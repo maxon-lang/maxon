@@ -615,6 +615,40 @@ end 'main'
 1200
 ```
 
+<!-- test: a-character-array-takes-a-one-byte-literal -->
+### A ONE-BYTE character literal adopts `Character` at an array element too
+
+`push` / `set` / `insert` are Character-expecting positions like any other, so the width rule that
+makes `'e'` an `int` and `'é'` a `Character` must not decide what an `Array with Character` accepts.
+It nearly did: when the element-argument type check landed, `a.push('e')` was refused as
+*"cannot assign 'int' … of type 'Character'"* on a program the oracle runs — the adoption door
+(`characterizedOperand`) has to be asked before the slot's type is compared, exactly as at a
+comparison, an assignment and a `return`.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias CharArray = Array with Character
+
+function build() returns Count
+	var a = CharArray.create()
+	a.push('e')
+	a.insert(0, value: 'z')
+	try a.set(1, value: 'q') otherwise panic("test invariant: set OOB")
+	return a.count()
+end 'build'
+
+function main() returns ExitCode
+	print("{build()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
 <!-- test: panic-takes-a-string-not-a-character -->
 ### `panic` takes a String, exactly as `print` does
 

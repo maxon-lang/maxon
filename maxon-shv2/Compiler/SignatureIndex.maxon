@@ -5034,8 +5034,29 @@ export type ProgramSignatures
 		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.fieldTypeOf: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
 		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
 
-		// A FUNCTION-typed field (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
-		// recorded this layout ran before the function alias was known — so it is re-tagged `function`
+		return self.declaredSlotType(declared, into: into)
+	end 'fieldTypeOf'
+
+	// ⭐ **WHAT A SLOT'S DECLARED TYPE MEANS ONCE THE ALIAS REGISTRIES ARE KNOWN** — the door a struct
+	// FIELD and an `Array` ELEMENT both come out of, ADOPTED into `into` (the calling file's own artifact
+	// interner) exactly as `returnTypeOf` does.
+	//
+	// Every one of the three re-tags below exists for the same reason: the DECLARATION SWEEP that recorded
+	// the slot ran before any alias was interned, so an alias-typed slot arrives as a bare `named` and the
+	// registries are the only thing that can say what it is. Leaving one unresolved is not a cosmetic loss
+	// — `named` reads as an INTEGER (`tagIsIntegral`), so a function slot admits an int, a generic-instance
+	// slot loses its `count()`, and a float slot is stored as raw i64 bits.
+	//
+	// ⚠ **IT IS ONE FUNCTION BECAUSE THE ELEMENT DOOR HAD A PARTIAL COPY OF IT, AND THE PART THE COPY
+	// DROPPED WAS REACHABLE.** `Parser.arrayElementValueType` spelled out the generic-alias re-tag and
+	// neither of the other two, so an `Array with <function alias>` element stayed `named` — an INT. It
+	// went unnoticed while nothing compared an element against its type; the moment the element-argument
+	// check (`Parser.requireArrayElementType`) did, that `named` would have read a pushed function VALUE as
+	// a function meeting an int slot and refused a program both compilers accept. A rule with two homes
+	// drifts, and only the newer home's obligations reveal which half the older one was missing.
+	export function declaredSlotType(declared MaxonType, into TypeNameInterner) returns MaxonType
+		// A FUNCTION-typed slot (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
+		// recorded its declaration ran before the function alias was known — so it is re-tagged `function`
 		// HERE, over this index's own function-alias registry (P1.5-A1). One place, so every reader (a
 		// field READ, a `Self{op: op}` construction check, the store-width query) sees a function VALUE
 		// and not an int. Re-interned into `into` by NAME exactly as `adoptType`'s `named` arm is.
@@ -5044,8 +5065,8 @@ export type ProgramSignatures
 			if self.isFunctionAlias(name) 'functionAlias'
 				return MaxonType.function(into.intern(name))
 			end 'functionAlias'
-			// A GENERIC-INSTANCE-typed field (`export var ops as IntArray`, an `Array` instance) arrives as a
-			// `named` for the same reason a function alias does — the SWEEP recorded this layout before the
+			// A GENERIC-INSTANCE-typed slot (`export var ops as IntArray`, an `Array` instance) arrives as a
+			// `named` for the same reason a function alias does — the SWEEP recorded the declaration before the
 			// generic alias was interned — so it is re-tagged `genericInstance` here, over this index's own
 			// generic-alias registry (P1.7). One place, so every reader (a field READ, a `Self{ops: ops}`
 			// construction check, the array method dispatch, the drop cascade) sees the instance and not an
@@ -5053,8 +5074,8 @@ export type ProgramSignatures
 			if self.isGenericAlias(name) 'genericAlias'
 				return MaxonType.genericInstance(self.genericAliasInstance(name))
 			end 'genericAlias'
-			// ⭐ A RANGED FLOAT-ALIAS-typed field (`export var mass as Weight`) arrives as a `named` for the
-			// same reason the two above do — the SWEEP recorded this layout before any alias was known — and
+			// ⭐ A RANGED FLOAT-ALIAS-typed slot (`export var mass as Weight`) arrives as a `named` for the
+			// same reason the two above do — the SWEEP recorded the declaration before any alias was known — and
 			// it is the one `named` whose VALUE is a genuine f64. Left overloaded it reads as an INTEGER
 			// (`tagIsIntegral`), which made `Self{mass: 2.5}` a false E3009 on legal code while `Self{mass: 3}`
 			// was admitted unconverted into a slot the store then wrote as an i64. Re-tagged here, in the ONE
@@ -5070,7 +5091,7 @@ export type ProgramSignatures
 		end 'maybeAlias'
 
 		return self.adoptType(declared, into: into)
-	end 'fieldTypeOf'
+	end 'declaredSlotType'
 
 	// Does field `index` of struct `structName` own DROPPABLE HEAP — a String, a struct, or a
 	// payload-bearing (boxed) union? Drives the struct's `__destruct_<T>` drop CASCADE: every field this

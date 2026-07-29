@@ -21823,7 +21823,7 @@ export type Parser
 			return self.emitArrayElementAccessor(func, callee: ArrGetName, args: pairArgs(arr, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
 		if methodTok.value.equals(ArraySetMethod) 'set'
-			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrSetName, throwing: true, range: range)
+			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrSetName, methodTok: methodTok, throwing: true, range: range)
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.consumeEmptyArgList()
@@ -21874,7 +21874,7 @@ export type Parser
 		// Non-throwing void mutators — rejected in value position (E3059).
 		try self.requireArrayVoidStatement(resultUsed, methodTok: methodTok)
 		if methodTok.value.equals(ArrayPushMethod) 'push'
-			let value = try self.parseArrayElementArg(func, giid: giid)
+			let value = try self.parseArrayElementArg(func, giid: giid, methodTok: methodTok)
 			return self.emitArrayVoidCall(ArrPushName, args: pairArgs(arr, second: value), receiver: arr, range: range)
 		end 'push'
 		if methodTok.value.equals(ArrayReserveMethod) 'reserve'
@@ -21891,7 +21891,7 @@ export type Parser
 			return self.emitArrayVoidCall(ArrClearName, args: singletonArgs(arr), receiver: arr, range: range)
 		end 'clear'
 		if methodTok.value.equals(ArrayInsertMethod) 'insert'
-			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, throwing: false, range: range)
+			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, methodTok: methodTok, throwing: false, range: range)
 		end 'insert'
 		if methodTok.value.equals(ArrayAppendMethod) 'append'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
@@ -22350,29 +22350,105 @@ export type Parser
 		end 'strategy'
 	end 'arrayElementCloneValue'
 
-	// The VALUE type a managed element is loaded as — the element's declared type retyped to its usable value
-	// form (a struct → `structRef`, a boxed union → its `named(<union>)`, a String → text, a nested Array /
-	// instance → `genericInstance` so `retrieved.count()` dispatches). A NESTED ARRAY element arrives as a
-	// `named` generic alias (`ByteArray` = `Array with Byte`) — the sweep recorded the layout before the alias
-	// interned — so it is resolved to its `genericInstance` here (the same alias→instance step
-	// `managedFieldDropCallee` takes for the drop). Every other element routes through the SAME
-	// `classifyUnionPayload`/`payloadValueTypeOf` the union-payload and struct-field reads use. The element id
-	// lives in signatures' interner, so it is adopted into this file's interner first (a ranged alias that
-	// shifted the interning order would otherwise misresolve — OPEN #52).
+	// The VALUE type an element is loaded as and checked against — the element's declared type retyped to its
+	// usable value form (a struct → `structRef`, a boxed union → its `named(<union>)`, a String → text, a
+	// nested Array / instance → `genericInstance` so `retrieved.count()` dispatches, a trivial element → its
+	// own declared type, alias name intact so the shift rule keeps reading its low bound).
+	//
+	// It is TWO shared steps and nothing of its own. `ProgramSignatures.declaredSlotType` resolves what the
+	// declaration sweep could not yet name — a generic alias (`ByteArray` = `Array with Byte`), a function
+	// alias, a float alias — and adopts the id into this file's interner (a ranged alias that shifted the
+	// interning order would otherwise misresolve, OPEN #52); `classifyUnionPayload`/`payloadValueTypeOf` then
+	// give the same value form a union payload and a struct field read. The alias→instance step used to be
+	// spelled here as well as there, which is exactly how the FUNCTION-alias element went missing: an
+	// `Array with <function alias>` element stayed `named`, i.e. an int.
+	//
+	// A FLOAT element cannot reach `payloadValueTypeOf`'s float panic: `Array with Float` and
+	// `Array with float` are both E2062 at the type ARGUMENT, one gate earlier.
 	function arrayElementValueType(giid GenericInstanceId) returns MaxonType
-		let declared = self.signatures.adoptType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames)
-		let tag = maxonTypeTag(declared)
-		if tag == ValueTypeTag.genericInstance 'instance'
-			return declared
-		end 'instance'
-		if tag == ValueTypeTag.named 'named'
-			let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("arrayElementValueType: an adopted `named` element type's id is not in this file's interner")
-			if self.signatures.isGenericAlias(name) 'genericAlias'
-				return MaxonType.genericInstance(self.signatures.genericAliasInstance(name))
-			end 'genericAlias'
-		end 'named'
+		let declared = self.signatures.declaredSlotType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames)
 		return payloadValueTypeOf(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared), declared: declared)
 	end 'arrayElementValueType'
+
+	// ⭐⭐ **AN ELEMENT ARGUMENT MUST AGREE WITH THE INSTANCE'S ELEMENT TYPE.** The `Array` mutators are
+	// PARSER-INTRINSIC — `push`/`set`/`insert` emit `__arr_push`/`__arr_set`/`__arr_insert` directly, so they
+	// have no `FuncSignature` and never reach `SemanticCheck.validateCall` — and until this existed nothing
+	// asked the question at all: `moveElementIntoArray` asked only about OWNERSHIP. All three symptoms were
+	// MEASURED, and none of them was a diagnostic:
+	//
+	//   • `Array with String` + `push(42)` — compiled clean, then the array's `__arr_decref` walk freed `42`
+	//     as a String pointer. A WILD FREE (0xC0000005).
+	//   • `Array with Integer` + `push("hello")` — compiled clean and printed the record's raw address as an
+	//     integer. A SILENT WRONG ANSWER.
+	//   • `Array with Integer` + `push(1.5)` — reached the backend and panicked there on an xmm→gpr move,
+	//     an internal error naming no source position, for a conversion the language refuses everywhere else.
+	//
+	// **IT IS `requireFieldType`'S BODY, AND DELIBERATELY SO**: an array element is a storage slot of a
+	// container exactly as a struct field is, so it takes the SAME classifier and the SAME two verdict doors
+	// — `assignableValue` (the coercion-site rule `checkDeclaredType` plus the widening an `ok` verdict owes,
+	// in one call) for a trivial element, `requireManagedValueMatches` (the matching heap kind, plus the
+	// aggregate NAME two `structRef` pointers share a tag over) for a managed one. No sentence is composed
+	// here: the array door and an ordinary assignment cannot come to explain one rule two ways.
+	//
+	// It is NOT folded into `requireFieldType` itself for one measured reason: that function names its site
+	// with `fieldSiteName`, a `String`, built INSIDE its managed arm. A shared core taking a pre-built name
+	// would make every SCALAR field pay an allocation it does not use today — the cost `FunctionTypeDoor`'s
+	// own header records at +1,852 in `phase:parse` for exactly this shape. What is written twice is a
+	// three-line composition; the RULE is single-homed.
+	//
+	// ⚠ **THE MANAGED/TRIVIAL ARM IS CHOSEN BY THE CLASSIFIER AND BY NOTHING ELSE, AND THAT COSTS A MEASURED
+	// ALLOCATION WORTH PAYING.** `ProgramSignatures.arrayElementIsManaged` answers the same question without
+	// boxing anything, and asking it here instead saves exactly one `PayloadClass` box per trivial-element
+	// `push`/`set`/`insert` SITE (measured on the ladder: 32 allocations at rung 0, doubling to 1,024 at
+	// rung 5 — 0.007% of the compile). It is NOT taken. The two predicates are SEPARATE implementations of
+	// "does this own heap?" — they already disagree on a generic-ALIAS `named` type, which `typeIsManaged`
+	// calls managed and `classifyUnionPayload` calls `undeclaredName` — and they agree at THIS door only
+	// because `declaredSlotType` resolves that alias first. A rung whose entire subject is two things
+	// disagreeing about a type does not buy 0.007% with a second opinion whose failure mode is the wild free
+	// it exists to stop.
+	//
+	// ⚠ **IT RUNS BEFORE THE MOVE-IN, NOT AFTER**, and that ordering is the fix rather than an ordering
+	// preference: `moveElementIntoArray` PROMOTES a borrowed record by the ELEMENT's protocol
+	// (`tagIsByteRecord`), so a struct pushed into a `String` array would be copied as a fused byte record
+	// before any check could see it. It hands back the value the slot wants, so the caller rebinds — the
+	// widening is unreachable here (`Array with Float` is E2062 at the type argument), but a caller that
+	// stored the value it already held is precisely the bug the shared door exists to make unwriteable.
+	//
+	// ⚠ **AN OPAQUE `T` ELEMENT IS NOT CHECKED, and that is the same ruling every other opaque door makes.**
+	// A shared generic body compiles ONCE, so `self.items.push(item)` has no concrete element type to compare
+	// against; the instantiation's argument is checked in the CALLER's frame, where the type is concrete.
+	//
+	// ⚠ **THE ARRAY LITERAL IS NOT A CALLER, and does not need to be.** `[a, b, c]` has no DECLARED element
+	// type to violate — its first element FIXES the instance (`arrayLiteralInstanceFor`) and every later one
+	// is compared against it by `requireArrayLiteralElementMatches`. It also has no method token to name.
+	//
+	// ⚠⚠ **A `Character` ELEMENT IS THE ONE SLOT THAT COERCES BEFORE IT COMPARES, AND LEAVING THAT OUT IS A
+	// FALSE REJECTION, MEASURED.** shv2 types a character literal by its BYTE WIDTH — one byte is an `int`,
+	// wider is a `Character` — so `a.push('e')` into an `Array with Character` arrives INT-tagged where every
+	// other Character-expecting position already makes such a literal adopt the type (`characterizedOperand`,
+	// `character-ownership.md`'s `character-literal-adopts-the-character-type`). Checked without it, the
+	// oracle counts one element and shv2 answers *"cannot assign 'int' … of type 'Character'"*. It is asked
+	// through the ONE adoption door — a literal in a Character position, never a tag pairing — so
+	// `char-literal-to-int.md`'s codepoint arithmetic is untouched, and it needs the value's TOKEN SPAN,
+	// which is why the callers hand over `valueStart` (the same position `moveElementIntoArray` reads).
+	function requireArrayElementType(giid GenericInstanceId, value ValueId, valueStart TokenIndex, methodTok Token) returns ValueId throws ParseError
+		if self.signatures.arrayElementIsOpaque(giid) 'opaqueInSharedBody'
+			return value
+		end 'opaqueInSharedBody'
+
+		let declared = self.signatures.declaredSlotType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames)
+		let element = try self.characterizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
+		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared)
+		if payloadClassIsManaged(class) 'managed'
+			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: element, siteName: String.from(methodTok.value), anchor: methodTok)
+			return element
+		end 'managed'
+
+		// The `field` door, because an element IS a slot of the container's storage and the noun a function
+		// value's E3005 needs is the container-slot one. A fourth noun would have to be minted in
+		// `FunctionTypeDoor`, and there is no fourth RULE here to justify one.
+		return try self.assignableValue(methodTok, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field)
+	end 'requireArrayElementType'
 
 	// `( expr )` — a single positional array-method argument (`push(x)`, `get(i)`, `reserve(n)`).
 	function parseArrayOneArg(func IrFunction) returns ValueId throws ParseError
@@ -22410,7 +22486,7 @@ export type Parser
 	// `__arr_set`/`__arr_insert` call (throwing for `set`, void for `insert`) and returns its result. The
 	// value argument is parsed AFTER the index so the throwing `set`'s call is the last op the enclosing
 	// `try` rewrites.
-	function parseArraySetOrInsert(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, throwing bool, range SourceRange) returns ValueId throws ParseError
+	function parseArraySetOrInsert(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, methodTok Token, throwing bool, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let index = try self.parseExpression(func, block: self.currentBlock)
 		try self.consumeArrayArgLabel(ArrayValueLabel)
@@ -22418,9 +22494,11 @@ export type Parser
 		// `moveElementIntoArray` promotes a borrowed String, transfers an owned value, refuses a borrowed
 		// aggregate. `__arr_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
 		// slot), so no leak; `__arr_insert` shifts the tail (a relocation) and stores into the vacated slot.
+		// The TYPE check precedes the move-in for the reason `requireArrayElementType` states.
 		let valueStart = self.pos
 		let raw = try self.parseExpression(func, block: self.currentBlock)
-		let value = try self.moveElementIntoArray(raw, giid: giid, valueStart: valueStart)
+		let checked = try self.requireArrayElementType(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
+		let value = try self.moveElementIntoArray(checked, giid: giid, valueStart: valueStart)
 		try self.consume(TokenKind.rightParen)
 
 		if throwing 'throwing'
@@ -22429,10 +22507,11 @@ export type Parser
 		return self.emitArrayVoidCall(callee, args: tripleArgs(arr, second: index, third: value), receiver: arr, range: range)
 	end 'parseArraySetOrInsert'
 
-	// `( expr )` — a single element-VALUE argument (`push(x)`), parsed then MOVED into the array (P1.7 slice 3):
-	// a managed element is consumed so the array owns it (its decref walk destroys it), a trivial element passes
-	// through. The value's start position is captured so a bare-local source can be poisoned (E3102).
-	function parseArrayElementArg(func IrFunction, giid GenericInstanceId) returns ValueId throws ParseError
+	// `( expr )` — a single element-VALUE argument (`push(x)`), TYPE-CHECKED against the instance's element
+	// type and then MOVED into the array (P1.7 slice 3): a managed element is consumed so the array owns it
+	// (its decref walk destroys it), a trivial element passes through. The value's start position is captured
+	// so a bare-local source can be poisoned (E3102).
+	function parseArrayElementArg(func IrFunction, giid GenericInstanceId, methodTok Token) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: self.currentBlock)
@@ -22440,7 +22519,8 @@ export type Parser
 		// to decide whether the arg is a bare local to POISON, and a consumed `)` would widen that window past a
 		// single-identifier arg (`push(node)`) — the poison would silently not fire and the moved binding would
 		// drop a second time at scope exit (a double-free / over-release, exit 101).
-		let moved = try self.moveElementIntoArray(value, giid: giid, valueStart: valueStart)
+		let checked = try self.requireArrayElementType(giid, value: value, valueStart: valueStart, methodTok: methodTok)
+		let moved = try self.moveElementIntoArray(checked, giid: giid, valueStart: valueStart)
 		try self.consume(TokenKind.rightParen)
 		return moved
 	end 'parseArrayElementArg'

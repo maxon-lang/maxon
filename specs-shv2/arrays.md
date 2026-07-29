@@ -1484,3 +1484,320 @@ end 'main'
 ```exitcode
 17
 ```
+
+### Element Type Checking
+
+An element handed to `push` / `set` / `insert` must agree with the instance's element type.
+The rule is the shared coercion rule every other declared slot asks — `checkDeclaredType` for a
+trivial element, the managed heap-kind check for a managed one — because an array element is a
+storage slot like a struct field, not a special case.
+
+<!-- test: element-int-roundtrip -->
+### An int element pushed into an int-element array reads back
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(42)
+	return try arr.get(0) otherwise 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: element-string-roundtrip -->
+### A String element pushed into a String-element array reads back
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var arr = StringArray.create()
+	arr.push("hi")
+	let s = try arr.get(0) otherwise ""
+	if s == "hi" 'match'
+		return 7
+	end 'match'
+	return 0
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: element-struct-roundtrip -->
+### A struct element pushed into an array of that struct reads back
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	arr.push(Item.create(9))
+	let first = try arr.get(0) otherwise Item.create(0)
+	return first.value
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: element-byte-in-range -->
+### An in-range int literal is a legal element of a Byte-ranged array
+```maxon
+typealias Byte = int(0 to 255)
+typealias ByteSlots = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteSlots.create()
+	arr.push(65)
+	arr.insert(0, value: 12)
+	try arr.set(1, value: 77) otherwise panic("test invariant: set OOB")
+	return try arr.get(1) otherwise 0
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- test: error.push-int-into-string-array -->
+### An int pushed into a String-element array is refused
+Unchecked, the element is stored raw and the array's decref walk frees `42` as a String
+pointer — a wild free (0xC0000005), not a diagnostic.
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var arr = StringArray.create()
+	arr.push(42)
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:6: cannot assign 'int' to variable 'push' of type 'String'
+```
+
+<!-- test: error.push-string-into-int-array -->
+### A String pushed into an int-element array is refused
+Unchecked, the raw record pointer is stored and read back as an integer — a silent wrong answer.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push("hello")
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:6: cannot assign 'String' to variable 'push' of type 'int'
+```
+
+<!-- test: error.push-float-into-int-array -->
+### A float pushed into an int-element array is the lossy-narrowing refusal
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1.5)
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:7:6: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: error.push-struct-into-string-array -->
+### A struct pushed into a String-element array is refused
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var arr = StringArray.create()
+	arr.push(Item.create(1))
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:16:6: cannot assign 'struct' to variable 'push' of type 'String'
+```
+
+<!-- test: error.push-string-into-struct-array -->
+### A String pushed into a struct-element array is refused
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	arr.push("hello")
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:16:6: cannot assign 'String' to variable 'push' of type 'struct'
+```
+
+<!-- test: error.push-wrong-struct-into-struct-array -->
+### A struct of the WRONG declared type is refused
+Both values are `structRef` pointers, so only the aggregate NAME separates them — the same
+identity check a struct field's managed slot makes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+type Other
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Other'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	arr.push(Other.create(1))
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:24:6: cannot assign 'Other' to variable 'push' of type 'Item'
+```
+
+<!-- test: error.insert-int-into-string-array -->
+### `insert` checks its `value:` argument too
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var arr = StringArray.create()
+	arr.push("hi")
+	arr.insert(0, value: 42)
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:6: cannot assign 'int' to variable 'insert' of type 'String'
+```
+
+<!-- test: error.insert-string-into-int-array -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	arr.insert(0, value: "hello")
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:6: cannot assign 'String' to variable 'insert' of type 'int'
+```
+
+<!-- test: error.insert-float-into-int-array -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	arr.insert(0, value: 1.5)
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:8:6: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: error.set-int-into-string-array -->
+### `set` checks its `value:` argument too
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var arr = StringArray.create()
+	arr.push("hi")
+	try arr.set(0, value: 42) otherwise panic("test invariant: set OOB")
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:10: cannot assign 'int' to variable 'set' of type 'String'
+```
+
+<!-- test: error.set-string-into-int-array -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	try arr.set(0, value: "hello") otherwise panic("test invariant: set OOB")
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:10: cannot assign 'String' to variable 'set' of type 'int'
+```
+
+<!-- test: error.set-float-into-int-array -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	try arr.set(0, value: 1.5) otherwise panic("test invariant: set OOB")
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:8:10: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
