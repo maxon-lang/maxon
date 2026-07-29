@@ -163,7 +163,10 @@ take its blocker instead)*
 | **S1** | ~~`__Builtins.*` QUALIFIED-call recognition~~ **✅ THE ROW WAS DRAWN STALE — THIS LANDED 2026-07-24** as §"STDLIB WHITELIST" step (2) (`1c36c1ba8`), which this board's own text says three lines further down. **Re-verified by RUNNING it 2026-07-29**, not by reading: `__Builtins.currentTimeNanos()` in an ordinary user program compiles and returns a live reading, and `__Builtins.noSuchIntrinsic()` gives a clean **E3004** (no panic). The arm is `Parser.maxon:26681`, gated on `isBuiltinsIntrinsicCallee`, recognizing 4 members (`currentTimeNanos`, `currentTimeMs`, `currentUnixTimeSeconds`, `sleep`). **Nothing in the S2 cone is blocked on it** — see the corrected blocker table below | L-stdlib | ✅ DONE | *(landed 2026-07-24)* | — |
 | **S2** | **Whitelist entries 4…n.** ⚠ **THE BLOCKER LIST BELOW WAS WRONG AND IS NOW MEASURED** (2026-07-29). **The dominant cost of the whole gate** . ⚠ **D5 IS NOW DONE AND ITS TWO FILES ADVANCED TO NEW, DIFFERENT BLOCKERS — both MEASURED 2026-07-29 after the fix, not predicted.** `stdlib/FilePath.maxon` clears all seven of its `#if` regions and now stops at **`E2010 :34:25 Expected 'identifier' but got 'from'`** — a function *named* `from`, which shv2 lexes as a keyword; that is a LEXER/parser question and belongs to no row yet. `stdlib/Process.maxon` clears its `#if` and now stops at **`E3004 :29:17 call to undefined function '__Builtins.executablePath'`** — a missing intrinsic, which IS S1-shaped work and is the first confirmed instance of it | L-stdlib | ⛔ BLOCKED | on ~~D5~~ ✅ · D1 · D2/D4 · S3 · **`from`-as-a-name (new, unrowed)** · **`__Builtins.executablePath` (new)** — *not* on S1. See the measured table | — |
 | **S3** | **`String.addressableBytes`** — `stdlib/File.maxon:60`'s first blocker, and **it was on no row until 2026-07-29**. Not a whitelist question and not a parser one: a String method shv2 does not provide (its E2015 lists what it does). Needs its own contract | L-stdlib | ⬜ FREE | — | — |
-| **D1** | **Methods on `union` / `enum`** — the DECLARATION SITE and the RECEIVER only (`Parser.maxon:7922`, self-labelled *"arrive with a later rung"*). ⚠ **"Unblocks 5 of the 13 harness files by itself" is MEASURED FALSE — see the box below.** It unblocks the *declaration*; 4 of those 5 then hit **D1b**. Real unlock: `TestOutcome.isPass` and every non-managed union/enum method, plus it is the hard prerequisite for D1b | L-parser-decl | 🔶 CLAIMED | `slice/D1-union-enum-methods` | 2026-07-29T19:14Z |
+| **D1** | **Methods on `union` / `enum`** — the DECLARATION SITE and the RECEIVER. ✅ `6b7c8a94b`..`f4c1c43e5`; **2372 → 2423/0**. `enclosingStructType`→`enclosingSelfType` (a struct's `Self` is `structRef`, an enum's `named`), `enterTypeScope` as ONE writer for name+kind, `enumMethodKeywordIndex` as one spelling of the modifier list. Statics **refused** (oracle misreads them; stdlib declares zero). Ports `specs/enum-full.md` byte-identical (36 of 54 enabled, 18 disabled with named blockers) + flips 2 in `enums-simple.md` + a shv2-authored receiver spec. ⭐⭐ **THE REVIEW FOUND 3 REACHABLE DEFECTS** — see the box. ⚠ **Moved NO committed goldens** (0 M); **added 51 x64-linux goldens the lane was silently missing**; arm64 SKIP — remote, UNVERIFIED, owes the same 51 | L-parser-decl | ✅ DONE | `slice/D1-union-enum-methods` | 2026-07-29T19:14Z |
+| **D1c** | **`match` arm with a DISCARDED payload binding is silently ACCEPTED** — `value(_)` compiles and runs (exit 0) where the oracle gives **E3081**. Confirmed by the D1 review; pinned as `enum-full.md`'s `disabled-test: error.match-discarded-bindings`. A genuinely MISSING check, not a wording difference, and shv2 claims no E3081 | L-parser-stmt | ⬜ FREE | — | — |
+| **D1d** | **⚠ REACHABLE COMPILER PANIC, PRE-EXISTING and D1-INDEPENDENT** — a keyword-named enum case used in an `if` condition (`if tagOf(Kw.end) != 3 'bad'`) ⇒ `panic at Parser.maxon:14467: parseIfStatement: the token scan predicted the closing 'end' at token 58 but the parser closed the last body at token 67`. Root: `closesBlockAt`/`opensBlockAt` read a keyword **after a `.`** as block structure. **The repro contains no enum method at all**, which is what proves it is not D1's. Same family as the two case-list misreads D1's review fixed, different walk | L-parser-stmt | ⬜ FREE | — | — |
+| **D1e** | **A method call on an RVALUE base is refused entirely** — `Point.create(21).doubled()` and `Kw.beta.twice()` both give `E2015 Unsupported: . statement`; the oracle accepts both (42). Pre-existing and general (structs too), **but D1 widened its reach**: `Enum.case.method()` is the natural spelling of the feature D1 just shipped, and every committed test binds to a local first | L-parser-postfix | ⬜ FREE | — | — |
 | **D1b** | **Binding a MANAGED payload out of a BORROWED union** (`E2015` at `Parser.maxon`, whose text already says *"a parameter, **a receiver**"* and blames a P1.4 that has since closed). Two sub-cases the design must separate: **read-only borrow** (`unreadable(path) gives "…{path.toString()}"` — `PeReadError.displayReason`, never moves) vs **move/copy out** (`pass(s, _) gives s` — `WorkerRecord.spec`, yields the String). ⚠ **NEEDS A DESIGN RULING** — the bootstrap borrows-and-retains-on-store where the self-hosted tier consumes, so the oracle's answer does not transfer | L-parser-postfix? | ⛔ BLOCKED | on **D1** (hard: unreachable until a method can be declared) | — |
 | **D2** | **The postfix / member walk**, all four symptoms as ONE slice: a method call on a struct FIELD · a field access on a non-struct base · a method call on a **literal** (`"a,b".split(",")`) · a static method on a primitive (`int.fromString`) | L-parser-postfix | 🔶 CLAIMED | `slice/D2-postfix-member-walk` | 2026-07-29T22:52Z |
 | **D4** | **`ByteArray` / `Byte` as a declared type** — today it resolves to `int`, which is why its symptom is D2's message. Blocks the 4 binary-image readers | L-types | ⬜ FREE | — | — |
@@ -197,6 +200,63 @@ take its blocker instead)*
 > | `PeReadError.displayReason` (`PeSectionReader.maxon:61`) | YES, **read-only** (`path.toString()`) |
 > | `WorkerRecord.spec`/`.test` (`SpecWorkerPool.maxon:464,471`) | YES, **moved out** (`pass(s, _) gives s`) |
 > | `Elf`/`Macho`/`DataSection`/`TypedValue` `.displayReason` | YES, same convention as PeReadError |
+>
+> ### ✅ D1 CLOSED 2026-07-29 (`6b7c8a94b`..`f4c1c43e5`, 2372 → **2423/0**) — AND THE REVIEW EARNED THE RUNG
+>
+> The prediction above held: it is a declaration-site rung, and the acceptance list came out at **10**
+> rather than 11 — `error.enum-method-non-exported-cross-file` turned out **not** to be an enum-method
+> case at all. Its subject is FUNCTION VISIBILITY, which shv2 has never enforced: `func.visibility` is
+> written at `Parser.maxon:8525` and **read nowhere**, no shv2 path emits **E3008**, and the registry
+> proves it structurally (E3008 carries `csharp` + `selfhosted` claims and **no `shv2` claim**, and a
+> code shv2 emitted could not be missing one). Its twin `export-keyword/error.non-exported-function-cross-file`
+> was already disabled for exactly that reason. **The coordinator's triage was wrong and the
+> implementer's disable was right, with better evidence than the triage had.**
+>
+> **⭐⭐ THE INDEPENDENT REVIEW FOUND THREE REACHABLE DEFECTS OVER A GREEN 2416/0 SUITE — every one in
+> code both the implementer and the coordinator had called done.** The pattern is now unbroken across
+> every rung of this phase.
+>
+> 1. **ONLY THE FIRST METHOD OF ANY ENUM WAS EVER SCANNED.** A method's closing `end` carries its block
+>    LABEL; the sweep's new depth walk returned to 0 on the `end`, advanced, and landed the cursor **on
+>    the label**, which the depth-0 fall-through handed to `readEnumCaseInto` — a charLiteral read as a
+>    string-backed case, throwing into the caller's `otherwise break`. Three measured consequences: the
+>    2nd+ method's return type never reached the whole-program index (⇒ `panic at LowerMaxonToStd:114:
+>    valueTagToStdType: an 'unresolved' tag reached lowering`); **every case declared after a method was
+>    SILENTLY DROPPED** from the layout; and the enum's own `end` was never consumed, so the outer sweep
+>    resumed *inside* the body. ⭐ **Coordinator-verified against the pre-fix parser**: a case after a
+>    method reads `E3034 unknown enum case: 'omega'`, and the same program returns 7 on the fix.
+>    `recordScannedType` is immune only because its depth-0 fall-through advances a token instead of
+>    reading a member. ⚠ **The rung's own 38 new acceptance cases were structurally blind to it** —
+>    `enum-full.md` puts its methods after all cases and mostly declares one.
+> 2. **`self.<name>` inside an enum method PANICKED** — `enclosingLayout` died resolving a `StructLayout`
+>    no enum declares, with a message blaming *"recordScannedType and parseTypeDeclaration disagree"*, a
+>    disagreement that never happened. Both spellings reached it (read and assignment). Now a positioned
+>    E2015 at the one door both pass.
+> 3. **Two walks read an enum's CASE LIST as block structure.** D1 newly points `ensureSiblingReceivers`
+>    at an enum body, and a case may be spelled with a keyword: a case named `end` broke the walk early
+>    (a legal sibling call became `E3004`), a case named `while` ran it PAST the enum's `end` so a
+>    *later type's* method was adopted as a sibling. Cured by giving the walk the enum's own member level
+>    and turning `atEnumBodyEnd` into the index-taking `enumBodyEndsAt` — **three walks ask that rule and
+>    only two were cursor-driven**, the one-fact-written-twice shape again.
+>
+> **⭐ THE SAFETY ARGUMENT WAS RE-DERIVED INDEPENDENTLY AND HOLDS — but its written reason was wrong.**
+> Eight escape routes for a boxed union's `self` were probed (return, rebind-then-return, `match self
+> gives self`, `Array.push`, a struct field, a consuming argument, another union's payload, `async`, and
+> two closure spellings); **all refused, none by an enum-specific check**. But `parseMethodCall`'s header
+> still claimed *"`parseSelfPrimary` refuses a bare `self` as a value … that refusal is the whole
+> load-bearing mechanism"* — true before D1, a **struct's only** after it. Corrected in place, naming the
+> three rules that now carry it.
+>
+> **⭐⭐ AND A CROSS-TARGET LANE WAS SILENTLY TESTING NOTHING OF THE RUNG.** D1's three spec files carry no
+> `<!-- targets: -->` marker, so every local target owes them goldens — and **only x64-windows had any**.
+> x64-linux ran GREEN over none of the feature, because **a MISSING golden never fails**. 51 goldens
+> generated from an unfiltered run and committed (`f4c1c43e5`). ⚠ `arm64-macos`/`arm64-linux` still owe
+> the same 51 — remote, hand-synced, **named rather than fabricated**, and not a merge condition.
+>
+> Gates: build 0 warnings · host **2423/0** · x64-linux **2325/0** · fragments **0 M** (additions only)
+> ⇒ byte-identical codegen · no run exits 101 · scale-test allocsDelta **0 at every rung**.
+> Three findings outside the rung filed as **D1c** (a missing E3081 check), **D1d** (a pre-existing
+> reachable panic, proven D1-independent by a repro with no enum method) and **D1e** (rvalue receivers).
 >
 > **⭐ THE ORACLE'S OWN SURFACE IS ASYMMETRIC, AND IT SETTLES THE STATIC QUESTION FOR FREE.** Measured
 > against `bin/maxon.exe`: an `enum` **instance** method with `match self` works (2); a `union`
