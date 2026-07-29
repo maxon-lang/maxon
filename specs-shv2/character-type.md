@@ -468,7 +468,11 @@ end 'main'
 ```
 
 <!-- disabled-test: error.otherwise-out-of-range -->
-<!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` + P1.9 ranged-typealias range checks (the E3005 this case gates on) -->
+<!-- MEASURED 2026-07-28: blocked ONLY on `Character.asciiValue()`, which does not exist
+     (`E2015: 'int' has no method named 'asciiValue'`). P1.4 `try`/`otherwise` landed, and the
+     P1.9 half — E3005 on an out-of-range `otherwise` value against a ranged return type — is
+     implemented and pinned by `ranged-typealias/error.otherwise-outside-ranged-return`.
+     This case is a `Character` method gap, NOT a ranged-typealias gap. -->
 ### Otherwise value must be within ranged type bounds
 
 ```maxon

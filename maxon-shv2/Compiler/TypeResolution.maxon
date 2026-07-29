@@ -81,6 +81,11 @@ export function resolveTypes(project Project, module MaxonModule)
 	// strictly fewer fetches, not more.)
 	let signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
 
+	// FIRST in the first pass — before a single name is erased. Two of them name a TYPEALIAS, and
+	// `resolveTypes` is what turns `Score` into `int`, so a drain that ran after it would have nothing
+	// left to name. (v1 drains its equivalents inside its own TypeResolution for the same reason.)
+	reportDeferredNameDiagnostics(project)
+
 	// Index-based so each function is a mutable binding (a `for x in ...` loop
 	// var is immutable; field assignment through it is rejected).
 	for i in 0 upto module.functions.count() 'eachFunc'
@@ -103,6 +108,83 @@ export function resolveTypes(project Project, module MaxonModule)
 	// M1 op value-types are all concrete (`integer` literals) — nothing to stamp.
 	// Op-type resolution (typed constants whose type is a named alias) grows at M9.
 end 'resolveTypes'
+
+// ⭐⭐ **THE DEFERRED NAME DIAGNOSTICS (P1.9) — UNUSED TYPEALIASES FIRST, HIDDEN CAST TARGETS SECOND.**
+//
+// The two orders this fixes are both load-bearing and neither can be had where the diagnostics are
+// FOUND. `DeferredNameDiagnostic` carries the argument in full; the short of it is that the parser
+// reports per file, the file walk is alphabetical, and the corpus pins a program whose E3062 is in
+// `types.maxon` and whose E2003 is in `main.maxon` — so per-file reporting orders them by two
+// FILENAMES. Draining here orders them by what they ARE.
+//
+// ⚠ It runs in a pass, and the pipeline's gate fires only BETWEEN passes, so both lists are drained
+// before anything stops the build — which is the second half of the same requirement: two diagnostics
+// in one program, in one order.
+function reportDeferredNameDiagnostics(project Project)
+	// ⚠ Captured BEFORE the loop, because the loop APPENDS to the very array `declarationAlreadyReported`
+	// scans: without the bound, each E3062 emitted here would be a row every later candidate compares
+	// against — turning k unused aliases into O(k²) comparisons, and (worse) letting one unused alias
+	// suppress another that happens to share its line in a different file.
+	let alreadyReported = project.diagnostics.count()
+
+	for entry in project.unusedTypeAliasDiagnostics 'eachUnused'
+		// ⭐ **A DECLARATION THAT WAS ALREADY REFUSED IS NOT ALSO REPORTED AS UNUSED.** Of course it is
+		// unused — nothing accepted it — so the second diagnostic adds no fact and points the reader at
+		// the symptom instead of the cause. TWO tests, because there are two ways a declaration earns a
+		// diagnostic and they are not the same shape:
+		//
+		//   • **By NAME**, for a name declared TWICE (E3061/E3006): the collision explains EVERY
+		//     declaration of it, including the earlier one that carries no diagnostic of its own.
+		//   • **By its own LINE**, for a declaration rejected on its merits — a `typealias Bad = Plain
+		//     with Integer` over a non-generic base (E2055), a wrong arity (E2056), a bare or float type
+		//     argument (E2061/E2062), a failed `where` constraint (E3017). Those anchor inside the RHS,
+		//     not on the alias name, so only the line ties them back; and a typealias declaration is one
+		//     line, so any diagnostic on it is about it.
+		//
+		// The reference reaches the same single-diagnostic shape structurally — its duplicate and RHS
+		// checks THROW, so its end-of-parse unused check never runs — and v1 by an explicit
+		// `constraintFailedTypealiases` set. shv2 needs the test because it reports these without
+		// unwinding the parse; reading the diagnostics already recorded is what spares it a third
+		// registry that every future declaration check would have to remember to write to.
+		if project.collidedTypeNames.contains(fileScopedDeclKey(entry.name, declFilePath: entry.filePath)) or declarationAlreadyReported(project, entry: entry, upTo: alreadyReported) 'alreadyExplained'
+			continue
+		end 'alreadyExplained'
+
+		reportPositioned(project, code: ErrorCode.semanticUnusedTypeAlias, message: "unused typealias: '{String.from(entry.name)}'", line: entry.line, column: entry.column, filePath: entry.filePath)
+	end 'eachUnused'
+
+	for entry in project.hiddenTypeNameDiagnostics 'eachHidden'
+		reportPositioned(project, code: ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: entry.line, column: entry.column, filePath: entry.filePath)
+	end 'eachHidden'
+end 'reportDeferredNameDiagnostics'
+
+// Is there already a diagnostic against this declaration's own source line? See the caller for the
+// rule; this is the scan that answers it.
+//
+// ⚠ It reads `project.diagnostics` DIRECTLY, and that is sound only because of WHERE the drain runs:
+// every check that can refuse a typealias declaration — the parser's own artifact diagnostics, the
+// merge's `commitTypeNameDecls`, and the pre-pipeline `checkConformance` / `checkGenericAliasCycles` /
+// `checkWhereConstraints` / `checkTypeSymbolNamespace` — has already reported by the time the first
+// pass runs. A check added LATER than `resolveTypes` would not be seen, which is the one thing to know
+// before moving either end.
+//
+// The scan is linear in the diagnostics reported BEFORE the drain (`upTo`) and runs once per
+// UNUSED-alias candidate — a population that is empty for every program that compiles, so a clean build
+// never enters the loop.
+//
+// Paths compare by their own spelling rather than through `FilePath.equals`, which case-folds by
+// cloning and lower-casing both sides on Windows. Every path here came out of `project.db.sourcePaths`,
+// so two references to one file are literally the same string — the identical assumption
+// `RangedAliasRegistry.multiplyDeclared` keys and probes on.
+function declarationAlreadyReported(project Project, entry DeferredNameDiagnostic, upTo ElementCount) returns bool
+	for i in 0 upto upTo 'each'
+		let reported = try project.diagnostics.get(i) otherwise panic("declarationAlreadyReported: i < upTo <= diagnostics.count() but get({i}) failed")
+		if reported.line == entry.line and reported.filePath.toString().equals(entry.filePath.toString()) 'sameDeclaration'
+			return true
+		end 'sameDeclaration'
+	end 'each'
+	return false
+end 'declarationAlreadyReported'
 
 // ⭐ **THE FOURTH DECLARATION SITE — a FUNCTION TYPEALIAS's parameter and return types.** A
 // `typealias Scaler = function(v Real) returns Real` names two types the three sweeps above never reach:

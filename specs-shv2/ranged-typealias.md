@@ -576,8 +576,7 @@ end 'main'
 
 ### Ranged type in struct field
 
-<!-- disabled-test: struct-field -->
-<!-- P1.1 structs + P1.2 String -->
+<!-- test: struct-field -->
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -933,7 +932,7 @@ end 'main'
 
 ### Unused local typealias
 
-<!-- disabled-test: unused-typealias -->
+<!-- test: unused-typealias -->
 <!-- E3062 unused-typealias check -->
 ```maxon
 typealias Score = int(0 to 100)
@@ -948,7 +947,7 @@ error E3062: specs/fragments/ranged-typealias/unused-typealias.test:2:11: unused
 
 ### Unused typealias with used typealias
 
-<!-- disabled-test: unused-typealias-with-used -->
+<!-- test: unused-typealias-with-used -->
 <!-- P1.9 `as` cast + E3062 -->
 ```maxon
 typealias Score = int(0 to 100)
@@ -965,7 +964,7 @@ error E3062: specs/fragments/ranged-typealias/unused-typealias-with-used.test:3:
 
 ### Error: unrepresentable range
 
-<!-- disabled-test: error.unrepresentable-range -->
+<!-- test: error.unrepresentable-range -->
 <!-- E3005 range validation at declaration -->
 ```maxon
 typealias Bad = int(i64.min to u64.max)
@@ -982,7 +981,7 @@ error E3005: specs/fragments/ranged-typealias/error.unrepresentable-range.test:2
 
 A negative-literal lower paired with `u64.max` upper cannot be represented in 64 bits — the upper bound exceeds `i64.max`, so no single 64-bit type can hold both ends. Without this check the parser would silently collapse the range to `-1..-1` (because `u64.max` is stored as the signed long `-1`).
 
-<!-- disabled-test: error.negative-low-u64-max -->
+<!-- test: error.negative-low-u64-max -->
 <!-- E3005 range validation at declaration -->
 ```maxon
 typealias Bad = int(-1 to u64.max)
@@ -997,7 +996,7 @@ error E3005: specs/fragments/ranged-typealias/error.negative-low-u64-max.test:2:
 
 ### Error: mismatched type bounds
 
-<!-- disabled-test: error.mismatched-type-bounds -->
+<!-- test: error.mismatched-type-bounds -->
 <!-- E3005 range validation at declaration -->
 ```maxon
 typealias Bad = int(i8.min to i32.max)
@@ -1065,9 +1064,39 @@ end 'main'
 50
 ```
 
+### Error: otherwise value outside the callee's ranged return type
+
+A `try … otherwise <literal>` default is bound to the callee's return type. When
+that return type is a ranged alias, the default must lie inside the range —
+otherwise the error path produces a binding that violates its own type's
+invariant, which is the one thing a ranged type exists to guarantee. The literal
+is therefore rejected at compile time, exactly as an out-of-range literal is at a
+cast or a ranged `return`.
+
+<!-- test: error.otherwise-outside-ranged-return -->
+```maxon
+typealias Score = int(0 to 100)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function getScore() returns Score throws MyError
+	return 50 as Score
+end 'getScore'
+
+function main() returns ExitCode
+	let v = try getScore() otherwise -1
+	return v
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.otherwise-outside-ranged-return.test:13:10: otherwise value -1 is outside the range of 'Score' (int(0 to 100))
+```
+
 ### Error: bare sized type shorthand not allowed
 
-<!-- disabled-test: error.bare-shorthand -->
+<!-- test: error.bare-shorthand -->
 <!-- E2003 bare-sized-type diagnostic (shv2 rejects it as a generic `unsupported`) -->
 ```maxon
 typealias Integer = i64
@@ -1111,7 +1140,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: cast-to-stdlib-internal-typealias -->
+<!-- test: cast-to-stdlib-internal-typealias -->
 <!-- stdlib whitelist: Array.maxon, which declares ElementCount — see cast-target-type-resolution.md -->
 A typealias declared inside the stdlib is reachable as a cast target from any
 file, regardless of its source-level visibility modifier. The stdlib's internal

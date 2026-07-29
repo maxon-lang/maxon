@@ -127,7 +127,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 		// the real parse cannot drift on what `returns X` means (see `foldDeclaredSignaturesInto`). It
 		// is handed the index it is BUILDING, which is safe because a sweep types no call and so never
 		// reads it; nothing else in the Parser needs a signature.
-		var scanner = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures)
+		var scanner = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSourceFile(project, path: path))
 		scanner.foldDeclaredSignaturesInto(signatures)
 		recordPhase(project, phase: CompilePhase.signatures, probe: probe)
 	end 'eachFile'
@@ -190,7 +190,7 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 
 	// M1 single-file build: namespace is empty (no cross-file qualification).
 	// Namespace derivation from the path grows with multi-file builds at M2.
-	var parser = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures)
+	var parser = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSourceFile(project, path: path))
 	let errorCountBefore = project.diagnostics.count()
 	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		reportParseError(project, path: path, error: parseErr)
@@ -342,6 +342,23 @@ export function probeRebuildCacheHits(project Project) throws CompileError
 	end 'each'
 end 'probeRebuildCacheHits'
 
+// ⭐ **IS THIS SOURCE FILE `stdlib/`'s (P1.9)?** Asked ONCE PER FILE, by the two queries that build a
+// `Parser`, and read only by a `typealias` declaration (`Parser.typeAliasVisibility`).
+//
+// ⚠ **THE PER-FILE FORM IS THE AFFORDABLE ONE, AND `StdlibSource`'s HEADER IS ABOUT THE OTHER TWO.**
+// `FilePath.isInside` costs about four String allocations (Windows `canonicalForCompare` clones and
+// lower-cases both sides), which is why deriving stdlib-ness per FUNCTION was measured at +3,633…+48,273
+// on the scale ladder and rejected outright. This is per FILE inside two O(files) loops — one of them
+// memoized to once per build — so it is the same shape as the walk the loader already makes.
+//
+// It asks the DIRECTORY rather than `project.stdlibSourcePaths` deliberately: that record is an ARRAY,
+// so a membership test over it is a linear scan of ~49 `FilePath.equals`, each allocating two Strings —
+// an order of magnitude worse than one `isInside` — and it would go on being worse as the loader's
+// whitelist grows toward the whole of `stdlib/`.
+function isStdlibSourceFile(project Project, path FilePath) returns bool
+	return path.isInside(project.stdlibDir)
+end 'isStdlibSourceFile'
+
 // Clear the registries that `mergeArtifact` rebuilds from artifacts, so a
 // queryAllModule miss re-derives them cleanly rather than compounding a prior
 // run's commits.
@@ -350,6 +367,12 @@ function resetMergeTargets(project Project)
 	project.funcSignatures = FuncSignatureMap.create()
 	project.pendingFnMergeChecks = PendingFnMergeCheckArray.create()
 	project.pendingFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
+	// The two deferred name-diagnostic lists and the collision set they are suppressed by: all three
+	// are PUSH/INSERT targets of the merge, so a warm rebuild that re-merged the same files would
+	// double every entry (`pendingFnMergeChecks`' reason, one line up).
+	project.unusedTypeAliasDiagnostics = DeferredNameDiagnosticArray.create()
+	project.hiddenTypeNameDiagnostics = DeferredNameDiagnosticArray.create()
+	project.collidedTypeNames = CollidedTypeNameSet.create()
 	// `conformances` is a PUSH array (like `pendingFnMergeChecks`): a warm rebuild that re-merges the
 	// same files would DOUBLE it without this reset. `interfaces` is an upsert map, reset with it for
 	// consistency so a queryAllModule miss re-derives both from the artifacts cleanly.
@@ -383,6 +406,15 @@ function reportLexerError(project Project, path FilePath, error LexerError)
 		unknownDirective(name, line, column) then reportPositioned(project, code: ErrorCode.lexerUnknownDirective, message: "Unknown compiler directive '#{name}'", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportLexerError'
+
+// The E2003 an `as` cast target that names a typealias the reading file cannot see reports (P1.9).
+// Worded ONCE because it has two producers that must not drift: the `hiddenCastTargetType` arm below
+// (a TOP-LEVEL constant's cast, re-raised at the declaration) and
+// `TypeResolution.reportDeferredNameDiagnostics` (a BODY cast, deferred so the report order does not
+// depend on the file walk). It is the reference oracle's exact text, which it also gives a name that no
+// declaration binds anywhere — a case shv2 reports more sharply as E3011
+// (`specs-shv2/cast-target-type-resolution.md`).
+export let HiddenTypeNameMessage = "Expected type name after 'as'"
 
 // Map a ParseError to a project diagnostic. The unexpected-token case is the
 // spec-gated E2010 (`parserExpectedToken`) — its exact `Expected '<x>' but got
@@ -586,6 +618,19 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// two compilers emit it from; shv2 raises it in the parser only because `parseBlockBody` is the
 		// one place that knows a nested block consumed no statements.
 		emptyBlock(label, line, column) then reportPositioned(project, code: ErrorCode.semanticEmptyBlock, message: "empty block: '{label}'", line: line, column: column, filePath: path)
+		// The P1.9 DECLARATION-SITE typealias arms. Every message is byte-for-byte the reference
+		// oracle's (2-Parser.cs:4794, :4831, :4838, :9840, :5782) — `ranged-typealias.md` and
+		// `export-keyword.md` compare this stderr exactly, in both suites.
+		bareSizedTypeAlias(typeName, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: "Bare sized type '{typeName}' is not allowed. Use explicit range syntax, e.g. 'int({typeName}.min to {typeName}.max)'", line: line, column: column, filePath: path)
+		mismatchedRangeBoundTypes(low, high, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Mismatched type bounds: '{low}' and '{high}' must reference the same type", line: line, column: column, filePath: path)
+		unrepresentableIntegerRange(low, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Integer range cannot span both negative values and above i64.max: 'int({low} to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead", line: line, column: column, filePath: path)
+		// The RANGE spells through `formatRangeDisplay`, the one place a range renders, so this and the
+		// cast/return E3005s cannot come to print one alias's bounds two ways. The VALUE is spelled
+		// plainly and deliberately NOT through that file's `formatBound`: an `otherwise` default is an
+		// integer LITERAL the author wrote, never the wrapped `u64.max` sentinel that helper exists to
+		// un-wrap, and the oracle prints it plainly too.
+		otherwiseOutsideRangedReturn(value, aliasName, low, high, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "otherwise value {value} is outside the range of '{aliasName}' ({formatRangeDisplay(low, high: high, isFloat: false)})", line: line, column: column, filePath: path)
+		hiddenCastTargetType(line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'
 

@@ -180,6 +180,16 @@ export type FileParseArtifact
 	// The tolerant declaration SWEEP uses a DIFFERENT artifact that is never merged, so a spurious
 	// diagnostic it records against the still-building signature index is discarded for free.
 	export var diagnostics as DiagnosticArray
+	// ⭐ THE TWO DEFERRED NAME DIAGNOSTICS (P1.9) — an unused typealias, and an `as` target naming an
+	// alias this file cannot see. They are kept OUT of `diagnostics` above and reported later, in a
+	// fixed order, by `TypeResolution.reportDeferredNameDiagnostics`; `DeferredNameDiagnostic`'s header
+	// carries the whole argument for why per-file reporting cannot give the order the corpus pins.
+	//
+	// Two lists rather than one with a kind tag, because the ORDER BETWEEN THEM is the entire reason
+	// they are deferred: every unused-alias diagnostic in the program precedes every hidden-name one,
+	// and a single list would have to re-derive that split at the drain.
+	export var unusedTypeAliases as DeferredNameDiagnosticArray
+	export var hiddenTypeNames as DeferredNameDiagnosticArray
 
 	export static function create(filePath FilePath) returns FileParseArtifact
 		return Self{
@@ -201,9 +211,22 @@ export type FileParseArtifact
 			conformances: sharedEmptyConformances,
 			typeNames: TypeNameInterner.create(),
 			currentFuncIndex: 0,
-			diagnostics: DiagnosticArray.create()
+			diagnostics: DiagnosticArray.create(),
+			unusedTypeAliases: sharedEmptyDeferredNameDiagnostics,
+			hiddenTypeNames: sharedEmptyDeferredNameDiagnostics
 		}
 	end 'create'
+
+	// Record an alias this file declared and never named, and an `as` target naming an alias this file
+	// cannot see. Both go through `appendDeferredNameDiagnostic`, the one copy-on-write writer for every
+	// list that starts as the shared empty — so neither carries its own copy of the identity test.
+	export function recordUnusedTypeAlias(entry DeferredNameDiagnostic)
+		self.unusedTypeAliases = appendDeferredNameDiagnostic(self.unusedTypeAliases, entry: entry)
+	end 'recordUnusedTypeAlias'
+
+	export function recordHiddenTypeName(entry DeferredNameDiagnostic)
+		self.hiddenTypeNames = appendDeferredNameDiagnostic(self.hiddenTypeNames, entry: entry)
+	end 'recordHiddenTypeName'
 
 	// THE emit choke point for a Maxon body op — the only way the parser creates
 	// one. Appending the op and recording its span happen together here, so
@@ -410,7 +433,20 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitInterfaces(project, artifact: artifact)
 	commitConformances(project, artifact: artifact)
 	commitDiagnostics(project, artifact: artifact)
+	commitDeferredNameDiagnostics(project, artifact: artifact)
 end 'mergeArtifact'
+
+// Fold this file's two DEFERRED name diagnostics into the project's own lists (P1.9). They are appended
+// rather than reported, because their whole point is to be reported LATER and in a fixed order — see
+// `DeferredNameDiagnostic` for why, and `TypeResolution.reportDeferredNameDiagnostics` for the drain.
+function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifact)
+	for entry in artifact.unusedTypeAliases 'eachUnused'
+		project.unusedTypeAliasDiagnostics.push(entry)
+	end 'eachUnused'
+	for entry in artifact.hiddenTypeNames 'eachHidden'
+		project.hiddenTypeNameDiagnostics.push(entry)
+	end 'eachHidden'
+end 'commitDeferredNameDiagnostics'
 
 // Fold this file's parser-raised diagnostics into `project.diagnostics` (P1.6-A) — the last
 // contribution, and the one that carries no ids to remap (a `Diagnostic` is a finished
@@ -451,6 +487,19 @@ end 'commitTypeNameDecls'
 // The two texts a collision can have, kept together because the CHOICE between them is the thing
 // worth reading in one place.
 function reportTypeNameCollision(project Project, decl TypeNameDecl, winner TypeNameDecl)
+	// ⭐ **A NAME REPORTED HERE IS NOT ALSO REPORTED AS UNUSED (P1.9).** Both declarations of a
+	// `typealias Score` declared twice in one file are genuinely unused, so the drain would add two
+	// E3062s on top of the one E3061 that actually explains the file — three diagnostics for one
+	// mistake, and the two extra pointing at the wrong thing. The reference suppresses it structurally
+	// (its duplicate check THROWS, so its end-of-parse unused check never runs) and v1 by an explicit
+	// set; shv2 needs the set, because its unused check runs at the parse and this one at the merge.
+	//
+	// ⚠ **KEYED PER DECLARING FILE, and that is not caution — a bare name would suppress the wrong
+	// file's diagnostic.** Two files may each legally declare `typealias Byte` (`TypeNameRegistry`'s
+	// carve-out; seven `stdlib/` files do), so one file declaring it twice would poison the name
+	// project-wide and silently swallow another file's genuinely-unused `Byte`.
+	project.collidedTypeNames.insert(fileScopedDeclKey(decl.name, declFilePath: decl.declFilePath))
+
 	if isTypeAliasDecl(decl.kind) and isTypeAliasDecl(winner.kind) 'bothAreTypeAliases'
 		reportPositioned(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{String.from(decl.name)}'", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
 		return

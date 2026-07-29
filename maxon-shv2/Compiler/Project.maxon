@@ -274,11 +274,23 @@ export type RangedTypeAlias
 	export var declFilePath as FilePath
 	export var nameLine as LineNumber
 	export var nameColumn as ColumnNumber
+	// ⭐ **WHO MAY NAME IT (P1.9)** — `file` for a plain `typealias`, `module` for an `export typealias`,
+	// and `global` for one the compiler supplies on the stdlib's behalf. It is what
+	// `visibleFrom` resolves by, and it exists because the corpus requires a
+	// non-exported alias to be UNNAMEABLE from another file
+	// (`export-keyword/error.non-exported-typealias-cross-file`) while a stdlib-internal one stays
+	// nameable everywhere (`ranged-typealias/cast-to-stdlib-internal-typealias`). Those two pull in
+	// opposite directions only if "stdlib" is an exception; as a third TIER they are one rule.
+	export var visibility as Visibility
 
-	export static function create(name ByteArray, underlying MaxonType, low ParsedInt, high ParsedInt, declFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber) returns RangedTypeAlias
-		return Self{name: name, underlying: underlying, low: low, high: high, declFilePath: declFilePath, nameLine: nameLine, nameColumn: nameColumn}
+	export static function create(name ByteArray, underlying MaxonType, low ParsedInt, high ParsedInt, visibility Visibility, declFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber) returns RangedTypeAlias
+		return Self{name: name, underlying: underlying, low: low, high: high, visibility: visibility, declFilePath: declFilePath, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
 end 'RangedTypeAlias'
+
+// The `<declaring file>|<type name>` keys of every declaration a collision was reported for — see
+// `Project.collidedTypeNames`.
+export typealias CollidedTypeNameSet = Set with ByteArray
 
 export typealias RangedTypeAliasArray = Array with RangedTypeAlias
 
@@ -358,42 +370,94 @@ end 'AliasRecordOutcome'
 // arrives in full the day ALL of `stdlib/` loads. A two-level map answers the same question with
 // no key to build: the probe that decides a name is contested IS the probe that holds the answer.
 //
-// ⚠ **AND NOT ITS VISIBILITY CONDITION EITHER, which is a deliberate divergence.**
-// `topLevelStorageKey` files a FILE-PRIVATE binding under the scoped key and an exported one under
-// the bare name, so a file-private binding is invisible elsewhere. An alias may NOT be made
-// invisible that way today: `specs-shv2/ranged-typealias.md`'s `cast-to-stdlib-internal-typealias`
-// requires a stdlib alias to be nameable "from any file, regardless of its source-level visibility
-// modifier". So EVERY alias reaches `byName` whatever its visibility, and a contested one is
-// ADDITIONALLY filed per declaring file — a file's own declaration WINS, and one declared only
-// elsewhere is still reachable. That keeps this change a strict narrowing: no name that resolved
-// before stops resolving.
+// ⚠ **AND NOT ITS VISIBILITY CONDITION EITHER, which stays a deliberate divergence even now that
+// visibility IS load-bearing (P1.9).** `topLevelStorageKey` files a FILE-PRIVATE binding under the
+// scoped key and an exported one under the bare name, so visibility is a property of the KEY. An alias
+// may not be filed that way: `cast-to-stdlib-internal-typealias` requires a stdlib alias to be nameable
+// "from any file, regardless of its source-level visibility modifier", so a NON-EXPORTED declaration
+// still has to be reachable through the bare door — for the stdlib, and (below) for a name several
+// files declare where only one exports it. So EVERY alias reaches `byName` whatever it wrote, and
+// visibility is applied at the READ (`visibleFrom`), not at the write.
+//
+// ⭐ That placement is what lets the two requirements be ONE rule rather than a rule and an exception:
+// a stdlib-supplied alias is `Visibility.global`, so the read-side test has no stdlib case in it at
+// all — and no path probing, which is what v1 does here and what its own surveyor calls
+// "fragile/environment-coupled" (`StdlibLoader.findStdlibPath`).
 //
 // **OUT OF SCOPE, deliberately** (coordinator ruling): when a name is declared in several OTHER
 // files and none is the reader's, the bare probe still answers last-wins. That is the E3063
 // ambiguity case, and reporting it needs cross-file name resolution — the same rung that gives
 // `export` its meaning as a key.
+// ⭐⭐ **THE ALIASES THE COMPILER SUPPLIES ON THE STDLIB'S BEHALF.** Each is declared, verbatim, in a
+// `stdlib/` module shv2 cannot compile — `Character.maxon` because it also declares `type Character`, a
+// name the compiler owns; `Array.maxon` because `Array` is a synthesized builtin — so the alias exists in
+// the LANGUAGE and in no registry a reader can probe. Seeded, it exists in both.
+//
+// They are ordinary `record`ed declarations of ordinary files, not carve-outs: a user's own
+// `typealias Codepoint = int(0 to 10)` simply contests one (`multiplyDeclared` files both, the user's file
+// resolves to the user's bounds), and the DECL PATH is the module the line really comes from, so a
+// diagnostic that ever prints it points at the truth. No file shv2 LOADS carries these paths, so neither
+// can collide with a reader's own path.
+//
+// ⭐ Their visibility is `global`, and that is what `cast-to-stdlib-internal-typealias` needs: a
+// stdlib-internal alias is nameable from any file "regardless of its source-level visibility modifier"
+// (the spec), and `ElementCount` is declared without `export` in `stdlib/Array.maxon`. Stating it as a
+// TIER rather than as an exception is what keeps `visibleFrom` free of a special case.
+
 // `stdlib/Character.maxon`'s `export typealias Codepoint = int(0 to 1114111)`, transcribed — the highest
 // Unicode scalar value, which is what makes the upper bound this number and not a round one.
 let CodepointAliasLow = 0 as ParsedInt
 let CodepointAliasHigh = 1114111 as ParsedInt
-
-// The file the seed claims as its declaring one. It names the module the line actually comes from, so a
-// diagnostic that ever prints it points at the truth; and because no file shv2 LOADS carries this path
-// (loading `Character.maxon` is what the compiler cannot do), it can never collide with a reader's own
-// path in `multiplyDeclared` — so a user's declaration always wins in the user's own file.
 let CodepointAliasDeclPath = "stdlib/Character.maxon"
 
-// The seed itself, built once per registry. Positions are 0: there is no source line in THIS program to
-// blame, and the only diagnostics that read them (E3061 same-file redeclaration, E3105 cross-file
-// primitive conflict) cannot fire against it — a user redeclaring `Codepoint` is in a different file, and
-// over `int`, which is this one's primitive too.
-function builtinCodepointAlias() returns RangedTypeAlias
+// `stdlib/Array.maxon:11`'s `typealias ElementCount = int(0 to u64.max)`, transcribed — the count and
+// index domain of the public collection API, which user code has to be able to name in an `as` cast.
+// The upper bound is the full unsigned span, which rides as the wrapped -1 exactly as a parsed
+// `u64.max` bound does (`RangedTypeAlias`).
+let ElementCountAliasLow = 0 as ParsedInt
+let ElementCountAliasHigh = U64MaxBound
+let ElementCountAliasName = b"ElementCount"
+let ElementCountAliasDeclPath = "stdlib/Array.maxon"
+
+// One seed. Positions are 0: there is no source line in THIS program to blame, and the only diagnostics
+// that read them (E3061 same-file redeclaration, E3105 cross-file primitive conflict) cannot fire against
+// one — a user redeclaring the name is in a different file, and over `int`, which is a seed's primitive too.
+function builtinStdlibAlias(name ByteArray, low ParsedInt, high ParsedInt, declPathText String) returns RangedTypeAlias
 	// Bound to a local rather than written inline as the argument: the bootstrap mislowers a
 	// `try … otherwise panic(…)` in argument position (E9001, "not in valueMap" against the pin temp).
-	let declPath = try FilePath.from(CodepointAliasDeclPath) otherwise panic("builtinCodepointAlias: '{CodepointAliasDeclPath}' is a literal relative path with no invalid character in it")
+	let declPath = try FilePath.from(declPathText) otherwise panic("builtinStdlibAlias: '{declPathText}' is a literal relative path with no invalid character in it")
 
-	return RangedTypeAlias.create(CodepointTypeName, underlying: MaxonType.integer, low: CodepointAliasLow, high: CodepointAliasHigh, declFilePath: declPath, nameLine: 0, nameColumn: 0)
-end 'builtinCodepointAlias'
+	return RangedTypeAlias.create(name, underlying: MaxonType.integer, low: low, high: high, visibility: Visibility.global, declFilePath: declPath, nameLine: 0, nameColumn: 0)
+end 'builtinStdlibAlias'
+
+// ⭐ **MAY `readerFilePath` NAME THIS DECLARATION (P1.9)?** Three tiers, no exceptions:
+//
+//   • its OWN declaring file always may — visibility governs who ELSE may see a declaration, never
+//     whether the declaration is in scope where it was written;
+//   • an `export`ed (`module`) or compiler-supplied stdlib (`global`) alias may be named anywhere;
+//   • a plain `typealias` may not be named from another file.
+//
+// ⚠ **IT IS A SEPARATE QUESTION FROM `lookup`, AND NOT FOLDED INTO IT, because the two answers are
+// wanted apart.** A hidden alias is still FOUND — that is exactly what tells "no declaration binds
+// this name anywhere" (E3011, at the `as`) from "one does, elsewhere, and did not export it" (E2003,
+// at the target name). Folding the test into `lookup` would collapse the two into the sharper one's
+// wording and report the wrong mistake.
+//
+// ⚠ **AND IT IS ASKED ONLY AT AN `as` CAST TARGET TODAY** (`Parser.hiddenAliasCastTarget`), which is
+// the position the corpus pins and the position v1 checks (`validateNamedTypeVisibility` walks
+// `convert` ops and nothing else). A hidden alias written as a PARAMETER or FIELD type still
+// resolves; widening that is a cross-file name-resolution rung, not a line here, because the message
+// this reports names the `as` and there is no ported wording for the other positions.
+// A FREE function, not a registry method: it reads the declaration and the reader's path and nothing
+// else, so it needs no registry state — and the parser, which is what asks it, holds an alias but no
+// registry.
+export function visibleFrom(alias RangedTypeAlias, readerFilePath FilePath) returns bool
+	if alias.visibility != Visibility.file 'exportedOrGlobal'
+		return true
+	end 'exportedOrGlobal'
+
+	return alias.declFilePath.toString().equals(readerFilePath.toString())
+end 'visibleFrom'
 
 export type RangedAliasRegistry
 	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
@@ -452,7 +516,8 @@ export type RangedAliasRegistry
 	// hashing it would invalidate every parse memo in the project to record a constant.
 	export static function create() returns RangedAliasRegistry
 		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create()}
-		_ = registry.record(builtinCodepointAlias())
+		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath))
+		_ = registry.record(builtinStdlibAlias(ElementCountAliasName, low: ElementCountAliasLow, high: ElementCountAliasHigh, declPathText: ElementCountAliasDeclPath))
 		return registry
 	end 'create'
 
@@ -1917,6 +1982,20 @@ export type Project
 	// resolved — the one thing that keeps it out of `checkValueMergeSignatures`' pre-resolution sweep. Reset
 	// with the other push-merge targets so a warm rebuild does not double it.
 	export var pendingFunctionTypeDoors as PendingFunctionTypeDoorArray
+	// ⭐ THE TWO DEFERRED NAME DIAGNOSTIC LISTS (P1.9) — E3062 candidates and hidden `as` targets,
+	// appended per file by `mergeArtifact` and drained, in this order, by
+	// `TypeResolution.reportDeferredNameDiagnostics`. `DeferredNameDiagnostic` carries the argument for
+	// why they are held back rather than reported where they are found. Reset with the other push-merge
+	// targets so a warm rebuild does not double them.
+	export var unusedTypeAliasDiagnostics as DeferredNameDiagnosticArray
+	export var hiddenTypeNameDiagnostics as DeferredNameDiagnosticArray
+	// ⭐ Every declaration a type-name COLLISION was reported for (E3061/E3006,
+	// `reportTypeNameCollision`) — the suppression set the unused-typealias drain reads, so one mistake
+	// earns one diagnostic. Keyed by `fileScopedDeclKey`, per DECLARING FILE: a bare name would let one
+	// file's duplicate `Byte` swallow another file's genuinely-unused one, two files being entitled to
+	// declare that name (see `TypeNameRegistry`). Reset with `typeNameDecls`, whose walk is its only
+	// writer.
+	export var collidedTypeNames as CollidedTypeNameSet
 	// Declared ranged typealiases, keyed by name (see RangedTypeAlias). The registry
 	// TypeResolution resolves every `MaxonType.named` against.
 	export var typeAliases as RangedAliasRegistry
@@ -2012,6 +2091,9 @@ export type Project
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
+			unusedTypeAliasDiagnostics: DeferredNameDiagnosticArray.create(),
+			hiddenTypeNameDiagnostics: DeferredNameDiagnosticArray.create(),
+			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
 			typeAliases: RangedAliasRegistry.create(),
 			typeNameDecls: TypeNameRegistry.create(),

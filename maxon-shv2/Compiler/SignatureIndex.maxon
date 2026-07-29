@@ -302,7 +302,10 @@ end 'topLevelStorageKey'
 // They use a two-level map instead, which needs no composite key. This site keeps the string key
 // because `declIndex` is one flat map shared with `topLevelStorageKey`'s writes; giving it the same
 // treatment is a change to that map's shape and to its writer, not to this function.
-function fileScopedDeclKey(name ByteArray, declFilePath FilePath) returns ByteArray
+// EXPORTED because the P1.9 collision-suppression set is keyed the same way and for the same reason —
+// "which FILE's declaration is this?" — and a second composite-key builder would be free to spell the
+// separator differently from this one.
+export function fileScopedDeclKey(name ByteArray, declFilePath FilePath) returns ByteArray
 	return "{declFilePath.toString()}{FileScopedKeySeparator}{String.from(name)}".toByteArray()
 end 'fileScopedDeclKey'
 
@@ -1707,6 +1710,11 @@ typealias ArrayLiteralElementNameSet = Set with ByteArray
 // not a bool.
 typealias ManagedTopLevelNameSet = Set with ByteArray
 
+// The `<declaring file>|<type name>` keys of every type name a top-level constant initializer casts to
+// (P1.9). Scoped rather than bare because the question it answers — "was this alias used in its OWN
+// file?" — is a file's. See `ProgramSignatures.constCastTargets`.
+typealias ConstCastTargetSet = Set with ByteArray
+
 // ⭐ **THE GENERIC-INSTANCE INTERNER (P1.6-A)** — `Box with Integer` ⇒ a `GenericInstanceId`, with the
 // `(baseId, argTypes)` payload held OUT OF LINE (inlining args into `MaxonType` would make the union
 // recursively aggregate — E4014). Two instances with the same base and structurally equal args share
@@ -2183,9 +2191,14 @@ export type ProgramSignatures
 	// index knows which side of the fold each of them is on. A flag threaded through `Parser.create`
 	// would be the same fact written down at three call sites, free to be passed wrongly at any of them.
 	export var allFilesFolded as bool
+	// ⭐ **THE TYPE NAMES TOP-LEVEL CONSTANT INITIALIZERS CAST TO, scoped by declaring file** (P1.9) —
+	// the one `use` the E3062 check cannot get from the parser. Written by `recordConstCastTarget` from
+	// inside the constant evaluator, read by `Parser.reportUnusedTypeAliases`; both doors carry the
+	// argument. Empty for every program with no top-level `let X = … as T`, which is nearly all of them.
+	var constCastTargets as ConstCastTargetSet
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create()}
 	end 'create'
 
 	// Could `name` denote a top-level MANAGED binding — `let` or `var` — anywhere in this program? A
@@ -2843,7 +2856,9 @@ export type ProgramSignatures
 	// once per declaration, never per reference (the memo above sees to that). Programs with no
 	// top-level constant build no parser here at all.
 	function walkConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstEvalOutcome
-		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: "", signatures: self)
+		// `isStdlibSource: false` is exact rather than a default: this walk reads an INITIALIZER, and the
+		// only thing the flag governs is a `typealias` DECLARATION, which an initializer cannot contain.
+		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: "", signatures: self, isStdlibSource: false)
 		let folded = try parser.evalConstInitializer(decl, stack: stack) otherwise (err) 'noValue'
 			return self.recordFailure(decl, error: err)
 		end 'noValue'
@@ -3510,6 +3525,36 @@ export type ProgramSignatures
 	export function aliasOf(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
 		return self.typeAliases.lookup(name, readerFilePath: readerFilePath)
 	end 'aliasOf'
+
+	// ⭐ **THE TYPE NAMES A FILE'S TOP-LEVEL CONSTANT INITIALIZERS CAST TO (P1.9) — a `use` the real
+	// parse structurally cannot see.**
+	//
+	// `let SENTINEL = 5 as Slot` is the only mention of `Slot` in many real files, and the E3062 check
+	// would call the alias unused. It cannot see the cast because the real parse SKIPS a top-level
+	// initializer's tokens wholesale (`readTopLevelBinding`) — the initializer is folded once, before
+	// any file is parsed, by the const evaluator (`evaluateInitializers`), whose `Parser` is transient
+	// and whose artifact is discarded.
+	//
+	// So the use is recorded HERE, on the index that evaluator is building and that every parse then
+	// reads. That is the same "record a use where the name is RESOLVED" rule the two parser hooks
+	// follow (`Parser.recordTypeNameUse`); this is simply the door for the one reader that is not the
+	// parser. It is keyed per DECLARING FILE, because "used in its OWN file" is the whole question.
+	//
+	// ⚠ It records the target of EVERY constant cast, including `as int` and `as ExitCode`. Filtering
+	// to alias names would mean asking the alias registry mid-sweep, when it is still being built and
+	// an absence means only "not swept yet"; and a name that is not a declared alias matches no
+	// candidate, so the extra entries answer nothing and cost one set insert each.
+	export function recordConstCastTarget(name ByteArray, declFilePath FilePath)
+		self.constCastTargets.insert(fileScopedDeclKey(name, declFilePath: declFilePath))
+	end 'recordConstCastTarget'
+
+	// Did a top-level constant declared in `declFilePath` cast to `name`? The read half of the above.
+	// It pays `fileScopedDeclKey`'s ~4 allocations, and pays them once per FILE-PRIVATE TYPEALIAS
+	// DECLARED — not per use and not per name reference — which is why the composite key is affordable
+	// here where `RangedAliasRegistry` refuses it.
+	export function isConstCastTarget(name ByteArray, declFilePath FilePath) returns bool
+		return self.constCastTargets.contains(fileScopedDeclKey(name, declFilePath: declFilePath))
+	end 'isConstCastTarget'
 
 	// The bare-name door, for the readers that have no file to ask from — see
 	// `RangedAliasRegistry.underlyingInAnyFile`, which is where the (narrow) residual is written down

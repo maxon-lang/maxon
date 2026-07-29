@@ -457,9 +457,6 @@ error E2004: specs/fragments/export-keyword/error.non-exported-enum-cross-file.t
 ```
 
 <!-- test: exported-typealias-cross-file -->
-<!-- P1.9 ranged typealiases — the cross-file half already works (the alias registry is
-     whole-program), but `42 as Score` does not parse at all: `Unsupported: as statement`.
-     The `as` CAST is the missing piece, not the export. -->
 ```maxon
 // --- file: api/types.maxon
 export typealias Score = int(0 to 100)
@@ -474,7 +471,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: error.non-exported-typealias-cross-file -->
+<!-- test: error.non-exported-typealias-cross-file -->
 <!-- export visibility + E3062 unused-typealias -->
 ```maxon
 // --- file: types.maxon

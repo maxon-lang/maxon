@@ -35,6 +35,12 @@ public enum ErrorCode {
   ParserUnexpectedToken = 2001,
   /// <summary>
   /// A type was required here and the token stream had something else.
+  /// shv2 emits it for the two shapes where a name IS present but is not a
+  /// usable type: a bare sized type as a typealias RHS (`typealias I = i64`),
+  /// and an `as` cast target that names a typealias the reading file cannot
+  /// see. A cast target no declaration binds ANYWHERE is E3011 instead, which
+  /// is sharper than the reference's blanket E2003 -- see
+  /// specs-shv2/cast-target-type-resolution.md.
   /// </summary>
   ParserExpectedType = 2003,
   /// <summary>
@@ -379,6 +385,9 @@ public enum ErrorCode {
   SemanticDuplicateTypeAlias = 3061,
   /// <summary>
   /// A typealias is declared and never used.
+  /// "Used" means the NAME appears in a type position in its OWN declaring
+  /// file. An exported alias is exempt (one file cannot see another's uses),
+  /// and being implicitly inferable from a bare `[...]` literal is not a use.
   /// </summary>
   SemanticUnusedTypeAlias = 3062,
   /// <summary>

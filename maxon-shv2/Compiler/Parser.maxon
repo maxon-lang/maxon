@@ -716,7 +716,96 @@ export union ParseError implements Error
 	// else. `label` is the block's own label, taken from its opening token rather than from the `end`'s
 	// optional one, so a block closed by a bare `end` still names itself.
 	emptyBlock(label String, line LineNumber, column ColumnNumber)
+	// --- The DECLARATION-SITE typealias arms (P1.9) ---
+	//
+	// ⭐ A BARE SIZED TYPE AS A TYPEALIAS RHS — `typealias Integer = i64`. Renders as **E2003**,
+	// positioned at the RHS name. It is refused rather than accepted because a sized name carries a
+	// WIDTH and no RANGE, and every reader shv2 has asks a ranged alias for its bounds — so the
+	// shorthand would mint a type whose narrowing check has nothing to check against. The message
+	// carries its own remedy, which is why this is not the generic `unsupported`: the fix is one
+	// rewrite of the same line, and naming it is the whole value of the diagnostic.
+	//
+	// ⚠ The suggested form says `int(...)` for a FLOAT name too (`f64` suggests `int(f64.min to
+	// f64.max)`). That reads oddly and it is the reference oracle's exact text, byte for byte
+	// (`2-Parser.cs:4794`); the specs compare stderr exactly, so it is transcribed and not improved.
+	bareSizedTypeAlias(typeName String, line LineNumber, column ColumnNumber)
+	// ⭐ TWO TYPE-QUALIFIED RANGE BOUNDS NAMING DIFFERENT TYPES — `int(i8.min to i32.max)`. Renders as
+	// **E3005**, positioned at the `int`/`float` keyword. A bound written as `<sized>.<min|max>` says
+	// which type's extreme it means, and a range whose two ends mean two different types is a mistake
+	// about the type, not a range to normalize. A bound written as a plain LITERAL names no type and is
+	// compatible with any qualifier, so this fires only when BOTH ends are qualified.
+	//
+	// `low`/`high` are the bounds AS WRITTEN (`i8.min`, `i32.max`). ⚠ The reference hardcodes `.min`
+	// on the low and `.max` on the high (`2-Parser.cs:4831`), so it reports `'i8.min'` for a source
+	// that wrote `i8.max`; shv2 prints the field the source actually named. Every case the corpus pins
+	// writes `.min` low and `.max` high, so the two agree everywhere a golden compares them.
+	mismatchedRangeBoundTypes(low String, high String, line LineNumber, column ColumnNumber)
+	// ⭐ AN INTEGER RANGE SPANNING BOTH NEGATIVE VALUES AND ABOVE `i64.max` — `int(-1 to u64.max)`.
+	// Renders as **E3005**, positioned at the `int` keyword. `u64.max` is stored as the wrapped -1
+	// (`RangedTypeAlias` keeps raw 64-bit patterns), so without this the range would silently collapse
+	// to `-1 to -1` and every check against it would be answering about a range nobody wrote. No
+	// 64-bit type holds both ends, so it is refused rather than widened.
+	unrepresentableIntegerRange(low ParsedInt, line LineNumber, column ColumnNumber)
+	// ⭐ A `try … otherwise <literal>` DEFAULT OUTSIDE THE CALLEE'S RANGED RETURN TYPE. Renders as
+	// **E3005**, positioned at the `try`. The default is bound to the callee's return type, so on the
+	// error path it produces a value wearing a type whose declared range excludes it — the one
+	// invariant a ranged type exists to carry. Refused at compile time exactly as an out-of-range
+	// literal is at a cast (E3005 from `InsertRangeChecks`) or at a ranged `return`.
+	otherwiseOutsideRangedReturn(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, line LineNumber, column ColumnNumber)
+	// ⭐ AN `as` CAST TARGET NAMING A TYPEALIAS THE READING FILE CANNOT SEE — a non-exported alias
+	// declared in ANOTHER file. Renders as **E2003** with the reference's exact wording
+	// (`HiddenTypeNameMessage`), positioned at the TARGET NAME — where `unknownCastTargetType` next
+	// door anchors at the `as`, because for that one the name denotes nothing anywhere and the `as` is
+	// the only token that is certainly part of a cast.
+	//
+	// It is a DIFFERENT diagnostic from E3011 on purpose: "no declaration binds this name anywhere" and
+	// "a declaration binds it, elsewhere, and did not export it" are different mistakes with different
+	// fixes, and shv2 can tell them apart because `aliasOf` finds the declaration either way. The
+	// reference collapses both into this one message; shv2 keeps E3011 sharper for the undeclared case
+	// (`specs-shv2/cast-target-type-resolution.md`) and matches the reference for this one.
+	//
+	// ⚠ **THIS VARIANT IS THE TOP-LEVEL-CONSTANT SPELLING ONLY.** A BODY cast records a
+	// `DeferredNameDiagnostic` instead of throwing — see `Parser.recordHiddenCastTarget` for the whole
+	// argument, and `hiddenAliasCastTarget` for the one predicate both spellings decide by.
+	hiddenCastTargetType(line LineNumber, column ColumnNumber)
 end 'ParseError'
+
+// ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
+//
+// Two of P1.9's diagnostics are about a NAME rather than about syntax — E3062 (an alias no position in
+// its own file names) and E2003 (a cast target the reading file cannot see) — and the corpus pins them
+// in a program where each comes from a DIFFERENT file, E3062 first
+// (`export-keyword/error.non-exported-typealias-cross-file`).
+//
+// ⚠ **THAT ORDER CANNOT BE HAD FROM PER-FILE REPORTING, and the reason is measured rather than
+// theoretical.** A file's diagnostics are reported as that file is parsed, so their order is the order
+// the SOURCE WALK found the files — which is alphabetical (`Compiler.collectMaxonSources`, measured
+// 2026-07-28: `main.maxon` before `types.maxon`, in both compilers). The pinned program declares the
+// alias in `types.maxon` and misuses it in `main.maxon`, so per-file reporting emits them backwards,
+// and it would do so as a property of two FILENAMES rather than of the program.
+//
+// ⇒ Both are recorded here instead and reported by `TypeResolution.reportDeferredNameDiagnostics`,
+// which drains the unused list and then the hidden list — so the order is a property of WHAT the
+// diagnostics are, which is the only thing that can be relied upon. It is v1's arrangement too
+// (`drainPendingUnusedTypealiases` and `validateNamedTypeVisibility`, both inside its TypeResolution),
+// and the deferral is what makes the E2003 non-fatal to the parse as well: a file that misuses a
+// hidden alias goes on parsing, so its other diagnostics are still reported.
+//
+// It carries the NAME as a field rather than only inside a rendered message because the drain must be
+// able to SUPPRESS by name: an alias whose declaration already collided with another is reported once,
+// as the collision (`Project.collidedTypeNames`).
+export type DeferredNameDiagnostic
+	export let name as ByteArray
+	export let filePath as FilePath
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function create(name ByteArray, filePath FilePath, line LineNumber, column ColumnNumber) returns DeferredNameDiagnostic
+		return Self{name: name, filePath: filePath, line: line, column: column}
+	end 'create'
+end 'DeferredNameDiagnostic'
+
+export typealias DeferredNameDiagnosticArray = Array with DeferredNameDiagnostic
 
 // The result of recovering a promise handle's AWAITED callee name from its defining `asyncCall`
 // (P1.5-B2b) — `found` for a real async spawn's result, `none` for a value that is not one.
@@ -804,6 +893,39 @@ end 'displayParamName'
 export function immutableMutatingCallMessage(blamed String, paramName String, functionName String) returns String
 	return "cannot pass '{blamed}' to function that mutates parameter '{paramName}' (in {functionName})"
 end 'immutableMutatingCallMessage'
+
+// Every type NAME one file writes in a type position (P1.9). See `Parser.usedTypeNames`.
+export typealias UsedTypeNameSet = Set with ByteArray
+
+// The set every file that names no type at all shares — most files name several, but the sweep's and
+// the const evaluator's `Parser`s reach no type position whatever, and neither should allocate one.
+// Copy-on-write, exactly as `sharedEmptyInnerAliases` is (`Parser.recordTypeNameUse`).
+let sharedEmptyUsedTypeNames = UsedTypeNameSet.create()
+
+// ⭐ THE ONE EMPTY `DeferredNameDiagnosticArray` every list of that type starts as — the parser's
+// candidate list and both of the artifact's. A SINGLE singleton, because the copy-on-write test is an
+// IDENTITY test (`is`): two empties of one type would not be interchangeable, so which one a field was
+// seeded with would become a fact to remember rather than one to derive.
+export let sharedEmptyDeferredNameDiagnostics = DeferredNameDiagnosticArray.create()
+
+// Append to a copy-on-write deferred list and hand back the list to store. The ONE writer for all three
+// fields that share the singleton above, so the identity test is spelled once instead of at each.
+// ⚠ Each arm builds and returns its OWN list rather than rebinding one `var` across the `if`. That is
+// not style: shv2 mints no merge phi for a MANAGED `var` reassigned inside a labelled `if` in a free
+// function, and the rebinding form is `E9001 … does not dominate` at this very call
+// (`stdlib.Array.push` reading a value defined only on the taken arm). A loud internal error, not a
+// wrong answer — and a pre-existing gap in a construct this rung does not otherwise touch, so it is
+// REPORTED rather than worked around anywhere else.
+export function appendDeferredNameDiagnostic(list DeferredNameDiagnosticArray, entry DeferredNameDiagnostic) returns DeferredNameDiagnosticArray
+	if list is sharedEmptyDeferredNameDiagnostics 'stillShared'
+		var fresh = DeferredNameDiagnosticArray.create()
+		fresh.push(entry)
+		return fresh
+	end 'stillShared'
+
+	list.push(entry)
+	return list
+end 'appendDeferredNameDiagnostic'
 
 // A generic type's bare-method-name -> "does it carry a layout-descriptor param?" map (P1.6-B1). See
 // `Parser.typeDescriptorNeeds`.
@@ -1076,7 +1198,12 @@ end 'FieldChainStep'
 let U8MaxBound = u8.max as ParsedInt
 let U16MaxBound = u16.max as ParsedInt
 let U32MaxBound = u32.max as ParsedInt
-let U64MaxBound = u64.max as ParsedInt
+
+// EXPORTED, alone among the four: `Project`'s seeded `stdlib/Array.maxon` alias declares
+// `int(0 to u64.max)` and must spell that upper bound the same way a PARSED `u64.max` bound does —
+// the wrapped -1 the registry stores. A second literal there would be the same number written twice,
+// in the one place a divergence would be silent (both spellings compile; only one matches).
+export let U64MaxBound = u64.max as ParsedInt
 
 // Every unsigned type's lower bound. One constant, not four: `u8.min` and `u64.min`
 // are the same zero, and a per-type spelling would only invite them to drift apart.
@@ -1286,6 +1413,89 @@ function pickBound(low ParsedInt, high ParsedInt, wantMax bool) returns ParsedIn
 	end 'max'
 	return low
 end 'pickBound'
+
+// Is `name` one of the ten SIZED type names? Derived from `sizedTypeBound` — the one table that says
+// what those names are — rather than from a second list beside it, so a name cannot be sized enough to
+// have a bound and not sized enough to be refused as a bare alias RHS. `wantMax` is immaterial: a name
+// either has both extremes or neither.
+//
+// ⚠ It answers TRUE for `f32`/`f64` as well as the eight integers, and that is the reference oracle's
+// roster, measured: `typealias Real = f64` is E2003 there. (v1's own `isSizedTypeName` lists only the
+// eight, which is the narrower of the two answers and the one the corpus does not pin.)
+function isSizedTypeName(name ByteArray) returns bool
+	return match sizedTypeBound(name, wantMax: true) 'kind'
+		value to floatBound gives true
+		notASizedType gives false
+	end 'kind'
+end 'isSizedTypeName'
+
+// ⭐ **ONE ENDPOINT OF A DECLARED RANGE, WITH THE PROVENANCE THE DECLARATION CHECK NEEDS.**
+//
+// The VALUE alone cannot answer the two questions `requireRepresentableRange` asks, and the reason is
+// that a bound's value is lossy about where it came from: `u64.max` is stored as the wrapped **-1**
+// (`RangedTypeAlias` keeps raw 64-bit patterns), so `int(-1 to u64.max)` and `int(-1 to -1)` are the
+// same pair of numbers and only one of them is a mistake. The qualifier is what tells them apart.
+//
+// It exists ONLY between `parseRangeBound` and that check — `RangedTypeAlias` still stores two plain
+// numbers, because nothing downstream of the declaration has any use for how the author spelled a
+// bound, and a field there would be paid for by every alias in the program.
+//
+// Both reference compilers reach for the same representation — a `(value, qualifier)` pair, empty for a
+// plain literal (`2-Parser.cs:5208`'s `(long, string?)`; v1's `BoundResult`, `Parser.maxon:21088`) —
+// which is the convergence that says it is the shape of the problem and not a choice. shv2 carries
+// `isMax` alongside so the diagnostic can print the field the SOURCE named rather than assuming `.min`
+// on the low end and `.max` on the high (see `mismatchedRangeBoundTypes`).
+type ParsedRangeBound
+	export let value as ParsedInt
+	// The sized type a `<sized>.<min|max>` bound named, or EMPTY for a plain literal. A literal names no
+	// type, so it is compatible with any qualifier — which is why emptiness is the whole test the
+	// mismatch check makes before comparing.
+	export let qualifier as ByteArray
+	export let isMax as bool
+	// ⭐ **DOES THE BOUND AS WRITTEN NAME `u64.max`** — the ONE extreme no signed 64-bit lower bound can
+	// share a type with, `u64` being the only sized type whose maximum exceeds `i64.max`?
+	//
+	// ⚠ **DECIDED AT CONSTRUCTION, AND THAT IS THE WHOLE REASON IT IS A FIELD.** `upto` normalizes the
+	// bound to an inclusive `high - 1` (`withValue`), so after normalization the record holds `-2` where
+	// the source wrote `u64.max`; a test derived from the value at READ time therefore answers about a
+	// number the author never wrote. MEASURED before this was a field: `int(-1 to u64.max)` was refused
+	// and `int(-1 upto u64.max)` — the same mistake, one keyword apart — was accepted and minted the
+	// range `int(18446744073709551615 to -2)`, which no value can satisfy.
+	//
+	// It is derived from the VALUE rather than by comparing the qualifier against a second `b"u64"`
+	// written here: `sizedTypeBound` is where the ten names live, and `U64MaxBound` is the only `.max` in
+	// that table equal to it. The `isMax` half is load-bearing too — `u64.min` is 0 and pairs with a
+	// negative lower perfectly well (`int(-1 to u64.min)` is `int(-1 to 0)`). (The reference oracle tests
+	// only the qualifier and so REFUSES that legal range, with a message quoting a `u64.max` the source
+	// never wrote: measured 2026-07-28.)
+	export let namesUnsignedMax as bool
+
+	static function literal(bound ParsedInt) returns ParsedRangeBound
+		return Self{value: bound, qualifier: EmptyBoundQualifier, isMax: false, namesUnsignedMax: false}
+	end 'literal'
+
+	static function qualified(bound ParsedInt, qualifier ByteArray, isMax bool) returns ParsedRangeBound
+		return Self{value: bound, qualifier: qualifier, isMax: isMax, namesUnsignedMax: isMax and bound == U64MaxBound}
+	end 'qualified'
+
+	// The same bound with a different VALUE and the same provenance — `upto`'s normalization to an
+	// inclusive `high - 1`. Every provenance field rides through unaltered: they describe what the
+	// source WROTE, which the normalization did not change.
+	function withValue(bound ParsedInt) returns ParsedRangeBound
+		return Self{value: bound, qualifier: self.qualifier, isMax: self.isMax, namesUnsignedMax: self.namesUnsignedMax}
+	end 'withValue'
+
+	// How the bound was WRITTEN — `i8.min`, `u64.max` — for the mismatch diagnostic. Only ever asked of
+	// a qualified bound (the check that asks has already established both ends carry a qualifier).
+	function spelling() returns String
+		let field = MaxBoundField if self.isMax else MinBoundField
+		return "{String.from(self.qualifier)}.{String.from(field)}"
+	end 'spelling'
+end 'ParsedRangeBound'
+
+// The empty qualifier a LITERAL bound carries. Named rather than spelled `b""` at its construction
+// sites, and shared, so the "no type was named" marker is one object rather than one per bound parsed.
+let EmptyBoundQualifier = b""
 
 // The bits of an `f32`/`f64` `.min`/`.max` bound, but ONLY where a float bound is legal — inside a
 // `float(...)` typealias (`isFloat`). In an int alias (`int(0 to f64.max)`) or in expression position
@@ -3885,8 +4095,33 @@ export type Parser
 	// no-op at height 0) and allocated ONCE, so the scale corpus (all scalar, no owned bindings) pays
 	// nothing per expression.
 	let emptyMoveMark as MoveMark
+	// ⭐ **EVERY TYPE NAME THIS FILE WRITES IN A TYPE POSITION (P1.9) — the E3062 check's other half.**
+	// File-scoped and never reset: "is this alias used?" is a question about the whole file, and the
+	// declarations it answers for are the whole file's too.
+	//
+	// It records NAMES and not just alias names, because the recording sites do not know (and must not
+	// have to ask) whether a written name is an alias, a struct or an interface — the filtering happens
+	// once, at `reportUnusedTypeAliases`, against the declarations. See `recordTypeNameUse` for the
+	// three sites and why they are the whole list.
+	// ⭐ **IS THE FILE BEING PARSED `stdlib/` SOURCE (P1.9)?** One bit, decided once per file by the
+	// query that builds this parser (`Queries`), because that is the only tier holding the project —
+	// and asked only of a `typealias` declaration (`typeAliasVisibility`). It is what makes a
+	// stdlib-internal alias nameable from every file without a path probe anywhere near the hot path.
+	let isStdlibSource as bool
+	var usedTypeNames as UsedTypeNameSet
+	// ⭐ **DOES THIS WALK COLLECT USES AT ALL?** Set by `parseModule` and false everywhere else, because
+	// `parseModule` is the only entry point that ever REPORTS (`reportUnusedTypeAliases`). The
+	// declaration sweep runs the same `parseTypeReference` over every signature, field and payload type
+	// in the program and would hash all of them into a set it then discards — one allocation and N
+	// hashes per file, inside an O(files) loop, for an answer nobody reads.
+	var collectsTypeNameUses as bool
+	// ⭐ **THIS FILE'S NON-EXPORTED TOP-LEVEL TYPEALIASES, in declaration order** — the E3062 check's
+	// candidates. An EXPORTED alias never enters (one file cannot see another's uses, so it can only
+	// ever be a false positive), which is why the filter is at the RECORDING site and not at the report:
+	// a candidate that could never be reported should not be built.
+	var declaredTypeAliases as DeferredNameDiagnosticArray
 
-	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures) returns Parser
+	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool) returns Parser
 		return Self{
 			tokens: tokens,
 			pos: 0,
@@ -3947,13 +4182,22 @@ export type Parser
 			lastFieldReadOffset: 0,
 			closureReturns: FuncReturnTypeMap.create(),
 			closureCaptureScopes: ScopeArray.create(),
-			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create())
+			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()),
+			isStdlibSource: isStdlibSource,
+			usedTypeNames: sharedEmptyUsedTypeNames,
+			collectsTypeNameUses: false,
+			declaredTypeAliases: sharedEmptyDeferredNameDiagnostics
 		}
 	end 'create'
 
 	// Parse the whole file into its artifact. Top-level loop: skip blank lines,
 	// dispatch each declaration, stop at EOF.
 	export function parseModule() returns FileParseArtifact throws ParseError
+		// This walk is the one that reports unused typealiases at its end, so it is the one that collects
+		// the uses. Set HERE rather than at `create`, because it is a property of which ENTRY POINT was
+		// called and not of how the parser was built — the sweep and the real parse are built alike.
+		self.collectsTypeNameUses = true
+
 		while true 'top'
 			self.skipNewlines()
 			if self.isEof() 'done'
@@ -3961,6 +4205,11 @@ export type Parser
 			end 'done'
 			try self.dispatchTopLevel()
 		end 'top'
+
+		// ⭐ AT THE END, AND ONLY AT THE END: "is this alias used?" is a question about the WHOLE file, so
+		// it cannot be answered before the last declaration has been read. A file that threw never gets
+		// here, which is right — its later uses were never parsed, so every alias would look unused.
+		self.reportUnusedTypeAliases()
 		return self.artifact
 	end 'parseModule'
 
@@ -4172,7 +4421,7 @@ export type Parser
 				continue
 			end 'isFunction'
 
-			if self.at(TokenKind.typealias) 'isTypeAlias'
+			if self.atTypeAliasDeclaration() 'isTypeAlias'
 				self.recordScannedTypeAlias(aliases, functionAliases: functionAliases, genericAliases: genericAliases)
 				continue
 			end 'isTypeAlias'
@@ -5706,9 +5955,48 @@ export type Parser
 	// The FORM it read is discarded here alone: the sweep's job is the registries, and the type-name
 	// collision the form feeds is decided at the merge from the REAL parse's artifact (whose position
 	// is the one a diagnostic must be anchored on).
+	// ⚠ **THE SWEEP MUST READ THE `export` ITSELF**, because its walk skips the keyword as an ordinary
+	// token and the visibility it drops is the one `RangedAliasRegistry.lookup` resolves by. The
+	// cursor's `export` is consumed here rather than in the caller's loop for the same reason the
+	// alias's whole grammar is read here: the two passes must agree about what a declaration SAYS, and
+	// the fewer places that read a declaration, the fewer can disagree.
 	function recordScannedTypeAlias(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, genericAliases GenericAliasEntryArray)
-		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, recordFunctionSignature: false) otherwise return
+		let visibility = self.consumeOptionalExport()
+		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, recordFunctionSignature: false, visibility: visibility) otherwise return
 	end 'recordScannedTypeAlias'
+
+	// Consume an optional leading `export` and answer what it means. THE one reader of that keyword —
+	// four walks meet it (the top-level dispatch, a type member, the declaration sweep's typealias arm
+	// and its type-body scan) and each used to spell the same four lines, which is one rule written
+	// down four times in a file where a fifth walk is always about to be added.
+	function consumeOptionalExport() returns Visibility
+		if not self.at(TokenKind.export) 'notExported'
+			return Visibility.file
+		end 'notExported'
+
+		self.advance()
+		return Visibility.module
+	end 'consumeOptionalExport'
+
+	// ⭐ **AN ALIAS DECLARED IN `stdlib/` IS `global` WHATEVER IT WROTE (P1.9)** — the spec's "reachable
+	// as a cast target from any file, regardless of its source-level visibility modifier". Seven of the
+	// aliases user code has to be able to name are declared without `export`
+	// (`stdlib/Sleep.maxon`'s `Milliseconds` among them), because inside their own module they never
+	// needed to be; they appear in the PUBLIC signatures anyway, so a user must be able to write the
+	// name in an `as` cast.
+	//
+	// Called from `readTypeAliasDeclaration` — the ONE reader of the whole typealias grammar, which
+	// every declaration site goes through (the real parse, the declaration sweep, and a NESTED alias
+	// inside a type body) — so no site can be added that forgets it. `recordTypeName` asks it a second
+	// time for the E3062 candidate list, which is the same function answering the same question, not a
+	// second copy of the rule.
+	//
+	// ⚠ **IT IS A PROPERTY OF ALIASES, NOT OF STDLIB MEMBERSHIP**, so it is deliberately NOT applied to
+	// a stdlib FUNCTION or top-level binding: a non-exported stdlib method stays uncallable from user
+	// code, which `export-keyword/error.stdlib-non-exported-method-is-not-callable` pins.
+	function typeAliasVisibility(declared Visibility) returns Visibility
+		return Visibility.global if self.isStdlibSource else declared
+	end 'typeAliasVisibility'
 
 	// Cursor is AT `type`. Append the struct it declares, plus a `FuncReturnTypeEntry` for each
 	// method it declares, and leave the cursor PAST the declaration's `end`.
@@ -5758,11 +6046,8 @@ export type Parser
 			// resolves the way a top-level `IntBox` does, and stays distinct from another type's `ElementArray`).
 			// Tolerant, like `readStructFieldInto`: a malformed nested alias is the real parse's to report, and
 			// stopping here leaves the remaining tokens to the robust outer walk.
-			if depth == 0 and self.atNestedTypeAlias() 'isInnerAlias'
-				if self.at(TokenKind.export) 'exportedInnerAlias'
-					self.advance()
-				end 'exportedInnerAlias'
-				let nested = try self.readNestedTypeAlias() otherwise break
+			if depth == 0 and self.atTypeAliasDeclaration() 'isInnerAlias'
+				let nested = try self.readNestedTypeAlias(self.consumeOptionalExport()) otherwise break
 				match nested 'nested'
 					ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingType, alias: alias))
 					genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
@@ -6194,24 +6479,27 @@ export type Parser
 	// three forms, a `type`, an `enum`, a `union`, an `interface`, or a `let`/`var` binding. Everything
 	// else (`extension`, ...) is out of the slice and rejected with a positioned error.
 	//
-	// `visibility` is consumed by `parseFunction` and by `readTopLevelBinding`. A typealias carries
-	// one too, and it is still deliberately DROPPED — but no longer because nothing scopes aliases.
-	// `RangedAliasRegistry` resolves them per declaring FILE; what it does not do is let visibility
-	// decide REACHABILITY, because `specs-shv2/ranged-typealias.md`'s `cast-to-stdlib-internal-typealias`
-	// requires a stdlib alias to be nameable from any file "regardless of its source-level visibility
-	// modifier". So an alias is filed under both keys, visibility is read by nobody, and recording it
-	// would still be a field nothing reads. It becomes load-bearing with E3063 / cross-file name
-	// resolution, which is where `export` gets its meaning as a key.
+	// ⭐ **`visibility` IS NOW LOAD-BEARING FOR A TYPEALIAS TOO (P1.9), where it used to be read and
+	// dropped.** It decides two things, and neither could be answered without it:
+	//
+	//   • **REACHABILITY** — a non-exported alias is invisible to another file, which
+	//     `export-keyword/error.non-exported-typealias-cross-file` pins as E2003 at the cast target.
+	//     The carve-out that made this "a field nothing reads" — a stdlib alias must be nameable from
+	//     anywhere regardless of what it wrote — is kept, and kept as a THIRD tier rather than as an
+	//     exception: a stdlib declaration is `Visibility.global` (`RangedAliasRegistry`), so the
+	//     visibility test has no special case in it at all.
+	//   • **WHETHER AN UNUSED ALIAS CAN BE REPORTED** — an exported one cannot, because this file
+	//     cannot see the uses another file makes of it (E3062, `reportUnusedTypeAliases`).
+	//
+	// It reaches the ranged registry through `readTypeAliasDeclaration` and the E3062 candidate list
+	// through `recordTypeName`, from this one local — so the two records cannot come to disagree about
+	// what the source wrote.
 	//
 	// A `type`'s visibility is dropped for the reason a typealias's USED to be — `project.structTypes`
 	// is whole-program — which is why `parseTypeDeclaration` does not take one. Its METHODS each carry
 	// their own, read at the member (see `parseTypeMember`), because that is where the source writes it.
 	function dispatchTopLevel() throws ParseError
-		var visibility = Visibility.file
-		if self.at(TokenKind.export) 'exported'
-			self.advance()
-			visibility = Visibility.module
-		end 'exported'
+		let visibility = self.consumeOptionalExport()
 
 		// ⭐ **THE ONE PLACE THAT SEES ALL FIVE TYPE-MINTING KEYWORDS**, which is why the type-name
 		// declaration record is taken here and not inside each of the five parsers: the record's whole
@@ -6227,18 +6515,18 @@ export type Parser
 			// A FILE-scope function takes no receiver: there is no enclosing type for one to be.
 			try self.parseFunction(visibility, takesReceiver: false)
 		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
-			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, recordFunctionSignature: true)
-			self.recordTypeName(nameIndex, kind: form)
+			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, recordFunctionSignature: true, visibility: visibility)
+			self.recordTypeName(nameIndex, kind: form, visibility: self.typeAliasVisibility(visibility))
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
 			try self.parseTypeDeclaration()
-			self.recordTypeName(nameIndex, kind: TypeDeclKind.structType)
+			self.recordTypeName(nameIndex, kind: TypeDeclKind.structType, visibility: visibility)
 		end 'isTypeDecl' else if self.at(TokenKind.enum) or self.at(TokenKind.union) 'isEnumDecl'
 			let isUnion = self.at(TokenKind.union)
 			try self.parseEnumDeclaration(isUnion)
-			self.recordTypeName(nameIndex, kind: TypeDeclKind.unionType if isUnion else TypeDeclKind.enumType)
+			self.recordTypeName(nameIndex, kind: TypeDeclKind.unionType if isUnion else TypeDeclKind.enumType, visibility: visibility)
 		end 'isEnumDecl' else if self.at(TokenKind.interface) 'isInterfaceDecl'
 			try self.parseInterfaceDeclaration()
-			self.recordTypeName(nameIndex, kind: TypeDeclKind.interfaceType)
+			self.recordTypeName(nameIndex, kind: TypeDeclKind.interfaceType, visibility: visibility)
 		end 'isInterfaceDecl' else if self.atTopLevelBindingKeyword() 'isBinding'
 			// The declaration EMITS NOTHING — for a `var` exactly as for a `let`. A constant inlines at
 			// every read; a var's slot is laid down by the backend from the arena
@@ -6258,10 +6546,91 @@ export type Parser
 	// the declaration the author wrote, never the keyword and never the incumbent. Takes the token's
 	// INDEX rather than the token, because the cursor has already moved past the declaration by the
 	// time this is called and `dispatchTopLevel` must not pay for a token it may never record.
-	function recordTypeName(nameIndex TokenIndex, kind TypeDeclKind)
+	// It ALSO enrols a non-exported typealias as an E3062 candidate, because this is the one site that
+	// holds all three facts at once — the name token, the FORM (only a `typealias` is a candidate;
+	// `isTypeAliasDecl` is the one place that classification lives), and the visibility the source
+	// wrote. Splitting it out would mean fetching the same token twice off the same index.
+	//
+	// ⚠ Only a TOP-LEVEL alias is a candidate. A nested one (`typealias Idx = …` inside a `type` body)
+	// never reaches here — `parseTypeMember` reads it — and it is deliberately not enrolled elsewhere:
+	// it is a member of a type, not a declaration of a file, and its uses are the type's.
+	function recordTypeName(nameIndex TokenIndex, kind TypeDeclKind, visibility Visibility)
 		let nameTok = self.tokenAt(nameIndex)
 		self.artifact.recordTypeNameDecl(TypeNameDecl.create(nameTok.value, kind: kind, declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
+
+		if not isTypeAliasDecl(kind) or visibility != Visibility.file 'notAnUnusedCandidate'
+			return
+		end 'notAnUnusedCandidate'
+
+		self.declaredTypeAliases = appendDeferredNameDiagnostic(self.declaredTypeAliases, entry: DeferredNameDiagnostic.create(nameTok.value, filePath: self.filePath, line: nameTok.line, column: nameTok.column))
 	end 'recordTypeName'
+
+	// ⭐ **RECORD THAT THIS FILE WROTE A TYPE NAME IN A TYPE POSITION (P1.9) — the E3062 "used" half.**
+	//
+	// ⚠ **THE RULE IS A LITERAL NAME IN A TYPE POSITION, AND NOTHING ELSE.** In particular, being
+	// IMPLICITLY INFERABLE is not a use: a bare `[1, 2, 3]` literal in a file that declares
+	// `typealias IntArray = Array with Integer` COULD be inferred as that alias, and both reference
+	// compilers still report the alias unused — the bootstrap's own comment says implicit binding
+	// "masked real unused-typealias mistakes" (`2-Parser.cs:18637`). `arrays/error.unused-array-typealias`
+	// pins exactly that program.
+	//
+	// ⭐ **THREE SITES, and they are three because that is how many DOORS shv2 has, not because a list
+	// was drawn up.** v1 marks uses at ~26 hand-maintained call sites scattered through its parser, and
+	// its own surveyor flags that as a completeness risk — a new type position silently forgets to mark.
+	// shv2 resolves written type names through far fewer doors, so a use is recorded where a name is
+	// RESOLVED:
+	//
+	//   1. `parseTypeReference` — the ONE type-reference parser, reached by every parameter type, return
+	//      type, field and payload type, generic type ARGUMENT, function-alias signature, `sizeof(T)`
+	//      operand and body `as` cast target. Ten call sites, one hook.
+	//   2. `parseQualifiedCall` — `IntArray.create()`. A generic-instance alias is very often named ONLY
+	//      here, and this base name is a raw token that never reaches (1).
+	//   3. A TOP-LEVEL constant's `as` target (`ProgramSignatures.isConstCastTarget`) — which the real
+	//      parse cannot see at all, because it SKIPS the initializer's tokens and the const evaluator
+	//      that does read them runs before any file is parsed. See that function.
+	//
+	// It takes NAMES indiscriminately — a struct name, an interface name, a type parameter — because a
+	// recording site does not know what a written name denotes and must not have to ask. The filtering
+	// happens once, at `reportUnusedTypeAliases`, against this file's own declarations.
+	function recordTypeNameUse(name ByteArray)
+		if not self.collectsTypeNameUses 'notTheReportingWalk'
+			return
+		end 'notTheReportingWalk'
+
+		if self.usedTypeNames is sharedEmptyUsedTypeNames 'stillShared'
+			self.usedTypeNames = UsedTypeNameSet.create()
+		end 'stillShared'
+		self.usedTypeNames.insert(name)
+	end 'recordTypeNameUse'
+
+	// ⭐ **E3062, ONCE PER FILE, AT THE END OF ITS PARSE** — every non-exported top-level typealias whose
+	// name this file never wrote in a type position, in DECLARATION order.
+	//
+	// The report is not made here: it is recorded and drained after every file is parsed, for the
+	// ordering reason `DeferredNameDiagnostic`'s header states in full.
+	//
+	// ⚠ An EXPORTED alias is exempt, and that is not leniency — it is the only sound answer a per-file
+	// check can give. Its uses may be in any other file, and this check sees one file, so reporting it
+	// could only ever be a false positive. (It is also why the pinned cross-file case reports TWICE: an
+	// alias that is non-exported AND used only from elsewhere is genuinely unused in its own file, and
+	// genuinely invisible at the use.) The exemption is applied at `recordTypeName`, so an exported
+	// alias is never even a candidate.
+	function reportUnusedTypeAliases()
+		for candidate in self.declaredTypeAliases 'each'
+			if self.usedTypeNames.contains(candidate.name) 'usedInABody'
+				continue
+			end 'usedInABody'
+
+			// The third door, asked SECOND because it costs a composite key where the set above costs a
+			// hash of bytes already in hand — and asked once per file-private alias DECLARED, which is
+			// the smallest population any of the three is asked of.
+			if self.signatures.isConstCastTarget(candidate.name, declFilePath: self.filePath) 'usedByAConstant'
+				continue
+			end 'usedByAConstant'
+
+			self.artifact.recordUnusedTypeAlias(candidate)
+		end 'each'
+	end 'reportUnusedTypeAliases'
 
 	// ⭐ A TOP-LEVEL `let` IS A COMPILE-TIME CONSTANT, AND THE DECLARATION IS WHERE ITS DIAGNOSTIC
 	// LANDS — but not where its VALUE is computed.
@@ -6426,7 +6795,12 @@ export type Parser
 	// rule has to tell them apart (`TypeNameRegistry`). The alternative — the caller inferring the
 	// form from which array grew, or re-deciding it off the tokens — would be a second copy of the
 	// discrimination this function already makes, which is this project's signature bug.
-	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, recordFunctionSignature bool) returns TypeDeclKind throws ParseError
+	// `visibility` reaches only the RANGED form's registry entry, because that is the only alias
+	// registry a cross-file reference is resolved through today (`RangedAliasRegistry.lookup`). A
+	// function or generic-instance alias mints a nominal identity in its own whole-program registry and
+	// has no visibility reader yet; giving it a field nothing consults would be the very thing the
+	// ranged form's used to be.
+	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, recordFunctionSignature bool, visibility Visibility) returns TypeDeclKind throws ParseError
 		try self.consume(TokenKind.typealias)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
@@ -6458,17 +6832,37 @@ export type Parser
 			return TypeDeclKind.genericAlias
 		end 'genericAlias'
 
-		// `int(...)` or `float(...)`. A `bool` alias has no range, a generic alias (`Array with T`)
-		// needs generics, and a bare `i64` is not legal Maxon at all — each is rejected here, naming
-		// its own gap, rather than being mapped onto a numeric path where it would silently mean
-		// something else. The two numeric forms differ ONLY in how their bounds read (int literals +
-		// `<int>.min/.max` versus float literals + `f32`/`f64.min/.max`), so `isFloat` threads through
-		// the shared bound parser rather than forking it.
+		// `int(...)` or `float(...)`. A `bool` alias has no range and a generic alias (`Array with T`)
+		// is handled above — each remaining RHS is rejected here, naming its own gap, rather than
+		// being mapped onto a numeric path where it would silently mean something else. The two
+		// numeric forms differ ONLY in how their bounds read (int literals + `<int>.min/.max` versus
+		// float literals + `f32`/`f64.min/.max`), so `isFloat` threads through the shared bound parser
+		// rather than forking it.
 		let isFloat = self.at(TokenKind.float)
 		if not self.at(TokenKind.int) and not isFloat 'notNumeric'
 			let tok = self.current()
+
+			// ⭐ A BARE SIZED TYPE (`typealias Integer = i64`) gets its OWN diagnostic, not the generic
+			// "unsupported" below, because it is not a missing feature — it is a rule, and the rule
+			// comes with the rewrite that satisfies it. `i64` names a WIDTH and no RANGE, and every
+			// reader shv2 has asks a ranged alias for its bounds, so the shorthand would mint a type
+			// whose narrowing check has nothing to check against.
+			//
+			// ⚠ **GUARDED ON THE NEXT TOKEN NOT BEING `.`**, exactly as v1 guards it
+			// (`maxon-selfhosted/Compiler/Parser.maxon:4967`): the sized names are also the qualifiers
+			// of a range BOUND, and a diagnostic that fired on the first token of `i64.min` would
+			// refuse the very syntax it recommends.
+			if tok.kind == TokenKind.identifier and self.kindAt(self.pos + 1) != TokenKind.dot and isSizedTypeName(tok.value) 'bareSizedType'
+				throw ParseError.bareSizedTypeAlias(String.from(tok.value), line: tok.line, column: tok.column)
+			end 'bareSizedType'
+
 			throw ParseError.unsupported("a typealias over '{tok.kind.rawValue}' (only `int(low to high)`, `float(low to high)` and `function(...)` are parsed; generic and bare-sized aliases arrive with the milestones that give them meaning)", line: tok.line, column: tok.column)
 		end 'notNumeric'
+
+		// The `int`/`float` keyword itself — the anchor for both range diagnostics below, taken before
+		// it is consumed. Both reference compilers blame this token and not a bound's own, because the
+		// defect is the RANGE and neither end is more at fault than the other.
+		let primitiveTok = self.current()
 
 		if isFloat 'consumeFloat'
 			try self.consume(TokenKind.float)
@@ -6480,30 +6874,67 @@ export type Parser
 		let low = try self.parseRangeBound(isFloat)
 		let high = try self.parseRangeUpperBound(isFloat)
 		try self.consume(TokenKind.rightParen)
+		try self.requireRepresentableRange(primitiveTok, low: low, high: high, isFloat: isFloat)
 
 		let underlying = MaxonType.float if isFloat else MaxonType.integer
-		rangedOut.push(RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low, high: high, declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
+		rangedOut.push(RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low.value, high: high.value, visibility: self.typeAliasVisibility(visibility), declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
 
 		return TypeDeclKind.rangedAlias
 	end 'readTypeAliasDeclaration'
 
-	// Is the cursor at a nested typealias declaration inside a type body (P1.6-C) — `typealias …` or the
-	// `export typealias …` the spec writes? A peek only; the caller consumes.
-	function atNestedTypeAlias() returns bool
+	// ⭐ **CAN A SINGLE 64-BIT TYPE HOLD THIS DECLARED RANGE?** The two ways it cannot, checked at the
+	// declaration — which is the only place the answer is still knowable, because `RangedTypeAlias`
+	// stores the bounds as bare numbers and `u64.max` rides as the wrapped -1 (see `ParsedRangeBound`).
+	//
+	// ⚠ **THE ORDER OF THE TWO IS DELIBERATE AND IT IS PINNED.** `int(i64.min to u64.max)` fails both
+	// tests, and the MISMATCH is the sharper fact: the author named two types, and once that is fixed
+	// the representability question does not arise. Reporting unrepresentability first would describe a
+	// consequence and leave the cause unnamed. Both reference compilers order it this way for this
+	// reason (`2-Parser.cs:4826-4830` says so in a comment); `error.unrepresentable-range` pins it.
+	function requireRepresentableRange(primitiveTok Token, low ParsedRangeBound, high ParsedRangeBound, isFloat bool) throws ParseError
+		// Two TYPE-QUALIFIED ends naming different types. A LITERAL end names no type at all and is
+		// compatible with every qualifier — `int(0 to i32.max)` is legal and common — which is why the
+		// test is "both are qualified AND they disagree" and not "they disagree".
+		if not low.qualifier.isEmpty() and not high.qualifier.isEmpty() and not low.qualifier.equals(high.qualifier) 'mismatchedBoundTypes'
+			throw ParseError.mismatchedRangeBoundTypes(low.spelling(), high: high.spelling(), line: primitiveTok.line, column: primitiveTok.column)
+		end 'mismatchedBoundTypes'
+
+		// ⚠ INTEGER ALIASES ONLY. A float bound's `value` is an IEEE-754 BIT PATTERN, so a negative
+		// float has its sign bit set and reads `< 0` here while meaning nothing of the sort; and
+		// `namesUnsignedMax` cannot fire in a float alias anyway, since a `u64.max` bound there is the
+		// integer bound `float(...)` deliberately tolerates. Testing it would be comparing a bit
+		// pattern with a count.
+		if isFloat 'floatAlias'
+			return
+		end 'floatAlias'
+
+		// A negative lower with a `u64.max` upper needs 65 bits. Left unchecked, the wrapped upper
+		// collapses the range to `-1 to -1` and every later check answers about a range nobody wrote.
+		if low.value < 0 and high.namesUnsignedMax 'unrepresentable'
+			throw ParseError.unrepresentableIntegerRange(low.value, line: primitiveTok.line, column: primitiveTok.column)
+		end 'unrepresentable'
+	end 'requireRepresentableRange'
+
+	// Is the cursor at a typealias declaration — `typealias …`, or the `export typealias …` the spec
+	// writes? A peek only; the caller consumes. Shared by the two walks that must recognize the form
+	// WITHOUT having consumed the `export` first: the type-body scan (P1.6-C nested aliases) and the
+	// declaration sweep, whose loop treats `export` as an ordinary token.
+	function atTypeAliasDeclaration() returns bool
 		if self.at(TokenKind.export) 'exported'
 			return self.kindAt(self.pos + 1) == TokenKind.typealias
 		end 'exported'
 		return self.at(TokenKind.typealias)
-	end 'atNestedTypeAlias'
+	end 'atTypeAliasDeclaration'
 
 	// ⭐ **READ ONE NESTED (INNER) TYPEALIAS (P1.6-C / P1.7 slice 3b-i)** — `typealias Idx = int(0 to u64.max)`
 	// OR `typealias ElementArray = Array with T` inside a generic type body. The cursor sits at `typealias`
-	// (any `export` is consumed by the caller). It reuses `readTypeAliasDeclaration` — the ONE typealias
-	// grammar the sweep and the real parse share — which routes a `Base with Args` RHS into `genericOut` and a
-	// ranged RHS into `rangedOut`. A nested FUNCTION alias has neither form and is rejected cleanly (a later
-	// slice). Both supported forms record their bare member into `enclosingInnerAliases` so the rest of the
-	// body's bare references resolve; the caller keys the returned shape whole-program.
-	function readNestedTypeAlias() returns NestedAliasResult throws ParseError
+	// (any `export` is consumed by the caller, which is why the visibility is passed rather than read).
+	// It reuses `readTypeAliasDeclaration` — the ONE typealias grammar the sweep and the real parse share —
+	// which routes a `Base with Args` RHS into `genericOut` and a ranged RHS into `rangedOut`. A nested
+	// FUNCTION alias has neither form and is rejected cleanly (a later slice). Both supported forms record
+	// their bare member into `enclosingInnerAliases` so the rest of the body's bare references resolve; the
+	// caller keys the returned shape whole-program.
+	function readNestedTypeAlias(visibility Visibility) returns NestedAliasResult throws ParseError
 		let aliasTok = self.current()
 		var ranged = RangedTypeAliasArray.create()
 		var functionAliases = FunctionTypeAliasArray.create()
@@ -6512,7 +6943,7 @@ export type Parser
 		// The FORM comes from the reader that decided it, never from which array grew: that inference
 		// would be a second copy of a discrimination `readTypeAliasDeclaration` already makes, free to
 		// drift the day a fourth form appears.
-		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, recordFunctionSignature: false)
+		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, recordFunctionSignature: false, visibility: visibility)
 
 		// A generic-instance nested alias (`Array with T`) — recorded by `readGenericInstanceAlias` into
 		// `generics`. Its instance is PARTIALLY OPAQUE (`Array with typeParameter(pos)`), keyed whole-program by
@@ -6969,7 +7400,7 @@ export type Parser
 	// representable value. Rejected with a positioned error, because the subtraction that
 	// normalizes it would otherwise underflow `ParsedInt` and take the COMPILER down on a
 	// source file it should merely have diagnosed.
-	function parseRangeUpperBound(isFloat bool) returns ParsedInt throws ParseError
+	function parseRangeUpperBound(isFloat bool) returns ParsedRangeBound throws ParseError
 		if self.at(TokenKind.upto) 'exclusive'
 			let uptoTok = try self.consume(TokenKind.upto)
 
@@ -6982,10 +7413,10 @@ export type Parser
 			end 'floatExclusive'
 
 			let bound = try self.parseRangeBound(isFloat)
-			if bound == I64MinBound 'unrepresentable'
+			if bound.value == I64MinBound 'unrepresentable'
 				throw ParseError.unsupported("an exclusive upper bound of i64.min — its inclusive form is one below the smallest 64-bit integer, so the range is empty and not representable", line: uptoTok.line, column: uptoTok.column)
 			end 'unrepresentable'
-			return bound - 1
+			return bound.withValue(bound.value - 1)
 		end 'exclusive'
 
 		try self.consume(TokenKind.to)
@@ -6996,7 +7427,7 @@ export type Parser
 	// type-qualified bound (`i64.min`, `u32.max`). For a FLOAT alias (`isFloat`): a float literal or a
 	// float type-qualified bound — see `parseFloatRangeBound`. The two endpoints of one range are
 	// parsed with the same `isFloat`, so a range cannot mix an int and a float bound.
-	function parseRangeBound(isFloat bool) returns ParsedInt throws ParseError
+	function parseRangeBound(isFloat bool) returns ParsedRangeBound throws ParseError
 		if isFloat 'float'
 			return try self.parseFloatRangeBound()
 		end 'float'
@@ -7004,12 +7435,12 @@ export type Parser
 		if self.at(TokenKind.minus) 'negative'
 			try self.consume(TokenKind.minus)
 			let tok = try self.consume(TokenKind.intLiteral)
-			return try self.intLiteralValue(tok, negated: true)
+			return ParsedRangeBound.literal(try self.intLiteralValue(tok, negated: true))
 		end 'negative'
 
 		if self.at(TokenKind.intLiteral) 'literal'
 			let tok = try self.consume(TokenKind.intLiteral)
-			return try self.intLiteralValue(tok, negated: false)
+			return ParsedRangeBound.literal(try self.intLiteralValue(tok, negated: false))
 		end 'literal'
 
 		return try self.parseTypeQualifiedBound(false)
@@ -7022,17 +7453,17 @@ export type Parser
 	// the one float decoder `parseFloatLiteral` does (`parseFloatBits`), so `0.0` reads the same bits
 	// in a bound as in an expression. A negated literal FLIPS the sign bit (`negatedFloatBits`) rather
 	// than subtracting: `0 - bits` on a bit pattern would be nonsense (see `FloatSignBit`).
-	function parseFloatRangeBound() returns ParsedInt throws ParseError
+	function parseFloatRangeBound() returns ParsedRangeBound throws ParseError
 		if self.at(TokenKind.minus) 'negative'
 			try self.consume(TokenKind.minus)
 			let tok = try self.consume(TokenKind.floatLiteral)
 			let bits = try self.floatLiteralBits(tok)
-			return negatedFloatBits(bits)
+			return ParsedRangeBound.literal(negatedFloatBits(bits))
 		end 'negative'
 
 		if self.at(TokenKind.floatLiteral) 'literal'
 			let tok = try self.consume(TokenKind.floatLiteral)
-			return try self.floatLiteralBits(tok)
+			return ParsedRangeBound.literal(try self.floatLiteralBits(tok))
 		end 'literal'
 
 		return try self.parseTypeQualifiedBound(true)
@@ -7095,7 +7526,7 @@ export type Parser
 	// caller's domain: true only for the bound of a `float(...)` alias, where an `f32`/`f64` bound
 	// is what is wanted; false for an int alias and for expression position (`let x = u16.max`),
 	// where a float bound has no integer value to carry and is rejected.
-	function parseTypeQualifiedBound(isFloat bool) returns ParsedInt throws ParseError
+	function parseTypeQualifiedBound(isFloat bool) returns ParsedRangeBound throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.dot)
 		let fieldTok = try self.consume(TokenKind.identifier)
@@ -7106,8 +7537,8 @@ export type Parser
 			// `float(0.0 to i64.max)` is as malformed as an out-of-order int range and left equally
 			// unchecked (F1 emits no range check that would read the bound; this matches the int path's
 			// existing laxness rather than adding a validation the int path does not have).
-			value(bound) then return bound
-			floatBound(bits) then return try floatBoundInFloatAlias(bits, isFloat: isFloat, typeTok: typeTok, fieldTok: fieldTok)
+			value(bound) then return ParsedRangeBound.qualified(bound, qualifier: typeTok.value, isMax: wantMax)
+			floatBound(bits) then return ParsedRangeBound.qualified(try floatBoundInFloatAlias(bits, isFloat: isFloat, typeTok: typeTok, fieldTok: fieldTok), qualifier: typeTok.value, isMax: wantMax)
 			notASizedType then throw ParseError.unexpectedToken("a sized numeric type (u8/u16/u32/u64/i8/i16/i32/i64/f32/f64)", got: String.from(typeTok.value), line: typeTok.line, column: typeTok.column)
 		end 'resolve'
 	end 'parseTypeQualifiedBound'
@@ -7655,11 +8086,7 @@ export type Parser
 	// a parameter named `SelfParamName` at position 0, and every later reader asks
 	// `FuncSignature.takesReceiver`, which reads that name back. See there — one fact, one home.
 	function parseTypeMember() throws ParseError
-		var visibility = Visibility.file
-		if self.at(TokenKind.export) 'exported'
-			self.advance()
-			visibility = Visibility.module
-		end 'exported'
+		let visibility = self.consumeOptionalExport()
 
 		let isStatic = self.at(TokenKind.static)
 		if isStatic 'staticMember'
@@ -7679,7 +8106,7 @@ export type Parser
 			// The whole-program recording (into `innerAliases`/`genericAliases`) is the sweep's; the real parse
 			// needs only the local `enclosingInnerAliases` population that `readNestedTypeAlias` performs, so the
 			// returned shape is discarded here.
-			_ = try self.readNestedTypeAlias()
+			_ = try self.readNestedTypeAlias(visibility)
 			return
 		end 'nestedTypeAlias'
 
@@ -8020,8 +8447,27 @@ export type Parser
 			return DeclaredAlias.undeclared
 		end 'notNamed'
 
-		return self.signatures.aliasOf(self.internedName(typeNameIdOf(t)), readerFilePath: self.filePath)
+		return self.declaredAliasOfNameId(typeNameIdOf(t))
 	end 'declaredAliasOfType'
+
+	// The same question asked of a VALUE rather than of a written type — the shape the `try … otherwise`
+	// check needs, where what is in hand is the try's result and not the callee's declared return type.
+	// A ranged-int alias value carries tag `named` and its alias name in the parallel name column (see
+	// `aggregateNameOf`), so the two routes reach the identical registry probe below.
+	function declaredAliasOfValue(value ValueId) returns DeclaredAlias
+		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
+			return DeclaredAlias.undeclared
+		end 'notNamed'
+
+		return self.declaredAliasOfNameId(self.valueNameId(value))
+	end 'declaredAliasOfValue'
+
+	// The registry probe both spellings above end in, written once: a file-local interner id becomes the
+	// name, and the name becomes this FILE's answer for it (the alias registry is scoped per declaring
+	// file, so the reader's path is not optional).
+	function declaredAliasOfNameId(nameId TypeNameId) returns DeclaredAlias
+		return self.signatures.aliasOf(self.internedName(nameId), readerFilePath: self.filePath)
+	end 'declaredAliasOfNameId'
 
 	// The ranged-alias name a `named` type denotes, else EMPTY — the RETURN path's spelling of the
 	// question above, which stores a name rather than an alias (`commitRangeChecks`).
@@ -8365,6 +8811,10 @@ export type Parser
 
 		if self.at(TokenKind.identifier) 'named'
 			let tok = try self.consume(TokenKind.identifier)
+			// Recorded HERE, above every arm, rather than in the arm that finally decides what the name
+			// denotes: a name written in a type position is a USE whichever way it resolves, and hooking
+			// the arms instead would need one hook per arm and would silently miss the next one added.
+			self.recordTypeNameUse(tok.value)
 
 			// ⭐ A QUALIFIED PER-INSTANCE ALIAS REFERENCE (P1.6-C) — `StrWrapper.Idx` in a type position. An
 			// identifier followed by `.` and another identifier is `Instance.Member`, the ONE dotted type form,
@@ -10895,7 +11345,11 @@ export type Parser
 		end 'voidTryOtherwiseValue'
 
 		let otherwiseTok = self.current()
+		// The token index the fallback expression starts at, kept so the range check below can ask what
+		// the expression parser ACTUALLY consumed — see `requireOtherwiseInRangedReturn`.
+		let otherwiseStart = self.pos
 		let otherwiseValue = try self.parseExpression(func, block: self.currentBlock)
+		try self.requireOtherwiseInRangedReturn(result, from: otherwiseStart, to: self.pos, tryTok: tryTok)
 
 		// ⭐ **MERGE (P1.5-A2b): a capturing closure may not be an `otherwise <value>` fallback** — it merges
 		// with the try's success value through one result phi (the code pointer alone), and the env rides a
@@ -10946,6 +11400,60 @@ export type Parser
 
 		return TryHandler.value(otherwiseValue)
 	end 'parseUnboundOtherwiseForm'
+
+	// ⭐ **AN `otherwise` FALLBACK LITERAL MUST LIE INSIDE THE TRY RESULT'S RANGED TYPE.** The fallback
+	// merges with the success value through one result phi typed by the callee's return type, so an
+	// out-of-range default binds a value wearing a type whose declared range excludes it — the one
+	// invariant a ranged type exists to carry, broken on exactly the path the author wrote the fallback
+	// for. Refused at compile time, as an out-of-range literal is at a cast and at a ranged `return`.
+	//
+	// ⚠ **IT READS THE TOKENS THE EXPRESSION PARSER ACTUALLY CONSUMED, which is why it takes a SPAN and
+	// does not peek ahead.** "Was this fallback a plain integer literal?" is a question about what was
+	// PARSED, and only `parseExpression` knows where its expression ended; a look-ahead here would be a
+	// second reading of the grammar, free to disagree with the first about where a fallback stops. The
+	// literal's text becomes a number through `intLiteralValue`, the one decoder every literal uses.
+	//
+	// A non-literal fallback — a call, an arithmetic expression, a variable — is deliberately NOT
+	// checked, matching the reference oracle (2-Parser.cs:9833, which requires a literal too). shv2 has
+	// no compile-time value for one here, and no guard site to hang a runtime check on: the pass that
+	// emits those (`InsertRangeChecks`) guards CASTS and RETURNS, and a fallback is neither.
+	function requireOtherwiseInRangedReturn(result ValueId, from TokenIndex, to TokenIndex, tryTok Token) throws ParseError
+		match self.declaredAliasOfValue(result) 'a'
+			undeclared then return
+			declared(alias) then try self.requireOtherwiseLiteralInRange(alias, from: from, to: to, tryTok: tryTok)
+		end 'a'
+	end 'requireOtherwiseInRangedReturn'
+
+	// The half above that has an alias in hand. A FLOAT alias is skipped: its bounds are IEEE-754 bit
+	// patterns and the span this reads is an INTEGER literal, so the comparison would be between two
+	// things that were never the same kind of number — the identical domain guard
+	// `reportConstCastIfOutOfRange` makes, for the identical reason.
+	function requireOtherwiseLiteralInRange(alias RangedTypeAlias, from TokenIndex, to TokenIndex, tryTok Token) throws ParseError
+		if aliasIsFloat(alias) 'floatAlias'
+			return
+		end 'floatAlias'
+
+		let negated = self.kindAt(from) == TokenKind.minus
+		// ⚠ **THE PARENTHESES ARE LOAD-BEARING.** The bootstrap that compiles this file binds
+		// `a + b if c else d` as `a + (b if c else d)` — the same trap `SplitLiveRanges.emitSpillAt`
+		// documents — so without them this reads `from + (1 if negated else from)`, i.e. `2 * from` on
+		// the non-negated arm. MEASURED before the fix: `otherwise -1` was refused and `otherwise 101`
+		// compiled clean and returned the success value, because the index landed on an unrelated token
+		// and the guard below bailed. The one arm the pinned case exercises was the one that worked.
+		let literalIndex = (from + 1) if negated else from
+
+		// The span must be the literal and NOTHING else — one token, or a `-` and one token.
+		if literalIndex + 1 != to or self.kindAt(literalIndex) != TokenKind.intLiteral 'notAPlainLiteral'
+			return
+		end 'notAPlainLiteral'
+
+		let value = try self.intLiteralValue(self.tokenAt(literalIndex), negated: negated)
+		if literalInRange(value, low: alias.low, high: alias.high, isFloat: false) 'inRange'
+			return
+		end 'inRange'
+
+		throw ParseError.otherwiseOutsideRangedReturn(value, aliasName: String.from(alias.name), low: alias.low, high: alias.high, line: tryTok.line, column: tryTok.column)
+	end 'requireOtherwiseLiteralInRange'
 
 	// `otherwise (e) 'label' … end 'label'` — bind the caught error `e = flag - 1` (typed as the TARGET's
 	// throws enum so `match e` recognizes it), then parse the labelled handler block. In a match arm this
@@ -17221,11 +17729,52 @@ export type Parser
 		var current = try self.parseUnary(func)
 		while self.at(TokenKind.as) 'cast'
 			let asTok = try self.consume(TokenKind.as)
+			// Captured BEFORE the target is parsed: E2003 anchors on the TARGET NAME, and by the time
+			// `parseTypeReference` returns the cursor is past it. (For a two-token `Wrapper.Idx` target
+			// this is the first of the two, which is the one the reference blames.)
+			let targetTok = self.current()
 			let targetType = try self.parseTypeReference()
-			current = try self.applyCast(current, targetType: targetType, asTok: asTok)
+			current = try self.applyCast(current, targetType: targetType, asTok: asTok, targetTok: targetTok)
 		end 'cast'
 		return current
 	end 'parseCast'
+
+	// ⭐ **A BODY CAST WHOSE TARGET NAMES AN ALIAS THIS FILE CANNOT SEE — RECORDED, NOT THROWN.**
+	//
+	// Two things follow from recording rather than throwing, and both are wanted. The parse CONTINUES,
+	// so the rest of the file is still checked and the cast's own value flows on as the alias's erased
+	// `int` (the diagnostic gates the build, so nothing is emitted from it). And the report is DEFERRED
+	// to the drain, which is what puts every E3062 in the program ahead of it — the order
+	// `export-keyword/error.non-exported-typealias-cross-file` pins, and one that per-file reporting
+	// cannot give (see `DeferredNameDiagnostic`).
+	//
+	// The TOP-LEVEL constant spelling of the same cast throws instead (`requireConstCastTargetKind`),
+	// and cannot do otherwise: its `Parser` is transient and its artifact is discarded, so it has no
+	// route to this list — its diagnostics are recorded on the declaration and re-raised where the
+	// declaration is written. Both spellings decide by the ONE predicate below and report the ONE
+	// message (`HiddenTypeNameMessage`) at the same anchor; only WHEN they surface differs.
+	function recordHiddenCastTarget(targetAlias DeclaredAlias, targetTok Token)
+		if not self.aliasHiddenFromThisFile(targetAlias) 'visible'
+			return
+		end 'visible'
+
+		self.artifact.recordHiddenTypeName(DeferredNameDiagnostic.create(targetTok.value, filePath: self.filePath, line: targetTok.line, column: targetTok.column))
+	end 'recordHiddenCastTarget'
+
+	// Did the lookup find a ranged typealias that some OTHER file declared and did not export? The one
+	// decision both cast sites make. It takes the ALREADY-RESOLVED lookup rather than a name, so the
+	// body site does not probe the registry a second time for a question its own `targetAlias` already
+	// answers — `aliasOf` CONSTRUCTS its `DeclaredAlias`, so a repeat ask is an allocation and not a
+	// field read (`RangedAliasRegistry.underlyingInAnyFile` measured what one box per site costs).
+	//
+	// A name no alias registry knows is not this check's business — it is E3011's, from
+	// `denotedCastTargetTag`, which is a sharper answer for a sharper mistake.
+	function aliasHiddenFromThisFile(found DeclaredAlias) returns bool
+		return match found 'a'
+			undeclared gives false
+			declared(alias) gives not visibleFrom(alias, readerFilePath: self.filePath)
+		end 'a'
+	end 'aliasHiddenFromThisFile'
 
 	function parseUnary(func IrFunction) returns ValueId throws ParseError
 		if self.at(TokenKind.minus) 'neg'
@@ -17382,7 +17931,7 @@ export type Parser
 	//     (2) is kept, and it is what the two predicates are for: a cast whose target answers every
 	//     question the tag column decides exactly as the source's own type does is still the no-op it
 	//     was, byte for byte.
-	function applyCast(value ValueId, targetType MaxonType, asTok Token) returns ValueId throws ParseError
+	function applyCast(value ValueId, targetType MaxonType, asTok Token, targetTok Token) returns ValueId throws ParseError
 		// ⭐ REJECT A FUNDAMENTALLY-INCOMPATIBLE KIND CAST FIRST (E3009), before any conversion is chosen. A
 		// managed aggregate (String/struct/function) has no conversion to or from a scalar, nor to a
 		// DIFFERENT aggregate; letting such a cast reach the float/no-op branches below would emit a
@@ -17403,6 +17952,17 @@ export type Parser
 			self.recordFunctionTypeDoor(typeNameIdOf(targetType), gotNameId: self.valueNameId(value), door: FunctionTypeDoor.cast, placeName: EmptySourceText, anchor: asTok)
 		end 'functionTypeDoor'
 
+		// The target's ranged-alias declaration, resolved ONCE for EVERY question that needs it — may
+		// this file NAME it (P1.9), WHICH alias a narrowing check names, and WHAT its range says about
+		// the shift fill. It is hoisted above the float branches because the visibility question is
+		// asked on all three paths, and hoisting also retires the float path's own second probe: each
+		// ask CONSTRUCTS a `DeclaredAlias`, so a repeat is an allocation and not a field read.
+		//
+		// ⚠ It reads the RESOLVED target type and not the target TOKEN, which is what makes a qualified
+		// `x as Wrapper.Idx` ask about the joined name rather than about `Wrapper`.
+		let targetAlias = self.declaredAliasOfType(targetType)
+		self.recordHiddenCastTarget(targetAlias, targetTok: targetTok)
+
 		let sourceIsFloat = tagIsFloat(self.tagOf(value))
 		let targetIsFloat = self.typeIsFloatDomain(targetType)
 
@@ -17411,18 +17971,13 @@ export type Parser
 			// target checks (`500.7 as Byte` guards `500`). The result has its own Std op, but the guard still
 			// anchors at the cast's BLOCK (below) for the same reason an int->int cast does.
 			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: asTok)
-			self.recordCastSite(narrowed, targetAlias: self.declaredAliasOfType(targetType), asTok: asTok)
+			self.recordCastSite(narrowed, targetAlias: targetAlias, asTok: asTok)
 			return narrowed
 		end 'floatToInt'
 
 		if not sourceIsFloat and targetIsFloat 'intToFloat'
 			return self.promoteToFloat(value, opTok: asTok)
 		end 'intToFloat'
-
-		// The target's ranged-alias declaration, resolved ONCE. Both questions below need it — WHICH
-		// alias a narrowing check names, and WHAT ITS RANGE says about the shift fill — and each used to
-		// re-ask `signatures.aliasOf` for itself.
-		let targetAlias = self.declaredAliasOfType(targetType)
 
 		// ⚠ **THE RANGE-CHECK SITE IS THE SOURCE, NOT THE MINTED RESULT, AND THAT IS A CORRECTNESS
 		// REQUIREMENT** — which is why it is recorded HERE, once, above a branch whose two arms both
@@ -19799,6 +20354,10 @@ export type Parser
 	// prepend in `parseCallNamed`, the one place that causes it, for both callers.)
 	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
+		// A `Type.method()` base NAMES a type, so it is a USE for the E3062 check — and it is the only
+		// place many generic-instance aliases are ever named (`IntArray.create()`). It never reaches
+		// `parseTypeReference`, which is why this second hook exists at all (`recordTypeNameUse`).
+		self.recordTypeNameUse(typeTok.value)
 
 		// `CharacterSet.letters()` / `CharacterSet.from(…)` — the compiler-owned type's statics (P1.8 Slice
 		// D). Intercepted before every alias rewrite below, because `CharacterSet` has no base struct: its
@@ -24100,8 +24659,8 @@ export type Parser
 	// what `u64.max` is. It materializes an ordinary integer literal.
 	function parseTypeQualifiedBoundExpression() returns ValueId throws ParseError
 		let boundTok = self.current()
-		let value = try self.parseTypeQualifiedBound(false)
-		return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(boundTok))
+		let bound = try self.parseTypeQualifiedBound(false)
+		return self.emitLiteral(bound.value, valueType: MaxonType.integer, range: SourceRange.ofToken(boundTok))
 	end 'parseTypeQualifiedBoundExpression'
 
 	// Resolve a variable reference to the SSA value its binding aliases — M2's
@@ -25354,6 +25913,11 @@ export type Parser
 		if self.at(TokenKind.identifier) or self.at(TokenKind.int) or self.at(TokenKind.bool) or self.at(TokenKind.float) 'targetType'
 			let targetTok = self.current()
 			self.advance()
+			// This walk is the ONLY reader of a top-level initializer's tokens — the real parse skips
+			// them — so it is the only thing that can tell the E3062 check the alias was named here.
+			// Recorded before the kind gate below, so a target that is about to be REJECTED still counts
+			// as a mention and the file is not told about two unrelated mistakes at once.
+			self.signatures.recordConstCastTarget(targetTok.value, declFilePath: self.filePath)
 			try self.requireConstCastTargetKind(value, targetTok: targetTok, asTok: asTok)
 			try self.checkConstCastRange(value, targetTok: targetTok, asTok: asTok)
 			return value
@@ -25381,6 +25945,14 @@ export type Parser
 		if targetTok.kind != TokenKind.identifier 'primitiveKeyword'
 			return
 		end 'primitiveKeyword'
+
+		// The VISIBILITY half, asked first for the reason `requireRepresentableRange` orders its two
+		// tests: a name this file may not see is a fact about the name, and every question below it is
+		// about a type the file was never entitled to reach. It THROWS where the body cast records —
+		// see `Parser.recordHiddenCastTarget` for why the two deliveries differ and what they share.
+		if self.aliasHiddenFromThisFile(self.signatures.aliasOf(targetTok.value, readerFilePath: self.filePath)) 'hiddenAlias'
+			throw ConstEvalError.defective(ParseError.hiddenCastTargetType(targetTok.line, column: targetTok.column))
+		end 'hiddenAlias'
 
 		// Both halves are the EMITTING path's own deciders and both raise a `ParseError`; `defective` is
 		// the one wrapper every parser diagnostic reaches this walk's `ConstEvalError` channel through, so
@@ -25594,10 +26166,10 @@ export type Parser
 		end 'call'
 
 		if self.peekKind() == TokenKind.dot 'qualifiedBound'
-			let value = try self.parseTypeQualifiedBound(false) otherwise (err) 'badBound'
+			let bound = try self.parseTypeQualifiedBound(false) otherwise (err) 'badBound'
 				throw ConstEvalError.defective(err)
 			end 'badBound'
-			return ConstValue.create(value, tag: ValueTypeTag.integer)
+			return ConstValue.create(bound.value, tag: ValueTypeTag.integer)
 		end 'qualifiedBound'
 
 		self.advance()

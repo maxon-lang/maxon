@@ -22,6 +22,14 @@ export enum ErrorCode
 
 	// The parser met a token that cannot appear at this point in the grammar.
 	parserUnexpectedToken = "E2001"
+	// A type was required here and the token stream had something else.
+	// shv2 emits it for the two shapes where a name IS present but is not a
+	// usable type: a bare sized type as a typealias RHS (`typealias I = i64`),
+	// and an `as` cast target that names a typealias the reading file cannot
+	// see. A cast target no declaration binds ANYWHERE is E3011 instead, which
+	// is sharper than the reference's blanket E2003 -- see
+	// specs-shv2/cast-target-type-resolution.md.
+	parserExpectedType = "E2003"
 	// An expression is not well formed. Broader than its C#/v1 name (ParserExpectedExpression) suggests: all three compilers report four distinct message families under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand.
 	parserExpressionError = "E2004"
 	// The parser reached end-of-file with a construct still open.
@@ -252,6 +260,11 @@ export enum ErrorCode
 	// from `commitTypeNameDecls` when BOTH declarations are typealiases; a pair
 	// involving a `type`/`enum`/`union`/`interface` is E3006 instead.
 	semanticDuplicateTypeAlias = "E3061"
+	// A typealias is declared and never used.
+	// "Used" means the NAME appears in a type position in its OWN declaring
+	// file. An exported alias is exempt (one file cannot see another's uses),
+	// and being implicitly inferable from a bare `[...]` literal is not a use.
+	semanticUnusedTypeAlias = "E3062"
 	// A 'union' value is compared with '=='/'!='. Unions carry no synthesized equality; use 'match'.
 	// a `union` value was compared with `==` / `!=`. Unions carry no
 	// synthesized equality -- a new case can't be added without every match site
