@@ -384,6 +384,29 @@ end 'main'
 error E2026: specs/fragments/enum-match-exhaustive/error.union-not-exhaustive.test:13:2: match on union 'Shape' is not exhaustive, missing: triangle
 ```
 
+<!-- test: error.enum-not-exhaustive-lists-every-missing-case -->
+<!-- ⚠ THE ONLY CASE THAT PINS THE SEPARATOR. Every other `missing:` golden in this suite names exactly ONE case, so the `", "` that joins them (`Parser.appendCommaSeparated`) is unreachable from them — a join that punctuated the list any other way, or that dropped the first or last entry, would leave the whole suite green. Three missing cases, not two, so an off-by-one in the join shows up as a wrong list rather than a plausible one. -->
+```maxon
+enum Color
+		red
+		green
+		blue
+		amber
+		violet
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.green
+	match c 'check'
+		red then return 1
+		green then return 2
+	end 'check'
+end 'main'
+```
+```maxoncstderr
+error E2026: specs/fragments/enum-match-exhaustive/error.enum-not-exhaustive-lists-every-missing-case.test:15:2: match on enum 'Color' is not exhaustive, missing: blue, amber, violet
+```
+
 <!-- test: error.enum-default-without-throws -->
 ```maxon
 enum Color

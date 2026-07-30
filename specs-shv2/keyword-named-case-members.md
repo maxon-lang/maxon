@@ -21,6 +21,13 @@ Both shapes are now ONE predicate (`keywordIsAName`), because they are one fact:
 
 - **A match-arm case name is a NAME** — the LOOKAHEAD (the next token is a match-arm separator
   `gives`/`then`/`to`/`upto`/`or`). That half already existed.
+- **A match-arm case name CARRYING A PAYLOAD BINDING LIST is a NAME** — the SAME lookahead, taken PAST
+  the list (`end(m) then …`, `while(a, b) gives …`). A one-token lookahead cannot see the separator at
+  all, because the list sits between them. That half did NOT exist either, and both directions refused a
+  program the oracle compiles and runs to 42:
+  - `end(m) then …` ended the arm loop, so the match reported `E2026 … not exhaustive, missing: end,
+    omega` — a **false rejection**;
+  - `while(m) then …` opened a block nothing closed, and `assertScanAligned` took the compiler down.
 - **A member name after a `.` is a NAME too** — the LOOKBEHIND. That half did NOT exist, and its
   absence was a **reachable compiler PANIC**, in both directions:
   - `Kw.end` was read as a **CLOSER**, so the scan predicted a construct's `end` too EARLY;
@@ -49,6 +56,24 @@ spells a real piece of block syntax character for character:**
 
 Nothing but the preceding `.` tells any of these apart, which is why the lookbehind belongs to the one
 shared predicate and every scan that counts depth asks it rather than testing `TokenKind.end` itself.
+
+⚠⚠ **THE PAYLOAD SHAPE'S SEPARATOR SET IS NARROWER THAN THE BARE SHAPE'S — `then`/`gives` ONLY — AND
+WIDENING IT BREAKS THE STDLIB.** A **parenthesized condition** is legal Maxon, so a real `if`/`while`
+header can be followed by `(`…`)` too, and what comes after that group is whatever the surrounding
+expression needs: `if (driveByte >= 65 and driveByte <= 90) or (driveByte >= 97 and driveByte <= 122)
+'isDrive'` (`stdlib/FilePath.maxon`) puts **`or`** immediately past it. `then` and `gives` are the only
+two separators a payload-carrying arm can take AND the only two no real header can be followed by;
+`to`/`upto` belong to scalar RANGE patterns, which carry no payload. `or` is the one accepted gap —
+`end(m) or omega then …` still reads as a closer, and shv2 refuses a payload binding on an `or`-pattern
+outright, so the program stays refused either way; the rung that lifts THAT restriction is the one that
+must widen this set. `a-parenthesized-condition-with-or-past-the-group` below is the case that turns a
+premature widening red.
+
+⚠ **AND THE PAYLOAD SHAPE MAY ONLY EVER ANSWER *YES*.** `Kw.end(20, b: 22)` — CONSTRUCTING a
+keyword-named case that carries a payload — has the `.` before the keyword AND the `(` after it, so a
+payload test that returned its verdict outright would answer for the lookbehind and hide it. Measured
+during this file's own review: it took `assertScanAligned` down on
+`if tagOf(Kw.end(20, b: 22)) == 42 'ok'`. `constructing-a-payload-carrying-keyword-case` pins it.
 
 ⚠ **One case here was authored AFTER the fix and never ran red, deliberately:**
 `closer-case-member-spelling-a-labelled-end-in-a-header` puts `Kw.end == Kw.end 'label'` in a `while`
@@ -516,6 +541,189 @@ end 'helper'
 function main() returns ExitCode
 	let h = Holder.create()
 	return h.total() as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closer-case-member-with-a-payload-binding-list -->
+```maxon
+typealias Num = int(0 to 1000)
+
+union Kw
+	alpha(n Num)
+	end(m Num)
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns Num
+	match k 'm'
+		alpha(n) then return n
+		end(m) then return m + 40
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	let v = tagOf(Kw.end(2))
+	if v == 42 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: opener-case-member-with-a-payload-binding-list -->
+```maxon
+typealias Num = int(0 to 1000)
+
+union Kw
+	alpha(n Num)
+	while(m Num)
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns Num
+	match k 'm'
+		alpha(n) then return n
+		while(m) then return m + 40
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	let v = tagOf(Kw.while(2))
+	if v == 42 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: payload-case-member-with-two-slots-in-a-gives-arm -->
+```maxon
+typealias Num = int(0 to 1000)
+
+union Kw
+	alpha(n Num)
+	end(a Num, b Num)
+end 'Kw'
+
+function tagOf(k Kw) returns Num
+	return match k 'm'
+		alpha(n) gives n
+		end(a, b) gives a + b
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	if tagOf(Kw.end(20, b: 22)) == 42 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: every-block-keyword-as-a-payload-carrying-case -->
+```maxon
+typealias Num = int(0 to 1000)
+
+union Kw
+	if(a Num)
+	else(b Num)
+	end(c Num)
+	while(d Num)
+	match(e Num)
+	for(f Num)
+	otherwise(g Num)
+end 'Kw'
+
+function tagOf(k Kw) returns Num
+	match k 'm'
+		if(a) then return a
+		else(b) then return b
+		end(c) then return c
+		while(d) then return d
+		match(e) then return e
+		for(f) then return f
+		otherwise(g) then return g
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var sum = 0
+	var i = 0
+	while i < 2 'spin'
+		sum = sum + tagOf(Kw.if(1)) + tagOf(Kw.else(2)) + tagOf(Kw.end(4)) + tagOf(Kw.while(8))
+		i = i + 1
+	end 'spin'
+	if sum == 30 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: constructing-a-payload-carrying-keyword-case -->
+```maxon
+typealias Num = int(0 to 1000)
+
+union Kw
+	alpha(n Num)
+	end(a Num, b Num)
+end 'Kw'
+
+function tagOf(k Kw) returns Num
+	match k 'm'
+		alpha(n) then return n
+		end(a, b) then return a + b
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var acc = 0
+	var i = 0
+	while i < 2 'spin'
+		if tagOf(Kw.end(20, b: 1)) == 21 'ok'
+			acc = acc + 21
+		end 'ok'
+		i = i + 1
+	end 'spin'
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-parenthesized-condition-with-or-past-the-group -->
+```maxon
+function main() returns ExitCode
+	var i = 0
+	var acc = 0
+	while ((i < 2) or (i < 0)) or false 'spin'
+		if ((i == 0) or (i == 1)) and true 'inner'
+			acc = acc + 21
+		end 'inner'
+		i = i + 1
+	end 'spin'
+	if acc == 42 'ok'
+		return 42
+	end 'ok'
+	return 1
 end 'main'
 ```
 ```exitcode

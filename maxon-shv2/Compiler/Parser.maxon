@@ -6691,27 +6691,64 @@ export type Parser
 		return ParseError.unsupported("'{tok.kind.rawValue}' as a field default (only a LITERAL default is parsed — `= 5`, `= 50.0`, `= true`, optionally signed. An arbitrary expression is evaluated once per struct literal, which needs the initializer captured at the declaration and replayed at every literal that omits the field, and arrives with the rung that has a case needing one)", line: tok.line, column: tok.column)
 	end 'rejectNonLiteralFieldDefault'
 
+	// The index of the `)` that closes the balanced `( … )` group opening at `index`, or the EOF token's
+	// index when the stream holds no matching one. Depth-counted rather than "scan to the first `)`"
+	// because a group can nest (`int(0 to 100)` in a parameter's type, `(a) or (b)` in a condition).
+	//
+	// ⚠ ONLY MEANINGFUL AT A `(` — it panics otherwise, exactly as `matchingEndOf` does, rather than
+	// answering for a token that opens no group.
+	//
+	// ⚠ It takes an INDEX because TWO walks ask it and only one of them is cursor-driven:
+	// `skipBalancedParens` moves the cursor with it, while `keywordIsAName` asks it of an arbitrary
+	// token (a keyword case name's payload binding list, `end(m) then …`). Written twice, the second
+	// copy would be free to grow the "scan to the first `)`" shortcut this one refuses.
+	function matchingRightParenOf(index TokenIndex) returns TokenIndex
+		if self.kindAt(index) != TokenKind.leftParen 'notAGroup'
+			panic("matchingRightParenOf: token {index} is not a `(` — a balanced group's extent is meaningful only at its opener")
+		end 'notAGroup'
+
+		let count = self.tokens.count()
+		var depth = 0
+		var i = index
+		while i < count 'scan'
+			let kind = self.kindAt(i)
+			if kind == TokenKind.leftParen 'open'
+				depth = depth + 1
+			end 'open' else if kind == TokenKind.rightParen 'close'
+				depth = depth - 1
+				if depth == 0 'balanced'
+					return i
+				end 'balanced'
+			end 'close' else if kind == TokenKind.eof 'unterminated'
+				// The tolerant answer, for `skipBalancedParens`'s reason: an unbalanced group is malformed
+				// source the real parse reports with a position. The EOF index is what tells the two callers
+				// apart from a match — it is the one index at which `kindAt` is not a `)`.
+				return i
+			end 'unterminated'
+
+			i = i + 1
+		end 'scan'
+		panic("matchingRightParenOf: ran off the end of a {count}-token stream — the lexer terminates every stream with an `eof` token, so the walk above must have returned at it")
+	end 'matchingRightParenOf'
+
 	// Advance past a balanced `( … )` starting at the cursor. Returns false — leaving the
-	// cursor where it stopped — when the token stream does not hold one, which the real
-	// parse will report properly. Depth-counted rather than "scan to the first `)`" because
-	// a parameter's type can itself carry parentheses (`int(0 to 100)`).
+	// cursor where the walk stopped — when the token stream does not hold one, which the real
+	// parse will report properly.
 	function skipBalancedParens() returns bool
 		if not self.at(TokenKind.leftParen) 'noParen'
 			return false
 		end 'noParen'
-		var depth = 0
-		while not self.isEof() 'scan'
-			if self.at(TokenKind.leftParen) 'open'
-				depth = depth + 1
-			end 'open' else if self.at(TokenKind.rightParen) 'close'
-				depth = depth - 1
-			end 'close'
-			self.advance()
-			if depth == 0 'balanced'
-				return true
-			end 'balanced'
-		end 'scan'
-		return false
+
+		let closeIndex = self.matchingRightParenOf(self.pos)
+		// An unterminated group answers the EOF index, so this test is exact rather than a proxy: on a
+		// match the answer IS the `)`, and the cursor lands one past it.
+		if self.kindAt(closeIndex) != TokenKind.rightParen 'unbalanced'
+			self.pos = closeIndex
+			return false
+		end 'unbalanced'
+
+		self.pos = (closeIndex + 1) as TokenIndex
+		return true
 	end 'skipBalancedParens'
 
 	// One top-level declaration: an optional `export`, then a `function`, a `typealias` in any of its
@@ -14731,13 +14768,31 @@ export type Parser
 	// and `assertScanAligned` fires (or the arm loop stops early, or the declaration sweep records a
 	// local as a top-level binding).
 	//
-	// **TWO SHAPES, ONE FACT, so ONE predicate** — a divergence would leave the opener rule taught and
-	// the closer rule not, or the lookahead taught and the lookbehind not:
+	// **THREE SHAPES, ONE FACT, so ONE predicate** — a divergence would leave the opener rule taught and
+	// the closer rule not, or one shape taught and the next not:
 	//
 	//   • **A MATCH-ARM CASE NAME — the LOOKAHEAD.** `if gives …`, `end then …`, `else to critical then
 	//     …`. A control keyword is NEVER followed by a match-arm SEPARATOR in real control flow (`if`
 	//     takes a condition, `end` a label or newline, `while` a condition), so a keyword immediately
 	//     followed by `gives`/`then`/`to`/`upto`/`or` is unambiguously a case name.
+	//   • **A MATCH-ARM CASE NAME CARRYING A PAYLOAD BINDING LIST — the SAME LOOKAHEAD, PAST THE LIST.**
+	//     `end(m) then …`, `while(a, b) gives …`. The separator sits after the list, not next to the
+	//     keyword, so a lookahead of ONE token misses it entirely. ⚠ Both directions were REACHABLE and
+	//     both refused a program the oracle compiles and runs: `end(m) then …` ended the arm loop, so the
+	//     match reported `E2026 … not exhaustive, missing: end, omega`; `while(m) then …` opened a block
+	//     nothing closed and took the compiler down in `assertScanAligned`.
+	//     ⚠⚠ **THE SEPARATOR SET HERE IS DELIBERATELY NARROWER — `then`/`gives` ONLY — AND WIDENING IT
+	//     BREAKS THE STDLIB.** A PARENTHESIZED condition is legal Maxon and is followed by whatever the
+	//     expression around it needs: `if (driveByte >= 65 and driveByte <= 90) or (driveByte >= 97 …)
+	//     'isDrive'` (`stdlib/FilePath.maxon`) puts `or` right past the group, and `while (try …
+	//     otherwise 0) > 0 'loop'` puts an operator there. `then` and `gives` are the only two
+	//     separators a payload-carrying arm can take AND the only two no real `if`/`while`/`match`/`for`
+	//     header can be followed by. `to`/`upto` belong to scalar RANGE patterns, which carry no
+	//     payload. `or` is the one genuine gap: `end(m) or omega then …` reads as a closer — shv2
+	//     already refuses a payload binding on an `or`-pattern outright (`rejectOrPatternBinding`), so the
+	//     program stays refused, and the rung that lifts THAT restriction is the one that must add `or`
+	//     here. `keyword-named-case-members.md` pins the payload arms AND the parenthesized-condition
+	//     shapes that forbid the wider set.
 	//   • **A MEMBER NAME — the LOOKBEHIND.** `Kw.end`, `Kw.while`, `obj.end()`. A `.` is followed by a
 	//     member name and by nothing else in this grammar (Maxon has no `..` range and a float literal
 	//     is one token), so a keyword whose PREVIOUS token is a `.` is a name, whatever follows it.
@@ -14754,6 +14809,20 @@ export type Parser
 		if next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or 'matchCaseName'
 			return true
 		end 'matchCaseName'
+
+		// ⚠ **A POSITIVE ANSWER ONLY — it must FALL THROUGH to the lookbehind, never answer `false` for
+		// it.** A keyword followed by `(` can equally be a member READ of a keyword-named case that
+		// carries a payload (`Kw.end(20, b: 22)`), which has the `.` before it AND the `(` after it.
+		// Returning the separator test's verdict outright hid the lookbehind from exactly those reads —
+		// measured, mid-review: `if tagOf(Kw.end(20, b: 22)) == 42 'ok'` took `assertScanAligned` down.
+		if next == TokenKind.leftParen 'payloadBindingList'
+			// Asked of the SHARED paren walk, so a nested group inside the list (or inside a parenthesized
+			// condition this must NOT claim) is matched by the one rule `skipBalancedParens` uses.
+			let separator = self.kindAt(self.matchingRightParenOf(index + 1) + 1)
+			if separator == TokenKind.then or separator == TokenKind.gives 'armSeparator'
+				return true
+			end 'armSeparator'
+		end 'payloadBindingList'
 
 		// Index 0 has no previous token, so it cannot be a member name.
 		if index == 0 'atFileStart'

@@ -25,6 +25,11 @@ is a case below:
   alternative the message names, so a compiler that refused it would be recommending a rejection.
 - **The rule is about the LIST, not about the match FORM** — a `gives` (expression) arm and a `then`
   (statement) arm read the same binding list through the same routine, so both are refused.
+- **The rule is about the LIST, not about the case NAME either** — a case spelled with a KEYWORD
+  (`end(_, _)`, `keyword-named-case-members.md`) is refused with the keyword in the message. That case is
+  here because the two facts INTERSECT: the arm has to be recognized as an arm at all before this check
+  can run, and `keywordIsAName` is what decides that a keyword followed by a payload binding list is a
+  case name rather than a block closer. Before it knew that shape, this program was `E2026` instead.
 
 Measured against the bootstrap oracle (2026-07-29), which is where the exact wording and anchor come
 from: the message spells the list back as the user wrote it (`two(_, _)`, one `_` per slot, joined with
@@ -73,6 +78,27 @@ end 'main'
 ```
 ```maxoncstderr
 error E3081: specs/fragments/match-payload-discard-bindings/error.all-discard-in-a-gives-arm.test:13:3: use 'value' instead of 'value(_)' to ignore associated values
+```
+
+<!-- test: error.all-discard-on-a-keyword-named-case -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Kw
+	alpha(n Integer)
+	end(a Integer, b Integer)
+end 'Kw'
+
+function main() returns ExitCode
+	let k = Kw.end(1, b: 2)
+	match k 'check'
+		alpha(n) then return 1
+		end(_, _) then return 0
+	end 'check'
+end 'main'
+```
+```maxoncstderr
+error E3081: specs/fragments/match-payload-discard-bindings/error.all-discard-on-a-keyword-named-case.test:13:3: use 'end' instead of 'end(_, _)' to ignore associated values
 ```
 
 <!-- test: partial-discard-is-legal -->
