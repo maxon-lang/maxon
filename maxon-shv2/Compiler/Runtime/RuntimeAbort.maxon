@@ -65,6 +65,15 @@ export enum RuntimeAbort
 	// `managed.slice` under an `otherwise panic(…)`, so this abort matches the oracle's CLASS of answer
 	// (the process ends) though not its message — shv2's `mrt_panic` is x64-windows-only.
 	stringSliceInvalidRange = 77
+	// `__mf_stat_field` / `__mf_stat_free`: a NULL stat buffer. Both references treat it as a stdlib-only
+	// INVARIANT violation rather than a catchable error (`__ManagedFile.statField`/`statFree` are registered
+	// non-throwing in each), and `__mm_free` is not null-safe — without the guard the free writes to the
+	// header eight bytes below address 0.
+	managedFileStatNullBuffer = 78
+	// `__mf_stat_field`: an index outside the six fields the 48-byte stat buffer holds — including a
+	// NEGATIVE one, which the signed `StdCmpPred` makes a separate compare. Without the guard the read
+	// returns whatever sits past a 48-byte allocation: a silent wrong answer, not a crash.
+	managedFileStatIndexOutOfRange = 79
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

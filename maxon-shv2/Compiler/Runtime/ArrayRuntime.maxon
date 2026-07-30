@@ -283,6 +283,36 @@ export let ArrSliceOpaqueName = b"__arr_slice_opaque"
 export let ArrCloneOpaqueName = b"__arr_clone_opaque"
 export let ArrAppendOpaqueName = b"__arr_append_opaque"
 
+// ⭐⭐ **THE `__ManagedMemory` MEMBERS R4.2 DELIVERS.** `__ManagedMemory` IS an `Array with Byte` at this
+// rung (`SignatureIndex.ManagedMemoryTypeName`), so its members are array-runtime entries — which is also why
+// they are `__arr_`-prefixed and ride the existing `usesArray` install with no bit of their own.
+//
+// ⚠ **NONE FOLDS ONTO AN EXISTING ENTRY, AND THE REASONS ARE SEPARATE.**
+//   • `__arr_mem_create(count, elementSize)` PUBLISHES `count` elements — length AND capacity are `count`,
+//     which is what makes the reference's `ByteMemory.create(1, 1)` followed by `setByte(0, …)` legal
+//     (`stdlib/Character.maxon:172-179`) — where `__arr_create` yields an EMPTY array whose every index is out
+//     of bounds. It also takes its element size as a RUNTIME argument rather than a compile-time literal,
+//     because the source writes one.
+//   • `__arr_set_length(arr, n)` REFUSES an `n` above the capacity where `__arr_resize` GROWS to fit. That
+//     refusal is the method's whole contract in the reference — `stdlib/Array.maxon:378-382` builds `resize`
+//     out of `reserve` THEN `setLength` precisely because `setLength` will not grow — so folding the two
+//     would silently turn every out-of-capacity publish into an allocation.
+//   • `__arr_set_byte(arr, byteOffset, value)` addresses BYTES where `__arr_set` addresses ELEMENTS. The two
+//     coincide at element size 1 and at no other size, and `create` takes its element size from the source.
+export let ArrMemCreateName = b"__arr_mem_create"
+export let ArrSetLengthName = b"__arr_set_length"
+export let ArrSetByteName = b"__arr_set_byte"
+
+// The `__ManagedMemoryError` ordinals these three throw, as error FLAGS — positional facts about
+// `Project.builtinManagedMemoryErrorEnum`'s case order, exactly as `ArrIndexOutOfBoundsFlag` is about
+// `ArrayError`'s. DERIVED from the one bias rather than spelled 4/7/8.
+let MemoryInvalidLengthOrdinal = 3 as ParsedInt
+let MemoryInvalidByteRangeOrdinal = 6 as ParsedInt
+let MemoryInvalidAllocationOrdinal = 7 as ParsedInt
+let MemoryInvalidLengthFlag = MemoryInvalidLengthOrdinal + ErrorFlagOrdinalBias
+let MemoryInvalidByteRangeFlag = MemoryInvalidByteRangeOrdinal + ErrorFlagOrdinalBias
+let MemoryInvalidAllocationFlag = MemoryInvalidAllocationOrdinal + ErrorFlagOrdinalBias
+
 // ⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED DEEP-CLONER — `__clone_<TypeName>`** (P1.7 slice 3b-vi-b), the
 // `(box) -> newBox` DUAL of `__destruct_<TypeName>`. `__`-prefixed, so `isCompilerInternalCallee` routes its
 // call/`funcAddr` past the user-function checks and no file declares it. ONE speller, so the STAMP site
@@ -353,7 +383,10 @@ end 'isArrayRuntimeCallee'
 // two lists name the same seven `Arr*Name` constants so they cannot drift. `slice` (P1.7 slice 4) throws on
 // an out-of-bounds or inverted range.
 export function isThrowingArrayRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName)
+	// R4.2 appends the three `__ManagedMemory` members, which throw `__ManagedMemoryError` rather than
+	// `ArrayError` — a different enum, but the same "throwing vs not" answer this predicate exists to give
+	// (`funcSignatureResultValTypes` reads `throwsClauseIsThrowing`, never the name's bytes).
+	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName) or callee.equals(ArrMemCreateName) or callee.equals(ArrSetLengthName) or callee.equals(ArrSetByteName)
 end 'isThrowingArrayRuntimeCallee'
 
 // A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
@@ -397,6 +430,13 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrClone(module)
 	buildArrAppend(module)
 	buildArrDecref(module)
+	// The three `__ManagedMemory` members (R4.2) — part of the all-or-nothing `usesArray` install for the
+	// reason the header gives: `__`-prefixed functions are excluded from the goldens, so an unreferenced one
+	// costs nothing a fragment can see, and these three call `__arr_create`/`__arr_reserve`/`__arr_cow_detach`
+	// anyway.
+	buildArrMemCreate(module)
+	buildArrSetLength(module)
+	buildArrSetByte(module)
 	// The MANAGED-element copies (P1.7 slice 3b-vi-b) — installed under their OWN bit, so a trivial-array
 	// program (the common one) does not carry them. `usesManagedArrayCopy` implies `usesArray` (they are
 	// `__arr_`-prefixed), so this install is always reached when the bit is set.
@@ -1845,6 +1885,170 @@ end 'buildArrAppend'
 // route (`Parser.requireArrayElementCopyable` → the `_managed` builders) are BOTH
 // `SignatureIndex.arrayElementIsManaged(giid)`, so "this array's elements are managed" is one fact read at the
 // drop and at the copy — there is no third spelling to drift.
+// ⭐ `__arr_mem_create(count, elementSize) -> (rec, flag)` — the `__ManagedMemory.create` constructor.
+// PUBLISHES `count` elements: length == capacity == count, the buffer zeroed (a fresh `__mm_alloc` is), which
+// is the reference's semantics and the reason it is not `__arr_create`. Throws `invalidAllocation` on a
+// negative count or a non-positive element size.
+//
+// ⚠ The element-size check is FIRST and it is a THROW, not the abort `__arr_create` diverges with: a 0
+// element size reaching here came from SOURCE (`__ManagedMemory.create(4, 0)`), where `__arr_create`'s can
+// only be a compiler bug. Letting it through would end the process for a program error.
+function buildArrMemCreate(module StdModule)
+	var func = IrFunction.createFromStd(ArrMemCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkCount = module.addBlock(func, label: b"chkcount")
+	var bad = module.addBlock(func, label: b"badalloc")
+	var build = module.addBlock(func, label: b"build")
+
+	emitParams(module, block: entry, count: 2)
+	let count = 0 as ValueId
+	let elementSize = 1 as ValueId
+
+	let one = emitConst(module, block: entry, value: 1, ids: ids)
+	let sizeTooSmall = emitCmp(module, block: entry, a: elementSize, b: one, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(sizeTooSmall, thenBlockId: bad.id, elseBlockId: checkCount.id))
+
+	let negative = emitIsNegative(module, block: checkCount, value: count, ids: ids)
+	module.setTerminator(checkCount, op: StdOp.condBranch(negative, thenBlockId: bad.id, elseBlockId: build.id))
+
+	emitMemoryThrow(module, block: bad, flag: MemoryInvalidAllocationFlag, ids: ids)
+
+	// `__arr_create` stamps the element size; `__arr_reserve` allocates a zeroed buffer for `count` of them;
+	// publishing the LENGTH is the one thing neither does, because an ordinary `Array` publishes through `push`.
+	let dtor = emitConst(module, block: build, value: TrivialElementDestroy, ids: ids)
+	let rec = ids.mint()
+	module.appendOp(build, op: StdOp.call(rec, callee: ArrCreateName, args: twoArgs(elementSize, second: dtor)))
+	module.appendOp(build, op: StdOp.call(ids.mint(), callee: ArrReserveName, args: twoArgs(rec, second: count)))
+	emitStoreField(module, block: build, record: rec, offset: ArrLengthOffset, value: count)
+	emitOkReturn(module, block: build, value: rec, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrMemCreate'
+
+// ⭐ `__arr_set_length(arr, n)` — publish exactly `n` elements, or throw `invalidLength`. VOID and throwing.
+//
+// ⚠ **IT REFUSES `n > capacity` RATHER THAN GROWING**, which is the whole difference from `__arr_resize`
+// and the reason `stdlib/Array.maxon`'s own `resize` is `reserve` THEN `setLength`.
+//
+// ⚠ **THE DETACH COMES FIRST, AHEAD OF THE CAPACITY READ, AND THE ORDER IS LOAD-BEARING.** A zero-copy view
+// or an `.rdata`-backed literal carries a NEGATIVE `capacity@16` (the `BufferOwnership` encoding), so reading
+// it before the detach would refuse every length including 0 — and the shrink below WRITES (it zeroes the
+// vacated range), which through a shared buffer would rewrite the parent's bytes. `__arr_cow_detach`
+// republishes `capacity@16` as the live length, so after it the bound is real and the buffer is this
+// record's. (`__arr_grow` detaches first for the same reason and says so.)
+function buildArrSetLength(module StdModule)
+	var func = IrFunction.createFromStd(ArrSetLengthName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkHigh = module.addBlock(func, label: b"chkhigh")
+	var bad = module.addBlock(func, label: b"badlen")
+	var pick = module.addBlock(func, label: b"pick")
+	var doZero = module.addBlock(func, label: b"dozero")
+	var setLen = module.addBlock(func, label: b"setlen")
+
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let n = 1 as ValueId
+
+	emitCowDetach(module, block: entry, arr: arr, ids: ids)
+	let negative = emitIsNegative(module, block: entry, value: n, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(negative, thenBlockId: bad.id, elseBlockId: checkHigh.id))
+
+	let capacity = emitLoadField(module, block: checkHigh, record: arr, offset: ArrCapacityOffset, ids: ids)
+	let overCapacity = emitCmp(module, block: checkHigh, a: n, b: capacity, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(checkHigh, op: StdOp.condBranch(overCapacity, thenBlockId: bad.id, elseBlockId: pick.id))
+
+	emitMemoryThrow(module, block: bad, flag: MemoryInvalidLengthFlag, ids: ids)
+
+	let oldLen = emitLoadField(module, block: pick, record: arr, offset: ArrLengthOffset, ids: ids)
+	let shrink = emitCmp(module, block: pick, a: n, b: oldLen, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(pick, op: StdOp.condBranch(shrink, thenBlockId: doZero.id, elseBlockId: setLen.id))
+
+	// The SHRINK path is `__arr_resize`'s verbatim, through the same two shared helpers: destroy the managed
+	// elements that leave the live range (inert for the byte element `__ManagedMemory` binds to, and correct
+	// for any other), THEN zero the vacated bytes so the `[length, capacity)`-reads-zero invariant survives a
+	// later grow back — which `managed-file.write-and-read` does, twice.
+	let es = emitLoadField(module, block: doZero, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: doZero, record: arr, offset: ArrBufferOffset, ids: ids)
+	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: doZero, record: arr, buffer: buffer, start: n, stop: oldLen, elementSize: es, ids: ids)
+	let startOff = emitBin(module, block: afterDestroy, a: n, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let endOff = emitBin(module, block: afterDestroy, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let zeroBytes = emitBin(module, block: afterDestroy, a: endOff, b: startOff, opcode: StdBinOpcode.sub, ids: ids)
+	let startAddr = emitBin(module, block: afterDestroy, a: buffer, b: startOff, opcode: StdBinOpcode.add, ids: ids)
+	var afterZero = emitFillRange(module, func: func, cur: afterDestroy, dest: startAddr, byteCount: zeroBytes, fillValue: 0, ids: ids)
+	module.setTerminator(afterZero, op: StdOp.branch(setLen.id))
+
+	emitStoreField(module, block: setLen, record: arr, offset: ArrLengthOffset, value: n)
+	let nothing = emitConst(module, block: setLen, value: 0, ids: ids)
+	emitOkReturn(module, block: setLen, value: nothing, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrSetLength'
+
+// ⭐ `__arr_set_byte(arr, byteOffset, value)` — write ONE byte at a BYTE offset, or throw
+// `invalidByteRange`. VOID and throwing.
+//
+// ⚠ **THE OFFSET IS A BYTE OFFSET, NOT AN ELEMENT INDEX**, and the bound is `[0, length * element_size)` —
+// the reference's own contract (`stdlib/Builtins.maxon:159`). It coincides with `__arr_set`'s element index at
+// element size 1 and at no other size, which is why this is its own entry rather than that one's alias.
+//
+// The detach is AFTER the bounds check and before the buffer load — `__arr_set`'s order, for its reason: a
+// throwing write must allocate nothing, and a write must never go through a buffer someone else is reading.
+function buildArrSetByte(module StdModule)
+	var func = IrFunction.createFromStd(ArrSetByteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkHigh = module.addBlock(func, label: b"chkhigh")
+	var bad = module.addBlock(func, label: b"badrange")
+	var store = module.addBlock(func, label: b"store")
+
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let byteOffset = 1 as ValueId
+	let value = 2 as ValueId
+
+	let negative = emitIsNegative(module, block: entry, value: byteOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(negative, thenBlockId: bad.id, elseBlockId: checkHigh.id))
+
+	let length = emitLoadField(module, block: checkHigh, record: arr, offset: ArrLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: checkHigh, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let byteLength = emitBin(module, block: checkHigh, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let pastEnd = emitCmp(module, block: checkHigh, a: byteOffset, b: byteLength, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(checkHigh, op: StdOp.condBranch(pastEnd, thenBlockId: bad.id, elseBlockId: store.id))
+
+	emitMemoryThrow(module, block: bad, flag: MemoryInvalidByteRangeFlag, ids: ids)
+
+	emitCowDetach(module, block: store, arr: arr, ids: ids)
+	let buffer = emitLoadField(module, block: store, record: arr, offset: ArrBufferOffset, ids: ids)
+	let addr = emitBin(module, block: store, a: buffer, b: byteOffset, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(store, op: StdOp.storeIndirect(addr, offset: 0, valueId: value, valueType: StdType.u8))
+	let nothing = emitConst(module, block: store, value: 0, ids: ids)
+	emitOkReturn(module, block: store, value: nothing, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrSetByte'
+
+// The `throws __ManagedMemoryError` stamp the three `__ManagedMemory` members carry. A `__ManagedMemory`
+// member does NOT throw `ArrayError`: the reference gives it its own enum, whose `invalidLength` and
+// `invalidByteRange` name conditions `ArrayError` has no case for, and a handler that binds the error must
+// see the cases the operation can actually report.
+function managedMemoryThrows() returns ThrowsClause
+	return ThrowsClause.throwing(String.from(ManagedMemoryErrorTypeName))
+end 'managedMemoryThrows'
+
+// One `__ManagedMemoryError` failure exit: no value, this variant's flag — `emitOobReturn`'s twin for the
+// other enum. (A VOID throwing function's value register is never moved, so the 0 is a formality the ABI
+// discards; `emitOkReturn` says the same about its success value.)
+function emitMemoryThrow(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	let flagVal = emitConst(module, block: block, value: flag, ids: ids)
+	module.setTerminator(block, op: StdOp.errorReturn(zero, errorFlagId: flagVal))
+end 'emitMemoryThrow'
+
 function buildArrDecref(module StdModule)
 	var func = IrFunction.createFromStd(ArrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)

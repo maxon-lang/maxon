@@ -1671,8 +1671,50 @@ export function builtinManagedFileErrorEnum() returns EnumLayout
 	addBuiltinEnumCase(layout, caseName: ManagedFileNotFoundCaseName)
 	addBuiltinEnumCase(layout, caseName: ManagedFileAccessDeniedCaseName)
 	addBuiltinEnumCase(layout, caseName: ManagedFileOpenFailedCaseName)
+	// ⭐ **R4.2 APPENDS EIGHT, IN v1'S EXACT ORDER** (`LowerMaxonToStd.maxon:1781-1795`) — the header above
+	// says why appending is the only legal move: each tag is DERIVED from declaration position, and the tag
+	// is what a throwing runtime returns as its error flag. `readFailed`/`writeFailed`/`sizeFailed`/
+	// `deleteFailed`/`statFailed` are the per-operation catch-alls (a `notFound`/`accessDenied` errno still
+	// wins over them, through the same `osLastError` mapping the open uses); `invalidStatBuffer`/
+	// `invalidStatIndex` are `statField`/`statFree`'s invariant violations; `closed` is an operation on a
+	// box whose handle has already been reclaimed.
+	//
+	// ⚠ **THERE IS NO `renameFailed`, AND ITS ABSENCE IS DELIBERATE IN BOTH REFERENCES.** The bootstrap
+	// reuses `deleteFailed` for a failed rename (`MaxonToStandardConversion.ManagedFile.cs:321-323`) and v1
+	// declares no such case; inventing one here would shift nothing (it would append) but would put a case
+	// in shv2's enum that no `match` in the corpus can ever name.
+	addBuiltinEnumCase(layout, caseName: ManagedFileReadFailedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedFileWriteFailedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedFileSizeFailedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedFileDeleteFailedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedFileStatFailedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedFileInvalidStatBufferCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedFileInvalidStatIndexCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedFileClosedCaseName)
 	return layout
 end 'builtinManagedFileErrorEnum'
+
+// ⭐ **THE COMPILER-OWNED `__ManagedMemoryError` (R4.2)** — what the three `__ManagedMemory` members this
+// rung delivers throw, and the type a handler's `match e` discriminates. Its case ORDER is the wire format
+// for the same reason `builtinManagedFileErrorEnum`'s is, and it is the reference's own
+// (`stdlib/Builtins.maxon:151-160`) so a program written against the reference reads the same ordinals here.
+//
+// Seeded UNCONDITIONALLY beside the file error for its stated reason: `createEnumRegistry` is the one door
+// that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`. It costs one
+// map entry in a program that touches no managed memory, and it cannot collide — the name is `__`-prefixed,
+// so `requireUnreservedName` already refuses any source that tries to declare it (E2051).
+export function builtinManagedMemoryErrorEnum() returns EnumLayout
+	var layout = EnumLayout.create(ManagedMemoryErrorTypeName, isUnion: false)
+	addBuiltinEnumCase(layout, caseName: ManagedMemoryIndexOutOfBoundsCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedMemoryEmptySlotCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedMemorySliceOutOfBoundsCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedMemoryInvalidLengthCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedMemoryInvalidCapacityCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedMemoryShiftOutOfBoundsCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedMemoryInvalidByteRangeCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedMemoryInvalidAllocationCaseName)
+	return layout
+end 'builtinManagedMemoryErrorEnum'
 
 // Append one payload-free case carrying the AUTO-INCREMENT tag a bare `enum` case gets. The case count so
 // far IS the next tag (`Parser.readEnumCaseInto`'s counter starts at 0 and steps by 1), so the tag is
@@ -1732,6 +1774,8 @@ export function createEnumRegistry() returns EnumLayoutMap
 	// R4.1: what every `__ManagedFile` operation throws. See `builtinManagedFileErrorEnum` for why it is
 	// seeded here unconditionally rather than by the declaration sweep like the `__ManagedFile` layout.
 	registry.upsert(ManagedFileErrorTypeName, value: builtinManagedFileErrorEnum())
+	// R4.2: what the three `__ManagedMemory` members throw, seeded for the same reason and in the same way.
+	registry.upsert(ManagedMemoryErrorTypeName, value: builtinManagedMemoryErrorEnum())
 	return registry
 end 'createEnumRegistry'
 

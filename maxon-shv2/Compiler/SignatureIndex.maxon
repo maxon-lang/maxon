@@ -1349,6 +1349,25 @@ function managedNameDropCallee(signatures ProgramSignatures, typeNames TypeNameI
 	if name.equals(CharacterSetTypeName) 'characterSet'
 		return CharSetDecrefName
 	end 'characterSet'
+	// ⭐⭐ **A `__ManagedFile` OWNS AN OS HANDLE, WHICH IS NOT MEMORY — SO ITS DROP MUST CLOSE, NOT JUST
+	// FREE (R4.2, and this line IS the RAII destructor).** Asked here, beside `CharacterSet`, because the
+	// shape is identical: a compiler-owned aggregate whose drop is a compiler-owned entry point rather
+	// than a synthesized `__destruct_<T>` cascade.
+	//
+	// ⚠ **IT COULD NOT BE THE CASCADE, and that was measured rather than assumed.** `_handle` is a scalar
+	// `int` field, so `structFieldIsManaged` is false and `installStructDestructors` skips the type
+	// outright — nothing is synthesized. Widening "managed field" to cover it would be a lie every other
+	// reader of that predicate would then act on, and `emitNullGuardedDrop`'s shape is wrong for it anyway:
+	// it loads the FIELD and calls `callee(field)`, while a close needs the BOX (it zeroes `_handle` to stay
+	// idempotent). `__mf_destruct(box)` is the refcount-checked teardown that does both.
+	//
+	// ⇒ Answering `MmDecrefName` here — which is what R4.1 did — frees the eight bytes and leaks the OS
+	// handle for the process lifetime, invisibly to the exit-101 gate, because a handle is not memory.
+	// ONE line covers both doors: a `var f as __ManagedFile` FIELD through the struct cascade, and a
+	// top-level `let f = __ManagedFile.openRead(…)` through `Parser.decrefCalleeFor`'s `structRef` arm.
+	if name.equals(ManagedFileTypeName) 'managedFile'
+		return ManagedFileDestructName
+	end 'managedFile'
 	if signatures.containsStruct(name) 'struct'
 		if signatures.structHasManagedField(name) 'managedStruct'
 			return destructorSymbol(name)
@@ -1659,13 +1678,83 @@ export let ManagedFileTypeName = b"__ManagedFile"
 // prediction.
 export let ManagedMemoryTypeName = b"__ManagedMemory"
 
-// The one static this rung delivers. The other four the corpus uses (`openWrite`/`exists`/`delete`/`stat`)
-// are refused BY NAME until R4.2 supplies them — see `Parser.parseManagedFileStaticCall`.
+// ⭐ **THE THIRTEEN `__ManagedFile` METHODS — the surface BOTH references agree on line-for-line**
+// (`maxon-sharp/Compiler/2-Parser.cs:1414-1440`, `maxon-selfhosted/.../LowerMaxonToStd.maxon:1801-1842`),
+// complete as of R4.2. Nine statics and four instance methods; a name outside this set is refused by name
+// at its own span rather than mangled into a callee no file declares
+// (`Parser.parseManagedFileStaticCall` / `Parser.dispatchManagedFileMethod`).
+//
+// ⚠ **THERE IS DELIBERATELY NO `seek`.** v1 has an `lseek` primitive, but it belongs to a different v1
+// abstraction and neither reference's `__ManagedFile` method list carries one — a fourteenth method here
+// would be shv2 inventing surface the language does not have.
 export let ManagedFileOpenReadMethod = b"openRead"
-
-// The one instance method this rung delivers. See `Parser.dispatchManagedFileMethod` for why it lands
-// here rather than with `size`/`read`/`write` in R4.2.
+export let ManagedFileOpenWriteMethod = b"openWrite"
+// ⭐ It is a distinct METHOD and NOT a distinct op: its only difference in either reference is a Unix 0755
+// permission bit, and shv2's file IO is host-only Windows by the R4.1 ruling — so it lowers to exactly
+// `openWrite`'s `osFileOpenWrite`. A POSIX lane splits them on the day it exists.
+export let ManagedFileOpenWriteExecutableMethod = b"openWriteExecutable"
+export let ManagedFileExistsMethod = b"exists"
+export let ManagedFileDeleteMethod = b"delete"
+export let ManagedFileRenameMethod = b"rename"
+export let ManagedFileStatMethod = b"stat"
+export let ManagedFileStatFieldMethod = b"statField"
+export let ManagedFileStatFreeMethod = b"statFree"
 export let ManagedFileCloseMethod = b"close"
+export let ManagedFileSizeMethod = b"size"
+export let ManagedFileReadMethod = b"read"
+export let ManagedFileWriteMethod = b"write"
+
+// ⭐ **THE PARAMETER NAMES A `__ManagedFile` ARGUMENT MISMATCH QUOTES BACK.** They are the reference's own
+// (`2-Parser.cs:1414-1440`), and they are what `builtin-type-checking.error-managed-file-*` pins: the
+// oracle reports `argument type mismatch for 'path'`, so the name is a fact about the SIGNATURE, not a
+// word this compiler picks.
+export let ManagedFilePathParamName = b"path"
+export let ManagedFileOldPathParamName = b"oldPath"
+export let ManagedFileNewPathParamName = b"newPath"
+export let ManagedFileManagedParamName = b"managed"
+export let ManagedFileSizeParamName = b"size"
+export let ManagedFileBufferParamName = b"buffer"
+export let ManagedFileIndexParamName = b"index"
+
+// ⭐ **THE `__ManagedMemory` SURFACE R4.2 DELIVERS — the four members its acceptance path needs, and no
+// more.** `get`/`set`/`grow`/`append`/`slice`/`byteAt`/`capacity`/`clear` are R4.4's, together with TYPING
+// an element size other than 1; see `ManagedMemoryTypeName` for why the binding is what decides that.
+export let ManagedMemoryCreateMethod = b"create"
+export let ManagedMemorySetLengthMethod = b"setLength"
+export let ManagedMemorySetByteMethod = b"setByte"
+export let ManagedMemoryLengthMethod = b"length"
+
+// Its parameter names, the reference's own (`2-Parser.cs:1470-1511`) for the same reason the file's are.
+export let ManagedMemoryCountParamName = b"count"
+export let ManagedMemoryElementSizeParamName = b"elementSize"
+export let ManagedMemoryNewLengthParamName = b"newLength"
+export let ManagedMemoryOffsetParamName = b"offset"
+export let ManagedMemoryValueParamName = b"value"
+
+// ⭐ **THE ERROR A `__ManagedMemory` MEMBER THROWS (R4.2)** — `stdlib/Builtins.maxon:151-160`, and NOT
+// `ArrayError`: `invalidLength` and `invalidByteRange` name conditions `ArrayError` has no case for, so a
+// handler that binds the error would be shown cases the operation cannot report. The eight cases are the
+// reference's, in the reference's ORDER, because the ordinal IS the error flag the runtime returns — the same
+// wire format `__ManagedFileError`'s order is.
+//
+// ⚠ R4.2 delivers three of the eight-case surface's members (`create`/`setLength`/`setByte`), so five of
+// these cases are unreachable TODAY. They are declared anyway rather than added one per rung: the ordinals
+// are positional, so a later rung that appends `sliceOutOfBounds` between two of them would silently reroute
+// every handler already written against the others.
+export let ManagedMemoryErrorTypeName = b"__ManagedMemoryError"
+export let ManagedMemoryIndexOutOfBoundsCaseName = b"indexOutOfBounds"
+export let ManagedMemoryEmptySlotCaseName = b"emptySlot"
+export let ManagedMemorySliceOutOfBoundsCaseName = b"sliceOutOfBounds"
+export let ManagedMemoryInvalidLengthCaseName = b"invalidLength"
+export let ManagedMemoryInvalidCapacityCaseName = b"invalidCapacity"
+export let ManagedMemoryShiftOutOfBoundsCaseName = b"shiftOutOfBounds"
+export let ManagedMemoryInvalidByteRangeCaseName = b"invalidByteRange"
+export let ManagedMemoryInvalidAllocationCaseName = b"invalidAllocation"
+
+// `String.init(managed ByteMemory)` — `stdlib/String.maxon:114`, the corpus's way back from a
+// `__ManagedMemory` to a `String`. Its parameter name is the reference's.
+export let StringInitMethod = b"init"
+export let StringInitManagedParamName = b"managed"
 
 // ⭐ **THE ERROR EVERY `__ManagedFile` OPERATION THROWS (R4.1)**, and the type a handler's `match e`
 // discriminates. Its three cases and the reason their ORDER is load-bearing live with the layout, in
@@ -1677,6 +1766,17 @@ export let ManagedFileErrorTypeName = b"__ManagedFileError"
 export let ManagedFileNotFoundCaseName = b"notFound"
 export let ManagedFileAccessDeniedCaseName = b"accessDenied"
 export let ManagedFileOpenFailedCaseName = b"openFailed"
+// The eight R4.2 cases, APPENDED in v1's exact order (`LowerMaxonToStd.maxon:1781-1795`). Appending is not
+// a style choice: the ordinal IS the wire format the runtime returns as an error flag, so inserting or
+// reordering one silently reroutes every handler in the corpus.
+export let ManagedFileReadFailedCaseName = b"readFailed"
+export let ManagedFileWriteFailedCaseName = b"writeFailed"
+export let ManagedFileSizeFailedCaseName = b"sizeFailed"
+export let ManagedFileDeleteFailedCaseName = b"deleteFailed"
+export let ManagedFileStatFailedCaseName = b"statFailed"
+export let ManagedFileInvalidStatBufferCaseName = b"invalidStatBuffer"
+export let ManagedFileInvalidStatIndexCaseName = b"invalidStatIndex"
+export let ManagedFileClosedCaseName = b"closed"
 
 // The FIELD that yields it from a byte array — `stdlib/String.maxon:68`'s `var managed as ByteMemory`,
 // which the corpus reaches as `"…".toByteArray().managed`. An identity read; see the arm in
