@@ -478,7 +478,23 @@ let CompilerInternalDeclaringModule = "Builtins.maxon"
 // USER's; being the compiler's internal bridge is a property of the FILE, so it must not turn on how a
 // command line spelled it — see `Parser.declaresCompilerInternalNames`. Both sides are resolved before
 // comparing, for the reason `isStdlibSourceFile` states: `FilePath.equals` compares SPELLINGS.
+// ⚠ **THE NAME TEST GUARDS THE PATH TEST, AND THAT ORDER IS THE WHOLE COST OF THIS DOOR.** It is asked
+// TWICE PER FILE (the declaration sweep and the real parse), and the identity test underneath it is the
+// expensive shape `StdlibSource`'s header measured and rejected — a `Directory.currentPath()`, two
+// `resolve`s, an interpolated `join`, and a `FilePath.equals` whose Windows arm clones and lower-cases
+// BOTH sides. MEASURED unguarded, on the scale ladder: **+1,440 allocations at rung 0 rising to +8,260 at
+// rung 5**, doubling with the file count — a per-file term paid by every compile to answer about ONE file
+// that is not in it. The basename compare is a byte scan over a string the `FilePath` already holds
+// (`toString` returns the field), it allocates nothing, and it is false for every file in any real
+// program — so the identity test runs for `Builtins.maxon` and for nothing else.
+//
+// It is a PREFILTER and not the answer: a user's own `src/Builtins.maxon` passes it and is then refused by
+// the path compare, which is exactly the case `Parser.declaresCompilerInternalNames` must get right.
 function declaresCompilerInternalNames(project Project, path FilePath) returns bool
+	if not path.toString().endsWith(CompilerInternalDeclaringModule) 'notEvenTheName'
+		return false
+	end 'notEvenTheName'
+
 	// Interpolated so the argument is a committed `String`: a bare module-`let` literal stays untyped and
 	// matches BOTH `FilePath.join` overloads (String / FilePath) — an E3007 ambiguity — exactly as
 	// `StdlibSource.locateStdlibDir` records for `StdlibDirName`.
