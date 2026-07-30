@@ -1,0 +1,45 @@
+// Runtime/ManagedFileRuntime.maxon — the `__ManagedFile` box: one OS file HANDLE, closed on drop (R4.1).
+//
+// ⭐ **THE ORACLE IS `specs/managed-file.md`, AND IT IS THE ONLY ORACLE AVAILABLE FOR THIS SUBSYSTEM.**
+// Both references implement file IO — the bootstrap in `2-Parser.cs:1414-1440`, v1 in
+// `LowerMaxonToStd.maxon:1801-1842` — and they AGREE on the ~13-method surface, so there is no divergence
+// to resolve there. What is NOT available is the usual ad-hoc question: `run_program compiler=csharp`
+// CRASHES (`E9001`, index out of range in `MaxonToStandardConversion`) on any standalone `__ManagedFile.*`
+// call, and the bootstrap's own suite is green over it only because its runner BATCHES the cases. That is
+// filed in PLAN.md's bootstrap-oracle list. ⇒ **The 11 committed cases are the whole oracle; a question the
+// corpus does not already ask cannot be asked of the bootstrap at all.** Prefer reading v1's lowering over
+// inventing an answer, and say so at the site when neither can settle something.
+//
+// ⭐ **HOST-ONLY BY RULING (2026-07-30).** `x64-windows` is real; every other target refuses at the call
+// site with the EXISTING `E3104 targetUnsupportedConstruct` via `targetHasWin32Substrate`
+// (`SemanticCheck.maxon`), which is the same route that makes the wall clock host-only. No new mechanism,
+// and deliberately NOT a per-backend port: v1's ~3,900 lines of per-backend emission buy lanes the oracle
+// cannot even validate (the bootstrap has no Linux or wasm emitter), and its arm64 directory walk is
+// unfinished in a way that returns an empty result with no error.
+//
+// ⚠ **DO NOT PORT v1's HANDLE BLOCK BY INSPECTION.** Both references REGISTER an 8-byte handle struct
+// while v1's real `__ManagedDirectory` runtime block is 40 bytes, with nothing tying the two together —
+// a type-checking fiction beside a runtime shape. Here the two are held together by the drift check in
+// `SignatureIndex.managedFileLayout`, which panics if this file's offsets and that layout disagree.
+
+// ⭐ **THE BOX'S FIELD OFFSET AND ITS SIZE** — asserted against the registered `StructLayout`
+// (`SignatureIndex.managedFileLayout`) rather than agreeing with it by inspection, exactly as
+// `CharSetCharsOffset`/`CharSetBoxBytes` are: the SHAPE is stated for the front end by that layout and
+// written here by these constants, and two readers of one shape is the pair this project keeps finding
+// drifted.
+//
+// One 8-byte slot holding the raw OS HANDLE. `specs/managed-file.md`'s "Type Structure" names the single
+// `_handle` field, and the corpus never reads it — direct construction is refused (E3072) so the handle
+// cannot be forged, and every read is the runtime's own through this offset.
+export let ManagedFileHandleOffset = 0 as ByteOffset
+export let ManagedFileBoxBytes = 8 as ParsedInt
+
+// The handle value a CLOSED box carries. `close()` is documented idempotent and is ALSO called by the
+// destructor, so the two must be able to run in either order and in both orders — `managed-file.exists`
+// closes explicitly and then lets the struct drop, which is exactly that sequence. Storing this sentinel
+// on close is what makes the second close a no-op rather than a double `CloseHandle` on a reused handle.
+//
+// ⚠ It is `0`, not Win32's `INVALID_HANDLE_VALUE` (-1), and the distinction is deliberate: a box is
+// allocated zeroed, so an unopened box and a closed box carry the same value and one guard covers both.
+// A handle the OS actually returns is never 0 for a file.
+export let ManagedFileClosedHandle = 0 as ParsedInt

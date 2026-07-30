@@ -1623,6 +1623,30 @@ export let CharacterSetTypeName = b"__CharacterSet"
 // is reachable through. Distinct from the reserved registry name above, and deliberately so.
 export let CharacterSetBuiltinName = b"CharacterSet"
 
+// ⭐ **THE COMPILER-OWNED `__ManagedFile` TYPE (R4.1).** An 8-byte box holding one raw OS file HANDLE,
+// with a runtime-owned destructor that closes it on drop — `specs/managed-file.md`'s "Type Structure"
+// states the single `_handle` field and the RAII contract.
+//
+// ⚠ **UNLIKE `__StringIndex` AND `__CharacterSet`, THE REGISTRY NAME AND THE USER-FACING NAME ARE THE
+// SAME BYTES, AND THAT IS THE WHOLE REASON THIS TYPE CAN DO WHAT THEY CANNOT.** Those two are registered
+// under a reserved `__`-prefixed name while the source spells a bare one, and `CharacterSetTypeName`'s
+// comment draws the consequence: such a type "cannot cross a function boundary, because a parameter or
+// return type would have to NAME it". The corpus REQUIRES this one to cross — `specs/managed-file.md`
+// writes `path __ManagedMemory` as a declared parameter and `export var file as __ManagedFile` as a
+// field — and it can, because the name a user writes IS the name the layout is registered under, so
+// there is no second spelling to fail to resolve.
+// ⇒ **The `__` prefix is therefore NOT a barrier here, and that was MEASURED rather than assumed:**
+// `requireUnreservedName`'s E2051 refuses a `__`-prefixed DECLARATION (`type __Foo`), not a `__`-prefixed
+// name in a TYPE POSITION. A field declared `as __StringIndex` today reports `E3011 Unknown type`, not
+// E2051 — it fails to RESOLVE, and resolving is exactly what registering the layout fixes.
+export let ManagedFileTypeName = b"__ManagedFile"
+
+// Its one field, per the spec's "Type Structure". Unexported and immutable: the corpus never reads or
+// writes it — `__ManagedFile{_handle: 0}` is E3072 (`managed-file.error-direct-construction`) precisely
+// so the handle cannot be forged — and the runtime reaches it through `ManagedFileHandleOffset`.
+export let ManagedFileHandleFieldName = b"_handle"
+export let ManagedFileHandleFieldIndex = 0 as FieldIndex
+
 // The builtin alias for a `CharacterSet`'s member set — the reference's own `typealias CharSet =
 // Set with Character` (`stdlib/CharacterSet.maxon:19`), which `CharacterSet.from` takes and the corpus
 // spells (`specs/unicode-category.md:121`). Registered by `registerCharacterSetType`.
@@ -3991,6 +4015,39 @@ export type ProgramSignatures
 		end 'sizeDrift'
 		return layout
 	end 'characterSetLayout'
+
+	// ⭐ **REGISTER THE COMPILER-OWNED `__ManagedFile` TYPE (R4.1)** — the `CharacterSet` twin, called by the
+	// declaration SWEEP when a file's tokens name a producer (`Parser.fileNamesManagedFileProducer`).
+	// Idempotent, so the sweep is the WRITE and every parser read is a pure read.
+	//
+	// ⚠ It registers under the name the SOURCE SPELLS (`__ManagedFile`), where `CharacterSet` and
+	// `StringIndex` register under a reserved name distinct from their user-facing one. See
+	// `ManagedFileTypeName` for why that difference is the point rather than an inconsistency: this type
+	// MUST be namable in a parameter and a field, and the corpus requires it.
+	export function registerManagedFileType()
+		if self.structTypes.contains(ManagedFileTypeName) 'alreadyRegistered'
+			return
+		end 'alreadyRegistered'
+		self.structTypes.upsert(ManagedFileTypeName, value: managedFileLayout())
+	end 'registerManagedFileType'
+
+	// The `__ManagedFile` layout, held to the runtime's own constants by the same drift check
+	// `characterSetLayout` uses and for the same reason — the front end states the shape here, the runtime
+	// writes the handle through `ManagedFileHandleOffset`, and two readers of one shape is the pair that
+	// drifts. ⚠ Both references register an 8-byte handle struct whose runtime block is a DIFFERENT size,
+	// with nothing tying the two; this check is what keeps that from being repeated here.
+	function managedFileLayout() returns StructLayout
+		var layout = StructLayout.create(ManagedFileTypeName)
+		layout.addField(ManagedFileHandleFieldName, declaredType: MaxonType.integer, mutable: true, exported: false, defaultValue: FieldDefault.none)
+
+		if layout.offsetOfField(ManagedFileHandleFieldIndex) != ManagedFileHandleOffset 'offsetDrift'
+			panic("managedFileLayout: the struct layout puts `_handle` at {layout.offsetOfField(ManagedFileHandleFieldIndex)} but the runtime reads it at {ManagedFileHandleOffset} — the front end's shape and the runtime's field access have drifted")
+		end 'offsetDrift'
+		if layout.sizeBytes() as ParsedInt != ManagedFileBoxBytes 'sizeDrift'
+			panic("managedFileLayout: the struct layout is {layout.sizeBytes()} bytes but the runtime allocates {ManagedFileBoxBytes} — the box the runtime builds and the shape the front end states have drifted")
+		end 'sizeDrift'
+		return layout
+	end 'managedFileLayout'
 
 	// ⚠ **THERE IS DELIBERATELY NO `characterSetLayoutOrPanic`**, where `StringIndex` has one. An index is
 	// READ through its layout (`charIndex()`/`bytePos()` are field loads, `stringIndexLayoutOrPanic` serves

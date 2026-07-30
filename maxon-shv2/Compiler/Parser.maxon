@@ -2541,6 +2541,7 @@ end 'comparisonOpSpelling'
 enum TokenProbe
 	stringIndexProducer
 	characterSetProducer
+	managedFileProducer
 end 'TokenProbe'
 
 // --- Character literals ---
@@ -4659,6 +4660,8 @@ export type Parser
 		let hasStringIndexProducer = self.fileNamesStringIndexProducer()
 		// The `CharacterSet` layout's own complete walk, for `hasStringIndexProducer`'s reason (P1.8 Slice D).
 		let hasCharacterSetProducer = self.fileNamesCharacterSetProducer()
+		// The `__ManagedFile` layout's own complete walk, for `hasStringIndexProducer`'s reason (R4.1).
+		let hasManagedFileProducer = self.fileNamesManagedFileProducer()
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -4810,6 +4813,12 @@ export type Parser
 		if hasCharacterSetProducer 'registerCharacterSet'
 			index.registerCharacterSetType()
 		end 'registerCharacterSet'
+
+		// Register the compiler-owned `__ManagedFile` type if this file names it (R4.1) — after `foldFile`,
+		// exactly as the two registrations above are and for the same reasons.
+		if hasManagedFileProducer 'registerManagedFile'
+			index.registerManagedFileType()
+		end 'registerManagedFile'
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -4939,6 +4948,12 @@ export type Parser
 		return self.fileNamesAnyToken(TokenProbe.characterSetProducer)
 	end 'fileNamesCharacterSetProducer'
 
+	// Does this file name `__ManagedFile` anywhere (R4.1)? See `atManagedFileProducer` for why the bare
+	// identifier is the whole probe.
+	function fileNamesManagedFileProducer() returns bool
+		return self.fileNamesAnyToken(TokenProbe.managedFileProducer)
+	end 'fileNamesManagedFileProducer'
+
 	// ⭐ **ONE COMPLETE WALK OF THE TOKEN ARRAY, ASKING ONE PROBE** — the shared body of the two whole-file
 	// questions above. It restores the cursor, so it is invisible to the caller, and stops at the first hit
 	// because the answer is a bool. Written once so a third such question cannot arrive with its own idea of
@@ -4967,6 +4982,7 @@ export type Parser
 		match probe 'probe'
 			stringIndexProducer then return self.atStringIndexProducer()
 			characterSetProducer then return self.atCharacterSetProducer()
+			managedFileProducer then return self.atManagedFileProducer()
 		end 'probe'
 	end 'probeMatchesHere'
 
@@ -4981,6 +4997,19 @@ export type Parser
 		end 'namesTheType'
 		return self.atBuiltinMethodCall(StringTrimMethod) or self.atBuiltinMethodCall(StringTrimStartMethod) or self.atBuiltinMethodCall(StringTrimEndMethod)
 	end 'atCharacterSetProducer'
+
+	// The `__ManagedFile` type name (R4.1). Deliberately TOLERANT like every sweep probe: it sees the
+	// identifier, not a type, so a file merely MENTIONING the name over-registers the layout rather than
+	// missing one that is used.
+	//
+	// ⚠ **ONE probe, not one per position, and that is the point.** The corpus names this type in three
+	// syntactically unrelated places — a static call (`__ManagedFile.openRead(…)`), a declared FIELD
+	// (`export var file as __ManagedFile`) and a declared PARAMETER — and a probe per position is three
+	// spellings of "this file needs the layout", the shape that drifts. The bare identifier covers all
+	// three because every one of them writes the name.
+	function atManagedFileProducer() returns bool
+		return self.at(TokenKind.identifier) and self.current().value.equals(ManagedFileTypeName)
+	end 'atManagedFileProducer'
 
 	// Is the cursor on `. <name>`? The shape every "does this file call builtin method X?" sweep probe
 	// asks, written once so a second probe cannot arrive with its own idea of what a method call looks
