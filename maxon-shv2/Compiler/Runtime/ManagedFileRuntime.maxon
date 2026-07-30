@@ -46,7 +46,7 @@ export let ManagedFileClosedHandle = 0 as ParsedInt
 
 // `CreateFileA` reports failure as `INVALID_HANDLE_VALUE`, which is -1 and NOT the zero a closed box
 // carries. Two distinct sentinels for two distinct facts: "the OS refused" vs "this box holds no handle".
-let InvalidHandleValue = -1 as ParsedInt
+export let InvalidHandleValue = -1 as ParsedInt
 
 // The Win32 last-error codes the corpus discriminates. `specs/managed-file.md`'s own note records that
 // Win32 `ERROR_FILE_NOT_FOUND` and POSIX `ENOENT` are BOTH 2 — which is why the errno→variant mapping is
@@ -83,25 +83,33 @@ let ManagedFileDeleteFailedFlag = ManagedFileDeleteFailedOrdinal + ErrorFlagOrdi
 let ManagedFileStatFailedFlag = ManagedFileStatFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedFileClosedFlag = ManagedFileClosedOrdinal + ErrorFlagOrdinalBias
 
-// ⭐ **`WIN32_FIND_DATAA` — the 320-byte record `FindFirstFileA` fills, and the ONLY thing `stat` and
-// `exists` read the filesystem through.** The offsets are the Win32 struct's, transcribed once (the
-// bootstrap transcribes the same six at `X86CodeEmitter.Runtime.cs:3777-3786`). Three of them are NOT
-// 8-aligned (`ftCreationTime` at 4, `ftLastAccessTime` at 12, `ftLastWriteTime` at 20) because the record
-// begins with a DWORD; x64 loads them unaligned without ceremony.
+// ⭐ **`WIN32_FIND_DATAA` — the 320-byte record `FindFirstFileA` fills**, which `stat` and `exists` read the
+// filesystem through and which `__ManagedDirectory` iterates over (R4.3). The offsets are the Win32 struct's,
+// transcribed once (the bootstrap transcribes the same six at `X86CodeEmitter.Runtime.cs:3777-3786` and
+// `cFileName` at `:2359`). Three of them are NOT 8-aligned (`ftCreationTime` at 4, `ftLastAccessTime` at 12,
+// `ftLastWriteTime` at 20) because the record begins with a DWORD; x64 loads them unaligned without ceremony.
 //
 // ⚠ The buffer is HEAP, not stack: the Std tier has no stack-slot primitive, so `stat`/`exists` allocate
-// it through `__mm_alloc` and free it before returning — on EVERY path, including the failing one.
-let FindDataBytes = 320 as ParsedInt
+// it through `__mm_alloc` and free it before returning — on EVERY path, including the failing one. A
+// directory search keeps its record for the LIFETIME of the search instead, inside its find block.
+//
+// ⚠ **THE SIZE AND THE OFFSETS ARE ONE FACT WITH TWO FAMILIES READING IT, WHICH IS WHY THEY ARE EXPORTED
+// FROM HERE RATHER THAN RE-TRANSCRIBED (R4.3).** A second copy of `cFileName is at 44` is a number nothing
+// checks: get it wrong and `filename()` returns a slice of a timestamp, silently.
+export let FindDataBytes = 320 as ParsedInt
 let FindDataAttributesOffset = 0 as ByteOffset
 let FindDataCreationTimeOffset = 4 as ByteOffset
 let FindDataLastAccessTimeOffset = 12 as ByteOffset
 let FindDataLastWriteTimeOffset = 20 as ByteOffset
 let FindDataSizeHighOffset = 28 as ByteOffset
 let FindDataSizeLowOffset = 32 as ByteOffset
+// `cFileName` — a NUL-terminated `char[MAX_PATH]` at the record's tail. Read only by `__ManagedDirectory`
+// (R4.3): `stat` and `exists` are told the path they asked about, so neither has any use for it.
+export let FindDataFileNameOffset = 44 as ByteOffset
 
 // The two `dwFileAttributes` bits the corpus can observe: `exists` answers 0 for a DIRECTORY (the spec
 // says "Returns 1 if the file exists (and is not a directory)"), and `stat` publishes both as 0/1.
-let FileAttributeDirectory = 0x10 as ParsedInt
+export let FileAttributeDirectory = 0x10 as ParsedInt
 let FileAttributeReadOnly = 0x1 as ParsedInt
 
 // ⭐ **THE 48-BYTE STAT BUFFER — six i64 fields, packed exactly as the bootstrap packs them**
@@ -135,7 +143,7 @@ let FileSizeHighShift = 32 as ParsedInt
 // narrow load's SIGNEDNESS is a decision it refuses to guess (see its own comment). Every DWORD this file
 // reads is unsigned, so a full-word load plus `and 0xFFFFFFFF` is the honest spelling and needs no new
 // access width: the four extra bytes are always inside the 320-byte find record.
-let DwordMask = 0xFFFFFFFF as ParsedInt
+export let DwordMask = 0xFFFFFFFF as ParsedInt
 
 // The `__mf_` prefix that identifies EVERY file-IO runtime entry point — the one test `scanRuntimeUsage`
 // reads to set `usesManagedFile` (and `usesHeap`), and the one `SemanticCheck` reads for E3104.
@@ -143,7 +151,7 @@ let ManagedFileRuntimePrefix = b"__mf_"
 
 // The Win32 BOOL a failed call returns. Every file import except the two opens and `FindFirstFileA`
 // answers with one, and the test is always "is it zero?".
-let Win32False = 0 as ParsedInt
+export let Win32False = 0 as ParsedInt
 
 // ⭐ **THE SCRATCH WORD A Win32 OUT-PARAMETER IS WRITTEN THROUGH** — `GetFileSizeEx`'s `PLARGE_INTEGER` and
 // `ReadFile`/`WriteFile`'s `lpNumberOfBytes*`. Named for THAT purpose rather than reusing `StatFieldBytes`
@@ -232,7 +240,7 @@ end 'managedFileThrows'
 // Emits into `cur`, routes the copy loop's exit into `join`, and writes the terminator in `join` — so the
 // caller carries on from `join` with the pointer this returns. `cur` dominates `join`, which is what lets
 // `len` be read in one and used in the other with no block argument.
-function emitPathToCString(module StdModule, func IrFunction, cur IrBlock, join IrBlock, pathRec ValueId, ids ValueMinter) returns ValueId
+export function emitPathToCString(module StdModule, func IrFunction, cur IrBlock, join IrBlock, pathRec ValueId, ids ValueMinter) returns ValueId
 	let len = emitLoadField(module, block: cur, record: pathRec, offset: ArrLengthOffset, ids: ids)
 	let buf = emitLoadField(module, block: cur, record: pathRec, offset: ArrBufferOffset, ids: ids)
 	let one = emitConst(module, block: cur, value: 1, ids: ids)
@@ -256,7 +264,7 @@ end 'emitPathToCString'
 // destructor cascade is deferred — see its comment), which is why a green suite never noticed; the day it
 // does, every `__ManagedFile` box would `callIndirect` through a garbage pointer. Stated once here so the
 // arity cannot be got wrong per call site.
-function emitRawAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
+export function emitRawAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
 	let dtor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let ptr = ids.mint()
 	module.appendOp(block, op: StdOp.call(ptr, callee: MmAllocName, args: twoArgs(byteCount, second: dtor)))
@@ -265,7 +273,7 @@ end 'emitRawAlloc'
 
 // Release one of this file's raw blocks. A `void` result the caller discards, spelled once so the minted
 // throwaway id is not repeated at a dozen sites.
-function emitRawFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)
+export function emitRawFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(ptr)))
 end 'emitRawFree'
 
@@ -300,23 +308,29 @@ function emitWin32BoolOutcome(module StdModule, func IrFunction, block IrBlock, 
 	let failedCall = emitCmp(module, block: block, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(failedCall, thenBlockId: failed.id, elseBlockId: ok.id))
 
-	emitErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: fallbackFlag, ids: ids)
-	emitManagedFileOk(module, block: ok, value: answer, ids: ids)
+	emitFileErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: fallbackFlag, ids: ids)
+	emitOkReturn(module, block: ok, value: answer, ids: ids)
 end 'emitWin32BoolOutcome'
 
 // ⭐⭐ **THE errno → VARIANT MAPPING, AND THE ONLY PLACE IT LIVES.** `err` is a `GetLastError` reading the
-// caller captured; this turns it into a `__ManagedFileError` and THROWS from `block`.
+// caller captured; this turns it into one of THREE error-enum cases and THROWS from `block`.
 //
 // `ERROR_PATH_NOT_FOUND` joins `ERROR_FILE_NOT_FOUND` in the `notFound` arm: a missing DIRECTORY component
 // is a missing path as far as the corpus is concerned, and `managed-file.open-read-not-found-variant` would
 // otherwise fall to the catch-all for a path whose parent does not exist. Anything else takes
-// `fallbackFlag` — the per-OPERATION catch-all, which is the only thing that differs between the eight
-// callers (`openFailed` for an open, `readFailed` for a read, and so on).
+// `fallbackFlag` — the per-OPERATION catch-all (`openFailed` for an open, `readFailed` for a read, and so on).
+//
+// ⚠ **THE THREE FLAGS ARE ALL PARAMETERS, AND R4.3 IS WHY.** `__ManagedDirectory` runs the identical
+// classification into `__ManagedDirectoryError`, whose `notFound`/`accessDenied` happen to sit at the same
+// two ordinals `__ManagedFileError`'s do (both references order both enums that way). Hard-coding this
+// file's two and letting the directory family inherit them would make that coincidence load-bearing and
+// silent: reorder either enum and every directory throw would name the wrong case with nothing failing.
+// Passed explicitly, the coincidence is a fact each caller states about its OWN enum.
 //
 // ⚠ It is builder-built Std rather than backend code because the arithmetic is the same on every platform
 // even though the READ is not: `specs/managed-file.md`'s own note records that Win32 `ERROR_FILE_NOT_FOUND`
 // and POSIX `ENOENT` are BOTH 2, so a future POSIX lane reuses this unchanged and supplies only the calls.
-function emitErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, fallbackFlag ParsedInt, ids ValueMinter)
+export function emitErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, notFoundFlag ParsedInt, deniedFlag ParsedInt, fallbackFlag ParsedInt, ids ValueMinter)
 	var checkPath = module.addBlock(func, label: b"mfchkp")
 	var checkDenied = module.addBlock(func, label: b"mfchkd")
 	var notFoundBlock = module.addBlock(func, label: b"mfnf")
@@ -335,25 +349,21 @@ function emitErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlo
 	let isDenied = emitCmp(module, block: checkDenied, a: err, b: deniedConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(checkDenied, op: StdOp.condBranch(isDenied, thenBlockId: deniedBlock.id, elseBlockId: otherBlock.id))
 
-	emitManagedFileThrow(module, block: notFoundBlock, flag: ManagedFileNotFoundFlag, ids: ids)
-	emitManagedFileThrow(module, block: deniedBlock, flag: ManagedFileAccessDeniedFlag, ids: ids)
-	emitManagedFileThrow(module, block: otherBlock, flag: fallbackFlag, ids: ids)
+	emitErrorReturn(module, block: notFoundBlock, flag: notFoundFlag, ids: ids)
+	emitErrorReturn(module, block: deniedBlock, flag: deniedFlag, ids: ids)
+	emitErrorReturn(module, block: otherBlock, flag: fallbackFlag, ids: ids)
 end 'emitErrnoClassifiedThrow'
 
-// One failure exit: no value, this variant's flag.
-function emitManagedFileThrow(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
-	let flagVal = emitConst(module, block: block, value: flag, ids: ids)
-	module.setTerminator(block, op: StdOp.errorReturn(zero, errorFlagId: flagVal))
-end 'emitManagedFileThrow'
+// The three-flag classification, with THIS family's two fixed cases supplied. Every `__ManagedFile` caller
+// throws `__ManagedFileError`, so its `notFound`/`accessDenied` are a per-FILE fact rather than a per-call
+// one; only the catch-all differs. Not a thin wrapper: it is what keeps the pairing out of five call sites.
+function emitFileErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, fallbackFlag ParsedInt, ids ValueMinter)
+	emitErrnoClassifiedThrow(module, func: func, block: block, err: err, notFoundFlag: ManagedFileNotFoundFlag, deniedFlag: ManagedFileAccessDeniedFlag, fallbackFlag: fallbackFlag, ids: ids)
+end 'emitFileErrnoClassifiedThrow'
 
-// One success exit carrying `value`. The dual-register `errorReturn` with a clear flag, exactly as
-// `ArrayRuntime.emitOkReturn` is; a VOID throwing function passes a 0 the ABI never moves (a void
-// `emitReturnValueMove` emits nothing) and it is only the flag register that is read.
-function emitManagedFileOk(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
-	let ok = emitConst(module, block: block, value: NoErrorFlag, ids: ids)
-	module.setTerminator(block, op: StdOp.errorReturn(value, errorFlagId: ok))
-end 'emitManagedFileOk'
+// ⚠ The two throwing exits this file used to spell for itself (`emitManagedFileThrow`/`emitManagedFileOk`)
+// are `MmRuntime.emitErrorReturn`/`emitOkReturn` — the identical three-line bodies `ArrayRuntime` also had.
+// R4.3 would have been the third copy; see their header in `MmRuntime` for why they now have one home.
 
 // ⭐ **THE HANDLE OF AN OPEN BOX, OR A `closed` THROW.** `size`/`read`/`write` all begin here: the box's
 // `_handle` is `ManagedFileClosedHandle` both before an open and after a close (one sentinel, two facts —
@@ -366,7 +376,7 @@ function emitOpenHandleOrThrow(module StdModule, func IrFunction, entry IrBlock,
 	let isClosed = emitCmp(module, block: entry, a: handle, b: closedConst, pred: StdCmpPred.eq, ids: ids)
 	var closedBlock = module.addBlock(func, label: b"mfclosed")
 	module.setTerminator(entry, op: StdOp.condBranch(isClosed, thenBlockId: closedBlock.id, elseBlockId: join.id))
-	emitManagedFileThrow(module, block: closedBlock, flag: ManagedFileClosedFlag, ids: ids)
+	emitErrorReturn(module, block: closedBlock, flag: ManagedFileClosedFlag, ids: ids)
 	return handle
 end 'emitOpenHandleOrThrow'
 
@@ -422,7 +432,7 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	let isInvalid = emitCmp(module, block: afterCopy, a: handle, b: invalidConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(afterCopy, op: StdOp.condBranch(isInvalid, thenBlockId: failed.id, elseBlockId: opened.id))
 
-	emitErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedFileOpenFailedFlag, ids: ids)
+	emitFileErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedFileOpenFailedFlag, ids: ids)
 
 	// The box: one 8-byte slot holding the handle, allocated through `__mm_alloc` so the ordinary ownership
 	// machinery drops it — and the drop it takes is `__mf_destruct`, which CLOSES the handle before freeing
@@ -430,7 +440,7 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	let boxSize = emitConst(module, block: opened, value: ManagedFileBoxBytes, ids: ids)
 	let box = emitRawAlloc(module, block: opened, byteCount: boxSize, ids: ids)
 	module.appendOp(opened, op: StdOp.storeIndirect(box, offset: ManagedFileHandleOffset, valueId: handle, valueType: StdType.i64))
-	emitManagedFileOk(module, block: opened, value: box, ids: ids)
+	emitOkReturn(module, block: opened, value: box, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedFileOpen'
@@ -573,7 +583,7 @@ function buildManagedFileRead(module StdModule)
 	let overCapacity = emitCmp(module, block: checkCap, a: size, b: byteCapacity, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(checkCap, op: StdOp.condBranch(overCapacity, thenBlockId: tooBig.id, elseBlockId: doRead.id))
 
-	emitManagedFileThrow(module, block: tooBig, flag: ManagedFileReadFailedFlag, ids: ids)
+	emitErrorReturn(module, block: tooBig, flag: ManagedFileReadFailedFlag, ids: ids)
 
 	let buffer = emitLoadField(module, block: doRead, record: arrRec, offset: ArrBufferOffset, ids: ids)
 	let out = emitWin32OutWord(module, block: doRead, ids: ids)
@@ -709,9 +719,9 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 	let failedCall = emitCmp(module, block: afterSecond, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(afterSecond, op: StdOp.condBranch(failedCall, thenBlockId: failed.id, elseBlockId: ok.id))
 
-	emitErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: fallbackFlag, ids: ids)
+	emitFileErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: fallbackFlag, ids: ids)
 	let nothing = emitConst(module, block: ok, value: 0, ids: ids)
-	emitManagedFileOk(module, block: ok, value: nothing, ids: ids)
+	emitOkReturn(module, block: ok, value: nothing, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedFilePathOperation'
@@ -776,7 +786,7 @@ function buildManagedFileStat(module StdModule)
 	// The find record is released on the failure path too — the throw carries no buffer, so nothing else
 	// ever will.
 	emitRawFree(module, block: failed, ptr: findData, ids: ids)
-	emitErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedFileStatFailedFlag, ids: ids)
+	emitFileErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedFileStatFailedFlag, ids: ids)
 
 	module.appendOp(pack, op: StdOp.osFileFindClose(search))
 	let bufSize = emitConst(module, block: pack, value: StatBufferBytes, ids: ids)
@@ -805,14 +815,14 @@ function buildManagedFileStat(module StdModule)
 	var afterReadOnly = emitStoreAttributeFlag(module, func: func, cur: afterDir, out: out, offset: StatIsReadOnlyOffset, attrs: attrs, mask: FileAttributeReadOnly, ids: ids)
 
 	emitRawFree(module, block: afterReadOnly, ptr: findData, ids: ids)
-	emitManagedFileOk(module, block: afterReadOnly, value: out, ids: ids)
+	emitOkReturn(module, block: afterReadOnly, value: out, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedFileStat'
 
 // One unsigned DWORD out of the find record — see `DwordMask` for why it is a word load and a mask rather
 // than a 4-byte access.
-function emitLoadDword(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+export function emitLoadDword(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let word = emitLoadField(module, block: block, record: record, offset: offset, ids: ids)
 	let mask = emitConst(module, block: block, value: DwordMask, ids: ids)
 	return emitBin(module, block: block, a: word, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)

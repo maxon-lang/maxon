@@ -53,7 +53,7 @@ export let ArrRecordBytes = 48 as ByteCount
 // `element_destroy@40` is the per-element destructor a managed-element array carries (P1.7 slice 3); for a
 // TRIVIAL element it is 0 and the drop path releases the buffer without walking. Both come pre-zeroed from
 // `__mm_alloc`, so `__arr_create` never writes them — the same zeroing contract `__mm_alloc` relies on.
-let TrivialElementDestroy = 0 as ParsedInt
+export let TrivialElementDestroy = 0 as ParsedInt
 
 // --- Byte-string literal (`b"…"`, P1.7 slice 2) ---
 //
@@ -935,21 +935,10 @@ function emitOobReturn(module StdModule, block IrBlock, ids ValueMinter)
 	emitErrorReturn(module, block: block, flag: ArrIndexOutOfBoundsFlag, ids: ids)
 end 'emitOobReturn'
 
-// One throwing failure exit: no value, this case's flag. The primary value is unread on the throw edge (the
-// desugar's phi takes the `otherwise` value there), so a plain 0 is honest. THE one home of that shape for the
-// array family — `emitMemoryThrow` is its `__ManagedMemoryError` twin, kept separate only because the two
-// enums' ordinals are separate facts.
-function emitErrorReturn(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
-	let zeroVal = emitConst(module, block: block, value: 0, ids: ids)
-	let flagVal = emitConst(module, block: block, value: flag, ids: ids)
-	module.setTerminator(block, op: StdOp.errorReturn(zeroVal, errorFlagId: flagVal))
-end 'emitErrorReturn'
-
-// A successful throwing return: `errorReturn(value, 0)`.
-function emitOkReturn(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
-	let flag = emitConst(module, block: block, value: NoErrorFlag, ids: ids)
-	module.setTerminator(block, op: StdOp.errorReturn(value, errorFlagId: flag))
-end 'emitOkReturn'
+// ⚠ `emitErrorReturn`/`emitOkReturn` — the two throwing exits this file calls at a few dozen sites — live in
+// `MmRuntime` beside the single-op emit helpers. They were this file's own until R4.3 needed the third copy;
+// see their header there for why one home rather than one per family. (`emitMemoryThrow` below stays here:
+// what it adds is which ENUM's ordinals it names, and that IS a per-family fact.)
 
 // ⭐⭐ **BUILD AN O(1) ZERO-COPY VIEW of `srcRecord`'s elements `[start, start+sliceLen)` (P1.7 COW slice B).**
 // The shared body of `__arr_clone` (start 0, sliceLen = length) and `__arr_slice` (a bounds-checked sub-range).

@@ -382,6 +382,30 @@ export function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, p
 	return v
 end 'emitCmp'
 
+// ⭐⭐ **THE TWO EXITS OF EVERY THROWING RUNTIME FUNCTION, ONE HOME.** A throwing runtime body ends in the
+// dual-register `errorReturn(value, flag)` ABI — `flag == NoErrorFlag` on the success edge, `ordinal +
+// ErrorFlagOrdinalBias` on the failure edge — and every family needs both spellings.
+//
+// ⚠ **THEY WERE COPIED, AND THE COPY IS EXACTLY THE PAIR THIS PROJECT KEEPS FINDING DRIFTED.**
+// `ArrayRuntime` had `emitErrorReturn`/`emitOkReturn` and `ManagedFileRuntime` had
+// `emitManagedFileThrow`/`emitManagedFileOk` — the same two three-line bodies under two names, and R4.3
+// would have made it three. They join the single-op emit helpers above for their reason: `MmRuntime` is the
+// runtime's base layer and every family already draws on it, so homing them here needs no new dependency.
+//
+// ⚠ A VOID throwing function passes a 0 through `value` that the ABI never moves (a void
+// `emitReturnValueMove` emits nothing); only the flag register is read.
+export function emitErrorReturn(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
+	let zeroVal = emitConst(module, block: block, value: 0, ids: ids)
+	let flagVal = emitConst(module, block: block, value: flag, ids: ids)
+	module.setTerminator(block, op: StdOp.errorReturn(zeroVal, errorFlagId: flagVal))
+end 'emitErrorReturn'
+
+// A successful throwing return: `errorReturn(value, 0)`. See `emitErrorReturn` for why the pair lives here.
+export function emitOkReturn(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
+	let flag = emitConst(module, block: block, value: NoErrorFlag, ids: ids)
+	module.setTerminator(block, op: StdOp.errorReturn(value, errorFlagId: flag))
+end 'emitOkReturn'
+
 // ⭐ **THE ONE BYTE-GRANULAR FILL LOOP.** Overwrite `byteCount` bytes at `dest` with the low byte of
 // `fillValue`, one byte at a time (fill widths are not all 8-multiples — a `b"hi"` buffer is 2 bytes, a
 // `pop`'s vacated slot is one ranged element). `byteCount == 0` exits on the first compare, writing nothing.
