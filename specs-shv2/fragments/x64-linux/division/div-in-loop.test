@@ -1,9 +1,11 @@
 // Test: div-in-loop
+typealias Positive = int(1 to i64.max)
+
 function main() returns ExitCode
 	var sum = 0
 	var i = 1
 	while i <= 6 'loop'
-		sum = sum + 100 / i
+		sum = sum + 100 / (i as Positive)
 		i = i + 1
 	end 'loop'
 	return sum
@@ -15,6 +17,7 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 r8, 0
     x64.movRegImm32 rcx, 1
     x64.jmp whilehdr
@@ -24,12 +27,25 @@ func @main {
     x64.jmp whileexit
   loop:
     x64.movRegImm32 rax, 100
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 rsi, rcx, 0
     x64.cqo
-    x64.idivReg rcx
+    x64.idivReg rsi
     x64.leaRegRegReg r8, r8, rax
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.jmp whilehdr
   whileexit:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

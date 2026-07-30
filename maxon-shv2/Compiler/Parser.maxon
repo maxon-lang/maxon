@@ -477,10 +477,15 @@ export union ParseError implements Error
 	// A `/` or `mod` BY ZERO in a top-level constant's initializer (`let X = 1 / 0`), or the one other
 	// integer division with no answer (`i64.min / -1`). Renders as E2045, positioned at the operator.
 	//
-	// A runtime `x / 0` is a trap, and shv2 lets it reach the hardware (OPEN.md #2). A CONSTANT one
-	// cannot: there is no run time to trap in, because the fold happens before the program exists. So
+	// A CONSTANT `1 / 0` has no run time to trap in, because the fold happens before the program exists. So
 	// there is no answer to give and no later pass that could give one, and the only honest move is to
 	// reject it where it is written.
+	//
+	// ⚠ It stays a DISTINCT arm from A1's `divisionByProvableZero` below, whose wording is the same rule
+	// stated for a FUNCTION BODY. Two arms because the reasons genuinely differ: a body's `a / 0` is rejected
+	// because a throw the program could catch would be a lie about a divide that can only fail, while a
+	// top-level `let`'s is rejected because there is no run time at all. Same verdict, different sentence, and
+	// different codes (E2045 here, E3103 there) — the reference draws the same line.
 	//
 	// AUTHORED, not ported — neither reference compiler gets this right. The bootstrap evaluates a
 	// constant `1 / 0` through C#'s DOUBLE division and silently declares the constant Infinity
@@ -488,6 +493,15 @@ export union ParseError implements Error
 	// `UnresolvedConstExpr` union carries `add`/`sub`/`mul` and no `div` — Project.maxon:3401-3423),
 	// so the question never reaches it.
 	constantDivisionByZero(op String, line LineNumber, column ColumnNumber)
+	// ⭐ **E3103 — A DIVISOR THE COMPILER HOLDS AS 0 (A1).** `a / 0`, `a mod 0`, `a / zero` where `zero`
+	// folded to 0, and the float `a / 0.0` / `a / -0.0` (both of which give an infinity). Positioned at the
+	// operator, which is where the bootstrap positions it.
+	//
+	// ⚠ **IT IS NOT ROUTED TO THE THROWING PATH, AND THAT IS THE RULE RATHER THAN A SHORTCUT.** A
+	// possibly-zero divisor throws `DivisionByZero` and is handled with `try`; a PROVABLY-zero one is a divide
+	// that can only ever fail, so offering the program a catchable error would be offering it a recovery from
+	// a bug. `op` carries the operator's own spelling so `mod` is not reported as `/`.
+	divisionByProvableZero(op String, line LineNumber, column ColumnNumber)
 	// A top-level constant cast whose LITERAL value is outside the ranged alias it is cast into
 	// (`let BAD = 300 as Byte`). Renders as E3005 with the SAME words and format `InsertRangeChecks`
 	// gives a body cast — `literalOutOfRangeMessage` — positioned at the `as` token. It is a distinct
@@ -3894,6 +3908,58 @@ enum MergeConstruct
 	ternary
 end 'MergeConstruct'
 
+// ⭐⭐ **WHICH DOMAIN'S CONSTANT THE PARSER HOLDS FOR A VALUE — one column, two views, no second column
+// (A1).** The parser's fold columns hold a bare 64-bit payload, and 64 bits are 64 bits: an integer's is a
+// NUMBER and a float's is an IEEE-754 BIT PATTERN, and reading one as the other is a silent wrong answer at
+// compile time (`3.14 + 2.0` folded as integers is neither 5.14 nor anything else). Before A1 the parser
+// simply refused to hold the float half, and `recordConstantArgRangeChecks`' header recorded the trade: "the
+// alternative — a second, float-domain constant column on every value in the program — is a large price for
+// a narrower filter."
+//
+// ⭐ **A1 NEEDED THE FLOAT HALF AND PAID NOTHING FOR IT, because the price that argument was refusing is a
+// SECOND COLUMN and this is not one.** The `known` flag was already a per-value column; making it say WHICH
+// DOMAIN instead of merely WHETHER costs the same slot and answers both questions from one read. So
+// `constIsKnown` is still a single array probe and still means "the compiler holds this value's INTEGER" —
+// every existing reader is unchanged, and `3.14 + 2.0` still cannot fold, because a float's slot says
+// `float` and never `integer`.
+//
+// ⚠ **THE DOMAIN IS THE PAYLOAD'S, NOT THE VALUE'S TAG, and they are deliberately not the same fact.** A
+// value whose tag is `float` may hold NO constant (a parameter, a runtime divide) — that is `unknown`, not
+// `float`. Reading the tag to decide how to read the payload would answer `float` for both and hand a
+// caller the unseeded 0 as if it were `+0.0`, which is exactly the sentinel this column exists to refuse.
+enum ConstPayloadDomain
+	// No constant at all: a parameter, a call result, a merge phi, a value whose defining op declined to fold.
+	unknown
+	// The payload is an integer. Read through `constIsKnown`/`constOf`.
+	integer
+	// The payload is an f64 BIT PATTERN. Read through `floatConstIsKnown`/`floatConstBitsOf`, and never
+	// through the integer pair — its ONE reader is the division-by-zero proof, which asks the pattern-safe
+	// `floatOrderKey` rather than comparing the bits as a number.
+	float
+end 'ConstPayloadDomain'
+
+export typealias ConstPayloadDomainArray = Array with ConstPayloadDomain
+
+// ⭐⭐ **WHAT THE COMPILER CAN PROVE ABOUT A DIVISOR (A1)** — the fallible-division rule's three answers, as
+// ONE value rather than as two predicates asked in sequence.
+//
+// The rule is genuinely three-way (E3103 / bare divide / throwing divide), and its first cut was two
+// booleans — `divisorIsProvablyZero` then `divisorIsProvablyNonZero` — which asked the SAME cascade twice
+// (the float-constant arm, then the integer-constant arm, once with `== 0` and once with `!= 0`). Two copies
+// of one walk, and worse: nothing but inspection stopped both from answering `true` for the same divisor,
+// which is an incoherent verdict the emitter had no arm for. One classification with three variants makes
+// that unrepresentable and states the rule in the shape the rule has.
+enum DivisorZeroVerdict
+	// A folded constant 0 / 0.0 / -0.0. **E3103** — never routed to the throwing path.
+	alwaysZero
+	// A non-zero folded constant, or a declared ranged type whose range excludes 0. A BARE divide.
+	neverZero
+	// ⚠ **THE SAFE ANSWER, AND THE ONE EVERY GAP IN THE PROOF MUST FALL TO.** A divisor wrongly called
+	// `neverZero` gets an unguarded divide — a hardware trap where a catchable error was promised, with no
+	// diagnostic anywhere. One wrongly called `possiblyZero` costs a needless `try`, which the author sees.
+	possiblyZero
+end 'DivisorZeroVerdict'
+
 // ⭐ **THE ONE CONSTRUCT→DIAGNOSTIC MAPPING for a value-merge type mismatch (P1.5 #80).** A ternary and a
 // match share the merge but not the diagnostic noun: a ternary names its TRUE and FALSE branches by
 // position (E2028), a match names the offending arm against the first (E3005). BOTH sides of the
@@ -4245,11 +4311,17 @@ export type Parser
 	// Maxon union value is a heap object, and this is the per-VALUE path. Re-created per function,
 	// so the cost is bounded by the largest function and not by the module.
 	//
-	// ⚠ Its REACH is a matter of diagnostic quality, never of correctness. A count it misses is a
-	// count `emitGuardedShift` saturates at run time, to exactly the same answer — which is what
-	// lets the fold be an optimization rather than a second opinion.
+	// ⚠ Its REACH is a matter of diagnostic quality, never of correctness FOR THE SHIFT RULE. A count it
+	// misses is a count `emitGuardedShift` saturates at run time, to exactly the same answer — which is what
+	// lets the fold be an optimization rather than a second opinion. ⚠⚠ **THAT IS NOT TRUE OF ITS SECOND
+	// READER (A1).** The division-by-zero proof reads these columns too, and there a MISS costs a needless
+	// `try` while a WRONG ANSWER costs a hardware trap where a catchable error was promised — so the proof is
+	// written to fail towards "possibly zero", never towards "provably non-zero".
+	//
+	// ⭐ **The `known` half names the payload's DOMAIN, not merely its presence** — see `ConstPayloadDomain`
+	// for why that is one column and not two, and why the tag cannot answer it.
 	var valueConsts as ParsedIntArray
-	var valueConstKnown as BoolArray
+	var valueConstDomains as ConstPayloadDomainArray
 	// ⭐ **THE OWNED-HEAP PROVENANCE — the SSA values that are FRESH owned heap allocations this function
 	// must drop.** Today, the interpolation RESULTS (`emitStringInterp`). It exists because ownership CANNOT
 	// be read off the type tag: an owned interpolation String and a borrowed-immortal rdata literal String
@@ -4701,7 +4773,7 @@ export type Parser
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
 			valueConsts: ParsedIntArray.create(),
-			valueConstKnown: BoolArray.create(),
+			valueConstDomains: ConstPayloadDomainArray.create(),
 			valueOwnsHeap: BoolArray.create(),
 			valuePromiseMarks: BoolArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
@@ -9549,7 +9621,7 @@ export type Parser
 		self.valueTags = ValueTypeTagArray.create()
 		self.valueNameIds = TypeNameIdArray.create()
 		self.valueConsts = ParsedIntArray.create()
-		self.valueConstKnown = BoolArray.create()
+		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
@@ -12333,8 +12405,26 @@ export type Parser
 		if self.at(TokenKind.byteStringLiteral) 'byteStringLiteralTarget'
 			return try self.parseByteStringLiteral()
 		end 'byteStringLiteralTarget'
+
+		// ⭐ **`try (a / b) otherwise …` — A PARENTHESIZED EXPRESSION AS THE TRY TARGET (A1).** The only
+		// throwing operation in the language written as an OPERATOR rather than a call, so it is the only one
+		// whose `try` cannot name a callee: `stdlib/Math.maxon`, `Json.maxon` and `helpers/sort/driftsort.maxon`
+		// spell it this way at eighteen sites, and `specs/arithmetic-operators.md:37` documents it as the form.
+		//
+		// ⚠⚠ **THIS DOES NOT OPEN `try` TO ARBITRARY PARENTHESIZED EXPRESSIONS, AND IT IS THE EXISTING
+		// MACHINERY — NOT A NEW GATE — THAT KEEPS IT SHUT.** The group is parsed as an ordinary expression, and
+		// `rewriteLastCallToTryCall` then looks at the LAST op it emitted: a possibly-zero divide left a `call
+		// __checked_div` and is converted, while `try (4 + 5)` left a `binOp` and falls to `rejectTryTarget`.
+		// So the accepted set is exactly "the group's outermost operation is fallible", derived from the one
+		// rule that already decides it for every other try shape rather than from a second division-shaped
+		// test here. The oracle reaches the same boundary from the same direction — `try (12 / d)` over a
+		// PROVABLY non-zero `d` is its own E2001, because a bare divide is not a call there either.
+		if self.at(TokenKind.leftParen) 'parenthesizedTarget'
+			return try self.parseParenthesizedExpression(func)
+		end 'parenthesizedTarget'
+
 		let tok = self.current()
-		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)`, `try obj.method(…)`, or `try await p` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
+		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)`, `try obj.method(…)`, `try (a / b)`, or `try await p` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
 	end 'parseTryCallReceiver'
 
 	// Rewrite the just-emitted `call` op in `currentBlock` into a `tryCall` defining `errorFlag` as its
@@ -17799,8 +17889,11 @@ export type Parser
 	end 'checkPatternType'
 
 	// Record a single-value pattern for duplicate detection, or raise E2027 if it repeats one. Only
-	// KNOWN-constant patterns (integer literals) participate; a float literal's bits are not tracked
-	// as a constant (see `parseFloatLiteral`), and no corpus case tests a duplicate float.
+	// INTEGER-domain constants participate (`constIsKnown`). A float literal's bits ARE tracked since A1, but
+	// in the float domain, which this deliberately does not read: two patterns that differ can still be the
+	// same VALUE (`+0.0` and `-0.0` compare equal), so a bit-set membership test would report the arms
+	// distinct while the second is dead. Deciding a duplicate float needs `floatOrderKey`, and no corpus case
+	// tests one — so the reach is unchanged and the reason it is unchanged is now a rule rather than a gap.
 	function checkAndRecordDuplicate(value ValueId, seenValues SeenPatternValues, patternTok Token) throws ParseError
 		if not self.constIsKnown(value) 'notConst'
 			return
@@ -18974,7 +19067,7 @@ export type Parser
 		// discovered by the op that DEFINES it, which is emitted after its id is minted — so the
 		// slot must exist first, and the emitter overwrites it (`recordConst`).
 		self.valueConsts.push(0)
-		self.valueConstKnown.push(false)
+		self.valueConstDomains.push(ConstPayloadDomain.unknown)
 		// Owned-heap provenance rides the same lockstep: seeded NOT owned, set true by `trackOwnedTemp`
 		// on the one value an interpolation allocates. The slot must exist before that call, exactly as
 		// the constant slot must exist before `recordConst`.
@@ -19014,7 +19107,7 @@ export type Parser
 		self.valueNameIds.push(typeNameIdOf(valueType))
 		// A parameter's value is the one thing the compiler provably cannot see.
 		self.valueConsts.push(0)
-		self.valueConstKnown.push(false)
+		self.valueConstDomains.push(ConstPayloadDomain.unknown)
 		// A parameter is never a fresh interpolation result, so it starts NOT owned — but its slot must
 		// exist so the column stays indexable by every ValueId, params included.
 		self.valueOwnsHeap.push(false)
@@ -19029,14 +19122,40 @@ export type Parser
 	// Remember the integer behind a value the parser has just DEFINED. Called by the emitters, on
 	// the id they minted a moment ago, so the slot is always there.
 	function recordConst(id ValueId, folded ParsedInt)
-		try self.valueConsts.set(id, value: folded) otherwise panic("Parser.recordConst: value v{id} has no constant slot — every SSA value must be minted through mintValue")
-		try self.valueConstKnown.set(id, value: true) otherwise panic("Parser.recordConst: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+		self.recordConstPayload(id, payload: folded, domain: ConstPayloadDomain.integer)
 	end 'recordConst'
 
-	// True iff the compiler holds `id`'s integer.
+	// The FLOAT twin: remember the f64 BIT PATTERN behind a value. Its only writer is `emitLiteralIn`'s float
+	// arm (a float literal, including the `-0.0` `parseNegatedNumericLiteral` folds into ONE literal), and its
+	// only reader is the division-by-zero proof — see `ConstPayloadDomain` for why the two domains share one
+	// payload column and why the DOMAIN, not the value's tag, is what says how to read it.
+	function recordFloatConst(id ValueId, bits ParsedInt)
+		self.recordConstPayload(id, payload: bits, domain: ConstPayloadDomain.float)
+	end 'recordFloatConst'
+
+	// The one write. Both halves move together by construction — a payload cannot be stored without the domain
+	// that says how to read it, which is the whole reason the domain is a column and not a convention.
+	function recordConstPayload(id ValueId, payload ParsedInt, domain ConstPayloadDomain)
+		try self.valueConsts.set(id, value: payload) otherwise panic("Parser.recordConstPayload: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+		try self.valueConstDomains.set(id, value: domain) otherwise panic("Parser.recordConstPayload: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+	end 'recordConstPayload'
+
+	// The DOMAIN of the constant payload the compiler holds for `id`, or `unknown` when it holds none.
+	function constPayloadDomain(id ValueId) returns ConstPayloadDomain
+		return try self.valueConstDomains.get(id) otherwise panic("Parser.constPayloadDomain: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+	end 'constPayloadDomain'
+
+	// True iff the compiler holds `id`'s integer. STILL ONE ARRAY PROBE, and still the INTEGER view: a float
+	// literal's slot says `float`, so every reader of this — the shift rule's count, `emitBinOp`'s fold, the
+	// duplicate-pattern check — sees exactly what it saw before the float half existed.
 	function constIsKnown(id ValueId) returns bool
-		return try self.valueConstKnown.get(id) otherwise panic("Parser.constIsKnown: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+		return self.constPayloadDomain(id) == ConstPayloadDomain.integer
 	end 'constIsKnown'
+
+	// True iff the compiler holds `id`'s f64 BIT PATTERN.
+	function floatConstIsKnown(id ValueId) returns bool
+		return self.constPayloadDomain(id) == ConstPayloadDomain.float
+	end 'floatConstIsKnown'
 
 	// The integer behind `id`. Only meaningful when `constIsKnown(id)` — asking otherwise is a
 	// caller bug, and handing back the unseeded 0 as if it were a real constant is exactly the
@@ -19046,8 +19165,25 @@ export type Parser
 			panic("Parser.constOf: value v{id} is not a known constant — guard the call with constIsKnown")
 		end 'unknown'
 
-		return try self.valueConsts.get(id) otherwise panic("Parser.constOf: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+		return self.constPayloadOf(id)
 	end 'constOf'
+
+	// The f64 BIT PATTERN behind `id`. Guarded on `floatConstIsKnown` for `constOf`'s exact reason, and with
+	// a sharper edge: the unseeded 0 IS the pattern for `+0.0`, so a sentinel here would not merely be wrong,
+	// it would read as a provably-ZERO divisor and turn a legal program into an E3103.
+	function floatConstBitsOf(id ValueId) returns ParsedInt
+		if not self.floatConstIsKnown(id) 'unknown'
+			panic("Parser.floatConstBitsOf: value v{id} is not a known float constant — guard the call with floatConstIsKnown")
+		end 'unknown'
+
+		return self.constPayloadOf(id)
+	end 'floatConstBitsOf'
+
+	// The raw payload, whichever domain it is in. Private to the two typed readers above, which is what keeps
+	// the domain check in front of every read of it.
+	function constPayloadOf(id ValueId) returns ParsedInt
+		return try self.valueConsts.get(id) otherwise panic("Parser.constPayloadOf: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+	end 'constPayloadOf'
 
 	// Record a fold's result, if it produced one. `notFoldable` is a DECISION and not a gap — the
 	// folder declined an operator whose answer is a diagnostic rather than a number — so the value
@@ -19489,6 +19625,15 @@ export type Parser
 				left = try self.emitShift(left, count: right, op: op, opTok: opTok, countStart: rhsStart, countEnd: rhsEnd)
 				continue
 			end 'isShift'
+
+			// A division's right operand is not an ordinary number either: it is the one operand in the
+			// language whose VALUE decides whether the operation can fail. It gets its own emitter, which owns
+			// the rule, both diagnostics AND the throwing desugar — the same split, for the same reason, as the
+			// shift above. See `emitDivOrMod`.
+			if divisionOperator(op) 'isDivision'
+				left = try self.emitDivOrMod(left, divisor: right, op: op, opTok: opTok)
+				continue
+			end 'isDivision'
 
 			left = try self.emitBinOp(left, rhs: right, op: op, opTok: opTok)
 		end 'climb'
@@ -20068,11 +20213,12 @@ export type Parser
 		// ⭐ **A CAST THAT CHANGES WHAT THE VALUE'S TYPE SAYS IS A CONVERSION, NOT A RE-TAG.** It yields a
 		// DISTINCT result value of the target type and leaves the SOURCE untouched, because the source
 		// binding stays usable under its own identity: `let b = aTag as WB.Idx` must not corrupt `aTag`
-		// (still `WA.Idx`), and `let w = x as Word` must not make `x` unsigned. TWO things a target can
-		// say, and each has its own predicate rather than one blurred test — a nominal IDENTITY (P1.6-C)
-		// and a SHIFT FILL — because they are answered from different registries and neither implies the
-		// other. Everything else is the representational no-op below, with no new value and no new op.
-		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) 'retaggingCast'
+		// (still `WA.Idx`), and `let w = x as Word` must not make `x` unsigned. THREE things a target can
+		// say, and each has its own predicate rather than one blurred test — a nominal IDENTITY (P1.6-C),
+		// a SHIFT FILL, and (A1) whether a DIVISION by the value can fail — because they are answered from
+		// different registries and none implies the others. Everything else is the representational no-op
+		// below, with no new value and no new op.
+		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias) 'retaggingCast'
 			return self.emitRetaggedCastValue(value, targetType: targetType, asTok: asTok)
 		end 'retaggingCast'
 
@@ -20204,6 +20350,49 @@ export type Parser
 		return not self.valueIsUnsigned(value) and rangeIsUnsignedMaxUpper(alias.low, high: alias.high)
 	end 'aliasChangesTheShiftFill'
 
+	// ⭐⭐ **DOES THIS int→int `as` CHANGE WHETHER A DIVISION BY THE VALUE CAN FAIL? (A1)** — the third thing a
+	// cast target can say, and the one that makes `let d = z as NonZero` the language's escape hatch from a
+	// checked divide rather than a no-op the divide cannot see.
+	//
+	// ⭐ **WITHOUT IT THE ESCAPE HATCH IS UNREACHABLE, AND THE CANONICAL SPELLING OF IT IS THE CORPUS'S OWN.**
+	// `divisorZeroVerdict` asks `declaredAliasOfValue`, which is tag-guarded on `named` — so a cast that
+	// leaves the value's tag `integer` leaves the alias invisible, and `100 / d` after `let d = z as NonZero`
+	// would demand a `try`. `specs-shv2/ranged-typealias.md`'s `cast-guard-fires-before-the-division` and
+	// `field-default-then-guarded-casts` spell exactly that and were green before A1; `specs/arithmetic-operators.md:37`
+	// documents it as THE way out. A rung that broke the spelling of its own exemption would be no exemption.
+	//
+	// ⚠ **THE SAFETY ARGUMENT IS `aliasChangesTheShiftFill`'s, VERBATIM, BECAUSE THE GATE IS THE SAME GATE** —
+	// a DECLARED RANGED INT alias and nothing else. Inside it a value's other tag-dispatched answers are
+	// provably fixed: the alias is unmanaged (so `decrefCalleeFor` cannot start routing a drop), it reduces to
+	// `integer` for `builtinConformerOfType` exactly as a bare `int` does, and it is not float (a float alias
+	// is refused below, because its bounds are f64 BIT PATTERNS and — the sharper reason here — a
+	// `named`-tagged float would be given `StdType.i64` and land in a GPR).
+	//
+	// ⚠ **AND IT ASKS WHETHER THE PROOF CAN MOVE, NOT MERELY WHETHER THE TARGET EXCLUDES ZERO.** A source
+	// already provably non-zero (a non-zero literal) gains nothing from the retag, and a target that ADMITS
+	// zero can only ever weaken the answer — so neither mints. That is what keeps `x as Byte`, `x as Percent`
+	// and `x as AsciiCode` the byte-for-byte no-ops they have always been while `z as NonZero` is not.
+	function castChangesTheDivisionProof(value ValueId, targetAlias DeclaredAlias) returns bool
+		return match targetAlias 'a'
+			declared(alias) gives self.aliasChangesTheDivisionProof(value, alias: alias)
+			undeclared gives false
+		end 'a'
+	end 'castChangesTheDivisionProof'
+
+	// The half of the question above that is about the ALIAS, split out exactly as
+	// `aliasChangesTheShiftFill` is and for the same reason: the arms read as the sentences they are.
+	function aliasChangesTheDivisionProof(value ValueId, alias RangedTypeAlias) returns bool
+		if aliasIsFloat(alias) 'floatAlias'
+			return false
+		end 'floatAlias'
+
+		if not rangeExcludesZero(alias.low, high: alias.high, isFloat: false) 'admitsZero'
+			return false
+		end 'admitsZero'
+
+		return self.divisorZeroVerdict(value) != DivisorZeroVerdict.neverZero
+	end 'aliasChangesTheDivisionProof'
+
 	// ⭐ **EMIT A REPRESENTATIONALLY-NO-OP CAST AS A DISTINCT VALUE.** The conversion moves no bits
 	// (int→int), so its RESULT is `value + 0` — one op, minted with a FRESH ValueId typed as the target —
 	// which leaves the source ValueId's identity untouched (an in-place re-tag would corrupt `aTag` when a
@@ -20295,11 +20484,105 @@ export type Parser
 		end 'k'
 	end 'typeIsFloatDomain'
 
+	// ⭐⭐ **EMIT `a / b` OR `a mod b` — THE ONE PLACE THE DIVIDE-BY-ZERO POLICY LIVES (A1).** Three ways out,
+	// decided per site from what the compiler can prove about the DIVISOR:
+	//
+	//   • **PROVABLY ZERO** (a folded `0`, `0.0` or `-0.0`) — E3103, at compile time. A divide that can only
+	//     ever fail is a bug, and a catchable error would offer the program a recovery from one.
+	//   • **PROVABLY NON-ZERO** (a non-zero folded constant, or a ranged type whose range excludes 0) — a
+	//     BARE `binOp`, byte for byte what this compiler emitted before `/` became fallible. No guard, no
+	//     branch, no call. This is the language's escape hatch and its cost is exactly zero.
+	//   • **ANYTHING ELSE** — the divide THROWS `__DivisionByZeroError`, so it must sit in a `try` (E3057,
+	//     reported by `SemanticCheck.validatePlainCall` when it does not).
+	//
+	// ⚠ **THE THROWING FORM IS EMITTED CALL-SHAPED, AND THAT IS STRUCTURAL RATHER THAN STYLISTIC.**
+	// `rewriteLastCallToTryCall` converts only a `call` or an `await`, and routes the `literal to asyncCall`
+	// range — which CONTAINS `binOp` — to `rejectTryTarget`. A `binOp` divide is therefore categorically
+	// unreachable from `try`, whatever else were done. Riding the ordinary `call` → `tryCall` → error-flag ABI
+	// also means the `try` requirement, the `otherwise (e)` binding, the propagate path and the fork's drop
+	// sets are the ones every other throwing callee already has; nothing here is new plumbing.
+	//
+	// ⚠ **THERE IS NO `try`-CONTEXT STACK, AND SHV2 DOES NOT NEED ONE.** The bootstrap asks
+	// `_inTryContext || _tryBlockStack.Count > 0` HERE and raises E3057 itself
+	// (`2-Parser.cs:23709-23716`). In shv2 a divide outside a `try` simply stays a plain `call` — nothing
+	// rewrites it — and `validatePlainCall` reports E3057 off the same `isThrowingRuntimeCallee` every other
+	// throwing builtin is reported through. One gate instead of two, and it cannot disagree with the parser's
+	// E3055 accept.
+	function emitDivOrMod(dividend ValueId, divisor ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
+		// The OPERAND rule first, for `emitShift`'s stated reason: a rejected program must leave no ops
+		// behind, and the proof below would otherwise decide the fallibility of operands that are not numbers.
+		let leftTag = self.tagOf(dividend)
+		let rightTag = self.tagOf(divisor)
+		try requireBinOpOperands(op, left: leftTag, right: rightTag, opTok: opTok)
+
+		match self.divisorZeroVerdict(divisor) 'verdict'
+			alwaysZero then throw ParseError.divisionByProvableZero(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
+			neverZero then return try self.emitBinOp(dividend, rhs: divisor, op: op, opTok: opTok)
+			possiblyZero then break 'verdict'
+		end 'verdict'
+
+		// ⭐ **THE PROMOTION IS THE SAME ONE `emitBinOp` OWES, PAID HERE FOR THE SAME REASON.** The Std
+		// expansion divides the two argument values directly, so a mixed `1.0 / n` must hand it an f64 on both
+		// sides or the emitted `divsd` would read an i64 out of a GPR. `promotedOperand` is idempotent and is
+		// asked of both sides, exactly as in `emitBinOp`, so the two paths cannot promote differently.
+		//
+		// It happens AFTER the verdict, which reads the operand the SOURCE wrote: the divisor's own constant
+		// domain is what says whether it is zero, and a promotion would only move the same value into a
+		// different domain's spelling.
+		let promotedDividend = self.promotedOperand(dividend, left: leftTag, right: rightTag, opTok: opTok)
+		let promotedDivisor = self.promotedOperand(divisor, left: leftTag, right: rightTag, opTok: opTok)
+
+		var args = ValueIdArray.create()
+		args.push(promotedDividend)
+		args.push(promotedDivisor)
+		return self.emitRuntimeCall(checkedDivisionCalleeForOp(op), args: args, resultTag: binOpResultTag(op, left: leftTag, right: rightTag), resultNameId: UnnamedTypeId, range: SourceRange.ofToken(opTok))
+	end 'emitDivOrMod'
+
+	// ⭐⭐ **THE WHOLE DIVIDE-BY-ZERO PROOF, IN ONE WALK.** Asked of the divisor's OWN constant domain, never of
+	// the divide's RESULT kind — which is what lets `1.0 / n` and `n / 2` each be decided by the operand
+	// actually written. (The bootstrap asks by result kind and therefore cannot prove `1.0 / 2`'s integer
+	// literal non-zero at all; its own comment calls that safe over-strictness.)
+	//
+	// The float arm reads BOTH zeros: `floatOrderKey` maps `+0.0` and `-0.0` to 0 (IEEE-754 makes them equal),
+	// and `x / ±0.0` is `±inf` either way, so both must read as zero. `-0.0` reaches here as a single literal
+	// with its sign bit set — `parseNegatedNumericLiteral` folds the sign into the literal — so no float
+	// arithmetic has to be folded to see it.
+	//
+	// ⚠ **EVERY GAP FALLS TO `possiblyZero`, AND THE TWO DIRECTIONS ARE NOT SYMMETRIC.** See the union's own
+	// header: a wrong `neverZero` is a silent hardware trap, a wrong `possiblyZero` is a visible needless `try`.
+	//
+	// ⚠ **A RANGED FLOAT ALIAS CANNOT BE PROVEN HERE, AND THAT IS A KNOWN GAP RATHER THAN AN OVERSIGHT.** A
+	// value of a ranged FLOAT alias carries tag `float`, not `named` (its register class depends on the tag, so
+	// the alias name cannot ride there — see `aliasChangesTheShiftFill`'s float arm), so `declaredAliasOfValue`
+	// has nothing to look up and the answer is `possiblyZero`. The bootstrap CAN prove it, from a side map of
+	// its own; the divergence costs a needless `try` on `x / d` for a `float(1.0 to 2.0)` divisor and nothing
+	// else, and no corpus case spells one.
+	function divisorZeroVerdict(divisor ValueId) returns DivisorZeroVerdict
+		if self.floatConstIsKnown(divisor) 'floatConstant'
+			return DivisorZeroVerdict.alwaysZero if floatOrderKey(self.floatConstBitsOf(divisor)) == 0 else DivisorZeroVerdict.neverZero
+		end 'floatConstant'
+
+		if self.constIsKnown(divisor) 'intConstant'
+			return DivisorZeroVerdict.alwaysZero if self.constOf(divisor) == 0 else DivisorZeroVerdict.neverZero
+		end 'intConstant'
+
+		return match self.declaredAliasOfValue(divisor) 'a'
+			declared(alias) gives DivisorZeroVerdict.neverZero if rangeExcludesZero(alias.low, high: alias.high, isFloat: aliasIsFloat(alias)) else DivisorZeroVerdict.possiblyZero
+			undeclared gives DivisorZeroVerdict.possiblyZero
+		end 'a'
+	end 'divisorZeroVerdict'
+
 	// Append a `binOp` op combining two SSA values; return the ValueId it defines. The
 	// result's TYPE is the operator's: arithmetic and shifts are integer; `and`/`or`/`xor`
 	// follow their operands (see `wordOpResultTag`) — the ONE place a bitwise op's result
 	// could be a bool, which is what `consume(f.a or f.b)` against a `bool` parameter needs.
 	// The source range anchors on the operator token (the conventional binop anchor).
+	//
+	// ⚠ **A `/` OR `mod` MUST NOT ARRIVE HERE FROM THE SOURCE DIRECTLY.** `emitDivOrMod` owns the
+	// divide-by-zero policy and calls this only on its provably-non-zero path; the source-level door is
+	// `parseBinary`'s `divisionOperator` gate. This function stays the emitter for the bare divide (that is
+	// what "byte for byte unchanged" means) and deliberately does not re-ask the policy, which would either
+	// duplicate it or diverge from it.
 	function emitBinOp(lhs ValueId, rhs ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
 		let leftTag = self.tagOf(lhs)
 		let rightTag = self.tagOf(rhs)
@@ -28690,7 +28973,7 @@ export type Parser
 		let savedValueTags = self.valueTags
 		let savedValueNameIds = self.valueNameIds
 		let savedValueConsts = self.valueConsts
-		let savedValueConstKnown = self.valueConstKnown
+		let savedValueConstDomains = self.valueConstDomains
 		let savedValueOwnsHeap = self.valueOwnsHeap
 		let savedValuePromiseMarks = self.valuePromiseMarks
 		let savedOwnedBindings = self.ownedBindings
@@ -28778,7 +29061,7 @@ export type Parser
 		self.valueTags = ValueTypeTagArray.create()
 		self.valueNameIds = TypeNameIdArray.create()
 		self.valueConsts = ParsedIntArray.create()
-		self.valueConstKnown = BoolArray.create()
+		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
@@ -28904,7 +29187,7 @@ export type Parser
 		self.valueTags = savedValueTags
 		self.valueNameIds = savedValueNameIds
 		self.valueConsts = savedValueConsts
-		self.valueConstKnown = savedValueConstKnown
+		self.valueConstDomains = savedValueConstDomains
 		self.valueOwnsHeap = savedValueOwnsHeap
 		self.valuePromiseMarks = savedValuePromiseMarks
 		self.ownedBindings = savedOwnedBindings
@@ -30184,12 +30467,17 @@ export type Parser
 	// The divide is emitted INLINE rather than as a `__clock_now_ms` runtime function, because a runtime
 	// function whose whole body is one call and one divide is a call/ret wrapped around two instructions —
 	// the same reasoning that makes `trunc` a builtin instead of a stdlib call. It goes through the ordinary
-	// `emitBinOp`, so the operand rules, the result tag and the constant view are the ones every source-level
-	// `/` gets; there is no second division path to keep in step.
+	// `emitDivOrMod`, so the operand rules, the result tag, the constant view AND the divide-by-zero policy are
+	// the ones every source-level `/` gets; there is no second division path to keep in step.
+	//
+	// ⚠ It therefore RE-ASKS the fallibility question of `NanosPerMillisecond`, and gets "provably non-zero"
+	// from the parser's own constant view — so this stays a BARE divide with no guard and no `try`, and it
+	// stays one for a reason the compiler checks rather than one this comment asserts. Routing it around
+	// `emitDivOrMod` to save that check would be the second division path the paragraph above forbids.
 	function emitMonotonicMs(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
 		let nanos = try self.emitClockIntrinsicCall(args, name: BuiltinsCurrentTimeMsName, runtimeName: GtNowNsName, calleeTok: calleeTok)
 		let perMilli = self.emitLiteral(NanosPerMillisecond, valueType: MaxonType.integer, range: SourceRange.ofToken(calleeTok))
-		return try self.emitBinOp(nanos, rhs: perMilli, op: MaxonBinOp.div, opTok: calleeTok)
+		return try self.emitDivOrMod(nanos, divisor: perMilli, op: MaxonBinOp.div, opTok: calleeTok)
 	end 'emitMonotonicMs'
 
 	// ⭐ **THE ARITY CHECK AND THE EMIT EVERY CLOCK INTRINSIC SHARES**, written once and returning the
@@ -30823,14 +31111,19 @@ export type Parser
 	// never fire.
 	//
 	// ⚠⚠ **AND THE TWO DOMAINS ANSWER THAT QUESTION DIFFERENTLY, WHICH IS NOT A WART BUT A CONSEQUENCE OF
-	// WHAT THE PARSER'S CONSTANT VIEW IS FOR.** `valueConstKnown` is the INTEGER view — `emitLiteralIn`
-	// records a fold only for an integer-tagged literal — because its readers decide integer questions (a
-	// shift COUNT, a folded operand), and a float's payload is an IEEE-754 bit pattern that every one of
-	// them would read as a number it is not. So a FLOAT argument is recorded on its TAG alone, and
-	// `InsertRangeChecks` decides literal-ness from its own `floatConsts` map, which is built from the Std
-	// `const` ops and does partition by domain. The cost is a site per float argument rather than per float
-	// LITERAL argument; float arguments are rare, and the alternative — a second, float-domain constant
-	// column on every value in the program — is a large price for a narrower filter.
+	// WHAT THE PARSER'S CONSTANT VIEW IS FOR.** `constIsKnown` is the INTEGER view — a float literal's
+	// payload is stamped `ConstPayloadDomain.float` and this reader answers only for `integer` — because its
+	// readers decide integer questions (a shift COUNT, a folded operand), and a float's payload is an
+	// IEEE-754 bit pattern that every one of them would read as a number it is not. So a FLOAT argument is
+	// recorded on its TAG alone, and `InsertRangeChecks` decides literal-ness from its own `floatConsts` map,
+	// which is built from the Std `const` ops. The cost is a site per float argument rather than per float
+	// LITERAL argument; float arguments are rare.
+	//
+	// ⚠ **A1 ADDED A FLOAT-DOMAIN CONSTANT VIEW (`floatConstIsKnown`), AND THIS SITE STILL MUST NOT NARROW TO
+	// IT.** The tag test is not a coarse stand-in for the missing literal test: a NON-literal float argument
+	// needs a site precisely SO THAT `needsRuntimeGuard` can emit its RUNTIME guard. Narrowing to
+	// `floatConstIsKnown` would record only the literals and silently drop every non-literal float argument's
+	// range check — a wrong answer, not a tighter filter.
 	//
 	// ⚠ Without the float arm, `take(500.0)` into a `float(0 to 100)` parameter compiled and was caught
 	// only by the callee's own ranged `return` at RUN time, where the reference refuses it at compile time.
@@ -31423,11 +31716,13 @@ export type Parser
 	// type is what says how to READ them; 64 bits are 64 bits. v1 mints a second literal op
 	// (`constF64`) and pays for it in every pass that has to match one.
 	//
-	// ⚠ These bits are deliberately NOT recorded as a parser constant, and the guard that stops it
-	// is `emitLiteralIn`'s `tagIsInteger` — already there, written for the bool case, and load-
-	// bearing here for a different one. A float in the fold columns would let `foldIntBinOp` ADD
-	// TWO IEEE PATTERNS AS INTEGERS: `3.14 + 2.0` would fold to a number that is neither 5.14 nor
-	// anything else, silently, at compile time.
+	// ⚠ **THESE BITS ARE RECORDED AS A PARSER CONSTANT SINCE A1 — IN THE FLOAT DOMAIN, NEVER THE INTEGER
+	// ONE**, which is what keeps the danger this comment used to describe from returning rather than merely
+	// unwritten. A float in the INTEGER fold columns would let `foldIntBinOp` ADD TWO IEEE PATTERNS AS
+	// INTEGERS: `3.14 + 2.0` would fold to a number that is neither 5.14 nor anything else, silently, at
+	// compile time. `ConstPayloadDomain` stamps the domain beside the payload and `constIsKnown` answers only
+	// for `integer`, so the integer folder cannot reach a float pattern at all. The ONE reader of the float
+	// half is the divide-by-zero proof (`divisorZeroVerdict`), which needs to see `let zero = 0.0`.
 	function parseFloatLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.floatLiteral)
 		let bits = try self.floatLiteralBits(tok)
@@ -31464,10 +31759,21 @@ export type Parser
 
 		// THE root of the parser's constant view. A `let` binds its NAME to the value the
 		// initializer produced, so `let SHIFT = -1` binds `SHIFT` to this very id — which is why
-		// folding a literal is all it takes to see a count named through a `let`.
-		if tagIsInteger(maxonTypeTag(valueType)) 'integer'
+		// folding a literal is all it takes to see a count named through a `let`, and — since A1 —
+		// a zero divisor named through one (`let zero = 0.0` then `x / zero`).
+		//
+		// ⭐ **THE TWO DOMAINS ARE RECORDED SEPARATELY, WHICH IS THE OPPOSITE OF RECORDING THEM
+		// TOGETHER.** The old single `tagIsInteger` gate held the float half OUT of the columns, and
+		// its comment named the exact danger: a float in the fold columns would let `foldIntBinOp` add
+		// two IEEE patterns as integers. That danger is gone rather than tolerated — a float's slot is
+		// stamped `float`, `constIsKnown` answers only for `integer`, and `foldIntBinOp` is reachable
+		// only through it. See `ConstPayloadDomain`.
+		let tag = maxonTypeTag(valueType)
+		if tagIsInteger(tag) 'integer'
 			self.recordConst(result, folded: value)
-		end 'integer'
+		end 'integer' else if tagIsFloat(tag) 'float'
+			self.recordFloatConst(result, bits: value)
+		end 'float'
 
 		return result
 	end 'emitLiteralIn'

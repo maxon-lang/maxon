@@ -132,10 +132,13 @@ let SHIFT = -1
 let c = a shl SHIFT   // E2054 — a named constant is a constant
 ```
 
-> ⚠ **The runtime panic is NOT YET IMPLEMENTED in maxon-shv2**, which has no panic runtime at all
-> (see `OPEN.md` #2 — `a / 0` escapes as a raw hardware trap for the same reason, and both are
-> waiting on the first slice of **Workstream R**). Until it lands, a negative count that only
-> appears at run time is *defined* rather than *diagnosed*: the guard reads it as out-of-range, so
+> ⚠ **The runtime panic is NOT YET IMPLEMENTED in maxon-shv2**: `emitGuardedShift` SATURATES a
+> run-time negative count instead of raising, and making it raise is the outstanding work.
+> ⚠ Its old companion citation is gone: `a / 0` no longer escapes as a raw hardware trap — A1 made
+> division FALLIBLE (a constant zero divisor is E3103, a possibly-zero one throws `DivisionByZero`),
+> so the two are no longer one blocker. (The retired `OPEN.md` this used to reference is also gone;
+> `maxon-shv2/PLAN.md` owns what is outstanding.) Until the shift panic lands, a negative count that
+> only appears at run time is *defined* rather than *diagnosed*: the guard reads it as out-of-range, so
 > `x shl -1` is 0 and `x shr -1` is the sign. That is deterministic, and it is not the masked
 > `x shl 63` this rule exists to kill — it is simply not yet the panic Go requires. The case is
 > carried below as a `disabled-test`.
@@ -511,11 +514,16 @@ end 'main'
 ```
 
 <!-- disabled-test: shift-by-negative-runtime-count-panics -->
-⚠ BLOCKED ON THE PANIC RUNTIME. Go: "if the shift count is negative at run time, a run-time panic
-occurs". The bootstrap does exactly that (`specs/bitwise-operators.md` pins it). **maxon-shv2 cannot
-yet**: it has no panic runtime, no trap op and no fault handler — its emitted runtime is a
-five-instruction entry stub. That is the first slice of **Workstream R**, and `OPEN.md` #2 (`a / 0`
-escaping as a raw `0xC0000094` hardware trap) is blocked on the same slice.
+⚠ BLOCKED ON THE SHIFT GUARD RAISING. Go: "if the shift count is negative at run time, a run-time
+panic occurs". The bootstrap does exactly that (`specs/bitwise-operators.md` pins it). **maxon-shv2
+does not yet**: `emitGuardedShift` saturates the count instead, so the answer is defined and the
+DIAGNOSTIC is what is missing.
+
+⚠ Its old companion — `OPEN.md` #2, `a / 0` escaping as a raw `0xC0000094` hardware trap — is
+**CLOSED**, and by a different mechanism than a panic: A1 made division fallible in the TYPE system
+(E3103 for a constant zero divisor, a thrown `DivisionByZero` for a possibly-zero one), so there is no
+trap left to route. The two were never one blocker; only the retired `OPEN.md` entry made them look
+like one.
 
 Meanwhile the answer here is 0, not a masked `4 shl 63`: the guard reads a negative count as
 out-of-range, exactly as it reads 64. So this is a MISSING DIAGNOSTIC, not a wrong answer.

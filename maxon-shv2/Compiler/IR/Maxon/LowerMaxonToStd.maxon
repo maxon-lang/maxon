@@ -2082,6 +2082,16 @@ type MaxonToStdLowering
 	// this path is new. The label guard is `lowerRuntimeCall`'s: a runtime call is positional by
 	// construction, so a label would silently mis-slot.
 	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
+		// ⭐ **A CHECKED DIVIDE IS EXPANDED, NOT CALLED (A1).** Asked FIRST, and exhaustively, so a checked
+		// division callee can never fall through to the `StdOp.tryCall` below — there is no `__checked_div`
+		// function for such a call to reach, and the linker's "call to unknown function" would be the failure.
+		// `CheckedDivisionRuntime`'s header explains why this family has no body to call.
+		let divisionKind = divisionKindOf(callee)
+		match divisionKind 'checkedDivision'
+			quotient to remainder then return self.lowerCheckedDivision(result, errorFlag: errorFlag, kind: divisionKind, args: args, dstBlock: dstBlock)
+			notCheckedDivision then break 'checkedDivision'
+		end 'checkedDivision'
+
 		if isCompilerInternalCallee(callee) 'compilerOwnTryCall'
 			requireRuntimeCallPositional(callee, argLabels: argLabels)
 			// The throwing OPAQUE-`T` `slice` (`__arr_slice_opaque`) takes the enclosing instance's descriptor as
@@ -2098,6 +2108,82 @@ type MaxonToStdLowering
 			duplicateArg then panic("lowerTryCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 		end 'slot'
 	end 'lowerTryCall'
+
+	// ⭐⭐ **EXPAND `__checked_div` / `__checked_mod` IN PLACE — AND BRANCHLESSLY (A1).** The whole body is a
+	// divisor test, and the test IS the error flag:
+	//
+	//   INTEGER: `flag = (divisor == 0)` · `safe = divisor or flag` · `result = dividend / safe`
+	//   FLOAT:   `flag = (divisor == 0.0)` · `result = dividend / divisor`
+	//
+	// ⭐ **THE COMPARE'S OWN 0/1 IS THE ERROR FLAG, WITH NO `select` AND NO SECOND CONSTANT.**
+	// `__DivisionByZeroError` has one case at ordinal 0, so its flag encoding is `0 + ErrorFlagOrdinalBias` = 1
+	// — exactly what an `x == 0` compare produces. That is a derivation, not a coincidence to rely on
+	// silently, so `DivisionByZeroFlag` is ASSERTED below rather than assumed: insert a case before
+	// `divisionByZero`, or change the bias, and this stops compiling instead of encoding the wrong error.
+	//
+	// ⭐ **THE INTEGER ARM'S `or` IS WHAT MAKES THE ZERO PATH SAFE WITHOUT A BRANCH.** x64 `idiv` (and wasm
+	// `i64.div_s`) FAULT on a zero divisor, and a trap is not a catchable `DivisionByZero` — so the divide must
+	// never see one. `divisor or flag` is `divisor` whenever the divisor is non-zero (the flag is 0) and `1`
+	// when it is zero (`0 or 1`), so the divide always runs on a safe operand and its quotient on the zero
+	// path is simply discarded by the `try` fork the parser already built. Both operands are already in
+	// registers; the whole guard is two extra instructions.
+	//
+	// ⭐ **THE FLOAT ARM NEEDS NO GUARD AT ALL**, and the asymmetry is the ISA's rather than a shortcut:
+	// `divsd` cannot fault — IEEE-754 answers `±inf`/`NaN` — so only the FLAG has to be computed, and the
+	// infinity it would have produced is discarded on the error edge. The zero test is a FLOAT compare and
+	// never an integer bit-compare, which is what makes it catch `-0.0` as well as `+0.0` (IEEE-754 makes the
+	// two equal, and `x / ±0.0` is a degenerate infinity either way).
+	//
+	// ⭐ **WHY NOT THE BOOTSTRAP'S THREE-BLOCK CFG** (`MaxonToStandardConversion.ManagedMemory.cs:2336-2394`,
+	// which splits entry → {zero, ok} → merge around a stack temp both arms store into and the merge reloads).
+	// Two reasons, and the first is structural: `lowerMaxonToStd` maps Maxon blocks to Std blocks **1:1** by
+	// construction (`lower`'s per-block walk, which `retypeBlockArgs` and every block id downstream depend on),
+	// so splitting here would break an invariant of the pass rather than add code to it. The second is that
+	// shv2 would not want the shape anyway — it carries values in BLOCK ARGS, not memory temps, so the
+	// bootstrap's store/reload pair has no counterpart, and the branchless form has no phi to merge either.
+	// The behaviour is identical: same flag, same quotient, and on the zero path a discarded result the
+	// bootstrap seeds to 0 and this leaves as `dividend / 1`.
+	function lowerCheckedDivision(result ValueId, errorFlag ValueId, kind CheckedDivisionKind, args ValueIdArray, dstBlock IrBlock)
+		if DivisionByZeroFlag != BoolTrueValue 'flagIsNotTheCompare'
+			panic("lowerCheckedDivision: `divisionByZero` encodes error flag {DivisionByZeroFlag}, but this expansion uses the divisor compare's own true payload ({BoolTrueValue}) as the flag — a case inserted before `divisionByZero`, or a changed `ErrorFlagOrdinalBias`, has broken that derivation")
+		end 'flagIsNotTheCompare'
+
+		let dividend = try args.get(0) otherwise panic("lowerCheckedDivision: a checked divide has two arguments — `emitDivOrMod` pushes the dividend first")
+		let divisor = try args.get(1) otherwise panic("lowerCheckedDivision: a checked divide has two arguments — `emitDivOrMod` pushes the divisor second")
+
+		// The operand type is the LEFT operand's, `appendStdBinOp`'s convention — and here the two sides are
+		// checked to AGREE rather than assumed to. `emitDivOrMod` promotes both through `promotedOperand`, so a
+		// mixed pair is a promotion bug; emitting the divide anyway would read an i64 out of a GPR as an f64
+		// (or the reverse), which is the same silent wrong answer `appendStdBinOp`'s own guard refuses.
+		let operandType = self.stdTypeOf(dividend)
+		if self.stdTypeOf(divisor) != operandType 'mixedDomains'
+			panic("lowerCheckedDivision: the dividend and the divisor of a checked divide are in DIFFERENT domains (one float, one integer) — `emitDivOrMod` must promote both operands before emitting one")
+		end 'mixedDomains'
+
+		let zero = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: DivisorZeroPattern, valueType: operandType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(errorFlag, lhs: divisor, rhs: zero, pred: StdCmpPred.eq, operandType: operandType))
+
+		if stdTypeIsFloat(operandType) 'floatDivide'
+			match kind 'floatKind'
+				quotient then break 'floatKind'
+				remainder then panic("lowerCheckedDivision: float `mod` does not exist — `requireBinOpOperands` refuses it, so a float-typed `__checked_mod` is a parser bug")
+				notCheckedDivision then panic("lowerCheckedDivision: reached with `notCheckedDivision` — `lowerTryCall`'s match routes only the two division kinds here")
+			end 'floatKind'
+
+			self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: dividend, rhs: divisor, opcode: StdBinOpcode.div, operandType: operandType))
+			return
+		end 'floatDivide'
+
+		let safeDivisor = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(safeDivisor, lhs: divisor, rhs: errorFlag, opcode: StdBinOpcode.bitOr, operandType: operandType))
+
+		match kind 'integerKind'
+			quotient then self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: dividend, rhs: safeDivisor))
+			remainder then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: dividend, rhs: safeDivisor))
+			notCheckedDivision then panic("lowerCheckedDivision: reached with `notCheckedDivision` — `lowerTryCall`'s match routes only the two division kinds here")
+		end 'integerKind'
+	end 'lowerCheckedDivision'
 
 	// `panic("message")` — exit the process with a non-zero code. The parser emitted a dead return
 	// terminator after this op, so the block stays well-formed though control never reaches it.

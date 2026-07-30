@@ -1,0 +1,49 @@
+// Test: checked-divide-keeps-the-idiv
+function opaque(x int) returns int
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let d = opaque(7)
+	let q = try (100 / d) otherwise 99
+	return q as ExitCode
+end 'main'
+---
+ExitCode: 14
+---
+func @opaque {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 7
+    x64.callDirect opaque
+    x64.movRegImm32 rax, 100
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg equal, rcx
+    x64.orRegReg r8, r8, rcx
+    x64.cqo
+    x64.idivReg r8
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 99
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r8, rax
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

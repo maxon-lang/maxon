@@ -683,10 +683,11 @@ public enum ErrorCode {
   /// </summary>
   SemanticThrowingFunctionAsValue = 3101,
   /// <summary>
-  /// An integer `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, or a
-  /// divisor that folded to 0). Unlike a possibly-zero divisor -- which is a throwing operation
-  /// handled with `try` (E3057) -- a provably-zero one is neither recoverable nor safe: it is a
-  /// bug, rejected at compile time.
+  /// A `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, `a mod 0`, a
+  /// divisor that folded to 0, or the float `a / 0.0` and `a / -0.0` -- both of which give an
+  /// infinity). Unlike a possibly-zero divisor -- which is a throwing operation handled with
+  /// `try` (E3057) -- a provably-zero one is neither recoverable nor safe: it is a bug, rejected
+  /// at compile time.
   /// </summary>
   SemanticDivisionByZero = 3103,
   /// <summary>

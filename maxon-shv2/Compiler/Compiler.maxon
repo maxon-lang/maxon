@@ -423,6 +423,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `scanRuntimeUsage` before any install ran, so the order is readability rather than a dependency.
 	installCharacterSetRuntime(pipeline.stdModule, usage: usage)
 
+	// ⭐ **THE FIFTH BUILTIN-ERROR ORDINAL CLAIM (A1)**, made HERE rather than inside an `install…` because
+	// fallible division installs no runtime function at all — a checked divide is expanded in place at the Std
+	// tier (`CheckedDivisionRuntime`'s header says why). The claim itself is the same unconditional,
+	// program-independent assertion the other four make from inside their installers' heads: it verifies the
+	// compiler's own transcription of an ordinal against the enum declaration, so it panics on the first program
+	// compiled or on none.
+	verifyDivisionByZeroOrdinals()
+
 	// The file-IO runtime (`__mf_open_read`, R4.1) — installed the same already-lowered way, on its own
 	// `usesManagedFile` bit. It must come AFTER the array install is decided but has no ordering dependency
 	// on it: it calls `__mm_alloc`/`__mm_free` (carried by the `usesHeap` bit it sets alongside its own) and

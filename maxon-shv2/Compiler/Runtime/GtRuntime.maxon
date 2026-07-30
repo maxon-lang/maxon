@@ -619,12 +619,18 @@ export function isThrowingGtRuntimeCallee(callee ByteArray) returns bool
 end 'isThrowingGtRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH COMPILER-INTERNAL RUNTIME CALLEE THROWS."** A throwing builtin (an out-of-bounds
-// array accessor, or `runProcess`) is invisible to the user-signature registry — no file declares it — so the two
+// array accessor, `runProcess`, or a possibly-zero divide) is invisible to the user-signature registry — no file
+// declares it — so the two
 // gates that decide `try`-ness for it (the parser's E3055 accept in `requireThrowingTryTarget`, SemanticCheck's
 // E3057 reject in `validatePlainCall`) both read THIS composed predicate rather than each listing the families,
 // which is what keeps the accept and the reject naming the same set. Grows one disjunct per throwing runtime family.
+//
+// ⚠ **THE DIVISION FAMILY IS THE ONE MEMBER WITH NO BUILT FUNCTION BEHIND IT** — `__checked_div`/`__checked_mod`
+// are expanded in place at the Std tier rather than called (`CheckedDivisionRuntime`'s header says why). That
+// changes nothing here: this predicate answers "must a `try` wrap it", which is a property of the OPERATION, and
+// both gates that read it run on the MAXON tier where the callee is still a call.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee)
+	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -680,6 +686,19 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	if isThrowingArrayRuntimeCallee(callee) 'arrayFamily'
 		return arrayErrorThrows()
 	end 'arrayFamily'
+
+	// ⭐ **THE DIVISION FAMILY (A1), ADDED WITH THE CASES THAT NEED IT** — exactly as the note above prescribes.
+	// `specs-shv2/safety.md`'s `divide-by-zero-expression-form` and `float-divide-by-zero-expression-form` BIND
+	// the error and discriminate `divisionByZero` in a `match`, so this family's one ordinal is a checked claim
+	// rather than an untested one. Without this arm `throwsOf` answers `none`, `tryErrorEnumType` types the `(e)`
+	// binding `integer`, and `match e` reports a MISSING FEATURE for a program whose feature is present — the
+	// defect R4.1 and R4.2 each paid for once.
+	//
+	// ⚠ It asks the THROWING predicate, which for this family is the WHOLE family: a checked divide exists only
+	// because its divisor might be zero, so there is no non-throwing member the wide test could wrongly claim.
+	if isThrowingDivisionRuntimeCallee(callee) 'divisionFamily'
+		return divisionByZeroThrows()
+	end 'divisionFamily'
 
 	return ThrowsClause.none
 end 'runtimeThrowsClause'

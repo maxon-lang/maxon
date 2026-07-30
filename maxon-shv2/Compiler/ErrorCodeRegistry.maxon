@@ -433,6 +433,12 @@ export enum ErrorCode
 	// double-free. A WRITE to a moved-from `var` is legal (it revives the binding). shv2-only: the
 	// reference compilers refcount, so aliasing is legal there and there is no move to violate.
 	useAfterMove = "E3102"
+	// A `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, `a mod 0`, a
+	// divisor that folded to 0, or the float `a / 0.0` and `a / -0.0` -- both of which give an
+	// infinity). Unlike a possibly-zero divisor -- which is a throwing operation handled with
+	// `try` (E3057) -- a provably-zero one is neither recoverable nor safe: it is a bug, rejected
+	// at compile time.
+	semanticDivisionByZero = "E3103"
 	// A construct whose RUNTIME SUBSTRATE exists on one target only is reached by a program compiled
 	// for another. shv2's green-thread scheduler and its clock/subprocess/IOCP imports are
 	// x64-windows only at this rung, so `sleep`, `runProcess`, the streaming-subprocess builtins and

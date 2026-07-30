@@ -1,0 +1,76 @@
+// Test: divisor-is-read-after-a-checked-divide
+function opaque(x int) returns int
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let d = opaque(7)
+	let z = opaque(0)
+	let q = try (100 / d) otherwise 99
+	let r = try (100 / z) otherwise 0
+	return (q + d + r + z) as ExitCode
+end 'main'
+---
+ExitCode: 21
+---
+func @opaque {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 7
+    x64.callDirect opaque
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 0
+    x64.callDirect opaque
+    x64.movRegImm32 rax, 100
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rcx
+    x64.movRegReg rsi, rbx
+    x64.orRegReg rsi, rbx, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rcx, 99
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, rax
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rax, 100
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg equal, rsi
+    x64.movRegReg rdi, r8
+    x64.orRegReg rdi, r8, rsi
+    x64.cqo
+    x64.idivReg rdi
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.leaRegRegReg rcx, rcx, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg r8, rax, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

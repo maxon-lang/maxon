@@ -1,9 +1,9 @@
 // Test: float-cmp-materialized
-var zeroA = 0.0
-var zeroB = 0.0
+var big = 1.0e308
 
 function main() returns ExitCode
-	let nan = zeroA / zeroB
+	let inf = big * 10.0
+	let nan = inf - inf
 	let a = nan == nan
 	let b = nan != nan
 	var r = 0
@@ -19,19 +19,18 @@ end 'main'
 ExitCode: 2
 ---
 data {
-  __data_zeroA@0 = f64 0
-  __data_zeroB@8 = f64 0
+  __data_big@0 = f64 9214871658872686752
 }
 
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.leaRegGlobal rax, __data_zeroA
+    x64.leaRegGlobal rax, __data_big
     x64.loadRegBaseDisp.word64 xmm0, [rax + 0]
-    x64.leaRegGlobal rax, __data_zeroB
-    x64.loadRegBaseDisp.word64 xmm1, [rax + 0]
-    x64.divsdRegReg xmm0, xmm0, xmm1
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.subsdRegReg xmm0, xmm0, xmm0
     x64.ucomisdRegReg xmm0, xmm0
     x64.setccReg notEqual, rcx
     x64.setccReg parity, rdx

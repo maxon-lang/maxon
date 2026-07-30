@@ -36,8 +36,33 @@ dividend that never reached `RAX` or a divisor colored into `RDX` computes the w
 quotient and the exit-code assertion catches it, and their committed `.test` goldens
 pin the emitted `mov rax` / `cqo` / `idiv` sequence itself against regression.
 
-Divide-by-zero and `INT_MIN / -1` overflow raise a hardware `#DE`, delivered by the
-runtime fault handler (a later deliverable), so there is no compiler-inserted guard.
+⭐ **DIVIDE-BY-ZERO IS A LANGUAGE-LEVEL THROW, NOT A HARDWARE TRAP (A1)**, and this file used to say
+the opposite. `/` and `mod` are FALLIBLE: a divisor the compiler cannot prove non-zero makes the
+divide a throwing operation, so it must sit in a `try (a / b) otherwise …` or the program is refused
+with E3057; a divisor it holds as the constant 0 is refused outright with E3103; and a divisor it
+proves non-zero — a non-zero literal, or a ranged type whose range excludes 0 — compiles to the bare
+`idiv` sequence above with no check, no branch and no call. `specs-shv2/safety.md` owns the rule and
+its tests; every divide in THIS file is deliberately over a provably non-zero divisor, so the
+sequence the goldens pin is the unguarded one.
+
+⚠ **`INT_MIN / -1` IS STILL UNGUARDED, and the two halves of the sentence above must not be reversed
+together by mistake.** `idiv` faults on that quotient as well as on a zero divisor, and NEITHER
+reference compiler handles it (the bootstrap only declines to *fold* it — `2-Parser.cs:23589-23590`).
+`DivisionByZero` is about the DIVISOR being zero and says nothing about the quotient being
+unrepresentable, so `i64.min / -1` still raises `#DE` and still reaches the fault handler.
+
+The guard, where one is needed, costs **three instructions and no branch** — `cmp divisor, 0`, a
+`setcc` materializing the answer, and `or safe, divisor, flag`. The `idiv` then runs on `safe`, which
+is the divisor itself whenever it is non-zero (the flag is 0) and 1 when it is zero, whose quotient the
+`try` fork discards. So a checked divide is still an `idiv` under exactly the `RAX`/`RDX` constraint
+described above; it is not a call, and the fixed-register cases below would still be testing that
+instruction if they were written with a `try`.
+
+⚠ **`safe` IS A FRESH SSA VALUE, NOT AN OVERWRITE OF THE DIVISOR** — and the goldens show the allocator
+reusing the divisor's register for it whenever the divisor is dead after the divide, which is the
+correct thing to do and looks alarming. `divisor-is-read-after-a-checked-divide` below is what turns
+that from a reading of one golden into a checked claim: a divisor still live afterwards must come back
+UNCHANGED, including the zero that took the error edge.
 
 ## Tests
 
@@ -135,12 +160,21 @@ live across every `idiv` AND updated each iteration, so it MUST be colored to a
 register that is neither `RAX` (the dividend) nor `RDX` (clobbered by `cqo`/`idiv`)
 — the fixed-register constraint under real pressure. Sum of `100 / i` for
 `i = 1..6`: 100 + 50 + 33 + 25 + 20 + 16 = 244.
+
+⚠ The counter is cast into `Positive` at the divide (A1). A loop-carried phi is not a
+constant the compiler can fold, so an unguarded `100 / i` is now E3057 — and the point of
+this case is a BARE `idiv` whose divisor is loop-carried, which is exactly what a range
+that excludes 0 buys back. The cast costs one `cmp`/branch against the lower bound
+(`int(1 to i64.max)` needs no upper check) plus the `lea` that mints the retagged value, and
+`i` runs 1..7, so the guard never fires.
 ```maxon
+typealias Positive = int(1 to i64.max)
+
 function main() returns ExitCode
 	var sum = 0
 	var i = 1
 	while i <= 6 'loop'
-		sum = sum + 100 / i
+		sum = sum + 100 / (i as Positive)
 		i = i + 1
 	end 'loop'
 	return sum
@@ -148,4 +182,159 @@ end 'main'
 ```
 ```exitcode
 244
+```
+
+### The fallible-division rule, at the instruction level (A1)
+
+`specs-shv2/safety.md` owns the RULE — what throws, what is refused, what is caught. These own its
+CODE, because the exemption's whole claim is about what is emitted and an exit code cannot see the
+difference between a bare divide and a guarded one. Per the relational-assertions rule, a case that
+merely runs pins nothing here: the `.test` goldens are the assertion.
+
+<!-- test: ranged-divisor-is-a-bare-idiv -->
+A divisor whose declared range EXCLUDES 0 is the escape hatch, and this is what it buys: the golden
+holds the same `mov rax` / `cqo` / `idivReg` sequence `div-simple` does, with no `cmp`, no `or`, no
+branch and no error flag anywhere near it. The divisor is a PARAMETER, so nothing folds it — the
+range is doing all the work. `100 / 7 = 14`, `100 mod 7 = 2`, `14 + 2 = 16`.
+```maxon
+typealias NonZero = int(1 to 1000)
+
+function divide(n int, d NonZero) returns int
+	return n / d + n mod d
+end 'divide'
+
+function main() returns ExitCode
+	return divide(100, d: 7) as ExitCode
+end 'main'
+```
+```exitcode
+16
+```
+
+<!-- test: checked-divide-keeps-the-idiv -->
+And this is what a CHECKED divide buys: the golden still holds an `idivReg`, because the guard is two
+instructions and no branch (`flag = divisor == 0`, `safe = divisor or flag`) rather than a call or a
+skipped divide. That is the whole reason the fixed-register cases in this file could have been
+written either way. `d` comes from an opaque call, so it cannot be folded; `100 / 7 = 14`.
+```maxon
+function opaque(x int) returns int
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let d = opaque(7)
+	let q = try (100 / d) otherwise 99
+	return q as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: checked-divide-in-a-loop -->
+A checked divide inside a LOOP, in expression position, with the quotient accumulated across the
+back edge — the shape `stdlib/Math.maxon` writes at fourteen sites. The fork's blocks are created per
+iteration's worth of control flow, not per iteration, and the loop-carried `sum` phi must survive
+both edges of every fork. Sum of `100 / i` for `i = 1..6` — the same 244 `div-in-loop` computes,
+reached the other way.
+```maxon
+function opaque(x int) returns int
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	var sum = 0
+	var i = 1
+	while i <= 6 'loop'
+		sum = sum + (try (100 / opaque(i)) otherwise 0)
+		i = i + 1
+	end 'loop'
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+244
+```
+
+<!-- test: checked-divide-with-a-managed-value-live-across-the-fork -->
+An OWNED String is live when the divide forks, so it flows to BOTH edges — and each edge must release
+it exactly once. That is the drop-set shape `desugarTry` splits per edge, and getting it wrong is a
+leak (exit 101) or a double free (a poison fault), never a wrong answer, which is why an exit code
+alone would not catch it. The divisor is non-zero, so the OK edge is the one taken.
+
+⚠ The `try` wraps the DIVIDE, not the interpolation. `try ("q={100 / d}\n") otherwise …` is **E3055**
+— correctly: the group's outermost operation there is `__str_*`, which cannot fail, so the `try` has
+nothing to attach to. The rule is `rewriteLastCallToTryCall`'s and it is not division-specific.
+```maxon
+function opaque(x int) returns int
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let d = opaque(4)
+	let held = "held d={d}\n"
+	let q = try (100 / d) otherwise 0
+	print(held)
+	print("q={q}\n")
+	return 0
+end 'main'
+```
+```stdout
+held d=4
+q=25
+```
+```exitcode
+0
+```
+
+<!-- test: checked-divide-error-edge-reassigns-a-managed-var -->
+The ERROR edge is the one taken here, and its handler REASSIGNS an owned String — dropping the one
+the var held and taking a new one — inside the handler's own scope frame. The `(e)` binding
+discriminates `divisionByZero`, so the caught error's type is the one `runtimeThrowsClause` answers
+with and not an untyped flag.
+```maxon
+function opaque(x int) returns int
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let z = opaque(0)
+	var label = "not caught\n"
+	try (100 / z) otherwise (e) 'handle'
+		match e 'kind'
+			divisionByZero then label = "caught divisionByZero\n"
+		end 'kind'
+	end 'handle'
+	print(label)
+	return 0
+end 'main'
+```
+```stdout
+caught divisionByZero
+```
+```exitcode
+0
+```
+
+<!-- test: divisor-is-read-after-a-checked-divide -->
+⭐ **THE DIVISOR SURVIVES THE GUARD.** `safe = divisor or flag` is a fresh SSA value, but the register
+allocator reuses the divisor's register for it wherever the divisor dies at the divide — so the only
+way to know the SSA form is honest is to keep the divisor LIVE past the divide and read it back. Both
+paths are exercised: `d = 7` takes the ok edge and must still read 7, and `z = 0` takes the ERROR edge,
+where `safe` was forced to 1 and `z` must nonetheless still read 0. `14 + 7 + 0 + 0 = 21`.
+```maxon
+function opaque(x int) returns int
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let d = opaque(7)
+	let z = opaque(0)
+	let q = try (100 / d) otherwise 99
+	let r = try (100 / z) otherwise 0
+	return (q + d + r + z) as ExitCode
+end 'main'
+```
+```exitcode
+21
 ```

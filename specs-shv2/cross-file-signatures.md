@@ -151,6 +151,11 @@ word operator DEFER on an unpinned operand would type `ready() and enabled()` as
 refuses an unknown operand — so this correct program would stop compiling. It compiles, and the
 `and` genuinely short-circuits: `enabled()` divides by zero and is never reached, because `ready()`
 is false. A clean exit IS the proof.
+
+⚠ The zero divisor comes from an OPAQUE call rather than from `var zero = 0`. A folded zero is a
+compile-time E3103 (A1), which would refuse the program outright and take the short-circuit — the
+actual subject — with it. The `otherwise panic` is what keeps "never reached" a checked claim: if
+the `and` ever stopped short-circuiting, this would name itself instead of trapping.
 ```maxon
 // --- file: a.maxon
 
@@ -158,9 +163,13 @@ export function ready() returns bool
 	return false
 end 'ready'
 
+function opaqueZero() returns int
+	return 0
+end 'opaqueZero'
+
 export function enabled() returns bool
-	var zero = 0
-	return 1 / zero == 0
+	let zero = opaqueZero()
+	return (try (1 / zero) otherwise panic("`and` did not short-circuit: enabled() was evaluated")) == 0
 end 'enabled'
 
 // --- file: b.maxon

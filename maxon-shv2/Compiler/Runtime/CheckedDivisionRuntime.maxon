@@ -1,0 +1,123 @@
+// Runtime/CheckedDivisionRuntime.maxon — the FALLIBLE DIVISION family (A1): the two callee names a
+// possibly-zero `/` or `mod` desugars to, the error enum they throw, and the one ordinal they throw it as.
+//
+// ⭐ **WHY A "RUNTIME" FILE THAT INSTALLS NO RUNTIME FUNCTION.** Every other throwing builtin family here
+// is a set of BUILT Std functions (`__arr_get`, `__mf_open_read`, `__md_next`, `__gt_process_run`), and its
+// file holds the builders. This one holds none, because a checked divide is EXPANDED IN PLACE at the point
+// of use (`LowerMaxonToStd.lowerCheckedDivision`) rather than called: the whole body is a compare, the
+// `setcc` that materializes it, an `or`, and the divide the program asked for — so a `call`/`ret` around it
+// would be a function whose prologue costs more than its work, the same argument `emitMonotonicMs` makes for
+// inlining its divide instead of building a `__clock_now_ms`. The bootstrap reaches the identical conclusion
+// (`MaxonToStandardConversion.ManagedMemory.cs:2336-2394` lowers `__checked_div` inline and deliberately
+// calls no runtime helper).
+//
+// What the file DOES own is everything a family needs BESIDES a body — and every one of those is a fact
+// some other file has to agree with, which is exactly why they live together in one:
+//
+//   • the two CALLEE NAMES, and the classifier that maps a name back to WHICH division it is;
+//   • the THROWING predicate `isThrowingRuntimeCallee` composes (so `try` is accepted, and a bare divide
+//     is refused with E3057);
+//   • the `throws` CLAUSE `runtimeThrowsClause` answers with (so an `otherwise (e)` binding is typed
+//     `__DivisionByZeroError` and `match e` dispatches on its cases rather than reporting a gap);
+//   • the ORDINAL the lowering encodes, and the `BuiltinErrorOrdinalCheck` claim that holds it to the
+//     declaration.
+//
+// ⭐ **THE PREDICATE AND THE LOWERING'S DISPATCH ARE ONE LIST, DERIVED, NOT TWO LISTS CHECKED.** The other
+// four families need a bidirectional install-time guard (`ArrayRuntime.verifyThrowingAccessorsMatchPredicate`)
+// because a name-listing predicate and a set of builders that stamp a `throws` clause are genuinely two
+// copies of one fact, and only a check can hold them together. Here there is nothing to check: the two name
+// CONSTANTS below are the only place either name is WRITTEN, `divisionKindOf` is the only classifier over
+// them, `isThrowingDivisionRuntimeCallee` is DERIVED from its answer, and `lowerCheckedDivision` matches that
+// same answer EXHAUSTIVELY — so a third kind cannot be named as throwing without the lowering refusing to
+// compile, and cannot be expanded without being named. A guard over one list would be a check with nothing on
+// the other side of it. (Ordinal drift is a different fact with a different pair of copies, and it DOES get
+// its claim below.)
+let CheckedDivideName = b"__checked_div"
+let CheckedModuloName = b"__checked_mod"
+
+// ⭐ **WHICH DIVISION A CHECKED-DIVISION CALLEE NAMES** — the one list, read three ways (the throwing
+// predicate below, the E3057 message's wording, and the Std expansion's opcode choice). `notCheckedDivision`
+// is the ordinary answer for every other callee in the program, so this is asked on the general call path
+// and must not allocate: both arms return a payload-free variant.
+export union CheckedDivisionKind
+	// `a / b` — the QUOTIENT. Integer (`StdOp.div`) or float (`binOp(div)`), decided by the operand type at
+	// lowering, which is why one name serves both: the desugar is about FALLIBILITY, not about width.
+	quotient
+	// `a mod b` — the REMAINDER. Integer only; float `mod` does not exist in the language.
+	remainder
+	notCheckedDivision
+end 'CheckedDivisionKind'
+
+export function divisionKindOf(callee ByteArray) returns CheckedDivisionKind
+	if callee.equals(CheckedDivideName) 'divide'
+		return CheckedDivisionKind.quotient
+	end 'divide'
+
+	if callee.equals(CheckedModuloName) 'modulo'
+		return CheckedDivisionKind.remainder
+	end 'modulo'
+
+	return CheckedDivisionKind.notCheckedDivision
+end 'divisionKindOf'
+
+// The callee name a source-level `/` or `mod` desugars to — the operator → name direction, beside the
+// name → kind direction above so the two constants are the ONE place either is written. Its gate is
+// `TypeRules.divisionOperator`, and `Parser.emitDivOrMod` is its only caller: any other operator here is a
+// routing bug in the expression climber, so it panics rather than defaulting to the quotient (which would
+// silently turn `a + b` into a division).
+export function checkedDivisionCalleeForOp(op MaxonBinOp) returns ByteArray
+	if op == MaxonBinOp.div 'divide'
+		return CheckedDivideName
+	end 'divide'
+
+	if op == MaxonBinOp.mod 'modulo'
+		return CheckedModuloName
+	end 'modulo'
+
+	panic("checkedDivisionCalleeForOp: '{op.rawValue}' is not a division operator — `divisionOperator` is the gate and `emitDivOrMod` its only caller")
+end 'checkedDivisionCalleeForOp'
+
+// The THROWING checked-division callees (A1) — the SIXTH composer behind `GtRuntime.isThrowingRuntimeCallee`,
+// and the only one whose whole family throws by definition: a checked divide exists ONLY because its divisor
+// could be zero. A divisor the compiler proves non-zero never reaches a call at all (`Parser.emitDivOrMod`
+// leaves it a bare `binOp`), so there is no non-throwing member for this predicate to exclude.
+export function isThrowingDivisionRuntimeCallee(callee ByteArray) returns bool
+	return match divisionKindOf(callee) 'k'
+		quotient to remainder gives true
+		notCheckedDivision gives false
+	end 'k'
+end 'isThrowingDivisionRuntimeCallee'
+
+// What a checked divide throws — this family's speller, beside the four in `ManagedFileRuntime`,
+// `ManagedDirectoryRuntime` and `ArrayRuntime`, and read through the one `GtRuntime.runtimeThrowsClause`.
+export function divisionByZeroThrows() returns ThrowsClause
+	return ThrowsClause.throwing(String.from(DivisionByZeroErrorTypeName))
+end 'divisionByZeroThrows'
+
+// ⭐ **THE ONE CASE, AND THE FLAG DERIVED FROM IT.** `__DivisionByZeroError` has exactly one case, so its
+// ordinal is 0 and its error flag is `0 + ErrorFlagOrdinalBias` — which is 1, which is exactly what an
+// `x == 0` compare already produces. That coincidence is what makes the expansion branchless: the divisor
+// test IS the error flag, with no `select` and no second constant. It is also FRAGILE in the one way a
+// derived value can be, so `lowerCheckedDivision` asserts it rather than assuming it (see there).
+export let DivisionByZeroOrdinal = 0 as ParsedInt
+export let DivisionByZeroFlag = DivisionByZeroOrdinal + ErrorFlagOrdinalBias
+
+// The `const` payload the divisor is tested against, in BOTH domains: the integer 0 and the IEEE-754 pattern
+// for `+0.0` are the same 64 bits, so one constant serves the integer and the float arm of the expansion and
+// neither has to spell a bare literal. (`-0.0` is a DIFFERENT pattern and is caught anyway — the float arm
+// compares as f64, and IEEE-754 makes the two zeros equal.)
+export let DivisorZeroPattern = 0 as ParsedInt
+
+// ⭐ **THE ORDINAL DRIFT GUARD (7b), FOR THE FIFTH FAMILY.** The enum's case ORDER is this family's wire
+// format and `DivisionByZeroOrdinal` above is a transcription of it, so the two are asserted to agree on
+// every compile — exactly as the four `install*Runtime` guards do, and for the same reason: drift is
+// otherwise SILENT, because every `otherwise (e)` arm would simply name the wrong case.
+//
+// ONE case is not an excuse to skip the claim; it is the cheapest possible claim, and a family that does not
+// make one reintroduces precisely the drift 7b closed. It is a free function rather than the tail of an
+// `install…` because this family installs nothing — the caller is `Compiler.maxon`, beside the four installs
+// whose own claims run there transitively.
+export function verifyDivisionByZeroOrdinals()
+	let divisionErrors = BuiltinErrorOrdinalCheck.create(builtinDivisionByZeroErrorEnum(), installer: b"lowerCheckedDivision")
+	divisionErrors.claim(DivisionByZeroCaseName, ordinal: DivisionByZeroOrdinal)
+end 'verifyDivisionByZeroOrdinals'

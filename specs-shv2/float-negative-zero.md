@@ -28,13 +28,23 @@ The reciprocal is what makes the sign observable without printing: `1.0 / -0.0` 
 and `1.0 / 0.0` is `+inf`, so the comparison is true only if the literal really carried the
 sign bit. Compiled as `0.0 - 0.0` both sides are `+inf` and the comparison is false.
 
-⚠ This case is shv2-only in the sense that the C# bootstrap cannot express it: the
-bootstrap rejects an unguarded `a / b` over floats with E3057 (its division-by-zero rule
-does not exempt the float domain, where IEEE-754 defines the result), and wrapping it in
-`try … otherwise` substitutes a value for the infinity the test is looking at. The expected
-answer here is IEEE-754's, not a transcription of the oracle's.
+⚠⚠ **THIS CASE IS INVALIDATED BY THE RULING, NOT BLOCKED BY A MISSING MECHANISM, AND NOTHING
+LATER WILL RE-ENABLE IT (A1).** The paragraph below already documented the divergence it now
+dies of: "the bootstrap rejects an unguarded `a / b` over floats with E3057 … and wrapping it
+in `try … otherwise` substitutes a value for the infinity the test is looking at." shv2 has
+adopted that rule, so `1.0 / x` over a possibly-zero `x` is a throwing operation here too and
+`x / 0.0` is an error rather than an infinity — the behaviour this case observes no longer
+exists in the language. There is no ranged type that would restore it either: the reciprocal
+must accept a ZERO to have a sign to reveal, and a range containing zero is exactly what makes
+the divide fallible.
 
-<!-- test: negative-zero-literal-keeps-its-sign -->
+⚠ **The FILE's subject survives intact and every other case in it stays green.** What is lost
+is only the RECIPROCAL as the instrument: `-0.0`'s sign bit is still pinned by the negated-literal,
+field-default, range-bound and interpolation cases below. Observing the sign of a zero DIRECTLY
+needs `print` of a signed infinity, or a `floatToBits` builtin shv2 does not expose to user code.
+
+<!-- disabled-test: negative-zero-literal-keeps-its-sign -->
+<!-- NEVER — invalidated by A1's ruling, not deferred by it. See the two ⚠ paragraphs above. -->
 ```maxon
 typealias Wide = float(f64.min to f64.max)
 

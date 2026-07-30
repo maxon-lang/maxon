@@ -147,7 +147,18 @@ values, FIVE registers: Hall's condition must fire and the splitter must bracket
 call), while argument setup still writes `RCX`, `RDX`, `RAX`, `R9`, `RSI`, `RDI` in slot order.
 Same digits as above, and the tail re-encodes the same six values, so
 `846325 + 846325 = 1692650`.
+
+⚠ The three divisors are cast into `Positive` (A1). `p + 12` is a PARAMETER expression, not a
+constant, so an unguarded divide is now E3057 — and this case's whole subject is Hall's condition
+over the six `idiv` RESULTS, which only exists if the divides are the bare instruction. A range
+excluding 0 keeps them bare. Each cast costs one `cmp`/branch against the lower bound — an
+`int(1 to i64.max)` needs no upper check, and the bound folds into a `cmpImm`, so the COMPARE holds no
+register — plus the one `lea rN, [rM + 0]` that mints the retagged value (`emitRetaggedCastValue`, whose
+header says why an in-place re-tag is not an option). The six quotients still cross the call in the five
+callee-saved registers with no spill, which is the claim above and is what the golden shows.
 ```maxon
+typealias Positive = int(1 to i64.max)
+
 function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
@@ -156,9 +167,9 @@ function divsAcross(p int) returns int
 	let n1 = p + 100
 	let n2 = p + 45
 	let n3 = p + 23
-	let d1 = p + 12
-	let d2 = p + 7
-	let d3 = p + 9
+	let d1 = (p + 12) as Positive
+	let d2 = (p + 7) as Positive
+	let d3 = (p + 9) as Positive
 	let q1 = n1 / d1
 	let q2 = n1 mod d1
 	let q3 = n2 / d2
@@ -326,7 +337,16 @@ only one value would cross the divide, and the test would prove nothing.
 `k1..k9 = 11..19`, summing to 135, so `t = 135` every iteration. The loop runs `i = 1..5`:
 `135/1 = 135`, `135/2 = 67`, `135/3 = 45`, `135/4 = 33`, `135/5 = 27`; total
 `135 + 67 + 45 + 33 + 27 = 307`.
+
+⚠ The loop counter is cast into `Positive` at the divide (A1); an unguarded loop-carried divisor is
+E3057, and this case needs the bare `idiv` (a `try` here would add the fork's own values to a working
+set that has exactly one register of slack). The guard's `cmp` folds its bound into an immediate and so
+holds no register; the cast's retag mint takes one (`r15` in the golden), and the eleven-value set still
+colors with NO spill in the loop body — which is the reduced-pool claim above, re-proven at the tighter
+bound. `i` runs 1..6, so the guard never fires.
 ```maxon
+typealias Positive = int(1 to i64.max)
+
 function press(p int) returns int
 	let k1 = p + 11
 	let k2 = p + 12
@@ -341,7 +361,7 @@ function press(p int) returns int
 	var i = 1
 	while i <= 5 'loop'
 		var t = k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9
-		sum = sum + t / i
+		sum = sum + t / (i as Positive)
 		i = i + 1
 	end 'loop'
 	return sum

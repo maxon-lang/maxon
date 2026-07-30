@@ -1,0 +1,42 @@
+// Test: ranged-divisor-is-a-bare-idiv
+typealias NonZero = int(1 to 1000)
+
+function divide(n int, d NonZero) returns int
+	return n / d + n mod d
+end 'divide'
+
+function main() returns ExitCode
+	return divide(100, d: 7) as ExitCode
+end 'main'
+---
+ExitCode: 16
+---
+func @divide {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rsi, rdx
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.movRegReg rdi, rax
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.leaRegRegReg r8, rdi, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 100
+    x64.movRegImm32 rdx, 7
+    x64.callDirect divide
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

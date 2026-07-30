@@ -781,6 +781,48 @@ export function shiftOperator(op MaxonBinOp) returns bool
 	end 'k'
 end 'shiftOperator'
 
+// ⭐ **THE TWO OPERATORS WHOSE DIVISOR MIGHT BE ZERO** — and so the two the fallible-division rule (A1)
+// governs. `Parser.emitDivOrMod` is the one emitter behind this gate, exactly as `emitShift` is behind
+// `shiftOperator`, and for the same reason: `/` and `mod` have a LEGALITY question (`a / 0` is E3103) and a
+// FALLIBILITY question (a possibly-zero divisor throws) that no other arithmetic operator has, so they get
+// their own emitter rather than an extra branch inside `emitBinOp`.
+//
+// ⚠ Float `mod` does not exist (`requireBinOpOperands` refuses it), so `remainder` is integer-only — but the
+// gate is over the OPERATOR, not the operand type, and both operators reach it in both domains before the
+// operand rule has spoken.
+export function divisionOperator(op MaxonBinOp) returns bool
+	return match op 'k'
+		add to mul gives false
+		div to mod gives true
+		bitAnd to shrLogical gives false
+	end 'k'
+end 'divisionOperator'
+
+// ⭐⭐ **CAN A VALUE OF THIS RANGE BE ZERO?** — the type-level half of the fallible-division rule (A1), and
+// the reason `int(1 to 1000)` is the language's escape hatch from a checked divide. A range excludes 0 iff it
+// lies WHOLLY above it or WHOLLY below it; anything spanning 0 admits it and its divides are throwing.
+//
+// ⚠ **THE `low < 0` GUARD IS WHAT KEEPS THE UNSIGNED QUIRK OUT OF THE NEGATIVE ARM**, and it is load-bearing
+// rather than defensive. `int(0 to u64.max)` rides with `high == -1` (the u64.max PATTERN, see
+// `rangeIsUnsignedMaxUpper`), so a bare `high < 0` would read it as "wholly negative" and elide the guard on
+// a range that plainly contains 0. Its `low == 0` never reaches that test, so it reads — correctly — as
+// admitting zero. The mixed shape that WOULD defeat the guard (`int(-10 to u64.max)`, indistinguishable in
+// this representation from `int(-10 to -1)`) is unrepresentable by construction:
+// `Parser.requireRepresentableRange` rejects a negative low with a `u64.max` upper outright.
+// The bootstrap's predicate is the same expression for the same reason (`2-Parser.cs:23661-23689`).
+//
+// FLOAT: the bounds are IEEE-754 patterns, so the comparison goes through `floatOrderKey` — which maps both
+// `+0.0` and `-0.0` to 0, so a range whose bound IS a zero of either sign admits zero, which is what a
+// divisor test needs. Bounds are INCLUSIVE in both domains (`float(… upto …)` is refused outright), so there
+// is no exclusive-upper adjustment on either arm.
+export function rangeExcludesZero(low ParsedInt, high ParsedInt, isFloat bool) returns bool
+	if isFloat 'float'
+		return floatOrderKey(low) > 0 or floatOrderKey(high) < 0
+	end 'float'
+
+	return low > 0 or (low < 0 and high < 0)
+end 'rangeExcludesZero'
+
 // ⭐ THE SHIFT RULE — THE CANONICAL STATEMENT OF WHAT `shl`/`shr` MEAN IN THIS COMPILER, and the
 // only one. Four readers, and none of them restates it:
 //

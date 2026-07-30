@@ -189,16 +189,25 @@ block — the edge v1's SSA destruction never rewired. `r`'s incoming `7` must a
 v1's bug is exactly the case where it does not, and the value that arrives is whatever the
 register happened to hold.
 
-The NaN is computed at RUNTIME from two globals, not written as a literal: `0.0 / 0.0` over
-two constants would be folded before it ever reached the backend, and a folded compare emits
-no `ucomisd` and no `jp` at all — the test would pass while testing nothing.
+The NaN is computed at RUNTIME from a global, not written as a literal: a folded NaN would
+reach the backend as a constant, a folded compare emits no `ucomisd` and no `jp` at all, and
+the test would pass while testing nothing.
+
+⚠ **THE SOURCE IS OVERFLOW (`inf - inf`), NOT `0.0 / 0.0` (A1)** — and that is the corpus's own
+resolution, not a workaround: `specs/primitive-comparable.md:169` and
+`specs-shv2/primitive-hashable.md`'s `float.hash.nan` already build their NaN this way, each
+saying why. Division by zero is now a language-level error (a constant zero divisor is E3103,
+a possibly-zero one throws), so there is no route from a divide to a NaN at all. Overflow to
+`inf` and `inf - inf` remain silent, which is exactly what this case needs — and the subject,
+the `ucomisd`/`jp` compare-branch path, is untouched: only where the unordered value came from
+has changed.
 ```maxon
-var zeroA = 0.0
-var zeroB = 0.0
+var big = 1.0e308
 
 function main() returns ExitCode
 	var r = 7
-	let nan = zeroA / zeroB
+	let inf = big * 10.0
+	let nan = inf - inf
 	if nan == nan 'check'
 		r = 1
 	end 'check'
@@ -215,12 +224,12 @@ the `jp` takes the THEN edge. So this is the same first-block jump as `eq-nan-el
 carrying a phi to the OTHER successor — a lowering that routed only the second block's jump
 through the trampoline fails here with `7` instead of `1`.
 ```maxon
-var zeroA = 0.0
-var zeroB = 0.0
+var big = 1.0e308
 
 function main() returns ExitCode
 	var r = 7
-	let nan = zeroA / zeroB
+	let inf = big * 10.0
+	let nan = inf - inf
 	if nan != nan 'check'
 		r = 1
 	end 'check'
@@ -236,12 +245,12 @@ end 'main'
 which `ucomisd` SETS on unordered, so it would take the then-branch and return 1. Only an
 `above`-family jump on swapped operands returns 7.
 ```maxon
-var zeroA = 0.0
-var zeroB = 0.0
+var big = 1.0e308
 
 function main() returns ExitCode
 	var r = 7
-	let nan = zeroA / zeroB
+	let inf = big * 10.0
+	let nan = inf - inf
 	let x = 5.0
 	if nan < x 'check'
 		r = 1
@@ -256,12 +265,12 @@ end 'main'
 <!-- test: le-nan-is-false -->
 `nan <= x` must be FALSE, for the same reason with ZF also set.
 ```maxon
-var zeroA = 0.0
-var zeroB = 0.0
+var big = 1.0e308
 
 function main() returns ExitCode
 	var r = 7
-	let nan = zeroA / zeroB
+	let inf = big * 10.0
+	let nan = inf - inf
 	let x = 5.0
 	if nan <= x 'check'
 		r = 1
@@ -279,12 +288,12 @@ unordered sets CF. It is here to pin that the lowering does NOT grow a `jp` it d
 need: if this ever starts emitting one, the `above` family's whole reason for existing has
 been forgotten.
 ```maxon
-var zeroA = 0.0
-var zeroB = 0.0
+var big = 1.0e308
 
 function main() returns ExitCode
 	var r = 7
-	let nan = zeroA / zeroB
+	let inf = big * 10.0
+	let nan = inf - inf
 	let x = 5.0
 	if nan > x 'check'
 		r = 1
@@ -303,11 +312,11 @@ A float compare whose result is a VALUE rather than a branch condition — it is
 and `nan != nan` materializes TRUE, which for `==` means the parity bit has to be folded
 into the byte `sete` produced rather than into a jump.
 ```maxon
-var zeroA = 0.0
-var zeroB = 0.0
+var big = 1.0e308
 
 function main() returns ExitCode
-	let nan = zeroA / zeroB
+	let inf = big * 10.0
+	let nan = inf - inf
 	let a = nan == nan
 	let b = nan != nan
 	var r = 0

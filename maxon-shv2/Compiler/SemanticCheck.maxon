@@ -1704,12 +1704,40 @@ function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 		notFound then break 'sourceMethod'
 	end 'sourceMethod'
 
+	// ⭐ **THE DIVISION FAMILY (A1) NAMES THE OPERATOR AND BOTH WAYS OUT — the second of the two arms here
+	// that do NOT take the shared sentence, and for the opposite reason to the array one.** The map above
+	// cannot answer for division and is not asked to: there is no method the author wrote to quote back,
+	// because they wrote an OPERATOR. (`runtimeCalleeSourceMethod` gates each of its four families behind
+	// that family's own predicate and falls to `notFound`, so a division callee reaches here rather than
+	// tripping a map that was never given an arm for it.)
+	//
+	// And unlike every other family here there are TWO fixes rather than one — wrap it in a `try`, or give
+	// the divisor a type whose range excludes 0 and get a bare divide back. The second is the one a hot loop
+	// wants, so the message has to offer it: the bootstrap's own wording does (`2-Parser.cs:23713-23715`),
+	// and a reader who is only told "add try" would never find it.
+	//
+	// The operator is recovered from the CALLEE, so `mod` is not reported as `/`: `divisionKindOf` is the one
+	// place that mapping lives. Its SPELLING comes from `TokenKind`, which is where the E3103 message gets it
+	// too (`opTok.kind.rawValue`) — so the two diagnostics for the same operator cannot come to spell it
+	// differently, and a `%` synonym would move both.
+	match divisionKindOf(callee) 'division'
+		quotient then return divisionRequiresTryMessage(TokenKind.slash.rawValue)
+		remainder then return divisionRequiresTryMessage(TokenKind.mod.rawValue)
+		notCheckedDivision then break 'division'
+	end 'division'
+
 	if isThrowingArrayRuntimeCallee(callee) 'arrayAccessor'
 		return "throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error"
 	end 'arrayAccessor'
 
 	return throwingCallRequiresTryMessage(callee)
 end 'throwingRuntimeCalleeMessage'
+
+// The E3057 sentence both division arms share, spelled once with the operator substituted — `/` and `mod` fail
+// for the identical reason and are fixed the identical two ways, so two copies would be one fact written twice.
+function divisionRequiresTryMessage(operator String) returns String
+	return "throwing division requires try: wrap it as `try (a {operator} b) otherwise …`, or give the divisor a ranged type that excludes 0 (e.g. `int(1 to ...)`) — a bare divide drops the divide-by-zero error"
+end 'divisionRequiresTryMessage'
 
 // A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
