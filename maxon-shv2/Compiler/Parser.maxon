@@ -499,6 +499,12 @@ export union ParseError implements Error
 	// through `Point.create(…)`. Both reference compilers impose the identical restriction under
 	// the identical code.
 	constructorRestricted(typeName String, line LineNumber, column ColumnNumber)
+	// A struct literal naming a COMPILER BUILTIN managed type (`__ManagedFile`, …). Renders as E3072,
+	// positioned at the type name. Distinct from `constructorRestricted` above, and it must be: that one
+	// says "not HERE" and names a static factory the user could write, whereas this type has no source
+	// body for a literal to be legal in and no user-reachable constructor at all — its handle comes from
+	// the OS. Reporting E3076 for it would name `__ManagedFile.create(...)`, which does not exist.
+	builtinTypeConstruction(typeName String, line LineNumber, column ColumnNumber)
 	// A field access (`p.x`) naming a field the struct does not declare. Renders as E3018,
 	// positioned at the FIELD name — the token that is wrong, not the value it is read from.
 	unknownField(typeName String, fieldName String, line LineNumber, column ColumnNumber)
@@ -20909,6 +20915,16 @@ export type Parser
 		// WHERE the literal is written, not about what it names. Asking the registry first would
 		// report "no such type" for a `Point{…}` written in `main` — naming a type that is right
 		// there in the file, which is a confusing answer to a question the user did not ask.
+		// ⭐ **A COMPILER BUILTIN MANAGED TYPE IS REFUSED BEFORE THE LOCATION CHECK (E3072, R4.1).** The
+		// order is the decision, exactly as the paragraph above makes one: E3076 says "not HERE" and points
+		// at a static factory the user could write, but `__ManagedFile` has NO source body for a literal to
+		// be legal in and no user-reachable constructor at all — its handle comes from the OS. So the
+		// location question never applies to it, and asking it first would answer a program's
+		// `__ManagedFile{_handle: 0}` by recommending `__ManagedFile.create(...)`, which does not exist.
+		if isBuiltinManagedTypeName(typeName) 'builtinManagedType'
+			throw ParseError.builtinTypeConstruction(String.from(typeName), line: anchor.line, column: anchor.column)
+		end 'builtinManagedType'
+
 		if not self.namesEnclosingType(typeName) 'outsideItsOwnBody'
 			throw ParseError.constructorRestricted(String.from(typeName), line: anchor.line, column: anchor.column)
 		end 'outsideItsOwnBody'

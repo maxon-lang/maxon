@@ -1641,6 +1641,21 @@ export let CharacterSetBuiltinName = b"CharacterSet"
 // E2051 — it fails to RESOLVE, and resolving is exactly what registering the layout fixes.
 export let ManagedFileTypeName = b"__ManagedFile"
 
+// ⭐ **THE ONE PLACE THAT ANSWERS "is this a compiler builtin MANAGED type?"** — read by
+// `Parser.requireConstructible` to raise E3072, and the list a later slice extends when
+// `__ManagedMemory` and `__ManagedDirectory` arrive (E3072's own registry doc already names all three).
+//
+// ⚠ **DELIBERATELY NOT FOLDED INTO `isCompilerOwnedTypeName`, and the distinction is load-bearing rather
+// than tidy.** That predicate answers "does the compiler RESERVE this name?" — it gates D4's
+// undeclared-name verdict and `requireTypeNameNotCompilerOwned`'s refusal of a user declaration binding
+// one of its six. This one answers "is this an opaque OS-handle type a struct literal may never build?".
+// The two sets are disjoint today (none of those six is managed, and this type is not reserved under a
+// bare alias) and they are asked at different doors for different reasons; merging them would give one
+// predicate two meanings and make the next `CharacterSet`-shaped misreport inevitable.
+export function isBuiltinManagedTypeName(name ByteArray) returns bool
+	return name.equals(ManagedFileTypeName)
+end 'isBuiltinManagedTypeName'
+
 // Its one field, per the spec's "Type Structure". Unexported and immutable: the corpus never reads or
 // writes it — `__ManagedFile{_handle: 0}` is E3072 (`managed-file.error-direct-construction`) precisely
 // so the handle cannot be forged — and the runtime reaches it through `ManagedFileHandleOffset`.
