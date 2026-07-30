@@ -16,7 +16,11 @@
 #   iterations   how many suite runs to attempt          (default 40)
 #   hang-seconds how long a run may take before it is    (default 90)
 #                declared wedged; the suite runs in
-#                5-9 s, so this is a >10x margin
+#                5-9 s, so this is a >10x margin. It
+#                must also stay BELOW the pool's own
+#                `WedgeWatchdogMs`, or the pool panics
+#                first and there is nothing left to
+#                sample — the loop says so if it does.
 #   lanes        both | host | wasm                      (default both)
 #
 # Artifacts land in temp/wedge-repro/ (gitignored). The loop KEEPS GOING after a wedge, so a long
@@ -160,13 +164,38 @@ probeArmedRegistration() {
 	} > "$dir/probe.txt" 2>&1
 }
 
+# Kill the whole run — and it takes the pid list RECORDED AT CAPTURE TIME, not a freshly walked one.
+#
+# ⚠ WALKING THE TREE HERE IS TOO LATE, and that is not a subtlety: `probeArmedRegistration` has by
+# then SIGKILLed every worker, so every worker's own children — the compile or `wasmtime` subprocess
+# a mid-job worker holds — have been reparented to launchd and are no longer descendants of anything
+# this script can find. A `descendants "$parent"` at this point returns the parent alone and the
+# grandchildren survive the harness, on a host with a documented history of wedging under exactly
+# this kind of orphaned munmap-heavy process. `capture` writes the full tree to pids.txt BEFORE it
+# probes, which is the only moment the whole thing is walkable.
+#
+# A recorded pid may have exited and had its number reused in the seconds since, so each one is
+# checked against the command it is expected to be before it is signalled. A pid that is now
+# something else is left alone; the cost of that guard is a leaked process in a race we have never
+# observed, and the cost of omitting it is signalling an unrelated process of the user's.
+killRecorded() {
+	local recorded="$1" signal="$2" p command
+	for p in $recorded; do
+		command="$(ps -o command= -p "$p" 2>/dev/null)"
+		case "$command" in
+			*maxon-shv2*|*wasmtime*) kill "-$signal" "$p" 2>/dev/null ;;
+			*) : ;;
+		esac
+	done
+	return 0
+}
+
 killTree() {
-	local parent="$1" tree
-	tree="$(descendants "$parent")"
-	kill -TERM $tree 2>/dev/null
+	local parent="$1" pidFile="$2" recorded
+	recorded="$(cat "$pidFile" 2>/dev/null) $(descendants "$parent")"
+	killRecorded "$recorded" TERM
 	sleep 2
-	tree="$(descendants "$parent")"
-	[ -n "$tree" ] && kill -KILL $tree 2>/dev/null
+	killRecorded "$recorded" KILL
 	return 0
 }
 
@@ -203,14 +232,31 @@ for i in $(seq 1 "$iterations"); do
 		dir="$outDir/wedge-$i-$lane"
 		echo "=== WEDGE on run $i ($lane) — capturing to $dir ===" | tee -a "$summary"
 		capture "$runner" "$dir"
-		killTree "$runner"
+		killTree "$runner" "$dir/pids.txt"
 		wait "$runner" 2>/dev/null
 		echo "run $i $lane WEDGED after ${hangSeconds}s" >> "$summary"
 	else
 		wait "$runner"
 		code=$?
 		elapsed=$(( $(date +%s) - start ))
-		echo "run $i $lane exit=$code ${elapsed}s $(tail -1 "$log")" >> "$summary"
+
+		# The run ENDED — but a run the pool's own watchdog took down is still a wedge, and counting
+		# it as an ordinary failure is how this harness would quietly stop finding anything.
+		#
+		# ⚠ THE TWO DEADLINES ARE INDEPENDENT AND THIS SCRIPT DOES NOT KNOW THE OTHER ONE. `hangSeconds`
+		# above must stay BELOW `WedgeWatchdogMs` in SpecWorkerPool.maxon for the capture to happen at
+		# all: the stacks are the deliverable, and once the watchdog has panicked the workers are gone
+		# and there is nothing left to sample. Rather than re-spell that threshold here — a copy of a
+		# number in another language that nothing would keep in step — the loop reads the OUTCOME: if
+		# the pool reported itself wedged, say so, and say what was missed.
+		if /usr/bin/grep -qi "spec worker pool wedged" "$log" 2>/dev/null; then
+			wedges=$((wedges + 1))
+			echo "=== WEDGE on run $i ($lane) — the pool's OWN watchdog fired at ${elapsed}s, before this loop's ${hangSeconds}s deadline." | tee -a "$summary"
+			echo "    Its per-slot report is in $log. No stacks were captured: lower the hang-seconds argument below the watchdog." | tee -a "$summary"
+			echo "run $i $lane WEDGED (self-reported) exit=$code ${elapsed}s" >> "$summary"
+		else
+			echo "run $i $lane exit=$code ${elapsed}s $(tail -1 "$log")" >> "$summary"
+		fi
 	fi
 done
 

@@ -265,7 +265,13 @@ end 'ProcessCapture'
 // (`SubprocessError.timeout` renders as "timed out after 120000ms"), NOT to police slow tests — a
 // tight deadline would inject flakes into a suite that currently has none, which is the one way
 // this guard could leave things worse than it found them.
-let SpecSpawnTimeoutMs = 120000
+//
+// ⚠ EXPORTED BECAUSE THE POOL'S WEDGE WATCHDOG IS DERIVED FROM IT, and must be: this deadline and
+// `WedgeWatchdogMs` are NESTED — this one bounds a single subprocess, that one bounds the dispatch
+// loop waiting on the worker running it — so the outer must be strictly the longer or it fires first
+// and reports this failure as a pool wedge. Do not re-spell either number as a literal; see
+// `WedgeWatchdogMs`.
+export let SpecSpawnTimeoutMs = 120000
 
 export function runProcess(exe Executable, argv StringArray) returns ProcessCapture throws SubprocessError
 	var config = Configuration.create(exe)
