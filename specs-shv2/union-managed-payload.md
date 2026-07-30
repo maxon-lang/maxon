@@ -548,6 +548,533 @@ end 'main'
 4
 ```
 
+<!-- test: retained-payload-outlives-its-container -->
+⭐ **THE LIFETIME CASE.** The retained reference outlives the box it came out of: `grab(m)`
+returns the payload, then `m` — the only other owner — dies at `makeAndExtract`'s scope exit and
+its cascade releases the box's reference. The payload must survive on the caller's reference
+alone. Without the retain this is a use-after-free printing freed bytes; with a retain but no
+drop it is exit 101.
+```maxon
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns String
+	return match m 'k'
+		silent gives "a fallback literal long enough to be a real heap string"
+		text(s) gives s
+	end 'k'
+end 'grab'
+
+function makeAndExtract() returns String
+	let m = M.text("the payload that must outlive its own container, heap-long")
+	return grab(m)
+end 'makeAndExtract'
+
+function main() returns ExitCode
+	print(makeAndExtract())
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+the payload that must outlive its own container, heap-long
+```
+
+<!-- test: retained-struct-payload-outlives-its-container -->
+The struct half of the case above, and a sharper detector: the container is gone and then a
+FIELD of the escaped payload is read. A dangling box does not have to crash — it can simply
+answer with whatever the freed memory holds, which is the wrong-answer shape a `print` would
+hide and an exit code will not.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Body
+	export var mass as Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Shape
+	empty
+	solid(body Body)
+end 'Shape'
+
+function bodyOf(s Shape) returns Body
+	return match s 'k'
+		empty gives Body.create(0)
+		solid(b) gives b
+	end 'k'
+end 'bodyOf'
+
+function makeAndExtract(mass Integer) returns Body
+	let s = Shape.solid(Body.create(mass))
+	return bodyOf(s)
+end 'makeAndExtract'
+
+function main() returns ExitCode
+	let b = makeAndExtract(37)
+	return b.mass as ExitCode
+end 'main'
+```
+```exitcode
+37
+```
+
+<!-- test: var-container-reassigned-while-a-retained-payload-is-live -->
+The container is a `var` and is REASSIGNED while a payload retained out of it is still live.
+The reassignment drops the OLD box, whose cascade releases its own reference to the first
+payload — the escaped binding holds the other one, so the first string must still read intact
+afterwards, and the second box's payload must be independent of it.
+```maxon
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns String
+	return match m 'k'
+		silent gives "a fallback literal long enough to be a real heap string"
+		text(s) gives s
+	end 'k'
+end 'grab'
+
+function main() returns ExitCode
+	var m = M.text("the FIRST payload string, long enough to be a real heap allocation")
+	let escaped = grab(m)
+	m = M.text("the SECOND payload string, long enough to be a real heap allocation")
+	print(escaped)
+	print(grab(m))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+the FIRST payload string, long enough to be a real heap allocationthe SECOND payload string, long enough to be a real heap allocation
+```
+
+<!-- test: owned-move-out-and-borrowed-retain-in-one-function -->
+Both bind paths in ONE function and one `ownedBindings` list: a locally built union is MOVED
+out of (its slot nulled, the union consumed) and a borrowed parameter is RETAINED from (slot
+intact, not consumed), with the two arms' bindings dropping through the same arm-exit machinery.
+A drop-floor that confused the two would double-free one of them.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function mixed(borrowed M) returns Integer
+	let owned = M.text("a locally built payload string long enough for the heap")
+	let a = match owned 'o'
+		silent gives 0
+		text(s) gives 1
+	end 'o'
+	let b = match borrowed 'b'
+		silent gives 0
+		text(t) gives 2
+	end 'b'
+	return a + b
+end 'mixed'
+
+function main() returns ExitCode
+	let m = M.text("the caller's payload string, long enough to be a real heap allocation")
+	return mixed(m) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: discard-on-a-borrowed-union-increfs-nothing -->
+The `_` discard path is unchanged by the retain: a discard binds nothing, so it emits no
+`incref` and leaves its payload in the box for the owner's cascade. Called twice on the same
+borrowed union — an incref with no matching binding to drop it would leak (exit 101), and a
+decref with no incref would free the caller's payload under it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Message
+	silent
+	text(body String, code Integer)
+end 'Message'
+
+function codeOf(m Message) returns Integer
+	return match m 'k'
+		silent gives 0
+		text(_, tag) gives tag
+	end 'k'
+end 'codeOf'
+
+function main() returns ExitCode
+	let m = Message.text("a discarded payload string long enough to be a heap one", code: 4)
+	let a = codeOf(m)
+	let b = codeOf(m)
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: repeated-borrowed-binds-in-a-loop-with-an-early-return -->
+Five binds of the same borrowed payload inside a loop, with an early `return` reachable from
+inside the loop body. Each iteration's retain must be released on the iteration's own exit
+rather than accumulating to the function's end.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Round = int(0 to 100)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function scan(m M) returns Integer
+	var i = 0 as Round
+	var seen = 0 as Integer
+	while i < 5 'spin'
+		let n = match m 'k'
+			silent gives 0
+			text(s) gives 1
+		end 'k'
+		if n == 0 'stop'
+			return 0
+		end 'stop'
+		seen = seen + n
+		i = i + 1
+	end 'spin'
+	return seen
+end 'scan'
+
+function main() returns ExitCode
+	let m = M.text("a repeatedly scanned payload string, long enough for the heap")
+	let a = scan(m)
+	print("{a}")
+	return a as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+```stdout
+5
+```
+
+<!-- test: borrowed-bind-two-levels-deep-then-the-owner-moves-it-out -->
+The container is borrowed by `outer`, bound there, and then handed on to `inner`, which borrows
+and binds it again — two live retains of one payload at different frames — and only afterwards
+does the owner in `main` move it out for itself.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function inner(m M) returns Integer
+	return match m 'k'
+		silent gives 0
+		text(s) gives 3
+	end 'k'
+end 'inner'
+
+function outer(m M) returns Integer
+	let first = match m 'k'
+		silent gives 0
+		text(s) gives 4
+	end 'k'
+	return first + inner(m)
+end 'outer'
+
+function main() returns ExitCode
+	let m = M.text("a payload string handed down two borrow levels, heap-long")
+	let a = outer(m)
+	match m 'own'
+		silent then return 0
+		text(s) then print(s)
+	end 'own'
+	return a as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+a payload string handed down two borrow levels, heap-long
+```
+
+<!-- test: retained-give-merged-with-literal-gives -->
+A result phi joining a RETAINED give (`one(a) gives a`) with two freshly built literal gives.
+All three edges must arrive owning their value, or the merged result is freed once too often
+on one path and never on another.
+```maxon
+union M
+	one(a String)
+	two(b String)
+	none
+end 'M'
+
+function pick(m M) returns String
+	return match m 'k'
+		one(a) gives a
+		two(b) gives "a rebuilt literal give long enough to be a heap string"
+		none gives "a third literal give also long enough to be a heap string"
+	end 'k'
+end 'pick'
+
+function main() returns ExitCode
+	let x = M.one("the retained give, long enough to be a real heap allocation")
+	let y = M.two("the discarded payload, long enough to be a real heap allocation")
+	print(pick(x))
+	print(pick(y))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+the retained give, long enough to be a real heap allocationa rebuilt literal give long enough to be a heap string
+```
+
+<!-- test: nested-matches-of-two-borrowed-unions -->
+A borrowed union matched INSIDE an arm of another borrowed union's match: two retains live at
+once, in nested arm scopes, dropped in the right order. Called twice, so a consumed scrutinee
+would show as a use-after-move on the second call.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Inner
+	quiet
+	loud(word String)
+end 'Inner'
+
+union Outer
+	blank
+	holds(label String)
+end 'Outer'
+
+function both(o Outer, i Inner) returns Integer
+	return match o 'x'
+		blank gives 0
+		holds(label) gives match i 'y'
+			quiet gives 1
+			loud(word) gives 2
+		end 'y'
+	end 'x'
+end 'both'
+
+function main() returns ExitCode
+	let o = Outer.holds("the outer label string, long enough to be a heap allocation")
+	let i = Inner.loud("the inner word string, long enough to be a heap allocation")
+	let a = both(o, i: i)
+	let b = both(o, i: i)
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: the-same-borrowed-container-matched-again-inside-its-own-arm -->
+Re-entrancy: the arm body matches the SAME borrowed container a second time while its own
+retain is still live. Legal exactly because a retain does not consume — the inner match sees
+the tag and the slot unchanged.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function depth(m M) returns Integer
+	return match m 'k'
+		silent gives 0
+		text(s) gives match m 'again'
+			silent gives 1
+			text(t) gives 6
+		end 'again'
+	end 'k'
+end 'depth'
+
+function main() returns ExitCode
+	let m = M.text("a re-entrantly matched payload string, long enough for the heap")
+	return depth(m) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: borrowed-bind-out-of-a-temporary-container -->
+The caller's container is a TEMPORARY (`peek(M.text(…))`), so it is owned by no binding and
+dies at the statement's end. The callee still borrows it and retains from it, which is the
+ordinary case — the interesting half is that the temporary's own drop must still happen exactly
+once afterwards.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function peek(m M) returns Integer
+	return match m 'k'
+		silent gives 0
+		text(s) gives 11
+	end 'k'
+end 'peek'
+
+function main() returns ExitCode
+	return peek(M.text("a temporary container's payload, long enough for the heap")) as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: retained-give-routed-through-a-try-channel -->
+The retained payload leaves its function through a `throws` signature and is joined with an
+`otherwise` fallback at the call site — the ok-edge/error-edge phi reconciliation, over a value
+whose `+1` came from a retain rather than from a fresh allocation.
+```maxon
+union Fail implements Error
+	because(why String)
+end 'Fail'
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns String throws Fail
+	return match m 'k'
+		silent gives "a fallback literal long enough to be a real heap string"
+		text(s) gives s
+	end 'k'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("a payload string routed through a try channel, heap-long")
+	let out = try grab(m) otherwise "an otherwise literal long enough to be a heap string"
+	print(out)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a payload string routed through a try channel, heap-long
+```
+
+<!-- test: retained-payload-moved-into-a-durable-struct-field -->
+⭐ The hardest lifetime shape in the set: the retained payload is moved into a STRUCT FIELD,
+and the struct outlives both the arm and the union it was bound out of (`m` dies at
+`makeAndWrap`'s exit). The retain's `+1` transfers into the field, the binding's own drop is
+skipped as moved-from, and the union's cascade releases the other reference.
+```maxon
+union M
+	silent
+	text(body String)
+end 'M'
+
+type Holder
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Holder'
+
+function wrap(m M) returns Holder
+	return match m 'k'
+		silent gives Holder.create("a fallback literal long enough to be a heap string")
+		text(s) gives Holder.create(s)
+	end 'k'
+end 'wrap'
+
+function makeAndWrap() returns Holder
+	let m = M.text("a payload moved into a durable struct field, long enough for the heap")
+	return wrap(m)
+end 'makeAndWrap'
+
+function main() returns ExitCode
+	let h = makeAndWrap()
+	print(h.label)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a payload moved into a durable struct field, long enough for the heap
+```
+
+<!-- test: two-borrowed-unions-a-string-one-and-a-struct-one -->
+Both managed payload classes bound out of borrowed parameters in one call, twice over: a
+`String` payload (dropped through `__str_decref`) and a `struct` payload (dropped through the
+struct's own destructor callee). The retain is emitted the same way for both; only the release
+is tag-routed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Body
+	export var mass as Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union A
+	none
+	one(s String)
+end 'A'
+
+union B
+	none
+	two(b Body)
+end 'B'
+
+function both(a A, b B) returns Integer
+	let x = match a 'x'
+		none gives 0
+		one(s) gives 5
+	end 'x'
+	let y = match b 'y'
+		none gives 0
+		two(body) gives body.mass
+	end 'y'
+	return x + y
+end 'both'
+
+function main() returns ExitCode
+	let a = A.one("the first union's payload, long enough to be a heap string")
+	let b = B.two(Body.create(9))
+	let r1 = both(a, b: b)
+	let r2 = both(a, b: b)
+	return (r1 + r2) as ExitCode
+end 'main'
+```
+```exitcode
+28
+```
+
 <!-- test: two-managed-fields-drop -->
 A case with two String fields, dropped at scope exit, frees both.
 ```maxon
@@ -590,6 +1117,126 @@ end 'main'
 ```
 ```stdout
 bound first string long enough to heap
+```
+
+<!-- test: fallthrough-out-of-a-binding-arm-into-a-payload-free-one -->
+The POSITIVE control for the three refusals below, and the reason they are narrow: falling
+OUT of a payload-binding arm is fine — the arm's own bindings were established by the case it
+actually matched, and they are dropped on the fallthrough edge like any other live exit. Only
+the arm being fallen INTO may not bind.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a(x String)
+	b
+end 'U'
+
+function main() returns ExitCode
+	let u = U.a("the falling-through payload, long enough to be a heap string")
+	var t = 0 as Code
+	match u 'k'
+		a(s) then print(s) and fallthrough
+		b then t = 7
+	end 'k'
+	return t as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+the falling-through payload, long enough to be a heap string
+```
+
+<!-- test: error.fallthrough-into-a-managed-binding-arm -->
+⭐ **A FALLTHROUGH TARGET MAY NOT BIND A PAYLOAD**, and this is the case that made it a
+refusal rather than a rule on paper: `a(s) … and fallthrough` reaches `b(t)`'s body while the
+union holds an `a`, so `t` destructures a case the value does not have. **MEASURED before the
+refusal existed: SIGSEGV (exit 139)** — arm `a` moved its payload out and nulled the slot, and
+`b(t)` then bound the null and printed it.
+
+It is the `or`-pattern rule (`rejectOrPatternBinding`) one construct over: *a payload binding
+is meaningful only where exactly one case matched*, and a fallthrough edge is precisely an
+arrival from a DIFFERENT case. Neither reference compiler refuses it and both produce
+garbage — the bootstrap prints the payload twice here, because it does not null the slot — so
+there is no behaviour being broken, only a hole being closed.
+```maxon
+union U
+	a(x String)
+	b(y String)
+end 'U'
+
+function main() returns ExitCode
+	let u = U.a("the fallthrough source payload, long enough to be a heap string")
+	match u 'k'
+		a(s) then print(s) and fallthrough
+		b(t) then print(t)
+	end 'k'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:11:3: Unsupported: `and fallthrough` into the payload-binding arm 'b' of `union U` — the preceding arm matched a DIFFERENT case, so on that edge these bindings would destructure a case the value does not hold (reading another case's slots, or a slot that arm already moved out and nulled). Fall through into a payload-free arm, or give this arm its own body
+```
+
+<!-- test: error.fallthrough-into-a-borrowed-binding-arm -->
+The same refusal on the BORROWED scrutinee D1b opens, where the payload is retained rather
+than moved so the slot is intact — which makes the failure a silent TYPE CONFUSION instead of
+a crash: `b(n)`'s `Code` binding would read the `String` POINTER arm `a` matched. Measured at
+exit 1 (the pointer failing `Code`'s range check) before the refusal existed; the bootstrap
+reaches the same confusion by its own route.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a(x String)
+	b(y Code)
+end 'U'
+
+function show(u U) returns Code
+	match u 'k'
+		a(s) then print(s) and fallthrough
+		b(n) then return n
+	end 'k'
+	return 0
+end 'show'
+
+function main() returns ExitCode
+	let u = U.a("a heap string long enough to be a real allocation")
+	return show(u) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:3: Unsupported: `and fallthrough` into the payload-binding arm 'b' of `union U` — the preceding arm matched a DIFFERENT case, so on that edge these bindings would destructure a case the value does not hold (reading another case's slots, or a slot that arm already moved out and nulled). Fall through into a payload-free arm, or give this arm its own body
+```
+
+<!-- test: error.fallthrough-into-a-scalar-binding-arm -->
+The refusal is about the BINDING, not about ownership: a SCALAR payload has no drop, no
+pointer and no crash, and is therefore the worst of the three — a silently wrong number.
+**MEASURED at 18 in BOTH compilers** (`m` reads `a`'s `9`, so `t = 9 + 9`) where `b`'s payload
+does not exist at all. That the two references agree on 18 is not evidence it is right; it is
+evidence neither of them asks the question.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a(x Code)
+	b(y Code)
+end 'U'
+
+function main() returns ExitCode
+	let u = U.a(9)
+	var t = 0 as Code
+	match u 'k'
+		a(n) then t = n and fallthrough
+		b(m) then t = t + m
+	end 'k'
+	return t as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:14:3: Unsupported: `and fallthrough` into the payload-binding arm 'b' of `union U` — the preceding arm matched a DIFFERENT case, so on that edge these bindings would destructure a case the value does not hold (reading another case's slots, or a slot that arm already moved out and nulled). Fall through into a payload-free arm, or give this arm its own body
 ```
 
 <!-- test: two-binding-arms-fall-through -->

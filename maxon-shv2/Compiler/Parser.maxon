@@ -16001,7 +16001,16 @@ export type Parser
 				var payloadBindings = PayloadBindingArray.create()
 				let intervalMark = dispatchIntervals.count()
 				if isEnumMatch 'enumPattern'
-					payloadBindings = try self.collectEnumPatternIntervals(requireEnumLayout(enumMatch), covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
+					let armLayout = requireEnumLayout(enumMatch)
+					payloadBindings = try self.collectEnumPatternIntervals(armLayout, covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
+					// An `and fallthrough` edge reaches this arm's BODY from a different case, and this arm's
+					// bindings sit at the head of that body — so they would destructure a case the value does
+					// not hold. Checked here, where the pattern's bindings are first in hand and before any
+					// phi or edge is wired for the fallthrough. Only an enum pattern produces bindings, so a
+					// scalar match cannot reach it.
+					if prevFallthrough 'ftTargetBinds'
+						try self.rejectFallthroughIntoBindingArm(payloadBindings, layout: armLayout, patternTok: patternTok)
+					end 'ftTargetBinds'
 				end 'enumPattern' else if usePlan 'scalarPlanPattern'
 					try self.collectScalarPatternIntervals(scrutTag, seenValues: seenValues, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
 				end 'scalarPlanPattern' else 'scalarChainPattern'
@@ -17290,6 +17299,31 @@ export type Parser
 		let binding = try atomBindings.get(0) otherwise panic("rejectOrPatternBinding: bindings.count() > 0 but get(0) failed")
 		throw ParseError.unsupported("a payload binding '{String.from(binding.nameTok.value)}' on an `or`-pattern (a binding shared across the alternatives of an or-arm arrives at a later rung)", line: binding.nameTok.line, column: binding.nameTok.column)
 	end 'rejectOrPatternBinding'
+
+	// ⭐ **A FALLTHROUGH TARGET MAY NOT BIND A PAYLOAD** — the `rejectOrPatternBinding` rule one construct
+	// over, and for the identical reason: a payload binding is meaningful only where EXACTLY ONE case
+	// matched, and an `and fallthrough` edge is precisely an arrival from a DIFFERENT case. On that edge
+	// the bindings would destructure a case the value does not hold.
+	//
+	// ⚠ What that costs depends only on which slot happens to be read, which is why it had to become a
+	// refusal rather than a note. All three MEASURED, before this check existed: a **SIGSEGV** (an owned
+	// arm MOVED its payload out and nulled the slot, and the arm fallen into bound the null and printed
+	// it); a silent **TYPE CONFUSION** (a borrowed arm leaves the slot intact, so an `int` binding in the
+	// arm fallen into reads the String POINTER the previous case put there); and a silently **WRONG
+	// NUMBER** (two scalar payloads at the same slot, so the successor re-reads its predecessor's value —
+	// no crash, no diagnostic, both reference compilers agreeing on the same wrong answer).
+	//
+	// NEITHER REFERENCE REFUSES IT and both produce garbage of their own — the bootstrap prints the
+	// payload twice in the String case, since it does not null the slot — so nothing that ever worked is
+	// taken away here. Positioned at the arm being fallen INTO, which is the arm that cannot bind.
+	// Falling OUT of a binding arm stays legal: those bindings were established by the case that actually
+	// matched, and they drop on the fallthrough edge like any other live exit.
+	function rejectFallthroughIntoBindingArm(bindings PayloadBindingArray, layout EnumLayout, patternTok Token) throws ParseError
+		if bindings.count() == 0 'bindsNothing'
+			return
+		end 'bindsNothing'
+		throw ParseError.unsupported("`and fallthrough` into the payload-binding arm '{String.from(patternTok.value)}' of `{layout.kindWord()} {String.from(layout.name)}` — the preceding arm matched a DIFFERENT case, so on that edge these bindings would destructure a case the value does not hold (reading another case's slots, or a slot that arm already moved out and nulled). Fall through into a payload-free arm, or give this arm its own body", line: patternTok.line, column: patternTok.column)
+	end 'rejectFallthroughIntoBindingArm'
 
 	// Parse a `(dir)` / `(_)` / `(a, b)` binding list on a single-case pattern, resolving each binding
 	// against the case's declared payload fields in SLOT order. A `_` is the discard — it consumes a

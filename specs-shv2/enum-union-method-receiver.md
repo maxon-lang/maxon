@@ -253,6 +253,64 @@ end 'main'
 cannot open a heap allocated path string, long enough to be a real one
 ```
 
+<!-- test: managed-payload-bound-out-of-an-RVALUE-receiver -->
+The receiver is a TEMPORARY the caller owns for the length of the statement, not a named
+binding — so the retain, the arm-exit drop and the temporary's own drop all land in one
+statement. The payload must still print intact and the box must still be freed exactly once.
+```maxon
+union PathError
+	missing
+	unreadable(path String)
+
+	export function displayReason() returns String
+		return match self 'k'
+			missing gives "no path was given at all, and this literal is heap-long"
+			unreadable(path) gives "cannot open {path}"
+		end 'k'
+	end 'displayReason'
+end 'PathError'
+
+function main() returns ExitCode
+	print(PathError.unreadable("an rvalue receiver's payload, long enough for the heap").displayReason())
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+cannot open an rvalue receiver's payload, long enough for the heap
+```
+
+<!-- test: a-method-that-binds-its-payload-and-recurses -->
+The method binds its managed payload out of `self` and then calls itself on the same receiver,
+four frames deep — four simultaneously live retains of one payload, released as the frames
+unwind. A retain that leaked would leave the count at four when the caller's binding dies.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Depth = int(0 to 10)
+
+union M
+	silent
+	text(body String)
+
+	export function spin(d Depth) returns Integer
+		return match self 'k'
+			silent gives 0
+			text(s) gives 1 + self.spin((d - 1) if d > 0 else 0) if d > 0 else 1
+		end 'k'
+	end 'spin'
+end 'M'
+
+function main() returns ExitCode
+	let m = M.text("a recursively bound payload string, long enough for the heap")
+	return m.spin(4) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
 <!-- test: two-calls-on-one-managed-receiver -->
 ```maxon
 union Outcome
