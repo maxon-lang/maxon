@@ -155,6 +155,10 @@ let GenericWrite = 0x40000000  // the child write end's dwDesiredAccess (CreateF
 let GenericRead = 0x80000000  // the child stdin-read end's dwDesiredAccess (CreateFileW, streaming slice 1b)
 let PipeWriteOpenMode = 0x00080002  // PIPE_ACCESS_OUTBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE — the sync stdin server pipe (no OVERLAPPED)
 let FileShareNone = 0x0  // dwShareMode (the pipe is not shared)
+// R4.1: a file opened for READING permits concurrent readers. `FileShareNone` is right for a pipe end,
+// which must not be shared, and would be wrong here — it would make a second `openRead` of the same path
+// fail with a sharing violation, which `managed-file.exists` (open, close, re-open) would trip over.
+let FileShareRead = 0x1  // dwShareMode for a read-only open
 let OpenExisting = 3  // dwCreationDisposition — connect to the already-created named pipe
 let FileAttributeNormal = 0x80  // dwFlagsAndAttributes
 let HandleFlagInherit = 1  // SetHandleInformation dwMask/HANDLE_FLAG_INHERIT — cleared on the parent read end
@@ -781,6 +785,8 @@ type StdToX64Lowering
 			osWriteFile gives win64OutgoingArgBytes(WriteFileStackArgWords)
 			// GetSystemTimeAsFileTime takes ONE argument, in rcx — register-only, no outgoing stack space.
 			osReadWallClock gives 0
+			// R4.1: CreateFileW takes SEVEN arguments — four in registers, three on the stack.
+			osFileOpenRead gives win64OutgoingArgBytes(CreateFileStackArgWords)
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -942,6 +948,8 @@ type StdToX64Lowering
 				osPipeCreate to osWriteFile then break 'term'
 				// The wall-clock read is a void body op, never a terminator.
 				osReadWallClock then break 'term'
+				// R4.1: the file OPEN is a value-producing body op, never a terminator.
+				osFileOpenRead then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1005,6 +1013,10 @@ type StdToX64Lowering
 				// The wall-clock read declares `clobbersFlags: true` (it lowers to a call), so it CAN be the
 				// last flag-writer before a branch; like a `call` it is not the compare, so the scan stops.
 				osReadWallClock then break 'isTheCompare'
+				// R4.1: the file OPEN declares `clobbersFlags: true` (it lowers to a call), so like the
+				// wall-clock read it can be the last flag-writer before a branch — and, like a `call`, it is
+				// not the compare, so the scan stops.
+				osFileOpenRead then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1080,6 +1092,8 @@ type StdToX64Lowering
 			osPipeCreate to osWriteFile gives false
 			// The wall-clock read is never a terminator, so it reads no fused compare flags.
 			osReadWallClock gives false
+			// R4.1: the file OPEN is never a terminator, so it reads no fused compare flags.
+			osFileOpenRead gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -1149,6 +1163,8 @@ type StdToX64Lowering
 			osWriteFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsWriteFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
 			// The `__Builtins` WALL clock: read the host's calendar into the caller's out-param word.
 			osReadWallClock(ftPtrId) then self.lowerOsReadWallClock(ftPtrId, dstBlock: dstBlock)
+			// R4.1: open a file for reading; the raw handle lands in `resultId`.
+			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpenRead(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1195,6 +1211,7 @@ type StdToX64Lowering
 			witnessTryCall then panic("lowerStdToX64: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
 			osPipeCreate to osWriteFile then panic("lowerStdToX64: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
 			osReadWallClock then panic("lowerStdToX64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
+			osFileOpenRead then panic("lowerStdToX64: an `osFileOpenRead` op appeared as a block terminator (lowering bug — a file open is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2161,6 +2178,34 @@ type StdToX64Lowering
 	// Lower `osIocpCreate` to `CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1)`. INVALID_HANDLE_VALUE is a
 	// FULL 64-bit -1, so it uses `movRegImm` (64-bit) — `movRegImm32` would zero-extend to 0x00000000FFFFFFFF, a
 	// different (invalid) handle.
+	// ⭐ **R4.1: `CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+	// NULL)`** — the file-IO runtime's OPEN primitive, the third `CreateFileW` call site in this file and the
+	// first that opens an actual FILE rather than the far end of a named pipe.
+	//
+	// The failure classification is NOT here: this yields the raw handle (or `INVALID_HANDLE_VALUE`) and
+	// `ManagedFileRuntime`'s builder-built Std reads `osLastError` to choose the error variant. See the
+	// `osFileOpenRead` op's own comment in `StdDialect` for why that split is deliberate.
+	function lowerOsFileOpenRead(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsFileOpenReadWin64(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsFileOpenRead: CreateFileW is x64-windows only — file IO is x64-windows-gated at R4.1, and SemanticCheck refuses such a program at its source span (E3104)")
+		end 'route'
+	end 'lowerOsFileOpenRead'
+
+	// Stack args 5-7 first (rax scratch, while every argument register is still free), then the register
+	// args — the ordering `lowerOsPipeCreateWin64` establishes and for its reason.
+	function lowerOsFileOpenReadWin64(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
+		self.emitWin64StackArgImm(dstBlock, slot: 0, value: OpenExisting)
+		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
+		self.emitWin64StackArgImm(dstBlock, slot: 2, value: NullPointer)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(pathPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rdx), value: GenericRead))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: FileShareRead))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateFileW)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsFileOpenReadWin64'
+
 	function lowerOsIocpCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsIocpCreateWin64(resultId, dstBlock: dstBlock)
@@ -2666,6 +2711,8 @@ type StdToX64Lowering
 			osPipeCreate to osWriteFile gives false
 			// The wall-clock read is never a terminator, let alone a float-equality condBranch.
 			osReadWallClock gives false
+			// R4.1: the file OPEN is never a terminator, let alone a float-equality condBranch.
+			osFileOpenRead gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2805,6 +2852,7 @@ type StdToX64Lowering
 			witnessTryCall panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a throwing witness call, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPipeCreate to osWriteFile panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a P1.5 IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osReadWallClock panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osReadWallClock`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osFileOpenRead panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osFileOpenRead`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

@@ -1053,6 +1053,30 @@ export union StdOp
 	// unchanged in that respect. Lowered by ALL FOUR backends as of P1.7a slice 2b-iv-C, exactly as
 	// `witnessCall` is; each fills the witness blob's slots in the form its image format can carry.
 	witnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- R4.1: the file-IO runtime's OPEN primitive ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `witnessTryCall`, per the band-append invariant: every
+	// stale `… to witnessTryCall` / `… to osWriteFile` full-tail range arm now FAILS TO COMPILE until it is
+	// consciously extended, which is the mechanism that finds every site obliged to classify or lower it.
+	// Its `category: system` places it logically in the system band, independent of this tail position.
+	//
+	// `osFileOpenRead(result, pathPtr)` = `CreateFileW(pathPtr, GENERIC_READ, FILE_SHARE_READ, NULL,
+	// OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)`, the raw HANDLE (or `INVALID_HANDLE_VALUE`) in `result`.
+	// One value operand and one def — the direct-return shape `osIocpCreate`/`osEventCreate` use, NOT the
+	// out-param shape `osReadClock` needs, because `CreateFileW` returns its answer in RAX.
+	//
+	// ⭐ **IT DOES NOT CLASSIFY ITS OWN FAILURE, AND THAT IS DELIBERATE.** The op yields the raw handle; the
+	// `notFound`-vs-`openFailed` decision is made in BUILDER-BUILT Std by `ManagedFileRuntime`, reading the
+	// existing `osLastError` op. Two reasons: the errno→variant mapping is the same arithmetic on every
+	// platform even though the read is not (Win32 `ERROR_FILE_NOT_FOUND` and POSIX `ENOENT` are both 2 —
+	// `specs/managed-file.md`'s own note says so), and keeping it out of the backend means a future POSIX
+	// lane supplies only the OPEN, exactly as `osReadWallClock`'s comment argues for the clock.
+	//
+	// ⭐ x64-WINDOWS ONLY at this rung, by the R4.1 ruling. Every other target refuses at the CALL SITE with
+	// the existing E3104 (`targetHasWin32Substrate`), so no backend ever sees this op — which is why the
+	// three non-Windows lowerings are absent rather than stubbed. A stub would be a silent wrong answer on
+	// a lane the oracle cannot even check.
+	osFileOpenRead(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1203,6 +1227,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// address and its arguments — through the SAME helper. Both its results (`resultId`, `errorFlagId`) are
 		// defs, exactly as `tryCall`'s two are.
 		witnessTryCall(_, _, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
+		// R4.1: the file OPEN reads its path BUFFER address; `resultId` is a def and is skipped here.
+		osFileOpenRead(_, pathPtr) then referenced.insert(pathPtr)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1353,6 +1379,9 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// The exact mirror of `collectStdOpUses`'s `witnessTryCall` arm: rewrite the witness-table address and the
 		// args; both results are defs and every remaining field is metadata carried through.
 		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
+		// R4.1: rewrite the path buffer; `resultId` is a def and is carried through unremapped, exactly as
+		// every other defining system op's is.
+		osFileOpenRead(resultId, pathPtr) gives StdOp.osFileOpenRead(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

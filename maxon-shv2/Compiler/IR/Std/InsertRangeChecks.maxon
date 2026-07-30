@@ -706,6 +706,8 @@ type RangeCheckEmitter
 				osPipeCreate to osWriteFile then break 'c'
 				// The wall-clock read produces no ranged-typealias value to range-check.
 				osReadWallClock then break 'c'
+				// R4.1: a raw OS handle is not a ranged-typealias value.
+				osFileOpenRead then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -793,6 +795,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		osPipeCreate to osWriteFile gives false
 		// The wall-clock read is a body op, never a `ret`.
 		osReadWallClock gives false
+		// R4.1: the file OPEN is a body op, never a `ret`.
+		osFileOpenRead gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -900,6 +904,9 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osWriteFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
 		// The wall-clock read defines nothing — its answer lands in the caller's out-param word.
 		osReadWallClock gives DefinedValueLookup.none
+		// R4.1: the file OPEN captures `CreateFileW`'s HANDLE out of RAX, so unlike the two reads above it
+		// DOES define a value — the direct-return shape, not the out-param one.
+		osFileOpenRead(resultId, _) gives DefinedValueLookup.defines(resultId)
 	end 'r'
 end 'stdOpDefinedValue'
 
