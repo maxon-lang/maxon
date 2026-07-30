@@ -792,10 +792,17 @@ error E2010: <fragment>:8:14: Expected '\{' but got 'newline'
 ```
 
 <!-- test: error.Self-as-a-binding-name -->
-### `Self` cannot be bound as a name
-The reason the arm order above is safe by construction rather than by care: no binding named `Self` can
-exist, so `Self.` has no local reading to be captured by. The reference bootstrap's own words, character
-for character apart from its unquoted `identifier`.
+### `Self` cannot be bound by a `let`
+A `let`/`var`, a `for … in` variable, a struct FIELD and a top-level binding each read their name with
+the strict identifier reader, so none of them can be spelled `Self`. The reference bootstrap's own words,
+character for character apart from its unquoted `identifier`.
+
+⚠ **This is NOT what makes the arm order safe, and the D9 review had to correct that claim.** A function
+or closure PARAMETER *can* be named `Self` — a parameter's name may be spelled with a keyword (D8) — so a
+binding named `Self` genuinely can exist and the scope test genuinely can find it. What makes `Self.`
+safe is the base position REFUSING to consult the value namespace about it
+(`Parser.baseNamesAValueInScope`); the cases below pin that, and the ones above pinned only the local
+named after the enclosing type, which is a different question.
 ```maxon
 function main() returns ExitCode
 	let Self = 5
@@ -804,4 +811,205 @@ end 'main'
 ```
 ```maxoncstderr
 error E2010: <fragment>:3:6: Expected 'identifier' but got 'Self'
+```
+
+<!-- test: parameter-named-Self-does-not-capture-a-static-call -->
+### A PARAMETER named `Self` does not capture `Self.` — and `Self{…}` agrees with it
+⚠ **The D9 review's finding.** `Self` reached `parseDottedPrimary`'s value-based arms as a raw token, so a
+parameter named `Self` — which D8's keyword-as-a-declared-name rule admits — was found by the scope test
+and `Self.make(41)` was read as a METHOD CALL on that parameter: *"'int' has no method named 'make'"*. The
+same body's `Self{n: v}` meant the TYPE all along, because `parsePrimary`'s `selfType` arm claims `{`
+ahead of any scope test — so one function had `Self` meaning two different things three lines apart. The
+reference bootstrap resolves both to the type and leaves the parameter merely unread (`E3012`).
+```maxon
+typealias Num = int(0 to 1000)
+
+type Gate
+	export var n as Num
+
+	export static function make(v Num) returns Gate
+		return Self{n: v}
+	end 'make'
+
+	export function twin(Self Num) returns Num
+		return Self.make(41).n + Self{n: 1}.n
+	end 'twin'
+end 'Gate'
+
+function main() returns ExitCode
+	return Gate.make(0).twin(7)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: parameter-named-Self-does-not-capture-an-enum-case -->
+### A parameter named `Self` does not capture `Self.<case>` either
+The enum-side face of the same finding, and it took a different arm: an enum case reference is not a call,
+so it fell to the FIELD-ACCESS arm and reported *"a field access on 'Self', which is declared 'int' and
+not a struct type"* for a case that is right there in the enum.
+```maxon
+typealias Num = int(0 to 100)
+
+enum Toggle
+	off
+	on
+
+	export function pick(Self Num) returns Toggle
+		return Self.on
+	end 'pick'
+end 'Toggle'
+
+function main() returns ExitCode
+	let t = Toggle.off
+	if t.pick(1) == Toggle.on 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closure-parameter-named-Self-does-not-capture-Self -->
+### A CLOSURE parameter named `Self` does not capture `Self.`
+A third door onto the same scope test — the closure's own parameter scope rather than the method's — so a
+guard placed on the method path alone would leave this one misreading.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Gate
+	export var n as Num
+
+	export static function make(v Num) returns Gate
+		return Self{n: v}
+	end 'make'
+
+	export function twin() returns Num
+		let f = function(Self Num) gives Self.make(41).n + 1
+		return f(7)
+	end 'twin'
+end 'Gate'
+
+function main() returns ExitCode
+	return Gate.make(0).twin()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: managed-payload-through-Self-under-a-Self-named-parameter -->
+### A MANAGED payload through `Self` while a parameter shadows the name
+The refcount half: the misread base built the box through a different arm, so the drop site has to be
+confirmed under the shadow too. An unbalanced refcount here is exit 101, not a wrong number.
+```maxon
+typealias Num = int(0 to 100)
+
+union Msg
+	text(s String)
+	silent
+
+	export function shout(Self Num) returns Msg
+		return Self.text("hi")
+	end 'shout'
+end 'Msg'
+
+function main() returns ExitCode
+	let m = Msg.silent
+	let n = m.shout(1)
+	return match n 'k'
+		text(s) gives s.byteLength() as ExitCode
+		silent gives 1
+	end 'k'
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: error.bare-Self-read-under-a-Self-named-parameter -->
+### A bare `Self` read is still refused when a parameter is named `Self`
+The other half of the rule, and the one that makes the parameter harmless rather than merely
+unreachable: `Self` alone is a TYPE in every expression position, so a parameter spelled that way can be
+declared and never read. The reference bootstrap refuses it too (`E3003 'Gate' is a type and cannot be
+used directly as a value`); shv2 names the token it stopped at.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Gate
+	export var n as Num
+
+	export function bad(Self Num) returns Num
+		return Self
+	end 'bad'
+end 'Gate'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:8:14: Expected '\{' but got 'newline'
+```
+
+<!-- test: enum-case-named-Self-through-Self -->
+### An enum case NAMED `Self`, referenced through `Self`
+Where D8 and D9 cross at their sharpest: `Self.Self` reads the BASE as the enclosing type and the MEMBER
+as a case whose own name is the same keyword. Two different rules about one word in three tokens. Found
+nothing; committed because only a committed case still runs, and because a review that reserved `Self` at
+`requireUnreservedName` would have silently refused this program (the bootstrap runs it, exit 42).
+```maxon
+enum Kw
+	Self
+	on
+
+	export function pick() returns Kw
+		return Self.Self
+	end 'pick'
+end 'Kw'
+
+function main() returns ExitCode
+	let k = Kw.on
+	if k.pick() == Kw.Self 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: static-method-named-Self-through-Self -->
+### A STATIC METHOD named `Self`, called through `Self`
+The call-shaped twin of the case above: the base resolves to `Gate` and the callee mangles to
+`Gate.Self`, so the member reader and the base reader disagree about the same word by design.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Gate
+	export var n as Num
+
+	export static function make(v Num) returns Gate
+		return Self{n: v}
+	end 'make'
+
+	export static function Self(v Num) returns Num
+		return v
+	end 'Self'
+
+	export function twin() returns Num
+		return Self.Self(42)
+	end 'twin'
+end 'Gate'
+
+function main() returns ExitCode
+	return Gate.make(0).twin()
+end 'main'
+```
+```exitcode
+42
 ```

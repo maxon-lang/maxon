@@ -22100,17 +22100,15 @@ export type Parser
 			return try self.parseMethodCall(func, resultUsed: resultUsed)
 		end 'methodCall'
 
-		if self.scope.contains(self.baseBindingName(self.current())) 'fieldAccess'
+		// A base that names a VALUE — a local binding, or a CAPTURED enclosing one (`level.rawValue` inside a
+		// closure, P1.5-A2b-2, which `parseFieldAccess` reads out of the env via `resolveFieldChain`'s captured
+		// arm). ONE arm and ONE predicate for the two, because they had one BODY between them: two `if`s
+		// returning the same `parseFieldAccess()` call, whose tests were also the two `methodCallsAt` spells out
+		// for the statement door. See `baseNamesAValueInScope` — it is where the shadowing rule now lives, and
+		// where `Self` is excluded from it.
+		if self.baseNamesAValueInScope(self.current()) 'valueBase'
 			return try self.parseFieldAccess()
-		end 'fieldAccess'
-
-		// A CAPTURED enclosing struct is the base (P1.5-A2b-2): `level.rawValue` inside a closure. The base is
-		// not in the closure's OWN scope (the check above), but it resolves into an enclosing capture scope, so
-		// `parseFieldAccess` (via `resolveFieldChain`'s captured arm) reads it out of the env. Asked BEFORE the
-		// type-bound fallback for the same "a value outranks a type name" reason a local base is.
-		if self.captureBinds(self.current()) 'capturedFieldAccess'
-			return try self.parseFieldAccess()
-		end 'capturedFieldAccess'
+		end 'valueBase'
 
 		// ⭐ **EVERY FORM BELOW NAMES A TYPE, AND ITS BASE IS READ THROUGH `typeBaseTokenAt` — WHICH IS WHERE
 		// `Self` BECOMES THE TYPE IT DENOTES (D9).** So `Self.off` inside `enum Toggle` takes the enum-case arm
@@ -22118,11 +22116,11 @@ export type Parser
 		// takes. There is deliberately no `Self` arm anywhere: the two spellings converge at the ONE token a
 		// type-named form reads its base from, so an arm added here serves both without knowing that.
 		//
-		// ⚠ **THE VALUE-BASED ARMS ABOVE DELIBERATELY READ THE RAW TOKEN, AND THAT ORDER IS THE RULE THAT
-		// `Self` IS A TYPE AND NEVER A VALUE.** A local binding named after the enclosing type (`let Box = 1`
-		// inside `type Box`) shadows `Box.` — that is the "a value outranks a type name" rule above — and must
-		// NOT capture `Self.`, which cannot mean a local under any spelling. Resolving the base before those
-		// arms would hand `Self.make(v)` to `parseMethodCall` on that binding.
+		// ⚠ **THE VALUE-BASED ARM ABOVE IS ASKED FIRST, AND `Self` IS THE ONE BASE IT MAY NOT CLAIM.** A local
+		// named after the enclosing type (`let Box = 1` inside `type Box`) shadows `Box.` — that is the "a value
+		// outranks a type name" rule — while `Self.` cannot mean a local under any spelling, and a parameter
+		// named `Self` is admitted by D8's keyword-as-a-declared-name rule, so the exclusion has to be stated
+		// rather than assumed. It is stated once, in `baseNamesAValueInScope`, with the measurements.
 		let baseTok = try self.typeBaseTokenAt(self.pos)
 
 		// `Color.red` and `Move.walk(Direction.east)` — an ENUM CASE reference or a UNION CONSTRUCT,
@@ -26765,6 +26763,40 @@ export type Parser
 	function baseBindingName(tok Token) returns ByteArray
 		return SelfParamName if tok.kind == TokenKind.self else tok.value
 	end 'baseBindingName'
+
+	// ⭐⭐ **DOES A DOTTED BASE NAME A VALUE IN SCOPE — a local BINDING or a closure CAPTURE?** The one
+	// answer to the "a value outranks a type name" question, and therefore the one place the shadowing
+	// rule is written. `methodCallsAt` (the STATEMENT door) and `parseDottedPrimary` (the EXPRESSION
+	// door) each used to spell these same two tests out for themselves, in the same order, with a
+	// comment on one of them asking that the other be kept in step BY HAND — one fact written twice,
+	// where a clause added to either copy alone re-points a name at a different declaration and earns
+	// no compile error anywhere.
+	//
+	// ⚠ **`Self` IS EXCLUDED, AND THAT EXCLUSION *IS* THE RULE THAT `Self` NAMES A TYPE AND NEVER A
+	// VALUE (D9 review).** It is not a shortcut for a lookup that would have missed: a declaration CAN
+	// bind the name — `function twin(Self Num)` is admitted, because a parameter's name may be spelled
+	// with a keyword (D8, `consumeNameToken`) — and the scope test would then find it and hand
+	// `Self.make(v)` to `parseMethodCall` on that parameter. Measured before this guard: `Self.make(41)`
+	// inside `twin(Self Num)` reported *"'int' has no method named 'make'"*, `Self.on` inside an `enum`
+	// reported *"a field access on 'Self', which is declared 'int' and not a struct type"*, and
+	// `Self{n: 42}` in the SAME body still meant the type — because `parsePrimary`'s `selfType` arm
+	// claims `{` ahead of any scope test. The reference bootstrap resolves every one of those to the
+	// TYPE and leaves the parameter unreadable (`E3012 unused variable: 'Self'` when nothing reads it,
+	// `E3003 'Gate' is a type and cannot be used directly as a value` when something does), so this is
+	// the oracle's rule and not a new one.
+	//
+	// ⭐ Excluded HERE rather than refused at the declaration, and that placement is the argument: the
+	// oracle ADMITS `function twin(Self Num)`, and `enum Kw { Self }` is a legal, useful case name both
+	// compilers run (`Kw.Self`). Reserving the word at `requireUnreservedName` would refuse both. What
+	// is wrong is not the declaration — it is a base position consulting the VALUE namespace about a
+	// token that cannot be in it.
+	function baseNamesAValueInScope(tok Token) returns bool
+		if tok.kind == TokenKind.selfType 'alwaysAType'
+			return false
+		end 'alwaysAType'
+
+		return self.scope.contains(self.baseBindingName(tok)) or self.captureBinds(tok)
+	end 'baseNamesAValueInScope'
 
 	// `p.x` — read field `x` out of the box `p` points at.
 	//
@@ -31496,7 +31528,7 @@ export type Parser
 		// TYPE as well — which is why it, alone, has to weigh itself against the type-based readings of
 		// this same shape (`staticCallClaimsBase`) rather than simply claiming it.
 		let baseTok = self.tokenAt(index)
-		if self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok) 'localOrCaptured'
+		if self.baseNamesAValueInScope(baseTok) 'localOrCaptured'
 			return true
 		end 'localOrCaptured'
 
