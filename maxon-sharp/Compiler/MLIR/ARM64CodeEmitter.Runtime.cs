@@ -6010,44 +6010,9 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 64, 8);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 96, 8);
 
-    // kevent(kq, changelist, 1, NULL, 0, NULL)
-    EmitGlobalLoadReg(ARM64Register.X0, "__io_kqueue_fd");
-    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 72, isAdd: true);
-    EmitMovRegImm(ARM64Register.X2, 1);
-    EmitMovRegImm(ARM64Register.X3, 0);
-    EmitMovRegImm(ARM64Register.X4, 0);
-    EmitMovRegImm(ARM64Register.X5, 0);
-    EmitCallImport("kevent");
+    EmitArmKeventAndWait(72, "maxon_net_tcp_connect");
 
-    // Set GT status = waiting
-    EmitLoadCurrentGt(ARM64Register.X9);
-    EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
-
-    // Yield: dequeue next runnable thread
-    DefineLabel("rt_ntc_try_dequeue");
-    EmitBranchLink("__gt_dequeue");
-    EmitCbnz(ARM64Register.X0, "rt_ntc_has_next");
-    EmitBranchLink("__gt_process_pending_waiter");
-    EmitBranchLink("__io_check_completions");
-    EmitBranchLink("__io_poll_kqueue");
-    EmitBranchLink("__gt_timer_check");
-    // Check if our IO completed (main thread: poll_kqueue sets status=ready without enqueue)
-    EmitLoadCurrentGt(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
-    EmitCmpImm(ARM64Register.X0, GtStatusWaiting);
-    EmitBranchCond(ARM64ConditionCode.Ne, "rt_ntc_resumed");
-    EmitBranch("rt_ntc_try_dequeue");
-
-    DefineLabel("rt_ntc_has_next");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 104, 8); // save next GT
-    EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
-    EmitLoadCurrentGt(ARM64Register.X0);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 104, 8);
-    EmitLoadP(ARM64Register.X9);
-    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
-    EmitBranchLink("__gt_context_switch");
+    EmitGtParkForIoCompletion("rt_ntc", 104, "rt_ntc_resumed");
 
     // Resumed: io_result_val set by __io_poll_kqueue
     DefineLabel("rt_ntc_resumed");
@@ -7240,6 +7205,147 @@ public partial class ARM64CodeEmitter {
   }
 
   /// <summary>
+  /// Publish status=waiting, arm the one-shot kqueue registration built at [x29+keventSlot],
+  /// and verify the kernel accepted it. Shared by every kqueue submit site; siteName names the
+  /// submitting runtime function and keeps this helper's labels and panic text unique.
+  ///
+  /// THE ORDER IS LOAD-BEARING: the status store MUST precede the arm. EVFILT_READ/WRITE are
+  /// level-triggered and the kqueue is process-wide, so on a pipe that already holds data the
+  /// event is deliverable the instant kevent() publishes the registration and ANY other M
+  /// polling that kqueue can reap it. The completer stores status=ready, and — finding
+  /// ioYielded==0, i.e. "still running, will self-detect" (__io_poll_kqueue guard (c)) —
+  /// deliberately does NOT enqueue, having also consumed the EV_ONESHOT registration and freed
+  /// the ctx. Marking AFTER the arm therefore overwrites a status=ready that was already
+  /// published: the pre-park re-check below reads `waiting`, the GT parks with no registration,
+  /// no run-queue entry and no future event, and the wakeup is lost forever. x86 has always
+  /// marked before it armed (EmitIoSubmitOverlappedCore, OPEN #66) and so does __io_submit_sync
+  /// one screen up; the kqueue sites were the outlier.
+  ///
+  /// The DMB is the release half of that publication. arm64 is weakly ordered, so without it
+  /// the status store may reach other Ms only after they have observed the registration — the
+  /// same lost wakeup, with the instructions already in the right order. It pairs with the
+  /// StoreLoad fence __io_poll_kqueue takes between its status store and its ioYielded load.
+  /// </summary>
+  private void EmitArmKeventAndWait(int keventSlot, string siteName) {
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    EmitDmbIsh();
+
+    // kevent(kq, changelist, nchanges=1, eventlist=NULL, nevents=0, timeout=NULL)
+    EmitGlobalLoadReg(ARM64Register.X0, "__io_kqueue_fd");
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, keventSlot, isAdd: true);
+    EmitMovRegImm(ARM64Register.X2, 1);
+    EmitMovRegImm(ARM64Register.X3, 0);
+    EmitMovRegImm(ARM64Register.X4, 0);
+    EmitMovRegImm(ARM64Register.X5, 0);
+    EmitCallImport("kevent");
+
+    // A registration the kernel REFUSED parks this GT on an event that can never be delivered,
+    // with exactly the signature of the lost wakeup above — a silently hung worker. Unchecked,
+    // one wedge would have two indistinguishable causes and every future investigation would
+    // have to rule this one out by reading. Say so instead.
+    var armedLabel = $"{siteName}_kevent_armed";
+    var msgLabel = $"__io_panic_msg_{siteName}_kevent";
+    DefineSymdata(msgLabel, System.Text.Encoding.UTF8.GetBytes(
+      $"PANIC: kevent(EV_ADD) rejected the registration in {siteName}\n\0"));
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Ge, armedLabel);
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, msgLabel);
+    EmitBranchLink("mrt_panic"); // never returns
+
+    DefineLabel(armedLabel);
+  }
+
+  /// <summary>
+  /// Branch to target when the current GT's I/O has completed, i.e. when a completer has moved
+  /// its status off `waiting`. Every point in the park handshake that must not commit to the
+  /// next step without re-asking asks with this. X0 and X9 are clobbered.
+  /// </summary>
+  private void EmitBranchIfIoCompleted(string target) {
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    EmitCmpImm(ARM64Register.X0, GtStatusWaiting);
+    EmitBranchCond(ARM64ConditionCode.Ne, target);
+  }
+
+  /// <summary>
+  /// Park the current GT until the kqueue registration it just armed completes, running other
+  /// runnable GTs meanwhile. nextGtSlot is a caller-owned 8-byte stack slot used to home the
+  /// successor GT across calls. Control leaves via resumedLabel, which the caller MUST define
+  /// immediately after this helper — the woke-while-parking path falls through into it.
+  ///
+  /// Shared by __io_submit_read/write and maxon_net_tcp_connect. They carried two copies of
+  /// this handshake and only one of them had the pre-park re-check, which is precisely the
+  /// drift the handshake exists to prevent; one copy is the fix for that.
+  /// </summary>
+  private void EmitGtParkForIoCompletion(string labelPrefix, int nextGtSlot, string resumedLabel) {
+    DefineLabel($"{labelPrefix}_try_dequeue");
+    EmitBranchLink("__gt_dequeue");
+    EmitCbnz(ARM64Register.X0, $"{labelPrefix}_has_next");
+
+    // Nothing runnable: drive the scheduler and the I/O engine inline on our own stack, then
+    // self-detect. A completer that reaped our event while we were still running left the
+    // wakeup for us to find right here (__io_poll_kqueue guard (c)), and the main OS thread —
+    // which is never enqueued at all (guard (a)) — only ever resumes this way.
+    EmitBranchLink("__gt_process_pending_waiter");
+    EmitBranchLink("__io_check_completions");
+    EmitBranchLink("__io_poll_kqueue");
+    EmitBranchLink("__gt_timer_check");
+    EmitBranchIfIoCompleted(resumedLabel);
+    EmitBranch($"{labelPrefix}_try_dequeue");
+
+    DefineLabel($"{labelPrefix}_has_next");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, nextGtSlot, 8);
+
+    // Re-check OUR OWN status before committing to park. A completer on another M can have
+    // reaped our kqueue event any time after the kevent registration above; finding us still
+    // running (ioYielded==0) it deliberately does NOT enqueue us and leaves us to self-detect
+    // (see __io_poll_kqueue's guard (c)). Parking without this check would strand us: status
+    // ready, on no run queue, with the event already consumed and nobody left to wake us.
+    //
+    // ⚠ This check covers the reap window that OPENS AT THE ARM and closes here — everything
+    // from kevent() through __gt_dequeue. It is NOT a Dekker pair with the completer's
+    // ioYielded load, and the comment that used to claim it was is wrong: a Dekker pair needs
+    // each side to store ITS flag before loading the other's, and our flag store (ioYielded=1,
+    // inside __gt_context_switch) happens AFTER this load, not before. The interleaving "we
+    // load status=waiting → completer stores ready and loads ioYielded==0 and skips → we set
+    // ioYielded=1 and park" therefore remains admissible even on a sequentially consistent
+    // machine. It spans only the ~25 instructions between this load and that store, versus a
+    // syscall plus a dequeue before the reorder, but closing it needs an atomic claim of the
+    // wakeup (a CAS handoff both sides perform), which is a protocol change, not an ordering
+    // one.
+    EmitBranchIfIoCompleted($"{labelPrefix}_woke_while_parking");
+
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, nextGtSlot, 8);
+    EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, nextGtSlot, 8);
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
+    EmitBranchLink("__gt_context_switch");
+
+    // Switched back in — but "resumed" does not imply "completed", so re-check rather than
+    // assume. A worker GT only ever gets here because a completer enqueued it, i.e. because
+    // its I/O finished; the MAIN OS THREAD does not. It is P0's scheduler GT, so every idle
+    // worker GT switches back to &P.mainThread as a matter of course, and this used to fall
+    // straight through to the read() with the fd not ready. __io_submit_sync's own main-thread
+    // arm sidesteps this by never parking the main thread at all; re-checking here covers the
+    // same ground for every caller and costs four instructions on the resume path.
+    EmitBranchIfIoCompleted(resumedLabel);
+    EmitBranch($"{labelPrefix}_try_dequeue");
+
+    // Our I/O completed while we were picking a successor, so we must NOT park. Hand the GT we
+    // dequeued back to the run queue — another M can have it — and go straight to the I/O.
+    // Its status is untouched here (the running store above is on the parking path only), so
+    // it goes back exactly as __gt_dequeue produced it.
+    DefineLabel($"{labelPrefix}_woke_while_parking");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, nextGtSlot, 8);
+    EmitBranchLink("__gt_enqueue");
+  }
+
+  /// <summary>
   /// __io_submit_read(fd_x0, buf_x1, len_x2): Register EVFILT_READ with kqueue, yield GT.
   /// When kqueue signals readiness, __io_check_completions performs the actual read()
   /// and resumes the GT.
@@ -7313,70 +7419,9 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // ctx
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 80, 8); // kevent+24 = udata
 
-    // kevent(kq, changelist, nchanges=1, eventlist=NULL, nevents=0, timeout=NULL)
-    EmitGlobalLoadReg(ARM64Register.X0, "__io_kqueue_fd");
-    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 56, isAdd: true); // changelist
-    EmitMovRegImm(ARM64Register.X2, 1); // nchanges
-    EmitMovRegImm(ARM64Register.X3, 0); // eventlist = NULL
-    EmitMovRegImm(ARM64Register.X4, 0); // nevents = 0
-    EmitMovRegImm(ARM64Register.X5, 0); // timeout = NULL
-    EmitCallImport("kevent");
+    EmitArmKeventAndWait(56, functionName);
 
-    // Set current GT status = waiting
-    EmitLoadCurrentGt(ARM64Register.X9);
-    EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
-
-    // Yield: try to dequeue next runnable thread
-    DefineLabel($"{functionName}_try_dequeue");
-    EmitBranchLink("__gt_dequeue");
-    EmitCbnz(ARM64Register.X0, $"{functionName}_has_next");
-
-    // No runnable thread: process pending I/O inline, then retry
-    EmitBranchLink("__gt_process_pending_waiter");
-    EmitBranchLink("__io_check_completions");
-    EmitBranchLink("__io_poll_kqueue");
-    EmitBranchLink("__gt_timer_check");
-    // Check if our IO completed (poll_kqueue sets status=ready for main thread without enqueue)
-    EmitLoadCurrentGt(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
-    EmitCmpImm(ARM64Register.X0, GtStatusWaiting);
-    EmitBranchCond(ARM64ConditionCode.Ne, $"{functionName}_resumed");
-    EmitBranch($"{functionName}_try_dequeue");
-
-    DefineLabel($"{functionName}_has_next");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // save next
-
-    // Re-check OUR OWN status before committing to park. A completer on another M can have
-    // reaped our kqueue event any time after the kevent registration above; finding us still
-    // running (ioYielded==0) it deliberately does NOT enqueue us and leaves us to self-detect
-    // (see __io_poll_kqueue's guard (c)). Parking without this check would strand us: status
-    // ready, on no run queue, with the event already consumed and nobody left to wake us.
-    // This load is the acquire half of that Dekker handshake — the completer fences between
-    // its status store and its ioYielded load, and __gt_context_switch fences between saving
-    // our context and setting ioYielded=1 — so at most one side can miss the other.
-    EmitLoadCurrentGt(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
-    EmitCmpImm(ARM64Register.X0, GtStatusWaiting);
-    EmitBranchCond(ARM64ConditionCode.Ne, $"{functionName}_woke_while_parking");
-
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48, 8); // next
-    EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
-    EmitLoadCurrentGt(ARM64Register.X0);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 48, 8);
-    EmitLoadP(ARM64Register.X9);
-    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
-    EmitBranchLink("__gt_context_switch");
-    EmitBranch($"{functionName}_resumed");
-
-    // Our I/O completed while we were picking a successor, so we must NOT park. Hand the GT we
-    // dequeued back to the run queue — another M can have it — and go straight to the read.
-    // Its status is untouched here (the running store above is on the parking path only), so
-    // it goes back exactly as __gt_dequeue produced it.
-    DefineLabel($"{functionName}_woke_while_parking");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48, 8); // next
-    EmitBranchLink("__gt_enqueue");
+    EmitGtParkForIoCompletion(functionName, 48, $"{functionName}_resumed");
 
     // Resumed after kqueue notification (via context switch or direct)
     DefineLabel($"{functionName}_resumed");
