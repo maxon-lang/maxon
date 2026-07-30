@@ -1,12 +1,21 @@
-// Test: out-of-bounds-set
+// Test: array-set-is-still-bounded-by-the-live-length
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
-	try mm.setLength(1) otherwise return 2
-	try mm.set(99, value: 42) otherwise return 0
+	var arr = IntArray.create()
+	arr.push(1)
+	arr.push(2)
+	if arr.capacity() < 4 'needsASlotPastTheLength'
+		return 1
+	end 'needsASlotPastTheLength'
+	try arr.set(2, value: 3) otherwise 'pastLength'
+		return 42
+	end 'pastLength'
 	return 5
 end 'main'
 ---
-ExitCode: 0
+ExitCode: 42
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -19,30 +28,24 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 2
-    arm64.movImm x1, 8
-    arm64.bl __arr_mem_create
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
     arm64.movRegReg x19, x0
-    arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.movImm x0, 1
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  tryok:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x19
-    arm64.bl __arr_set_length
-    arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.movImm x20, 2
+    arm64.bl __arr_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_capacity
+    arm64.cmp x0, 4
+    arm64.cset x0, lt
+    arm64.cbnz x0, needsASlotPastTheLength
+    arm64.b ifcont
+  needsASlotPastTheLength:
+    arm64.movImm x20, 1
     arm64.movRegReg x0, x19
     arm64.bl __arr_decref
     arm64.movRegReg x0, x20
@@ -50,17 +53,17 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  tryok:
-    arm64.movImm x1, 99
-    arm64.movImm x2, 42
+  ifcont:
+    arm64.movImm x1, 2
+    arm64.movImm x2, 3
     arm64.movRegReg x0, x19
-    arm64.bl __arr_mem_set
+    arm64.bl __arr_set
     arm64.cmp x9, 0
     arm64.cset x0, ne
     arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
-    arm64.movImm x20, 0
+    arm64.movImm x20, 42
     arm64.movRegReg x0, x19
     arm64.bl __arr_decref
     arm64.movRegReg x0, x20

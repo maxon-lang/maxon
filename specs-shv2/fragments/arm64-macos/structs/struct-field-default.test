@@ -1,0 +1,100 @@
+// Test: struct-field-default
+type Counter
+	export var value = 0
+	export var step = 1
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	static function create(value CounterValue, step CounterStep) returns Self
+		return Self{value: value, step: step}
+	end 'create'
+end 'Counter'
+
+typealias CounterValue = int(0 to u64.max)
+typealias CounterStep = int(0 to u64.max)
+
+function main() returns ExitCode
+	let c1 = Counter.create()
+	let c2 = Counter.create(40, step: 1)
+	let c3 = Counter.create(10, step: 2)
+	return c1.value + c2.value + c3.step
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Counter.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Counter.create#CounterValue#CounterStep {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Counter.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 40
+    arm64.movImm x1, 1
+    arm64.bl Counter.create#CounterValue#CounterStep
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 10
+    arm64.movImm x1, 2
+    arm64.bl Counter.create#CounterValue#CounterStep
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.add x1, x1, x2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.add x21, x1, x2
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

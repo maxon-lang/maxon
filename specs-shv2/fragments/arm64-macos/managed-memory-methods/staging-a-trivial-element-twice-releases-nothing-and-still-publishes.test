@@ -1,24 +1,21 @@
-// Test: setlength-then-get
+// Test: staging-a-trivial-element-twice-releases-nothing-and-still-publishes
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
-	try mm.setLength(3) otherwise return 2
-	try mm.set(0, value: 100) otherwise return 3
-	try mm.set(1, value: 200) otherwise return 3
-	try mm.set(2, value: 300) otherwise return 3
-	if mm.length() != 3 'badLen'
-		return 4
-	end 'badLen'
-	if mm.capacity() < 8 'badCap'
-		return 5
-	end 'badCap'
-	let v = try mm.get(2) otherwise return 6
-	if v != 300 'badVal'
-		return 7
-	end 'badVal'
-	return 0
+	var total = 0
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(1) otherwise return 2
+	try mm.set(1, value: 5) otherwise return 3
+	try mm.set(1, value: 6) otherwise return 4
+	try mm.set(1, value: 7) otherwise return 5
+	try mm.setLength(2) otherwise return 6
+	total = total + (try mm.get(1) otherwise return 7)
+	try mm.setLength(1) otherwise return 8
+	try mm.set(1, value: 30) otherwise return 9
+	try mm.setLength(2) otherwise return 10
+	total = total + (try mm.get(1) otherwise return 11)
+	return total as ExitCode
 end 'main'
 ---
-ExitCode: 0
+ExitCode: 37
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -31,7 +28,7 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 8
+    arm64.movImm x0, 4
     arm64.movImm x1, 8
     arm64.bl __arr_mem_create
     arm64.movRegReg x19, x0
@@ -46,7 +43,7 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   tryok:
-    arm64.movImm x1, 3
+    arm64.movImm x1, 1
     arm64.movRegReg x0, x19
     arm64.bl __arr_set_length
     arm64.cmp x9, 0
@@ -63,8 +60,8 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   tryok:
-    arm64.movImm x1, 0
-    arm64.movImm x2, 100
+    arm64.movImm x1, 1
+    arm64.movImm x2, 5
     arm64.movRegReg x0, x19
     arm64.bl __arr_mem_set
     arm64.cmp x9, 0
@@ -82,7 +79,7 @@ func @main {
     arm64.ret
   tryok:
     arm64.movImm x1, 1
-    arm64.movImm x2, 200
+    arm64.movImm x2, 6
     arm64.movRegReg x0, x19
     arm64.bl __arr_mem_set
     arm64.cmp x9, 0
@@ -90,40 +87,6 @@ func @main {
     arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
-    arm64.movImm x20, 3
-    arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  tryok:
-    arm64.movImm x1, 2
-    arm64.movImm x2, 300
-    arm64.movRegReg x0, x19
-    arm64.bl __arr_mem_set
-    arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.movImm x20, 3
-    arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  tryok:
-    arm64.movRegReg x0, x19
-    arm64.bl __arr_count
-    arm64.cmp x0, 3
-    arm64.cset x0, ne
-    arm64.cbnz x0, badLen
-    arm64.b ifcont
-  badLen:
     arm64.movImm x20, 4
     arm64.movRegReg x0, x19
     arm64.bl __arr_decref
@@ -132,14 +95,16 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  tryok:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 7
     arm64.movRegReg x0, x19
-    arm64.bl __arr_capacity
-    arm64.cmp x0, 8
-    arm64.cset x0, lt
-    arm64.cbnz x0, badCap
-    arm64.b ifcont
-  badCap:
+    arm64.bl __arr_mem_set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
     arm64.movImm x20, 5
     arm64.movRegReg x0, x19
     arm64.bl __arr_decref
@@ -148,13 +113,13 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  tryok:
     arm64.movImm x1, 2
     arm64.movRegReg x0, x19
-    arm64.bl __arr_get
+    arm64.bl __arr_set_length
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
     arm64.movImm x20, 6
@@ -166,11 +131,14 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   tryok:
-    arm64.cmp x0, 300
-    arm64.cset x0, ne
-    arm64.cbnz x0, badVal
-    arm64.b ifcont
-  badVal:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
     arm64.movImm x20, 7
     arm64.movRegReg x0, x19
     arm64.bl __arr_decref
@@ -179,8 +147,78 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
-    arm64.movImm x20, 0
+  tryok:
+    arm64.add x20, x0, 0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_set_length
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 8
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 30
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_mem_set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 9
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_set_length
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 10
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 11
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.add x20, x20, x0
     arm64.movRegReg x0, x19
     arm64.bl __arr_decref
     arm64.movRegReg x0, x20

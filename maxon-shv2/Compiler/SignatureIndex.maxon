@@ -5678,6 +5678,17 @@ export type ProgramSignatures
 		return try args.get(position) otherwise panic("ProgramSignatures.substitutedInstanceArg: type-parameter position {position} out of range for instance {id}'s {args.count()} argument(s) — arity was checked at instantiation (E2056)")
 	end 'substitutedInstanceArg'
 
+	// ⭐ **IS INSTANCE `id`'s ARGUMENT AT `position` A MANAGED TYPE?** — asked here rather than by the caller,
+	// for the reason T1 exists: `substitutedInstanceArg` returns a type in THIS INDEX's interner, so the only
+	// table that can resolve its `named` id is `self.typeNames`, and that table is private. A caller doing the
+	// two steps itself must either be handed the interner or adopt the type into its own first — and adopting
+	// it is precisely the mistake, because the id then means whatever name happens to sit at that number in
+	// the OTHER table. Keeping both steps inside makes the pairing structural instead of conventional, which
+	// is the same move `instanceArgAggregateName` above already makes.
+	export function instanceArgIsManaged(id GenericInstanceId, position TypeParamId) returns bool
+		return self.typeIsManaged(self.substitutedInstanceArg(id, position: position), from: self.typeNames)
+	end 'instanceArgIsManaged'
+
 	// The number of fields instance `id` carries — its base struct's field count.
 	export function genericInstanceFieldCount(id GenericInstanceId) returns FieldIndex
 		return self.baseLayoutOf(id).fieldCount()

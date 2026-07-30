@@ -1,0 +1,34 @@
+// Test: name-disambiguation-preserved
+typealias Integer = int(i64.min to i64.max)
+
+function slice(start Integer, endIndex Integer) returns Integer
+	return endIndex - start
+end 'slice'
+
+function slice(start Integer, length Integer) returns Integer
+	return start + length
+end 'slice'
+
+function main() returns ExitCode
+	return slice(10, length: 32)
+end 'main'
+---
+ExitCode: 42
+---
+func @slice#start#length {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 10
+    arm64.movImm x1, 32
+    arm64.bl slice#start#length
+    arm64.epilogue 16
+    arm64.ret
+}

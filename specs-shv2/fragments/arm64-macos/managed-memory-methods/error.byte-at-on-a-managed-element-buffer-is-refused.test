@@ -1,0 +1,12 @@
+// Test: error.byte-at-on-a-managed-element-buffer-is-refused
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("a published string, long enough to require an allocation")
+	let b = try xs.managed.byteAt(0) otherwise return 1
+	return b as ExitCode
+end 'main'
+---
+CompilerError:
+error E3110: <fragment>:7:25: 'managed.byteAt' cannot address the bytes of an element of 'String': a managed element is stored as a POINTER, so those bytes are a heap ADDRESS, not data — reading them discloses one and writing them corrupts it. Raw byte access is for a buffer of trivial elements

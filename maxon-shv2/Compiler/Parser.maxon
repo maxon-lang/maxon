@@ -6718,7 +6718,7 @@ export type Parser
 	function declaresTransferableParam(paramTypes MaxonTypeArray, takesReceiver bool) returns bool
 		for i in firstUserParamIndex(takesReceiver) upto paramTypes.count() 'eachParam'
 			let paramType = try paramTypes.get(i) otherwise panic("declaresTransferableParam: paramTypes.get OOB at {i} inside its own count()")
-			if self.signatures.typeIsManaged(paramType) or maxonTypeTag(paramType) == ValueTypeTag.typeParameter 'transferable'
+			if self.signatures.typeIsManaged(paramType, from: self.artifact.typeNames) or maxonTypeTag(paramType) == ValueTypeTag.typeParameter 'transferable'
 				return true
 			end 'transferable'
 		end 'eachParam'
@@ -30553,7 +30553,7 @@ export type Parser
 		// `false`, the retype fired on a managed type anyway, and `over(b.get())` chose an `over(x Integer)`
 		// overload that then did arithmetic on the payload word (exit 25 where 7 was correct). This is
 		// OPEN #56's interner mismatch — the reason `substitutedInstanceArg` and `adoptType` are two steps.
-		if self.signatures.typeIsManaged(self.instanceSubstitutedIndexType(receiver, opaque: inner)) 'managedConcrete'
+		if self.signatures.instanceArgIsManaged(self.valueNameId(receiver), position: typeNameIdOf(inner)) 'managedConcrete'
 			return
 		end 'managedConcrete'
 

@@ -1,0 +1,45 @@
+// Test: bool-type-disambiguation
+typealias Integer = int(i64.min to i64.max)
+
+function check(value Integer) returns Integer
+	return value
+end 'check'
+
+function check(value bool) returns Integer
+	if value 'branch'
+		return 1
+	end 'branch' else 'other'
+		return 0
+	end 'other'
+end 'check'
+
+function main() returns ExitCode
+	return check(true)
+end 'main'
+---
+ExitCode: 1
+---
+func @check#bool {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, branch
+    arm64.b ifelse
+  branch:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.bl check#bool
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,33 @@
+// Test: basic-type-disambiguation-string
+typealias Integer = int(i64.min to i64.max)
+
+function process(value Integer) returns Integer
+	return value * 2
+end 'process'
+
+function process(value String) returns Integer
+	return value.count()
+end 'process'
+
+function main() returns ExitCode
+	return process("hello world hello world hello world hello worl!")
+end 'main'
+---
+ExitCode: 47
+---
+func @process#String {
+  entry:
+    arm64.prologue 16
+    arm64.bl __gr_count
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_1
+    arm64.bl process#String
+    arm64.epilogue 16
+    arm64.ret
+}
