@@ -1357,31 +1357,39 @@ let ParametersAreMutable = false
 // (`_` means discard), spelled once.
 let DiscardBindingName = b"_"
 
-// Join `items` with `", "` — the separator every list a match diagnostic spells out uses (E2026's
-// uncovered-case list, E3081's discard list). Spelled once, because two messages that render a list of
-// the same kind must not come to punctuate it differently. Cold: only a rejected program reaches it.
-function joinCommaSeparated(items StringArray) returns String
-	var joined = ""
-	for i in 0 upto items.count() 'each'
-		if i > 0 'separator'
-			joined = "{joined}, "
-		end 'separator'
-		joined = "{joined}{try items.get(i) otherwise panic("joinCommaSeparated: items.get OOB at {i} — the loop bound is the array's own count")}"
-	end 'each'
-	return joined
-end 'joinCommaSeparated'
+// Add `item` to a `", "`-separated list — the separator every list a match diagnostic spells out uses
+// (E2026's uncovered-case list, E3081's discard list), spelled ONCE so two messages rendering a list of
+// the same kind cannot come to punctuate it differently.
+//
+// ⚠ **IT ACCUMULATES A STRING RATHER THAN JOINING AN ARRAY, AND THAT IS A MEASURED CONSTRAINT, not a
+// style choice.** `checkEnumExhaustive` calls this from the loop it walks on EVERY enum match, not only
+// on a rejected one, so a `StringArray` to join would be one allocation per enum match in the program:
+// measured on the scale ladder at **+20 allocations at rung 0 doubling to +640 at rung 5** — linear in
+// program size, for a list only a refused program ever renders. This way an exhaustive match allocates
+// nothing at all here.
+//
+// An empty `list` means "nothing appended yet" EXACTLY, rather than approximately: every item either
+// site can pass is a non-empty token (an enum case name is an identifier, the discard is `_`), so no
+// parallel `isFirst` flag is needed to tell the first append from a later one.
+function appendCommaSeparated(list String, item String) returns String
+	if list.isEmpty() 'firstItem'
+		return item
+	end 'firstItem'
+
+	return "{list}, {item}"
+end 'appendCommaSeparated'
 
 // An all-discard binding list spelled back as the user wrote it — `_`, `_, _`, … — for E3081's message
 // ("use 'two' instead of 'two(_, _)'"). Built from the COUNT rather than from the bindings themselves
 // because every one of them is the same token by definition of the diagnostic, and it reads the
 // discard's own spelling so a language that renamed `_` renames the message with it.
 function discardBindingList(count ElementCount) returns String
-	var slots = StringArray.create()
+	var list = ""
 	// The index is not read — every slot renders the same token — so the loop variable is the discard.
 	for _ in 0 upto count 'eachSlot'
-		slots.push(String.from(DiscardBindingName))
+		list = appendCommaSeparated(list, item: String.from(DiscardBindingName))
 	end 'eachSlot'
-	return joinCommaSeparated(slots)
+	return list
 end 'discardBindingList'
 
 // How many `.field` HOPS a token-level field-chain walk must find (`Parser.fieldChainEndAfter`). A
@@ -16967,19 +16975,19 @@ export type Parser
 	// `missing:` list, positioned at the closing `end` — the enum twin of the scalar exhaustiveness
 	// gate, and the mechanism that makes adding a case force every match site to handle it.
 	function checkEnumExhaustive(layout EnumLayout, covered BoolArray) throws ParseError
-		var missing = StringArray.create()
+		var missing = ""
 		for i in 0 upto layout.caseCount() 'eachCase'
 			let isCovered = try covered.get(i) otherwise panic("checkEnumExhaustive: covered.get OOB at {i} — the bitmap is sized to the enum's case count")
 			if not isCovered 'uncovered'
-				missing.push(String.from(layout.caseNameAt(i)))
+				missing = appendCommaSeparated(missing, item: String.from(layout.caseNameAt(i)))
 			end 'uncovered'
 		end 'eachCase'
 
-		// The list IS the flag — an exhaustive match leaves it empty, so there is no parallel `hasMissing`
-		// bool to keep in step with it.
-		if missing.count() > 0 'incomplete'
+		// The list IS the flag — a case name is never empty, so an exhaustive match leaves it empty and
+		// there is no parallel `hasMissing` bool to keep in step with it.
+		if not missing.isEmpty() 'incomplete'
 			let endTok = self.current()
-			throw ParseError.enumMatchNotExhaustive(layout.kindWord(), typeName: String.from(layout.name), missing: joinCommaSeparated(missing), line: endTok.line, column: endTok.column)
+			throw ParseError.enumMatchNotExhaustive(layout.kindWord(), typeName: String.from(layout.name), missing: missing, line: endTok.line, column: endTok.column)
 		end 'incomplete'
 	end 'checkEnumExhaustive'
 
