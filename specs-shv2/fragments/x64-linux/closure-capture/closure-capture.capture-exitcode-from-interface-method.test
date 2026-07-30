@@ -1,0 +1,162 @@
+// Test: closure-capture.capture-exitcode-from-interface-method
+typealias Integer = int(0 to u64.max)
+
+interface Coded
+	function code() returns ExitCode
+end 'Coded'
+
+type Box implements Coded
+	let n as Integer
+
+	function code() returns ExitCode
+		return n
+	end 'code'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Wrap uses T where T is Coded
+	let item as T
+
+	function run() returns ExitCode
+		let v = self.item.code()
+		let f = function() gives v
+		return f()
+	end 'run'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Wrap'
+
+typealias BoxWrap = Wrap with Box
+
+function main() returns ExitCode
+	let w = BoxWrap.create(Box.create(9))
+	return w.run()
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Box.code {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Wrap.run {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callMem [rbx + 24]
+    x64.movRegReg rbx, r8
+    x64.leaRegFunc r12, [rip + Wrap.run$closure_0]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.movRegReg rcx, r13
+    x64.callReg r12
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Wrap.run$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Wrap.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 9
+    x64.callDirect Box.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect Wrap.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.leaRegRdata rdx, [rip + __witness_Box.Coded]
+    x64.movRegReg rcx, r12
+    x64.callDirect Wrap.run
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Wrap_Box
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

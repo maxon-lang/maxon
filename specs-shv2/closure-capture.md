@@ -604,3 +604,123 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: closure-capture.capture-exitcode-from-alias-call -->
+The result of an INDIRECT call whose function alias returns `ExitCode`, captured into a closure. This
+is the storage half of the width claim `first-class-function.alias-returns-exitcode` pins: once the
+alias's return is genuinely `MaxonType.exitCode`, the call's SSA result is `exitCode`-tagged, and an
+`exitCode` lowers to `StdType.u32` — for which `accessWidthFor` has no memory-access form and panics on
+every backend. An env slot is `EnvSlotBytes` wide by construction, so a scalar capture owns a whole
+machine word regardless of its declared width; `envSlotStorageType` is the one door the store and the
+read both ask, and it gives an `exitCode` capture that word. Zero-extension is unambiguous because the
+value is unsigned — the same reason `accessWidthFor` already admits `u8`. Returns `9`.
+```maxon
+typealias IntThunk = function() returns ExitCode
+
+function nine() returns ExitCode
+	return 9
+end 'nine'
+
+function useIt(t IntThunk) returns ExitCode
+	let v = t()
+	let f = function() gives v
+	return f()
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(nine)
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: closure-capture.capture-exitcode-from-interface-method -->
+The PRE-EXISTING twin of the case above, and the reason the fix belongs at the env slot rather than at
+either producing door. `Parser.interfaceReturnMaxonType` has minted `exitCode`-tagged call results
+since P1.7a, so an interface method declared `returns ExitCode` whose result is captured hit the same
+`accessWidthFor` panic on every target long before a function alias could produce one — it simply had
+no committed case. Two entrances, one sink: fixing the sink closes both, and fixing either door would
+have left the other reachable. Returns `9`.
+```maxon
+typealias Integer = int(0 to u64.max)
+
+interface Coded
+	function code() returns ExitCode
+end 'Coded'
+
+type Box implements Coded
+	let n as Integer
+
+	function code() returns ExitCode
+		return n
+	end 'code'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Wrap uses T where T is Coded
+	let item as T
+
+	function run() returns ExitCode
+		let v = self.item.code()
+		let f = function() gives v
+		return f()
+	end 'run'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Wrap'
+
+typealias BoxWrap = Wrap with Box
+
+function main() returns ExitCode
+	let w = BoxWrap.create(Box.create(9))
+	return w.run()
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: closure-capture.capture-exitcode-wide-value -->
+The WIDTH half of the two cases above, and the reason they are not enough on their own. Both of them
+carry the value `9`, which fits in a single byte — so they pass unchanged even if `envSlotStorageType`
+hands the slot a 1-byte `boolean` instead of the machine word, on every target, clobbering nothing.
+They pin THAT the capture works, not the width it works at. This one carries `100000` through the same
+env slot and subtracts `99991` back down to an exit code, so the assertion is load-bearing without
+needing `print` (which is Beyond on wasm): truncate the slot to a byte and the captured value becomes
+`100000 & 0xFF = 160`, which does not come back to `9`. **Verified by sabotage, and the DIFFERENCE is the point.** Force the slot
+to one byte: this case fails on its VALUE (`expected 9, got 4294867465`), which is behaviour and needs
+nothing but the exit code. The other two fail only as `codegen changed — golden fragment mismatch`, which
+is a real catch but a different one — it needs their fragments to already exist, so it would not have
+caught the width at the moment they were authored, and it says "something moved" rather than "the value
+is wrong".
+⚠ `100000` is deliberately above the byte range and below 2^31, which keeps this case pinning ONE fact.
+An `ExitCode` above 2^31 used to read back SIGNED on wasm and unsigned on x64; W1's own review found and
+fixed that, and it is re-measured here rather than assumed (`3000000009` prints identically on both
+targets today). Pinning the width at that boundary would tie this assertion to the sign fix as well, so
+a case that failed would not say which of the two had regressed.
+```maxon
+typealias IntThunk = function() returns ExitCode
+
+function big() returns ExitCode
+	return 100000
+end 'big'
+
+function useIt(t IntThunk) returns ExitCode
+	let v = t()
+	let f = function() gives v
+	return f() - 99991
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(big)
+end 'main'
+```
+```exitcode
+9
+```

@@ -27612,7 +27612,7 @@ export type Parser
 		// width and read at another corrupts the environment silently.
 		let captureType = self.resolveFloatAliasType(binding.varType)
 		let slot = self.captureSlotFor(tok.value, enclosingValue: binding.boundValue, captureType: captureType)
-		return self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.fieldStorageType(captureType), range: SourceRange.ofToken(tok))
+		return self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.envSlotStorageType(captureType), range: SourceRange.ofToken(tok))
 	end 'emitCaptureRead'
 
 	// The env slot for `name`, appending a fresh one (recording the enclosing value + type to store) on first
@@ -28179,13 +28179,49 @@ export type Parser
 			// The WIDTH comes from `fieldStorageType` and the OFFSET from `envSlotOffset`, because
 			// `emitCaptureRead` reads the slot back through those same two — and `capType` is the
 			// SOURCE type it recorded, which for a ranged alias is `named` and has no width of its own.
-			self.emitIndirectStore(env, offset: envSlotOffset(i), value: capValue, storageType: self.fieldStorageType(capType), range: range)
+			self.emitIndirectStore(env, offset: envSlotOffset(i), value: capValue, storageType: self.envSlotStorageType(capType), range: range)
 		end 'storeEach'
 
 		self.markValueOwnsHeap(env)
 		self.ownedBindings.push(VarInfo.createValueBinding(EmptySourceText, varType: MaxonType.integer, mutable: false, boundValue: env))
 		self.markCapturingClosure(closureValue, env: env)
 	end 'buildClosureEnv'
+
+	// ⭐ **THE WIDTH OF ONE ENV SLOT — `fieldStorageType`, except that an `exitCode` capture occupies a FULL
+	// MACHINE WORD.** The one door for the STORE (`buildClosureEnv`) and the READ (`emitCaptureRead`); they
+	// address the same slot, so a second spelling is a silent environment corruption.
+	//
+	// An env slot is `EnvSlotBytes` wide BY CONSTRUCTION — `envSlotOffset` strides by it — so unlike a struct
+	// field there is no packing to respect: a scalar capture has a whole word to itself whatever its declared
+	// width. `exitCode` is the ONE scalar whose `StdType` is narrower than the word (u32), and `accessWidthFor`
+	// refuses a u32 memory access outright. That refusal is deliberate and it is about a DIFFERENT question: a
+	// narrow SIGNED integer's load form depends on its signedness, which is P1.9's `as` cast. It does not reach
+	// here — the slot is a word and the value is UNSIGNED, so zero-extension is unambiguous, the IDENTICAL
+	// reason `accessWidthFor` already admits `u8` one line above the refusal. The machine word is the slot's
+	// real width, not a widening hack.
+	//
+	// ⚠ **NOT folded into `fieldStorageType`.** A STRUCT field is packed against its neighbours, so it may
+	// legitimately want 4 bytes the day u32 memory access lands, and widening it there would move every
+	// following field. The env slot has no neighbour constraint.
+	//
+	// ⭐⭐ **TWO ENTRANCES, ONE SINK — AND W1 OPENED ONLY ONE OF THEM.** W1 was right to make a function
+	// alias's `ExitCode` return a real `exitCode`; that is what fixed the wasm functype. But
+	// `mintIndirectCallResult` types an indirect call's SSA RESULT from the same `functionAliasReturnType`, so
+	// the result VALUE became `exitCode`-tagged too and a capture of it reached this store — W1 guarded the
+	// SIGNATURE column and the VALUE column came along with it. The OTHER entrance is older:
+	// `interfaceReturnMaxonType` has minted `exitCode` results since P1.7a, so an interface method
+	// `returns ExitCode` whose result is captured panicked before W1 as well. Fixing either DOOR would have
+	// left the other live, which is why the fix is at the SINK. Probed: struct-field assign, array push,
+	// loop-carried var, plain return and direct call never reach a width door with a value's own tag.
+	//
+	// Pinned by `closure-capture.capture-exitcode-from-alias-call`, `.capture-exitcode-from-interface-method`
+	// and `.capture-exitcode-wide-value` — the last because the first two carry `9`, which survives even a
+	// 1-byte slot, so they pin THAT the capture works and not the width it works at.
+	function envSlotStorageType(declared MaxonType) returns MaxonType
+		let stored = self.fieldStorageType(declared)
+
+		return MaxonType.integer if maxonTypeTag(stored) == ValueTypeTag.exitCode else stored
+	end 'envSlotStorageType'
 
 	// `globalAddr <label>` then `loadIndirect <addr> 0` — the two ops a global's read is.
 	//
