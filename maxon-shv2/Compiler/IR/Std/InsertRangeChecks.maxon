@@ -64,6 +64,11 @@ end 'RangeBoundCheck'
 
 typealias RangeBoundCheckArray = Array with RangeBoundCheck
 
+// The op list each guarded block held BEFORE its first guard split it, one entry per block id — see
+// `RangeCheckEmitter.guardChainSource`. A row is filled the moment a split takes that block's list
+// away from it; every other row stays the empty list the column was created with.
+typealias PreSplitOpsByBlock = Array with OpIndexArray
+
 // A guard's insertion point: the block to split and the `opRefs` position to split it at (ops before
 // stay in the head, ops from here on move to the continuation). The position is what makes the guard
 // fire AT its site rather than at the end of its block — see `guardSiteAt`.
@@ -178,9 +183,13 @@ end 'insertRangeChecks'
 let sharedEmptyGuardChainTail = ValueIdArray.create()
 
 // The `guardChainBase` companion to it, shared for the identical reason and replaced in the identical
-// place — the two columns are built together and are empty together, so `guardChainTail.isEmpty()` is
-// the one test that decides for both.
+// place — the three chain columns are built together and are empty together, so
+// `guardChainTail.isEmpty()` is the one test that decides for all of them.
 let sharedEmptyGuardChainBase = BlockOpPosArray.create()
+
+// One pre-split op list per block id — see `RangeCheckEmitter.guardChainSource`. Shared and replaced
+// exactly as the two columns above are.
+let sharedEmptyGuardChainSource = PreSplitOpsByBlock.create()
 
 // Per-function emitter: owns the module + function it rewrites and the fresh-ValueId counter its guard
 // ops draw from (seeded past every id the function already uses).
@@ -209,11 +218,23 @@ type RangeCheckEmitter
 	// LOWERING left it; but the k-th guard SPLITS that block, so the (k+1)-th site's op now sits in the
 	// continuation at `position - base`, where `base` is where the last split cut. Zero until a block's
 	// first guard splits it, and moved to the split point by every split after that. Built and shared
-	// exactly as `guardChainTail` is — the two are one index in two columns, so one `isEmpty` decides both.
+	// exactly as `guardChainTail` is — the three chain columns are one index in three columns, so one
+	// `isEmpty` decides all of them.
 	var guardChainBase as BlockOpPosArray
+	// ⭐⭐ **THE OP LIST EACH GUARDED BLOCK HELD BEFORE ITS FIRST GUARD SPLIT IT — THE ONE LIST EVERY
+	// SEGMENT OF ITS CHAIN IS CARVED OUT OF, AND THE REASON THIS PASS IS LINEAR IN ITS BYTES.** A
+	// chain-end block is carved by copying out the ops between the previous split point and this one; the
+	// ops PAST this split point are not touched at all, and the continuation is left EMPTY until
+	// `materializeChainTails` places them, once, when no further split can move them. Over k guards in a
+	// block of B ops that copies B op refs in total rather than Θ(k × B) — see `splitChainEnd`.
+	//
+	// It is also the coordinate space a site's recorded `stdOpPos` is written in, which is why
+	// `guardSiteAt` bounds-checks against it and not against a block whose front the splits have carved
+	// away. Built and shared exactly as the two columns above are.
+	var guardChainSource as PreSplitOpsByBlock
 
 	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase}
+		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -243,6 +264,14 @@ type RangeCheckEmitter
 		for site in checks.sites 'eachSite'
 			self.processSite(site, filePath: checks.filePath)
 		end 'eachSite'
+		// ⚠ **AFTER THE LAST ALIAS-NAMED SITE AND BEFORE THE RETURN SITES, AND BOTH HALVES ARE
+		// LOAD-BEARING.** A chained split leaves its continuation's ops PENDING (`splitChainEnd`), so
+		// until this runs the last continuation of every guarded block is empty — and `guardReturns`
+		// splits the block it finds AT ITS END, an end that is not where that block ends yet. Running it
+		// after the loop is what makes the pending tail cost one placement per block instead of one per
+		// guard.
+		self.materializeChainTails()
+
 		for argSite in checks.argSites 'eachArgSite'
 			self.processArgSite(argSite, filePath: checks.filePath)
 		end 'eachArgSite'
@@ -425,17 +454,14 @@ type RangeCheckEmitter
 			return
 		end 'noBoundNeeded'
 
-		let ok = self.splitBlock(site.block, position: site.position)
-		// ⚠ **BEFORE `emitPanicBlock`, AND THE ORDER IS LOAD-BEARING** — see `extendGuardChain`.
-		match chain 'chain'
-			blockChain(siteBlockId) then self.extendGuardChain(siteBlockId, continuation: ok, splitAt: site.position)
-			retChain then break 'chain'
-		end 'chain'
+		// ⚠ **THE SPLIT ADVANCES THE CHAIN INSIDE ITSELF, BEFORE `emitPanicBlock`, AND THE ORDER IS
+		// LOAD-BEARING** — see `extendGuardChain`.
+		let ok = self.splitFor(site, chain: chain)
 		let panicBlock = self.emitPanicBlock(message)
 		self.emitCascade(site.block, value: value, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
 	end 'emitGuardAt'
 
-	// Move `siteBlockId`'s chain end onto the continuation `splitBlock` just made, so the next guard in
+	// Move `siteBlockId`'s chain end onto the continuation `splitChainEnd` just made, so the next guard in
 	// that source block lands after this one instead of before it.
 	//
 	// ⚠ **THIS MUST RUN BEFORE ANYTHING ELSE APPENDS A BLOCK.** The continuation's own blockRef is
@@ -445,11 +471,13 @@ type RangeCheckEmitter
 	// between would chain the NEXT guard onto the panic block, and no test would show that as anything
 	// but wrong code at some unrelated site.
 	//
-	// ⚠ **THE BASE MOVES WITH THE TAIL, AND `splitAt` IS WHY.** The continuation holds the head's ops from
-	// `splitAt` on, so an op that stood at position p of the chain-end block now stands at `p - splitAt` of
-	// the new one. `guardChainBase` accumulates those shifts in the ORIGINAL block's coordinates, which is
-	// the space a site's recorded position is written in — advance one column without the other and the
-	// (k+1)-th guard lands at an offset measured against a block it is no longer in.
+	// ⚠ **THE BASE MOVES WITH THE TAIL, AND `splitAt` IS WHY.** The continuation is where the source
+	// block's ops from `splitAt` on will stand, so an op that stood at position p of the chain-end block
+	// now stands at `p - splitAt` of the new one. `guardChainBase` accumulates those shifts in the
+	// ORIGINAL block's coordinates, which is the space a site's recorded position is written in — advance
+	// one column without the other and the (k+1)-th guard lands at an offset measured against a block it
+	// is no longer in. It is also where the pending tail STARTS, which is what `materializeChainTails`
+	// reads it as.
 	function extendGuardChain(siteBlockId BlockId, continuation IrBlock, splitAt BlockOpPos)
 		let okRef = try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("extendGuardChain: `addBlock` made the continuation of '{String.from(self.func.name)}' but registered no blockRef for it")
 		if self.module.getBlock(okRef).id != continuation.id 'notTheContinuation'
@@ -461,37 +489,152 @@ type RangeCheckEmitter
 		try self.guardChainBase.set(siteBlockId, value: base + splitAt) otherwise panic("extendGuardChain: guardChainBase.set OOB at block {siteBlockId}, which was just read in range")
 	end 'extendGuardChain'
 
-	// Split `head` at `position`: ops before it stay in `head`; ops from it on, plus `head`'s
-	// terminator / conditional branch / outgoing edges, move to a fresh continuation block returned
-	// here. `head` is left un-terminated for the cascade to finish.
-	function splitBlock(head IrBlock, position BlockOpPos) returns IrBlock
-		var ok = self.module.addBlock(self.func, label: b"__rc_ok")
+	// Which split the site gets, and the chain advance that belongs to the chained one. Both leave `head`
+	// un-terminated for the cascade to finish and return the continuation the guard's in-range edge goes
+	// to.
+	function splitFor(site GuardSite, chain GuardChain) returns IrBlock
+		return match chain 'chain'
+			blockChain(siteBlockId) gives self.splitChainEnd(site, sourceBlockId: siteBlockId)
+			retChain gives self.splitBlockInPlace(site.block, position: site.position)
+		end 'chain'
+	end 'splitFor'
+
+	// ⭐⭐ **CARVE THE NEXT SEGMENT OF `sourceBlockId`'S CHAIN OUT OF ITS PRE-SPLIT OP LIST — WITHOUT
+	// EVER MOVING THE OPS PAST THE CUT.** The chain-end block ends up holding the source block's ops from
+	// the previous split point up to this one; the continuation is left EMPTY, because the next guard on
+	// this chain would only carve a prefix off it again, and `materializeChainTails` places what remains
+	// once the loop is over.
+	//
+	// ⚠ **THIS IS THE DIFFERENCE BETWEEN LINEAR AND QUADRATIC BYTES, MEASURED.** The split used to
+	// partition the chain-end block's own list into two FRESH arrays, which moved everything after the
+	// cut on every guard: k guards in a source block of B ops copied Σ(B − pₖ) ≈ k·B/2 op refs, and the
+	// generated `scaleDivide` — 1,024 `as ScaleDivisor` casts in ONE straight-line block, doubling per
+	// scale rung — read `phase:insertRangeChecks` at ×2.83 ×2.82 ×3.73 ×4.11 ×4.32 bytes per DOUBLING
+	// ladder rung, 13.0% of everything the compiler allocated at rung 5, with the ratio still climbing.
+	// Allocations were dead flat at ×2.00 throughout: a fixed number of arrays per site, each one bigger
+	// — which is the whole signature of this bug and is why the byte column, not the allocation column,
+	// is the one that found it.
+	//
+	// The asymmetry that makes it work: an array can give up its BACK for free but not its FRONT, and a
+	// chain cuts left to right. Carving forward out of one stable list makes every copy a segment nobody
+	// copies again, so the whole chain moves B op refs in total.
+	function splitChainEnd(site GuardSite, sourceBlockId BlockId) returns IrBlock
+		let source = self.chainSourceOps(sourceBlockId, chainEnd: site.block)
+		// The block is about to hand its list over to the segment carved below, so park the pre-split list
+		// where the rest of the chain can still read it. Idempotent after the first split: `chainSourceOps`
+		// hands back the row this wrote.
+		try self.guardChainSource.set(sourceBlockId, value: source) otherwise panic("splitChainEnd: guardChainSource has no row for block id {sourceBlockId}, which `guardSiteAt` already resolved within the function's block-id space")
+		let base = try self.guardChainBase.get(sourceBlockId) otherwise panic("splitChainEnd: guardChainBase has no entry for block id {sourceBlockId}, which `guardSiteAt` just read in range")
+
 		// A mutable alias to the head block (a parameter binding is immutable; field writes need a `var`).
 		// It is the SAME heap object — IrBlock is a reference type — so these writes land on the real block.
+		var headBlock = site.block
+		var segment = OpIndexArray.create()
+		for i in base upto base + site.position 'carveSegment'
+			let opIdx = try source.get(i) otherwise panic("splitChainEnd: block {sourceBlockId} of '{String.from(self.func.name)}' holds {source.count()} pre-split ops but its chain begins at {base} and the guard splits {site.position} ops into it")
+			segment.push(opIdx)
+		end 'carveSegment'
+		headBlock.opRefs = segment
+
+		let ok = self.splitBlockExit(headBlock)
+		self.extendGuardChain(sourceBlockId, continuation: ok, splitAt: site.position)
+		return ok
+	end 'splitChainEnd'
+
+	// Split `head` at `position` in place: ops before it stay in `head`, ops from it on move to the
+	// continuation.
+	//
+	// ⚠ **WHY THE RETURN SITES DO NOT USE `splitChainEnd`, AND WHY NEITHER SPLIT CAN BE THE OTHER.** A
+	// return site has no chain (see `GuardChain`): its block is re-found from the CURRENT `ret`
+	// terminator, so it can be a continuation an alias site minted — a block no site's coordinates
+	// describe and no pre-split list covers. It is also split at its very END (`guardReturns` passes
+	// `opRefs.count()`), which is why splitting in place costs nothing here: the loop moves no op and the
+	// truncate drops none. `splitChainEnd` cannot work this way because it repeats on the SAME source
+	// block, and that is exactly where moving the ops past the cut becomes Θ(guards × block).
+	function splitBlockInPlace(head IrBlock, position BlockOpPos) returns IrBlock
+		var headBlock = head
+		var tailOps = OpIndexArray.create()
+		for i in position upto headBlock.opRefs.count() 'moveTail'
+			let opIdx = try headBlock.opRefs.get(i) otherwise panic("splitBlockInPlace: opRefs.get OOB at {i}")
+			tailOps.push(opIdx)
+		end 'moveTail'
+		headBlock.opRefs.truncate(position)
+
+		var ok = self.splitBlockExit(headBlock)
+		ok.opRefs = tailOps
+		return ok
+	end 'splitBlockInPlace'
+
+	// The half of a split that is the same whichever way the ops are placed: mint the continuation and
+	// move `head`'s EXIT onto it — the terminator, the conditional branch and the outgoing edge arguments
+	// — leaving `head` un-terminated for the cascade to finish.
+	function splitBlockExit(head IrBlock) returns IrBlock
+		var ok = self.module.addBlock(self.func, label: b"__rc_ok")
 		var headBlock = head
 
-		var headOps = OpIndexArray.create()
-		var tailOps = OpIndexArray.create()
-		for i in 0 upto headBlock.opRefs.count() 'partition'
-			let opIdx = try headBlock.opRefs.get(i) otherwise panic("splitBlock: opRefs.get OOB at {i}")
-			if i < position 'inHead'
-				headOps.push(opIdx)
-			end 'inHead' else 'inTail'
-				tailOps.push(opIdx)
-			end 'inTail'
-		end 'partition'
-
-		ok.opRefs = tailOps
 		ok.terminator = headBlock.terminator
 		ok.condBranch = headBlock.condBranch
 		ok.branchEdges = headBlock.branchEdges
 
-		headBlock.opRefs = headOps
 		headBlock.terminator = Terminator.unset
 		headBlock.condBranch = CondBranch.none
 		headBlock.branchEdges = BranchEdgeArray.create()
 		return ok
-	end 'splitBlock'
+	end 'splitBlockExit'
+
+	// The op list the site block held BEFORE any guard split it — the coordinate space a site's recorded
+	// `stdOpPos` is written in, and the one list every segment of that block's chain is carved out of.
+	//
+	// ⚠ **"HAS A SPLIT MOVED PAST THIS BLOCK YET" IS DERIVED, NOT A FOURTH COLUMN.** `guardChainTail`
+	// starts every block as its own chain end and a split is exactly what moves it off itself, so a chain
+	// end that still IS the source block is a block whose `opRefs` is still its pre-split list. Recording
+	// that list any earlier than the split would be wrong rather than merely eager: a site `guardSiteAt`
+	// has already resolved can still turn out to owe no cascade at all (`emitGuardAt`'s both-bounds-elided
+	// return), and a block nothing split must keep its own list.
+	function chainSourceOps(sourceBlockId BlockId, chainEnd IrBlock) returns OpIndexArray
+		if chainEnd.id == sourceBlockId 'stillItsOwnChainEnd'
+			return chainEnd.opRefs
+		end 'stillItsOwnChainEnd'
+
+		return try self.guardChainSource.get(sourceBlockId) otherwise panic("chainSourceOps: guardChainSource has no row for block id {sourceBlockId} of '{String.from(self.func.name)}', whose chain end `guardChainTail` has already been moved off it")
+	end 'chainSourceOps'
+
+	// ⭐⭐ **PLACE THE OPS EVERY GUARDED BLOCK STILL OWES ITS LAST CONTINUATION.** A chained split leaves
+	// the continuation empty (`splitChainEnd`), so the ops from the last split point to the end of the
+	// source list are placed here — once, when no further guard can move them. Without this every guarded
+	// block loses everything that followed its last guard.
+	//
+	// It walks the chain-tail column rather than a list of split blocks because that column already
+	// records the answer: a row whose chain end is a block OTHER than itself was split. The column is as
+	// wide as the block-id space was at the FIRST guard, which is the only part of it that can hold a
+	// site's block (`guardSiteAt`) — `func.nextBlockId` has since grown by every block this pass appended.
+	function materializeChainTails()
+		if self.guardChainTail.isEmpty() 'noRuntimeGuardEmitted'
+			return
+		end 'noRuntimeGuardEmitted'
+
+		for blockId in 0 upto self.guardChainTail.count() 'eachBlockId'
+			let tailRef = try self.guardChainTail.get(blockId) otherwise panic("materializeChainTails: guardChainTail has no row for block id {blockId}, which is inside the column's own width")
+			if tailRef == 0 'notInThisFunction'
+				continue
+			end 'notInThisFunction'
+
+			var chainEnd = self.module.getBlock(tailRef - 1)
+			if chainEnd.id == blockId 'neverSplit'
+				continue
+			end 'neverSplit'
+			if not chainEnd.opRefs.isEmpty() 'alreadyHoldsOps'
+				panic("materializeChainTails: the chain end of block {blockId} in '{String.from(self.func.name)}' already holds {chainEnd.opRefs.count()} op(s) — a continuation is minted empty and receives its ops only here, so something appended to one before its tail was placed")
+			end 'alreadyHoldsOps'
+
+			let base = try self.guardChainBase.get(blockId) otherwise panic("materializeChainTails: guardChainBase has no entry for block id {blockId}, which guardChainTail just answered for")
+			let source = self.chainSourceOps(blockId, chainEnd: chainEnd)
+			for i in base upto source.count() 'eachPendingOp'
+				let opIdx = try source.get(i) otherwise panic("materializeChainTails: pre-split list of block {blockId} holds {source.count()} ops but its last split cut at {base}")
+				chainEnd.opRefs.push(opIdx)
+			end 'eachPendingOp'
+		end 'eachBlockId'
+	end 'materializeChainTails'
 
 	// The panic block: `osRangePanic <message-label>`, then a dead return (the panic never returns, but
 	// every block must terminate). The message is interned as a NUL-terminated `.rdata` cstr blob — the
@@ -635,6 +778,8 @@ type RangeCheckEmitter
 			self.guardChainTail = buildBlockIdIndex(self.module, func: self.func)
 			self.guardChainBase = BlockOpPosArray.create()
 			self.guardChainBase.growFilled(self.func.nextBlockId, value: 0)
+			self.guardChainSource = PreSplitOpsByBlock.create()
+			self.guardChainSource.growFilled(self.func.nextBlockId, value: OpIndexArray.create())
 		end 'firstRuntimeGuard'
 
 		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: site.block, from: self.func.name)
@@ -643,12 +788,18 @@ type RangeCheckEmitter
 			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {site.stdOpPos} of block {site.block}, but that block's chain end already begins at {base} — sites are consumed in source order, so a position can never fall behind the last split")
 		end 'behindTheChain'
 
-		let position = site.stdOpPos - base
-		if position > block.opRefs.count() 'pastTheBlock'
-			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {site.stdOpPos} of block {site.block}, which is {position} into a chain-end block holding only {block.opRefs.count()} ops — `splitBlock` would silently put every op in the head and anchor the guard at the end")
+		// ⚠ THE BOUND IS CHECKED IN THE SITE'S OWN COORDINATES — against the block's PRE-SPLIT op count,
+		// not the chain-end block's current one. Those were the same number while a split moved the ops
+		// past the cut onto the continuation; they are not, now that a continuation is minted empty and
+		// filled only by `materializeChainTails` (see `guardChainSource`). Checked against the block as it
+		// stands, every guard after the first in a block would read a count of zero and this would fire on
+		// a program with nothing wrong with it.
+		let sourceOps = self.chainSourceOps(site.block, chainEnd: block)
+		if site.stdOpPos > sourceOps.count() 'pastTheBlock'
+			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {site.stdOpPos} of block {site.block}, which held only {sourceOps.count()} ops before this pass split it — `splitChainEnd` would silently carve the whole block into the head and anchor the guard at the end")
 		end 'pastTheBlock'
 
-		return GuardSite.create(block, position: position)
+		return GuardSite.create(block, position: site.stdOpPos - base)
 	end 'guardSiteAt'
 
 	// The block whose terminator is `ret(value)`.
