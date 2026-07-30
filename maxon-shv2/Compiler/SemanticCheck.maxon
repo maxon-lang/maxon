@@ -221,16 +221,32 @@ let WideningArgScore = 1 as OverloadArgScore
 // Wide enough for `ExactArgScore` at every parameter of the widest signature the ABI admits.
 typealias OverloadArgScore = int(0 to 128)
 
-// Score every candidate and answer which one the call meant. Two sweeps rather than an array of scores: the
-// first finds the best total, the second collects who holds it — so the common single-winner case allocates
-// nothing but the answer.
+typealias OverloadArgScoreArray = Array with OverloadArgScore
+
+// Score every candidate and answer which one the call meant. ONE scoring pass, holding the scores.
+//
+// ⚠ It scored every candidate TWICE — once to find the best total, once to ask who held it — on the stated
+// grounds that keeping an array of scores was the more expensive arrangement. It is the cheaper one: scoring
+// a candidate runs `slotCallArgs`, which ALLOCATES the slotted argument list, so the second sweep re-paid
+// that allocation for every candidate to avoid one array of small integers. Scoring is also the only part
+// of this pass that touches the signature registry and the type rules, so doubling it doubled the actual
+// work — and the two sweeps had to be kept answering identically by hand, one `overloadCandidateScore` call
+// spelled in two places, which is the shape this compiler keeps getting bitten by.
+//
+// `incompatible` folds to `NoCompatibleOverloadScore`, which needs no second flag and is not a sentinel: a
+// candidate that FITS always scores at least `WideningArgScore` (a zero-argument candidate is floored there
+// by `overloadArgTypeFit`), so zero is unreachable for a fitting candidate and `best` staying zero means
+// nothing fitted.
 function selectOverload(project Project, func IrFunction, op MaxonOp, candidates ByteArrayArray) returns OverloadPick
+	var scores = OverloadArgScoreArray.create()
 	var best = NoCompatibleOverloadScore
 	for candidate in candidates 'eachCandidate'
-		match overloadCandidateScore(project, func: func, op: op, candidate: candidate) 'fit'
-			fits(score) then best = overloadBetterScore(best, candidate: score)
-			incompatible then break 'fit'
+		let score = match overloadCandidateScore(project, func: func, op: op, candidate: candidate) 'fit'
+			fits(fitScore) gives fitScore
+			incompatible gives NoCompatibleOverloadScore
 		end 'fit'
+		scores.push(score)
+		best = overloadBetterScore(best, candidate: score)
 	end 'eachCandidate'
 
 	if best == NoCompatibleOverloadScore 'nothingFits'
@@ -238,9 +254,10 @@ function selectOverload(project Project, func IrFunction, op MaxonOp, candidates
 	end 'nothingFits'
 
 	var tied = ByteArrayArray.create()
-	for candidate in candidates 'eachWinner'
-		if overloadCandidateHoldsScore(project, func: func, op: op, candidate: candidate, score: best) 'winner'
-			tied.push(candidate)
+	for i in 0 upto candidates.count() 'eachWinner'
+		let score = try scores.get(i) otherwise panic("selectOverload: scores.get OOB at {i} — one score was pushed per candidate")
+		if score == best 'winner'
+			tied.push(try candidates.get(i) otherwise panic("selectOverload: candidates.get OOB at {i} inside its own count()"))
 		end 'winner'
 	end 'eachWinner'
 
@@ -257,15 +274,6 @@ let NoCompatibleOverloadScore = 0 as OverloadArgScore
 function overloadBetterScore(best OverloadArgScore, candidate OverloadArgScore) returns OverloadArgScore
 	return candidate if candidate > best else best
 end 'overloadBetterScore'
-
-// Does this candidate score exactly `score`? The second sweep's question, kept a `bool` so the winner
-// collection does not have to re-match the fit union at its own call site.
-function overloadCandidateHoldsScore(project Project, func IrFunction, op MaxonOp, candidate ByteArray, score OverloadArgScore) returns bool
-	return match overloadCandidateScore(project, func: func, op: op, candidate: candidate) 'fit'
-		fits(candidateScore) gives candidateScore == score
-		incompatible gives false
-	end 'fit'
-end 'overloadCandidateHoldsScore'
 
 union OverloadFit
 	fits(score OverloadArgScore)

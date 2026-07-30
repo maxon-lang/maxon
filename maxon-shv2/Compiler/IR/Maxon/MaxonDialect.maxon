@@ -987,8 +987,13 @@ export let NoErrorFlag = 0 as ParsedInt
 
 // ⭐ **WHICH NAME, IF ANY, AN OP BINDS A CALLEE BY — the dialect's own answer to the one question overload
 // resolution asks of every op** (D7). It lives here, beside the union, because the answer is a property of
-// the OP SET: a new callee-carrying variant is added to `MaxonOp` and to the two matches below in one edit,
-// where a resolver keeping its own band ranges would silently classify it as callee-free.
+// the OP SET: a new callee-carrying variant is added to `MaxonOp` and classified for this question in one
+// edit, rather than a consumer in another file inferring it from op ranges it does not own.
+//
+// ⚠ Proximity is NOT what makes that safe, and it was originally credited with doing so — see
+// `maxonOpCallee`, which asserted a band-range resolver would be the unsafe spelling while itself using
+// three band ranges. What makes it safe is that the classifier names EVERY arm, so the compiler refuses a
+// new op until it has an answer here.
 export union MaxonOpCallee
 	// A DIRECT call's callee name — the operand overload resolution may REWRITE (`withRewrittenCallee`).
 	direct(callee ByteArray)
@@ -1007,16 +1012,47 @@ end 'MaxonOpCallee'
 // ⚠ `indirectCall` and the two witness dispatches carry NO name to bind: an indirect call's callee is a
 // VALUE, and a witness dispatch was resolved against the enclosing type's `where` constraints at parse time
 // (there is no callee name anywhere on the op). Neither can be an overload set's member.
+//
+// ⚠⚠ **EVERY ARM IS NAMED, AND NOT ONE IS A RANGE — because a RANGE ARM IS EXACTLY HOW THIS ANSWER GOES
+// SILENTLY WRONG.** It was written with three (`literal to stringLiteral`, `throwError to panicAbort`,
+// `await to witnessTryDispatch`) while claiming that living beside the union is what stops a new
+// callee-carrying variant being classified as callee-free. It is not: `MaxonOp`'s own growth convention is
+// to APPEND AT THE END (every one of its last six arms says so in its comment), and an appended arm lands
+// INSIDE `await to witnessTryDispatch`, which would answer `none` for it without a word — no compile error,
+// no panic, just an overload that stops being resolvable at that op kind. The sibling helpers
+// (`withRewrittenCallee`, and SemanticCheck's `overloadCallArgs`/`overloadResultValue`) are safe by their
+// `default panic`; this one had no such floor, being the function that DECIDES which ops the others are
+// asked about. Naming all 27 is the only spelling under which adding an op cannot compile until someone
+// classifies it — the same argument `TypeRules.tagIsIntegral` records for `ValueTypeTag`.
 export function maxonOpCallee(op MaxonOp) returns MaxonOpCallee
 	return match op 'op'
 		call(_, callee, _, _, _, _) gives MaxonOpCallee.direct(callee)
-		literal to stringLiteral gives MaxonOpCallee.none
 		tryCall(_, _, callee, _, _, _, _) gives MaxonOpCallee.direct(callee)
-		throwError to panicAbort gives MaxonOpCallee.none
-		functionRef(_, funcName) gives MaxonOpCallee.functionValue(funcName)
-		indirectCall gives MaxonOpCallee.none
 		asyncCall(_, callee, _, _, _, _) gives MaxonOpCallee.direct(callee)
-		await to witnessTryDispatch gives MaxonOpCallee.none
+		functionRef(_, funcName) gives MaxonOpCallee.functionValue(funcName)
+		literal gives MaxonOpCallee.none
+		ret gives MaxonOpCallee.none
+		retVoid gives MaxonOpCallee.none
+		binOp gives MaxonOpCallee.none
+		unaryOp gives MaxonOpCallee.none
+		compare gives MaxonOpCallee.none
+		condBranch gives MaxonOpCallee.none
+		branch gives MaxonOpCallee.none
+		globalAddr gives MaxonOpCallee.none
+		loadIndirect gives MaxonOpCallee.none
+		storeIndirect gives MaxonOpCallee.none
+		stringLiteral gives MaxonOpCallee.none
+		throwError gives MaxonOpCallee.none
+		propagateError gives MaxonOpCallee.none
+		panicAbort gives MaxonOpCallee.none
+		indirectCall gives MaxonOpCallee.none
+		await gives MaxonOpCallee.none
+		tryAwait gives MaxonOpCallee.none
+		sizeofType gives MaxonOpCallee.none
+		byteStringLiteral gives MaxonOpCallee.none
+		switch gives MaxonOpCallee.none
+		witnessDispatch gives MaxonOpCallee.none
+		witnessTryDispatch gives MaxonOpCallee.none
 	end 'op'
 end 'maxonOpCallee'
 

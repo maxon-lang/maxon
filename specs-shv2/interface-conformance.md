@@ -566,12 +566,20 @@ A conforming type may OVERLOAD the method it conforms with: `label()` satisfies 
 function 'Widget.label'` until this rung, because shv2 keyed a method by its bare `Type.method` name alone —
 which is also what this case originally existed to pin, and the ORACLE has always accepted the program.
 
-⚠ It keeps guarding the regression it was written for, and the two halves it plays off each other are
-unchanged: the conformance check reads a method's param TYPES from the module and its param NAMES from the
-signature registry. Those were two independent resolutions of one collision and they disagreed on arity, so
-the check indexed one by the other's count and PANICKED rather than letting the diagnostic fail the build.
-With the collision now RESOLVED rather than refused, the same disagreement would be a panic with no
-diagnostic behind it to hide it — so the assertion is that this compiles and runs.
+⚠ **IT DOES NOT KEEP GUARDING THE REGRESSION IT WAS WRITTEN FOR. The case BELOW is what does.** The original
+guarded a PANIC on the REFUSAL path, and converting a negative test into a positive one is exactly how such a
+guard is lost: the conformance check reads a method's param TYPES from the module and its param NAMES from the
+signature registry, those were two independent resolutions of ONE collision, they disagreed on arity, and the
+check indexed one column by the other's count. What prevents it is `ConformanceCheck.checkConformance`'s
+`projectHasErrors` gate — and THIS program has no diagnostic at all, so it never reaches that gate.
+`formatActualSignature`, the function that panicked, is reached only from the E3016 mismatch arm, and here
+`label()` matches `Named.label()` exactly. **Delete the gate and this test stays GREEN.**
+
+Nor are the two halves still played off each other: under D7 the second method registers under a MANGLED name,
+so the module's function map and `funcSignatures` hold two DISTINCT keys and cannot disagree about one. Only an
+IDENTICAL-signature duplicate still collides. This case is therefore kept purely as D7 acceptance — the
+assertion is that it compiles and runs — and the guard is restored by
+`error.duplicate-method-conformance-same-signature` below.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -602,4 +610,57 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: error.duplicate-method-conformance-same-signature -->
+⭐⭐ **THE ONE DUPLICATE D7 STILL REFUSES — and the only program left that reaches the conformance check's
+malformed-module gate.** Overloading resolves a collision by MANGLING the later member's registration name, so
+two methods of one name are two distinct keys unless their signatures are IDENTICAL too; then
+`Parser.overloadRegistrationNameFor` hands back the BARE name on purpose and it collides in
+`commitFuncSignatures`, earning the E3006 it always did.
+
+⚠ **D7 DID NOT LOSE THE OLD PANIC GUARD — IT MADE THE PANIC UNREACHABLE, AND THAT IS A STRONGER OUTCOME THAN A
+TEST.** The panic needed TWO things: a name collision, AND the module's function table and `funcSignatures`
+disagreeing about the colliding method's ARITY (`checkOneMethod` reads param TYPES from the former and param
+NAMES from the latter, so it indexed one column by the other's count). Its predecessor supplied both with
+`label()` beside `label(extra Integer)`. Post-D7 a collision survives ONLY when the two signatures are
+IDENTICAL — anything else mangles — so the arities necessarily AGREE and the disagreement cannot be
+constructed. The second premise is gone, not merely untested.
+
+⚠ **MEASURED, and it is why this note does not claim to be that guard:** stubbing
+`ConformanceCheck.checkConformance`'s `projectHasErrors` early-return out entirely leaves the suite at
+**2581 passed / 0 failed**. Nothing here exercises that gate — not this case and not any other. It is retained
+as defence-in-depth for a malformed module arriving by some other route (any diagnostic, not just E3006), and a
+reader should know it is unexercised rather than assume this case covers it. What THIS case pins is the D7
+boundary itself: the one duplicate shape the rung still refuses, refused with a clean diagnostic.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function label() returns Integer
+end 'Named'
+
+type Widget implements Named
+	var v as Integer
+
+	function label() returns Integer
+		return v
+	end 'label'
+
+	function label() returns Integer
+		return v + 1
+	end 'label'
+
+	static function create() returns Self
+		return Self{v: 0}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:16:11: duplicate definition of function 'Widget.label'
 ```
