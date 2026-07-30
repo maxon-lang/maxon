@@ -1,0 +1,65 @@
+// Test: first-class-function.bool-return-through-alias
+typealias Num = int(0 to 100)
+typealias Pred = function(Num) returns bool
+
+function isBig(n Num) returns bool
+	return n > 50
+end 'isBig'
+
+function callIt(p Pred) returns ExitCode
+	return 5 if p(90) else 0
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(isBig)
+end 'main'
+---
+ExitCode: 5
+---
+func @isBig {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 50
+    x64.setccReg greater, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @callIt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 90
+    x64.callReg rbx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 5
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + __fnref_isBig]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect callIt
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

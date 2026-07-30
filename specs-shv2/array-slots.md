@@ -155,8 +155,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: raw-open-slot-reports-empty-slot -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: raw-open-slot-reports-empty-slot -->
 ### An empty slot opened through the raw buffer reports emptySlot
 `__ManagedMemory.setLength` is the layer where an unwritten slot is a defined state. Read back
 through `Array.get` it is `emptySlot` — NOT `indexOutOfBounds`, which would blame an index that
@@ -187,8 +186,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: past-the-end-reports-index-out-of-bounds -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: past-the-end-reports-index-out-of-bounds -->
 ### An index past the end still reports indexOutOfBounds
 The other half of the same distinction: this one really IS out of bounds.
 ```maxon
@@ -217,8 +215,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: first-empty-slot -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: first-empty-slot -->
 ### first() on an array whose slot 0 is empty
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -245,8 +242,7 @@ end 'main'
 77
 ```
 
-<!-- disabled-test: last-empty-slot -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: last-empty-slot -->
 ### last() on an array whose last slot is empty
 ```maxon
 typealias Integer = int(i64.min to i64.max)

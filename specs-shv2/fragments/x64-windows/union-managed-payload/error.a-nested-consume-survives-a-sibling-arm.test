@@ -1,0 +1,30 @@
+// Test: error.a-nested-consume-survives-a-sibling-arm
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns Integer
+	return match m 'g'
+		silent gives 0 as Integer
+		text(s) gives s.byteLength() as Integer
+	end 'g'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("an owned payload string, long enough to be a real heap allocation")
+	let r = match m 'outer'
+		text gives match m 'inner'
+			silent gives 0 as Integer
+			text(t) gives t.byteLength() as Integer
+		end 'inner'
+		silent gives 0 as Integer
+	end 'outer'
+	print("r={r} after={grab(m)}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:25:27: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment

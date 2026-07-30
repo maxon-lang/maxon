@@ -73,8 +73,7 @@ end 'main'
 error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-directory-open-search-int.test:3:34: argument type mismatch for 'path': expected '__ManagedMemory', got 'int'
 ```
 
-<!-- disabled-test: builtin-type-checking.error-managed-memory-set-length-string -->
-<!-- R4.4 — the `__ManagedMemory` OBJECT surface. R4.2 delivers `create`/`setLength`/`setByte`/`length` on the BYTE binding only, and `create(10, 8)` here asks for an element size the `Array with Byte` alias cannot TYPE. -->
+<!-- test: builtin-type-checking.error-managed-memory-set-length-string -->
 ```maxon
 function main() returns ExitCode
 	let managed = try __ManagedMemory.create(10, 8) otherwise panic("create failed")
@@ -86,8 +85,7 @@ end 'main'
 error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-memory-set-length-string.test:4:10: argument type mismatch for 'newLength': expected 'int', got 'String'
 ```
 
-<!-- disabled-test: builtin-type-checking.error-managed-memory-append-int -->
-<!-- R4.4 — the `__ManagedMemory` OBJECT surface: `append` is one of the members R4.2 deliberately leaves out, and `create(10, 8)` asks for an element size the `Array with Byte` alias cannot TYPE. -->
+<!-- test: builtin-type-checking.error-managed-memory-append-int -->
 ```maxon
 function main() returns ExitCode
 	let managed = try __ManagedMemory.create(10, 8) otherwise panic("create failed")

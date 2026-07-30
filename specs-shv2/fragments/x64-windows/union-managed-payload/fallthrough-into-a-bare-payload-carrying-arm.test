@@ -1,0 +1,66 @@
+// Test: fallthrough-into-a-bare-payload-carrying-arm
+typealias Code = int(0 to 255)
+
+union U
+	a(x Code)
+	b(y Code)
+end 'U'
+
+function main() returns ExitCode
+	let u = U.a(9)
+	var t = 0 as Code
+	match u 'k'
+		a(n) then t = n and fallthrough
+		b then t = t + 1
+	end 'k'
+	return t as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 9
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.jmp matcharm
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, critsplit
+    x64.jmp matchdead
+  critsplit:
+    x64.jmp matcharm
+  matcharm:
+    x64.leaRegRegImm32 rbx, rax, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

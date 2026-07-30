@@ -166,8 +166,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: empty-string-bytes-push -->
-<!-- `String.toByteArray()` — P1.2 wave D provides only `append`/`byteLength` (E2015) -->
+<!-- test: empty-string-bytes-push -->
 ```maxon
 function main() returns ExitCode
 	let s = ""
@@ -215,8 +214,7 @@ end 'main'
 
 ### Bounds checking
 
-<!-- disabled-test: bounds-get-oob -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: bounds-get-oob -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -235,8 +233,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: bounds-set-oob -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: bounds-set-oob -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -257,8 +254,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: bounds-setlength-exceeds-capacity -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: bounds-setlength-exceeds-capacity -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -276,8 +272,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: bounds-byte-oob -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: bounds-byte-oob -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -294,8 +289,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: bounds-slice-oob -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: bounds-slice-oob -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -316,8 +310,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: bounds-valid-operations -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: bounds-valid-operations -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -342,8 +335,7 @@ end 'main'
 100
 ```
 
-<!-- disabled-test: bounds-negative-index -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: bounds-negative-index -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -417,8 +409,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: shrink-setlength-direct-no-leak -->
-<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
+<!-- test: shrink-setlength-direct-no-leak -->
 Shrink directly through the `__ManagedMemory.setLength` builtin (the path
 `Array.resize` lowers to). Dropping the tail must free those elements.
 ```maxon
