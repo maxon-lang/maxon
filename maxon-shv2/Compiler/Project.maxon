@@ -1642,20 +1642,46 @@ export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 // erase-to-`integer`, the aggregate-identity check) sees an ordinary enum and needs no arm of its own.
 export function builtinOrderingEnum() returns EnumLayout
 	var layout = EnumLayout.create(OrderingTypeName, isUnion: false)
-	addBuiltinOrderingCase(layout, caseName: OrderingLessThanCaseName)
-	addBuiltinOrderingCase(layout, caseName: OrderingEqualToCaseName)
-	addBuiltinOrderingCase(layout, caseName: OrderingGreaterThanCaseName)
+	addBuiltinEnumCase(layout, caseName: OrderingLessThanCaseName)
+	addBuiltinEnumCase(layout, caseName: OrderingEqualToCaseName)
+	addBuiltinEnumCase(layout, caseName: OrderingGreaterThanCaseName)
 	return layout
 end 'builtinOrderingEnum'
+
+// ⭐ **THE COMPILER-OWNED `__ManagedFileError` (R4.1)** — what every `__ManagedFile` static and method
+// throws, and the type a handler's `match e` discriminates.
+//
+// ⚠ **THE CASE ORDER IS THE WIRE FORMAT, NOT A STYLE CHOICE.** A throwing runtime returns its error as
+// `errorReturn(value, flag)` where `flag = ordinal + ErrorFlagOrdinalBias` (see
+// `ArrayRuntime.ArrIndexOutOfBoundsFlag`), and a handler that binds the error matches on the ordinal
+// recovered from it. So these three names in THIS sequence are what makes
+// `managed-file.open-read-not-found-variant`'s `notFound then …` select the arm the runtime meant.
+// The order is `specs/managed-file.md`'s own — "notFound / accessDenied / openFailed".
+// ⇒ Reordering them silently reroutes every handler in the corpus. Add new cases at the END.
+//
+// Seeded UNCONDITIONALLY, exactly as `Ordering` is, rather than demand-driven like the `__ManagedFile`
+// LAYOUT: `createEnumRegistry` is the door that reaches BOTH registries (`Project.enumTypes`, the
+// authority, and `ProgramSignatures.enumTypes`, the parser's index), and a handler resolves its `match`
+// through the former. A registration wired only into the sweep would populate one and not the other.
+// It costs one map entry in a program that never opens a file, and it cannot collide: the name is
+// `__`-prefixed, so `requireUnreservedName` already refuses any source that tries to declare it (E2051)
+// — the same argument that lets `__ManagedFile` be namable in a parameter without a reserved-name gate.
+export function builtinManagedFileErrorEnum() returns EnumLayout
+	var layout = EnumLayout.create(ManagedFileErrorTypeName, isUnion: false)
+	addBuiltinEnumCase(layout, caseName: ManagedFileNotFoundCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedFileAccessDeniedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedFileOpenFailedCaseName)
+	return layout
+end 'builtinManagedFileErrorEnum'
 
 // Append one payload-free case carrying the AUTO-INCREMENT tag a bare `enum` case gets. The case count so
 // far IS the next tag (`Parser.readEnumCaseInto`'s counter starts at 0 and steps by 1), so the tag is
 // DERIVED from declaration order rather than written down — this type's header explains why a tag and a
 // declaration position must never be the same stored field, and writing `0`/`1`/`2` here would smuggle the
 // conflation back in through the builder.
-function addBuiltinOrderingCase(layout EnumLayout, caseName ByteArray)
+function addBuiltinEnumCase(layout EnumLayout, caseName ByteArray)
 	layout.addCase(caseName, tag: layout.caseCount(), payloads: PayloadFieldArray.create())
-end 'addBuiltinOrderingCase'
+end 'addBuiltinEnumCase'
 
 // The TAG of one `Ordering` case, read back OFF the layout (P1.7a slice 2b-ii). THE door the synthesized
 // `int.compare` (which RETURNS these tags) and the `<`/`>`/`<=`/`>=` lowering (which TESTS its dispatch result
@@ -1703,6 +1729,9 @@ end 'orderingTagOf'
 export function createEnumRegistry() returns EnumLayoutMap
 	var registry = EnumLayoutMap.create()
 	registry.upsert(OrderingTypeName, value: builtinOrderingEnum())
+	// R4.1: what every `__ManagedFile` operation throws. See `builtinManagedFileErrorEnum` for why it is
+	// seeded here unconditionally rather than by the declaration sweep like the `__ManagedFile` layout.
+	registry.upsert(ManagedFileErrorTypeName, value: builtinManagedFileErrorEnum())
 	return registry
 end 'createEnumRegistry'
 
