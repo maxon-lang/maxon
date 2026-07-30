@@ -77,6 +77,22 @@ export function checkedDivisionCalleeForOp(op MaxonBinOp) returns ByteArray
 	panic("checkedDivisionCalleeForOp: '{op.rawValue}' is not a division operator — `divisionOperator` is the gate and `emitDivOrMod` its only caller")
 end 'checkedDivisionCalleeForOp'
 
+// The kind → OPERATOR direction, which closes the cycle the two functions above open (operator → name →
+// kind) and is what lets `lowerCheckedDivision` hand the divide back to `lowerBinOp` — the ONE place that
+// decides what a `/` or a `mod` becomes — instead of spelling `StdOp.div` / `StdOp.mod` a second time.
+//
+// ⚠ It is an EXHAUSTIVE match, deliberately: a third member of `CheckedDivisionKind` stops this function
+// compiling, which is the only thing that can stop a new checked division from being lowered as a quotient
+// by omission. `notCheckedDivision` is not a division and has no operator, so it panics rather than
+// defaulting to one — `lowerTryCall`'s own match is what keeps it unreachable.
+export function divisionOperatorForKind(kind CheckedDivisionKind) returns MaxonBinOp
+	match kind 'k'
+		quotient then return MaxonBinOp.div
+		remainder then return MaxonBinOp.mod
+		notCheckedDivision then panic("divisionOperatorForKind: `notCheckedDivision` names no operator — `lowerTryCall` routes only the two division kinds into the expansion")
+	end 'k'
+end 'divisionOperatorForKind'
+
 // The THROWING checked-division callees (A1) — the SIXTH composer behind `GtRuntime.isThrowingRuntimeCallee`,
 // and the only one whose whole family throws by definition: a checked divide exists ONLY because its divisor
 // could be zero. A divisor the compiler proves non-zero never reaches a call at all (`Parser.emitDivOrMod`

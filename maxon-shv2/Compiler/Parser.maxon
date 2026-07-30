@@ -12306,9 +12306,19 @@ export type Parser
 			throw ParseError.unsupported("block-form `try 'label' … end` (grouping multiple calls in one try) — a later slice; use a single-statement `try call()` optionally with `otherwise`", line: tryTok.line, column: tryTok.column)
 		end 'blockForm'
 
+		// ⭐⭐ **WHERE THE TARGET'S OWN OPS BEGIN — the fact that makes "the LAST op in the block" mean "the
+		// TARGET'S last op".** `module.ops` is append-only for the whole parse (nothing truncates it, and a
+		// rewrite mutates in place), so an op index below this floor was appended before the target was
+		// parsed and cannot be the target's however the target is spelled.
+		//
+		// ⚠ It is a FLOOR on the op INDEX rather than a count of `currentBlock.opRefs`, because the target
+		// may legally leave `currentBlock` behind: a nested `try` (`try consume(try get() otherwise 0)`)
+		// desugars into a fork and the outer call lands in the merge block, so a per-block count would be
+		// measured against a block that is no longer current.
+		let targetOpFloor = self.artifact.module.ops.count()
 		let result = try self.parseTryCallTarget(func)
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok)
+		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
 
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
 
@@ -12411,14 +12421,20 @@ export type Parser
 		// whose `try` cannot name a callee: `stdlib/Math.maxon`, `Json.maxon` and `helpers/sort/driftsort.maxon`
 		// spell it this way at eighteen sites, and `specs/arithmetic-operators.md:37` documents it as the form.
 		//
-		// ⚠⚠ **THIS DOES NOT OPEN `try` TO ARBITRARY PARENTHESIZED EXPRESSIONS, AND IT IS THE EXISTING
-		// MACHINERY — NOT A NEW GATE — THAT KEEPS IT SHUT.** The group is parsed as an ordinary expression, and
-		// `rewriteLastCallToTryCall` then looks at the LAST op it emitted: a possibly-zero divide left a `call
-		// __checked_div` and is converted, while `try (4 + 5)` left a `binOp` and falls to `rejectTryTarget`.
-		// So the accepted set is exactly "the group's outermost operation is fallible", derived from the one
-		// rule that already decides it for every other try shape rather than from a second division-shaped
-		// test here. The oracle reaches the same boundary from the same direction — `try (12 / d)` over a
-		// PROVABLY non-zero `d` is its own E2001, because a bare divide is not a call there either.
+		// ⚠⚠ **THIS DOES NOT OPEN `try` TO ARBITRARY PARENTHESIZED EXPRESSIONS.** The group is parsed as an
+		// ordinary expression, and `rewriteLastCallToTryCall` then looks at the LAST op the target emitted: a
+		// possibly-zero divide left a `call __checked_div` and is converted, while `try (4 + 5)` left a
+		// `binOp` and falls to `rejectTryTarget`. So the accepted set is exactly "the group's outermost
+		// operation is fallible", derived from the one rule that already decides it for every other try shape
+		// rather than from a second division-shaped test here. The oracle reaches the same boundary from the
+		// same direction — `try (12 / d)` over a PROVABLY non-zero `d` is its own E2001, because a bare
+		// divide is not a call there either.
+		//
+		// ⚠⚠ **BUT IT DID NEED ONE NEW FACT, AND SAYING OTHERWISE WAS FALSE UNTIL A REVIEW MEASURED IT.**
+		// "The last op the target emitted" is only the target's while the target is guaranteed to have
+		// emitted one, and this is the FIRST try form that can emit nothing: `(v)` over a bare name is a
+		// lookup. `parseTry`'s `targetOpFloor` is that fact — see `rewriteLastCallToTryCall`, and
+		// `safety.md`'s two `error.try-over-a-parenthesized-…` cases for the wrong answer it stops.
 		if self.at(TokenKind.leftParen) 'parenthesizedTarget'
 			return try self.parseParenthesizedExpression(func)
 		end 'parenthesizedTarget'
@@ -12432,12 +12448,28 @@ export type Parser
 	// call in place for the same reason: it makes nested tries (`try consume(try get() otherwise 0)`)
 	// work — each inner try rewrites its OWN call, and the outer rewrites the last op after the whole
 	// parse, which is its own call.
-	function rewriteLastCallToTryCall(func IrFunction, flag ValueId, tryTok Token) returns TryTarget throws ParseError
+	function rewriteLastCallToTryCall(func IrFunction, flag ValueId, tryTok Token, targetOpFloor OpIndex) returns TryTarget throws ParseError
 		let refCount = self.currentBlock.opRefs.count()
 		if refCount == 0 'noOp'
 			throw ParseError.unsupported("`try` must be applied to a call — the expression after `try` emitted no call", line: tryTok.line, column: tryTok.column)
 		end 'noOp'
 		let opIdx = try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("rewriteLastCallToTryCall: opRefs.get OOB on a non-empty block")
+
+		// ⭐⭐ **THE LAST OP MUST BE ONE THE TARGET EMITTED (see `targetOpFloor`).** Every try form but one
+		// is guaranteed to emit its call, so this never fired until `try (…)` opened the door to a group
+		// whose inner expression is a bare NAME — a lookup, which emits nothing — and the "last op the
+		// target emitted" became the last op the PREVIOUS STATEMENT emitted. That is not a cosmetic blame
+		// slip: `let a = arr.get(2)` then `try (a) otherwise 99` REWROTE the array accessor two statements
+		// up, so the handler caught the ARRAY's error, `w` took 99 instead of `a`, and the E3057 that bare
+		// accessor owed vanished with the `call` it would have been reported against.
+		//
+		// It routes to `rejectTryTarget` rather than wording its own sentence: to the author, `try (a)` and
+		// `try (a + b)` are one mistake — the thing after `try` is not a call — and one sentence is what
+		// keeps the two spellings from drifting apart.
+		if opIdx < targetOpFloor 'notTheTargetsOp'
+			return try self.rejectTryTarget(tryTok)
+		end 'notTheTargetsOp'
+
 		let op = try self.artifact.module.ops.get(opIdx) otherwise panic("rewriteLastCallToTryCall: last opRef {opIdx} not in module.ops")
 		return match op 'rewrite'
 			call(result, callee, args, argLabels, argRanges, argImmutableNames) gives TryTarget.named(self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames))
@@ -17950,7 +17982,7 @@ export type Parser
 		if scrutTag == ValueTypeTag.named 'aliasScrutinee'
 			let name = self.internedName(self.valueNameId(scrut))
 			return match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'a'
-				declared(alias) gives not tagIsFloat(maxonTypeTag(alias.underlying))
+				declared(alias) gives not aliasIsFloat(alias)
 				undeclared gives false
 			end 'a'
 		end 'aliasScrutinee'
@@ -20333,7 +20365,7 @@ export type Parser
 	// The half of the question above that is about the ALIAS. Split out because the two arms below read
 	// as the two sentences they are.
 	function aliasChangesTheShiftFill(value ValueId, alias RangedTypeAlias) returns bool
-		if maxonTypeTag(alias.underlying) == ValueTypeTag.float 'floatAlias'
+		if aliasIsFloat(alias) 'floatAlias'
 			return false
 		end 'floatAlias'
 
@@ -20515,9 +20547,13 @@ export type Parser
 		let rightTag = self.tagOf(divisor)
 		try requireBinOpOperands(op, left: leftTag, right: rightTag, opTok: opTok)
 
+		// The BARE divide goes to `emitBinOpOverCheckedOperands`, not to `emitBinOp` — which now REFUSES a
+		// division outright, so that a division reaching the general emitter is a loud parser bug rather
+		// than an unguarded `idiv`. The operand rule this verdict sits behind is the one that door would
+		// have asked, so nothing is skipped by entering past it.
 		match self.divisorZeroVerdict(divisor) 'verdict'
 			alwaysZero then throw ParseError.divisionByProvableZero(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
-			neverZero then return try self.emitBinOp(dividend, rhs: divisor, op: op, opTok: opTok)
+			neverZero then return self.emitBinOpOverCheckedOperands(dividend, rhs: divisor, op: op, leftTag: leftTag, rightTag: rightTag, opTok: opTok)
 			possiblyZero then break 'verdict'
 		end 'verdict'
 
@@ -20557,6 +20593,19 @@ export type Parser
 	// has nothing to look up and the answer is `possiblyZero`. The bootstrap CAN prove it, from a side map of
 	// its own; the divergence costs a needless `try` on `x / d` for a `float(1.0 to 2.0)` divisor and nothing
 	// else, and no corpus case spells one.
+	//
+	// ⚠⚠ **THE ALIAS ARM IS ONLY AS SOUND AS THE RANGE IS ENFORCED, AND ONE DOOR DOES NOT ENFORCE IT AT
+	// RUNTIME — measured, and the one way this verdict can be WRONG rather than merely coarse.** Four of the
+	// five doors into a ranged binding emit a runtime guard (`as` cast, field store, field default, ranged
+	// `return`), so `neverZero` off a `NonZero` value from any of them is a real proof. The fifth — a CALL
+	// ARGUMENT — owes only the COMPILE-TIME half by design (`InsertRangeChecks.processArgSite`, whose
+	// `RangeCheckGuard.compileTimeOnly` catches an out-of-range LITERAL and nothing else), so a runtime 0
+	// passed to a `d NonZero` parameter, or pushed into an `Array with NonZero`, reaches an unguarded `idiv`
+	// and traps. VERIFIED against the bootstrap on the parameter case: it emits the identical bare divide and
+	// traps identically, so this is the LANGUAGE's unenforced premise rather than an shv2 divergence, and the
+	// cure belongs to the argument door (every call site with a ranged parameter gains a guard) and not to
+	// the division rule. Filed for its own rung; recorded here because a premise nothing enforces is worth
+	// more written down than inferred.
 	function divisorZeroVerdict(divisor ValueId) returns DivisorZeroVerdict
 		if self.floatConstIsKnown(divisor) 'floatConstant'
 			return DivisorZeroVerdict.alwaysZero if floatOrderKey(self.floatConstBitsOf(divisor)) == 0 else DivisorZeroVerdict.neverZero
@@ -20578,16 +20627,34 @@ export type Parser
 	// could be a bool, which is what `consume(f.a or f.b)` against a `bool` parameter needs.
 	// The source range anchors on the operator token (the conventional binop anchor).
 	//
-	// ⚠ **A `/` OR `mod` MUST NOT ARRIVE HERE FROM THE SOURCE DIRECTLY.** `emitDivOrMod` owns the
-	// divide-by-zero policy and calls this only on its provably-non-zero path; the source-level door is
-	// `parseBinary`'s `divisionOperator` gate. This function stays the emitter for the bare divide (that is
-	// what "byte for byte unchanged" means) and deliberately does not re-ask the policy, which would either
-	// duplicate it or diverge from it.
+	// ⭐⭐ **A `/` OR `mod` CANNOT BE EMITTED THROUGH THIS DOOR AT ALL — REFUSED, NOT DOCUMENTED.** This
+	// function is the emitter for the fourteen operators whose result is just a number; `emitDivOrMod` owns
+	// the divide-by-zero policy and reaches the bare emit below through `emitBinOpOverCheckedOperands`, past
+	// this refusal, on its provably-non-zero verdict alone.
+	//
+	// ⚠ **THE COMMENT THAT USED TO STAND HERE WAS THIS RUNG'S OWN EVIDENCE THAT A COMMENT IS NOT ENOUGH.**
+	// It asked callers not to bring a division here — and `emitMonotonicMs` already had, silently, for as
+	// long as it had existed: a second division path in a compiler whose whole A1 claim is that there is
+	// one. A new intrinsic that divides is exactly as easy to write today, and the next one would be found
+	// the same way (by reading) or not at all. A `panic` names the caller, on the first program that
+	// compiles it, and needs nobody to be reading.
 	function emitBinOp(lhs ValueId, rhs ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
 		let leftTag = self.tagOf(lhs)
 		let rightTag = self.tagOf(rhs)
 		try requireBinOpOperands(op, left: leftTag, right: rightTag, opTok: opTok)
 
+		if divisionOperator(op) 'divisionSkippedItsPolicy'
+			panic("emitBinOp: '{op.rawValue}' is a DIVISION, and reaching this emitter is how one gets emitted with NO divide-by-zero verdict asked — an unguarded `idiv` where a catchable `DivisionByZero` was promised. Route it through `emitDivOrMod`, which owns the rule for every `/` and `mod` in the language; `parseBinary`'s `divisionOperator` gate is the source-level door and `emitMonotonicMs` is the intrinsic-level one.")
+		end 'divisionSkippedItsPolicy'
+
+		return self.emitBinOpOverCheckedOperands(lhs, rhs: rhs, op: op, leftTag: leftTag, rightTag: rightTag, opTok: opTok)
+	end 'emitBinOp'
+
+	// The emit itself, entered only with the operand rule ALREADY asked — which is what lets `emitDivOrMod`
+	// reach it for the one operator `emitBinOp` refuses without either re-asking `requireBinOpOperands` or
+	// carrying a "trust me" flag through the door above. The result's TYPE is the operator's: arithmetic and
+	// shifts are integer; `and`/`or`/`xor` follow their operands (`wordOpResultTag`).
+	function emitBinOpOverCheckedOperands(lhs ValueId, rhs ValueId, op MaxonBinOp, leftTag ValueTypeTag, rightTag ValueTypeTag, opTok Token) returns ValueId
 		let resultTag = binOpResultTag(op, left: leftTag, right: rightTag)
 
 		// ⭐ **NUMERIC PROMOTION, PAID FOR.** `TypeRules.arithResultTag` answering `float` is a
@@ -20614,7 +20681,7 @@ export type Parser
 		end 'bothKnown'
 
 		return result
-	end 'emitBinOp'
+	end 'emitBinOpOverCheckedOperands'
 
 	// One operand of a binary op or comparison, moved into the float domain if the PAIR meets
 	// there. Takes both tags because promotion is a property of the pair, not of the operand —

@@ -2164,6 +2164,17 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: DivisorZeroPattern, valueType: operandType))
 		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(errorFlag, lhs: divisor, rhs: zero, pred: StdCmpPred.eq, operandType: operandType))
 
+		// ⭐⭐ **THE DIVIDE ITSELF GOES THROUGH `lowerBinOp`, WHICH IS ALREADY THE ONE PLACE THAT DECIDES WHAT
+		// A `/` OR A `mod` BECOMES.** This expansion's job is the GUARD — which operand the divide reads —
+		// and not the OPCODE. Written out here instead, it was a second copy of `lowerDivision`'s float/int
+		// choice and of `lowerBinOp`'s `mod` arm, with nothing making the two agree: add an UNSIGNED
+		// `StdOp.udiv` for an unsigned operand type in `lowerDivision` and a checked unsigned divide would go
+		// on emitting the signed `idiv`, silently, for every divisor the compiler cannot prove non-zero. It
+		// also re-derives `appendStdBinOp`'s purity guard for free rather than sitting beside it.
+		//
+		// ⚠ The FLOAT arm hands it the RAW divisor and the integer arm the OR'd one, and that asymmetry is
+		// the ISA's, stated once in this function's header: `divsd` cannot fault, so a float divide needs the
+		// FLAG computed and nothing else guarded.
 		if stdTypeIsFloat(operandType) 'floatDivide'
 			match kind 'floatKind'
 				quotient then break 'floatKind'
@@ -2171,18 +2182,14 @@ type MaxonToStdLowering
 				notCheckedDivision then panic("lowerCheckedDivision: reached with `notCheckedDivision` — `lowerTryCall`'s match routes only the two division kinds here")
 			end 'floatKind'
 
-			self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: dividend, rhs: divisor, opcode: StdBinOpcode.div, operandType: operandType))
+			self.lowerBinOp(result, lhs: dividend, rhs: divisor, op: MaxonBinOp.div, dstBlock: dstBlock)
 			return
 		end 'floatDivide'
 
 		let safeDivisor = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(safeDivisor, lhs: divisor, rhs: errorFlag, opcode: StdBinOpcode.bitOr, operandType: operandType))
 
-		match kind 'integerKind'
-			quotient then self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: dividend, rhs: safeDivisor))
-			remainder then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: dividend, rhs: safeDivisor))
-			notCheckedDivision then panic("lowerCheckedDivision: reached with `notCheckedDivision` — `lowerTryCall`'s match routes only the two division kinds here")
-		end 'integerKind'
+		self.lowerBinOp(result, lhs: dividend, rhs: safeDivisor, op: divisionOperatorForKind(kind), dstBlock: dstBlock)
 	end 'lowerCheckedDivision'
 
 	// `panic("message")` — exit the process with a non-zero code. The parser emitted a dead return

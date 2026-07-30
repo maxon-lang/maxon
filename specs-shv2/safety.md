@@ -48,9 +48,22 @@ is still produced silently. Float `mod` does not exist (`mod` is integer-only).
 reversed together by mistake.** `idiv` faults on it as well as on a zero divisor, and
 NEITHER reference compiler handles it (the bootstrap only declines to *fold* it); the
 `DivisionByZero` this rung adds is about the DIVISOR being zero and says nothing about
-the quotient being unrepresentable. So `i64.min / -1` still raises `#DE` on x64 and is
-still classified by the fault handler to the `panic: integer divide by zero` diagnostic
-— a hardware trap in a language that otherwise has none left here.
+the quotient being unrepresentable. So `i64.min / -1` still raises a hardware fault on
+x64 — a trap in a language that otherwise has none left here.
+
+⚠⚠ **AND THAT FAULT IS NOT DIAGNOSED AT ALL, which is measured and is not what this file
+claimed.** It arrives as `STATUS_INTEGER_OVERFLOW` (**0xC0000095**), a DIFFERENT exception
+code from the zero divisor's `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094), and
+`X64Runtime.buildFaultThunkChunk` converts 0xC0000094 **and nothing else** — its own header
+says so, and lists integer overflow among the codes that "arrive with their specs, at their
+milestones". So the process dies with **no panic line, no backtrace, and exit 0xC0000095**
+rather than the `panic: integer divide by zero` + exit 1 this paragraph used to promise.
+Measured on a bare `i64.min / d` over a `d` of declared type `int(-1 to -1)`, which is the
+only spelling that gets past the divisor proof. The bootstrap DOES classify it (it carries
+both codes — `X86CodeEmitter.Runtime.cs`'s `ExceptionCodeIntOverflow` and its
+`__gt_ftp_intovf` arm), so this is an shv2 gap and one `cmp` wide; it is left to its own
+slice rather than ridden along here, because a diagnostic needs its own asserted panic line
+and this rung's subject is the DIVISOR.
 
 ## Tests
 
@@ -297,6 +310,64 @@ end 'main'
 ```
 ```maxoncstderr
 error E3057: <fragment>:10:14: throwing division requires try: wrap it as `try (a mod b) otherwise …`, or give the divisor a ranged type that excludes 0 (e.g. `int(1 to ...)`) — a bare divide drops the divide-by-zero error
+```
+
+### The parenthesized `try` target must have emitted the op it is applied to
+
+⭐⭐ **A `try` TARGET THAT EMITS NOTHING MUST BE REFUSED, AND ONLY A REFUSAL KEEPS THE DOOR THE
+WIDTH IT CLAIMS.** `try (a / b)` is accepted because `rewriteLastCallToTryCall` converts the LAST op
+in the current block and a possibly-zero divide leaves a `call __checked_div` there. That derivation
+is sound only while the target is guaranteed to have PUT an op there: a parenthesized group whose
+inner expression is a bare NAME emits no op at all (a name is a lookup), so "the last op the target
+emitted" silently becomes *the last op the previous statement emitted*.
+
+⚠ **Measured before the guard existed, and it was not merely a wrong message.** The second case below
+COMPILED and returned **99**: the `try`/`otherwise` was transplanted onto the `arr.get(2)` two
+statements above it, so the handler fired for the ARRAY's out-of-bounds error, `w` took the handler's
+value instead of `a`'s, and the E3057 that bare `arr.get(2)` owed disappeared along the way — because
+the op it would have been reported against was no longer a plain `call`. Two diagnostics lost and a
+wrong value produced, from one widened door.
+
+The guard is a DERIVATION rather than a paren-shaped special case: `parseTry` records the module's op
+count before parsing the target, and an op older than that mark cannot be the target's. Every other
+try form is unaffected, because every one of them emits its call.
+
+<!-- test: error.try-over-a-parenthesized-non-call -->
+The group is a plain local, so nothing was emitted for it. The blame must land on the `try`, not on
+the non-throwing `opaque` whose call happens to be the last op in the block.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let v = opaque(5)
+	let w = try (v) otherwise 99
+	return w as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:10: Unsupported: `try` must be applied to a call — `try f(…)` or `try obj.method(…)`; the expression after `try` is not a call
+```
+
+<!-- test: error.try-over-a-parenthesized-name-cannot-claim-an-earlier-call -->
+The same shape with a THROWING call in front of it — the case that compiled and answered 99.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(7)
+	let a = arr.get(2)
+	let w = try (a) otherwise 99
+	return w as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:9:10: Unsupported: `try` must be applied to a call — `try f(…)` or `try obj.method(…)`; the expression after `try` is not a call
 ```
 
 ### A divisor the compiler HOLDS as 0 is never recoverable — it is E3103
