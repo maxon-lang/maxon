@@ -1332,13 +1332,18 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 	if signatures.isGenericAlias(name) 'genericAlias'
 		return signatures.genericInstanceBoxDropCallee(signatures.genericAliasInstance(name))
 	end 'genericAlias'
-	return managedNameDropCallee(signatures, typeNames: typeNames, name: name)
+	return managedNameDropCallee(signatures, name: name)
 end 'managedFieldDropCallee'
 
 // The drop callee for a managed field NAMED `name` — a declared struct or boxed union. Split from
 // `managedFieldDropCallee` so a `structRef` (which is always a struct) and a `named` (struct or union) reach
 // the same struct/union lookup once the name is in hand.
-function managedNameDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, name ByteArray) returns ByteArray
+//
+// ⚠ **IT TAKES NO INTERNER, AND MUST NOT.** Every question below is keyed by the NAME, and the two that need
+// a layout (`structHasManagedField`, `unionHasManagedPayload`) fetch the index's OWN and read it over the
+// index's OWN interner. It USED to thread the caller's `typeNames` through to the union arm, which is how a
+// `signatures` layout came to be resolved against `project.typeNames` — see `unionHasManagedPayload`.
+function managedNameDropCallee(signatures ProgramSignatures, name ByteArray) returns ByteArray
 	// ⭐ **A `CharacterSet` IS A COMPILER-OWNED AGGREGATE AND TAKES A COMPILER-OWNED DROP** (P1.8 Slice D),
 	// exactly as an `Array` takes `__arr_decref` and a `Set` takes `__set_decref`. Asked BEFORE the
 	// declared-struct lookup: its layout IS registered (it needs a nominal identity) and it DOES own a
@@ -1385,22 +1390,17 @@ function managedNameDropCallee(signatures ProgramSignatures, typeNames TypeNameI
 		end 'managedStruct'
 		return MmDecrefName
 	end 'struct'
+	// ⭐ **BY NAME, exactly as the struct arm above is** — and through the SAME `unionBoxDropCallee` a boxed
+	// union's scope-exit drop takes, so a union FIELD and a union BINDING cannot be dropped through
+	// different callees. See `unionHasManagedPayload` for the reachable compiler panic the layout-and-
+	// foreign-interner spelling this replaces produced.
 	match signatures.enumOf(name) 'union'
-		declared(layout) then return unionNameDropCallee(signatures, typeNames: typeNames, layout: layout)
+		declared then return signatures.unionBoxDropCallee(name)
 		// A managed field that is neither struct nor enum cannot occur: `structFieldIsManaged` classified it
 		// managed, and its only managed non-String forms are a declared struct and a boxed union.
 		undeclared then panic("managedNameDropCallee: managed field '{String.from(name)}' is neither a declared struct nor a declared enum/union — the caller classified it managed")
 	end 'union'
 end 'managedNameDropCallee'
-
-// A boxed union that itself owns a managed payload drops through its own cascade; a scalar-only union box
-// owns only its box.
-function unionNameDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout) returns ByteArray
-	if unionHasManagedField(signatures, typeNames: typeNames, layout: layout, wantStringOnly: false) 'managedUnion'
-		return destructorSymbol(layout.name)
-	end 'managedUnion'
-	return MmDecrefName
-end 'unionNameDropCallee'
 
 // ⭐ **HOW A MANAGED FIELD OF DECLARED TYPE `fieldType` IS DEEP-CLONED (P1.7 slice 3b-vi-b).** The exact
 // STRUCTURAL DUAL of `managedFieldDropCallee`: a value cloned through the strategy this returns is dropped
@@ -5999,21 +5999,30 @@ export type ProgramSignatures
 		return self.enumTypes.contains(name)
 	end 'containsEnum'
 
-	// The runtime entry that drops an owned box of `layout` — `__destruct_<U>` for a managed-payload
-	// union (its own tag-conditional cascade), the trivial `__mm_decref` for a scalar-only one. THE
-	// door `decrefCalleeFor` routes a boxed union's scope-exit drop through.
+	// ⭐ **THE ONE RUNTIME ENTRY THAT DROPS AN OWNED BOX OF UNION `unionName`** — `__destruct_<U>` for a
+	// managed-payload union (its own tag-conditional cascade), the trivial `__mm_decref` for a scalar-only
+	// one. BOTH doors that ask it come here: `decrefCalleeFor`'s scope-exit drop of a boxed union, and
+	// `managedNameDropCallee`'s union arm for a boxed-union FIELD.
 	//
-	// ⚠ It resolves the layout's payload types against `self.typeNames` — the interner they were
-	// minted against (a signatures layout's payload ids live here, remapped in by
-	// `remapEnumLayoutPayloadTypes`), NOT the caller's. The interner is NOT the caller's to choose:
-	// `decrefCalleeFor` used to pass its own artifact interner, which misread a managed payload
-	// whenever a ranged alias perturbed the interning order — answering `__mm_decref` for a
-	// managed-payload union (a LEAK) or a wrong `__destruct_<T>` (a wild-free). Keeping the
-	// resolution here, over this index's own interner, is the fix (OPEN #52).
+	// ⚠ **IT TAKES A NAME, NOT A LAYOUT AND AN INTERNER, AND THAT IS THE WHOLE POINT.** The payload types
+	// are resolved against `self.typeNames` — the interner they were minted against (a signatures layout's
+	// payload ids live here, remapped in by `remapEnumLayoutPayloadTypes`) — and the interner is NOT the
+	// caller's to choose. It went wrong TWICE, in the two doors, and each was fixed alone:
+	//   • `decrefCalleeFor` passed its own ARTIFACT interner, which misread a managed payload whenever a
+	//     ranged alias perturbed the interning order — `__mm_decref` for a managed-payload union (a LEAK) or
+	//     a wrong `__destruct_<T>` (a wild-free). OPEN #52.
+	//   • `managedNameDropCallee`'s union arm passed the caller's `project.typeNames` against a SIGNATURES
+	//     layout, which cross-file read a ranged-alias payload as MANAGED and demanded a `__destruct_<U>`
+	//     that `installUnionDestructors` — asking over the correctly-paired PROJECT layout — never
+	//     synthesized: `bl to unknown function '__destruct_Payloaded'`, a compiler panic on a valid
+	//     two-file program. Found in T1's review; see `unionHasManagedPayload`.
+	// One fact was spelled twice and only one copy was ever repaired. Taking the NAME leaves nothing for a
+	// caller to get wrong, so the second copy cannot come back.
 	//
-	// Precondition: `layout` came from `self.enumOf`, so its payload ids live in `self.typeNames`.
-	export function unionBoxDropCallee(layout EnumLayout) returns ByteArray
-		return unionNameDropCallee(self, typeNames: self.typeNames, layout: layout)
+	// The union is a precondition, not a case: both callers reached here through an `enumOf` that answered
+	// `declared`.
+	export function unionBoxDropCallee(unionName ByteArray) returns ByteArray
+		return destructorSymbol(unionName) if self.unionHasManagedPayload(unionName) else MmDecrefName
 	end 'unionBoxDropCallee'
 
 	// The DECLARED type of field `index` of struct `structName`, ADOPTED into `into` — the calling
@@ -6361,6 +6370,33 @@ export type ProgramSignatures
 		end 'eachField'
 		return false
 	end 'structHasManagedField'
+
+	// ⭐ **THE UNION TWIN OF `structHasManagedField`, AND BY NAME FOR THE IDENTICAL REASON**: the layout comes
+	// out of THIS index's own `enumTypes` and is read over THIS index's own interner, so a caller cannot pair
+	// a layout from one registry with an interner from another. The free `unionHasManagedField` still takes
+	// both, because its other callers legitimately hold a PROJECT layout and pass `project.typeNames` — a
+	// correctly-matched pair. This is the entry for a caller that holds only a NAME.
+	//
+	// ⚠⚠ **THE PAIRING THIS REPLACES WAS A REACHABLE COMPILER PANIC ON A VALID PROGRAM, MEASURED (T1 review).**
+	// `managedNameDropCallee`'s STRUCT arm already asked by name (`structHasManagedField`); its UNION arm
+	// fetched `enumOf(name)`'s layout — a SIGNATURES layout — and resolved that layout's payload ids against
+	// the CALLER's `project.typeNames`. In ONE file the two tables fold in the same order and every id
+	// coincides; ACROSS files they diverge, so a `some(v Num)` payload whose `Num` is a ranged alias
+	// misresolved and the union read MANAGED, demanding a `__destruct_<U>` — while `installUnionDestructors`
+	// asked the SAME question over the correctly-paired PROJECT layout, read SCALAR, and synthesized nothing.
+	// The two answers then linked against each other:
+	//   `panic at Arm64Backend: arm64ResolveCallFixups: bl to unknown function '__destruct_Payloaded'`
+	// on a two-file program containing no error at all. It is OPEN #56's mismatch — the one
+	// `managedStructFieldDropCallee` closed for the struct arm — surviving in the arm nobody closed it for,
+	// and it is the same "an id is only a number without its table" defect T1 fixed one door along. Asking by
+	// NAME makes the mispairing UNREPRESENTABLE rather than correct-by-convention.
+	//
+	// The union is a precondition, not a case: the sole caller reached here through an `enumOf` that answered
+	// `declared`.
+	export function unionHasManagedPayload(unionName ByteArray) returns bool
+		let layout = try self.enumTypes.get(unionName) otherwise panic("ProgramSignatures.unionHasManagedPayload: no `union {String.from(unionName)}` is declared — the caller asks `enumOf` first")
+		return unionHasManagedField(self, typeNames: self.typeNames, layout: layout, wantStringOnly: false)
+	end 'unionHasManagedPayload'
 
 	// ⭐ **CAN A MANAGED-ELEMENT `Array with T` BE DEEP-CLONED by this rung's mechanism (P1.7 slice 3b-vi-b)?**
 	// The FRONT-END gate for a managed `slice`/`clone`/`append`, and the exact envelope the cloner synthesis

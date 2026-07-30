@@ -545,3 +545,161 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:25:22: Unsupported: reading the managed field 'items' out of a TEMPORARY `Bag` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
 ```
+
+<!-- test: crossfile-ranged-alias-union-payload-drop-cascade -->
+⭐⭐ **A SECOND MISPAIRING, ONE DOOR FURTHER IN — and this one PANICKED THE COMPILER on a program
+with no error in it.** `Bag` owns a boxed-union field whose payload is typed by a ranged alias.
+"Does this union own managed heap?" was asked twice with two different pairings: the DROP ROUTING
+(`managedNameDropCallee`) resolved a **signatures** layout against **`project.typeNames`** and read
+the alias payload MANAGED, demanding a `__destruct_Payloaded`; `installUnionDestructors` asked over
+the correctly-paired **project** layout, read it SCALAR, and synthesized nothing. The two answers
+linked against each other — `bl to unknown function '__destruct_Payloaded'`. In ONE file the two
+tables fold in the same order and every id coincides, so it is cross-file only, and it needs no
+padding: the divergence is structural, not order-sensitive. Both doors now ask
+`unionBoxDropCallee(name)`, which answers over the index's own layout and interner.
+```maxon
+// --- file: bag.maxon
+typealias Num = int(0 to 1000)
+
+export union Payloaded
+	some(v Num)
+	none
+end 'Payloaded'
+
+export type Bag
+	export var n as Num
+	export var u as Payloaded
+
+	export static function make() returns Bag
+		return Bag{n: 42, u: Payloaded.some(3)}
+	end 'make'
+end 'Bag'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return Bag.make().n
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: crossfile-ranged-alias-union-payload-off-a-bound-name -->
+⚠ **CONTROL for the case above, and the proof it was reachable WITHOUT the temporary door at all.**
+The same two files read through a BOUND receiver, which the managed-field guard never inspects. It
+panicked identically, so the mispairing is the drop routing's and not the guard's — which is why
+fixing the guard alone would have left it live.
+```maxon
+// --- file: bag.maxon
+typealias Num = int(0 to 1000)
+
+export union Payloaded
+	some(v Num)
+	none
+end 'Payloaded'
+
+export type Bag
+	export var n as Num
+	export var u as Payloaded
+
+	export static function make() returns Bag
+		return Bag{n: 42, u: Payloaded.some(3)}
+	end 'make'
+end 'Bag'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let b = Bag.make()
+	return b.n
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: crossfile-genuinely-managed-union-payload-drop-cascade -->
+⚠ **CONTROL (e).** The same shape with a payload that is GENUINELY managed — a `String`. This one
+always worked, because a `string` payload carries its own tag and never needs a name resolved
+against any interner. It is what localises the defect above to the NAME RESOLUTION rather than to
+unions, to cross-file layouts, or to the drop cascade itself.
+```maxon
+// --- file: bag.maxon
+export union Payloaded
+	some(v String)
+	none
+end 'Payloaded'
+
+export type Bag
+	export var n as int
+	export var u as Payloaded
+
+	export static function make() returns Bag
+		return Bag{n: 42, u: Payloaded.some("x")}
+	end 'make'
+end 'Bag'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let b = Bag.make()
+	return b.n
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: crossfile-generic-instance-scalar-field-off-a-temporary -->
+⭐ **THE GUARD'S OTHER ARM.** The refusal reads `genericInstanceFieldIsManaged` when the receiver is
+a generic INSTANCE and `structFieldIsManaged` when it is a plain struct; only the struct arm is
+exercised above. A `Holder with Integer`'s `item` is a trivial scalar, so it is COPIED and the read
+off a temporary is legal — cross-file, where the alias naming the instance lives in the reading file
+and the generic type in the other.
+```maxon
+// --- file: holder.maxon
+export type Holder uses T
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+end 'Holder'
+
+// --- file: main.maxon
+typealias Integer = int(0 to u32.max)
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	return IntHolder.create(7).item
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.crossfile-generic-instance-managed-field-off-a-temporary -->
+⭐ **THE GUARD'S OTHER ARM MUST STILL REFUSE.** `Holder with String`'s `item` is a managed heap
+pointer the box frees at drop, so reading it off a temporary is the same use-after-free the struct
+arm refuses. Measured stable at 0–7 padding aliases in the reading file, which is what shows the
+instance arm never depended on the interning order the struct arm did.
+```maxon
+// --- file: holder.maxon
+export type Holder uses T
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+end 'Holder'
+
+// --- file: main.maxon
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let s = StrHolder.create("hello").item
+	print(s)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:36: Unsupported: reading the managed field 'item' out of a TEMPORARY `Holder` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```

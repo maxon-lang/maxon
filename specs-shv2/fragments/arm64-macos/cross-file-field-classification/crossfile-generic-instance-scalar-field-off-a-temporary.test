@@ -1,0 +1,53 @@
+// Test: crossfile-generic-instance-scalar-field-off-a-temporary
+// --- file: holder.maxon
+export type Holder uses T
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+end 'Holder'
+
+// --- file: main.maxon
+typealias Integer = int(0 to u32.max)
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	return IntHolder.create(7).item
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.bl Holder.create
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
