@@ -61,10 +61,12 @@
 // * The STDERR DRAIN IS SYNCHRONOUS, at shutdown. v1 drained it continuously from an `async` GT
 //   and leaked one MM allocation per worker (the Promise box + the GT's arg buffer never
 //   returned to the slab). See `shutdownAndDrainStderr`.
-// * NO WATCHDOG. v1 needed one because its workers compiled IN-PROCESS, so a compiler infinite
-//   loop hung the worker with no way out. Here every compile is a grandchild subprocess, and a
-//   compiler that hangs hangs the serial runner too — a timeout in the pool would only disguise
-//   where the bug is.
+// * NO PER-JOB TIMEOUT. v1 needed one because its workers compiled IN-PROCESS, so a compiler
+//   infinite loop hung the worker with no way out. Here every compile is a grandchild subprocess,
+//   and a compiler that hangs hangs the serial runner too — a per-job timeout in the pool would
+//   only disguise where the bug is. What the pool DOES have is a wedge watchdog, which is not the
+//   same thing: it does not bound a job, it bounds the DISPATCH LOOP's own idleness, and it never
+//   reroutes or retries — it panics with every slot's state. See `WedgeWatchdogMs`.
 // * NO `WORKER_COMPILING:` BREADCRUMBS. Same root cause: v1's worker WAS the compiler, so a
 //   compiler panic killed it and the parent needed a breadcrumb to say which fragment did it.
 //   Here a compiler panic is a non-zero exit from a grandchild, which `runOneTest` already turns
@@ -103,6 +105,47 @@ let ProtocolFieldSep = ":"
 // that finished early would sit idle until the awaited one came back.
 let PollYieldMs = 1
 
+// Milliseconds in a second. Named because the watchdog below is stated in SECONDS (the unit an
+// operator thinks in) and measured in MILLISECONDS (the unit `Clock` counts in), and one of those
+// two spellings has to be derived from the other rather than written down twice.
+let MillisPerSecond = 1000
+
+// The one fractional digit `formatSeconds` keeps.
+let TenthsPerSecond = 10
+
+// How long the dispatch loop tolerates making NO progress at all — nothing dispatched, nothing
+// collected — before it declares the pool wedged and panics with every slot's state.
+//
+// ⚠ THIS NUMBER IS MEASURED, NOT GUESSED, and it has to be: a watchdog that fires on a merely slow
+// run is worse than no watchdog, because it turns a green suite red at random and the gate stops
+// meaning anything. Measured on the 8-core arm64-macOS host, 2026-07-30: the whole 210-spec suite
+// takes 5.5 s on the host lane and 8.2 s on the wasm lane, and the slowest SINGLE spec run on its
+// own — `arrays`, 92 tests — takes 1.25 s including process startup. "Progress" is a job being
+// dispatched or an answer being collected, so the interval this bounds can only be as long as the
+// slowest single JOB, which is one spec: 1.25 s realistically, and 8.2 s as a ceiling no job can
+// exceed because no job outlasts the run that contains it. Two minutes is ~15x the entire suite and
+// ~96x the slowest job — a false positive needs a machine two orders of magnitude slower than the
+// one measured, on which the suite would take nine minutes and a wedge report would be the least of
+// the operator's problems.
+//
+// The one non-absurd way to trip it is a machine SUSPENDED mid-run for longer than this: Darwin's
+// CLOCK_MONOTONIC is boottime-based and keeps counting across a lid-close. That is not a slow run,
+// it is a stopped one, and the report identifies itself — every slot reads the same age, and that age
+// is the length of the nap.
+//
+// WHY IT EXISTS AT ALL: the dispatch loop's fallthrough is a POLL, not a block, so a pool that stops
+// making progress does not deadlock loudly — it parks and re-scans forever, at a couple of percent
+// CPU, and an unattended gate is then indistinguishable from a slow one. It has happened: measured at
+// 2 wedges in 75 back-to-back suite runs on this host, on both lanes, green on retry with the same
+// binary. A LOUD failure is retryable and diagnosable; a silent hang is neither.
+//
+// ⚠ IT IS NOT A WORKAROUND FOR THE WEDGE IT WAS WRITTEN FOR, and it does not retire when that is
+// fixed. The 2026-07-30 wedges were traced OUT of this file — a lost kqueue wakeup in the arm64
+// green-thread runtime — and the case for a deadline on a poll loop is independent of them: a loop
+// that cannot deadlock can only fail by never finishing, and that failure has no symptom unless
+// something is counting.
+let WedgeWatchdogMs = 120 * MillisPerSecond
+
 // A leak-gated Maxon program exits with this when it leaked. A worker IS such a program, so this
 // code coming back from one means the HARNESS leaked while servicing that worker's tests — a
 // suite failure even if every test it ran passed.
@@ -127,6 +170,10 @@ typealias WorkerId = int(0 to u32.max)
 // A TALLY of workers, which — unlike a pool size — may legitimately be zero ("no worker exited
 // non-zero"). A separate alias precisely because `WorkerCount` may not be.
 typealias WorkerTally = int(0 to u32.max)
+
+// A tally of JOBS — dispatched, completed, still queued. The dispatch loop's own bookkeeping, and
+// what the wedge report leads with.
+typealias JobTally = int(0 to u64.max)
 
 // A job's dispatch weight: the total source bytes of the tests it will run. BYTES, not test
 // count — a spec's cost tracks how much source the compiler must chew, and 15 one-liners are
@@ -590,6 +637,12 @@ end 'outcomeOf'
 typealias DrainPromise = Promise with (StringArray, SubprocessError)
 typealias DrainPromiseArray = Array with DrainPromise
 
+// When each slot's in-flight job was handed to its worker. Read ONLY by the wedge report, where the
+// spread between the slots is the diagnosis: twelve slots dispatched within milliseconds of each
+// other says the whole pool stalled at once, while one slot far older than the rest names the single
+// worker that stopped answering.
+typealias DispatchInstantArray = Array with InstantMs
+
 // Read record lines from `child` until its next WORKER_READY. Throws on EOF before READY — the
 // worker exited mid-job — so the dispatcher's `otherwise 'workerDied` fires.
 //
@@ -797,6 +850,57 @@ function abortOnDeadWorker(handle PersistentWorkerHandle, job SpecJob, reason St
 	panic("spec worker {handle.workerId} died while running '{job.specName}'; see stderr above")
 end 'abortOnDeadWorker'
 
+// `1234` as `1.2 s`. The wedge report's numbers span three orders of magnitude — a slot re-dispatched
+// milliseconds ago sits beside one outstanding for two minutes — and a raw millisecond count buries
+// the only digit that separates them.
+function formatSeconds(ms DurationMs) returns String
+	let whole = ms / MillisPerSecond
+	// Scaled by the tenths-per-second BEFORE the divide, so the one divisor in this function is
+	// `MillisPerSecond` twice over rather than a second constant derived from it.
+	let tenths = (ms - whole * MillisPerSecond) * TenthsPerSecond / MillisPerSecond
+	return "{whole}.{tenths} s"
+end 'formatSeconds'
+
+// The pool has stopped moving. Print what every slot was doing and take the run down.
+//
+// THE REPORT IS THE POINT. A wedge is not reproducible on demand — the measured rate is a couple of
+// runs in a hundred, and the same binary runs green on the retry — so the ONE moment the state is
+// knowable is the moment it is detected, and a watchdog that merely said "timed out" would throw away
+// the only evidence anybody will ever get. The three facts below each rule out a different cause:
+//
+//   * WHICH SLOTS ARE BUSY, and the spread of their ages. All twelve stalled together is a parent-
+//     side or scheduler-side stall; one slot far older than the rest names a single stuck worker.
+//   * WHAT JOB each busy slot holds, so the spec can be run on its own.
+//   * WHETHER THE DRAIN PROMISE IS COMPLETE. Every busy slot should read `no` here, because a
+//     completed drain is exactly what `findReadyDrain` would have served instead of parking. A `yes`
+//     would mean the answer arrived and the SCAN missed it — a different bug entirely, in this file
+//     rather than under it, and one nothing else would ever surface.
+//
+// There is deliberately no recovery, for the same reason `abortOnDeadWorker` has none: rerouting or
+// retrying inside the harness would turn a hard bug into an intermittently green suite.
+function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt DispatchInstantArray, queued JobTally, dispatched JobTally, completed JobTally)
+	var report = LineJoiner.create()
+	report.push("\n=== spec worker pool WEDGED: nothing dispatched or collected for {formatSeconds(WedgeWatchdogMs)} ===")
+	report.push("{dispatched} job(s) dispatched, {completed} collected, {queued} still queued")
+
+	for slot in 0 upto busy.count() 'eachSlot'
+		let isBusy = try busy.get(slot) otherwise panic("abortOnWedgedPool: busy.get({slot}) is in bounds by construction")
+		if not isBusy 'idleSlot'
+			report.push("  slot {slot}: idle")
+			continue
+		end 'idleSlot'
+
+		let job = try inFlight.get(slot) otherwise panic("abortOnWedgedPool: inFlight.get({slot}) is in bounds by construction")
+		let since = try dispatchedAt.get(slot) otherwise panic("abortOnWedgedPool: dispatchedAt.get({slot}) is in bounds by construction")
+		let drain = try drains.get(slot) otherwise panic("abortOnWedgedPool: a busy slot always has a drain promise, and slot {slot} is busy")
+		let answered = "yes" if __Builtins.gtIsComplete(drain.inner) != 0 else "no"
+		report.push("  slot {slot}: '{job.specName}' sent {formatSeconds(Clock.elapsedMs(since))} ago, drain complete: {answered}")
+	end 'eachSlot'
+
+	printError("{report.build()}\n")
+	panic("spec worker pool wedged — see the per-slot report above. This is a HARNESS bug, not a test failure: RETRY the run. If it reproduces, `scripts/spec-wedge-repro.sh` loops the suite and captures the parked stacks of the parent and its workers the next time it happens.")
+end 'abortOnWedgedPool'
+
 // ============================================================================================
 // THE DISPATCHER
 // ============================================================================================
@@ -859,17 +963,23 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 	// Promise cannot live inside a struct the loop also keeps mutating (see `drainResultsThunk`),
 	// and splitting out only that one field would read worse than splitting all of them.
 	//
-	// THE THREE ARE INDEXED BY THE SAME SLOT NUMBER AND `busy` IS THE GUARD FOR THE OTHER TWO:
-	// `inFlight[slot]` and `drains[slot]` are read ONLY where `busy[slot]` is true, and `sendAndDrain`
-	// establishes all three before it sets the guard — so a slot is never observable as busy with a
-	// stale job or a missing promise.
+	// THE FOUR ARE INDEXED BY THE SAME SLOT NUMBER AND `busy` IS THE GUARD FOR THE OTHER THREE:
+	// `inFlight[slot]`, `drains[slot]` and `dispatchedAt[slot]` are read ONLY where `busy[slot]` is
+	// true, and `sendAndDrain` establishes all three before it sets the guard — so a slot is never
+	// observable as busy with a stale job or a missing promise.
 	var busy = BoolArray.create()
 	var inFlight = SpecJobArray.create()
 	var drains = DrainPromiseArray.create()
+	var dispatchedAt = DispatchInstantArray.create()
 	let idleJob = SpecJob.idle()
+	// The placeholder instant, like `SpecJob.idle()` beside it: never read, because an idle slot's
+	// age is not a thing the report prints. It only keeps this array the same length as `busy` from
+	// the start, so the two are indexed by the same slot number.
+	let idleInstant = Clock.nowMs()
 	for _ in 0 upto poolSize 'initSlots'
 		busy.push(false)
 		inFlight.push(idleJob)
+		dispatchedAt.push(idleInstant)
 	end 'initSlots'
 
 	// One bucket per plan, filled out of order and concatenated in plan order at the end. THIS is
@@ -883,15 +993,23 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 	// drains that same slot again, while every other worker sits on a finished job nobody reads.
 	var dispatchCursor = 0 as WorkerId
 	var drainCursor = 0 as WorkerId
-	var dispatched = 0
-	var completed = 0
+	var dispatched = 0 as JobTally
+	var completed = 0 as JobTally
+
+	// The watchdog's whole state. `dispatched + completed` counts every progress event this loop can
+	// make, so a poll that finds it unchanged since the previous poll found nothing moving — which is
+	// exactly the condition to time, and it is measured HERE rather than at the three places progress
+	// happens, so there is one clock read per park and no way to add a fourth progress path that
+	// forgets to reset the timer.
+	var lastProgress = 0 as JobTally
+	var lastProgressMs = Clock.nowMs()
 
 	while true 'dispatchLoop'
 		// Feed the pool before draining it: the parallelism does not exist until every worker has a
 		// job, so an idle slot always outranks a ready answer.
 		if let idleSlot = try findIdleSlot(busy, cursor: dispatchCursor) 'haveIdleWorker'
 			if jobQueue.count() > 0 'haveWork'
-				sendAndDrain(workers, slot: idleSlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains)
+				sendAndDrain(workers, slot: idleSlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt)
 				dispatched = dispatched + 1
 				dispatchCursor = wrapSlot(idleSlot + 1, poolSize: poolSize)
 				continue
@@ -927,7 +1045,7 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 			// the instant it printed WORKER_READY, so the next job overlaps with the parent's
 			// decode — and with a slowest-first queue, the next job is the best one left.
 			if jobQueue.count() > 0 'moreWork'
-				sendAndDrain(workers, slot: readySlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains)
+				sendAndDrain(workers, slot: readySlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt)
 				dispatched = dispatched + 1
 			end 'moreWork' else 'queueDrained'
 				try busy.set(readySlot, value: false) otherwise panic("runSpecPool: busy.set({readySlot}) is in bounds by construction")
@@ -940,8 +1058,21 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 			continue
 		end 'haveAnswer'
 
-		// Nobody idle, nobody answered. Park, so the scheduler can run the drain green threads —
-		// every one of them blocked on an overlapped read of its worker's stdout.
+		// Nobody idle, nobody answered. Before parking again, ask how long that has been true: a poll
+		// loop cannot deadlock, so without this the only symptom of a pool that has stopped moving is
+		// a gate that never returns.
+		let progress = dispatched + completed
+		if progress != lastProgress 'movedSincePreviousPark'
+			lastProgress = progress
+			lastProgressMs = Clock.nowMs()
+		end 'movedSincePreviousPark'
+
+		if Clock.elapsedMs(lastProgressMs) >= WedgeWatchdogMs 'wedged'
+			abortOnWedgedPool(busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, queued: jobQueue.count(), dispatched: dispatched, completed: completed)
+		end 'wedged'
+
+		// Park, so the scheduler can run the drain green threads — every one of them blocked on an
+		// overlapped read of its worker's stdout.
 		sleep(PollYieldMs)
 	end 'dispatchLoop'
 
@@ -1024,13 +1155,18 @@ end 'spawnPool'
 // right index, and the strict split below turns any future reordering into a panic rather than a
 // silently mis-indexed promise.
 //
-// THE ORDER OF THE THREE SLOT WRITES IS DELIBERATE, and `busy` goes LAST. `busy[slot]` is the guard
-// that tells the two scans below that `inFlight[slot]` and `drains[slot]` may be read, so it is set
-// only once both of them hold this job's values. Setting it first — as this used to — leaves a
-// window in which the slot claims to be busy while its promise is still the PREVIOUS job's, and that
-// window is safe today only because nothing between the writes happens to yield to another green
-// thread. That is a property of the current code, not of the invariant, so it is not one to rest on.
-function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray)
+// THE ORDER OF THE FOUR SLOT WRITES IS DELIBERATE, and `busy` goes LAST. `busy[slot]` is the guard
+// that tells the two scans below that `inFlight[slot]`, `drains[slot]` and `dispatchedAt[slot]` may
+// be read, so it is set only once all three hold this job's values. Setting it first — as this used
+// to — leaves a window in which the slot claims to be busy while its promise is still the PREVIOUS
+// job's, and that window is safe today only because nothing between the writes happens to yield to
+// another green thread. That is a property of the current code, not of the invariant, so it is not
+// one to rest on.
+//
+// `dispatchedAt` is stamped AFTER the send rather than before it, so it dates the job from the moment
+// the worker could first have seen it. The distinction matters in exactly the case it is read in: a
+// wedge report whose ages included a blocked write would be timing the parent, not the worker.
+function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt DispatchInstantArray)
 	var handle = try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")
 
 	try handle.sendJob(job.toJobLine()) otherwise (e) 'sendFailed'
@@ -1039,6 +1175,7 @@ function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job Sp
 		abortOnDeadWorker(handle, job: job, reason: "could not send it the job: {e.displayReason()}")
 	end 'sendFailed'
 
+	try dispatchedAt.set(slot, value: Clock.nowMs()) otherwise panic("sendAndDrain: dispatchedAt.set({slot}) is in bounds by construction")
 	try inFlight.set(slot, value: job) otherwise panic("sendAndDrain: inFlight.set({slot}) is in bounds by construction")
 
 	let drain = async drainResultsThunk(handle.child)
