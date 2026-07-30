@@ -140,7 +140,7 @@ end 'main'
 ```
 
 <!-- disabled-test: cstring-round-trip -->
-<!-- `String.cstr()` — the cstring intrinsics are not built (E2015) -->
+<!-- TWO blockers, and the note named only the SECOND. (1) `__ManagedMemory.fromCString(cstr)` is not built — it is the FIRST thing the case reaches, and it takes a `cstring`, a type shv2 has no producer for at all. (2) `String.cstr()` is not built either. Neither is R4.4's: a member whose only argument type does not exist cannot be given a reachable caller, so building it would be a mechanism no spec can exercise. They arrive together, with the rung that gives shv2 a `cstring`. -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -756,6 +756,121 @@ function main() returns ExitCode
 		return 42
 	end 'allSix'
 	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+### R4.4 probes — the buffer surface at its edges
+
+These are shv2-authored, one per boundary the R4.4 implementation decides. Each was measured against the
+implementation before it was committed; none is a restatement of a `/specs` case.
+
+<!-- test: buffer-surface-does-not-leak-onto-a-byte-array -->
+
+⭐⭐ **THE GUARD R4.2 COULD NOT WRITE.** R4.2 answered "is this a `__ManagedMemory`?" with an ELEMENT test
+(`giid == internArrayByteInstance()`), so every buffer member was visible on a user's own `ByteArray` too — a
+cost its own comment recorded and could not remove, because a receiver carried no memory of the surface it was
+reached through. R4.4 answers with PROVENANCE instead (`Parser.bufferSurfaceValues`), and this program is what
+says so: `"ab".toByteArray()` is byte-elemented, so the old gate ADMITTED `setLength` on it. The sibling case
+below pins the same refusal for a non-byte array, which the old gate also refused — together they show the
+gate moved rather than merely narrowed.
+```maxon
+function main() returns ExitCode
+	var b = "ab".toByteArray()
+	try b.setLength(1) otherwise return 1
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:8: Unsupported: `Array` method 'setLength' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later
+```
+
+<!-- test: buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes -->
+
+A `slice` taken THROUGH the buffer surface is itself a buffer — the surface rides the VALUE, so `sub.managed`
+resolves on a binding the slice produced. And that slice is a zero-copy VIEW, whose `capacity@16` is the
+NEGATIVE `ViewBufferCapacity` sentinel: `setLength` and `setByte` must therefore detach it to a private buffer
+before they read a bound or write a byte, or the first refuses every length and the second rewrites the
+parent's bytes. The parent is read back afterwards to prove it did not move.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(11)
+	arr.push(22)
+	arr.push(33)
+	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
+	try sub.managed.setLength(1) otherwise panic("setLength: a detached view publishes its live length")
+	try sub.managed.setByte(0, 99) otherwise panic("setByte: offset 0 of a detached 8-byte slot")
+	let parent = try arr.get(0) otherwise panic("get: index 0 of a length-3 array")
+	return (sub.managed.length() + parent) as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: byte-at-reads-the-word-buffer-a-byte-at-a-time -->
+
+`byteAt` addresses BYTES where `get` addresses ELEMENTS, and at element size 8 the two differ — which is the
+whole reason `byteAt` is not `get`'s alias. 258 is `0x0102`, so its low byte is 2 and its second byte is 1 on
+a little-endian target. It also pins the element TYPING `create`'s literal element size decides: 258 does not
+fit a `Byte`, so under R4.2's byte-only binding this program was refused outright.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	try mm.setLength(1) otherwise return 2
+	try mm.set(0, value: 258) otherwise return 3
+	let lo = try mm.byteAt(0) otherwise return 4
+	let hi = try mm.byteAt(1) otherwise return 5
+	return (lo + hi) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: byte-at-stops-at-the-live-length -->
+
+`byteAt`'s bound is `length · element_size` — the LIVE length, not the capacity that `setByte` is bounded by.
+The asymmetry is v1's and it is deliberate (`stdlib/Internals.maxon:3507-3530`): a write stages bytes into
+allocated slots BEFORE a length publishes them, a read has nothing to see there. This asks for the byte at
+exactly the limit.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	let v = try mm.byteAt(2) otherwise 7
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: grow-to-the-same-capacity-then-below-it -->
+
+`grow` raises the capacity to EXACTLY what it is asked for. Asked for what it already has it is a no-op;
+asked to LOWER it, it throws `invalidCapacity` rather than silently keeping the larger buffer — which is the
+one thing that separates it from `reserve` (v1 `stdlib/Internals.maxon:3485-3503`).
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
+	try mm.grow(8) otherwise return 2
+	if mm.capacity() != 8 'cap'
+		return 3
+	end 'cap'
+	try mm.grow(4) otherwise (e) 'shrink'
+		match e 'k'
+			invalidCapacity then return 42
+			default panic("grow below the current capacity must report invalidCapacity")
+		end 'k'
+	end 'shrink'
+	return 5
 end 'main'
 ```
 ```exitcode
