@@ -715,6 +715,38 @@ end 'RuntimeCalleeSourceMethod'
 // is". It does now: `notFound` is what makes that true, and a sixth family joining without a map gets its own
 // callee named rather than another family's word.
 //
+// ⭐⭐ **AND THE THIRD LIST IS HELD TO THE SECOND AT INSTALL TIME — THE ONE HOME OF WHY (D12 review).**
+// A family now writes its throwing callees down TWICE: once in `isThrowingXRuntimeCallee`, once as the arms
+// of its source-method map. Nothing in the language ties them, and D12 took that pairing from ONE instance
+// (R4.3's directory map) to FOUR. The divergence is the shape this project keeps being bitten by — a name
+// added to the predicate and not to the map compiles clean, passes every green suite, and then **panics the
+// compiler in front of a user who merely forgot a `try` on that one callee**. A latent crash shipped in a
+// binary, triggered by source nobody has written yet.
+//
+// ⇒ **Each family's install-time drift guard now ASKS ITS OWN MAP for every throwing callee it installed**
+// (`installManagedFileRuntime`, `installManagedDirectoryRuntime`, `installStringIndexRuntime`, and
+// `ArrayRuntime.verifyThrowingAccessorsMatchPredicate` for the buffer members). A missing arm is the map's
+// own `panic`, fired at INSTALL of any program that uses the family — which the spec suite does on every
+// run — instead of at a user's missing `try`. The builder set is already held equal to the predicate in
+// those same loops, so the chain is builders ≡ predicate ≡ map, checked in ONE traversal.
+//
+// ⚠ **NO SECOND LIST, AND THAT IS THE POINT OF THE SHAPE.** The names come from `module.functions` — what
+// was actually installed — and the map is interrogated directly rather than described by a parallel column
+// of names. `Project.BuiltinErrorOrdinalCheck`'s header (7b) records what the column costs: its first cut
+// took two parallel arrays and thereby reintroduced, in the guard's own call shape, the drift the guard
+// existed to catch.
+//
+// ⚠ **FORWARD ONLY — "every throwing callee has a spelling" — and the backward arm is deliberately absent
+// rather than forgotten**, for 7b's reason one step over. "Every name the map answers for is throwing"
+// cannot be asked without enumerating the map's DOMAIN, which is exactly the name column above; and it would
+// guard nothing, because a map is only ever reached through its family's throwing predicate, so an arm for a
+// non-throwing callee is unreachable rather than wrong. ⚠ The forward arm is total for the file (8),
+// directory (4), string-search (2) and buffer (7) families. It is NOT total for the array accessors, and
+// that is a design fact rather than a gap: the nine genuine `Arr*` throwing callees have NO per-method
+// spelling ON PURPOSE — they are worded as a family ("throwing array accessor"), which is what
+// `try-postfix-target.error.two-throwing-calls-in-one-chain` pins. So the array loop asks only for the
+// buffer members, the subset that has a map.
+//
 // ⚠ **THE MEMORY ARM MUST STAY ABOVE ANY ARRAY TEST, FOR `runtimeThrowsClause`'s REASON ONE LINE OF
 // REASONING FURTHER ON**: `isThrowingArrayRuntimeCallee` INCLUDES `isManagedMemoryRuntimeCallee` (one record,
 // one runtime, `__arr_`-prefixed), so answering here first is exactly what leaves the caller's array arm
@@ -743,6 +775,31 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 
 	return RuntimeCalleeSourceMethod.notFound
 end 'runtimeCalleeSourceMethod'
+
+// ⭐⭐ **THE ONE SPELLING OF "THIS FAMILY'S MAP ANSWERED, AND WITH SOMETHING QUOTABLE" — what the four
+// install-time drift guards call.** The four families ask their own map for every throwing callee they
+// installed; the ASKING is the existence check (a missing arm is that map's own panic), and this is what
+// makes the answer USED rather than discarded — **E3064 refuses a discarded pure result**, which is the
+// language declining to let a guard be written as a call whose value nobody reads.
+//
+// ⚠ The emptiness test is not a formality bolted on to satisfy E3064: an empty spelling would put `''` in
+// front of an author in place of the method they wrote, which is the same class of wrong answer D12 exists
+// to remove — just spelled with no characters. One home for the rule, so four families cannot word it four
+// ways.
+export function requireQuotableSourceSpelling(spelling ByteArray, callee ByteArray)
+	if spelling.count() == 0 'unquotable'
+		panic("requireQuotableSourceSpelling: the source-method map answers an EMPTY spelling for '{String.from(callee)}' — an E3057 would quote '' at an author in place of the method they actually wrote")
+	end 'unquotable'
+end 'requireQuotableSourceSpelling'
+
+// The `sharedByTwoSpellings` half of the same check — BOTH names reach the message, so both must be
+// quotable. Separate from the single-name form because a `match` arm binds two values and may not drop one:
+// a check that read only the first would leave the second — the very spelling the case exists to carry —
+// unverified.
+export function requireQuotableSharedSpellings(spelling ByteArray, alsoSpelled ByteArray, callee ByteArray)
+	requireQuotableSourceSpelling(spelling, callee: callee)
+	requireQuotableSourceSpelling(alsoSpelled, callee: callee)
+end 'requireQuotableSharedSpellings'
 
 // The GT runtime's `.data` slots, appended to the user's globals before `layOut` orders them — ordinary
 // i64 slots in every respect, exactly like MmRuntime's `runtimeGlobals()`.

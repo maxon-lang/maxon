@@ -85,6 +85,10 @@ let StringErrorTypeName = "StringError"
 // from the SAME two `StrIndex*Name` constants, through one builder that cannot stamp one and not the other.
 // That is what `ArrayRuntime.verifyThrowingAccessorsMatchPredicate` had to check at install time for its
 // seven separately-built accessors; here the single builder makes the two facts one.
+//
+// ⚠⚠ **THAT ARGUMENT DOES NOT REACH THE THIRD FACT (D12 review).** `stringIndexSourceMethodName` below is a
+// separate list of these same two names, and no builder ties it to this predicate — so
+// `installStringIndexRuntime` grew the one install-time check this family does need. See the loop there.
 export function isThrowingStringIndexRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(StrIndexFirstName) or callee.equals(StrIndexLastName)
 end 'isThrowingStringIndexRuntimeCallee'
@@ -106,7 +110,7 @@ export function stringIndexSourceMethodName(callee ByteArray) returns ByteArray
 	if callee.equals(StrIndexLastName) 'findLast'
 		return StringFindLastMethod
 	end 'findLast'
-	panic("stringIndexSourceMethodName: '{String.from(callee)}' is not a throwing `StringIndex` callee — only the two `isThrowingStringIndexRuntimeCallee` names can reach an E3057, and this is asked behind that predicate")
+	panic("stringIndexSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `StringIndex` callee — this map is asked ONLY behind `isThrowingStringIndexRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `String*Method` constant. `installStringIndexRuntime`'s drift guard asks this for every throwing `__strix_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'stringIndexSourceMethodName'
 
 // Install the referenced `StringIndex` runtime functions into the lowered Std module. Called AFTER the
@@ -134,6 +138,18 @@ export function installStringIndexRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrIndexSlice 'slice'
 		buildStringIndexSlice(module)
 	end 'slice'
+
+	// ⭐ **THE THIRD LIST (D12 review): a throwing callee must also have a SOURCE-METHOD arm.** This family
+	// needs NO builder-vs-predicate loop — one builder stamps both searches from the same two constants, as
+	// `isThrowingStringIndexRuntimeCallee`'s header records — but `stringIndexSourceMethodName` is a THIRD
+	// spelling of those two names that no builder ties to anything. Asked, not described: the CALL is the
+	// check, so a missing arm is that map's own panic here at install rather than in front of a user who
+	// forgot a `try` on `findFirst`. Reasoning lives once, on `GtRuntime.runtimeCalleeSourceMethod`.
+	for func in module.functions 'eachFunc'
+		if isThrowingStringIndexRuntimeCallee(func.name) 'hasSourceMethod'
+			requireQuotableSourceSpelling(stringIndexSourceMethodName(func.name), callee: func.name)
+		end 'hasSourceMethod'
+	end 'eachFunc'
 end 'installStringIndexRuntime'
 
 // ⭐ **`__strix_make(charIdx, bytePos) -> StringIndex` — THE ONE DOOR A `StringIndex` IS BORN THROUGH.**

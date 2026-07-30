@@ -210,7 +210,7 @@ export function managedDirectorySourceMethodName(callee ByteArray) returns ByteA
 	if callee.equals(ManagedDirectoryCurrentPathName) 'currentPath'
 		return ManagedDirectoryCurrentPathMethod
 	end 'currentPath'
-	panic("managedDirectorySourceMethodName: '{String.from(callee)}' is not a throwing `__ManagedDirectory` callee — only the four `isThrowingManagedDirectoryRuntimeCallee` names can reach an E3057, and this is asked behind that predicate")
+	panic("managedDirectorySourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `__ManagedDirectory` callee — this map is asked ONLY behind `isThrowingManagedDirectoryRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `ManagedDirectory*Method` constant. `installManagedDirectoryRuntime`'s drift guard asks this for every throwing `__md_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedDirectorySourceMethodName'
 
 // ⭐ **THE ERROR TYPE A DIRECTORY CALLEE THROWS — the WHAT to the predicate's THAT**, and the twin of
@@ -801,6 +801,15 @@ export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUs
 		if named and not stamped 'namedNotStamped'
 			panic("installManagedDirectoryRuntime: isThrowingManagedDirectoryRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted (R4.3)")
 		end 'namedNotStamped'
+
+		// ⭐ **THE THIRD LIST (D12 review): a throwing callee must also have a SOURCE-METHOD arm.** R4.3's map
+		// is the OLDEST instance of this exposure — it shipped guarded only by its own panic — and D12 turned
+		// one instance into four. Asked, not described: the CALL is the check, so a missing arm fires here at
+		// install rather than in front of a user who forgot a `try`. Reasoning lives once, on
+		// `GtRuntime.runtimeCalleeSourceMethod`.
+		if named 'hasSourceMethod'
+			requireQuotableSourceSpelling(managedDirectorySourceMethodName(func.name), callee: func.name)
+		end 'hasSourceMethod'
 	end 'eachFunc'
 end 'installManagedDirectoryRuntime'
 

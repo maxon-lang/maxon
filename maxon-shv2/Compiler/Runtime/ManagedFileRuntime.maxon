@@ -256,7 +256,7 @@ export function managedFileSourceMethod(callee ByteArray) returns RuntimeCalleeS
 	if callee.equals(ManagedFileStatName) 'stat'
 		return RuntimeCalleeSourceMethod.found(ManagedFileStatMethod)
 	end 'stat'
-	panic("managedFileSourceMethod: '{String.from(callee)}' is not a throwing `__ManagedFile` callee — only the eight `isThrowingManagedFileRuntimeCallee` names can reach an E3057, and this is asked behind that predicate")
+	panic("managedFileSourceMethod: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `__ManagedFile` callee — this map is asked ONLY behind `isThrowingManagedFileRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `ManagedFile*Method` constant. `installManagedFileRuntime`'s drift guard asks this for every throwing `__mf_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedFileSourceMethod'
 
 // ⭐ **THE ERROR TYPE A FILE CALLEE THROWS — the WHAT to the predicate's THAT.** `ProgramSignatures.throwsOf`
@@ -1065,6 +1065,23 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 		if named and not stamped 'namedNotStamped'
 			panic("installManagedFileRuntime: isThrowingManagedFileRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted (R4.1)")
 		end 'namedNotStamped'
+
+		// ⭐ **THE THIRD LIST (D12 review): a throwing callee must also have a SOURCE-METHOD arm.** Asked, not
+		// described — the answer is discarded and the CALL is the check, so a missing arm is
+		// `managedFileSourceMethod`'s own panic here at install rather than in front of a user who forgot a
+		// `try` on that one callee. `GtRuntime.runtimeCalleeSourceMethod`'s header holds the whole reasoning,
+		// including why there is no backward arm and no column of names.
+		// ⚠ This family's map answers the UNION (it owns the one non-injective callee), so the arms are named
+		// here rather than an answer being read as a name. `notFound` is unreachable — the map panics before
+		// it — and is a `panic` rather than a `break` for that reason: reaching it would mean the map grew a
+		// silent absent-state, which is what the union's `notFound` means for a family with NO map at all.
+		if named 'hasSourceMethod'
+			match managedFileSourceMethod(func.name) 'spelling'
+				found(method) then requireQuotableSourceSpelling(method, callee: func.name)
+				sharedByTwoSpellings(spelling, alsoSpelled) then requireQuotableSharedSpellings(spelling, alsoSpelled: alsoSpelled, callee: func.name)
+				notFound then panic("installManagedFileRuntime: `managedFileSourceMethod` answers notFound for '{String.from(func.name)}', which isThrowingManagedFileRuntimeCallee names as throwing — every throwing `__mf_` callee must have a source-method arm, and this map may not have an absent state")
+			end 'spelling'
+		end 'hasSourceMethod'
 	end 'eachFunc'
 end 'installManagedFileRuntime'
 

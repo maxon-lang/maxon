@@ -553,7 +553,7 @@ export function managedMemorySourceMethodName(callee ByteArray) returns ByteArra
 	if callee.equals(ArrMemSetName) 'set'
 		return ArraySetMethod
 	end 'set'
-	panic("managedMemorySourceMethodName: '{String.from(callee)}' is not a `__ManagedMemory` runtime callee — only the seven `isManagedMemoryRuntimeCallee` names can reach an E3057, and this is asked behind that predicate")
+	panic("managedMemorySourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a `__ManagedMemory` runtime callee — this map is asked ONLY behind `isManagedMemoryRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every buffer member `installArrayRuntime` installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedMemorySourceMethodName'
 
 // A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
@@ -682,6 +682,17 @@ function verifyThrowingAccessorsMatchPredicate(module StdModule)
 			if named and not stamped 'namedNotStamped'
 				panic("installArrayRuntime: isThrowingArrayRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-accessor builder set and the predicate have drifted (P1.7 slice 1)")
 			end 'namedNotStamped'
+
+			// ⭐ **THE THIRD LIST (D12 review): a BUFFER member must also have a SOURCE-METHOD arm.** Keyed on
+			// `isManagedMemoryRuntimeCallee` and not on `named`, because this family's forward arm is
+			// deliberately partial: the nine genuine `Arr*` throwing accessors have NO per-method spelling and
+			// must not — they are worded as a family, which is what
+			// `try-postfix-target.error.two-throwing-calls-in-one-chain` pins. The buffer members are the
+			// subset that HAS a map, so they are the subset that is checked. Reasoning lives once, on
+			// `GtRuntime.runtimeCalleeSourceMethod`.
+			if isManagedMemoryRuntimeCallee(func.name) 'bufferHasSourceMethod'
+				requireQuotableSourceSpelling(managedMemorySourceMethodName(func.name), callee: func.name)
+			end 'bufferHasSourceMethod'
 		end 'arr'
 	end 'eachFunc'
 end 'verifyThrowingAccessorsMatchPredicate'
