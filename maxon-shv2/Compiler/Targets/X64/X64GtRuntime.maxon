@@ -330,6 +330,21 @@ function gtShimStackArgWords(slotIndex RelocSlotIndex) returns StackSize
 		return ReadFileStackArgWords as StackSize
 	end 'readFile'
 
+	// ⚠ **R4.2 FIX — `CreateFileA` WAS MISSING, AND ITS ABSENCE READ AS "NO STACK ARGUMENTS".** R4.1 added
+	// the `A` entry point beside the pipes' `CreateFileW` but did not add it here, so a `__ManagedFile.open*`
+	// reached from a SPAWNED green thread took the switched path and copied ZERO words onto the system stack
+	// — leaving `dwCreationDisposition`, `dwFlagsAndAttributes` and `hTemplateFile` as whatever happened to
+	// be there. It needs the same three words its `W` sibling does; both derive from the one
+	// `CreateFileStackArgWords`, so neither can drift from the argument layout `StdToX64Conversion` writes.
+	// (Unreachable in the corpus today, which combines no `async` with file IO — which is exactly why a
+	// silent zero survived a green suite.)
+	if slotIndex == iatSlotIndex(IatSlot.CreateFileA) 'createFileAnsi'
+		return CreateFileStackArgWords as StackSize
+	end 'createFileAnsi'
+
+	// The five R4.2 file imports (`GetFileSizeEx`, `DeleteFileA`, `MoveFileExA`, `FindFirstFileA`,
+	// `FindClose`) are all ≤4-argument register-only calls, so the 0 below is their CORRECT count, not a
+	// missing entry — `stdOpOutgoingArgBytes` reserves 0 outgoing words for each and there is nothing to copy.
 	return 0
 end 'gtShimStackArgWords'
 

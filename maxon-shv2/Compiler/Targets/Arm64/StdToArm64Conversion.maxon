@@ -388,9 +388,8 @@ type StdToArm64Lowering
 			witnessCall(_, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osPipeCreate to osReadWallClock gives 0
-			// R4.1: x64-windows only — refused at the CALL SITE by E3104, so it never reaches this backend.
-			osFileOpenRead gives 0
-			osFileClose gives 0
+			// R4.1 + R4.2: x64-windows only — refused at the CALL SITE by E3104, so none reaches this backend.
+			osFileOpenRead to osFileFindClose gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -508,8 +507,7 @@ type StdToArm64Lowering
 			// counterpart at this rung; SemanticCheck refuses such a program at its source span (E3104), so
 			// this is the backstop for a compiler bug rather than the user-facing rejection.
 			osReadWallClock then panic("lowerStdToArm64: `osReadWallClock` is x64-windows only — the wall clock is x64-windows-gated at this rung")
-			osFileOpenRead then panic("lowerStdToArm64: `osFileOpenRead` is x64-windows only — file IO is x64-windows-gated at R4.1, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
-			osFileClose then panic("lowerStdToArm64: `osFileClose` is x64-windows only — file IO is x64-windows-gated at R4.1, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
+			osFileOpenRead to osFileFindClose then panic("lowerStdToArm64: the file-IO ops are x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -551,8 +549,7 @@ type StdToArm64Lowering
 			switch then self.lowerSwitch(op, dstRef: dstRef)
 			osPipeCreate to osWriteFile then panic("lowerStdToArm64: a P1.5 IOCP op appeared as a block terminator (lowering bug — all are body ops; also x64-windows only)")
 			osReadWallClock then panic("lowerStdToArm64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op; also x64-windows only)")
-			osFileOpenRead then panic("lowerStdToArm64: an `osFileOpenRead` op appeared as a block terminator (lowering bug — a file open is a value-producing body op; also x64-windows only)")
-			osFileClose then panic("lowerStdToArm64: an `osFileClose` op appeared as a block terminator (lowering bug — a file open is a value-producing body op; also x64-windows only)")
+			osFileOpenRead to osFileFindClose then panic("lowerStdToArm64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op; also x64-windows only)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

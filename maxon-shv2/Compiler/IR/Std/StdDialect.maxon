@@ -1060,10 +1060,15 @@ export union StdOp
 	// consciously extended, which is the mechanism that finds every site obliged to classify or lower it.
 	// Its `category: system` places it logically in the system band, independent of this tail position.
 	//
-	// `osFileOpenRead(result, pathPtr)` = `CreateFileW(pathPtr, GENERIC_READ, FILE_SHARE_READ, NULL,
+	// `osFileOpenRead(result, pathPtr)` = `CreateFileA(pathPtr, GENERIC_READ, FILE_SHARE_READ, NULL,
 	// OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)`, the raw HANDLE (or `INVALID_HANDLE_VALUE`) in `result`.
 	// One value operand and one def — the direct-return shape `osIocpCreate`/`osEventCreate` use, NOT the
-	// out-param shape `osReadClock` needs, because `CreateFileW` returns its answer in RAX.
+	// out-param shape `osReadClock` needs, because `CreateFileA` returns its answer in RAX.
+	//
+	// ⚠ **THE `A` ENTRY POINT, AND THIS COMMENT USED TO SAY `W` WHILE THE LOWERING EMITTED `A` (fixed R4.2).**
+	// The lowering was right and the sentence was wrong: a Maxon path is a UTF-8 BYTE buffer, and the `W`
+	// entry point would read those bytes as UTF-16 code units — broken even for pure ASCII. See
+	// `StdToX64Conversion.lowerOsFileOpenRead` and `IatSlot.CreateFileA`, which carry the argument.
 	//
 	// ⭐ **IT DOES NOT CLASSIFY ITS OWN FAILURE, AND THAT IS DELIBERATE.** The op yields the raw handle; the
 	// `notFound`-vs-`openFailed` decision is made in BUILDER-BUILT Std by `ManagedFileRuntime`, reading the
@@ -1084,6 +1089,68 @@ export union StdOp
 	// with no way to close leaks an OS handle for the process lifetime, and that leak is invisible to the
 	// exit-101 memory gate. Appended past `osFileOpenRead` per the band-append invariant.
 	osFileClose(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- R4.2: the rest of the file-IO primitives ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osFileClose`, per the band-append invariant — every
+	// stale full-tail range arm now FAILS TO COMPILE until it is consciously extended, which is the
+	// mechanism that finds every site obliged to classify or lower them. All seven carry
+	// `category: system`, placing them logically in the system band independent of this tail position, and
+	// all seven are ⭐ x64-WINDOWS ONLY by the R4.1 ruling: the call site is refused on every other target
+	// with the existing E3104 (`SemanticCheck.calleeNeedsWin32Substrate`), so the non-Windows arms panic as
+	// a backstop for a compiler bug rather than stubbing an answer the oracle cannot check.
+	//
+	// ⚠ **EVERY COMMENT BELOW NAMES THE ENTRY POINT THE LOWERING ACTUALLY EMITS.** `osFileOpenRead`'s said
+	// `CreateFileW` for a whole rung while the code emitted `CreateFileA`; the four `A`-suffixed imports
+	// here are the same decision for the same reason (a Maxon path is UTF-8 bytes).
+	//
+	// `osReadFile(result, handle, buf, len, bytesOutPtr)` = `ReadFile(handle, buf, len, bytesOutPtr, NULL)`
+	// — the exact mirror of `osWriteFile` above, down to the operand order and the 5th NULL `lpOverlapped`
+	// stack argument. SYNCHRONOUS, and deliberately so: R4.1's handle is opened `FILE_ATTRIBUTE_NORMAL`
+	// with no `FILE_FLAG_OVERLAPPED` and is associated with no completion port, so an overlapped read on it
+	// would be a different call with different semantics. (The bootstrap routes file reads through its
+	// IOCP because its handles ARE overlapped; shv2's are not — async file IO is R3's consumer.) DEFINES
+	// the BOOL result; the byte count lands in memory at `bytesOutPtr`.
+	osReadFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osFileOpenWrite(result, pathPtr)` = `CreateFileA(pathPtr, GENERIC_WRITE, FILE_SHARE_READ |
+	// FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)`, the raw HANDLE (or
+	// `INVALID_HANDLE_VALUE`) in `result` — `osFileOpenRead`'s shape with three constants changed.
+	//
+	// ⚠ **THE SHARE MODE IS `FILE_SHARE_READ | FILE_SHARE_WRITE`, NOT 0, AND THAT IS DELIBERATE.** With 0 an
+	// editor or an antivirus scanner holding a read handle on the path makes the open fail with
+	// `ERROR_SHARING_VIOLATION` — an intermittent failure that depends on what else is running. The
+	// bootstrap's own sync worker makes the same choice and says so.
+	//
+	// ⭐ **`openWriteExecutable` EMITS THIS SAME OP.** The only thing it adds in the references is a Unix
+	// 0755 permission bit, and shv2's file IO is host-only Windows by the R4.1 ruling, so there is nothing
+	// for a second op to carry — one extra dispatch arm in the parser, zero extra ops here. A POSIX lane
+	// adds the second op on the day it adds the second backend.
+	osFileOpenWrite(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osFileSize(result, handle, sizeOutPtr)` = `GetFileSizeEx(handle, sizeOutPtr)` — the 64-bit size is
+	// written to `[sizeOutPtr]` and the BOOL verdict is `result`. The OUT-PARAM shape (like `osReadClock`)
+	// rather than the direct-return one, because that is how the Win32 API answers: a 64-bit size cannot
+	// share RAX with a success flag.
+	osFileSize(resultId ValueId, handleId ValueId, sizeOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osFileDelete(result, pathPtr)` = `DeleteFileA(pathPtr)`, the BOOL in `result` (non-zero = deleted).
+	// The failure CLASSIFICATION is not here — `ManagedFileRuntime` reads `osLastError` and picks the
+	// variant, for the reason `osFileOpenRead` states.
+	osFileDelete(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osFileRename(result, oldPathPtr, newPathPtr)` = `MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING |
+	// MOVEFILE_WRITE_THROUGH)`, the BOOL in `result`. The two flags are the bootstrap's and are kept for its
+	// stated reasons: the atomic replace makes publishing the destination torn-read-safe, and write-through
+	// flushes the metadata so a crash straight after cannot lose the new name.
+	osFileRename(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osFileFindFirst(result, pathPtr, findDataPtr)` = `FindFirstFileA(pathPtr, findDataPtr)` — the search
+	// HANDLE (or `INVALID_HANDLE_VALUE`) in `result`, and the 320-byte `WIN32_FIND_DATAA` record written to
+	// `[findDataPtr]`. The caller owns that buffer and MUST `osFileFindClose` the handle.
+	//
+	// ⭐ **IT SERVES BOTH `stat` AND `exists`, WHICH IS WHY THERE IS NO `GetFileAttributesA` HERE.** `stat`
+	// needs the find record's timestamps and sizes; `exists` needs one bit of the very same
+	// `dwFileAttributes` word (is this a directory?). Importing a second entry point to ask a question this
+	// record already answers would be two ways to ask one thing — and they can disagree.
+	osFileFindFirst(resultId ValueId, pathPtrId ValueId, findDataPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osFileFindClose(handle)` = `FindClose(handle)`. No result, exactly as `osFileClose` has none and for
+	// the same reason: a close that fails leaves a caller nothing to do.
+	osFileFindClose(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1238,6 +1305,16 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osFileOpenRead(_, pathPtr) then referenced.insert(pathPtr)
 		// The close reads its HANDLE and defines nothing.
 		osFileClose(handle) then referenced.insert(handle)
+		// R4.2. Each reads its VALUE operands (an out-param ADDRESS is a live operand for the reason
+		// `osReadWallClock`'s is: the allocator must not free its register before the OS writes through it);
+		// every `resultId` is a def and is skipped here.
+		osReadFile(_, handle, buf, len, bytesOutPtr) then insertUseQuad(referenced, a: handle, b: buf, c: len, d: bytesOutPtr)
+		osFileOpenWrite(_, pathPtr) then referenced.insert(pathPtr)
+		osFileSize(_, handle, sizeOutPtr) then insertUsePair(referenced, a: handle, b: sizeOutPtr)
+		osFileDelete(_, pathPtr) then referenced.insert(pathPtr)
+		osFileRename(_, oldPathPtr, newPathPtr) then insertUsePair(referenced, a: oldPathPtr, b: newPathPtr)
+		osFileFindFirst(_, pathPtr, findDataPtr) then insertUsePair(referenced, a: pathPtr, b: findDataPtr)
+		osFileFindClose(handle) then referenced.insert(handle)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1392,6 +1469,15 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// every other defining system op's is.
 		osFileOpenRead(resultId, pathPtr) gives StdOp.osFileOpenRead(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileClose(handle) gives StdOp.osFileClose(remappedValue(handle, subst: subst))
+		// R4.2: the exact mirrors of `collectStdOpUses`'s seven arms — every value operand it reports read is
+		// rewritten here, and every `resultId` is a def carried through unremapped.
+		osReadFile(resultId, handle, buf, len, bytesOutPtr) gives StdOp.osReadFile(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), lenId: remappedValue(len, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst))
+		osFileOpenWrite(resultId, pathPtr) gives StdOp.osFileOpenWrite(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
+		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
+		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
+		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
+		osFileFindFirst(resultId, pathPtr, findDataPtr) gives StdOp.osFileFindFirst(resultId, pathPtrId: remappedValue(pathPtr, subst: subst), findDataPtrId: remappedValue(findDataPtr, subst: subst))
+		osFileFindClose(handle) gives StdOp.osFileFindClose(remappedValue(handle, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

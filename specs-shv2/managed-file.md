@@ -75,8 +75,8 @@ end 'main'
 not found
 ```
 
-<!-- disabled-test: managed-file.write-and-read -->
-<!-- R4.2 — needs the `__ManagedMemory` OBJECT surface (`create`/`setLength`/`setByte`), `String.init(buffer)`, and `openWrite`/`write`/`read`/`size`. R4.1 binds `__ManagedMemory` to `Array with Byte` as an OPAQUE path buffer only, which nine of these eleven cases are satisfied by; this is one of the two that construct one and read its capacity. -->
+<!-- test: managed-file.write-and-read -->
+<!-- targets: x64-windows -->
 ```maxon
 export enum TestFileError implements Error
 	openFailed
@@ -161,8 +161,8 @@ end 'main'
 Hello Managed
 ```
 
-<!-- disabled-test: managed-file.exists -->
-<!-- R4.2 — needs the `exists` and `openWrite` statics and the `close()` instance method. R4.1 delivers `openRead` alone; the other four statics are refused BY NAME rather than mangled into an undeclared callee (`Parser.parseManagedFileStaticCall`). -->
+<!-- test: managed-file.exists -->
+<!-- targets: x64-windows -->
 ```maxon
 export enum TestFileError implements Error
 	openFailed
@@ -210,8 +210,8 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: managed-file.delete-nonexistent -->
-<!-- R4.2 — needs the `delete` static. R4.1 delivers `openRead` alone. -->
+<!-- test: managed-file.delete-nonexistent -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedFile.delete("nonexistent_delete_xyz.txt".toByteArray().managed) otherwise 'checkFail'
@@ -228,8 +228,8 @@ end 'main'
 delete failed as expected
 ```
 
-<!-- disabled-test: managed-file.auto-close -->
-<!-- R4.2 — needs `openWrite`/`write`/`size` AND the RAII DESTRUCTOR that closes on drop. `close()` itself IS delivered (R4.1), which is what keeps this rung from shipping a handle leak: an explicit close reclaims the handle, and it is idempotent, so the destructor R4.2 adds can close again harmlessly. What is missing here is only the AUTOMATIC half — this case never calls close, it relies on `wf` going out of scope. -->
+<!-- test: managed-file.auto-close -->
+<!-- targets: x64-windows -->
 ```maxon
 export enum TestFileError implements Error
 	openFailed
@@ -309,8 +309,8 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: managed-file.delete-not-found-variant -->
-<!-- R4.2 — needs the `delete` static. The errno→variant MECHANISM is delivered and proven by `open-read-not-found-variant` above, which discriminates `notFound` through the same `osLastError` mapping; only this static is absent. -->
+<!-- test: managed-file.delete-not-found-variant -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -327,8 +327,8 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: managed-file.stat-not-found-variant -->
-<!-- R4.2 — needs the `stat` static. Same as `delete-not-found-variant`: the variant mechanism is delivered, only this static is absent. -->
+<!-- test: managed-file.stat-not-found-variant -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	var result = 0

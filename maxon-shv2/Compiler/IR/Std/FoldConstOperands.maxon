@@ -124,9 +124,9 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		osPipeCreate to osWriteFile gives StdConstInfo.notConst
 		// The wall-clock read defines no value at all, so there is nothing to call constant.
 		osReadWallClock gives StdConstInfo.notConst
-		// R4.1: an OS file HANDLE is a kernel value, never a compile-time constant.
-		osFileOpenRead gives StdConstInfo.notConst
-		osFileClose gives StdConstInfo.notConst
+		// R4.1 + R4.2: an OS file HANDLE, a Win32 BOOL and a search handle are kernel values, never
+		// compile-time constants; the two void ops define nothing to call constant.
+		osFileOpenRead to osFileFindClose gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -213,9 +213,9 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		osPipeCreate to osWriteFile gives FoldResult.unchanged
 		// The wall-clock read's one operand is an out-param ADDRESS — never an immediate.
 		osReadWallClock gives FoldResult.unchanged
-		// R4.1: the file OPEN's one operand is a path BUFFER address — never an immediate.
-		osFileOpenRead gives FoldResult.unchanged
-		osFileClose gives FoldResult.unchanged
+		// R4.1 + R4.2: every file op's operands are BUFFER or out-param addresses, a HANDLE or a byte
+		// COUNT the caller computed — never a const-foldable immediate.
+		osFileOpenRead to osFileFindClose gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 

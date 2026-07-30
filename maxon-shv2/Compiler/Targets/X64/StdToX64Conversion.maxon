@@ -160,7 +160,20 @@ let FileShareNone = 0x0  // dwShareMode (the pipe is not shared)
 // which must not be shared, and would be wrong here — it would make a second `openRead` of the same path
 // fail with a sharing violation, which `managed-file.exists` (open, close, re-open) would trip over.
 let FileShareRead = 0x1  // dwShareMode for a read-only open
+// R4.2: a file opened for WRITING permits concurrent readers AND writers. `FileShareRead` alone would make
+// `__ManagedFile.openWrite` fail with `ERROR_SHARING_VIOLATION` whenever an editor, an indexer or a virus
+// scanner happens to hold a write handle on the path — an intermittent failure that depends on what else is
+// running on the box. The bootstrap's sync worker makes the same choice and says so.
+let FileShareReadWrite = 0x3  // dwShareMode for a write open: FILE_SHARE_READ | FILE_SHARE_WRITE
 let OpenExisting = 3  // dwCreationDisposition — connect to the already-created named pipe
+// R4.2: `openWrite` CREATES OR TRUNCATES. `specs/managed-file.md` documents it as "Opens a file for writing
+// (creates or overwrites)", which is exactly CREATE_ALWAYS — not OPEN_ALWAYS (which would leave a longer
+// previous file's tail behind the new bytes) and not CREATE_NEW (which fails on an existing path).
+let CreateAlways = 2  // dwCreationDisposition — create, truncating an existing file
+// R4.2: `MoveFileExA`'s dwFlags. REPLACE_EXISTING makes publishing the destination atomic rather than a
+// delete-then-rename with a window where neither name exists; WRITE_THROUGH flushes the metadata so a crash
+// straight after the call cannot lose the new name. Both are the bootstrap's, kept for its stated reasons.
+let MoveFileReplaceWriteThrough = 9  // MOVEFILE_REPLACE_EXISTING (1) | MOVEFILE_WRITE_THROUGH (8)
 let FileAttributeNormal = 0x80  // dwFlagsAndAttributes
 let HandleFlagInherit = 1  // SetHandleInformation dwMask/HANDLE_FLAG_INHERIT — cleared on the parent read end
 let HandleFlagClear = 0  // SetHandleInformation dwFlags = 0 (strip inheritance)
@@ -786,9 +799,18 @@ type StdToX64Lowering
 			osWriteFile gives win64OutgoingArgBytes(WriteFileStackArgWords)
 			// GetSystemTimeAsFileTime takes ONE argument, in rcx — register-only, no outgoing stack space.
 			osReadWallClock gives 0
-			// R4.1: CreateFileW takes SEVEN arguments — four in registers, three on the stack.
+			// R4.1: CreateFileA takes SEVEN arguments — four in registers, three on the stack.
 			osFileOpenRead gives win64OutgoingArgBytes(CreateFileStackArgWords)
-			osFileClose gives win64OutgoingArgBytes(CreateFileStackArgWords)
+			// ⚠ `CloseHandle` takes ONE argument, in rcx — register-only, like `osCancelIo` two arms up. It
+			// used to reserve `CreateFileStackArgWords` here, which was three dead frame words per file-using
+			// function and a comment claiming a shape the call does not have (R4.2).
+			osFileClose gives 0
+			// R4.2. `ReadFile` is `WriteFile`'s mirror (one stack word, `lpOverlapped`); `CreateFileA` for the
+			// write open is the read open's seven. The remaining five are ≤4-argument register-only calls:
+			// `GetFileSizeEx`/`FindFirstFileA` take two, `MoveFileExA` three, `DeleteFileA`/`FindClose` one.
+			osReadFile gives win64OutgoingArgBytes(ReadFileStackArgWords)
+			osFileOpenWrite gives win64OutgoingArgBytes(CreateFileStackArgWords)
+			osFileSize to osFileFindClose gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -950,9 +972,8 @@ type StdToX64Lowering
 				osPipeCreate to osWriteFile then break 'term'
 				// The wall-clock read is a void body op, never a terminator.
 				osReadWallClock then break 'term'
-				// R4.1: the file OPEN is a value-producing body op, never a terminator.
-				osFileOpenRead then break 'term'
-				osFileClose then break 'term'
+				// R4.1 + R4.2: every file op is a value-producing or void body op, never a terminator.
+				osFileOpenRead to osFileFindClose then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1016,11 +1037,10 @@ type StdToX64Lowering
 				// The wall-clock read declares `clobbersFlags: true` (it lowers to a call), so it CAN be the
 				// last flag-writer before a branch; like a `call` it is not the compare, so the scan stops.
 				osReadWallClock then break 'isTheCompare'
-				// R4.1: the file OPEN declares `clobbersFlags: true` (it lowers to a call), so like the
-				// wall-clock read it can be the last flag-writer before a branch — and, like a `call`, it is
+				// R4.1 + R4.2: every file op declares `clobbersFlags: true` (each lowers to a call), so like the
+				// wall-clock read one can be the last flag-writer before a branch — and, like a `call`, it is
 				// not the compare, so the scan stops.
-				osFileOpenRead then break 'isTheCompare'
-				osFileClose then break 'isTheCompare'
+				osFileOpenRead to osFileFindClose then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1096,9 +1116,8 @@ type StdToX64Lowering
 			osPipeCreate to osWriteFile gives false
 			// The wall-clock read is never a terminator, so it reads no fused compare flags.
 			osReadWallClock gives false
-			// R4.1: the file OPEN is never a terminator, so it reads no fused compare flags.
-			osFileOpenRead gives false
-			osFileClose gives false
+			// R4.1 + R4.2: no file op is ever a terminator, so none reads fused compare flags.
+			osFileOpenRead to osFileFindClose gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -1172,6 +1191,15 @@ type StdToX64Lowering
 			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpenRead(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			// R4.1: close the handle. `CloseHandle`'s BOOL is discarded, so nothing is captured from RAX.
 			osFileClose(handleId) then self.lowerOsFileClose(handleId, dstBlock: dstBlock)
+			// R4.2: the rest of the file-IO primitives. Each routes through `requireWin64FileIo` for the
+			// x64-windows gate, then emits its one import call.
+			osReadFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsReadFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
+			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			osFileSize(resultId, handleId, sizeOutPtrId) then self.lowerOsFileSize(resultId, handleId: handleId, sizeOutPtrId: sizeOutPtrId, dstBlock: dstBlock)
+			osFileDelete(resultId, pathPtrId) then self.lowerOsFileDelete(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
+			osFileFindFirst(resultId, pathPtrId, findDataPtrId) then self.lowerOsFileFindFirst(resultId, pathPtrId: pathPtrId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
+			osFileFindClose(handleId) then self.lowerOsFileFindClose(handleId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1218,8 +1246,7 @@ type StdToX64Lowering
 			witnessTryCall then panic("lowerStdToX64: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
 			osPipeCreate to osWriteFile then panic("lowerStdToX64: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
 			osReadWallClock then panic("lowerStdToX64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
-			osFileOpenRead then panic("lowerStdToX64: an `osFileOpenRead` op appeared as a block terminator (lowering bug — a file open is a value-producing body op)")
-			osFileClose then panic("lowerStdToX64: an `osFileClose` op appeared as a block terminator (lowering bug — a file open is a value-producing body op)")
+			osFileOpenRead to osFileFindClose then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2198,35 +2225,116 @@ type StdToX64Lowering
 	// `ManagedFileRuntime`'s builder-built Std reads `osLastError` to choose the error variant. See the
 	// `osFileOpenRead` op's own comment in `StdDialect` for why that split is deliberate.
 	function lowerOsFileOpenRead(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsFileOpenReadWin64(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
-			syscall then panic("lowerOsFileOpenRead: CreateFileW is x64-windows only — file IO is x64-windows-gated at R4.1, and SemanticCheck refuses such a program at its source span (E3104)")
-		end 'route'
+		self.requireWin64FileIo("osFileOpenRead")
+		self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericRead, shareMode: FileShareRead, disposition: OpenExisting, dstBlock: dstBlock)
 	end 'lowerOsFileOpenRead'
 
+	// ⭐ **R4.2: `CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS,
+	// FILE_ATTRIBUTE_NORMAL, NULL)`.** The read open's call with three constants changed — see
+	// `FileShareReadWrite` and `CreateAlways` for why each is what it is.
+	//
+	// ⭐ **`openWriteExecutable` REACHES THIS SAME LOWERING**, because its only difference in either
+	// reference is a Unix 0755 mode bit and shv2's file IO is host-only Windows by the R4.1 ruling. See
+	// `StdDialect.osFileOpenWrite`.
+	function lowerOsFileOpenWrite(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osFileOpenWrite")
+		self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericWrite, shareMode: FileShareReadWrite, disposition: CreateAlways, dstBlock: dstBlock)
+	end 'lowerOsFileOpenWrite'
+
+	// ⭐ **THE ONE `CreateFileA` EMISSION, PARAMETERIZED BY THE THREE CONSTANTS THE TWO OPENS DIFFER IN.**
+	// The read and write opens differ ONLY in `dwDesiredAccess`, `dwShareMode` and `dwCreationDisposition`;
+	// the argument REGISTERS, the three stack slots, the entry point and the RAX capture are one shape, so
+	// they are written once. Two copies is how one of them would quietly acquire a different `hTemplateFile`.
+	//
 	// Stack args 5-7 first (rax scratch, while every argument register is still free), then the register
-	// args — the ordering `lowerOsPipeCreateWin64` establishes and for its reason.
-	function lowerOsFileOpenReadWin64(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.emitWin64StackArgImm(dstBlock, slot: 0, value: OpenExisting)
+	// args — the ordering `lowerOsPipeCreateWin64` establishes and for its reason. The access mask uses the
+	// 64-bit `movRegImm` because `GENERIC_READ` is `0x80000000`, which reads as a sign bit in an imm32
+	// spelling; one form for both keeps the two opens byte-comparable.
+	function emitWin64CreateFileA(resultId ValueId, pathPtrId ValueId, access MachineWord, shareMode MachineWord, disposition MachineWord, dstBlock IrBlock)
+		self.emitWin64StackArgImm(dstBlock, slot: 0, value: disposition)
 		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
 		self.emitWin64StackArgImm(dstBlock, slot: 2, value: NullPointer)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(pathPtrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rdx), value: GenericRead))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: FileShareRead))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rdx), value: access))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: shareMode))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateFileA)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsFileOpenReadWin64'
+	end 'emitWin64CreateFileA'
+
+	// ⭐ **THE x64-WINDOWS GATE FOR THE WHOLE FILE-IO BAND, ASKED ONCE.** All nine file ops are
+	// x64-windows only by the R4.1 ruling, and `SemanticCheck.requireTargetSupportsCallee` refuses such a
+	// program at its own source span (E3104) long before lowering — so this is the backstop for a compiler
+	// bug that got one past that gate, never the user-facing rejection. Nine copies of the same
+	// `match x64OsCallKind` wrapper is the duplication this replaces; the op's name is the only thing that
+	// differed between them, so it is the only thing passed in.
+	function requireWin64FileIo(opName String)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then return
+			syscall then panic("lowerStdToX64: `{opName}` lowers to a Win32 import and is x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program at its source span (E3104)")
+		end 'route'
+	end 'requireWin64FileIo'
 
 	// ⭐ **R4.1: `CloseHandle(handle)`** — register-only (one argument in rcx), and the BOOL it returns is
 	// DISCARDED, exactly as `osWriteStdout` discards `WriteFile`'s. A close that fails leaves a caller
 	// nothing to do, and `close()` is documented idempotent, so there is no verdict worth capturing.
 	function lowerOsFileClose(handleId ValueId, dstBlock IrBlock)
-		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsWin64Call1(IatSlot.CloseHandle, arg0: handleId, dstBlock: dstBlock)
-			syscall then panic("lowerOsFileClose: CloseHandle is x64-windows only — file IO is x64-windows-gated at R4.1, and SemanticCheck refuses such a program at its source span (E3104)")
-		end 'route'
+		self.requireWin64FileIo("osFileClose")
+		self.lowerOsWin64Call1(IatSlot.CloseHandle, arg0: handleId, dstBlock: dstBlock)
 	end 'lowerOsFileClose'
+
+	// ⭐ **R4.2: `ReadFile(handle, buf, len, bytesOutPtr, NULL)`** — SYNCHRONOUS, and the exact mirror of
+	// `osWriteFile`'s emission (which is why both go through `emitWin64FileIoCall`). The handle R4.1 opens
+	// carries `FILE_ATTRIBUTE_NORMAL` with no `FILE_FLAG_OVERLAPPED` and is associated with no completion
+	// port, so this is the read that handle supports; the bootstrap's overlapped `__io_submit_read` is a
+	// different call for a different handle.
+	function lowerOsReadFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osReadFile")
+		self.emitWin64FileIoCall(IatSlot.ReadFile, resultId: resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
+	end 'lowerOsReadFile'
+
+	// ⭐ **R4.2: `GetFileSizeEx(handle, sizeOutPtr)`** — the 64-bit size lands in the caller's out-param
+	// word and the BOOL verdict in `resultId`. Register-only (two arguments).
+	function lowerOsFileSize(resultId ValueId, handleId ValueId, sizeOutPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osFileSize")
+		self.lowerOsWin64Call2(IatSlot.GetFileSizeEx, arg0: handleId, arg1: sizeOutPtrId, dstBlock: dstBlock)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsFileSize'
+
+	// ⭐ **R4.2: `DeleteFileA(path)`** — register-only, the BOOL captured. The `A` entry point for the
+	// reason every path-taking import here uses it: a Maxon path is a UTF-8 byte buffer.
+	function lowerOsFileDelete(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osFileDelete")
+		self.lowerOsWin64Call1(IatSlot.DeleteFileA, arg0: pathPtrId, dstBlock: dstBlock)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsFileDelete'
+
+	// ⭐ **R4.2: `MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`** — three
+	// register arguments, the BOOL captured. See `MoveFileReplaceWriteThrough` for the flags.
+	function lowerOsFileRename(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osFileRename")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(oldPathPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(newPathPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: MoveFileReplaceWriteThrough))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.MoveFileExA)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsFileRename'
+
+	// ⭐ **R4.2: `FindFirstFileA(path, findDataPtr)`** — register-only; the search HANDLE (or
+	// `INVALID_HANDLE_VALUE`) is captured and the 320-byte `WIN32_FIND_DATAA` record is written through the
+	// caller's buffer pointer.
+	function lowerOsFileFindFirst(resultId ValueId, pathPtrId ValueId, findDataPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osFileFindFirst")
+		self.lowerOsWin64Call2(IatSlot.FindFirstFileA, arg0: pathPtrId, arg1: findDataPtrId, dstBlock: dstBlock)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsFileFindFirst'
+
+	// ⭐ **R4.2: `FindClose(handle)`** — register-only, the BOOL discarded for the reason `osFileClose`
+	// discards `CloseHandle`'s.
+	function lowerOsFileFindClose(handleId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osFileFindClose")
+		self.lowerOsWin64Call1(IatSlot.FindClose, arg0: handleId, dstBlock: dstBlock)
+	end 'lowerOsFileFindClose'
 
 	function lowerOsIocpCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
@@ -2383,22 +2491,27 @@ type StdToX64Lowering
 	// slot) goes in r9; the 5th arg (lpOverlapped = NULL) is the one stack argument (slot 0). The BOOL is captured.
 	function lowerOsWriteFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsWriteFileWin64(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
+			importCall then self.emitWin64FileIoCall(IatSlot.WriteFile, resultId: resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
 			syscall then panic("lowerOsWriteFile: the streaming stdin write is x64-windows only — the subprocess substrate is x64-windows-gated at this rung")
 		end 'route'
 	end 'lowerOsWriteFile'
 
-	function lowerOsWriteFileWin64(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId, dstBlock IrBlock)
-		// The one stack arg (`lpOverlapped = NULL`, slot 0) FIRST via rax scratch, then the four register args.
+	// ⭐ **THE SHARED `ReadFile`/`WriteFile` EMISSION.** The two imports take the IDENTICAL Win64 shape —
+	// `(handle, buf, len, bytesOutPtr)` in rcx/rdx/r8/r9 plus a NULL `lpOverlapped` in stack slot 0, BOOL
+	// in RAX — so the entry point is the only thing that differs and is the only thing passed in (R4.2).
+	// The one stack arg goes FIRST via the rax scratch, then the four register args; the register
+	// allocator's per-arg-register def liveness keeps a still-needed source out of a register clobbered
+	// before its own move, so the emission order is free (the same guarantee `lowerOsWriteStdout` relies on).
+	function emitWin64FileIoCall(slot IatSlot, resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(0), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(handleId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(lenId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(bytesOutPtrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WriteFile)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(slot)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsWriteFileWin64'
+	end 'emitWin64FileIoCall'
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32` — the same two-part
 	// protocol `lowerCmp` uses, so the fold that moved the right operand into an immediate
@@ -2733,9 +2846,8 @@ type StdToX64Lowering
 			osPipeCreate to osWriteFile gives false
 			// The wall-clock read is never a terminator, let alone a float-equality condBranch.
 			osReadWallClock gives false
-			// R4.1: the file OPEN is never a terminator, let alone a float-equality condBranch.
-			osFileOpenRead gives false
-			osFileClose gives false
+			// R4.1 + R4.2: no file op is ever a terminator, let alone a float-equality condBranch.
+			osFileOpenRead to osFileFindClose gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2875,8 +2987,7 @@ type StdToX64Lowering
 			witnessTryCall panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a throwing witness call, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPipeCreate to osWriteFile panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a P1.5 IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osReadWallClock panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osReadWallClock`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			osFileOpenRead panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osFileOpenRead`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			osFileClose panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osFileClose`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osFileOpenRead to osFileFindClose panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

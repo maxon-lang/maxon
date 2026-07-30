@@ -498,10 +498,19 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		// The wall-clock read defines no value — `GetSystemTimeAsFileTime` writes its answer to the
 		// caller's out-param word, exactly as `osReadClock` does with its two.
 		osReadWallClock then break 'result'
-		// R4.1: the file OPEN defines the `CreateFileW` HANDLE — an integer, so a GPR.
+		// R4.1: the file OPEN defines the `CreateFileA` HANDLE — an integer, so a GPR.
 		osFileOpenRead(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		// The close defines no value, so there is no result class to record.
 		osFileClose then break 'result'
+		// R4.2: the five ops whose Win32 entry point answers in RAX define an integer (a BOOL verdict or a
+		// search HANDLE), so a GPR; the find-close defines nothing, exactly as the file close does.
+		osReadFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osFileOpenWrite(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osFileSize(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osFileDelete(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osFileRename(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osFileFindFirst(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osFileFindClose then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 

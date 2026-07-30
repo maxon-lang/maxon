@@ -191,6 +191,26 @@ export enum IatSlot
 	// point plus a real widening of the byte buffer; it is not this rung's, and it is written down rather
 	// than discovered later.
 	CreateFileA
+	// ⭐ **R4.2 — THE REST OF THE FILE-IO IMPORTS.** APPENDED AFTER `CreateFileA` so every existing slot
+	// INDEX (and hence every existing `iatCall` relocation) is unchanged; a reorder would silently repoint
+	// every prior import. All five are kernel32, so `Kernel32DirEntries` stays 1 — that constant counts
+	// import DIRECTORY entries (DLLs), not imports.
+	//
+	// `GetFileSizeEx` answers `size()`; `DeleteFileA` and `MoveFileExA` are `delete`/`rename`.
+	//
+	// ⭐ **`FindFirstFileA` + `FindClose` SERVE BOTH `stat` AND `exists`, WHICH IS WHY THERE IS NO
+	// `GetFileAttributesA` HERE.** The find record carries the timestamps and sizes `stat` packs AND the
+	// `dwFileAttributes` word whose directory bit is the whole of `exists`'s answer, so importing a second
+	// entry point would be two ways to ask one question — and two ways can disagree. (The bootstrap does
+	// use `GetFileAttributesA` for `exists`, on a POSIX-shaped sync-worker path shv2 does not have.)
+	//
+	// ⚠ `ReadFile` is NOT here: it was already imported for the P1.5 IOCP substrate, and `osReadFile`
+	// reuses that slot rather than taking a second one for the same entry point.
+	GetFileSizeEx
+	DeleteFileA
+	MoveFileExA
+	FindFirstFileA
+	FindClose
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer
