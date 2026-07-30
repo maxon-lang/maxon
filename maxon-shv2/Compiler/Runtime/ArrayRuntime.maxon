@@ -533,17 +533,22 @@ export function installDropTypeParamRuntime(module StdModule, usage RuntimeUsage
 	buildDropTypeParam(module)
 end 'installDropTypeParamRuntime'
 
-// ⭐ **THE DRIFT GUARD for "which array callee throws".** `isThrowingArrayRuntimeCallee` names seven
-// accessors, and exactly seven builders above stamp a `throws ArrayError` clause; those two facts must stay
-// the SAME seven or a callee's wasm SIGNATURE and its call site disagree — the throwing function gains (or
+// ⭐ **THE DRIFT GUARD for "which array callee throws".** `isThrowingArrayRuntimeCallee` names a set of
+// `__arr_` entries, and exactly the builders above stamp a throwing clause; those two facts must name the
+// SAME set or a callee's wasm SIGNATURE and its call site disagree — the throwing function gains (or
 // loses) the i64 error-flag result `funcSignatureResultValTypes` derives from the clause, while the body and
 // the call site use the other shape. That mismatch is INVISIBLE on native (the flag rides a fixed register
 // outside the signature) and surfaces on wasm as an invalid module — precisely the Slice 1 bug this rung
 // fixed. The predicate's header PROMISES the two lists cannot drift; this makes it a CHECKED invariant. It
-// reads the ACTUAL stamped clause off each built function rather than re-listing the seven names (a re-list
+// reads the ACTUAL stamped clause off each built function rather than re-listing the names (a re-list
 // would be a third copy to drift), and checks BOTH directions: a `__arr_` function is throwing iff the
 // predicate names it. Runs once per array-using compile (`installArrayRuntime`'s tail) — linear in the
 // module's function count, a compile abort rather than a runtime trap on drift.
+//
+// ⚠ It tests THROWING-NESS, not WHICH enum, which is why it kept working unchanged when the `__ManagedMemory`
+// members joined the predicate (R4.2/R4.4): those are `__arr_`-prefixed and throwing, but they stamp
+// `__ManagedMemoryError`. Which enum a callee's clause NAMES is `GtRuntime.runtimeThrowsClause`'s fact and is
+// checked by the cases that discriminate it, not here — the wasm signature depends only on throwing-ness.
 function verifyThrowingAccessorsMatchPredicate(module StdModule)
 	for func in module.functions 'eachFunc'
 		if isArrayRuntimeCallee(func.name) 'arr'
@@ -2205,19 +2210,6 @@ function emitByteRangeGuard(module StdModule, func IrFunction, block IrBlock, ch
 	emitMemoryThrow(module, block: bad, flag: MemoryInvalidByteRangeFlag, ids: ids)
 end 'emitByteRangeGuard'
 
-// ⭐ `__arr_mem_grow(arr, newCapacity)` — raise the capacity to EXACTLY `newCapacity`, or throw
-// `invalidCapacity`. VOID and throwing. v1's `__managed_mem_grow` (`stdlib/Internals.maxon:3485-3503`).
-//
-// ⚠ **THE DETACH PRECEDES THE CAPACITY COMPARISON, AND IT HAS TO.** A zero-copy view or an `.rdata`-backed
-// literal carries a NEGATIVE `capacity@16` (the `BufferOwnership` encoding), so comparing against it would
-// answer "already big enough" for every ask and leave the record pointing at bytes it may not write —
-// `__arr_grow` states the same order for the same reason. The detach republishes `capacity@16` as the live
-// length, after which the comparison is against a real capacity.
-//
-// ⚠ **IT RUNS NO ELEMENT DESTRUCTORS AND ZERO-FILLS NOTHING.** A grow only ever ADDS slots, so nothing
-// leaves the live range; the added slots come zeroed, because `emitReallocateToCapacity` copies exactly
-// `length·es` bytes into a fresh `__mm_alloc` (which is zeroed). Destructors run on a SHRINK
-// (`__arr_set_length`, `__arr_clear`) and nowhere else.
 // ⭐ `__arr_mem_append(self, other)` — concatenate `other`'s live elements onto `self`, growing first. VOID
 // and throwing; see `ArrMemAppendName` for why it exists beside `__arr_append`.
 //
@@ -2268,6 +2260,19 @@ function buildArrMemAppend(module StdModule)
 	module.functions.push(func)
 end 'buildArrMemAppend'
 
+// ⭐ `__arr_mem_grow(arr, newCapacity)` — raise the capacity to EXACTLY `newCapacity`, or throw
+// `invalidCapacity`. VOID and throwing. v1's `__managed_mem_grow` (`stdlib/Internals.maxon:3485-3503`).
+//
+// ⚠ **THE DETACH PRECEDES THE CAPACITY COMPARISON, AND IT HAS TO.** A zero-copy view or an `.rdata`-backed
+// literal carries a NEGATIVE `capacity@16` (the `BufferOwnership` encoding), so comparing against it would
+// answer "already big enough" for every ask and leave the record pointing at bytes it may not write —
+// `__arr_grow` states the same order for the same reason. The detach republishes `capacity@16` as the live
+// length, after which the comparison is against a real capacity.
+//
+// ⚠ **IT RUNS NO ELEMENT DESTRUCTORS AND ZERO-FILLS NOTHING.** A grow only ever ADDS slots, so nothing
+// leaves the live range; the added slots come zeroed, because `emitReallocateToCapacity` copies exactly
+// `length·es` bytes into a fresh `__mm_alloc` (which is zeroed). Destructors run on a SHRINK
+// (`__arr_set_length`, `__arr_clear`) and nowhere else.
 function buildArrMemGrow(module StdModule)
 	var func = IrFunction.createFromStd(ArrMemGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(2)

@@ -1756,6 +1756,16 @@ export let ManagedMemoryIndexParamName = b"index"
 export let ManagedMemoryOtherParamName = b"other"
 export let ManagedMemoryValueParamName = b"value"
 
+// ⭐ **THE MACHINE-WORD ELEMENT WIDTH A `__ManagedMemory.create(count, 8)` NAMES (R4.4 review)** — the
+// second and last of the two widths shv2 can give a buffer an element TYPE for, `ByteStringElementSize`
+// being the first. It is `LayoutDescriptor.MachineWordBytes` in the type a PARSED source constant arrives
+// as, spelled here for the reason `ManagedArrayElementBytes` is spelled in this file: a `ByteOffset` and a
+// `ParsedInt` are distinct types, and the comparison happens on the parsed side.
+// ⇒ Read by `managedMemoryInstanceForElementSize` (which width maps to which instance) and by
+// `managedMemoryElementSizeIsTypeable` (which widths are admitted at all), so those two answer about ONE
+// set of widths rather than two lists that can drift.
+let ManagedMemoryWordElementSize = 8 as ParsedInt
+
 // ⭐ **THE ERROR A `__ManagedMemory` MEMBER THROWS (R4.2)** — `stdlib/Builtins.maxon:151-160`, and NOT
 // `ArrayError`: `invalidLength` and `invalidByteRange` name conditions `ArrayError` has no case for, so a
 // handler that binds the error would be shown cases the operation cannot report. The eight cases are the
@@ -4833,6 +4843,10 @@ export type ProgramSignatures
 	// `invalidAllocation` at RUN TIME — the buffer's own guard (`__arr_mem_create`) is where a size the
 	// allocator cannot use is caught, and hoisting that into a parse-time refusal would turn a case the corpus
 	// pins as a caught throw into a compile error. Which instance a doomed `create` was typed as is unobservable.
+	//
+	// ⚠⚠ **PRECONDITION: `managedMemoryElementSizeIsTypeable`.** It has no arm for a width shv2 has no element
+	// type of, because there is no honest one — see that predicate for the wrong answer the missing `else`
+	// used to give.
 	export function managedMemoryInstanceForElementSize(elementSize ParsedInt) returns GenericInstanceId
 		if elementSize == ByteStringElementSize 'bytePacked'
 			return self.internArrayByteInstance()
@@ -4840,6 +4854,28 @@ export type ProgramSignatures
 
 		return self.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
 	end 'managedMemoryInstanceForElementSize'
+
+	// ⭐⭐ **CAN shv2 GIVE A BUFFER OF THIS ELEMENT WIDTH A TYPE AT ALL? (R4.4 review.)** The gate the answer
+	// above needs in front of it, reading the same two constants so the ACCEPTED set and the MAPPED set cannot
+	// come to differ.
+	//
+	// ⚠ **A WIDTH WITH NO ELEMENT TYPE IS A SILENT WRONG ANSWER, NOT A ROUNDING, AND IT WAS MEASURED.** The
+	// front end types `get`/`set` off the INSTANCE while the runtime strides by the record's `element_size@24`,
+	// so a `create(4, elementSize: 4)` — typed as the machine-WORD instance, because that was the whole `else`
+	// — accepted `mm.set(0, value: 5000000000)` against `int`'s range and stored four bytes of it:
+	// `mm.get(0)` read back **705032704**. The two facts about one buffer disagreed, quietly, at run time.
+	// R4.2 had no such hole only because it typed every buffer as bytes, so that program was refused by the
+	// element's range.
+	// ⇒ shv2 has exactly TWO trivial element widths (`trivialElementStorageBytes`: byte-PACKED or a machine
+	// WORD), so those are the two a source `elementSize` may name. The reference can carry others because its
+	// `__ManagedMemory with Element` names a real 2- or 4-byte type shv2 does not have — the gap is an element
+	// TYPE, and a diagnostic saying so is the honest answer until one exists.
+	//
+	// ⚠ A NON-POSITIVE size is admitted, for the reason above: `create(4, 0)` must compile and throw
+	// `invalidAllocation` at run time, and which instance a doomed `create` wore is unobservable.
+	export function managedMemoryElementSizeIsTypeable(elementSize ParsedInt) returns bool
+		return elementSize <= ByteStringElementSize or elementSize == ManagedMemoryWordElementSize
+	end 'managedMemoryElementSizeIsTypeable'
 
 	// ⭐ **THE `Array with String` / `Array with <aggregate>` INSTANCES FOR A MANAGED-ELEMENT LITERAL (P1.7
 	// slice 3).** A bare `["a","b"]` / `[p1,p2]` has no typealias to intern from, and — unlike the int/Byte

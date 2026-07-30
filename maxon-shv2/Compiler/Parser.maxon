@@ -1049,13 +1049,13 @@ let sharedEmptyTupleLayouts = StructLayoutMap.create()
 // the per-file parse fan-out, and costs a fixed handful of allocations for the whole compile rather than one
 // structure per function. `Set.contains` on a zero-capacity set returns before it hashes anything, so the
 // programs that never mark also never pay to ask.
-let sharedEmptyImmutableGlobalReads = ImmutableGlobalReadSet.create()
+let sharedEmptyImmutableGlobalReads = ValueMarkSet.create()
 
 // The module-level shared EMPTY buffer-surface mark set (R4.4), held as the initial value of
 // `bufferSurfaceValues` AND as the COW anchor its per-function reset points at —
 // `sharedEmptyImmutableGlobalReads`'s pattern, for its reason and with its invariant. Every program that
 // never names `__ManagedMemory` leaves it empty, which is the whole corpus bar a handful of files.
-let sharedEmptyBufferSurfaceValues = BufferSurfaceValueSet.create()
+let sharedEmptyBufferSurfaceValues = ValueMarkSet.create()
 
 // The module-level shared EMPTY iteration-lock stack (P1.8 slice A), held as the initial value of
 // `iterationLockedBindings` AND as the COW anchor its per-function reset points at —
@@ -3425,13 +3425,38 @@ typealias InnerAliasNameSet = Set with ByteArray
 // `Idx` results and arguments DECAY to plain (no per-instance identity) — which matches the oracle.
 typealias ValueInstanceAliasMap = Map with (ValueId, TypeNameId)
 
-// The per-function set of SSA values loaded out of an IMMUTABLE top-level global's slot (P1.7 slice 2b) —
-// see `Parser.immutableGlobalReads` for what it decides and why it is a hash set rather than a list.
-typealias ImmutableGlobalReadSet = Set with ValueId
+// ⭐ **ONE PARSER MARK OVER THIS FUNCTION'S SSA VALUES — a set of the values that carry it.** The two marks
+// that wear this shape are `Parser.immutableGlobalReads` (loaded out of an IMMUTABLE top-level global's slot,
+// P1.7 slice 2b) and `Parser.bufferSurfaceValues` (denotes a `__ManagedMemory` BUFFER rather than the `Array`
+// around it, R4.4); each field's own header says what its mark DECIDES and why a set rather than a list.
+//
+// ⭐ **ONE ALIAS RATHER THAN ONE PER MARK, BECAUSE THE PURPOSE IS THE SHARED ONE (review, R4.4).** What a
+// name has to describe here is the shape the copy-on-write discipline is written against — see
+// `privateValueMarkSet`, which is one function precisely because there is one type for it to take. The
+// per-mark purpose is carried by the FIELD name, which is where it varies.
+typealias ValueMarkSet = Set with ValueId
 
-// The per-function set of SSA values that denote a `__ManagedMemory` BUFFER rather than the `Array` around it
-// (R4.4) — see `Parser.bufferSurfaceValues` for what it decides and why the fact lives on the value.
-typealias BufferSurfaceValueSet = Set with ValueId
+// ⭐⭐ **THE COPY-ON-WRITE OFF THE SHARED EMPTY ANCHOR — THE ONE HOME OF THE HALF OF A MARK THAT IS
+// DANGEROUS TO WRITE TWICE (review, R4.4).** Hand back the set the caller may INSERT into: its own, when it
+// already has one, and a fresh empty set when it is still holding `anchor`.
+//
+// ⚠ **THE ANCHOR IS MODULE-LEVEL AND SHARED ACROSS THE PER-FILE PARSE FAN-OUT**, so inserting into it is
+// not a lost mark but a LEAKED one: every other function in every other file would then see a mark naming
+// an unrelated value in its own SSA space, and a program would be refused for something it never wrote. A
+// wrong answer, and not a compile error — which is exactly why the test may not be a three-line idiom each
+// mark set copies. R4.4 arrived with a second hand-written copy of it (`markBufferSurface`), which is what
+// this closes; the pattern's purpose was already stated twice in prose before it was stated once in code.
+//
+// ⚠ Every mark set stays SPARSE, and that is what this buys beyond safety: a program that never mints the
+// mark never allocates a set for it, and `Set.contains` on the shared zero-capacity anchor returns before
+// it hashes anything. The reset-per-function and closure-body SWAP sites hand the anchor straight back.
+function privateValueMarkSet(current ValueMarkSet, anchor ValueMarkSet) returns ValueMarkSet
+	if current is anchor 'stillShared'
+		return ValueMarkSet.create()
+	end 'stillShared'
+
+	return current
+end 'privateValueMarkSet'
 
 // One enclosing loop on the parser's loop-context stack. `break`/`continue` read it
 // to find their targets (innermost, or by label) and to build the block-arg value
@@ -4158,7 +4183,7 @@ export type Parser
 	// doubling, a textbook quadratic — and 39% of `phase:parse` at the top rung, while the `var` control
 	// stayed flat at x1.99. It allocates almost nothing (the list's own geometric growth, +21 allocations at
 	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
-	var immutableGlobalReads as ImmutableGlobalReadSet
+	var immutableGlobalReads as ValueMarkSet
 	// ⭐⭐ **WHICH SSA VALUES DENOTE A `__ManagedMemory` BUFFER RATHER THAN THE `Array` AROUND IT (R4.4)** —
 	// the fact `SignatureIndex.ManagedMemoryTypeName` says the binding costs, kept where shv2 keeps such facts.
 	//
@@ -4185,7 +4210,7 @@ export type Parser
 	// A SPARSE set for `immutableGlobalReads`' reason — the population is zero in every program that never
 	// names `__ManagedMemory` — sharing the same module-level empty anchor discipline. Reset per function and
 	// SWAPPED across a closure body, exactly like the sibling value marks.
-	var bufferSurfaceValues as BufferSurfaceValueSet
+	var bufferSurfaceValues as ValueMarkSet
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THE BARE IDENTIFIER `parseVariableReference` LAST RESOLVED**,
 	// empty when that binding may be written through. A scalar hand-off from the ONE resolution that can
 	// answer it to the ONE consumer that needs it (`bareArgImmutableName`, at a call argument), because a
@@ -23522,12 +23547,23 @@ export type Parser
 	//
 	// The constant comes from the parser's own fold (`constIsKnown`), so `let W = 8` then `create(n, W)` is
 	// admitted — a `let`'s use IS its literal in shv2 — while a parameter or a computed size is refused by name.
+	//
+	// ⚠⚠ **AND A CONSTANT IS NOT ENOUGH: IT MUST BE A WIDTH shv2 HAS AN ELEMENT TYPE FOR (review, R4.4).**
+	// Knowing the size at the call buys nothing if the instance chosen for it then STRIDES differently from
+	// the type `get`/`set` are checked against — measured on `create(4, elementSize: 4)`, which took the
+	// machine-word instance, accepted `set(0, value: 5000000000)` against `int`'s range and read back
+	// 705032704. `managedMemoryElementSizeIsTypeable` owns that set; this is the door that reports it.
 	function requireManagedMemoryElementSize(elementSize ValueId, argStart TokenIndex) returns GenericInstanceId throws ParseError
 		if not self.constIsKnown(elementSize) 'notAConstant'
 			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}.{String.from(ManagedMemoryCreateMethod)}`'s `{String.from(ManagedMemoryElementSizeParamName)}` must be a compile-time constant — it picks the buffer's ELEMENT TYPE, which `get`/`set` are typed from, and a size that exists only at run time leaves them with no type. Write the literal ({ByteStringElementSize} for bytes, {primitiveTypeByteSize(ValueTypeTag.integer)} for words).", line: self.tokenAt(argStart).line, column: self.tokenAt(argStart).column)
 		end 'notAConstant'
 
-		return self.signatures.managedMemoryInstanceForElementSize(self.constOf(elementSize))
+		let size = self.constOf(elementSize)
+		if not self.signatures.managedMemoryElementSizeIsTypeable(size) 'noElementTypeIsThatWide'
+			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}.{String.from(ManagedMemoryCreateMethod)}`'s `{String.from(ManagedMemoryElementSizeParamName)}` is {size}, and shv2 has no element TYPE of that width — a buffer must be byte-packed ({ByteStringElementSize}) or machine-word ({primitiveTypeByteSize(ValueTypeTag.integer)}). Typing it as a word anyway would check `get`/`set` against a range the buffer's stride cannot hold, and store the value truncated.", line: self.tokenAt(argStart).line, column: self.tokenAt(argStart).column)
+		end 'noElementTypeIsThatWide'
+
+		return self.signatures.managedMemoryInstanceForElementSize(size)
 	end 'requireManagedMemoryElementSize'
 
 	// The argument to `String.from` must be an `Array with Byte` — the instance a `b"…"` literal and a
@@ -27563,26 +27599,18 @@ export type Parser
 	// then see a mark naming an unrelated value in its own SSA space, and a program would be refused for a
 	// binding it never wrote. One home makes that unwritable rather than merely unwritten.
 	function markImmutableGlobalRead(value ValueId)
-		if self.immutableGlobalReads is sharedEmptyImmutableGlobalReads 'stillShared'
-			self.immutableGlobalReads = ImmutableGlobalReadSet.create()
-		end 'stillShared'
-
+		self.immutableGlobalReads = privateValueMarkSet(self.immutableGlobalReads, anchor: sharedEmptyImmutableGlobalReads)
 		self.immutableGlobalReads.insert(value)
 	end 'markImmutableGlobalRead'
 
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
-	// identical copy-on-write reason: a second insert site that skipped the identity test would write the
-	// MODULE-level shared empty set and leak a mark naming an unrelated value in every other function of
-	// every other file.
+	// identical copy-on-write reason, through the same one home for it (`privateValueMarkSet`).
 	//
 	// Its two callers are the two producers of a buffer: `__ManagedMemory.create` and a `slice` taken
 	// THROUGH the buffer surface. Nothing else mints one — `.managed` is an identity read, so it produces no
 	// new value to mark and passes the surface along the dispatch instead (see `dispatchArrayMethod`).
 	function markBufferSurface(value ValueId)
-		if self.bufferSurfaceValues is sharedEmptyBufferSurfaceValues 'stillShared'
-			self.bufferSurfaceValues = BufferSurfaceValueSet.create()
-		end 'stillShared'
-
+		self.bufferSurfaceValues = privateValueMarkSet(self.bufferSurfaceValues, anchor: sharedEmptyBufferSurfaceValues)
 		self.bufferSurfaceValues.insert(value)
 	end 'markBufferSurface'
 

@@ -269,3 +269,38 @@ end 'main'
 ```exitcode
 55
 ```
+
+<!-- test: error.declare-array-error-enum -->
+### `ArrayError` is a declaration the compiler owns
+The two cases above discriminate `ArrayError`, which means the compiler must SEED that enum — and it seeds
+it under the BARE name, because user source already spells `throws ArrayError` (four committed cases do).
+A bare seed with no reservation is half a name: shv2 has no namespace, so a user `enum ArrayError` would
+land in the same registry bucket and the later write would win, while the array runtime went on returning
+the builtin's ordinals. MEASURED before the reservation existed: this program compiled, and
+`try arr.get(5)` routed `indexOutOfBounds` (ordinal 0) into the user's first case with no diagnostic
+anywhere. Refused now, exactly as `Ordering` and `CharacterSet` are — a REFERENCE to the name in a `throws`
+clause stays legal, which is the whole reason the name is bare.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+enum ArrayError
+	somethingElse
+	another
+end 'ArrayError'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(7)
+	let v = try a.get(5) otherwise (e) 'oops'
+		match e 'k'
+			somethingElse then return 11
+			another then return 12
+		end 'k'
+	end 'oops'
+	return v
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:6: Unsupported: a declaration of the type name 'ArrayError', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
+```

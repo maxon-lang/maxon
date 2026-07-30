@@ -901,3 +901,58 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:7:8: Unsupported: `Array` method 'setLength' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later
 ```
+
+### An element size shv2 has no element TYPE for is refused, not silently truncated
+
+<!-- test: error.create-element-size-with-no-element-type -->
+
+`create`'s `elementSize` is read TWICE: the runtime stores it into `element_size@24` — the stride every
+accessor moves by — and the front end picks the result's `Array` instance from it, because `get`/`set` are
+typed off the ELEMENT. Those two readings must describe the same width. shv2 has exactly two trivial element
+widths (byte-PACKED and a machine WORD), so a source that writes any other positive size makes them disagree,
+and the disagreement is invisible: `create(4, elementSize: 4)` took the word instance, accepted
+`set(0, value: 5000000000)` against `int`'s range, stored four bytes of it, and `get(0)` read back
+**705032704**. Found in review of R4.4, which is the rung that introduced the element-size typing. The
+refusal names the width and the two that work.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 4) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	try mm.set(0, value: 5000000000) otherwise return 3
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:3:37: Unsupported: `__ManagedMemory.create`'s `elementSize` is 4, and shv2 has no element TYPE of that width — a buffer must be byte-packed (1) or machine-word (8). Typing it as a word anyway would check `get`/`set` against a range the buffer's stride cannot hold, and store the value truncated.
+```
+
+### A buffer mark minted in one function does not reach another function's value
+
+<!-- test: error.buffer-mark-does-not-leak-across-functions -->
+
+The buffer surface rides the VALUE (`Parser.bufferSurfaceValues`), and `ValueId`s restart at 0 in every
+function (`resetPerFunction` re-creates the minter), so the mark set is per-function and its shared empty
+anchor is MODULE-level. If a mark were ever inserted into the anchor itself, it would name an id in an
+unrelated function's SSA space — and the failure is an over-ACCEPTANCE, which no diagnostic reports.
+
+MEASURED, by removing the copy-on-write detach: this exact program COMPILED AND RAN, `bytes.setByte(0, 67)`
+writing a byte through a `String`'s own buffer because `mm`'s id in `makeBuf` collided with `bytes`'s id
+here. The whole 2665-case suite was green over that removal, which is why this case exists — the guard's
+two prose statements of the invariant had no test between them. The padding is load-bearing: it is what
+aligns the two ids, and the case is worth nothing without it.
+```maxon
+function makeBuf() returns ExitCode
+	let mm = try __ManagedMemory.create(4 + 0, 1) otherwise return 1
+	return 0
+end 'makeBuf'
+
+function main() returns ExitCode
+	let pad1 = 1
+	let bytes = "ab".toByteArray()
+	try bytes.setByte(0, 67) otherwise return 3
+	return makeBuf()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:12: Unsupported: `Array` method 'setByte' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later
+```

@@ -744,8 +744,22 @@ end 'resolveType'
 // The RANGED carve-out applies to it unchanged and is what the corpus needs: a user
 // `typealias Codepoint = int(0 to 1114111)` — the very declaration `stdlib/Character.maxon` makes — erases
 // to the same `integer` the builtin does, so the two answers agree and there is nothing to refuse.
+//
+// ⭐⭐ **`ArrayError` JOINS THE LIST AT R4.4's REVIEW, AND IT JOINS FOR `Ordering`'S EXACT REASON — IT IS
+// SEEDED BY `createEnumRegistry` UNDER A BARE NAME.** R4.4 registered a THIRD compiler-owned enum there
+// (`Project.builtinArrayErrorEnum`) and could not give it the `__` prefix its two `__ManagedMemoryError` /
+// `__ManagedFileError` siblings wear, because user source already spells the bare name in a `throws` clause
+// (see `SignatureIndex.ArrayErrorTypeName`). A bare seed and no entry here is precisely the hole this
+// function's header describes, and it was not hypothetical.
+// ⚠ **MEASURED, before this line existed:** a program declaring `enum ArrayError` with cases
+// `somethingElse`/`another` COMPILED, `upsertDeclaredEnum` let the declaration displace the seed, and
+// `try arr.get(5) otherwise (e) … match e` routed the runtime's `indexOutOfBounds` (ordinal 0) into the
+// user's `somethingElse` arm — exit 11, no diagnostic anywhere. One error type under two meanings, decided
+// by whichever write landed last: the wrong answer the seed is supposed to be undisplaceable against.
+// ⇒ The reservation is only over a DECLARATION. `throws ArrayError` is a type REFERENCE and stays legal —
+// which is the whole reason the name is bare — and the four committed cases that write it are unaffected.
 export function isCompilerOwnedTypeName(name ByteArray) returns bool
-	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName)
+	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName)
 end 'isCompilerOwnedTypeName'
 
 // The name a `named` type denotes, ERASED to a concrete `MaxonType` — or `notDeclared` when it
