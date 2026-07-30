@@ -2544,6 +2544,7 @@ end 'comparisonOpSpelling'
 // Which compiler-owned layouts a file names — the answer `fileNamesProducerMask` walks the tokens once to
 // build, where three separate walks used to build it three times.
 typealias ProducerMask = int(0 to 7)
+
 let StringIndexProducerBit = 1 as ProducerMask
 let CharacterSetProducerBit = 2 as ProducerMask
 let ManagedFileProducerBit = 4 as ProducerMask
@@ -24464,43 +24465,26 @@ export type Parser
 	// (`Code`), a struct — to a `named` type `mintOwnedCallResult` resolves through the same alias/struct doors
 	// a direct call's return does.
 	//
-	// ⭐ **`ExitCode` IS CLAIMED HERE, WITH THE KEYWORDS AND NOT WITH THE USER NAMES, AND THE REASON IS A
-	// WIDTH (P1.7a slice 2b-iv-B).** An interface stores its return type as a rendered source STRING, so this
-	// function RE-DERIVES what a declaration derived once — and the `named` fallback is only safe while the
-	// two derivations agree. They agree for every name but this one: a ranged alias, an enum and a struct all
-	// collapse to an i64 machine word whichever route reaches them (`valueTagToStdType`), whereas `ExitCode`
-	// is the ONE builtin whose tag carries a sub-64 width (u32). Left to the fallback, the dispatch site typed
-	// its result i64 while the conforming impl declared u32 — invisible on the register targets, where every
-	// value occupies a 64-bit register, and a **`wasm trap: indirect call type mismatch`** on wasm, whose
-	// `call_indirect` checks the declared functype against the target's own EXACTLY. MEASURED: an
+	// ⭐ **`ExitCode` IS CLAIMED WITH THE KEYWORDS AND NOT WITH THE USER NAMES, AND THE REASON IS A WIDTH
+	// (P1.7a slice 2b-iv-B).** An interface stores its return type as a rendered source STRING, so this
+	// function RE-DERIVES what a declaration derived once, and the `named` fallback is only safe while the two
+	// derivations agree — which they do for every name but that one. MEASURED at this door: an
 	// `ExitCode`-returning interface method returned 42 on x64 and trapped under wasmtime.
 	//
-	// It is claimed by the SAME named constant `denotedNamedType` claims it by — the authority for what a type
-	// NAME denotes — rather than a second spelling of the bytes, since a second spelling is the thing that
-	// would let the two drift apart again. It cannot be routed through that cascade wholesale: this function
-	// answers for the VALUE column, where a ranged alias deliberately keeps its `named` identity (see
-	// `castConvertsPerInstance`), while the cascade erases it for the SIGNATURE column.
-	// ⚠ Every name below is spelled by the CANONICAL constant `IrInterface` already exports for it, never by a
-	// fresh `b"…"` — `BoolConformerName`'s own header says a second spelling of one of these "is the same fact
-	// and so must not become a second constant", and these four are the same four names the interface
-	// declarations, the conformance answer and the synthesized impl symbols are all keyed by.
+	// It cannot be routed through `denotedNamedType` wholesale: this function answers for the VALUE column,
+	// where a ranged alias deliberately keeps its `named` identity (see `castConvertsPerInstance`), while
+	// that cascade erases it for the SIGNATURE column.
+	//
+	// ⭐⭐ **SO THE NAME→TAG TABLE IS `builtinTypeNameTag`, AND THIS DOOR IS NO LONGER THE ONLY ASKER (W1).**
+	// The table used to be written out here, and here alone — which is precisely how the FUNCTION-TYPEALIAS
+	// registry, a second interner-free store of the same kind, came to drop `ExitCode`'s width and trap on
+	// wasm. One table, three doors; see `builtinTypeNameTag` for the measurement and for why `Character` is
+	// not in it. `named` is its answer for every name it does not own, which is exactly what
+	// `maxonTypeOfTag`'s `named` arm rebuilds from this file's interned id — and the intern is paid only on
+	// that answer, never for a builtin whose type carries no name at all.
 	function interfaceReturnMaxonType(returnTypeName ByteArray) returns MaxonType
-		if returnTypeName.equals(BoolConformerName) 'boolReturn'
-			return MaxonType.boolean
-		end 'boolReturn'
-		if returnTypeName.equals(IntConformerName) 'intReturn'
-			return MaxonType.integer
-		end 'intReturn'
-		if returnTypeName.equals(FloatConformerName) 'floatReturn'
-			return MaxonType.float
-		end 'floatReturn'
-		if returnTypeName.equals(StringConformerName) 'stringReturn'
-			return MaxonType.string
-		end 'stringReturn'
-		if returnTypeName.equals(ExitCodeBuiltinName) 'exitCodeReturn'
-			return MaxonType.exitCode
-		end 'exitCodeReturn'
-		return MaxonType.named(self.artifact.typeNames.intern(returnTypeName))
+		let tag = builtinTypeNameTag(returnTypeName)
+		return maxonTypeOfTag(tag, nameId: UnnamedTypeId if tag != ValueTypeTag.named else self.artifact.typeNames.intern(returnTypeName))
 	end 'interfaceReturnMaxonType'
 
 	// The token shape of a method call on an ARRAY FIELD reached through a field chain — `<base>(.<field>)+
@@ -29739,13 +29723,18 @@ export type Parser
 	// FunctionTypeAlias), re-interning the name into THIS file's interner. `void` means the function
 	// returns nothing; a primitive return carries no name; a `named`/`structRef`/function return carries
 	// the name it re-interns from.
+	//
+	// ⭐ The rebuild itself is `maxonTypeOfStoredTypeName` — shared with `TypeResolution`'s twin, which does
+	// the same job against the PROJECT's merged interner — so this function supplies only the interner. That
+	// is what recovers `ExitCode`'s u32 width from the stored NAME rather than dropping it to a `named` i64;
+	// see `builtinTypeNameTag` for the wasm trap the third spelling of that rule used to cost (W1).
 	function functionAliasReturnType(alias FunctionTypeAlias) returns MaxonReturnType
 		if alias.returnTag == ValueTypeTag.void 'voidReturn'
 			return MaxonReturnType.void
 		end 'voidReturn'
 
 		let nameId = UnnamedTypeId if alias.returnTypeName.isEmpty() else self.artifact.typeNames.intern(alias.returnTypeName)
-		return MaxonReturnType.value(maxonTypeOfTag(alias.returnTag, nameId: nameId))
+		return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, nameId: nameId))
 	end 'functionAliasReturnType'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.

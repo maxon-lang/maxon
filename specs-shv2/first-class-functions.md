@@ -3031,3 +3031,119 @@ end 'main'
 ```exitcode
 210
 ```
+
+<!-- test: first-class-function.exitcode-return-through-alias -->
+⭐ **THE WIDTH A FUNCTION TYPEALIAS USED TO DROP (W1).** `ExitCode` is the ONE builtin type name
+whose tag carries a sub-64 width (`MaxonType.exitCode` → u32), and a function typealias stores its
+declared return interner-free as a `(tag, NAME)` pair — so a `returns ExitCode` arrives at every
+reader as the tag `named` plus the bytes `ExitCode`, and rebuilding it through `maxonTypeOfTag`
+alone gave back a `named`, an i64. The call site then declared `(i64) -> i64` against a
+`__fnref_nine` thunk whose own return width came from the resolved declaration and was i32.
+
+Invisible on every register target — an i64 and a u32 occupy the same GPR — and a hard
+**`wasm trap: indirect call type mismatch`** on wasm, whose `call_indirect` checks the declared
+functype against the funcref's own EXACTLY. So this case is worth nothing on the lane that
+computed the right answer anyway and is the whole assertion on the lane that trapped; it runs on
+all of them for that reason. No closure is involved: a bare function reference through a typealias
+is enough.
+```maxon
+typealias Thunk = function() returns ExitCode
+
+function nine() returns ExitCode
+	return 9
+end 'nine'
+
+function callThunk(t Thunk) returns ExitCode
+	return t()
+end 'callThunk'
+
+function main() returns ExitCode
+	return callThunk(nine)
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: first-class-function.ranged-alias-return-through-alias -->
+⭐ **THE CONTROL FOR THE CASE ABOVE, AND THE CONTROL IS THE POINT (W1).** `Code` is declared over
+`ExitCode`'s EXACT range, so the two cases differ in the NAME and in nothing else — which is what
+shows the divergence was a WIDTH recovered from a name and not a name treated specially. A user
+ranged alias erases to width-free `integer` on both sides of the call (an i64 either way), so it
+agreed before the fix and agrees after it; a regression that re-broke `ExitCode` by teaching the
+rebuild to answer for one name would leave this case green and the one above red, which is
+precisely the pair that says which.
+```maxon
+typealias Code = int(0 to u32.max)
+typealias CodeThunk = function() returns Code
+
+function nine() returns Code
+	return 9
+end 'nine'
+
+function callThunk(t CodeThunk) returns Code
+	return t()
+end 'callThunk'
+
+function main() returns ExitCode
+	return callThunk(nine) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: first-class-function.exitcode-return-through-alias-computed -->
+The recovered return type is a VALUE, not just a return slot: the indirect call's result is bound
+and then arithmetic is done on it. A width recovered only where the call's functype is declared
+would still leave the bound value carrying the wrong tag, and the tag is what every later rule
+reads — so this pins that an `ExitCode` recovered from a function typealias is usable as the
+integral value it is, and not merely callable. `4 + 4 + 1`.
+```maxon
+typealias Thunk = function() returns ExitCode
+
+function four() returns ExitCode
+	return 4
+end 'four'
+
+function twice(t Thunk) returns ExitCode
+	let v = t()
+	return v + v + 1
+end 'twice'
+
+function main() returns ExitCode
+	return twice(four)
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: first-class-function.exitcode-param-through-alias -->
+The PARAMETER half of the same registry, isolated from the return half — the alias takes an
+`ExitCode` and returns a user ranged alias, so the only sub-64 name in the signature is on the
+argument side. It already agreed, and the asymmetry is the point: an indirect call's argument
+widths come from the RESOLVED `functionAliasShapes` (and the uniform function-value ABI passes
+every non-float argument as one machine word regardless), where the RETURN width was taken from
+the parser's own rebuild instead. So this case is the evidence for that asymmetry rather than a
+second repro of it, and it is what would catch a fix that single-sourced the two columns by moving
+the return's answer onto the param's footing instead of the other way round. `8 + 1`.
+```maxon
+typealias Outcome = int(0 to u32.max)
+typealias Bump = function(ExitCode) returns Outcome
+
+function bump(c ExitCode) returns Outcome
+	return c + 1
+end 'bump'
+
+function applyIt(f Bump, c ExitCode) returns Outcome
+	return f(c)
+end 'applyIt'
+
+function main() returns ExitCode
+	return applyIt(bump, c: 8) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```

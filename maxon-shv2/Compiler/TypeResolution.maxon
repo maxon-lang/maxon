@@ -58,11 +58,89 @@
 // string — the alias spelling is a contract shared with the parser's interner. Grows
 // into a builtin-alias table (Character, etc.) when the stdlib cone lands.
 //
-// EXPORTED because the parser's INTERFACE-RETURN resolver must claim it too: an interface stores its
-// method return type as a rendered source STRING, so `Parser.interfaceReturnMaxonType` re-derives the
-// MaxonType from the name and has to reach the same answer this cascade does. A second spelling of the
-// bytes is what would let the two drift (P1.7a slice 2b-iv-B).
-export let ExitCodeBuiltinName = b"ExitCode"
+// ⚠ **FILE-PRIVATE, AND IT IS THE `builtinTypeNameTag` BELOW THAT CARRIES THE NAME ACROSS FILES (W1).** The
+// re-derivation doors — an interface's rendered return STRING, a function typealias's stored return NAME —
+// need the ANSWER, not the bytes, and handing them the bytes is what produced three hand-written copies of
+// one rule and a wasm trap in two of them. Nothing outside this file names the constant now; the doors ask
+// the table, which is the only thing that keeps them from drifting (P1.7a slice 2b-iv-B, W1).
+let ExitCodeBuiltinName = b"ExitCode"
+
+// ⭐⭐ **THE TAG A BUILTIN TYPE NAME DENOTES — THE ONE ANSWER FOR EVERY DOOR THAT HOLDS A TYPE ONLY AS ITS
+// SOURCE-SPELLED NAME (W1).** Two registries store a declared type INTERNER-FREE, as the bytes the source
+// wrote: an INTERFACE method's return type (a rendered source STRING — `IrInterface`) and a FUNCTION
+// TYPEALIAS's parameters and return (`FunctionTypeAlias`, whose `(tag, name)` pairs are what let it ride the
+// merge with no interner remap). Both therefore RE-DERIVE what a declaration derived once, and a
+// re-derivation is sound only while it reaches the SAME answer.
+//
+// It reaches the same answer for every name but one, because a ranged alias, an enum, a struct and a bare
+// nominal `named` all collapse to the same i64 machine word whichever route arrives at them
+// (`valueTagToStdType`).
+//
+// ⚠ **`ExitCode` IS THE ONE THAT DOES NOT, AND WHAT IT COST WAS A wasm TRAP.** It is the only builtin whose
+// tag carries a SUB-64 width (u32 — `valueTagToStdType`'s `exitCode` arm is the sole home of that width), so
+// a `returns ExitCode` rebuilt as a `named` is an i64 while the callee's own resolved declaration is a u32.
+// Invisible on every register target, where both occupy one 64-bit GPR, and a hard
+// **`wasm trap: indirect call type mismatch`** on wasm, whose `call_indirect` checks the declared functype
+// against the funcref's own EXACTLY: the call site declared `() -> i64` against a `__fnref_` thunk typed
+// `() -> i32`. MEASURED both ways — `typealias Thunk = function() returns ExitCode` + `nine() returns
+// ExitCode` returned 9 natively and trapped 134 under wasmtime, while the identical program over a user
+// `int(0 to u32.max)` alias of the SAME RANGE ran clean on both. That pair is what says the fact is a WIDTH
+// recovered from a NAME, not a name treated specially, and both halves of it are pinned
+// (`specs-shv2/first-class-functions.md`, `exitcode-return-through-alias` + its `ranged-alias` control).
+//
+// ⇒ **The rule is stated ONCE, here, and asked by all three doors** — `Parser.interfaceReturnMaxonType`,
+// `Parser.functionAliasReturnType`, and this file's own `functionAliasReturnType`/`functionAliasParamType`
+// twin (which rebuild against the project's merged interner where the parser's rebuilds against the FILE's).
+// It had been spelled at the first of the three and nowhere else, which is exactly why the other two dropped
+// the width; a fourth hand-written `ExitCode` arm would have passed the same test and left standing the
+// arrangement that produced the trap.
+//
+// ⚠ **`named` IS THE ANSWER FOR EVERY OTHER NAME, AND IT IS A CLASSIFICATION RATHER THAN A SENTINEL**: it
+// says the name denotes a NAMED type, which is precisely what `maxonTypeOfTag`'s own `named` arm rebuilds
+// from the caller's interned id. Every caller feeds this straight into that rebuild, so there is no second
+// decision to keep in step and nothing to test the answer against.
+//
+// ⚠ **`Character` IS DELIBERATELY ABSENT, and admitting it would be a FEATURE rather than a re-spelling.**
+// The set here is exactly the set the interface door already answered for, because this rung single-sources
+// that door and does not widen it. A function typealias cannot reach the question at all:
+// `parseTypeReference` answers `Character` (and `String`) SYNTACTICALLY, so an alias stores them by TAG with
+// an EMPTY name and the `named` arm is never asked about either. The interface door can reach it, and
+// MEASURED it is REFUSED — an interface method declared `returns Character`, dispatched through a witness,
+// reports `E3005 Cannot return 'int' from function declared to return 'Character'`. That is a clean refusal
+// rather than a wrong answer, and admitting it means adopting a managed record as an owned temp at the
+// dispatch site (`Parser.mintOwnedCallResult`), which is a mechanism with its own acceptance cases.
+//
+// ⚠ Every name is spelled by the CANONICAL constant the compiler already exports for it, never a fresh
+// `b"…"` — `BoolConformerName`'s own header says a second spelling of one of these "is the same fact and so
+// must not become a second constant".
+export function builtinTypeNameTag(name ByteArray) returns ValueTypeTag
+	if name.equals(BoolConformerName) 'isBool'
+		return ValueTypeTag.boolean
+	end 'isBool'
+	if name.equals(IntConformerName) 'isInt'
+		return ValueTypeTag.integer
+	end 'isInt'
+	if name.equals(FloatConformerName) 'isFloat'
+		return ValueTypeTag.float
+	end 'isFloat'
+	if name.equals(StringConformerName) 'isString'
+		return ValueTypeTag.string
+	end 'isString'
+	if name.equals(ExitCodeBuiltinName) 'isExitCode'
+		return ValueTypeTag.exitCode
+	end 'isExitCode'
+	return ValueTypeTag.named
+end 'builtinTypeNameTag'
+
+// ⭐ **THE ONE REBUILD OF A TYPE STORED AS AN INTERNER-FREE `(tag, NAME)` PAIR** — the shape
+// `FunctionTypeAlias` keeps for its parameters and its return (see there for why it travels by name rather
+// than by id). The stored TAG already answers for every type whose spelling `parseTypeReference` settled
+// syntactically; a `named` tag is the only one that still carries a NAME, so it is the only one asked
+// whether that name is a builtin whose own tag carries a width. `nameId` is the caller's interner's id for
+// the same name, which is what keeps the two interners' rebuilds one function rather than two.
+export function maxonTypeOfStoredTypeName(tag ValueTypeTag, name ByteArray, nameId TypeNameId) returns MaxonType
+	return maxonTypeOfTag(tag if tag != ValueTypeTag.named else builtinTypeNameTag(name), nameId: nameId)
+end 'maxonTypeOfStoredTypeName'
 
 // `denotedNamedType`'s "this name is in none of the sources" answer. Payload-free — the caller
 // already holds the name it asked about — so it is a scalar and the throw allocates nothing on a
@@ -216,9 +294,9 @@ end 'resolveFunctionAliasShapes'
 // Rebuild one stored parameter's `MaxonType` from its interner-free `(tag, name)` pair, re-interning the
 // name into the project's merged interner. The twin of `functionAliasReturnType` below and of the parser's
 // own `functionAliasReturnType`, which does the identical rebuild against the FILE's interner — the storage
-// convention is one, so the rebuild is stated once per interner and nowhere else.
+// convention is one, so the rebuild is `maxonTypeOfStoredTypeName` and these two only supply the interner.
 function functionAliasParamType(project Project, param FunctionAliasParam) returns MaxonType
-	return maxonTypeOfTag(param.tag, nameId: functionAliasNameId(project, typeName: param.typeName))
+	return maxonTypeOfStoredTypeName(param.tag, name: param.typeName, nameId: functionAliasNameId(project, typeName: param.typeName))
 end 'functionAliasParamType'
 
 // Rebuild a function alias's declared RETURN type from its interner-free storage. `void` means the function
@@ -227,7 +305,7 @@ function functionAliasReturnType(project Project, alias FunctionTypeAlias) retur
 	if alias.returnTag == ValueTypeTag.void 'voidReturn'
 		return MaxonReturnType.void
 	end 'voidReturn'
-	return MaxonReturnType.value(maxonTypeOfTag(alias.returnTag, nameId: functionAliasNameId(project, typeName: alias.returnTypeName)))
+	return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, nameId: functionAliasNameId(project, typeName: alias.returnTypeName)))
 end 'functionAliasReturnType'
 
 // The project-interner id behind one stored type NAME — `UnnamedTypeId` for a primitive, which carries none
