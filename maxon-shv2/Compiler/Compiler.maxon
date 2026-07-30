@@ -417,6 +417,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `scanRuntimeUsage` before any install ran, so the order is readability rather than a dependency.
 	installCharacterSetRuntime(pipeline.stdModule, usage: usage)
 
+	// The file-IO runtime (`__mf_open_read`, R4.1) — installed the same already-lowered way, on its own
+	// `usesManagedFile` bit. It must come AFTER the array install is decided but has no ordering dependency
+	// on it: it calls `__mm_alloc`/`__mm_free` (carried by the `usesHeap` bit it sets alongside its own) and
+	// `ArrayRuntime.emitForwardCopy`, which is a BUILDER it inlines rather than a callee it references.
+	installManagedFileRuntime(pipeline.stdModule, usage: usage)
+
 	// The Array runtime (`__arr_create`/`__arr_push`/`__arr_get`/…) — installed the same way and for the
 	// same reason: already-lowered Std, appended after the pipeline so it is never re-optimized. Keyed on
 	// its own `usesArray` bit (any `__arr_*` reference), which also implied `usesHeap` above (the helpers

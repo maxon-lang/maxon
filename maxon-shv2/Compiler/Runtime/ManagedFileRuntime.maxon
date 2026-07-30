@@ -43,3 +43,164 @@ export let ManagedFileBoxBytes = 8 as ParsedInt
 // allocated zeroed, so an unopened box and a closed box carry the same value and one guard covers both.
 // A handle the OS actually returns is never 0 for a file.
 export let ManagedFileClosedHandle = 0 as ParsedInt
+
+// `CreateFileA` reports failure as `INVALID_HANDLE_VALUE`, which is -1 and NOT the zero a closed box
+// carries. Two distinct sentinels for two distinct facts: "the OS refused" vs "this box holds no handle".
+let InvalidHandleValue = -1 as ParsedInt
+
+// The Win32 last-error codes the corpus discriminates. `specs/managed-file.md`'s own note records that
+// Win32 `ERROR_FILE_NOT_FOUND` and POSIX `ENOENT` are BOTH 2 — which is why the errno→variant mapping is
+// builder-built Std here rather than backend code, and why a future POSIX lane reuses this arithmetic
+// unchanged and supplies only the OPEN.
+let ErrorFileNotFound = 2 as ParsedInt
+let ErrorPathNotFound = 3 as ParsedInt
+let ErrorAccessDenied = 5 as ParsedInt
+
+// The three `__ManagedFileError` ordinals, as ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`). DERIVED
+// from the bias rather than spelled 1/2/3, exactly as `ArrayRuntime.ArrIndexOutOfBoundsFlag` is — and the
+// ordinals themselves are positional facts about `Project.builtinManagedFileErrorEnum`'s case order,
+// which is why that function's comment calls the order a wire format.
+let ManagedFileNotFoundOrdinal = 0 as ParsedInt
+let ManagedFileAccessDeniedOrdinal = 1 as ParsedInt
+let ManagedFileOpenFailedOrdinal = 2 as ParsedInt
+let ManagedFileNotFoundFlag = ManagedFileNotFoundOrdinal + ErrorFlagOrdinalBias
+let ManagedFileAccessDeniedFlag = ManagedFileAccessDeniedOrdinal + ErrorFlagOrdinalBias
+let ManagedFileOpenFailedFlag = ManagedFileOpenFailedOrdinal + ErrorFlagOrdinalBias
+
+// The one entry point this rung installs.
+export let ManagedFileOpenReadName = b"__mf_open_read"
+
+// ⭐ **WHICH `__ManagedFile` CALLEES THROW** — the third composer behind `Parser.isThrowingRuntimeCallee`,
+// beside `isThrowingArrayRuntimeCallee` and `isThrowingGtRuntimeCallee`. Held to the builders by the
+// bidirectional drift guard in `installManagedFileRuntime`, which is copied from `installArrayRuntime`
+// deliberately: a predicate and a `throws` stamp are one fact in two places, and this project keeps
+// finding that pair drifted.
+export function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(ManagedFileOpenReadName)
+end 'isThrowingManagedFileRuntimeCallee'
+
+// `__mf_open_read(pathRec) -> (box, flag)` — open a file for reading, or throw `__ManagedFileError`.
+//
+// ⚠ **THE PATH IS COPIED INTO A NUL-TERMINATED SCRATCH BUFFER, AND IT HAS TO BE.** `CreateFileA` takes an
+// `LPCSTR`, but an Array's buffer carries no terminator: only STRING LITERALS are NUL-terminated (in their
+// rdata blob, `StringRuntime.stringBlobBytes`), and `"…".toByteArray()` MATERIALIZES a fresh array whose
+// buffer is exactly `length` bytes. Writing a NUL at `buffer[length]` in place would be a one-byte heap
+// overflow whenever capacity equals length — which is precisely what a freshly materialized view has.
+// ⇒ allocate `length + 1`, copy, terminate, call, free. The copy reuses `ArrayRuntime.emitForwardCopy`
+// rather than growing a second byte loop.
+function buildManagedFileOpenRead(module StdModule)
+	var func = IrFunction.createFromStd(ManagedFileOpenReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(String.from(ManagedFileErrorTypeName)))
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var afterCopy = module.addBlock(func, label: b"mfterm")
+	var failed = module.addBlock(func, label: b"mffail")
+	var opened = module.addBlock(func, label: b"mfok")
+	var notFoundBlock = module.addBlock(func, label: b"mfnf")
+	var checkDenied = module.addBlock(func, label: b"mfchkd")
+	var deniedBlock = module.addBlock(func, label: b"mfden")
+	var otherBlock = module.addBlock(func, label: b"mfoth")
+
+	emitParams(module, block: entry, count: 1)
+	let pathRec = 0 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: pathRec, offset: ArrLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: pathRec, offset: ArrBufferOffset, ids: ids)
+	let one = emitConst(module, block: entry, value: 1, ids: ids)
+	let size = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(size, lhs: len, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let scratch = ids.mint()
+	module.appendOp(entry, op: StdOp.call(scratch, callee: MmAllocName, args: argsOf(size)))
+	let cont = emitForwardCopy(module, func: func, cur: entry, dest: scratch, src: buf, byteCount: len, ids: ids)
+	module.setTerminator(cont, op: StdOp.branch(afterCopy.id))
+
+	// Terminate, open, then release the scratch buffer IMMEDIATELY — the OS has copied the path by the
+	// time `CreateFileA` returns, and holding it until the error paths merge would leak on two of them.
+	let nulAddr = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.binOp(nulAddr, lhs: scratch, rhs: len, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let nul = emitConst(module, block: afterCopy, value: ManagedFileClosedHandle, ids: ids)
+	module.appendOp(afterCopy, op: StdOp.storeIndirect(nulAddr, offset: 0, valueId: nul, valueType: StdType.u8))
+	let handle = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.osFileOpenRead(handle, pathPtrId: scratch))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(scratch)))
+	let invalidConst = emitConst(module, block: afterCopy, value: InvalidHandleValue, ids: ids)
+	let isInvalid = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.cmp(isInvalid, lhs: handle, rhs: invalidConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(afterCopy, op: StdOp.condBranch(isInvalid, thenBlockId: failed.id, elseBlockId: opened.id))
+
+	// ⭐ The errno→variant mapping, and the ONLY place it lives. `ERROR_PATH_NOT_FOUND` joins
+	// `ERROR_FILE_NOT_FOUND` in the `notFound` arm: a missing DIRECTORY component is a missing path as far
+	// as the corpus is concerned, and `managed-file.open-read-not-found-variant` would otherwise fall to
+	// `openFailed` for a path whose parent does not exist.
+	let err = ids.mint()
+	module.appendOp(failed, op: StdOp.osLastError(err))
+	let notFoundConst = emitConst(module, block: failed, value: ErrorFileNotFound, ids: ids)
+	let isNotFound = ids.mint()
+	module.appendOp(failed, op: StdOp.cmp(isNotFound, lhs: err, rhs: notFoundConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(failed, op: StdOp.condBranch(isNotFound, thenBlockId: notFoundBlock.id, elseBlockId: checkDenied.id))
+
+	let pathNotFoundConst = emitConst(module, block: checkDenied, value: ErrorPathNotFound, ids: ids)
+	let isPathNotFound = ids.mint()
+	module.appendOp(checkDenied, op: StdOp.cmp(isPathNotFound, lhs: err, rhs: pathNotFoundConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	var checkAccess = module.addBlock(func, label: b"mfchka")
+	module.setTerminator(checkDenied, op: StdOp.condBranch(isPathNotFound, thenBlockId: notFoundBlock.id, elseBlockId: checkAccess.id))
+
+	let deniedConst = emitConst(module, block: checkAccess, value: ErrorAccessDenied, ids: ids)
+	let isDenied = ids.mint()
+	module.appendOp(checkAccess, op: StdOp.cmp(isDenied, lhs: err, rhs: deniedConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(checkAccess, op: StdOp.condBranch(isDenied, thenBlockId: deniedBlock.id, elseBlockId: otherBlock.id))
+
+	emitManagedFileThrow(module, block: notFoundBlock, flag: ManagedFileNotFoundFlag, ids: ids)
+	emitManagedFileThrow(module, block: deniedBlock, flag: ManagedFileAccessDeniedFlag, ids: ids)
+	emitManagedFileThrow(module, block: otherBlock, flag: ManagedFileOpenFailedFlag, ids: ids)
+
+	// The box: one 8-byte slot holding the handle, allocated through `__mm_alloc` so the ordinary
+	// ownership machinery drops it — the destructor that CLOSES it is R4.2's, and until then a dropped
+	// box releases its memory without closing, which is why `close()` is in this rung's acceptance set.
+	let boxSize = emitConst(module, block: opened, value: ManagedFileBoxBytes, ids: ids)
+	let box = ids.mint()
+	module.appendOp(opened, op: StdOp.call(box, callee: MmAllocName, args: argsOf(boxSize)))
+	module.appendOp(opened, op: StdOp.storeIndirect(box, offset: ManagedFileHandleOffset, valueId: handle, valueType: StdType.i64))
+	let ok = emitConst(module, block: opened, value: NoErrorFlag, ids: ids)
+	module.setTerminator(opened, op: StdOp.errorReturn(box, errorFlagId: ok))
+
+	module.functions.push(func)
+end 'buildManagedFileOpenRead'
+
+// One failure exit: no value, this variant's flag.
+function emitManagedFileThrow(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	let flagVal = emitConst(module, block: block, value: flag, ids: ids)
+	module.setTerminator(block, op: StdOp.errorReturn(zero, errorFlagId: flagVal))
+end 'emitManagedFileThrow'
+
+// ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installArrayRuntime` for its stated reason:
+// the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places, and a
+// builder that gains or loses a clause without the predicate following is a `try` that silently stops
+// being required (or an E3057 on a call that cannot fail). Checked in BOTH directions.
+export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesManagedFile 'noManagedFile'
+		return
+	end 'noManagedFile'
+
+	buildManagedFileOpenRead(module)
+
+	for func in module.functions 'eachFunc'
+		if not isManagedFileRuntimeCallee(func.name) 'notOurs'
+			continue
+		end 'notOurs'
+		let named = isThrowingManagedFileRuntimeCallee(func.name)
+		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
+		if stamped and not named 'stampedNotNamed'
+			panic("installManagedFileRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingManagedFileRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted (R4.1)")
+		end 'stampedNotNamed'
+		if named and not stamped 'namedNotStamped'
+			panic("installManagedFileRuntime: isThrowingManagedFileRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted (R4.1)")
+		end 'namedNotStamped'
+	end 'eachFunc'
+end 'installManagedFileRuntime'
+
+// Every callee this file installs — what the drift guard iterates. One name today; it grows with R4.2.
+export function isManagedFileRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(ManagedFileOpenReadName)
+end 'isManagedFileRuntimeCallee'

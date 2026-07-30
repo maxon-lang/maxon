@@ -557,9 +557,13 @@ export type RuntimeUsage
 	export var usesCharSetDecref as bool
 	export var usesCharSetContains as bool
 	export var usesStrTrim as bool
+	// R4.1: the program opens a file. Unlike the wall clock it DOES declare a transitive dependency —
+	// `__mf_open_read` allocates a NUL-terminated scratch copy of the path and the handle box through
+	// `__mm_alloc`/`__mm_free`, so it carries `usesHeap` too (set together below).
+	export var usesManagedFile as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -690,6 +694,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isClockRuntimeCallee(callee) 'wallClock'
 		usage.usesWallClock = true
 	end 'wallClock'
+	// R4.1: a `__mf_*` call. It carries `usesHeap` with it, unlike the clock above — the open allocates a
+	// NUL-terminated scratch copy of the path and the handle box, and frees the scratch.
+	if isManagedFileRuntimeCallee(callee) 'managedFile'
+		usage.usesManagedFile = true
+		usage.usesHeap = true
+	end 'managedFile'
 	if callee.equals(PrintStringName) 'print'
 		usage.usesPrint = true
 	end 'print'

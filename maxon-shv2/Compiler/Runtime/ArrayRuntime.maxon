@@ -498,7 +498,11 @@ end 'buildDropTypeParam'
 
 // Copy `byteCount` bytes from `src` to `dest`, LOW address first — safe when `dest <= src` (a grow's
 // old→new copy, a remove's shift-left). `byteCount == 0` copies nothing (the header guard holds at once).
-function emitForwardCopy(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, byteCount ValueId, ids ValueMinter) returns IrBlock
+// ⚠ EXPORTED for `ManagedFileRuntime` (R4.1), which copies a path's bytes into a NUL-terminated scratch
+// buffer. Exported rather than re-implemented: a second byte-copy loop is the duplication this file's own
+// header argues against ("One implementation of each … so the element-stride arithmetic lives in exactly
+// one place per direction"), and the low-address-first direction is exactly what a fresh buffer needs.
+export function emitForwardCopy(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, byteCount ValueId, ids ValueMinter) returns IrBlock
 	var header = module.addBlock(func, label: b"cpyfh")
 	var body = module.addBlock(func, label: b"cpyfb")
 	let done = module.addBlock(func, label: b"cpyfd")
