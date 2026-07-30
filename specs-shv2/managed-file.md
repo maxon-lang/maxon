@@ -361,25 +361,30 @@ error E3072: specs/fragments/managed-file/managed-file.error-direct-construction
 <!-- targets: x64-windows -->
 shv2-authored, and it pins the DISPATCHER rather than a behaviour the oracle defines.
 
-R4.1 delivers `close()` and nothing else of the instance surface, so `size`/`read`/`write` are refused
-BY NAME. Left to fall through they would mangle into a callee no file declares and surface as `E3004`
-against a method the author did write and the language does have — the same argument
-`parseStringStaticCall` makes for `String`'s statics.
+The instance surface is exactly four methods (`size`/`read`/`write`/`close`), so anything else is refused
+BY NAME. Left to fall through it would mangle into a callee no file declares and surface as `E3004`
+against a method the author did write — the same argument `parseStringStaticCall` makes for `String`'s
+statics.
 
-⚠ It is a COMPILE-TIME case on purpose: `close()` on a real handle needs a file to exist in the
-runner's working directory, which no static this rung delivers can create. That behaviour is pinned by
-`managed-file.exists` and `managed-file.auto-close` when R4.2 supplies `openWrite`. What is pinned here
-is the half that needs no filesystem — that the receiver dispatches at all, and that an unknown member
-is a positioned refusal naming the rung.
+⚠ The probe is `seek`, and that choice is the point rather than an arbitrary misspelling: v1 has an
+`lseek` primitive, but it belongs to a different v1 abstraction and NEITHER reference's `__ManagedFile`
+method list carries one, so `seek` is a name the language genuinely does not have and will not acquire by
+a later rung finishing this surface. (This case used to probe `size`, which R4.2 delivers — a marker that
+went stale the moment the rung it was written against landed.)
+
+⚠ It is a COMPILE-TIME case on purpose: it needs no file to exist in the runner's working directory. The
+RUNTIME half of instance dispatch is pinned by `managed-file.write-and-read` and `managed-file.auto-close`,
+which reach `write`/`size` through a struct FIELD — the spelling the documented usage pattern actually
+uses.
 ```maxon
 function main() returns ExitCode
 	let f = try __ManagedFile.openRead("nonexistent_unknown_method_xyz.txt".toByteArray().managed) otherwise 'nf'
 		return 1
 	end 'nf'
-	let n = f.size()
+	let n = f.seek(0)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:12: Unsupported: `__ManagedFile` method 'size' — this rung provides `close()`; `size`, `read` and `write` arrive with the read/write slice
+error E2015: <fragment>:6:12: Unsupported: `__ManagedFile` method 'seek' — the type has exactly the four both references declare: `size()`, `read(managed, size)`, `write(managed)` and `close()`
 ```
