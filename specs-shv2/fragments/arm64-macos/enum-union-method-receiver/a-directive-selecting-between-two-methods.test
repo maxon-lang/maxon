@@ -1,0 +1,59 @@
+// Test: a-directive-selecting-between-two-methods
+enum Plat
+	alpha
+
+#if testing(true)
+	export function tag() returns int
+		return 3
+	end 'tag'
+#else
+	export function tag() returns int
+		return 7
+	end 'tag'
+#endif
+
+	omega
+end 'Plat'
+
+function main() returns ExitCode
+	let p = Plat.omega
+	match p 'k'
+		alpha then return 1
+		omega then return p.tag() as ExitCode
+	end 'k'
+end 'main'
+---
+ExitCode: 7
+---
+func @Plat.tag {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.bl Plat.tag
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+  matchcont:
+}

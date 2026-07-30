@@ -1,0 +1,32 @@
+// Test: error.per-instance-alias-actual-at-opaque-formal
+typealias Integer = int(i64.min to i64.max)
+type Leaf
+	export var name as String
+end 'Leaf'
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+	export var value as T
+	export var tag as Idx
+	export static function create(v T, tag Idx) returns Self
+		return Self{value: v, tag: tag}
+	end 'create'
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+end 'Wrapper'
+type Box uses T
+	export var item as T
+	export static function create(v T) returns Self
+		return Self{item: v}
+	end 'create'
+end 'Box'
+typealias IntWrapper = Wrapper with Integer
+typealias LeafBox = Box with Leaf
+function main() returns ExitCode
+	let w = IntWrapper.create(1, tag: 5)
+	let b = LeafBox.create(w.getTag())
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:27:10: argument type mismatch for 'v': expected 'Leaf', got 'IntWrapper.Idx'

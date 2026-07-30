@@ -1,0 +1,43 @@
+// Test: match-break.fallthrough-into-break-arm
+function main() returns ExitCode
+	var r = 0
+	var n = 1
+	match n 'check'
+		1 then r = 5 and fallthrough
+		2 then break
+		default then r = 9
+	end 'check'
+	return r
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 1
+    arm64.cmp x1, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 5
+    arm64.b matcharm
+  matchnext:
+    arm64.cmp x1, 2
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit
+    arm64.b matchdefault
+  critsplit:
+    arm64.b matcharm
+  matcharm:
+    arm64.b matchcont
+  matchdefault:
+    arm64.movImm x0, 9
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+  afterbreak:
+}

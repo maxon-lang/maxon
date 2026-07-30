@@ -1,0 +1,57 @@
+// Test: match-break.continue-in-for-reaches-step
+function main() returns ExitCode
+	var seen = 0
+	var skipped = 0
+	for i in 0 upto 6 'each'
+		match i 'check'
+			2 then continue
+			4 then continue
+			default then seen = seen + 1
+		end 'check'
+		skipped = skipped + 10
+	end 'each'
+	return seen + skipped
+end 'main'
+---
+ExitCode: 44
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x2, 6
+    arm64.cset x6, lt
+    arm64.cbnz x6, each
+    arm64.b forexit
+  each:
+    arm64.cmp x2, 2
+    arm64.cset x6, eq
+    arm64.cbnz x6, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.b forstep
+  matchnext:
+    arm64.cmp x2, 4
+    arm64.cset x6, eq
+    arm64.cbnz x6, matcharm
+    arm64.b matchdefault
+  matcharm:
+    arm64.b forstep
+  matchdefault:
+    arm64.add x0, x0, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.add x1, x1, 10
+    arm64.b forstep
+  forstep:
+    arm64.add x2, x2, 1
+    arm64.b forhdr
+  forexit:
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}

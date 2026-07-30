@@ -1,0 +1,105 @@
+// Test: match-enum-binding-struct
+
+typealias Integer = int(i64.min to i64.max)
+
+type EnumPoint
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'EnumPoint'
+
+union Shape
+	circle(radius Integer)
+	rect(origin EnumPoint)
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Shape.rect(EnumPoint.create(10, y: 20))
+	match s 'handle'
+		circle(r) then return r
+		rect(p) then return p.x + p.y
+	end 'handle'
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @EnumPoint.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 10
+    arm64.movImm x1, 20
+    arm64.bl EnumPoint.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Shape
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.add x19, x1, x2
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Shape
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+  matchcont:
+}

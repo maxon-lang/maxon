@@ -1,0 +1,25 @@
+// Test: error.crossfile-call-argument-uses-callee-range
+// --- file: lib.maxon
+typealias Limit = int(0 to 10)
+
+export function narrow(x Limit) returns Limit
+	return x
+end 'narrow'
+
+// --- file: main.maxon
+typealias Limit = int(0 to 1000)
+
+function wide(x Limit) returns Limit
+	return x
+end 'wide'
+
+function main() returns ExitCode
+	let w = wide(500)
+	if w == 500 'ok'
+		return narrow(500)
+	end 'ok'
+	return 1
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:19:10: Value 500 is outside the range of 'Limit' (int(0 to 10))

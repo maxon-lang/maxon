@@ -1,0 +1,43 @@
+// Test: directives.union-body-cases
+union Reading
+	#if testing(false)
+		settled
+	#else
+		discarded
+	#endif
+	pending
+end 'Reading'
+
+function main() returns ExitCode
+	return match Reading.settled 'r'
+		settled gives 35
+		pending gives 90
+	end 'r'
+end 'main'
+---
+ExitCode: 35
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 35
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 90
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}

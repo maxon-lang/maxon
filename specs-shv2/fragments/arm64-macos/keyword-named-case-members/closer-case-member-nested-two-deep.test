@@ -1,0 +1,101 @@
+// Test: closer-case-member-nested-two-deep
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < tagOf(Kw.end) 'outer'
+		if tagOf(Kw.end) == 2 'inner'
+			total = total + 21
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return total as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @tagOf {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+  matchcont:
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.movImm x0, 1
+    arm64.bl tagOf
+    arm64.cmp x20, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, outer
+    arm64.b whileexit
+  outer:
+    arm64.movImm x0, 1
+    arm64.bl tagOf
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, inner
+    arm64.b critsplit
+  inner:
+    arm64.add x0, x19, 21
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.add x20, x20, 1
+    arm64.movRegReg x19, x0
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

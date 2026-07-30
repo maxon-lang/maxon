@@ -1,0 +1,54 @@
+// Test: a-free-call-beside-a-case-named-while
+enum Sib
+	alpha
+	while
+
+	export function outer() returns int
+		return helper() + 1
+	end 'outer'
+end 'Sib'
+
+type Later
+	export var n as int
+
+	export function helper() returns int
+		return 99
+	end 'helper'
+end 'Later'
+
+function helper() returns int
+	return 6
+end 'helper'
+
+function main() returns ExitCode
+	let a = Sib.alpha
+	return a.outer() as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+func @Sib.outer {
+  entry:
+    arm64.prologue 16
+    arm64.bl helper
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @helper {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 6
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl Sib.outer
+    arm64.epilogue 16
+    arm64.ret
+}

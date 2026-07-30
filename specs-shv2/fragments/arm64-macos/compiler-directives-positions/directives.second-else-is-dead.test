@@ -1,0 +1,24 @@
+// Test: directives.second-else-is-dead
+#if os(Plan9)
+function main() returns ExitCode
+	return 1
+end 'main'
+#else
+function main() returns ExitCode
+	return 2
+end 'main'
+#else
+function main() returns ExitCode
+	return 3
+end 'main'
+#endif
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}

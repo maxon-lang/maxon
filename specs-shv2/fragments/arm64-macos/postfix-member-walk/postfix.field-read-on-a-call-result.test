@@ -1,0 +1,50 @@
+// Test: postfix.field-read-on-a-call-result
+typealias Wide = int(i64.min to i64.max)
+
+type Leaf
+	export var tally as Wide
+
+	export static function make(tally Wide) returns Self
+		return Self{tally: tally}
+	end 'make'
+end 'Leaf'
+
+function main() returns ExitCode
+	return Leaf.make(4).tally
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Leaf.make {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 4
+    arm64.bl Leaf.make
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

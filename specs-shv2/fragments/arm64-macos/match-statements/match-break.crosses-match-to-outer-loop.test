@@ -1,0 +1,61 @@
+// Test: match-break.crosses-match-to-outer-loop
+function main() returns ExitCode
+	var r = 0
+	var i = 0
+	while i < 3 'outer'
+		var j = 0
+		while j < 3 'inner'
+			match j 'check'
+				1 then break 'outer'
+				default then r = r + 1
+			end 'check'
+			j = j + 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return r
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 3
+    arm64.cset x2, lt
+    arm64.cbnz x2, outer
+    arm64.b critsplit
+  outer:
+    arm64.movImm x2, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x2, 3
+    arm64.cset x6, lt
+    arm64.cbnz x6, inner
+    arm64.b whileexit
+  inner:
+    arm64.cmp x2, 1
+    arm64.cset x6, eq
+    arm64.cbnz x6, matcharm
+    arm64.b matchdefault
+  matcharm:
+    arm64.b whileexit
+  matchdefault:
+    arm64.add x0, x0, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.add x2, x2, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.add x1, x1, 1
+    arm64.b whilehdr
+  critsplit:
+    arm64.b whileexit
+  whileexit:
+    arm64.epilogue 16
+    arm64.ret
+}

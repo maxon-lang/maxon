@@ -1,0 +1,32 @@
+// Test: directives.top-level-branches
+#if testing(false)
+	function pick() returns ExitCode
+		return 21
+	end 'pick'
+#else
+	function pick() returns ExitCode
+		return 99
+	end 'pick'
+#endif
+
+function main() returns ExitCode
+	return pick()
+end 'main'
+---
+ExitCode: 21
+---
+func @pick {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 21
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl pick
+    arm64.epilogue 16
+    arm64.ret
+}

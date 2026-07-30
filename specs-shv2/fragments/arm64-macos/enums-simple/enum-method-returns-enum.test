@@ -1,0 +1,75 @@
+// Test: enum-method-returns-enum
+enum Toggle
+	on
+	off
+
+	function flip() returns Toggle
+		let result = match self 'check'
+			on gives Toggle.off
+			off gives Toggle.on
+		end 'check'
+		return result
+	end 'flip'
+end 'Toggle'
+
+function main() returns ExitCode
+	let t = Toggle.on
+	let flipped = t.flip()
+	let result = match flipped 'check'
+		off gives 1
+		on gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+func @Toggle.flip {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl Toggle.flip
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}

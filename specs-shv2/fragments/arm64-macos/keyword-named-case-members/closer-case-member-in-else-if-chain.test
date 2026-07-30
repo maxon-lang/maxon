@@ -1,0 +1,91 @@
+// Test: closer-case-member-in-else-if-chain
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	if tagOf(Kw.end) == 1 'first'
+		return 1
+	end 'first' else if tagOf(Kw.end) == 2 'second'
+		return 42
+	end 'second' else 'rest'
+		return 3
+	end 'rest'
+end 'main'
+---
+ExitCode: 42
+---
+func @tagOf {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+  matchcont:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.bl tagOf
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, first
+    arm64.b ifelse
+  first:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.movImm x0, 1
+    arm64.bl tagOf
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, second
+    arm64.b ifelse
+  second:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+  ifcont:
+}

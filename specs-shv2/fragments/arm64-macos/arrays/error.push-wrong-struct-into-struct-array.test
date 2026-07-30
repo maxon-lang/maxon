@@ -1,0 +1,29 @@
+// Test: error.push-wrong-struct-into-struct-array
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+type Other
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Other'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	arr.push(Other.create(1))
+	return arr.count()
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:24:6: cannot assign 'Other' to variable 'push' of type 'Item'

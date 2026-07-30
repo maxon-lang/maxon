@@ -1,0 +1,46 @@
+// Test: postfix.enum-method-on-an-enum-literal
+typealias Wide = int(i64.min to i64.max)
+
+enum Direction
+	north
+	south
+
+	function score() returns Wide
+		if self == Direction.north 'n'
+			return 7
+		end 'n'
+		return 3
+	end 'score'
+end 'Direction'
+
+function main() returns ExitCode
+	return Direction.south.score()
+end 'main'
+---
+ExitCode: 3
+---
+func @Direction.score {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, n
+    arm64.b ifcont
+  n:
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.bl Direction.score
+    arm64.epilogue 16
+    arm64.ret
+}

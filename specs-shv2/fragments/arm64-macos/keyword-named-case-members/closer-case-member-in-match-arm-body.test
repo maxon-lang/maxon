@@ -1,0 +1,90 @@
+// Test: closer-case-member-in-match-arm-body
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function pick(n int) returns int
+	match n 'p'
+		0 then return tagOf(Kw.end) * 21
+		default then return 9
+	end 'p'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(0) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @tagOf {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+  matchcont:
+}
+
+func @pick {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdefault
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.bl tagOf
+    arm64.movImm x16, 21
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+  matchdefault:
+    arm64.movImm x0, 9
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl pick
+    arm64.epilogue 16
+    arm64.ret
+}

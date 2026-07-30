@@ -1,0 +1,43 @@
+// Test: directives.enum-body-cases
+enum Mode
+	#if testing(false)
+		chosen
+	#else
+		rejected
+	#endif
+	steady
+end 'Mode'
+
+function main() returns ExitCode
+	return match Mode.chosen 'm'
+		chosen gives 34
+		steady gives 90
+	end 'm'
+end 'main'
+---
+ExitCode: 34
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 34
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 90
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}

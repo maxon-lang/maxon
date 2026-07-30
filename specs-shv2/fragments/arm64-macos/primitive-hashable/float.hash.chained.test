@@ -1,0 +1,75 @@
+// Test: float.hash.chained
+function main() returns ExitCode
+	let f = 3.14
+	let once = f.hash()
+	let twice = f.hash().hash()
+	if once != twice 'chainDiffers'
+		return 1
+	end 'chainDiffers'
+	if once != 1374389535 'pinned'
+		return 2
+	end 'pinned'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, d8
+    arm64.storeSlotReg slot0, x19
+    arm64.fpLoadRdata d8, [rdata + __fconst_0]
+    arm64.movRegReg d0, d8
+    arm64.bl float.hash
+    arm64.movRegReg x19, x0
+    arm64.movRegReg d0, d8
+    arm64.bl float.hash
+    arm64.bl int.hash
+    arm64.cmp x19, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, chainDiffers
+    arm64.b ifcont
+  chainDiffers:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot d8, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.cmp x19, 1374389535
+    arm64.cset x0, ne
+    arm64.cbnz x0, pinned
+    arm64.b ifcont
+  pinned:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot d8, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot d8, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @int.hash {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @float.hash {
+  entry:
+    arm64.prologue 16
+    arm64.fmov x0, d0
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}

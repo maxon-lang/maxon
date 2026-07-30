@@ -1,0 +1,71 @@
+// Test: utf16-is-lead-surrogate
+function main() returns ExitCode
+	// 0xD83D = 55357 (high surrogate for 😀)
+	if utf16IsLeadSurrogate(55357) 'c1'
+		print("1\n")
+	end 'c1'
+	if utf16IsLeadSurrogate(56832) 'c2'
+		print("0\n")
+	end 'c2'
+	if utf16IsLeadSurrogate(65) 'c3'
+		print("0\n")
+	end 'c3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 55357
+    arm64.bl utf16IsLeadSurrogate
+    arm64.cbnz x0, c1
+    arm64.b ifcont
+  c1:
+    arm64.leaRdata x0, __str_rec_1
+    arm64.bl __print_string
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 56832
+    arm64.bl utf16IsLeadSurrogate
+    arm64.cbnz x0, c2
+    arm64.b ifcont
+  c2:
+    arm64.leaRdata x0, __str_rec_3
+    arm64.bl __print_string
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 65
+    arm64.bl utf16IsLeadSurrogate
+    arm64.cbnz x0, c3
+    arm64.b ifcont
+  c3:
+    arm64.leaRdata x0, __str_rec_3
+    arm64.bl __print_string
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @utf16IsLeadSurrogate {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 55296
+    arm64.cset x1, ge
+    arm64.movImm x2, 0
+    arm64.cbnz x1, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x0, 56319
+    arm64.cset x0, le
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x2
+    arm64.b scmerge
+  scmerge:
+    arm64.epilogue 16
+    arm64.ret
+}

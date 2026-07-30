@@ -1,0 +1,63 @@
+// Test: closer-case-member-spelling-a-labelled-end-in-a-header
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function main() returns ExitCode
+	var acc = 0
+	var i = 0
+	while Kw.end == Kw.end 'spin'
+		if Kw.end == Kw.end 'inner'
+			acc = acc + 21
+		end 'inner'
+		i = i + 1
+		if i == 2 'done'
+			break
+		end 'done'
+	end 'spin'
+	return acc as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.movImm x2, 1
+    arm64.cmp x2, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, spin
+    arm64.b critsplit
+  spin:
+    arm64.movImm x2, 1
+    arm64.cmp x2, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, inner
+    arm64.b critsplit
+  inner:
+    arm64.add x0, x0, 21
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.add x1, x1, 1
+    arm64.cmp x1, 2
+    arm64.cset x2, eq
+    arm64.cbnz x2, done
+    arm64.b ifcont
+  done:
+    arm64.b whileexit
+  ifcont:
+    arm64.b whilehdr
+  critsplit:
+    arm64.b whileexit
+  whileexit:
+    arm64.epilogue 16
+    arm64.ret
+}
