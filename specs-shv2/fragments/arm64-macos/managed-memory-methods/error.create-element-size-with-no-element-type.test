@@ -1,0 +1,10 @@
+// Test: error.create-element-size-with-no-element-type
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 4) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	try mm.set(0, value: 5000000000) otherwise return 3
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:3:37: Unsupported: `__ManagedMemory.create`'s `elementSize` is 4, and shv2 has no element TYPE of that width — a buffer must be byte-packed (1) or machine-word (8). Typing it as a word anyway would check `get`/`set` against a range the buffer's stride cannot hold, and store the value truncated.

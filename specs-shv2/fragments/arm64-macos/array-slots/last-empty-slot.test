@@ -14,7 +14,8 @@ typealias SlotArray = Array with Slot
 function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.push(Slot.create(1))
-	arr.resize(3)
+	arr.reserve(3)
+	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
 	let result = try arr.last() otherwise Slot.create(55)
 	return result.value
 end 'main'
@@ -57,7 +58,24 @@ func @main {
     arm64.bl __arr_push
     arm64.movImm x1, 3
     arm64.movRegReg x0, x19
-    arm64.bl __arr_resize
+    arm64.bl __arr_reserve
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_set_length
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_1
+    arm64.movImm x0, 134
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
     arm64.movRegReg x0, x19
     arm64.bl __arr_last
     arm64.movRegReg x20, x0

@@ -1,44 +1,31 @@
-// Test: first-empty-slot
+// Test: past-the-end-reports-index-out-of-bounds
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
 	export var value as Integer
-
-	static function create(value Integer) returns Self
-		return Self{value: value}
-	end 'create'
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
 	var arr = SlotArray.create()
-	arr.reserve(3)
-	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
-	let result = try arr.first() otherwise Slot.create(77)
-	return result.value
+	arr.reserve(2)
+	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
+	try arr.get(5) otherwise (e) 'handler'
+		match e 'check'
+			emptySlot then return 42
+			indexOutOfBounds then return 99
+		end 'check'
+	end 'handler'
+	return 0
 end 'main'
 ---
-ExitCode: 77
+ExitCode: 99
 ---
 data {
   __slab_cursor@0 = i64 0
   __slab_end@8 = i64 0
   __mm_alloc_count@16 = i64 0
-}
-
-func @Slot.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
 }
 
 func @main {
@@ -50,10 +37,10 @@ func @main {
     arm64.leaFuncAddr x1, __mm_decref
     arm64.bl __arr_create
     arm64.movRegReg x19, x0
-    arm64.movImm x1, 3
+    arm64.movImm x1, 2
     arm64.movRegReg x0, x19
     arm64.bl __arr_reserve
-    arm64.movImm x1, 3
+    arm64.movImm x1, 2
     arm64.movRegReg x0, x19
     arm64.bl __arr_set_length
     arm64.cmp x9, 0
@@ -70,25 +57,21 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   tryok:
+    arm64.movImm x1, 5
     arm64.movRegReg x0, x19
-    arm64.bl __arr_first
-    arm64.movRegReg x20, x0
+    arm64.bl __arr_get
     arm64.cmp x9, 0
     arm64.cset x0, ne
     arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
-    arm64.movImm x0, 77
-    arm64.bl Slot.create
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x20
-    arm64.b trycont
-  trycont:
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.bl __mm_decref
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x20, 99
     arm64.movRegReg x0, x19
     arm64.bl __arr_decref
     arm64.movRegReg x0, x20
@@ -96,4 +79,29 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x20, 42
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+  tryok:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchcont:
 }

@@ -1,0 +1,15 @@
+// Test: error.buffer-mark-does-not-leak-across-functions
+function makeBuf() returns ExitCode
+	let mm = try __ManagedMemory.create(4 + 0, 1) otherwise return 1
+	return 0
+end 'makeBuf'
+
+function main() returns ExitCode
+	let pad1 = 1
+	let bytes = "ab".toByteArray()
+	try bytes.setByte(0, 67) otherwise return 3
+	return makeBuf()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:10:12: Unsupported: `Array` method 'setByte' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later
