@@ -530,3 +530,27 @@ end 'main'
 ```maxoncstderr
 error E3057: specs/fragments/managed-file/managed-file.open-read-without-try.test:3:6: throwing function requires try: 'openRead'
 ```
+
+<!-- test: managed-file.open-write-executable-without-try -->
+<!-- targets: x64-windows -->
+
+⭐⭐ **THE ONE CALLEE TWO SPELLINGS SHARE NAMES BOTH, RATHER THAN GUESSING ONE (review of D12).**
+`openWriteExecutable` and `openWrite` are ONE call here — the executable form's only difference in either
+reference is a Unix 0755 bit and shv2's file IO is host-only Windows by the R4.1 ruling, so the parser emits
+`__mf_open_write` for both. The callee is therefore a LOSSY KEY and no map over it can be injective. D12's
+first cut answered `'openWrite'`, which is the rung's OWN defect one level in: the right code, quoting a
+method this program does not contain and sending the author looking for a call they never wrote. Naming
+both is true whichever was written, and the clause says why the compiler cannot narrow it.
+
+⚠ This case is the one that would go quiet if a POSIX lane ever splits the two entry points — at which
+point the callee stops being lossy, `ManagedFileRuntime.managedFileSourceMethod`'s open-write arm collapses
+to an ordinary `found`, and THIS wording must change with it.
+```maxon
+function main() returns ExitCode
+	_ = __ManagedFile.openWriteExecutable("nonexistent_open_write_exec_without_try_xyz.txt".toByteArray().managed)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/managed-file/managed-file.open-write-executable-without-try.test:3:6: throwing function requires try: 'openWrite' or 'openWriteExecutable' — the two are ONE call, so the callee cannot say which was written
+```

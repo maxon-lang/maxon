@@ -221,38 +221,43 @@ end 'isThrowingManagedFileRuntimeCallee'
 // nothing here can disagree with what the source was matched against. Asked only on the COLD path, and only
 // behind `isThrowingManagedFileRuntimeCallee`, which is what the panic states rather than answers.
 //
-// ⚠⚠ **`__mf_open_write` ANSWERS `openWrite` FOR BOTH SPELLINGS THAT REACH IT**, because at this rung they
-// are ONE call: `openWriteExecutable` adds only a Unix 0755 bit, shv2's file IO is host-only Windows by the
-// R4.1 ruling, and the parser's `openWriteExecutable` arm therefore emits `__mf_open_write` (see the entry-
-// point block above). So the callee genuinely carries no evidence of which word was typed, and a POSIX lane
-// that splits the two entry points splits this answer with them at no extra cost.
-export function managedFileSourceMethodName(callee ByteArray) returns ByteArray
+// ⚠⚠ **`__mf_open_write` IS A LOSSY KEY, SO IT ANSWERS WITH BOTH SPELLINGS RATHER THAN GUESSING ONE.**
+// `openWrite` and `openWriteExecutable` are ONE call at this rung — the executable form adds only a Unix
+// 0755 bit, shv2's file IO is host-only Windows by the R4.1 ruling, and the parser's `openWriteExecutable`
+// arm therefore emits `__mf_open_write` (see the entry-point block above). The callee carries no evidence of
+// which word was typed, so `found(ManagedFileOpenWriteMethod)` would tell an author who wrote
+// `openWriteExecutable` to look for an `openWrite` their program does not contain: D12's own defect, one
+// level in. `sharedByTwoSpellings` is true whichever was written. ⚠ **This is the ONE arm that is not
+// injective, and it is why this map answers the UNION where its three siblings answer a NAME** — a POSIX
+// lane that splits the two entry points collapses this arm back to a `found` at no extra cost, and nothing
+// else here changes.
+export function managedFileSourceMethod(callee ByteArray) returns RuntimeCalleeSourceMethod
 	if callee.equals(ManagedFileOpenReadName) 'openRead'
-		return ManagedFileOpenReadMethod
+		return RuntimeCalleeSourceMethod.found(ManagedFileOpenReadMethod)
 	end 'openRead'
 	if callee.equals(ManagedFileOpenWriteName) 'openWrite'
-		return ManagedFileOpenWriteMethod
+		return RuntimeCalleeSourceMethod.sharedByTwoSpellings(ManagedFileOpenWriteMethod, alsoSpelled: ManagedFileOpenWriteExecutableMethod)
 	end 'openWrite'
 	if callee.equals(ManagedFileSizeName) 'size'
-		return ManagedFileSizeMethod
+		return RuntimeCalleeSourceMethod.found(ManagedFileSizeMethod)
 	end 'size'
 	if callee.equals(ManagedFileReadName) 'read'
-		return ManagedFileReadMethod
+		return RuntimeCalleeSourceMethod.found(ManagedFileReadMethod)
 	end 'read'
 	if callee.equals(ManagedFileWriteName) 'write'
-		return ManagedFileWriteMethod
+		return RuntimeCalleeSourceMethod.found(ManagedFileWriteMethod)
 	end 'write'
 	if callee.equals(ManagedFileDeleteName) 'delete'
-		return ManagedFileDeleteMethod
+		return RuntimeCalleeSourceMethod.found(ManagedFileDeleteMethod)
 	end 'delete'
 	if callee.equals(ManagedFileRenameName) 'rename'
-		return ManagedFileRenameMethod
+		return RuntimeCalleeSourceMethod.found(ManagedFileRenameMethod)
 	end 'rename'
 	if callee.equals(ManagedFileStatName) 'stat'
-		return ManagedFileStatMethod
+		return RuntimeCalleeSourceMethod.found(ManagedFileStatMethod)
 	end 'stat'
-	panic("managedFileSourceMethodName: '{String.from(callee)}' is not a throwing `__ManagedFile` callee — only the eight `isThrowingManagedFileRuntimeCallee` names can reach an E3057, and this is asked behind that predicate")
-end 'managedFileSourceMethodName'
+	panic("managedFileSourceMethod: '{String.from(callee)}' is not a throwing `__ManagedFile` callee — only the eight `isThrowingManagedFileRuntimeCallee` names can reach an E3057, and this is asked behind that predicate")
+end 'managedFileSourceMethod'
 
 // ⭐ **THE ERROR TYPE A FILE CALLEE THROWS — the WHAT to the predicate's THAT.** `ProgramSignatures.throwsOf`
 // answers with it for a callee no file declares (R4.1), which is what types an `otherwise (e)` binding and

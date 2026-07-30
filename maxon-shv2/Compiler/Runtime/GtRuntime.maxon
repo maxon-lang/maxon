@@ -691,6 +691,14 @@ end 'runtimeThrowsClause'
 // distinct instead of a sentinel.
 export union RuntimeCalleeSourceMethod
 	found(method ByteArray)
+	// ⚠⚠ **TWO SOURCE SPELLINGS, ONE CALLEE — AND THAT IS THE SAME DEFECT D12 EXISTS TO REMOVE, one level
+	// in.** `__mf_open_write` is what BOTH `__ManagedFile.openWrite` and `__ManagedFile.openWriteExecutable`
+	// emit (one parser arm, one runtime entry — a Unix 0755 bit is the whole difference and shv2's file IO
+	// is host-only Windows by the R4.1 ruling), so the callee is a LOSSY KEY and no map over it can be
+	// injective. Quoting ONE of the two is a false statement about a program that contains only the other —
+	// exactly "the right code naming a construct the program does not contain". So the answer names BOTH,
+	// which is true whichever was written, and the message says why the compiler cannot narrow it.
+	sharedByTwoSpellings(spelling ByteArray, alsoSpelled ByteArray)
 	notFound
 end 'RuntimeCalleeSourceMethod'
 
@@ -716,8 +724,13 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 		return RuntimeCalleeSourceMethod.found(managedDirectorySourceMethodName(callee))
 	end 'directoryFamily'
 
+	// ⚠ The file family answers the union DIRECTLY where its three siblings answer a NAME the composer wraps,
+	// and the asymmetry is a fact about the families rather than a style drift: `__mf_open_write` is reached
+	// by two source spellings, so this is the one family whose callee is not injective onto one. A return
+	// type as narrow as it is PROVABLY correct — the siblings cannot answer anything but `found`, and their
+	// `ByteArray` says so at the signature.
 	if isThrowingManagedFileRuntimeCallee(callee) 'fileFamily'
-		return RuntimeCalleeSourceMethod.found(managedFileSourceMethodName(callee))
+		return managedFileSourceMethod(callee)
 	end 'fileFamily'
 
 	if isThrowingStringIndexRuntimeCallee(callee) 'stringIndexFamily'

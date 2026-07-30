@@ -1692,8 +1692,15 @@ function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 	// ⭐ A FAMILY THAT KNOWS THE AUTHOR'S OWN METHOD GETS THE ORDINARY USER-FUNCTION SENTENCE, and that is
 	// right rather than merely convenient: a `dir.next()` or an `f.openRead(p)` is a method call like any
 	// other as far as the author is concerned. `specs-shv2/managed-directory.md`'s `next-without-try` pins it.
+	//
+	// ⚠ A callee two spellings share cannot say which was written, so the sentence names both rather than
+	// picking one — quoting `'openWrite'` at an author who wrote `openWriteExecutable` would be this
+	// function's own defect (the right code, a construct the program does not contain) wearing a better
+	// noun. It is still the ONE sentence above, extended; `specs-shv2/managed-file.md`'s
+	// `open-write-executable-without-try` pins it.
 	match runtimeCalleeSourceMethod(callee) 'sourceMethod'
 		found(method) then return throwingCallRequiresTryMessage(method)
+		sharedByTwoSpellings(spelling, alsoSpelled) then return "{throwingCallRequiresTryMessage(spelling)} or '{String.from(alsoSpelled)}' — the two are ONE call, so the callee cannot say which was written"
 		notFound then break 'sourceMethod'
 	end 'sourceMethod'
 
