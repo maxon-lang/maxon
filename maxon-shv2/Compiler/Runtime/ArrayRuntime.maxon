@@ -375,6 +375,24 @@ export let ArrMemAppendName = b"__arr_mem_append"
 // ⚠ It owns only what differs — the CAPACITY bound, the detach that bound needs, and the complaint — and
 // delegates the write itself to `emitElementStoreAndOkReturn`, which is `__arr_set`'s tail verbatim
 // (`__arr_mem_append`'s precedent: own the arithmetic, delegate the copy).
+//
+// ⚠⚠ **THE STAGING REGION `[length, capacity)` CARRIES NO OWNERSHIP, AND THE RULING IS WHAT MAKES THAT A
+// USER-VISIBLE FACT RATHER THAN AN INTERNAL ONE** (measured in R4.6 review, and left as it is DELIBERATELY —
+// see below). A managed element written there is owned by NOBODY until `setLength` publishes it: `__arr_decref`
+// destroys only `[0, length)`, `__arr_push`/`__arr_insert`/`__arr_mem_append` store AT `length` without
+// destroying the occupant (before R4.6 that slot was provably NULL, so there was nothing to destroy), and a
+// grow or a detach copies only `length · element_size` live bytes and abandons the rest. MEASURED, both at
+// exit **101**: staging a heap String and never publishing it; and staging one, then `push`ing over it.
+//
+// ⚠ **THAT IS THE PROTOCOL, NOT A DEFECT, AND THE DISTINCTION IS WHAT DECIDED IT.** Every one of those routes
+// requires the caller to break the contract `setLength`'s own documentation states — *"stage the new elements
+// FIRST and use `setLength` to publish them"* — exactly as `__mm_alloc` without a release does; follow the
+// contract and every staged element is published and owned. Contrast the leak R4.6 DID fix
+// (`emitDestroyRejectedElement`), which was reachable from CORRECT code, because a bounds check refusing an
+// index is ordinary control flow and not a protocol violation. And the failure here is LOUD: the leak gate
+// reports it at exit. ⚠ Making `push` destroy the occupant of slot `length` would close it, at a dtor gate
+// plus a null test on every managed `push` — a hot path, and a semantic decision about who owns a staged
+// element. Do not take it as a tidy-up; it needs a ruling.
 export let ArrMemSetName = b"__arr_mem_set"
 
 // The `__ManagedMemoryError` ordinals these members throw, as error FLAGS — positional facts about
@@ -2286,11 +2304,22 @@ end 'buildArrByteAt'
 // is the USER RULING of 2026-07-30 (see `ArrMemSetName`); the canonical `set`/`setByte` lines say LENGTH and
 // are stale. Do not "fix" the two bounds into one — the members are asking different questions.
 //
-// ⇒ The ownership half rides the SAME parameter because it is the same fact: a zero-copy view or an
+// ⇒ The ownership half rides the SAME parameter — but NOT because the two are one fact. It is because the
+// combination a second parameter would let you spell is the UNSOUND one: a zero-copy view or an
 // `.rdata`-backed literal carries a NEGATIVE `capacity@16` (the `BufferOwnership` encoding), so a capacity
 // limit read off one would refuse EVERY offset, and a write through a shared buffer would rewrite someone
-// else's bytes. A READ needs neither — it reads the live length, which is always real, and reading THROUGH a
-// shared buffer is exactly what a view is for.
+// else's bytes. CAPACITY-WITHOUT-DETACH is never correct, and one parameter is what makes it unspellable. A
+// READ needs neither — it reads the live length, which is always real, and reading THROUGH a shared buffer is
+// exactly what a view is for.
+//
+// ⚠ **THE PRICE, stated so it is not rediscovered as a surprise: the parameter also forbids a SOUND
+// combination — detach with a LENGTH limit — and `__arr_set` is standing proof that one exists** (found in
+// R4.6 review). It is a write, it detaches, and its bound is the live length, so it cannot be folded onto
+// this guard as it stands; it does not try to. It also detaches AFTER its bounds check so a doomed
+// `Array.set` allocates nothing, which is a third axis this guard cannot express and must not, since a
+// capacity limit is only readable once the detach has published it. If a fourth member ever needs
+// detach-with-length, split `isWrite` back into `limitOffset` + `detach` and keep the unsound pair out some
+// other way — do not read `isWrite` as a claim that the limit and the ownership are the same question.
 //
 // ⚠⚠ **THE DETACH IS UNCONDITIONAL, AND R4.4's CONDITIONAL ONE WAS A MEASURED WRONG ANSWER (fixed R4.6).**
 // It used to run only under a hand-written copy of `emitBufferNotOwned` — `capacity < 0` — which is arm 1 of

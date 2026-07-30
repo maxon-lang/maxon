@@ -1252,3 +1252,32 @@ end 'main'
 ```exitcode
 110
 ```
+
+<!-- test: set-through-a-viewed-owner-detaches-first -->
+
+⭐⭐ **THE SAME ARM-2 HOLE ON THE MEMBER R4.6 ADDED, WHICH THE `setByte` CASE ABOVE DOES NOT COVER (added in
+review).** `__arr_mem_set` and `__arr_set_byte` reach `__arr_cow_detach` through the one
+`emitBufferAccessGuard`, so it is tempting to read one case as covering both — it does not. MEASURED, by
+re-applying R4.6's own sabotage (restore R4.4's conditional `capacity < 0` detach and rebuild): the suite went
+**53 passed / 1 failed**, red on the `setByte` case ALONE, while this program — never committed — returned the
+identical wrong **198**. One guard with two callers needs one case per caller, because the day the guard
+sprouts a third parameter is the day the two callers stop taking the same path through it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(11)
+	arr.push(22)
+	arr.push(33)
+	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
+	try arr.managed.set(0, value: 99) otherwise panic("set: index 0 of a length-3 buffer")
+	let viewed = try sub.get(0) otherwise panic("get: index 0 of a length-2 view")
+	let owner = try arr.get(0) otherwise panic("get: index 0 of a length-3 array")
+	return (viewed + owner) as ExitCode
+end 'main'
+```
+```exitcode
+110
+```
