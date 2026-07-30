@@ -12698,12 +12698,13 @@ export type Parser
 	end 'emitRuntimeCall'
 
 	// ⭐ **EMIT A VOID `__mm_incref` OF `value`** — the one spelling of "take a second owner of this box,
-	// discarding the returned nothing". Single-sources the three sites that incref a managed box in place:
-	// `retainThrownField` (#64 — a thrown borrowed-container field) and the two `try … otherwise` phi
-	// reconciliations (the ok-edge borrow that merges with an owned fallback, and `transferFallbackToPhi`'s
-	// aliased-binding error edge). `__mm_retain` is the RETURNING twin (`retainBorrowedAggregate`) for when a
-	// FRESH SSA name is needed; this void form is for when the box is increfed in place and the caller already
-	// holds the ValueId it means.
+	// discarding the returned nothing". Single-sources every site that increfs a managed box in place:
+	// `retainThrownField` (#64 — a thrown borrowed-container field), `retainBorrowedPayload` (D1b — a managed
+	// payload bound out of a borrowed union), the two `try … otherwise` phi reconciliations (the ok-edge
+	// borrow that merges with an owned fallback, and `transferFallbackToPhi`'s aliased-binding error edge),
+	// and `handleEscapingBorrowFeed`'s static-constructor feed of a co-owned aggregate. `__mm_retain` is the RETURNING twin
+	// (`retainBorrowedAggregate`) for when a FRESH SSA name is needed; this void form is for when the box is
+	// increfed in place and the caller already holds the ValueId it means.
 	function emitIncref(value ValueId, range SourceRange)
 		_ = self.emitRuntimeCall(MmIncrefName, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitIncref'
@@ -15831,12 +15832,13 @@ export type Parser
 			dispatchSubject = self.emitUnionTagLoad(scrut, range: SourceRange.ofToken(matchTok))
 		end 'boxedDispatch'
 
-		// ⭐ **MATCH-CONSUME BOOKKEEPING (P1.3 slice 2).** A managed payload BINDING moves its field out
-		// of the box, which is legal only when the scrutinee is an OWNED local (`scrutOwned` — a borrowed
-		// param/receiver is the P1.4 case, refused in `moveOutManagedPayload`). If ANY arm moves a managed
-		// payload out, the whole scrutinee is consumed: its binding is marked `partiallyMoved` after the
-		// loop (a re-read would deref a nulled slot — E3102 — but the box is still dropped, its cascade
-		// null-guarding the moved slots). A match that moves nothing BORROWS — the union survives.
+		// ⭐ **MATCH-CONSUME BOOKKEEPING (P1.3 slice 2).** A managed payload BINDING takes its field out of
+		// the box, and `scrutOwned` decides HOW: an OWNED local is MOVED out of, a BORROWED one (a
+		// param/receiver, whose owner is the caller's local) is RETAINED from instead (D1b —
+		// `moveOutManagedPayload` vs `retainBorrowedPayload`). If ANY arm MOVES a managed payload out, the
+		// whole scrutinee is consumed: its binding is marked `partiallyMoved` after the loop (a re-read
+		// would deref a nulled slot — E3102 — but the box is still dropped, its cascade null-guarding the
+		// moved slots). A match that retains, or binds nothing managed, BORROWS — the union survives.
 		let scrutOwned = self.valueIsOwnedHeap(scrut)
 		var matchMovedManaged = false
 
@@ -17350,10 +17352,15 @@ export type Parser
 	// binds nothing (its managed payload is left in the box and dropped by the scope-exit cascade).
 	//
 	// ⭐ **A SCALAR binding is a COPY** (not a borrow into the box), so dropping the box does not
-	// invalidate it. A MANAGED binding (String/struct) is a MOVE-OUT: the binding OWNS the payload and
-	// drops it at its own scope exit, and the box slot is nulled so the box's cascade skips it (see
-	// `moveOutManagedPayload`). Returns whether ANY managed field was moved out — the whole match then
-	// consumes the scrutinee (`markScrutineePartiallyMoved`).
+	// invalidate it. A MANAGED binding (String/struct) OWNS its payload either way — it drops at its own
+	// scope exit — but HOW it acquires that ownership depends on who owns the box:
+	//   • an OWNED LOCAL scrutinee ⇒ a MOVE-OUT, and the box slot is nulled so the box's cascade skips it
+	//     (`moveOutManagedPayload`);
+	//   • a BORROWED scrutinee (a parameter, a receiver) ⇒ a RETAIN, and the slot is left INTACT because
+	//     the box's real owner is the caller's local (`retainBorrowedPayload`, D1b).
+	// Returns whether ANY managed field was MOVED out — the whole match then consumes the scrutinee
+	// (`markScrutineePartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
+	// borrowed box, and marking it moved would make the caller's later re-read a false E3102.
 	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutOwned bool, layout EnumLayout) returns bool throws ParseError
 		var movedManaged = false
 		for binding in bindings 'each'
@@ -17366,10 +17373,14 @@ export type Parser
 			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.signatures.adoptType(binding.field.declaredType, into: self.artifact.typeNames))
 			let loaded = try self.emitUnionPayloadLoad(scrutBox, field: binding.field, slot: binding.slot, layout: layout, posTok: binding.nameTok, range: range)
 			var bindingInfo = try self.scope.declareValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), mutable: false, value: loaded) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
-			if payloadClassIsManaged(class) 'managedMoveOut'
-				try self.moveOutManagedPayload(bindingInfo, loaded: loaded, class: class, scrutBox: scrutBox, scrutOwned: scrutOwned, slot: binding.slot, layout: layout, nameTok: binding.nameTok, range: range)
-				movedManaged = true
-			end 'managedMoveOut'
+			if payloadClassIsManaged(class) 'managedPayload'
+				if scrutOwned 'ownedMoveOut'
+					self.moveOutManagedPayload(bindingInfo, loaded: loaded, class: class, scrutBox: scrutBox, slot: binding.slot, layout: layout, range: range)
+					movedManaged = true
+				end 'ownedMoveOut' else 'borrowedRetain'
+					self.retainBorrowedPayload(bindingInfo, loaded: loaded, range: range)
+				end 'borrowedRetain'
+			end 'managedPayload'
 		end 'each'
 		return movedManaged
 	end 'declarePayloadBindings'
@@ -17379,28 +17390,56 @@ export type Parser
 	// its own scope exit through `emitDecref`'s tag routing), and the box SLOT is NULLED so the box's own
 	// `__destruct_<U>` cascade — which null-guards every field — does not decref it a second time.
 	//
-	// ⚠ Moving a managed field out of a BORROWED union (a parameter, a receiver) would STEAL it from its
-	// owner — the caller's cascade would then skip a payload the callee already dropped, or double-free
-	// one it did not. That is the cross-call borrow-consume ruling deferred to P1.4, so the scrutinee must
-	// be an OWNED LOCAL; a borrowed one is E2015 here rather than a silent double-free.
-	function moveOutManagedPayload(bindingInfo VarInfo, loaded ValueId, class PayloadClass, scrutBox ValueId, scrutOwned bool, slot CaseIndex, layout EnumLayout, nameTok Token, range SourceRange) throws ParseError
-		if not scrutOwned 'borrowedScrut'
-			throw ParseError.unsupported("binding the managed payload '{String.from(nameTok.value)}' out of a `{layout.kindWord()} {String.from(layout.name)}` that is not an OWNED local — a borrowed union (a parameter, a receiver) cannot have its payload MOVED out; that cross-call ownership arrives at P1.4 (match a payload-free / `_`-discarded arm to borrow it instead)", line: nameTok.line, column: nameTok.column)
-		end 'borrowedScrut'
-
-		// The moved-out payload (a String or a struct box — this path is reached only for a managed field)
-		// is now OWNED by this binding, so it carries the provenance bit `valueIsOwnedHeap` reads: a later
-		// `let q = <it>` re-moves it correctly, and a struct payload is no longer mistaken for a borrow. The
-		// binding owns the drop (it is in `ownedBindings`), not the statement, so it leaves the pending-temp
-		// list — the `trackOwnedTemp`/`removeFromPendingTemps` pair nets to "bit set, not pending", which is
-		// what a value dropped by a binding rather than by the statement needs.
-		self.trackOwnedTemp(loaded)
-		self.removeFromPendingTemps(loaded)
-		self.ownedBindings.push(bindingInfo)
+	// ⚠ **Reached ONLY for an OWNED LOCAL scrutinee.** Moving a managed field out of a BORROWED union
+	// would STEAL it from its owner — the caller's cascade would then skip a payload the callee already
+	// dropped, or double-free one it did not. A borrowed scrutinee takes `retainBorrowedPayload` instead,
+	// which leaves the slot alone; `declarePayloadBindings` is the one place that picks between them.
+	function moveOutManagedPayload(bindingInfo VarInfo, loaded ValueId, class PayloadClass, scrutBox ValueId, slot CaseIndex, layout EnumLayout, range SourceRange)
+		self.ownPayloadBinding(bindingInfo, loaded: loaded)
 
 		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
 		self.emitIndirectStore(scrutBox, offset: layout.payloadSlotOffset(slot), value: zero, storageType: payloadStorageOf(class), range: range)
 	end 'moveOutManagedPayload'
+
+	// ⭐ **RETAIN A MANAGED PAYLOAD BOUND OUT OF A BORROWED UNION (D1b).** The load borrowed the payload —
+	// the box's owner is the CALLER's local (a parameter, or a method's receiver), and it survives this
+	// frame — so ownership cannot be MOVED: the caller may re-read the field, or match the union again, and
+	// its own cascade will release every slot it still holds. So instead of a move this RETAINS:
+	// `__mm_incref` raises the payload's refcount, the binding owns that SECOND reference and drops it at
+	// the arm's own exit (`dropArmScopedOwned`), and the slot is left INTACT for the owner. The refcount
+	// balances at exactly one free. Nothing left the box, so the match does NOT consume the scrutinee.
+	//
+	// ⚠ **THE INCREF MUST PRECEDE ANY RELEASE OF THE BASE**, and it does because it is emitted at the bind
+	// point — the op immediately after `emitUnionPayloadLoad`, before the arm body can drop anything. The
+	// hazard in full is `specs/refcount-accessor-borrow-order.md`: release the base first and its
+	// destructor drives the field to zero, so the following incref resurrects freed memory.
+	//
+	// The RETAIN twin of `moveOutManagedPayload`, and the THIRD application of the #40 retain-promotion
+	// thesis after `retainBorrowedAggregate` and `retainThrownField` — whose comment states the same
+	// argument for the throw channel, one field-load out. **A bounded, unconditional refcount op is the
+	// point, not a shortcut.** v1 decides the same question per value with a whole-function dataflow
+	// analysis (`InsertRefcounts.computeIncomingOwnerAcquire`) because its RELEASE side is derived from
+	// that same analysis — a last-use decref — so a blanket acquire there genuinely leaks. shv2's release
+	// is STRUCTURAL: the binding is in `ownedBindings` and drops at its scope exit whatever the analysis
+	// would have said, so an unconditional acquire is unconditionally balanced and needs no analysis at
+	// all. Porting v1's would buy a saved incref with a dataflow pass shv2 does not have.
+	function retainBorrowedPayload(bindingInfo VarInfo, loaded ValueId, range SourceRange)
+		self.emitIncref(loaded, range: range)
+		self.ownPayloadBinding(bindingInfo, loaded: loaded)
+	end 'retainBorrowedPayload'
+
+	// The half both managed-payload bind paths share: the binding OWNS the payload's reference, however it
+	// was acquired (moved out of an owned box, or retained out of a borrowed one). The provenance bit is
+	// what `valueIsOwnedHeap` reads — a later `let q = <it>` re-moves it correctly, and a struct payload is
+	// not mistaken for a borrow — and `ownedBindings` is what DROPS it, at the arm's own exit.
+	//
+	// `markValueOwnsHeap` rather than `trackOwnedTemp`, for the reason a consumed parameter needs the same
+	// half: the BINDING owns the drop, not the statement, so enrolling a statement-scoped pending temp
+	// would drop the payload a second time at the enclosing statement's end.
+	function ownPayloadBinding(bindingInfo VarInfo, loaded ValueId)
+		self.markValueOwnsHeap(loaded)
+		self.ownedBindings.push(bindingInfo)
+	end 'ownPayloadBinding'
 
 	// The declaration index of the case named by `nameTok`, or E3034 (unknown case) positioned at
 	// `posTok`. THE one emitter of "this name is not a case of this enum" — a `Color.red` literal

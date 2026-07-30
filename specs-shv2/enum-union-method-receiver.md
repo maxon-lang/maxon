@@ -26,6 +26,21 @@ once, so a receiver consumed by the first call would make the second a use-after
 INCREF'd per call would leak; `self-passed-to-a-free-function` hands `self` on as an ordinary borrowed
 argument, which is what proves the receiver is parameter 0 and nothing more.
 
+## Binding the receiver's MANAGED PAYLOAD (D1b)
+
+The cases above never bind the payload; the four beside them now do, because that is what the harness
+itself wants (`PeReadError.displayReason` reads one, `WorkerRecord.spec` RETURNS one). The receiver is
+the CALLER's box, so the payload cannot be MOVED out of it — it is **RETAINED** at the bind
+(`__mm_incref`), the binding owns that second reference and drops it at the arm's own exit, and **the
+box slot is left intact** so the owner keeps its own reference. The match therefore does not consume
+the receiver. See `union-managed-payload.md`'s Documentation for the rule in full and for the
+borrowed-PARAMETER half of the same mechanism.
+
+Two of the four exist only to catch the two ways a plausible implementation goes wrong, and neither is
+caught by the other cases: `receiver-still-owns-its-payload-after-a-bind` asks the same receiver twice,
+which a slot-nulling implementation fails; `managed-payload-receiver-bind-leak-free` binds 300 times, so
+an unbalanced refcount is a certainty (exit 101) rather than a coin flip.
+
 ⚠ **`return self` is REFUSED, and that refusal is the whole safety argument for letting bare `self`
 be a value at all.** A boxed union's receiver is a pointer the CALLER's binding owns; returning it
 would have the caller adopt and free a box whose own owner frees it too. It is refused by the
@@ -98,6 +113,144 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: managed-payload-receiver-is-bound -->
+The "IS bound" twin of the case directly above, and the shape the harness actually wants
+(`PeSectionReader.PeReadError.displayReason`): the method BINDS the managed payload out of its
+borrowed receiver and reads it. The receiver is the CALLER's box, so the payload cannot be moved
+out of it — it is RETAINED instead (`__mm_incref` at the bind), the binding owns that second
+reference and drops it at the arm's exit, and the box slot is left intact for the owner. The
+refcount balances at exactly one free.
+```maxon
+union PathError
+	missing
+	unreadable(path String)
+
+	export function displayReason() returns String
+		return match self 'k'
+			missing gives "no path was given at all, and this literal is heap-long"
+			unreadable(path) gives "cannot open {path}"
+		end 'k'
+	end 'displayReason'
+end 'PathError'
+
+function main() returns ExitCode
+	let e = PathError.unreadable("/a/rather/long/path/that/forces/a/real/heap/allocation")
+	print(e.displayReason())
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+cannot open /a/rather/long/path/that/forces/a/real/heap/allocation
+```
+
+<!-- test: managed-payload-escapes-through-the-receiver -->
+`SpecWorkerPool.WorkerRecord.spec` verbatim in shape: the bound payload is not merely READ inside
+the method, it is RETURNED — so the retained reference outlives the receiver's borrow and the
+caller adopts it. This is the sub-case a borrow-only design could not close, and it is why the bind
+retains rather than borrows. The other two payloads are `_`-discarded and stay in the box, freed by
+the owner's cascade.
+```maxon
+union Record
+	pass(specName String, testName String)
+	fail(specName String, testName String, reason String)
+
+	export function spec() returns String
+		return match self 's'
+			pass(s, _) gives s
+			fail(s, _, _) gives s
+		end 's'
+	end 'spec'
+end 'Record'
+
+function main() returns ExitCode
+	let r = Record.fail("the spec name, long enough to force a real heap allocation", testName: "the test name, also long enough to be heap allocated", reason: "the failure reason, likewise long enough for the heap")
+	print(r.spec())
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+the spec name, long enough to force a real heap allocation
+```
+
+<!-- test: receiver-still-owns-its-payload-after-a-bind -->
+⭐ **THE CASE THAT CATCHES A NULLED SLOT.** A retain must NOT clear the box slot the payload was
+loaded from — the container's owner keeps its own reference — so the SAME receiver is asked twice
+and the second call must still see the payload's bytes. A move-out implementation (which nulls the
+slot) passes every other case in this file and fails only here: the second call would interpolate a
+null pointer.
+```maxon
+union PathError
+	missing
+	unreadable(path String)
+
+	export function displayReason() returns String
+		return match self 'k'
+			missing gives "no path was given at all, and this literal is heap-long"
+			unreadable(path) gives "cannot open {path}"
+		end 'k'
+	end 'displayReason'
+end 'PathError'
+
+function main() returns ExitCode
+	let e = PathError.unreadable("the path string, itself long enough to be a real heap allocation")
+	let first = e.displayReason()
+	let second = e.displayReason()
+	print(first)
+	print(second)
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+cannot open the path string, itself long enough to be a real heap allocationcannot open the path string, itself long enough to be a real heap allocation
+```
+
+<!-- test: managed-payload-receiver-bind-leak-free -->
+⭐ **THE LEAK GATE.** 300 rounds of binding a managed payload out of a borrowed receiver. One
+unbalanced `incref` per round leaves the payload's refcount at 300 when the container dies, so the
+box is never freed and the run exits 101; one unbalanced `decref` frees it under the container. The
+loop is what turns a single off-by-one into a certainty rather than a coin flip.
+```maxon
+typealias Round = int(0 to 1000)
+
+union PathError
+	missing
+	unreadable(path String)
+
+	export function displayReason() returns String
+		return match self 'k'
+			missing gives "no path was given at all, and this literal is heap-long"
+			unreadable(path) gives "cannot open {path}"
+		end 'k'
+	end 'displayReason'
+end 'PathError'
+
+function main() returns ExitCode
+	let e = PathError.unreadable("a heap allocated path string, long enough to be a real one")
+	var i = 0 as Round
+	while i < 300 'spin'
+		let shown = e.displayReason()
+		i = i + 1
+	end 'spin'
+	print(e.displayReason())
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+cannot open a heap allocated path string, long enough to be a real one
 ```
 
 <!-- test: two-calls-on-one-managed-receiver -->

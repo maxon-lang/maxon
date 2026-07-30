@@ -20,11 +20,23 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
   payload slot — no incref, no copy. The source binding is moved-from (a later
   read is `E3102`). A borrowed String literal payload is promoted to an owned
   heap copy first, so the box always owns a droppable payload.
-- **A match binding is a MOVE-OUT.** `match u { case(x) then … }` loads the
-  managed field into `x` (which becomes an owned binding, dropped at its own
-  scope exit) and clears the box slot. After the match `u` is moved-from (a later
-  read is `E3102`). A discard `_`, an unbound tag-only arm, and a payload-free /
-  scalar arm bind nothing and leave the box owned — `u` is dropped at scope exit.
+- **A match binding on an OWNED union is a MOVE-OUT.** `match u { case(x) then … }`
+  loads the managed field into `x` (which becomes an owned binding, dropped at its
+  own scope exit) and clears the box slot. After the match `u` is moved-from (a
+  later read is `E3102`). A discard `_`, an unbound tag-only arm, and a
+  payload-free / scalar arm bind nothing and leave the box owned — `u` is dropped
+  at scope exit.
+- **A match binding on a BORROWED union is a RETAIN.** Where the scrutinee is a
+  parameter or a method receiver, the box's owner is the caller's local and
+  survives the call, so ownership cannot be moved out of it. The bind emits
+  `__mm_incref` on the loaded payload instead: the binding owns that *second*
+  reference and drops it at the arm's own exit, and **the box slot is left
+  intact** so the owner keeps its own reference and may re-read the field, match
+  the union again, or move the payload out itself. The refcount balances at
+  exactly one free, and the borrowed union is **not** consumed by the match — a
+  later read of it is legal, not `E3102`. The retain is unconditional (no escape
+  analysis): the binding's release is structural — its scope exit — so a blanket
+  acquire is blanket-balanced.
 - **Drop is a tag-conditional STATIC cascade.** When an owned managed-payload
   union is dropped, its `__destruct_<U>` loads the tag, and for the live case
   drops each still-present managed field through its own type's destructor (a
@@ -32,9 +44,9 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
   frees the box. A moved-out slot is null and is skipped, so a payload is freed
   exactly once whether it was moved out, discarded, or left in place.
 
-Passing a managed-payload union across a call boundary (as a parameter or a
-return value), and binding a managed payload out of a *borrowed* union, are the
-cross-call ownership ruling deferred to **P1.4**.
+Passing a managed-payload union across a call boundary as a *return value* is
+still the cross-call ownership ruling deferred beyond this rung; passing one as a
+**parameter** and binding its managed payload out is the retain above (D1b).
 
 ## Tests
 
@@ -198,6 +210,311 @@ end 'main'
 ```
 ```exitcode
 2
+```
+
+<!-- test: match-borrow-binds-managed-payload -->
+The "IS bound" twin of the case directly above: a match on a BORROWED union (a
+parameter) that DOES bind its managed payload. The payload cannot be moved out — its
+owner is the caller's local — so it is RETAINED (`__mm_incref` at the bind), the
+binding owns that second reference and drops it at the arm's exit, and the box slot is
+left intact. The caller's union is NOT consumed by the call.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Body
+	export var mass as Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Shape
+	empty
+	solid(body Body)
+end 'Shape'
+
+function massOf(s Shape) returns Integer
+	return match s 'check'
+		empty gives 1
+		solid(b) gives b.mass
+	end 'check'
+end 'massOf'
+
+function main() returns ExitCode
+	let s = Shape.solid(Body.create(3))
+	return massOf(s) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: borrowed-bind-then-the-owner-moves-it-out -->
+⭐ **THE CASE THAT CATCHES A NULLED SLOT.** A retain must NOT clear the slot the payload
+was loaded from, and the sharpest reader of that slot is the OWNER doing its own
+move-out afterwards: `massOf(s)` binds the struct payload out of a borrowed parameter,
+then `match s` in the caller MOVES the same payload out and reads `b.mass`. A nulling
+implementation loads 0 here and dereferences it. It also pins the refcount: the borrow's
+retained reference is dropped at the callee's arm exit, the moved-out binding drops the
+last one at `main`'s scope exit, and the box's cascade skips the (now genuinely) nulled
+slot — one free, no leak.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Body
+	export var mass as Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Shape
+	empty
+	solid(body Body)
+end 'Shape'
+
+function massOf(s Shape) returns Integer
+	return match s 'check'
+		empty gives 1
+		solid(b) gives b.mass
+	end 'check'
+end 'massOf'
+
+function main() returns ExitCode
+	let s = Shape.solid(Body.create(3))
+	let borrowed = massOf(s)
+	let owned = match s 'own'
+		empty gives 1
+		solid(b) gives b.mass
+	end 'own'
+	return (borrowed + owned) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: borrowed-bind-in-an-arm-that-returns -->
+A retained payload binding leaves its arm through a TERMINATED exit (`then return`)
+rather than the live fall-through every case above uses, so it drops through
+`emitScopeDrops` down to the arm's floor instead of through `dropArmScopedOwned` —
+the other half of the arm-exit rule, and the half a `gives` arm cannot reach.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function show(m M) returns Integer
+	match m 'k'
+		silent then return 0
+		text(s) then print(s)
+	end 'k'
+	return 3
+end 'show'
+
+function main() returns ExitCode
+	let m = M.text("a returned-arm payload string, long enough to be a real heap allocation")
+	return show(m) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+a returned-arm payload string, long enough to be a real heap allocation
+```
+
+<!-- test: borrowed-bind-in-an-arm-that-breaks -->
+The third arm exit: a `break` out of an enclosing loop drops the retained binding
+through the LOOP's floor. The arm binds but never prints, so nothing but the leak gate
+can tell the drop happened — which is exactly the point.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Round = int(0 to 100)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function show(m M) returns Integer
+	var i = 0 as Round
+	while i < 10 'spin'
+		match m 'k'
+			silent then return 0
+			text(s) then break 'spin'
+		end 'k'
+		i = i + 1
+	end 'spin'
+	return 5
+end 'show'
+
+function main() returns ExitCode
+	let m = M.text("a broken-arm payload string, long enough to be a real heap allocation")
+	return show(m) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: borrowed-bind-then-moved-into-another-union -->
+The retained `+1` TRANSFERS: the binding is moved into a second union's payload, so its
+own scope-exit drop is skipped (`movedFrom`) and the new box owns the reference instead.
+The source union still holds its slot and drops the other reference at `main`'s exit —
+two owners, two drops, one free.
+```maxon
+union M
+	silent
+	text(body String)
+end 'M'
+
+union Held
+	nothing
+	holds(v String)
+end 'Held'
+
+function rewrap(m M) returns Held
+	return match m 'k'
+		silent gives Held.nothing
+		text(s) gives Held.holds(s)
+	end 'k'
+end 'rewrap'
+
+function main() returns ExitCode
+	let m = M.text("a rewrapped payload string, long enough to be a real heap allocation")
+	let h = rewrap(m)
+	match h 'j'
+		nothing then return 0
+		holds(v) then print(v)
+	end 'j'
+	return 8
+end 'main'
+```
+```exitcode
+8
+```
+```stdout
+a rewrapped payload string, long enough to be a real heap allocation
+```
+
+<!-- test: three-managed-payloads-out-of-one-borrowed-union -->
+Three String payloads bound out of ONE borrowed union in a single arm: three increfs at
+the bind, three drops at the arm's exit, and one of them escapes as the arm's `gives`
+value. A retain emitted once per ARM rather than once per BINDING would leak two.
+```maxon
+union R
+	one(a String)
+	three(a String, b String, c String)
+end 'R'
+
+function first(r R) returns String
+	return match r 's'
+		one(a) gives a
+		three(a, b, c) gives a
+	end 's'
+end 'first'
+
+function main() returns ExitCode
+	let r = R.three("a first payload string long enough to heap", b: "a second payload string long enough to heap", c: "a third payload string long enough to heap")
+	print(first(r))
+	return 6
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+a first payload string long enough to heap
+```
+
+<!-- test: retained-payload-that-escapes-shares-the-owner-s-record -->
+The retain is an INCREF, not a copy, so a payload that escapes the borrow is a SECOND
+owner of the SAME record — and an in-place `append` through it is visible to the union
+that still holds it. That is not a shv2 quirk: the **bootstrap answers identically**
+(measured — same two lines of stdout), so the observable semantics of a payload bound
+out of a borrowed union agree across the two compilers. It is pinned because it is the
+one place the incref-vs-copy choice is *observable* rather than internal: were the bind
+to copy the way `promoteBorrowedToOwned` copies a borrowed String for a `var`, this
+program would print the unmutated original and disagree with the reference.
+```maxon
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns String
+	return match m 'k'
+		silent gives "a fallback literal long enough to be a real heap string"
+		text(s) gives s
+	end 'k'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("original payload, long enough to be a real heap allocation")
+	var escaped = grab(m)
+	escaped.append(" MUTATED")
+	print(grab(m))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original payload, long enough to be a real heap allocation MUTATED
+```
+
+<!-- test: borrowed-struct-payload-bind-leak-free -->
+⭐ **THE LEAK GATE, struct half.** 300 rounds of binding a STRUCT payload out of a
+borrowed parameter. An unbalanced `incref` leaves the `Body` box's refcount at 300 when
+the union's cascade releases it, so it is never freed and the run exits 101; an
+unbalanced `decref` frees it under the union that still points at it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Round = int(0 to 1000)
+
+type Body
+	export var mass as Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Shape
+	empty
+	solid(body Body)
+end 'Shape'
+
+function massOf(s Shape) returns Integer
+	return match s 'check'
+		empty gives 1
+		solid(b) gives b.mass
+	end 'check'
+end 'massOf'
+
+function main() returns ExitCode
+	let s = Shape.solid(Body.create(3))
+	var i = 0 as Round
+	var total = 0 as Integer
+	while i < 300 'spin'
+		total = total + massOf(s)
+		i = i + 1
+	end 'spin'
+	if total != 900 'wrong'
+		return 1
+	end 'wrong'
+	return 7
+end 'main'
+```
+```exitcode
+7
 ```
 
 <!-- test: discard-managed-field -->
