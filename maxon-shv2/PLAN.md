@@ -163,7 +163,7 @@ take its blocker instead)*
 | **S1** | ~~`__Builtins.*` QUALIFIED-call recognition~~ **✅ THE ROW WAS DRAWN STALE — THIS LANDED 2026-07-24** as §"STDLIB WHITELIST" step (2) (`1c36c1ba8`), which this board's own text says three lines further down. **Re-verified by RUNNING it 2026-07-29**, not by reading: `__Builtins.currentTimeNanos()` in an ordinary user program compiles and returns a live reading, and `__Builtins.noSuchIntrinsic()` gives a clean **E3004** (no panic). The arm is `Parser.maxon:26681`, gated on `isBuiltinsIntrinsicCallee`, recognizing 4 members (`currentTimeNanos`, `currentTimeMs`, `currentUnixTimeSeconds`, `sleep`). **Nothing in the S2 cone is blocked on it** — see the corrected blocker table below | L-stdlib | ✅ DONE | *(landed 2026-07-24)* | — |
 | **S2** | **Whitelist entries 4…n.** ⚠ **THE BLOCKER LIST BELOW WAS WRONG AND IS NOW MEASURED** (2026-07-29). **The dominant cost of the whole gate** . ⚠ **D5 IS NOW DONE AND ITS TWO FILES ADVANCED TO NEW, DIFFERENT BLOCKERS — both MEASURED 2026-07-29 after the fix, not predicted.** `stdlib/FilePath.maxon` clears all seven of its `#if` regions and now stops at **`E2010 :34:25 Expected 'identifier' but got 'from'`** — a function *named* `from`, which shv2 lexes as a keyword; that is a LEXER/parser question and belongs to no row yet. `stdlib/Process.maxon` clears its `#if` and now stops at **`E3004 :29:17 call to undefined function '__Builtins.executablePath'`** — a missing intrinsic, which IS S1-shaped work and is the first confirmed instance of it | L-stdlib | ⛔ BLOCKED | on ~~D5~~ ✅ · D1 · D2/D4 · S3 · **`from`-as-a-name (new, unrowed)** · **`__Builtins.executablePath` (new)** — *not* on S1. See the measured table | — |
 | **S3** | **`String.addressableBytes`** — `stdlib/File.maxon:60`'s first blocker, and **it was on no row until 2026-07-29**. Not a whitelist question and not a parser one: a String method shv2 does not provide (its E2015 lists what it does). Needs its own contract. ⛔⛔ **CLAIMED AND RELEASED UNBUILT 2026-07-30 — THE ROW IS NOT INDEPENDENTLY DELIVERABLE, AND THREE MEASUREMENTS SAY SO.** (1) **It is not a String algorithm at all**: `stdlib/String.maxon:181` defines it as one line, `return managed`, a `module function` returning `ByteMemory` (`__ManagedMemory with Byte`) — an ENCAPSULATION DOOR handing the private `managed` field to other stdlib files, not a method to implement. (2) **NO SPEC COULD TEST IT.** It is `module`-visible, and specs are user code: the oracle answers `E3008: function 'stdlib.String.addressableBytes' is not exported` (measured). A rung delivering it would have no committed case that exercises it — the "green suite that tests nothing" this process exists to prevent. (3) **Its only two consumers are blocked far behind it.** All ten call sites are in `File.maxon`/`Directory.maxon`, and those files reach `__ManagedFile.openRead/exists/delete/rename` and `__ManagedDirectory.openSearch/exists/create` — **shv2 synthesizes ONLY `__ManagedMemory`** (grepped: no `__ManagedFile`, no `__ManagedDirectory` anywhere in `maxon-shv2/Compiler/`). ⇒ `addressableBytes` is File.maxon's FIRST error with an entire missing file-IO runtime behind it — **the board's own "first errors are LOWER BOUNDS" warning, applied to a row the board wrote anyway.** ⇒ folded into **R4** below; take that instead | L-stdlib | ⛔ BLOCKED | on **R4** | — |
-| **R4** | **THE FILE-IO RUNTIME — `__ManagedFile` + `__ManagedDirectory`.** Opened 2026-07-30 by S3, which measured its way into it. 🔶 **CLAIMED 01:48Z — AND THE SURVEY BELOW LANDED 01:20–01:55Z, INDEPENDENTLY, FROM THE D4 SLICE. R4's OWNER MUST READ IT BEFORE PLANNING: the row you claimed is false in its load-bearing sentence.** *(Neither agent was wrong to race — the claim and the survey crossed on the wire. This is the board doing its job: the correction reaches you by rebase.)* ⛔⛔ **THE PREMISE IS FALSE, AND IT MAKES THIS A WORKSTREAM RATHER THAN A SLICE — SURVEYED 2026-07-30 across both references + shv2.** The row said *"shv2 synthesizes exactly one `__Managed*` type (`__ManagedMemory`) … need two more"*. **shv2 has NO `__Managed*` type AT ALL.** `isCompilerOwnedTypeName` (`TypeResolution.maxon:646-648`) enumerates exactly six names — `ExitCode`, `HashValue`, `Codepoint`, `Ordering`, `CharacterSet`, `CharacterMemberSetAlias` — and none is managed; shv2 never compiles `stdlib/Array.maxon` or `stdlib/String.maxon`, it **SYNTHESIZES** their layouts against `Runtime/MmRuntime.maxon`, and `specs-shv2/managed-memory-methods.md` disables every case that so much as names `__ManagedMemory` (same footnote 8+ times). ⇒ R4 is not *"add two more of a thing that exists"*; it is **"introduce the FIRST compiler-owned refcounted OS-handle type mechanism in shv2"** — plus **`ByteMemory`**, which is not a resolvable shv2 type either (`stdlib/String.maxon:68` declares `var managed as ByteMemory`) and is the REAL prerequisite hiding behind S3's one-line `addressableBytes`. **The contract, where both references agree:** 13 `__ManagedFile` methods + 7 `__ManagedDirectory` methods (bootstrap `2-Parser.cs:1414-1440`/`:1449-1463`; v1 `LowerMaxonToStd.maxon:1801-1842`/`:1883-1920`), each an 8-byte refcounted handle with a runtime-owned destructor that closes on drop. ⛔ **AND THE ORACLE CANNOT ANSWER FOR TWO OF THE THREE LANES shv2's OWN GATE RUNS: the bootstrap has NO Linux emitter and NO wasm backend whatsoever** — `3-MlirPipeline.cs:182` throws for any arch that is not x64/arm64, and x64 is hard-wired to Win32 while arm64 is hard-wired to Darwin. Only **v1** implements all four, including a full WASI Preview2 filesystem (`Targets/Wasm/MirToWasm.maxon:1723-1796`) — and v1 does not build, so it can only be read. ✅ **The wasm/arm64 question needs no new mechanism, though:** shv2 already owns the clean target-refusal path — **E3104** `targetUnsupportedConstruct` via `targetHasWin32Substrate` (`SemanticCheck.maxon:1338-1423`), which is exactly how the wall clock is x64-windows-only today. *(NOT E3074 — that is v1's subprocess-specific code, and `ErrorCodeRegistry.maxon:428` says so.)* ✅ **44 committed acceptance tests already exist to port**, byte-identical, across 7 `/specs` files (`managed-file.md` 9, `managed-directory.md` 10, `directory.md` 9, `file-info.md` 6, `file-io.md` 7, +3 scattered) — note `specs/filepath.md`'s 40 cases are pure string work and touch no filesystem. ⚠ Whitelisting `File.maxon`/`Directory.maxon` reserves `FileReadError`/`FileWriteError`/… **program-wide** (`StdlibLoader.maxon:90-114`), and File.maxon carries string literals ⇒ **it is the `.rdata` golden-churn trigger this board already warns about for S2.** ⇒ **THE SCOPE IS A RULING, NOT A MEASUREMENT** — host-only with E3104 elsewhere? `ByteMemory` as its own rung first? how many slices? **R4's owner should settle that before writing code, and should not expect one rung to hold it** | L-stdlib | 🔶 CLAIMED | `slice/R4-file-io-runtime` | 2026-07-30T01:48Z |
+| **R4** | **THE FILE-IO RUNTIME — `__ManagedFile` + `__ManagedDirectory`.** Opened 2026-07-30 by S3, which measured its way into it. ⛔⛔ **CLAIMED 01:48Z AND RELEASED UNBUILT 02:0xZ — AND THE SURVEY BELOW LANDED 01:20–01:55Z, INDEPENDENTLY, FROM THE D4 SLICE, REACHING THE SAME VERDICT. TWO AGENTS SURVEYED THIS ROW IN PARALLEL AND BOTH STOPPED AT "NEEDS A RULING"; that agreement is the strongest evidence on the row.** *(Neither agent was wrong to race — the claim and the survey crossed on the wire. This is the board doing its job: the correction reaches you by rebase.)* ⛔⛔ **THE PREMISE IS FALSE, AND IT MAKES THIS A WORKSTREAM RATHER THAN A SLICE — SURVEYED 2026-07-30 across both references + shv2.** The row said *"shv2 synthesizes exactly one `__Managed*` type (`__ManagedMemory`) … need two more"*. **shv2 has NO `__Managed*` type AT ALL.** `isCompilerOwnedTypeName` (`TypeResolution.maxon:646-648`) enumerates exactly six names — `ExitCode`, `HashValue`, `Codepoint`, `Ordering`, `CharacterSet`, `CharacterMemberSetAlias` — and none is managed; shv2 never compiles `stdlib/Array.maxon` or `stdlib/String.maxon`, it **SYNTHESIZES** their layouts against `Runtime/MmRuntime.maxon`, and `specs-shv2/managed-memory-methods.md` disables every case that so much as names `__ManagedMemory` (same footnote 8+ times). ⇒ R4 is not *"add two more of a thing that exists"*; it is **"introduce the FIRST compiler-owned refcounted OS-handle type mechanism in shv2"** — plus **`ByteMemory`**, which is not a resolvable shv2 type either (`stdlib/String.maxon:68` declares `var managed as ByteMemory`) and is the REAL prerequisite hiding behind S3's one-line `addressableBytes`. **The contract, where both references agree:** 13 `__ManagedFile` methods + 7 `__ManagedDirectory` methods (bootstrap `2-Parser.cs:1414-1440`/`:1449-1463`; v1 `LowerMaxonToStd.maxon:1801-1842`/`:1883-1920`), each an 8-byte refcounted handle with a runtime-owned destructor that closes on drop. ⛔ **AND THE ORACLE CANNOT ANSWER FOR TWO OF THE THREE LANES shv2's OWN GATE RUNS: the bootstrap has NO Linux emitter and NO wasm backend whatsoever** — `3-MlirPipeline.cs:182` throws for any arch that is not x64/arm64, and x64 is hard-wired to Win32 while arm64 is hard-wired to Darwin. Only **v1** implements all four, including a full WASI Preview2 filesystem (`Targets/Wasm/MirToWasm.maxon:1723-1796`) — and v1 does not build, so it can only be read. ✅ **The wasm/arm64 question needs no new mechanism, though:** shv2 already owns the clean target-refusal path — **E3104** `targetUnsupportedConstruct` via `targetHasWin32Substrate` (`SemanticCheck.maxon:1338-1423`), which is exactly how the wall clock is x64-windows-only today. *(NOT E3074 — that is v1's subprocess-specific code, and `ErrorCodeRegistry.maxon:428` says so.)* ✅ **44 committed acceptance tests already exist to port**, byte-identical, across 7 `/specs` files (`managed-file.md` 9, `managed-directory.md` 10, `directory.md` 9, `file-info.md` 6, `file-io.md` 7, +3 scattered) — note `specs/filepath.md`'s 40 cases are pure string work and touch no filesystem. ⚠ Whitelisting `File.maxon`/`Directory.maxon` reserves `FileReadError`/`FileWriteError`/… **program-wide** (`StdlibLoader.maxon:90-114`), and File.maxon carries string literals ⇒ **it is the `.rdata` golden-churn trigger this board already warns about for S2.** ⇒ **THE SCOPE IS A RULING, NOT A MEASUREMENT** — host-only with E3104 elsewhere? `ByteMemory` as its own rung first? how many slices? **R4's owner should settle that before writing code, and should not expect one rung to hold it** ⭐⭐ **THE CLAIMANT'S INDEPENDENT SURVEY ADDS FOUR FACTS THE ABOVE DOES NOT, each run rather than read — see the full box in this section (“R4 IS A PHASE, NOT A ROW”):** **(a) v1 MEASURES THE PORT AT ~6,700–6,800 LINES ACROSS ~9 FILES**, of which **~3,900 is per-backend machine-code emission** (Windows IAT ~1,350 · wasm ~2,060 · arm64 ~460) for a ~20-method surface. **(b) shv2 has NO THROWING BUILTIN AT ALL, and it is STRUCTURAL:** `throwsMap` is built exclusively from DECLARED functions (`SemanticCheck.maxon:70-78`) and an intrinsic is never in `module.functions`, so it *cannot* appear there — yet every one of the ~20 members is `try X otherwise`-shaped in the stdlib. This would be shv2's **first** throwing synthesized builtin, with nothing to copy. **(c) shv2's WHOLE OS-PRIMITIVE SURFACE IS THREE SLOTS** — `OsImportSlot` (`Targets/Shared/OsImportSlot.maxon:25-29`) holds exactly `exit`, `write`, `mmap`; each new primitive costs an `OsImportSlot` case + a Mach-O symbol + a Windows `IatSlot` case + **per-arch** Linux syscall numbers + a WASI triple + a lowering arm in each of three backends, and there is **no `wasi:filesystem/*` import in shv2 at all**. **(d) WASI PREVIEW2, NOT PREVIEW1** — v1 uses `wasi:filesystem/types` resource handles and `MirToWasm.maxon:15-16` states *“Preview1 … is gone”*, so a port written against `path_open`/`fd_readdir` targets an API v1 abandoned. ⚠ **And the 8-byte handle struct both references register is a TYPE-CHECKING FICTION** — v1's real `__ManagedDirectory` runtime block is **40 bytes**, with no single source of truth tying the two. ⚠ **v1 NEVER FINISHED THIS ON arm64-macOS AND IT FAILS SILENTLY:** `getdents64` has *“no macOS import wired yet”* and returns `-1`, which `mrt_directory_next` reads as EOF ⇒ **`Directory.list()` returns an EMPTY ARRAY with no error** (`Arm64Backend.maxon:2396-2411`). ⇒ **RELEASED ⬜ FREE rather than held:** the ruling is the user's, and a 🔶 row would close L-stdlib to everyone while it waits. | L-stdlib | ⬜ FREE | *(claimed+released 2026-07-30 — needs a ruling first)* | — |
 | **D1** | **Methods on `union` / `enum`** — the DECLARATION SITE and the RECEIVER. ✅ `6b7c8a94b`..`f4c1c43e5`; **2372 → 2423/0**. `enclosingStructType`→`enclosingSelfType` (a struct's `Self` is `structRef`, an enum's `named`), `enterTypeScope` as ONE writer for name+kind, `enumMethodKeywordIndex` as one spelling of the modifier list. Statics **refused** (oracle misreads them; stdlib declares zero). Ports `specs/enum-full.md` byte-identical (36 of 54 enabled, 18 disabled with named blockers) + flips 2 in `enums-simple.md` + a shv2-authored receiver spec. ⭐⭐ **THE REVIEW FOUND 3 REACHABLE DEFECTS** — see the box. ⚠ **Moved NO committed goldens** (0 M); **added 51 x64-linux goldens the lane was silently missing**; arm64 SKIP — remote, UNVERIFIED, owes the same 51 | L-parser-decl | ✅ DONE | `slice/D1-union-enum-methods` | 2026-07-29T19:14Z |
 | **D1c** | **`match` arm with a DISCARDED payload binding is silently ACCEPTED** — `value(_)` compiles and runs (exit 0) where the oracle gives **E3081**. Confirmed by the D1 review; pinned as `enum-full.md`'s `disabled-test: error.match-discarded-bindings`. A genuinely MISSING check, not a wording difference, and shv2 claims no E3081 ✅ **CLOSED 2026-07-30** (`e700a5133`..`f081f9392`). **E3081** now fires iff the binding list is non-empty AND every binding is `_` — the oracle's rule, MEASURED: `two(_, b)` partial discard stays LEGAL, a bare case name stays legal, `one(x)`-unused is a different rule entirely. Registry: added the missing `shv2` claim to the EXISTING E3081, no new number. Flips `enum-full.md`'s `error.match-discarded-bindings`. ⚠ Two PRE-EXISTING shv2-authored specs were INVALID programs the oracle rejects (`text(_)`) — rewritten to a PARTIAL discard, **not** a bare case name, because a bare name carries no binding list so `declarePayloadBindings`'s discard branch would never run and the tests would have passed while testing nothing (the P1.9 masked-subject trap). Their 4 goldens move for that reason only. ⭐ The first cut's comma-join dedup put a `StringArray.create()` in `checkEnumExhaustive`, which runs on EVERY enum match: **+20 allocs at rung 0 doubling to +640 at rung 5, ×2.00** — a CORRECT dedup that was still UNSCALABLE, caught by the optimizer pass and removed | L-parser-stmt | ✅ DONE | `slice/D1d-keyword-block-structure` | 2026-07-29T23:05Z |
 | **D1d** | **⚠ REACHABLE COMPILER PANIC, PRE-EXISTING and D1-INDEPENDENT** — a keyword-named enum case used in an `if` condition (`if tagOf(Kw.end) != 3 'bad'`) ⇒ `panic at Parser.maxon:14467: parseIfStatement: the token scan predicted the closing 'end' at token 58 but the parser closed the last body at token 67`. Root: `closesBlockAt`/`opensBlockAt` read a keyword **after a `.`** as block structure. **The repro contains no enum method at all**, which is what proves it is not D1's. Same family as the two case-list misreads D1's review fixed, different walk ✅ **CLOSED 2026-07-30** (`e700a5133`..`f081f9392`). Cured at the ONE shared exclusion: `keywordIsMatchCaseName` → **`keywordIsAName`**, now a case-name LOOKAHEAD **or** a member-name LOOKBEHIND (`prev == dot`) **or** a payload-carrying case name. ⭐ **THREE MORE SCANS tested `TokenKind.end` themselves and needed folding in** — `blockDepthAfter`, `parseMatchCommon`'s end-of-arms test, and `elseFollowsBlockEnd`, whose 'is the previous token an `end`' was a THIRD panic (a ternary whose condition ends in a keyword member). `ensureSiblingReceivers` was refusing legal programs in BOTH directions. `assertScanAligned` is byte-unchanged — it produced every RED. ⭐⭐ **THE REVIEW FOUND THE ONE SHAPE THE FIX ITSELF MISSED, AND IT WAS RUNG-HALTING**: a keyword case name carrying a PAYLOAD (`end(m) then …`) — the lookahead is ONE token and the binding list sits between the name and its separator, so `end(m)` was falsely rejected (E2026 not-exhaustive) and `while(m)` **PANICKED**, both on programs the oracle runs to 42. Two subtleties it had to get right: the payload shape's separator set must be NARROWER (`then`/`gives` only — `if (a and b) or (c and d)` is legal Maxon and `stdlib/FilePath.maxon:137` is exactly that, verified RED by widening it), and the payload test may only answer YES and must fall through to the lookbehind (`Kw.end(20, b: 22)` has both) | L-parser-stmt | ✅ DONE | `slice/D1d-keyword-block-structure` | 2026-07-29T23:05Z |
@@ -335,6 +335,69 @@ take its blocker instead)*
 > literal" the note warns about. ⇒ **Whoever claims S2 must first MEASURE whether one entry moves the
 > committed goldens.** If it does, **⬜ DEAD-`.rdata` ELIMINATION becomes S2's blocker** and belongs on
 > this board above it. Measure before claiming; do not discover this halfway through.
+
+> ### ⛔⛔ R4 (FILE IO) IS A PHASE, NOT A ROW — MEASURED 2026-07-30, RELEASED UNBUILT, AND IT NEEDS A RULING
+>
+> Claimed and released the same session. **Everything below was RUN, not read.** The row's own hedge —
+> *"scope unknown until someone measures"* — is now discharged, and the answer is that no single rung can
+> hold it.
+>
+> **WHAT THE CORPUS DEMANDS.** `specs/managed-file.md` (**9 cases**) and `specs/managed-directory.md`
+> (**10 cases**) test `__ManagedFile`/`__ManagedDirectory` **directly from user code**, are **fully enabled
+> upstream (0 disabled)**, and are **entirely absent from `specs-shv2/`**. So the builtin surface is owed
+> *whatever* route shv2 takes for the stdlib façade — this is not a question that can be dodged by
+> declining to compile `stdlib/File.maxon`. Behind them sit `specs/file-io.md` (7), `specs/directory.md`
+> (9), `specs/file-info.md` (6) and `specs/filepath.md` (40), which need the façade and therefore D8.
+> **No fixture mechanism exists in the corpus** — every case is self-contained write→read→delete — so
+> byte-identical porting is viable and needs no harness work.
+>
+> **WHY IT CANNOT BE ONE RUNG.** The 19 builtin cases are blocked on a prerequisite the board never named,
+> and it is not small. Each of the three routes the corpus uses to obtain a path buffer is **absent from
+> shv2**, measured:
+>
+> | what the acceptance specs write | shv2 today |
+> |---|---|
+> | `__ManagedMemory.create(n, 1)` | **E3004** — no such intrinsic; shv2 synthesizes ZERO `__Managed*` types |
+> | `"lit".toByteArray().managed` | **E2015** — `Array` is a synthesized 48-byte record and *"exposes no fields at all"* |
+> | `String.cstr()` / `String.init(mm)` | **E2015** — the cstring intrinsics are not built |
+>
+> ⇒ a `__ManagedMemory` door + a String↔buffer bridge is **slice 1**, `__ManagedFile` **slice 2**,
+> `__ManagedDirectory` **slice 3**, the stdlib façade **slice 4** (behind D8). v1 measures the whole thing
+> at **~6,700 lines / ~9 files**, ~3,900 of it per-backend codegen.
+>
+> ### ⭐⭐ THE RULING IT NEEDS IS ABOUT **TARGETS**, AND THIS IS THE PART NO ROW HAS EVER STATED
+>
+> **shv2's OS-primitive surface is THREE slots.** `OsImportSlot` (`Compiler/Targets/Shared/OsImportSlot.maxon:25-29`)
+> holds exactly `exit`, `write`, `mmap`. Every new primitive costs: an `OsImportSlot` case · a Mach-O
+> symbol spelling · a Windows `IatSlot` case · **per-arch** Linux syscall numbers (x64 and arm64 differ) ·
+> a WASI import triple · and a lowering arm in each of `StdToX64` / `StdToArm64` / `StdToWasm`.
+> **There is no `wasi:filesystem/*` import in shv2 at all** — wholly new, not an extension.
+>
+> ⚠⚠ **AND THE PRECEDENT IS WORSE THAN IT LOOKS: even the CLOCK is x64-windows-only.** `osReadClock`,
+> `osSleepMs` and `osReadWallClock` **panic** on arm64 and on wasm (`StdToArm64Conversion.maxon:484-548`,
+> `StdToWasm.maxon:1244-1268`), fronted by a clean **E3104** for reachable calls. So following the
+> established precedent — land file IO x64-windows-first behind E3104 — has a consequence this board must
+> state plainly: **on an arm64-macOS host NOT ONE of the 19 acceptance cases could execute**, because
+> x64-windows binaries do not run natively there and the feature would be E3104-refused on every lane such
+> a host can reach. That is a rung whose suite is green because it tests nothing, which is the single
+> failure this whole process exists to prevent.
+>
+> ⚠ **v1 never finished this on arm64-macOS either, and it fails SILENTLY:** `getdents64` has *"no macOS
+> import wired yet"* and returns `-1`, which `mrt_directory_next` reads as EOF — so **`Directory.list()`
+> returns an empty array with no error** (`Arm64Backend.maxon:2396-2411`). x64-macOS panics on every
+> file op. The "debugged reference" is not debugged here.
+>
+> ⇒ **THE QUESTION FOR THE USER, and it is genuinely not the coordinator's:** does R4 (a) go
+> x64-windows-first behind E3104, accepting that it is unverifiable from a Mac; (b) go
+> host-target-first (arm64-macOS + wasm), inverting the precedent; or (c) go cross-platform from day one,
+> ~6,700 lines and a new WASI filesystem surface? **Also unstated anywhere: WASI Preview2, not Preview1** —
+> v1 uses `wasi:filesystem/types` resource handles (`descriptor.open-at`/`.read`/`.read-directory`), and
+> `MirToWasm.maxon:15-16` says *"Preview1 … is gone"*, so a port written against `path_open`/`fd_readdir`
+> targets an API v1 abandoned.
+>
+> ⚠ **One more trap for whoever builds it:** v1 registers both handles as **8-byte one-field structs**
+> while the real `__ManagedDirectory` runtime block is **40 bytes** — a type-checking fiction with **no
+> single source of truth** tying the two, kept in sync by hand.
 
 > ### ⚠ TWO ROWS WILL MOVE EXISTING GOLDENS. THAT SERIALIZES THEM AGAINST EVERYTHING IN FLIGHT.
 > A slice that only turns a REFUSAL into an ACCEPTANCE adds NEW specs and NEW fragments — which never
@@ -4293,6 +4356,36 @@ function-value + A2a closure spec cases to arm64 (the ADRP+ADD codegen has lande
 this needs an arm64 RUNNER); **#20** the arm64/wasm compile-error fragments a Windows host structurally
 cannot regenerate (it cross-compiles then tries to EXECUTE).
 
+> ### ⭐ THE arm64-macos GOLDEN DEBT IS NOW **QUANTIFIED**, MEASURED ON AN arm64-macOS HOST, 2026-07-30
+>
+> This section's premise — *"blocked on a CAPABLE HOST"* — is written from the Windows box. **Run ON a
+> Mac, the arm64-macos lane is the HOST lane and the debt is directly measurable.** On clean `main`
+> (`913f99e12`), with both compilers freshly built (0 warnings): **`specs-shv2` reads `2370 passed,
+> 62 failed`, exit 1** — and **all 62 are `specs-shv2/fragments/arm64-macos/` golden mismatches**, i.e.
+> exactly the accumulated `#86`-family debt, not a regression. By spec: `type-name-collision` 12 ·
+> `where-clauses` 11 · `union-managed-payload` 8 · `witness-throws` 6 · `generic-types` 5 ·
+> `ranged-typealias` 4 · `retain-escaping-borrow` 3 · then 11 specs with 1–2 each.
+>
+> ⚠⚠ **THE CONSEQUENCE FOR THIS PROCESS, AND IT IS NOT SMALL: `/rung` STEP 1 CANNOT GET A GREEN BASELINE
+> ON A MAC.** The skill requires one and forbids *"turning a gate green by narrowing what it tests"*, so
+> **every rung attempted from an arm64-macOS host halts at step 1** until these 62 are minted. The
+> batching rule that produced this ("arm64 is remote, synced periodically") is correct *from Windows* and
+> **inverts on a Mac**, where arm64-macos is native and x64-windows is the lane that cannot execute.
+> ⇒ **Minting these 62 is a deliberate stale-golden sweep (skill step 13), owed BEFORE the next Mac-hosted
+> rung — not something to fold into an unrelated slice.** Deliberately NOT done here: it is 62 goldens
+> across 15 specs whose diffs want reviewing on their own, and this session's row was R4.
+>
+> ⚠⚠ **AND THE STALE 62 ARE THE SMALLER HALF. THE SAME RUN MINTED `130` GOLDENS THAT WERE SIMPLY
+> ABSENT, plus `22` whole spec directories, across `42` DISTINCT SPECS** — among them
+> `enum-union-method-receiver` (D1's feature), `compiler-directives` (D5's), `enum-full`, `arrays`,
+> `character-set` and `function-overloads`. **A MISSING golden never fails**, so the arm64-macos lane has
+> been reporting PASS over ~42 specs' worth of codegen it never compared. That is the exact shape D1's own
+> row recorded for x64-linux (*"x64-linux ran GREEN over none of the feature"*, 51 goldens, `f4c1c43e5`)
+> — **it was never fixed for arm64-macos, and it is now measured at 130 + 22.** ⇒ the sweep is
+> **62 stale + 130 absent**, and the absent half is invisible to every gate that exists.
+
+
+
 **Budgets:** **≤30 s / ≤1.7 GB / >90% CPU** on self-compile. Runtime multi-core is already proven
 (Track 0). **Caching is revisited here, on a working compiler, with the approach chosen fresh** —
 not ported from v1's `.mxc`.
@@ -4332,6 +4425,34 @@ not ported from v1's `.mxc`.
 | 8 | **A compiler-SYNTHESIZED type that gains a managed field must be named in `managedNameDropCallee`, and the arm is a NAME EQUALITY** (shv2; filed by P1.8 Slice D's review, 2026-07-28). `installStructDestructors` walks `project.structTypes`, so a synthesized type is in no file's declarations and the generic route mints `__destruct___<Name>` — a symbol nothing builds. Today exactly ONE hand-written arm exists (`__CharacterSet`), and `__StringIndex` needs none because it is scalar-only, so this is **not yet duplication** and the abstraction was deliberately not built on speculation | The next synthesized type to acquire a managed field **dies in the BACKEND** — `panic at X64Backend.maxon:1820: resolveCallFixups: call to unknown function '__destruct___<Name>'` — a panic, not a diagnostic. Sabotage-confirmed: removing the existing arm gives **40 red, all that panic**; replacing it with the generic `__mm_decref` gives **40 red, all exit 101** (a leak). ⇒ **When a SECOND such type appears, replace both arms with ONE predicate** ("a reserved `__`-prefixed layout with a managed field must name its compiler-owned drop"), which turns a backend panic into a compile-time assertion |
 
 ### Bootstrap (`maxon-sharp`) oracle bugs — silent wrong answers to fix when the subsystem is next touched
+
+- **⬜ `E9001` ON LEGAL MAXON: ANY INSTANCE METHOD ON A `__ManagedMemory` OBTAINED FROM THE STATIC
+  `__ManagedMemory.create` FACTORY.** Found 2026-07-30 by the R4 survey, probing whether the corpus's
+  file-IO specs are portable. **4-line repro, and the whole file is it:**
+  ```maxon
+  function main() returns ExitCode
+  	var m = try __ManagedMemory.create(8, 1) otherwise panic("alloc")
+  	try m.setLength(4) otherwise panic("len")
+  	return 0
+  end 'main'
+  ```
+  ⇒ `error E9001: Lowering function 'main' failed: Index was out of range. Must be non-negative and less
+  than the size of the collection. (Parameter 'index')` at
+  `MaxonSharp.Compiler.Ir.Conversion.MaxonToStandardConversion.Run`. **It is the RECEIVER's provenance,
+  not the method**: `setLength`, `setByte` and `length` all ICE identically, while the static `create`
+  call ALONE compiles and runs, and a `__ManagedMemory` handed straight to `__ManagedFile.openWrite` /
+  `.write` compiles fine. Independent of the `otherwise` form (inline `panic` and the labelled-block form
+  both ICE) and of whether the index/capacity is a literal or a runtime value — so it is **not** the
+  argument-pinning family the entries below describe, despite also surfacing as E9001.
+  ⭐⭐ **AND THE SUITE IS GREEN OVER IT, STRUCTURALLY: `specs/managed-memory-methods.md` passes 29/29 and
+  `specs/managed-file.md` 11/11, because every one of those 40 cases reaches its buffer through
+  `arr.managed` — an `Array`'s field — and NOT ONE of them calls the static `__ManagedMemory.create`
+  factory that the documentation block at `specs/managed-memory-methods.md:33-36` nonetheless
+  advertises.** A documented public factory whose result is unusable, behind a green 40-case suite: this
+  is *"a green suite is proof no COMMITTED TEST fails, never proof the feature works"* in its purest
+  form. ⚠ `stdlib/File.maxon:71,78` writes exactly this shape (`create` then `setLength`) and the stdlib
+  compiles — so the trigger boundary is narrower still and is the one thing this filing does NOT know.
+  **Whoever fixes it: add a case that goes through the FACTORY, or the next survey re-finds this.**
 
 - **⬜ `E9001` ON LEGAL MAXON: a `try … otherwise …` INSIDE AN ARGUMENT LIST.** Found 2026-07-29 by the
   ranged-bounds rung, which had to write around it. `assign value %N (kind=MaxonInteger) not in
