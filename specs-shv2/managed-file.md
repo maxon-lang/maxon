@@ -388,3 +388,50 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:6:12: Unsupported: `__ManagedFile` method 'seek' — the type has exactly the four both references declare: `size()`, `read(managed, size)`, `write(managed)` and `close()`
 ```
+
+<!-- test: managed-file.rename-round-trip -->
+<!-- targets: x64-windows -->
+shv2-authored, like the dispatcher case above, and for a reason of the same kind: `rename` is the ONLY one
+of the thirteen methods that NO canonical case reaches. Every `/specs` exercise of it goes through
+`File.rename`, whose signature takes a `FilePath` — and `stdlib/FilePath.maxon` is not whitelisted for shv2
+(it stops at `E2015 String method 'byteAtOrPanic'`, `:56`), so there is no ported case to enable. Shipping
+the method untested is worse than authoring one.
+
+What it pins is the ROUND TRIP, at the builtin level: a file written and closed, renamed, and then observed
+to have moved — `exists(old) == 0` AND `exists(new) == 1`. Either half alone would pass against a `rename`
+that did nothing to one of the two names.
+
+⚠ It also happens to be the one case where a `__ManagedFile` is bound DIRECTLY rather than through a
+wrapper's field, so the two receiver spellings (`structRef` from the open, `named` from a field read) are
+both covered by the file: this one and `managed-file.write-and-read`.
+```maxon
+function main() returns ExitCode
+	let oldPath = "test_managed_rename_src.txt"
+	let newPath = "test_managed_rename_dst.txt"
+	var f = try __ManagedFile.openWrite(oldPath.toByteArray().managed) otherwise 'openFail'
+		return 1
+	end 'openFail'
+	try f.write("rename me".toByteArray().managed) otherwise 'writeFail'
+		f.close()
+		return 2
+	end 'writeFail'
+	f.close()
+
+	try __ManagedFile.rename(oldPath.toByteArray().managed, newPath.toByteArray().managed) otherwise 'renameFail'
+		return 3
+	end 'renameFail'
+	if __ManagedFile.exists(oldPath.toByteArray().managed) != 0 'oldStillThere'
+		return 4
+	end 'oldStillThere'
+	if __ManagedFile.exists(newPath.toByteArray().managed) != 1 'newMissing'
+		return 5
+	end 'newMissing'
+	try __ManagedFile.delete(newPath.toByteArray().managed) otherwise 'deleteFail'
+		return 6
+	end 'deleteFail'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```

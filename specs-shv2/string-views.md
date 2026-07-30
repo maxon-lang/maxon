@@ -214,9 +214,15 @@ error E3005: <fragment>:3:22: 'String.from' requires a Array with Byte, but its 
 ```
 
 <!-- test: error.string-has-exactly-one-static -->
-### `String` has ONE static, and an unknown one is named where it is written
+### An unknown `String` static is named where it is written
 `fromOwnedBytes` is deliberately not exported by the reference ("take these bytes and trust me about
 them" is not a promise the stdlib can let arbitrary code make), and there is no `String.from(codepoints)`.
+
+⚠ The exported set became TWO at R4.2, which added `init(managed)` (`stdlib/String.maxon:114`) beside
+`from(bytes)` (`:119`) — so this case's message moved with it. What the case pins is unchanged and is not the
+COUNT: an unknown static is refused at its own span rather than mangled into a `String.create` callee no
+file declares. (The test's NAME still says "exactly one"; it is kept because renaming it would delete and
+re-add a committed fragment for no gain.)
 ```maxon
 function main() returns ExitCode
 	let s = String.create()
@@ -224,7 +230,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:17: Unsupported: `String` static 'create' — the reference exports one, `from(bytes)`, and `fromOwnedBytes` is deliberately not exported
+error E2015: <fragment>:3:17: Unsupported: `String` static 'create' — the reference exports two, `from(bytes)` and `init(managed)`, and `fromOwnedBytes` is deliberately not exported
 ```
 
 <!-- test: error.codepoint-is-a-compiler-owned-type-name -->
