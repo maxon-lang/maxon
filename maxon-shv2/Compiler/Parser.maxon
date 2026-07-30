@@ -4042,7 +4042,8 @@ export type Parser
 	// this is only the String owned/borrowed split the tag conflates.
 	//
 	// A PER-VALUE bool column, indexed by ValueId in lockstep with `valueTags`/`valueConstKnown` (pushed
-	// `false` in `mintValue`/`recordValueType`, set `true` in `trackOwnedTemp`, read by `valueIsOwnedHeap`).
+	// `false` in `mintValue`/`recordValueType`, set `true` in `markValueOwnsHeap` — which `trackOwnedTemp`
+	// calls when the value also owes a statement-scoped drop — read by `valueIsOwnedHeap`).
 	// It is a set-MEMBERSHIP fact and nothing more — never iterated, order-independent — so the O(1) column
 	// read is the right shape and the earlier sparse list was not: that list was scanned once per binding
 	// and grew by one per interpolation, never pruned within a function, so a function with N bound
@@ -12770,10 +12771,15 @@ export type Parser
 	//     avoid. The bit says NO for a param (`bindParameters` never sets it) and YES for every owned box.
 	//
 	// So the bit is the whole answer, uniformly across String / struct / union: it is set at every owned
-	// heap PRODUCER (`trackOwnedTemp` — an interpolation, a promotion, a struct literal, a boxed-union
-	// construct, an owned call result, a managed payload moved out of an owned union) and nowhere else. An
-	// O(1) column read, seeded `false` by `mintValue`/`recordValueType`. The day a third owned heap kind
-	// (an owned array) lands, its producer calls `trackOwnedTemp` and this answers for it too — no arm to
+	// heap PRODUCER and nowhere else, through one of the two doors that set it —
+	//   • `trackOwnedTemp` (bit + a STATEMENT-scoped drop obligation) — an interpolation, a promotion, a
+	//     struct literal, a boxed-union construct, an owned call result;
+	//   • `markValueOwnsHeap` (the bit ALONE) — a value whose drop is owed by a BINDING or by the caller
+	//     instead, so a pending-temp entry would drop it twice: a consumed parameter, a `for` loop value, a
+	//     managed payload bound out of a union (`ownPayloadBinding` — moved out of an owned one or retained
+	//     out of a borrowed one), a thrown field, a closure env.
+	// An O(1) column read, seeded `false` by `mintValue`/`recordValueType`. The day a third owned heap kind
+	// (an owned array) lands, its producer calls one of those two and this answers for it too — no arm to
 	// add, because the bit already means exactly "owns droppable heap".
 	function valueIsOwnedHeap(value ValueId) returns bool
 		return try self.valueOwnsHeap.get(value) otherwise panic("valueIsOwnedHeap: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
@@ -12877,9 +12883,9 @@ export type Parser
 
 	// Is `value` still an UNCONSUMED owned temporary — a value `trackOwnedTemp` enrolled and nothing has
 	// transferred to a binding yet? The two owned-value homes are disjoint by construction (a transfer to a
-	// binding `removeFromPendingTemps` first — `parseBinding`/`moveInPayload`/`moveOutManagedPayload`), so a
-	// value in this list is exactly one owned by no binding. `parseMatchCommon` reads it to tell a
-	// temporary scrutinee (which needs match-scoped enrollment) from an already-bound one (which does not).
+	// binding `removeFromPendingTemps` first — `parseBinding`/`moveInPayload`), so a value in this list is
+	// exactly one owned by no binding. `parseMatchCommon` reads it to tell a temporary scrutinee (which
+	// needs match-scoped enrollment) from an already-bound one (which does not).
 	function pendingTempsContain(value ValueId) returns bool
 		for pending in self.pendingTempDrops 'each'
 			if pending == value 'found'
@@ -15836,11 +15842,24 @@ export type Parser
 		// the box, and `scrutOwned` decides HOW: an OWNED local is MOVED out of, a BORROWED one (a
 		// param/receiver, whose owner is the caller's local) is RETAINED from instead (D1b —
 		// `moveOutManagedPayload` vs `retainBorrowedPayload`). If ANY arm MOVES a managed payload out, the
-		// whole scrutinee is consumed: its binding is marked `partiallyMoved` after the loop (a re-read
-		// would deref a nulled slot — E3102 — but the box is still dropped, its cascade null-guarding the
-		// moved slots). A match that retains, or binds nothing managed, BORROWS — the union survives.
+		// whole scrutinee is consumed: its binding is marked `partiallyMoved` — a re-read is E3102, but the
+		// box is still dropped, its cascade null-guarding the moved slots. A match that retains, or binds
+		// nothing managed, BORROWS — the union survives.
+		//
+		// ⚠ **THE MARK IS PATH-SENSITIVE, AND IT LANDS AT THE ARM THAT MOVED — not after the loop.** The
+		// scrutinee is dead for the REST OF THAT ARM the instant its payload leaves the box: the slot is
+		// nulled, so a re-read inside the same arm (`text(s) gives grab(m)`, or a nested `match m`) hands
+		// a null payload to whoever reads it next. Marked only after the loop, that read parsed against a
+		// LIVE scrutinee and compiled to a SIGSEGV — measured both ways, and D1b widened it from "a nested
+		// match in the same arm" to "any callee that binds the payload", because the borrowed bind a callee
+		// needs was E2015 until this rung. A FRESH sibling arm rewinds it (`beginFreshArm` — the arms are
+		// mutually exclusive, so an arm that did not run moved nothing), while an `and fallthrough`
+		// successor INHERITS it, exactly as it inherits `movedFrom`.
 		let scrutOwned = self.valueIsOwnedHeap(scrut)
-		var matchMovedManaged = false
+		// "Some reaching path left the scrutinee consumed" — the merge-level union of the per-arm bit, which
+		// is NOT the same as "some arm of THIS match moved a payload out": a nested `match m` in an arm body
+		// consumes the same binding, and `beginFreshArm` carries that out of the arm it happened in.
+		var scrutConsumed = false
 
 		// ⭐ **A TEMPORARY OWNED SCRUTINEE IS ENROLLED AS A MATCH-SCOPED OWNED BINDING (P1.3).** A
 		// constructed union box used directly — `match U.case(x) …` — is an owned heap TEMPORARY: it sits
@@ -15940,8 +15959,9 @@ export type Parser
 						self.recordBranchEdge(prevTestBlock, targetId: defaultBody.id, argIds: matchEdgeArgs)
 					end 'defaultFailEdge'
 				end 'defaultIsFtTarget' else 'defaultFresh'
-					self.restoreBindings(carried, snapshot: entryVals)
-					self.restoreMoveMark(entryMoveMark)
+					if self.beginFreshArm(carried, entryVals: entryVals, entryMoveMark: entryMoveMark, scrut: scrut) 'priorArmConsumed'
+						scrutConsumed = true
+					end 'priorArmConsumed'
 				end 'defaultFresh'
 
 				if usePlan 'planMissTarget'
@@ -16021,8 +16041,9 @@ export type Parser
 				if prevFallthrough 'armIsFtTarget'
 					matchEdgeArgs = self.setupFallthroughTargetPhis(bodyBlock, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
 				end 'armIsFtTarget' else 'armFresh'
-					self.restoreBindings(carried, snapshot: entryVals)
-					self.restoreMoveMark(entryMoveMark)
+					if self.beginFreshArm(carried, entryVals: entryVals, entryMoveMark: entryMoveMark, scrut: scrut) 'priorArmConsumed'
+						scrutConsumed = true
+					end 'priorArmConsumed'
 				end 'armFresh'
 
 				if usePlan 'planEdgeArgs'
@@ -16054,7 +16075,11 @@ export type Parser
 					self.scope.pushScope()
 					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutOwned: scrutOwned, layout: requireEnumLayout(enumMatch))
 					if armMovedManaged 'consumed'
-						matchMovedManaged = true
+						scrutConsumed = true
+						// The scrutinee is dead for the REST OF THIS ARM from here — its slot is nulled, so the
+						// arm body's own re-read must be E3102 rather than a null deref. See the match-consume
+						// header for the measured SIGSEGV this ordering is the cure for.
+						self.setScrutineePartiallyMoved(scrut, value: true)
 					end 'consumed'
 				end 'openArmBindings'
 
@@ -16160,8 +16185,12 @@ export type Parser
 		// still dropped at scope exit — its cascade null-guards the moved slots. A TEMPORARY scrutinee's
 		// SYNTHETIC binding (enrolled above) is marked too, which is harmless — it has no name to re-read,
 		// and `partiallyMoved` skips no drop, so the box still drops through the cascade.
-		if matchMovedManaged 'consumeScrut'
-			self.markScrutineePartiallyMoved(scrut)
+		//
+		// ⚠ Re-asserted here rather than left to the in-arm mark, because the LAST arm parsed may have been
+		// a fresh non-consuming one, which rewound it (`beginFreshArm`). The consuming arm's mark governs
+		// its OWN body; this one governs the code after the whole match, where any arm may have run.
+		if scrutConsumed 'consumeScrut'
+			self.setScrutineePartiallyMoved(scrut, value: true)
 		end 'consumeScrut'
 
 		// ⭐ **EMIT THE PLANNED DISPATCH** — after every arm body and the default/dead miss target are in
@@ -16191,10 +16220,6 @@ export type Parser
 		return outcome
 	end 'parseMatchCommon'
 
-	// Mark the binding a consumed match scrutinee denotes as `partiallyMoved` — a re-read is E3102, but
-	// the box is still dropped (see VarInfo.partiallyMoved). Found by VALUE via `isLiveOwnerOf`, the same
-	// predicate `poisonMoveSource` uses, so a temporary scrutinee (owned by no binding) is correctly a
-	// no-op. An O(ownedBindings) scan, run once per consuming match.
 	// ⭐ **DROP A MATCH ARM'S OWNED (managed) PAYLOAD BINDINGS**, the enum twin of `closeBlock` +
 	// `parseBlockBody`'s fall-through drop. The arm's managed bindings own heap that must be released when
 	// the arm exits, and the release is keyed on HOW it exits (the block rule, exactly):
@@ -16219,19 +16244,68 @@ export type Parser
 		end 'drain'
 	end 'dropArmScopedOwned'
 
-	function markScrutineePartiallyMoved(scrut ValueId)
+	// ⭐ **BEGIN A FRESH (non-fallthrough) MATCH ARM** — rewind every piece of per-path state the preceding
+	// arm advanced, back to what the match was entered with. THE one door, so the "what does a fresh arm
+	// inherit?" question is answered in a single place for the `default` arm and the pattern arm alike; a
+	// fact rewound at one site and not the other is exactly the drift that leaks one arm's moves onto its
+	// sibling. An `and fallthrough` target deliberately calls NONE of this — control really did arrive from
+	// the previous arm, so it inherits that arm's bindings, its moves, and its consumed scrutinee.
+	//
+	// The scrutinee's `partiallyMoved` is rewound because the arms are MUTUALLY EXCLUSIVE: an arm that did
+	// not run moved nothing out of the box, so a sibling arm reads a whole union. It cannot have been set
+	// BEFORE the match — `match m` reads `m`, and `requireBindingLive` refuses a partially-moved read — so
+	// `false` is the entry state rather than a captured one.
+	//
+	// ⚠ **RETURNS WHETHER THE PRECEDING PATH LEFT THE SCRUTINEE CONSUMED, and the caller MUST carry that to
+	// the merge** — this rewind is per-PATH, but the code AFTER the match runs on every path, so a consume
+	// on any one of them must survive. Returned rather than left to the caller's own bookkeeping because
+	// the arm need not have consumed the scrutinee ITSELF: a NESTED `match m` inside the arm body sets the
+	// same bit, and only the value read here can see it. (Without the carry, `text then match m …` followed
+	// by a payload-free arm would leave `m` reading LIVE after the outer match, and a later bind would load
+	// the nulled slot — the same SIGSEGV this rewind exists to close, one construct out.)
+	function beginFreshArm(carried VarInfoArray, entryVals ValueIdArray, entryMoveMark MoveMark, scrut ValueId) returns bool
+		let consumedOnThePrecedingPath = self.scrutineeIsPartiallyMoved(scrut)
+
+		self.restoreBindings(carried, snapshot: entryVals)
+		self.restoreMoveMark(entryMoveMark)
+		self.setScrutineePartiallyMoved(scrut, value: false)
+
+		return consumedOnThePrecedingPath
+	end 'beginFreshArm'
+
+	// Set the `partiallyMoved` bit of the binding a match scrutinee denotes — `true` where a binding arm
+	// moved a managed payload out (a re-read is then E3102, but the box is still dropped: see
+	// `VarInfo.partiallyMoved`), `false` where a fresh sibling arm rewinds that.
+	//
+	// The read/write PAIR is the `pendingTempsContain`/`removeFromPendingTemps` shape, and it cannot drift
+	// on WHICH binding it means for the same reason that pair cannot: the key is ONE shared predicate
+	// (`isLiveOwnerOf`, the same one `poisonMoveSource` uses), not a condition spelled once per function.
+	// A temporary scrutinee is owned by no binding, so both halves are correctly inert on it — it has no
+	// name to re-read.
+	function setScrutineePartiallyMoved(scrut ValueId, value bool)
 		var i = 0
 		while i < self.ownedBindings.count() 'each'
 			// A `var` bound from `.get(i)`: the flag is written THROUGH the shared `VarInfo` reference
 			// (the `Scope.setValue` idiom `poisonMoveSource` uses), so every holder observes it.
-			var owned = try self.ownedBindings.get(i) otherwise panic("markScrutineePartiallyMoved: ownedBindings.get OOB at {i}")
+			var owned = try self.ownedBindings.get(i) otherwise panic("setScrutineePartiallyMoved: ownedBindings.get OOB at {i}")
 			if self.isLiveOwnerOf(owned, value: scrut) 'source'
-				owned.partiallyMoved = true
+				owned.partiallyMoved = value
 				return
 			end 'source'
 			i = i + 1
 		end 'each'
-	end 'markScrutineePartiallyMoved'
+	end 'setScrutineePartiallyMoved'
+
+	// Has the binding a match scrutinee denotes had a managed payload moved out of it on the path parsed so
+	// far? The reader half of the pair above.
+	function scrutineeIsPartiallyMoved(scrut ValueId) returns bool
+		for owned in self.ownedBindings 'each'
+			if self.isLiveOwnerOf(owned, value: scrut) 'source'
+				return owned.partiallyMoved
+			end 'source'
+		end 'each'
+		return false
+	end 'scrutineeIsPartiallyMoved'
 
 	// Parse ONE arm's body. A `gives` arm is a single expression (its value feeds the merge phi); a
 	// `then` arm is a single statement, and `and fallthrough` may follow it. Reports E2049 for a
@@ -17393,7 +17467,7 @@ export type Parser
 	//   • a BORROWED scrutinee (a parameter, a receiver) ⇒ a RETAIN, and the slot is left INTACT because
 	//     the box's real owner is the caller's local (`retainBorrowedPayload`, D1b).
 	// Returns whether ANY managed field was MOVED out — the whole match then consumes the scrutinee
-	// (`markScrutineePartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
+	// (`setScrutineePartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
 	// borrowed box, and marking it moved would make the caller's later re-read a false E3102.
 	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutOwned bool, layout EnumLayout) returns bool throws ParseError
 		var movedManaged = false

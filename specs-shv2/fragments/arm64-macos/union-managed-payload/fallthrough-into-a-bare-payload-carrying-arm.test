@@ -1,0 +1,64 @@
+// Test: fallthrough-into-a-bare-payload-carrying-arm
+typealias Code = int(0 to 255)
+
+union U
+	a(x Code)
+	b(y Code)
+end 'U'
+
+function main() returns ExitCode
+	let u = U.a(9)
+	var t = 0 as Code
+	match u 'k'
+		a(n) then t = n and fallthrough
+		b then t = t + 1
+	end 'k'
+	return t as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 9
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.cmp x2, 0
+    arm64.cset x6, eq
+    arm64.cbnz x6, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.b matcharm
+  matchnext:
+    arm64.cmp x2, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, critsplit
+    arm64.b matchdead
+  critsplit:
+    arm64.b matcharm
+  matcharm:
+    arm64.add x19, x1, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+}

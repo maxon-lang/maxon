@@ -1239,6 +1239,98 @@ end 'main'
 error E2015: <fragment>:14:3: Unsupported: `and fallthrough` into the payload-binding arm 'b' of `union U` — the preceding arm matched a DIFFERENT case, so on that edge these bindings would destructure a case the value does not hold (reading another case's slots, or a slot that arm already moved out and nulled). Fall through into a payload-free arm, or give this arm its own body
 ```
 
+<!-- test: error.fallthrough-out-of-a-consuming-arm-into-a-read-of-the-scrutinee -->
+Falling OUT of a binding arm stays legal (`fallthrough-out-of-a-binding-arm-into-a-payload-free-one`),
+but the arm fallen INTO inherits what the arm fallen FROM did: on that edge the scrutinee's slot is
+nulled, so a read of it there is E3102 rather than a null load. The successor is reachable BOTH ways —
+by its own dispatch edge, where `m` is whole, and by the fallthrough edge, where it is not — so the
+refusal is the conservative answer of the two, and it is the same rule an `and fallthrough` target
+already obeys for `movedFrom`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns Integer
+	return match m 'g'
+		silent gives 0 as Integer
+		text(s) gives s.byteLength() as Integer
+	end 'g'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("an owned payload string, long enough to be a real heap allocation")
+	var n = 0 as Integer
+	match m 'k'
+		text(s) then n = s.byteLength() as Integer and fallthrough
+		silent then n = n + grab(m)
+	end 'k'
+	print("n={n}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:21:28: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: fallthrough-into-a-bare-payload-carrying-arm -->
+The blast-radius guard for `error.fallthrough-into-a-*-binding-arm`: the refusal is about the
+BINDINGS, not about the case. A payload-carrying case named BARE binds nothing, destructures nothing,
+and is a legal fallthrough target — `b` reads no slot at all, so the edge from `a` carries no
+misinterpretation. Answers 10 (`a`'s 9, plus the 1 the fallen-into arm adds).
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a(x Code)
+	b(y Code)
+end 'U'
+
+function main() returns ExitCode
+	let u = U.a(9)
+	var t = 0 as Code
+	match u 'k'
+		a(n) then t = n and fallthrough
+		b then t = t + 1
+	end 'k'
+	return t as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: fallthrough-into-an-or-pattern-arm -->
+The other half of that guard: an `or`-pattern arm can never bind (a payload binding on an `or`-pattern
+is `rejectOrPatternBinding`), so it reaches the fallthrough check with an empty binding list and passes
+it. A check that keyed on "does this arm's case carry a payload?" rather than on the bindings in hand
+would have rejected this one too.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a(x Code)
+	b
+	c
+end 'U'
+
+function main() returns ExitCode
+	let u = U.a(9)
+	var t = 0 as Code
+	match u 'k'
+		a(n) then t = n and fallthrough
+		b or c then t = t + 1
+	end 'k'
+	return t as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
 <!-- test: two-binding-arms-fall-through -->
 Two arms that each bind a managed payload AND fall through: each arm's binding is dropped on ITS OWN
 exit edge, not accumulated for the continuation (where the other arm's value would be garbage). Both
@@ -1384,6 +1476,317 @@ end 'main'
 ```
 ```maxoncstderr
 error E3102: <fragment>:23:21: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.read-the-consumed-scrutinee-inside-the-arm-that-moved-it -->
+⭐ **THE SIGSEGV D1b WIDENED.** `error.match-consume-then-use` pins the read that comes AFTER the
+match; this is the same read INSIDE the arm that did the moving, where the slot is nulled from the
+bind onwards. The scrutinee was marked `partiallyMoved` only once the whole arm loop had been parsed,
+so this read parsed against a LIVE `m` and compiled — and `grab` binds the payload out of its borrowed
+parameter, loads the null the outer arm just stored, and dereferences it. **Measured: exit 139
+(SIGSEGV).** It is D1b that made it reachable this way: the borrowed bind `grab` needs was `E2015`
+until this rung, so before it the only spelling was a nested `match m` (below). The mark now lands at
+the arm that moved, not after the loop.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns Integer
+	return match m 'g'
+		silent gives 0 as Integer
+		text(s) gives s.byteLength() as Integer
+	end 'g'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("an owned payload string, long enough to be a real heap allocation")
+	let r = match m 'k'
+		silent gives 0 as Integer
+		text(s) gives grab(m)
+	end 'k'
+	print("r={r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:20:22: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.re-match-the-consumed-scrutinee-inside-its-own-arm -->
+The pre-D1b spelling of the case above, and it segfaulted the same way (**measured: exit 139**): the
+arm binds `s`, which nulls slot 0, and the nested `match m` in its own body binds `t` from that null.
+The borrowed twin — `the-same-borrowed-container-matched-again-inside-its-own-arm` — is LEGAL and stays
+legal, because a retain leaves the slot intact. Which of the two a program gets is exactly the
+owned/borrowed split, so the two tests are read together.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function main() returns ExitCode
+	let m = M.text("an owned payload string, long enough to be a real heap allocation")
+	let r = match m 'k'
+		silent gives 0 as Integer
+		text(s) gives match m 'again'
+			silent gives 1 as Integer
+			text(t) gives t.byteLength() as Integer
+		end 'again'
+	end 'k'
+	print("r={r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:23: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: the-consumed-scrutinee-stays-live-in-a-sibling-arm -->
+⭐ **THE OVER-REJECTION GUARD for the two refusals above.** The arms of a match are MUTUALLY
+EXCLUSIVE, so an arm that moved the payload out says nothing about the arm that did not run: reading
+`m` in a SIBLING arm is legal and must stay legal. Marking the scrutinee consumed and leaving it
+marked for the rest of the loop would reject this — and would do it ORDER-DEPENDENTLY, since swapping
+the two arms makes the same program compile again. Each fresh arm therefore rewinds the bit
+(`beginFreshArm`), exactly as it rewinds `movedFrom`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns Integer
+	return match m 'g'
+		silent gives 0 as Integer
+		text(s) gives s.byteLength() as Integer
+	end 'g'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("an owned payload string, long enough to be a real heap allocation")
+	let r = match m 'k'
+		text(s) gives s.byteLength() as Integer
+		silent gives grab(m)
+	end 'k'
+	print("r={r}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+r=65
+```
+
+<!-- test: error.a-nested-consume-survives-a-sibling-arm -->
+⭐ **THE CARRY.** The rewind above is per-PATH, but the code AFTER the match runs on EVERY path, so a
+consume on any one of them has to survive it. Here the consume is not made by the outer match's own
+arm at all — the `text` arm's body is a NESTED `match m`, and it is that inner match which nulls the
+slot. The following `silent` arm is fresh and rewinds the bit; without the carry out of the arm it
+happened in, `m` would read LIVE after the outer match and `grab(m)` would load the nulled slot on the
+`text` path. Ordering is the whole test: put `silent` first and no rewind ever sees the bit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns Integer
+	return match m 'g'
+		silent gives 0 as Integer
+		text(s) gives s.byteLength() as Integer
+	end 'g'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("an owned payload string, long enough to be a real heap allocation")
+	let r = match m 'outer'
+		text gives match m 'inner'
+			silent gives 0 as Integer
+			text(t) gives t.byteLength() as Integer
+		end 'inner'
+		silent gives 0 as Integer
+	end 'outer'
+	print("r={r} after={grab(m)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:25:27: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: borrowed-bind-in-an-arm-that-continues -->
+The fourth arm exit, beside the fall-through, the `return` and the `break` already pinned: a
+`continue` drops the retained binding through the LOOP's floor. 200 rounds, so an unbalanced retain is
+exit 101 rather than a coin flip.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Round = int(0 to 1000)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function show(m M) returns Integer
+	var i = 0 as Round
+	var n = 0 as Integer
+	while i < 200 'spin'
+		i = i + 1
+		match m 'k'
+			silent then n = n + 1
+			text(s) then continue
+		end 'k'
+		n = n + 2
+	end 'spin'
+	return n
+end 'show'
+
+function main() returns ExitCode
+	let m = M.text("a continued-arm payload string, long enough to be a real heap allocation")
+	print("n={show(m)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=0
+```
+
+<!-- test: borrowed-bind-in-an-arm-that-throws -->
+The ERROR channel exit: the arm binds a payload out of the borrowed parameter and then THROWS, so the
+retained reference is released on the propagate path rather than through any of the four normal exits.
+200 rounds through a `try … otherwise`, so a reference leaked on the throw edge is exit 101.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Round = int(0 to 1000)
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function show(m M) returns Integer throws Boom
+	match m 'k'
+		silent then return 0
+		text(s) then throw Boom.bad
+	end 'k'
+	return 3
+end 'show'
+
+function main() returns ExitCode
+	let m = M.text("a thrown-arm payload string, long enough to be a real heap allocation")
+	var i = 0 as Round
+	var n = 0 as Integer
+	while i < 200 'spin'
+		n = try show(m) otherwise 4
+		i = i + 1
+	end 'spin'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: borrowed-bind-in-an-arm-that-breaks-the-match -->
+A `break` out of the MATCH (not out of a loop) leaves the arm through `MatchContext.breakExits`, whose
+marks are trimmed to the match's owned floor (`moveMarkPrefix`) — the one capture site that is not
+already at its join's height. The retained binding must be dropped on that edge too. 200 rounds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Round = int(0 to 1000)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function show(m M) returns Integer
+	var i = 0 as Round
+	var n = 0 as Integer
+	while i < 200 'spin'
+		match m 'k'
+			silent then n = n + 1
+			text(s) then break 'k'
+		end 'k'
+		n = n + 7
+		i = i + 1
+	end 'spin'
+	return n
+end 'show'
+
+function main() returns ExitCode
+	let m = M.text("a match-break payload string, long enough to be a real heap allocation")
+	print("n={show(m)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=1400
+```
+
+<!-- test: borrowed-bind-out-of-a-union-held-in-a-struct-field -->
+The scrutinee is neither a local nor a parameter but a struct FIELD read (`h.m`), which owns nothing —
+so it takes the borrowed/retain path exactly as a parameter does, and the field keeps its own
+reference. 200 rounds over the same field: an unbalanced retain leaves the payload's refcount at 200
+when the struct's cascade releases it (exit 101), and a missing retain frees it under the struct.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Round = int(0 to 1000)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+type Holder
+	export var m as M
+
+	static function create(m M) returns Self
+		return Self{m: m}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(M.text("a field-held payload string, long enough to be a real heap allocation"))
+	var i = 0 as Round
+	var n = 0 as Integer
+	while i < 200 'spin'
+		match h.m 'k'
+			silent then n = n + 1
+			text(s) then n = n + s.byteLength() as Integer
+		end 'k'
+		i = i + 1
+	end 'spin'
+	print("n={n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=13800
 ```
 
 <!-- test: union-struct-payload-ranged-alias -->
