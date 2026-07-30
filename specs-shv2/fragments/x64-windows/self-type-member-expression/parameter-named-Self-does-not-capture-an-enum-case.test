@@ -1,0 +1,53 @@
+// Test: parameter-named-Self-does-not-capture-an-enum-case
+typealias Num = int(0 to 100)
+
+enum Toggle
+	off
+	on
+
+	export function pick(Self Num) returns Toggle
+		return Self.on
+	end 'pick'
+end 'Toggle'
+
+function main() returns ExitCode
+	let t = Toggle.off
+	if t.pick(1) == Toggle.on 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @Toggle.pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 1
+    x64.callDirect Toggle.pick
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

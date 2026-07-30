@@ -1824,25 +1824,49 @@ end 'orderingTagOf'
 // declare more cases than their runtime throws. A backward "every case is claimed" arm would fire on all of
 // them. The forward arm is COMPLETE for the failure this guards: any insertion, deletion or reorder that
 // moves a case somebody throws moves it away from its claimed ordinal, and is caught here.
-export function assertBuiltinErrorOrdinals(layout EnumLayout, claimedNames ByteArrayArray, claimedOrdinals ParsedIntArray, installer ByteArray)
-	if claimedNames.count() != claimedOrdinals.count() 'lockstep'
-		panic("assertBuiltinErrorOrdinals: {String.from(installer)} passed {claimedNames.count()} names and {claimedOrdinals.count()} ordinals — the two columns are one claim per index and are built together")
-	end 'lockstep'
+//
+// ⭐⭐ **ONE CLAIM IS ONE CALL, FOR `EnumLayout.addCase`'s EXACT REASON** (fifteen functions up this file:
+// "a caller that pushed a name and forgot a tag would shift every later case's tag onto the wrong case").
+// 7b first shipped this as a free function taking two PARALLEL ARRAYS — a name column and an ordinal column
+// pushed in lockstep at four call sites — plus a runtime `count() != count()` panic apologizing for the
+// shape. That panic existed only because the shape PERMITTED desynchronization, and the mismatches it could
+// NOT see are the dangerous ones: pushing a name and an ordinal in the wrong ORDER, or dropping a name and
+// an ordinal belonging to DIFFERENT cases, leaves the counts equal and silently re-pairs every claim below
+// — the very failure this guard exists to catch, reintroduced by the guard's own call shape. Carrying both
+// halves in ONE argument list and checking them on the spot makes that unrepresentable, and the count check
+// goes away WITH the columns rather than being deleted on an argument.
+//
+// ⚠ **NOTHING A USER PROGRAM CONTAINS CAN STEER THIS.** The declaration is always one of the four
+// `builtin…ErrorEnum()` CONSTRUCTORS above — never an `enumTypes` lookup — and the claims are compiler
+// constants, so the verdict is a property of the compiler BINARY alone: it panics on the first program
+// compiled, or on none. That is what makes `panic` right here rather than a diagnostic; no source can reach
+// it, and a source that tried to declare a colliding type is refused by `requireUnreservedName` (E2051).
+export type BuiltinErrorOrdinalCheck
+	// The declaration every claim is checked against.
+	var declaration as EnumLayout
+	// WHO transcribed the ordinals, for the diagnostic — the installer that owns the literals.
+	var installer as ByteArray
 
-	for i in 0 upto claimedNames.count() 'eachClaim'
-		let name = try claimedNames.get(i) otherwise panic("assertBuiltinErrorOrdinals: claimedNames.get OOB at {i}")
-		let claimed = try claimedOrdinals.get(i) otherwise panic("assertBuiltinErrorOrdinals: claimedOrdinals.get OOB at {i}")
-		let index = layout.indexOfCase(name)
-		if index >= layout.caseCount() 'noSuchCase'
-			panic("assertBuiltinErrorOrdinals: {String.from(installer)} claims ordinal {claimed} for '{String.from(name)}', but `{layout.kindWord()} {String.from(layout.name)}` declares no such case — the runtime throws a case the enum does not have, so no handler arm could ever match it")
+	export static function create(declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
+		return Self{declaration: declaration, installer: installer}
+	end 'create'
+
+	// One claim — "`installer` throws `caseName` as `ordinal`" — verified against the declaration on the
+	// spot. THE only way to state a claim, so a name can never be recorded without the ordinal it belongs to.
+	export function claim(caseName ByteArray, ordinal ParsedInt)
+		if not self.declaration.hasCase(caseName) 'noSuchCase'
+			panic("BuiltinErrorOrdinalCheck: {String.from(self.installer)} claims ordinal {ordinal} for '{String.from(caseName)}', but `{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares no such case — the runtime throws a case the enum does not have, so no handler arm could ever match it")
 		end 'noSuchCase'
 
-		let declared = layout.tagOfIndex(index)
-		if declared != claimed 'drifted'
-			panic("assertBuiltinErrorOrdinals: '{String.from(name)}' is ordinal {declared} in `{layout.kindWord()} {String.from(layout.name)}` but {String.from(installer)} throws it as {claimed} — the enum's case ORDER is the wire format and the two have DRIFTED. Every handler arm for this case would name the wrong error, silently. Fix the runtime's ordinal, or move the case back")
+		// `hasCase` is the ONE reader of `indexOfCase`'s "absent" convention this check needs, so the index
+		// below is in range by construction. `orderingTagOf` re-spells that convention as
+		// `index >= caseCount()`; a second copy of it here would be a third place the convention is written.
+		let declared = self.declaration.tagOfIndex(self.declaration.indexOfCase(caseName))
+		if declared != ordinal 'drifted'
+			panic("BuiltinErrorOrdinalCheck: '{String.from(caseName)}' is ordinal {declared} in `{self.declaration.kindWord()} {String.from(self.declaration.name)}` but {String.from(self.installer)} throws it as {ordinal} — the enum's case ORDER is the wire format and the two have DRIFTED. Every handler arm for this case would name the wrong error, silently. Fix the runtime's ordinal, or move the case back")
 		end 'drifted'
-	end 'eachClaim'
-end 'assertBuiltinErrorOrdinals'
+	end 'claim'
+end 'BuiltinErrorOrdinalCheck'
 
 // ⭐ **AN ENUM REGISTRY, SEEDED WITH THE COMPILER-KNOWN ENUMS (P1.7a slice 2b-ii)** — THE one constructor
 // of an `EnumLayoutMap`, used by BOTH registries that hold declared enums (`Project.enumTypes`, the

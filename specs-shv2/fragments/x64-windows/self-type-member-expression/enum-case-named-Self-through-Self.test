@@ -1,0 +1,50 @@
+// Test: enum-case-named-Self-through-Self
+enum Kw
+	Self
+	on
+
+	export function pick() returns Kw
+		return Self.Self
+	end 'pick'
+end 'Kw'
+
+function main() returns ExitCode
+	let k = Kw.on
+	if k.pick() == Kw.Self 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @Kw.pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect Kw.pick
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

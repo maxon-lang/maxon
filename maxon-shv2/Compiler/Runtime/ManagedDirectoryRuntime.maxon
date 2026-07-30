@@ -767,23 +767,14 @@ export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUs
 	// ordinals below are transcribed literals in this file. Asserted against the declaration on every
 	// install, because drift is otherwise SILENT: every handler arm would name the wrong case, with no
 	// crash and no wrong exit code. Measured — swapping two cases leaves the suite fully green.
-	var claimedNames = ByteArrayArray.create()
-	var claimedOrdinals = ParsedIntArray.create()
-	claimedNames.push(ManagedDirectoryNotFoundCaseName)
-	claimedNames.push(ManagedDirectoryAccessDeniedCaseName)
-	claimedNames.push(ManagedDirectoryOpenSearchFailedCaseName)
-	claimedNames.push(ManagedDirectoryNextFailedCaseName)
-	claimedNames.push(ManagedDirectoryCreateFailedCaseName)
-	claimedNames.push(ManagedDirectoryCurrentPathFailedCaseName)
-	claimedNames.push(ManagedDirectoryClosedCaseName)
-	claimedOrdinals.push(ManagedDirectoryNotFoundOrdinal)
-	claimedOrdinals.push(ManagedDirectoryAccessDeniedOrdinal)
-	claimedOrdinals.push(ManagedDirectoryOpenSearchFailedOrdinal)
-	claimedOrdinals.push(ManagedDirectoryNextFailedOrdinal)
-	claimedOrdinals.push(ManagedDirectoryCreateFailedOrdinal)
-	claimedOrdinals.push(ManagedDirectoryCurrentPathFailedOrdinal)
-	claimedOrdinals.push(ManagedDirectoryClosedOrdinal)
-	assertBuiltinErrorOrdinals(builtinManagedDirectoryErrorEnum(), claimedNames: claimedNames, claimedOrdinals: claimedOrdinals, installer: b"installManagedDirectoryRuntime")
+	let directoryErrors = BuiltinErrorOrdinalCheck.create(builtinManagedDirectoryErrorEnum(), installer: b"installManagedDirectoryRuntime")
+	directoryErrors.claim(ManagedDirectoryNotFoundCaseName, ordinal: ManagedDirectoryNotFoundOrdinal)
+	directoryErrors.claim(ManagedDirectoryAccessDeniedCaseName, ordinal: ManagedDirectoryAccessDeniedOrdinal)
+	directoryErrors.claim(ManagedDirectoryOpenSearchFailedCaseName, ordinal: ManagedDirectoryOpenSearchFailedOrdinal)
+	directoryErrors.claim(ManagedDirectoryNextFailedCaseName, ordinal: ManagedDirectoryNextFailedOrdinal)
+	directoryErrors.claim(ManagedDirectoryCreateFailedCaseName, ordinal: ManagedDirectoryCreateFailedOrdinal)
+	directoryErrors.claim(ManagedDirectoryCurrentPathFailedCaseName, ordinal: ManagedDirectoryCurrentPathFailedOrdinal)
+	directoryErrors.claim(ManagedDirectoryClosedCaseName, ordinal: ManagedDirectoryClosedOrdinal)
 
 	if not usage.usesManagedDirectory 'noManagedDirectory'
 		return
