@@ -308,6 +308,100 @@ end 'main'
 3
 ```
 
+<!-- test: postfix.union-method-on-a-call-result -->
+The enum arm is reached on the `named` tag plus an ENUM registration, and a `union` registers the
+same way — so routing the arm through the one dispatcher gave a union receiver its value spellings at
+the same moment it gave them to an enum. Every committed union-receiver case binds its receiver to a
+name first (`let o = …; o.isPass()`), so the value door had no union witness at all until this case:
+the whole of `enum-union-method-receiver.md` survives deleting `parsePostfix`'s member arm.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+union Shape
+	dot
+	box(w Wide)
+
+	function area() returns Wide
+		match self 'm'
+			dot then return 1
+			box(w) then return w
+		end 'm'
+	end 'area'
+end 'Shape'
+
+function pick() returns Shape
+	return Shape.box(21)
+end 'pick'
+
+function main() returns ExitCode
+	return pick().area() * 2
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: postfix.union-method-on-a-case-constructor-result -->
+A union CASE CONSTRUCTOR is not an ordinary call, and a payload-less case is not a call at all — but
+both yield a union value bound to no name, so both are receivers. Pinned in one program because they
+are one question asked of two producers.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+union Shape
+	dot
+	box(w Wide)
+
+	function area() returns Wide
+		match self 'm'
+			dot then return 1
+			box(w) then return w
+		end 'm'
+	end 'area'
+end 'Shape'
+
+function main() returns ExitCode
+	return Shape.box(21).area() + Shape.dot.area()
+end 'main'
+```
+```exitcode
+22
+```
+
+<!-- test: postfix.union-method-on-a-managed-temporary-in-a-loop -->
+The receiver is a union temporary owning a HEAP payload, and no binding exists to hang its drop on.
+A per-iteration leak here is exit **101**, not a wrong answer, which is why the loop is 200 rounds
+rather than one — the answer is identical either way and only the leak count is not.
+```maxon
+union Outcome
+	pass
+	fail(reason String)
+
+	export function isPass() returns bool
+		return match self 'p'
+			pass gives true
+			fail gives false
+		end 'p'
+	end 'isPass'
+end 'Outcome'
+
+function main() returns ExitCode
+	var i = 0
+
+	while i < 200 'loop'
+		if Outcome.fail("a rather long failure reason to force a heap allocation").isPass() 'y'
+			return 1
+		end 'y'
+		i = i + 1
+	end 'loop'
+
+	return 7
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: error.member-on-a-value-with-no-members -->
 A receiver whose type carries no members at all is a POSITIONED refusal naming the member and the
 type — never the `. statement` catch-all that a `break`ing postfix loop used to leave behind. The

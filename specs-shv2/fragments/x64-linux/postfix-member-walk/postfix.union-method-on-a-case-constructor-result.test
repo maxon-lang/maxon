@@ -1,0 +1,93 @@
+// Test: postfix.union-method-on-a-case-constructor-result
+typealias Wide = int(i64.min to i64.max)
+
+union Shape
+	dot
+	box(w Wide)
+
+	function area() returns Wide
+		match self 'm'
+			dot then return 1
+			box(w) then return w
+		end 'm'
+	end 'area'
+end 'Shape'
+
+function main() returns ExitCode
+	return Shape.box(21).area() + Shape.dot.area()
+end 'main'
+---
+ExitCode: 22
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Shape.area {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 21
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect Shape.area
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 8], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect Shape.area
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
