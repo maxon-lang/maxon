@@ -1929,8 +1929,16 @@ end 'checkArgTypes'
 // argument of EVERY call in the program — a per-argument allocation on a path that reports nothing almost
 // every time. That is why the label arrives as its two pieces.
 function argParamLabel(paramName ByteArray, position ParamCount) returns String
-	return "{position + 1}" if paramName.isEmpty() else "'{String.from(paramName)}'"
+	return "{position + 1}" if paramName.isEmpty() else quotedParamLabel(String.from(paramName))
 end 'argParamLabel'
+
+// How a NAMED parameter is quoted in a diagnostic. ⭐ Exported because the parser tier renders the same
+// sentence about a COMPILER BUILTIN's parameter (`Queries.renderParseError`'s `builtinArgumentType` arm), and a
+// builtin's parameters always have names — they are written in this compiler's own signature tables, so there
+// is no positional fallback for it to choose between.
+export function quotedParamLabel(paramName String) returns String
+	return "'{paramName}'"
+end 'quotedParamLabel'
 
 // ⭐ **THE ARGUMENT-MISMATCH SENTENCE, STATED ONCE FOR THE FIVE SITES THAT REPORT IT.** What DECIDES a
 // mismatch is deliberately five different rules — an aggregate IDENTITY asked three ways (a concrete
@@ -1944,8 +1952,20 @@ end 'argParamLabel'
 // always has a declared name — a property of today's call graph, not an invariant. The day one of those
 // rules serves an indirect call it would name the parameter `''`, and no test would say so.
 function argTypeMismatchMessage(paramName ByteArray, position ParamCount, expected String, got String) returns String
-	return "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{expected}', got '{got}'"
+	return argTypeMismatchSentence(argParamLabel(paramName, position: position), expected: expected, got: got)
 end 'argTypeMismatchMessage'
+
+// ⭐ **THE SENTENCE ITSELF, GIVEN THE LABEL** — exported for the SIXTH site, which is in another TIER: a
+// COMPILER BUILTIN's argument mismatch is the PARSER's to raise (a builtin has no signature entry for
+// `checkArgTypes` to consult, which is `ParseError.builtinArity`'s reason too) and is rendered in
+// `Queries.renderParseError`. `builtin-type-checking.error-managed-file-open-read-int` pins
+// `argument type mismatch for 'path': expected '__ManagedMemory', got 'int'` — the SAME sentence a user
+// function's wrong argument gets, because it is the same fact. Written out again over there it would drift,
+// which is exactly what the note above records this sentence already having done once, among five sites in
+// ONE file.
+export function argTypeMismatchSentence(label String, expected String, got String) returns String
+	return "argument type mismatch for {label}: expected '{expected}', got '{got}'"
+end 'argTypeMismatchSentence'
 
 // ⭐ **ONE ARGUMENT AGAINST ITS PARAMETER — the rule, stated once for both call shapes.** A DIRECT call
 // reaches it per slotted argument (`checkArgTypes`) and an INDIRECT one per positional argument

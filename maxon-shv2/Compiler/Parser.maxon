@@ -150,6 +150,15 @@ export union ParseError implements Error
 	// what the builtin DOES accept ("number" for `trunc`, "String" for `print`), because the two differ
 	// and a fixed word would be wrong for one of them.
 	builtinOperandType(name String, required String, got String, line LineNumber, column ColumnNumber)
+	// ⭐ A SIGNATURE-checked builtin's argument meeting the wrong type — the `__ManagedFile`,
+	// `__ManagedMemory` and `String.init` family (R4.2). A SECOND variant beside `builtinOperandType` rather
+	// than a reuse of it, because the two say different things for a reason: `builtinOperandType` names the
+	// BUILTIN and what it accepts (`'print' requires a String`), which is right for an ad-hoc builtin that
+	// has no signature; these have real signatures in BOTH references — named, typed parameters run through
+	// the ordinary argument checker — so their mismatch reads as an argument mismatch, and
+	// `builtin-type-checking` pins exactly that. Rendered through `SemanticCheck.argTypeMismatchSentence`, so
+	// the sentence has ONE producer across the two tiers.
+	builtinArgumentType(paramName String, expected String, got String, line LineNumber, column ColumnNumber)
 	unsupported(feature String, line LineNumber, column ColumnNumber)
 	// A parameter list that repeats a name (`function f(x int, x int)`). The second
 	// binding would be a dead, uncallable parameter, so it is rejected at parse time.
@@ -1960,7 +1969,7 @@ let NumericBuiltinArity = 1 as ParamCount
 // parser's `valueTags` column, so a String tagged `named` at parse time would stay `named` on the value and
 // the String operators would never see it.
 //
-// ⚠ This paragraph used to sit over a `StringBuiltinName = b"String"` of its own, which was a second
+// ⚠ This paragraph used to sit over a `StringConformerName = b"String"` of its own, which was a second
 // spelling of `IrInterface`'s canonical constant — the thing `BoolConformerName`'s header forbids outright.
 // Deleted at the W1 review; `Character`'s twin went the same way. See `StringConformerName`.
 
@@ -2397,7 +2406,11 @@ let ArrayValueLabel = b"value"
 // "does this method take OWNERSHIP of an element?" (push/set/insert only), which is a question about
 // the ARGUMENT. This one is about the RECEIVER.
 function arrayMethodMutatesReceiver(name ByteArray) returns bool
-	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
+	// R4.2 appends the two `__ManagedMemory` MUTATORS. They belong in this list for the same reason `resize`
+	// and `set` do — both rewrite the record (`setLength` its `length@8` and the vacated bytes, `setByte` one
+	// byte of its buffer) — so a `let`-bound receiver is E3019 and an outstanding borrow is E3070, through the
+	// one home those two rules have. `length()` only reads and is deliberately absent.
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod) or name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod)
 end 'arrayMethodMutatesReceiver'
 
 // ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the same immutable-receiver rule,
@@ -21987,6 +22000,14 @@ export type Parser
 			return try self.parseManagedFileStaticCall(func, typeTok: typeTok)
 		end 'managedFileStatic'
 
+		// `__ManagedMemory.create(count, elementSize)` (R4.2) — intercepted BEFORE the generic-alias arm
+		// below, which would route it to `parseArrayStaticCall` (the alias IS bound to an `Array` instance)
+		// and refuse its two arguments against `Array.create()`'s none. That is the measured red:
+		// `E2010 Expected ')' but got 'integer literal'`.
+		if typeTok.value.equals(ManagedMemoryTypeName) 'managedMemoryStatic'
+			return try self.parseManagedMemoryStaticCall(func, typeTok: typeTok)
+		end 'managedMemoryStatic'
+
 		// `String.from(bytes)` — the one exported `String` static (P1.8 Slice E). Intercepted here for
 		// `CharacterSet`'s reason and not for a new one: `String` is a BUILTIN with no `type` declaration
 		// behind it, so the mangled `String.from` below would name a callee no file declares (E3004), and
@@ -22346,7 +22367,7 @@ export type Parser
 		// `StringIndex` arm above has one: the layout IS registered, so the struct path would accept the box
 		// and then resolve `close` against `funcSignatures`, where no file declares `__ManagedFile.close`.
 		if self.isManagedFileType(recv.tag, nameId: recv.nameId) 'managedFileMethod'
-			return try self.dispatchManagedFileMethod(recv)
+			return try self.dispatchManagedFileMethod(func, recv: recv)
 		end 'managedFileMethod'
 
 		// AN ENUM/UNION RECEIVER (D1) — `d.isNorth()`, `s.action()`, `self.isStop()`, and now also
@@ -23191,18 +23212,16 @@ export type Parser
 		throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` static '{String.from(methodTok.value)}' — shv2 provides the eleven predefined sets and `from(chars)`", line: methodTok.line, column: methodTok.column)
 	end 'parseCharacterSetStaticCall'
 
-	// ⭐ **`__ManagedFile.openRead(path)` — THE ONE STATIC THIS RUNG DELIVERS (R4.1).**
+	// ⭐ **THE NINE `__ManagedFile` STATICS — the surface BOTH references declare, complete at R4.2.** A name
+	// outside it is REFUSED BY NAME here rather than left to fall through: falling through would mangle
+	// `__ManagedFile.seek` into a callee no file declares and surface as E3004 against a name the author did
+	// write — the same "reject positioned, do not mangle" argument `parseStringStaticCall` makes below.
 	//
-	// The other four the corpus uses (`openWrite`, `exists`, `delete`, `stat`) are R4.2's, and each is
-	// REFUSED BY NAME here rather than left to fall through: falling through would mangle
-	// `__ManagedFile.exists` into a callee no file declares and surface as E3004 against a name the author
-	// did write and the language does have — the same "reject positioned, do not mangle" argument
-	// `parseStringStaticCall` makes two functions down.
-	//
-	// ⚠ The result is a MANAGED box (`__mm_alloc`'d by `__mf_open_read`), so it goes through
-	// `emitOwnedRuntimeResult` and is tracked as an owned temporary — not `emitRuntimeCall`, which would
-	// leak it. Its tag is `structRef` over the registered `__ManagedFile` layout, which is what lets it be
-	// stored into a `var file as __ManagedFile` field.
+	// ⚠ **OWNERSHIP DIFFERS PER STATIC AND IS NOT A DETAIL.** The three OPENS return a `__mm_alloc`'d box,
+	// so they go through `emitOwnedRuntimeResult` and are tracked as owned temporaries — whose drop is
+	// `__mf_destruct`, the RAII close (`SignatureIndex.managedNameDropCallee`). `stat` returns a RAW pointer
+	// the caller must hand back to `statFree`, so it is deliberately NOT tracked: nothing in the ownership
+	// model can free a bare `int`, and the exit-101 leak gate is what reports a caller that forgets.
 	//
 	// ⚠ Throwing-ness is NOT decided here. `isThrowingManagedFileRuntimeCallee` names the callee and the
 	// composed `isThrowingRuntimeCallee` is read by the parser's E3055 accept and SemanticCheck's E3057
@@ -23212,21 +23231,92 @@ export type Parser
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(typeTok, last: methodTok)
 
-		if not methodTok.value.equals(ManagedFileOpenReadMethod) 'unknownStatic'
-			throw ParseError.unsupported("`{String.from(ManagedFileTypeName)}` static '{String.from(methodTok.value)}' — this rung provides `{String.from(ManagedFileOpenReadMethod)}(path)`; `openWrite`, `exists`, `delete` and `stat` arrive with the read/write slice", line: methodTok.line, column: methodTok.column)
-		end 'unknownStatic'
+		if methodTok.value.equals(ManagedFileOpenReadMethod) 'openRead'
+			return try self.parseManagedFileOpen(func, callee: ManagedFileOpenReadName, methodTok: methodTok, range: range)
+		end 'openRead'
+		// ⭐ **TWO METHODS, ONE CALLEE.** `openWriteExecutable`'s only difference in either reference is a Unix
+		// 0755 permission bit, and shv2's file IO is host-only Windows by the R4.1 ruling — so there is
+		// nothing for a second entry point to carry. A POSIX lane splits them on the day it exists.
+		if methodTok.value.equals(ManagedFileOpenWriteMethod) or methodTok.value.equals(ManagedFileOpenWriteExecutableMethod) 'openWrite'
+			return try self.parseManagedFileOpen(func, callee: ManagedFileOpenWriteName, methodTok: methodTok, range: range)
+		end 'openWrite'
+		if methodTok.value.equals(ManagedFileExistsMethod) 'exists'
+			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ManagedFileExistsName, args: singletonArgs(path), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'exists'
+		if methodTok.value.equals(ManagedFileDeleteMethod) 'delete'
+			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ManagedFileDeleteName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'delete'
+		if methodTok.value.equals(ManagedFileRenameMethod) 'rename'
+			try self.consume(TokenKind.leftParen)
+			let oldPath = try self.parseManagedMemoryArg(func, paramName: ManagedFileOldPathParamName, methodTok: methodTok)
+			try self.consume(TokenKind.comma)
+			let newPath = try self.parseManagedMemoryArg(func, paramName: ManagedFileNewPathParamName, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitRuntimeCall(ManagedFileRenameName, args: pairArgs(oldPath, second: newPath), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'rename'
+		if methodTok.value.equals(ManagedFileStatMethod) 'stat'
+			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ManagedFileStatName, args: singletonArgs(path), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'stat'
+		if methodTok.value.equals(ManagedFileStatFieldMethod) 'statField'
+			try self.consume(TokenKind.leftParen)
+			let buffer = try self.parseBuiltinIntegerArg(func, paramName: ManagedFileBufferParamName, methodTok: methodTok)
+			try self.consume(TokenKind.comma)
+			let index = try self.parseBuiltinIntegerArg(func, paramName: ManagedFileIndexParamName, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitRuntimeCall(ManagedFileStatFieldName, args: pairArgs(buffer, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'statField'
+		if methodTok.value.equals(ManagedFileStatFreeMethod) 'statFree'
+			try self.consume(TokenKind.leftParen)
+			let buffer = try self.parseBuiltinIntegerArg(func, paramName: ManagedFileBufferParamName, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitRuntimeCall(ManagedFileStatFreeName, args: singletonArgs(buffer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'statFree'
 
-		try self.consume(TokenKind.leftParen)
-		let pathTok = self.current()
-		let path = try self.parseExpression(func, block: self.currentBlock)
-		// The SAME argument rule `String.from` applies, and for the same reason stated there: any other
-		// `Array` instance would be read at ITS element stride, so the path handed to the OS would be
-		// whichever bytes fell on the stride boundaries.
-		try self.requireByteArrayValue(path, subject: "{String.from(ManagedFileTypeName)}.{String.from(ManagedFileOpenReadMethod)}", anchor: pathTok)
-		try self.consume(TokenKind.rightParen)
-
-		return self.emitOwnedRuntimeResult(ManagedFileOpenReadName, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedFileNameId(), range: range)
+		throw ParseError.unsupported("`{String.from(ManagedFileTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly the nine both references declare: `openRead`, `openWrite`, `openWriteExecutable`, `exists`, `delete`, `rename`, `stat`, `statField` and `statFree`", line: methodTok.line, column: methodTok.column)
 	end 'parseManagedFileStaticCall'
+
+	// One of the three OPENS: a single `__ManagedMemory` path, and an OWNED `__ManagedFile` box back. Its tag
+	// is `structRef` over the registered `__ManagedFile` layout, which is what lets it be stored into a
+	// `var file as __ManagedFile` field.
+	function parseManagedFileOpen(func IrFunction, callee ByteArray, methodTok Token, range SourceRange) returns ValueId throws ParseError
+		let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+		return self.emitOwnedRuntimeResult(callee, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedFileNameId(), range: range)
+	end 'parseManagedFileOpen'
+
+	// `(<path>)` — the one-`__ManagedMemory`-argument list six of the nine statics share.
+	function parseOneManagedMemoryArgList(func IrFunction, paramName ByteArray, methodTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let value = try self.parseManagedMemoryArg(func, paramName: paramName, methodTok: methodTok)
+		try self.consume(TokenKind.rightParen)
+		return value
+	end 'parseOneManagedMemoryArgList'
+
+	// ⭐ **ONE `__ManagedMemory` ARGUMENT, CHECKED AGAINST THE PARAMETER IT FILLS.**
+	//
+	// ⚠ **THE ANCHOR IS THE METHOD-NAME TOKEN, NOT THE ARGUMENT, AND THAT IS THE ORACLE'S COLUMN.**
+	// `builtin-type-checking.error-managed-file-open-read-int` pins `3:29`, which is where `openRead` starts,
+	// not where the `0` is — and it is the right choice rather than a quirk to match: a mismatch is a fact
+	// about the CALL, and `SemanticCheck.checkArgTypes` positions every ordinary argument mismatch on the
+	// call range for the same reason.
+	function parseManagedMemoryArg(func IrFunction, paramName ByteArray, methodTok Token) returns ValueId throws ParseError
+		let value = try self.parseExpression(func, block: self.currentBlock)
+		try self.requireManagedMemoryValue(value, paramName: paramName, anchor: methodTok)
+		return value
+	end 'parseManagedMemoryArg'
+
+	// One `int` argument of a signature-checked builtin — `size`, `count`, `elementSize`, a stat buffer's
+	// address, a stat field index, a byte offset, a byte value. Same anchor rule as its `__ManagedMemory`
+	// sibling above, and the same sentence.
+	function parseBuiltinIntegerArg(func IrFunction, paramName ByteArray, methodTok Token) returns ValueId throws ParseError
+		let value = try self.parseExpression(func, block: self.currentBlock)
+		if self.tagOf(value) != ValueTypeTag.integer 'notInteger'
+			throw ParseError.builtinArgumentType(String.from(paramName), expected: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(value), line: methodTok.line, column: methodTok.column)
+		end 'notInteger'
+		return value
+	end 'parseBuiltinIntegerArg'
 
 	// ⭐ **`String.from(bytes)` — THE ONE `String` STATIC, AND THE CORPUS'S ONLY WAY BACK FROM BYTES (P1.8
 	// Slice E).** The reference exports exactly this overload (`stdlib/String.maxon:119-121`); its
@@ -23243,20 +23333,70 @@ export type Parser
 	// so it never reaches the mangled `String.from` callee no file declares.
 	function parseStringStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
-		if not self.at(TokenKind.from) 'unknownStatic'
-			let methodTok = self.current()
-			throw ParseError.unsupported("`{String.from(StringConformerName)}` static '{String.from(methodTok.value)}' — the reference exports one, `from(bytes)`, and `fromOwnedBytes` is deliberately not exported", line: methodTok.line, column: methodTok.column)
+		if self.at(TokenKind.from) 'fromStatic'
+			let fromTok = try self.consume(TokenKind.from)
+			let range = SourceRange.between(typeTok, last: fromTok)
+			try self.consume(TokenKind.leftParen)
+			let bytesTok = self.current()
+			let bytes = try self.parseExpression(func, block: self.currentBlock)
+			try self.requireByteArrayValue(bytes, subject: "{String.from(StringConformerName)}.from", anchor: bytesTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(bytes), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+		end 'fromStatic'
+
+		// ⭐ **`String.init(managed)` — THE SECOND EXPORTED STATIC (R4.2), AND THE SAME CALLEE AS `from`.**
+		// `stdlib/String.maxon:114` declares `init(managed ByteMemory)` and `:119` declares
+		// `from(bytes ByteArray)`; those two parameter types are ONE type in shv2 (`ManagedMemoryTypeName`
+		// binds `__ManagedMemory` to the byte-array instance), and both statics mean "make a String out of
+		// these bytes" — so `__str_from_bytes` serves both and there is one emission for one behaviour.
+		//
+		// ⚠ **IT COPIES, WHERE THE REFERENCE'S `init` ADOPTS, AND THE COPY IS WHAT MAKES IT SAFE HERE.**
+		// The reference builds `String{managed: managed, …}` — it takes the buffer — while `__str_from_bytes`
+		// builds a String record of its own. Adopting would double-free `managed-file.write-and-read`'s
+		// `var buffer`, which is still live and still dropped at its scope exit.
+		//
+		// ⚠ The DIAGNOSTIC differs from `from`'s deliberately: `init`'s parameter is declared
+		// `__ManagedMemory` and `from`'s a `ByteArray`, so a wrong argument names the type the SIGNATURE
+		// declares rather than one wording for two signatures.
+		let methodTok = self.current()
+		if methodTok.value.equals(StringInitMethod) 'initStatic'
+			_ = try self.consume(TokenKind.identifier)
+			let range = SourceRange.between(typeTok, last: methodTok)
+			try self.consume(TokenKind.leftParen)
+			let managed = try self.parseManagedMemoryArg(func, paramName: StringInitManagedParamName, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(managed), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+		end 'initStatic'
+
+		throw ParseError.unsupported("`{String.from(StringConformerName)}` static '{String.from(methodTok.value)}' — the reference exports two, `from(bytes)` and `init(managed)`, and `fromOwnedBytes` is deliberately not exported", line: methodTok.line, column: methodTok.column)
+	end 'parseStringStaticCall'
+
+	// ⭐ **`__ManagedMemory.create(count, elementSize)` — THE ONE `__ManagedMemory` STATIC (R4.2).** It yields
+	// an OWNED `Array with Byte` record, so its scope-exit drop routes through `__arr_decref` (which frees the
+	// record AND its element buffer) exactly as a `.create()`d array's does.
+	//
+	// ⚠ **`elementSize` IS A REAL ARGUMENT — it is read and stored into the record's `element_size@24`** —
+	// but the RESULT's static type is `Array with Byte` whatever it says, because that is the one instance
+	// `__ManagedMemory` is bound to at this rung. For the `1` every acceptance path passes, the two agree.
+	// TYPING another element size is R4.4's row (`specs/managed-memory-builtin.md` is written against
+	// `create(4, elementSize: 8)`, which needs `__ManagedMemory` to be a generic of its own); the parameter is
+	// honest rather than hardcoded so that rung changes a binding and not a signature.
+	function parseManagedMemoryStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(typeTok, last: methodTok)
+
+		if not methodTok.value.equals(ManagedMemoryCreateMethod) 'unknownStatic'
+			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` static '{String.from(methodTok.value)}' — R4.2 provides `create(count, elementSize)`; the rest of the object surface (`fromCString`, `createCursor`) is R4.4's", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
 
-		let fromTok = try self.consume(TokenKind.from)
-		let range = SourceRange.between(typeTok, last: fromTok)
 		try self.consume(TokenKind.leftParen)
-		let bytesTok = self.current()
-		let bytes = try self.parseExpression(func, block: self.currentBlock)
-		try self.requireByteArrayValue(bytes, subject: "{String.from(StringConformerName)}.from", anchor: bytesTok)
+		let count = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryCountParamName, methodTok: methodTok)
+		try self.consume(TokenKind.comma)
+		let elementSize = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryElementSizeParamName, methodTok: methodTok)
 		try self.consume(TokenKind.rightParen)
-		return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(bytes), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
-	end 'parseStringStaticCall'
+		return self.emitOwnedRuntimeResult(ArrMemCreateName, args: pairArgs(count, second: elementSize), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internArrayByteInstance(), range: range)
+	end 'parseManagedMemoryStaticCall'
 
 	// The argument to `String.from` must be an `Array with Byte` — the instance a `b"…"` literal and a
 	// `.toByteArray()` both produce, and the one `__str_from_bytes` may read a byte at a time. Any other
@@ -23267,12 +23407,40 @@ export type Parser
 	// different name, and inheriting the old literal would have reported `String.from` about a call the
 	// author never wrote — a diagnostic naming the wrong function is worse than a vague one.
 	function requireByteArrayValue(value ValueId, subject String, anchor Token) throws ParseError
-		if self.tagOf(value) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(value)) and self.signatures.arrayElementSize(self.valueNameId(value)) == ByteStringElementSize 'isByteArray'
+		if self.valueIsByteArray(value) 'isByteArray'
 			return
 		end 'isByteArray'
 
-		throw ParseError.builtinOperandType(subject, required: "Array with Byte", got: self.giveTypeName(self.tagOf(value), aggregateName: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))), line: anchor.line, column: anchor.column)
+		throw ParseError.builtinOperandType(subject, required: "Array with Byte", got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
 	end 'requireByteArrayValue'
+
+	// ⭐ **THE SAME RULE FOR A SIGNATURE-CHECKED BUILTIN'S `__ManagedMemory` PARAMETER (R4.2)** — one
+	// PREDICATE, two diagnostics, and the split is the signatures' rather than a wording preference. See
+	// `ParseError.builtinArgumentType`: `String.from`'s parameter is declared `ByteArray` and every
+	// `__Managed*` parameter is declared `__ManagedMemory`, so each names the type ITS signature declares.
+	// `builtin-type-checking.error-managed-file-open-read-int` pins the `__ManagedMemory` spelling.
+	function requireManagedMemoryValue(value ValueId, paramName ByteArray, anchor Token) throws ParseError
+		if self.valueIsByteArray(value) 'isByteArray'
+			return
+		end 'isByteArray'
+
+		throw ParseError.builtinArgumentType(String.from(paramName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
+	end 'requireManagedMemoryValue'
+
+	// Is `value` the `Array with Byte` instance — the one `__ManagedMemory` is bound to, the one a `b"…"`
+	// literal has and the one `.toByteArray()` produces? The shared PREDICATE behind the two rules above:
+	// they test the same thing and differ only in what they SAY. Any other `Array` instance would be read at
+	// ITS element stride, so a path handed to the OS (or a String built from it) would be whichever bytes
+	// fell on the stride boundaries — a silent wrong answer, refused at the argument.
+	function valueIsByteArray(value ValueId) returns bool
+		return self.tagOf(value) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(value)) and self.signatures.arrayElementSize(self.valueNameId(value)) == ByteStringElementSize
+	end 'valueIsByteArray'
+
+	// How a value's type is SPELLED in a diagnostic — its tag, resolved through the aggregate name behind it.
+	// Three builtin-argument rules read it; written out it was the same four-call chain each time.
+	function valueDisplayTypeName(value ValueId) returns String
+		return self.giveTypeName(self.tagOf(value), aggregateName: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value)))
+	end 'valueDisplayTypeName'
 
 	// ⭐ **BUILD ONE PREDEFINED SET: its explicit members into a fresh `Set with Character`, then the box.**
 	// Each member is a `Character` LITERAL the parser mints from the preset's bytes — the same immortal
@@ -23517,33 +23685,64 @@ export type Parser
 
 	// Is this receiver a `__ManagedFile`? A TAG cannot answer it — every struct box is `structRef` — so it
 	// is the interned NAME behind the tag, exactly as `isStringIndexType` asks.
+	//
+	// ⚠⚠ **IT ACCEPTS `named` AS WELL AS `structRef`, AND WITHOUT THAT HALF THE CORPUS'S ACTUAL SPELLING
+	// DOES NOT DISPATCH (R4.2).** A struct FIELD read carries `named`, not `structRef` — `fieldTypeOf`
+	// re-tags only function and generic-alias fields, which `decrefCalleeFor`'s own `named` arm records — and
+	// the corpus reaches every instance method through a field: `specs/managed-file.md`'s documented usage
+	// pattern is a `__ManagedFile` INSIDE a wrapper type, so it is `wf.file.write(…)`, never `f.write(…)`.
+	// Left narrow, that receiver falls past this arm to the struct path and reports E3004 against a method
+	// the language does have. (R4.1 shipped the narrow test because its one enabled case bound the box
+	// DIRECTLY — the only spelling `structRef` alone serves.)
 	function isManagedFileType(tag ValueTypeTag, nameId TypeNameId) returns bool
-		if tag != ValueTypeTag.structRef 'notAStruct'
+		if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notAnAggregateRef'
 			return false
-		end 'notAStruct'
+		end 'notAnAggregateRef'
 		return nameId == self.managedFileNameId()
 	end 'isManagedFileType'
 
-	// ⭐ **`f.close()` — THE ONE `__ManagedFile` INSTANCE METHOD THIS RUNG DELIVERS (R4.1).** The cursor
-	// sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`).
+	// ⭐ **THE FOUR `__ManagedFile` INSTANCE METHODS — `close`, `size`, `read`, `write` (R4.2 completes
+	// R4.1's one).** The cursor sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`).
 	//
-	// It exists in the same rung as `openRead` rather than waiting for R4.2, and the reason is a LEAK: an
-	// open with no close leaks an OS handle for the process lifetime, and that leak is invisible to the
-	// exit-101 memory gate because a handle is not memory. `size`/`read`/`write` genuinely can wait; this
-	// cannot.
+	// `close()` is the one that landed a rung early, and the reason was a LEAK: an open with no close leaks
+	// an OS handle for the process lifetime, and that leak is invisible to the exit-101 memory gate because a
+	// handle is not memory. It stays NON-throwing and void, per the spec's "Does not throw"; the other three
+	// throw `__ManagedFileError`.
 	//
-	// Non-throwing, per the spec's "Does not throw", and void — so an unknown method is refused by name
-	// here rather than mangled into a callee no file declares.
-	function dispatchManagedFileMethod(recv MethodReceiver) returns ValueId throws ParseError
+	// An unknown method is refused by name here rather than mangled into a callee no file declares —
+	// `parseManagedFileStaticCall`'s argument, on the instance side.
+	function dispatchManagedFileMethod(func IrFunction, recv MethodReceiver) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(recv.anchor, last: methodTok)
 
-		if not methodTok.value.equals(ManagedFileCloseMethod) 'unknownMethod'
-			throw ParseError.unsupported("`{String.from(ManagedFileTypeName)}` method '{String.from(methodTok.value)}' — this rung provides `{String.from(ManagedFileCloseMethod)}()`; `size`, `read` and `write` arrive with the read/write slice", line: methodTok.line, column: methodTok.column)
-		end 'unknownMethod'
+		if methodTok.value.equals(ManagedFileCloseMethod) 'close'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ManagedFileCloseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'close'
+		if methodTok.value.equals(ManagedFileSizeMethod) 'size'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ManagedFileSizeName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'size'
+		// ⚠ The buffer is BORROWED, not consumed: `__mf_read` writes into it and `__mf_write` reads out of
+		// it, and neither takes ownership — which is what lets the caller keep using `buffer` afterwards (and
+		// lets a `"…".toByteArray().managed` temporary drop at the end of the statement, as it does today for
+		// `openRead`'s path).
+		if methodTok.value.equals(ManagedFileReadMethod) 'read'
+			try self.consume(TokenKind.leftParen)
+			let managed = try self.parseManagedMemoryArg(func, paramName: ManagedFileManagedParamName, methodTok: methodTok)
+			try self.consume(TokenKind.comma)
+			let size = try self.parseBuiltinIntegerArg(func, paramName: ManagedFileSizeParamName, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitRuntimeCall(ManagedFileReadName, args: tripleArgs(recv.value, second: managed, third: size), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'read'
+		if methodTok.value.equals(ManagedFileWriteMethod) 'write'
+			try self.consume(TokenKind.leftParen)
+			let managed = try self.parseManagedMemoryArg(func, paramName: ManagedFileManagedParamName, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitRuntimeCall(ManagedFileWriteName, args: pairArgs(recv.value, second: managed), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'write'
 
-		try self.consumeEmptyArgList()
-		return self.emitRuntimeCall(ManagedFileCloseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		throw ParseError.unsupported("`{String.from(ManagedFileTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly the four both references declare: `size()`, `read(managed, size)`, `write(managed)` and `close()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedFileMethod'
 
 	// ⭐ **IS THIS THE `StringIndex` TYPE?** A TAG cannot answer it — every struct box is `structRef` — so it
@@ -24601,8 +24800,13 @@ export type Parser
 		// `missingBaseLayout`'s header warns against for this very field, two doors away.
 		// ⇒ Returning the receiver for a non-byte array would be the worse bug: a word-strided record under
 		// a type that promises byte-addressable memory.
+		// ⭐⭐ **IS THIS RECEIVER A `__ManagedMemory`?** It is the byte instance and nothing else, because that
+		// is the ONE instance `ManagedMemoryTypeName` binds the alias to — so the `.managed` identity below and
+		// the three `__ManagedMemory` MEMBERS further down are gated on the same answer, asked once.
+		let isManagedMemory = giid == self.signatures.internArrayByteInstance()
+
 		if methodTok.value.equals(ManagedMemoryFieldName) 'managedIdentity'
-			if giid != self.signatures.internArrayByteInstance() 'notAByteArray'
+			if not isManagedMemory 'notAByteArray'
 				throw ParseError.unsupported("`.{String.from(ManagedMemoryFieldName)}` on this array: the field is real for every element type (`stdlib/Array.maxon` declares it), but shv2 binds `{String.from(ManagedMemoryTypeName)}` to a BYTE array only at this rung, so it has no type to give a non-byte element's buffer", line: methodTok.line, column: methodTok.column)
 			end 'notAByteArray'
 			return arr
@@ -24641,7 +24845,11 @@ export type Parser
 		end 'slice'
 
 		// Non-throwing value accessors.
-		if methodTok.value.equals(CountMethod) 'count'
+		// ⭐ `__ManagedMemory.length()` IS `Array.count()` — both read `length@8` and nothing else — so the
+		// name is folded onto this arm rather than given a second, byte-identical emission of its own (R4.2).
+		// `setLength`/`setByte` below are deliberately NOT folded onto `resize`/`set`: those two pairs differ
+		// (see the `__ManagedMemory` mutators).
+		if methodTok.value.equals(CountMethod) or (isManagedMemory and methodTok.value.equals(ManagedMemoryLengthMethod)) 'count'
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
@@ -24691,6 +24899,46 @@ export type Parser
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			return try self.parseArrayAppend(func, arr: arr, giid: giid, range: range)
 		end 'append'
+
+		// ⭐⭐ **THE TWO `__ManagedMemory` MUTATORS (R4.2) — `setLength` and `setByte`.** VOID and THROWING,
+		// which is why they sit here (past `requireArrayVoidStatement`, so a value-position use is E3059)
+		// rather than with the throwing ACCESSORS above, which all yield a value.
+		//
+		// ⚠ **NEITHER IS AN ALIAS OF THE `Array` METHOD IT RESEMBLES, and folding either would be a silent
+		// wrong answer.** `resize` GROWS the capacity to fit where `setLength` must REFUSE a length above it —
+		// `stdlib/Array.maxon:378-382` builds `resize` out of `reserve` THEN `setLength` for exactly that
+		// reason — and `set` addresses ELEMENTS where `setByte` addresses BYTES, which coincide at element
+		// size 1 and at no other size. See `ArrayRuntime.ArrSetLengthName`.
+		//
+		// ⚠⚠ **THEY GO THROUGH `emitRuntimeCall`, NOT `emitArrayVoidCall`, AND THAT IS NOT A STYLE CHOICE.**
+		// `emitArrayVoidCall` returns the RECEIVER as the expression's value, which is right for the
+		// NON-throwing mutators around it (`arr.push(x)` yields something for a statement to be). Under a
+		// `try` it makes the TRY's value the array — an owned managed record — and the try's ok/error
+		// reconciliation then acts on it: MEASURED as an access violation on the first `setByte` of a freshly
+		// created buffer. `parseArraySetOrInsert` already splits the same way for the same reason (its
+		// throwing arm calls `emitRuntimeCall`, its non-throwing one `emitArrayVoidCall`).
+		//
+		// ⚠ **THE COST OF THE R4.1 BINDING IS THAT ALL THREE ARE VISIBLE ON A USER'S `ByteArray` TOO**, which
+		// the language does not give it (`stdlib/Array.maxon` declares `resize`/`truncate`, not `setLength`).
+		// `__ManagedMemory` IS `Array with Byte` here, so a `__ManagedMemory` method necessarily arrives on an
+		// array receiver and can only be gated on that instance — a receiver carries no memory of the name it
+		// was spelled with. Giving `__ManagedMemory` an identity of its own is R4.4's row; the alternative
+		// available HERE is a second type reconciled with the `ByteArray` every caller passes, which is
+		// exactly what `ManagedMemoryTypeName` argues against.
+		if isManagedMemory and methodTok.value.equals(ManagedMemorySetLengthMethod) 'setLength'
+			try self.consume(TokenKind.leftParen)
+			let newLength = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryNewLengthParamName, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitRuntimeCall(ArrSetLengthName, args: pairArgs(arr, second: newLength), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'setLength'
+		if isManagedMemory and methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
+			try self.consume(TokenKind.leftParen)
+			let byteOffset = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryOffsetParamName, methodTok: methodTok)
+			try self.consume(TokenKind.comma)
+			let byteValue = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryValueParamName, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitRuntimeCall(ArrSetByteName, args: tripleArgs(arr, second: byteOffset, third: byteValue), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'setByte'
 
 		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
 	end 'dispatchArrayMethod'
