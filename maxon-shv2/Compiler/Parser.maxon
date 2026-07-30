@@ -18379,10 +18379,11 @@ export type Parser
 	// `-(f())`), which is why it stays in this postfix band and the cast does not.
 	//
 	// `resultUsed` is whether this postfix chain's FINAL value is read — `false` only for a bare-call
-	// STATEMENT (`callStmt`), `true` in every expression. It gates ONLY a VOID indirect-call/array-method
-	// result: a void result is always TERMINAL (the loop continues only on a `function`/`Array` value, and
-	// void is neither), so the outer `resultUsed` is exactly the one the terminal call sees, and forwarding
-	// it uniformly to every hop is correct — an intermediate hop's value is never void.
+	// STATEMENT (`callStmt`), `true` in every expression. It gates ONLY a VOID indirect-call / container-
+	// mutator result, and forwarding it uniformly to every hop is correct because a void result is
+	// TERMINAL: the loop does continue past one — every `.member` is now a hop — but the very next hop
+	// refuses it (`structBaseOfReceiver` reports a member access on a `void` value, positioned at the
+	// member), so no chain can ever reach a SECOND call whose `resultUsed` the outer one would misstate.
 	function parsePostfix(func IrFunction, value ValueId, resultUsed bool) returns ValueId throws ParseError
 		var current = value
 		while true 'postfix'
