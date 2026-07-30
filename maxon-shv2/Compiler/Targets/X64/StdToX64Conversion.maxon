@@ -810,7 +810,7 @@ type StdToX64Lowering
 			// `GetFileSizeEx`/`FindFirstFileA` take two, `MoveFileExA` three, `DeleteFileA`/`FindClose` one.
 			osReadFile gives win64OutgoingArgBytes(ReadFileStackArgWords)
 			osFileOpenWrite gives win64OutgoingArgBytes(CreateFileStackArgWords)
-			osFileSize to osFileFindClose gives 0
+			osFileSize to osFileAttributes gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -973,7 +973,7 @@ type StdToX64Lowering
 				// The wall-clock read is a void body op, never a terminator.
 				osReadWallClock then break 'term'
 				// R4.1 + R4.2: every file op is a value-producing or void body op, never a terminator.
-				osFileOpenRead to osFileFindClose then break 'term'
+				osFileOpenRead to osFileAttributes then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1040,7 +1040,7 @@ type StdToX64Lowering
 				// R4.1 + R4.2: every file op declares `clobbersFlags: true` (each lowers to a call), so like the
 				// wall-clock read one can be the last flag-writer before a branch — and, like a `call`, it is
 				// not the compare, so the scan stops.
-				osFileOpenRead to osFileFindClose then break 'isTheCompare'
+				osFileOpenRead to osFileAttributes then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1117,7 +1117,7 @@ type StdToX64Lowering
 			// The wall-clock read is never a terminator, so it reads no fused compare flags.
 			osReadWallClock gives false
 			// R4.1 + R4.2: no file op is ever a terminator, so none reads fused compare flags.
-			osFileOpenRead to osFileFindClose gives false
+			osFileOpenRead to osFileAttributes gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -1200,6 +1200,12 @@ type StdToX64Lowering
 			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
 			osFileFindFirst(resultId, pathPtrId, findDataPtrId) then self.lowerOsFileFindFirst(resultId, pathPtrId: pathPtrId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
 			osFileFindClose(handleId) then self.lowerOsFileFindClose(handleId, dstBlock: dstBlock)
+			// R4.3: the four directory primitives. Each routes through the same `requireWin64FileIo` gate
+			// and emits one register-only import call whose RAX answer is captured.
+			osFileFindNext(resultId, handleId, findDataPtrId) then self.lowerOsFileFindNext(resultId, handleId: handleId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
+			osDirCreate(resultId, pathPtrId) then self.lowerOsDirCreate(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			osDirCurrentPath(resultId, bufLenId, bufPtrId) then self.lowerOsDirCurrentPath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
+			osFileAttributes(resultId, pathPtrId) then self.lowerOsFileAttributes(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1246,7 +1252,7 @@ type StdToX64Lowering
 			witnessTryCall then panic("lowerStdToX64: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
 			osPipeCreate to osWriteFile then panic("lowerStdToX64: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
 			osReadWallClock then panic("lowerStdToX64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
-			osFileOpenRead to osFileFindClose then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
+			osFileOpenRead to osFileAttributes then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2336,6 +2342,44 @@ type StdToX64Lowering
 		self.lowerOsWin64Call1(IatSlot.FindClose, arg0: handleId, dstBlock: dstBlock)
 	end 'lowerOsFileFindClose'
 
+	// ⭐ **R4.3: `FindNextFileA(handle, findDataPtr)`** — register-only; the BOOL is captured because a FALSE
+	// is the only thing that distinguishes end-of-iteration from an OS error, and `ManagedDirectoryRuntime`
+	// makes that distinction from `GetLastError`.
+	function lowerOsFileFindNext(resultId ValueId, handleId ValueId, findDataPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osFileFindNext")
+		self.lowerOsWin64Call2(IatSlot.FindNextFileA, arg0: handleId, arg1: findDataPtrId, dstBlock: dstBlock)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsFileFindNext'
+
+	// ⭐ **R4.3: `CreateDirectoryA(path, NULL)`** — the BOOL captured. The `lpSecurityAttributes` NULL is an
+	// IMMEDIATE, which is why this does not go through `lowerOsWin64Call2` (that one moves two virtual
+	// registers): a second argument that is a constant has no ValueId to move from.
+	function lowerOsDirCreate(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osDirCreate")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(pathPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateDirectoryA)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsDirCreate'
+
+	// ⭐ **R4.3: `GetCurrentDirectoryA(bufLen, bufPtr)`** — register-only, and note that the LENGTH is the
+	// first argument and the buffer the second, which is the reverse of every other path-taking import in
+	// this file. The three-way answer (0 / fits / required size) is classified in builder-built Std.
+	function lowerOsDirCurrentPath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osDirCurrentPath")
+		self.lowerOsWin64Call2(IatSlot.GetCurrentDirectoryA, arg0: bufLenId, arg1: bufPtrId, dstBlock: dstBlock)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsDirCurrentPath'
+
+	// ⭐ **R4.3: `GetFileAttributesA(path)`** — register-only, the raw attribute mask captured. See the op's
+	// own comment in `StdDialect` for why this import exists beside `FindFirstFileA` rather than being
+	// folded into it.
+	function lowerOsFileAttributes(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osFileAttributes")
+		self.lowerOsWin64Call1(IatSlot.GetFileAttributesA, arg0: pathPtrId, dstBlock: dstBlock)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsFileAttributes'
+
 	function lowerOsIocpCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsIocpCreateWin64(resultId, dstBlock: dstBlock)
@@ -2847,7 +2891,7 @@ type StdToX64Lowering
 			// The wall-clock read is never a terminator, let alone a float-equality condBranch.
 			osReadWallClock gives false
 			// R4.1 + R4.2: no file op is ever a terminator, let alone a float-equality condBranch.
-			osFileOpenRead to osFileFindClose gives false
+			osFileOpenRead to osFileAttributes gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2987,7 +3031,7 @@ type StdToX64Lowering
 			witnessTryCall panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a throwing witness call, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPipeCreate to osWriteFile panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a P1.5 IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osReadWallClock panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osReadWallClock`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			osFileOpenRead to osFileFindClose panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osFileOpenRead to osFileAttributes panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

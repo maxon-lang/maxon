@@ -511,6 +511,12 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		osFileRename(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileFindFirst(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileFindClose then break 'result'
+		// R4.3: all four directory primitives answer in RAX with an integer — a Win32 BOOL, a character
+		// count or a `dwFileAttributes` mask — so all four define a GPR result.
+		osFileFindNext(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osDirCreate(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osDirCurrentPath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osFileAttributes(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 

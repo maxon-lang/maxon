@@ -1151,6 +1151,51 @@ export union StdOp
 	// `osFileFindClose(handle)` = `FindClose(handle)`. No result, exactly as `osFileClose` has none and for
 	// the same reason: a close that fails leaves a caller nothing to do.
 	osFileFindClose(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- R4.3: the four primitives a DIRECTORY needs and a file does not ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osFileFindClose`, per the band-append invariant — every
+	// stale `… to osFileFindClose` full-tail range arm now FAILS TO COMPILE until it is consciously
+	// extended, which is the mechanism that finds every site obliged to classify or lower them. All four
+	// carry `category: system`, placing them logically in the system band independent of this tail position,
+	// and all four are ⭐ x64-WINDOWS ONLY by the R4.1 ruling: the call site is refused on every other target
+	// with the existing E3104 (`SemanticCheck.calleeNeedsWin32Substrate`), so the non-Windows arms panic as a
+	// backstop for a compiler bug rather than stubbing an answer the oracle cannot check.
+	//
+	// ⚠ **EVERY COMMENT BELOW NAMES THE ENTRY POINT THE LOWERING ACTUALLY EMITS**, the discipline the R4.2
+	// band above states: all four are the `A` variants, because a Maxon path is UTF-8 bytes.
+	//
+	// `osFileFindNext(result, handle, findDataPtr)` = `FindNextFileA(handle, findDataPtr)` — the Win32 BOOL
+	// in `result` and the next entry written over the caller's 320-byte `WIN32_FIND_DATAA`.
+	//
+	// ⚠ **A FALSE HERE IS NOT A FAILURE — `GetLastError() == ERROR_NO_MORE_FILES` IS THE ORDINARY END OF AN
+	// ITERATION**, and telling those two apart is `ManagedDirectoryRuntime`'s job, not this op's. The op
+	// yields the raw BOOL for the reason `osFileOpenRead` yields the raw handle: the errno arithmetic is the
+	// same on every platform even though the CALL is not, so a future POSIX lane supplies only the call.
+	osFileFindNext(resultId ValueId, handleId ValueId, findDataPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osDirCreate(result, pathPtr)` = `CreateDirectoryA(pathPtr, NULL)`, the BOOL in `result` (non-zero =
+	// created). The `lpSecurityAttributes` NULL is the only argument the op does not carry, exactly as
+	// `osFileOpenRead` does not carry its five fixed `CreateFileA` constants.
+	osDirCreate(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osDirCurrentPath(result, bufLen, bufPtr)` = `GetCurrentDirectoryA(bufLen, bufPtr)`.
+	//
+	// ⚠ **ITS RESULT HAS THREE MEANINGS, WHICH IS WHY THE RETRY LOOP IS IN BUILDER-BUILT Std AND NOT HERE.**
+	// Win32 answers `0` for failure, `< bufLen` for "written, NUL included", and `>= bufLen` for "the buffer
+	// was too small and this is the size it needs, NUL included" — in which case the buffer's contents are
+	// UNDEFINED and the call must be repeated. A backend that hid the loop would be making that decision
+	// three tiers below the only code that knows what to allocate.
+	osDirCurrentPath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osFileAttributes(result, pathPtr)` = `GetFileAttributesA(pathPtr)` — the raw `dwFileAttributes` mask,
+	// or `INVALID_FILE_ATTRIBUTES` (`0xFFFFFFFF`) when the path names nothing.
+	//
+	// ⚠ **IT IS THE SECOND ENTRY POINT `osFileFindFirst`'s COMMENT ARGUES AGAINST, AND THE ARGUMENT DOES NOT
+	// COVER THIS CASE.** That one refuses a `GetFileAttributesA` for `__ManagedFile.exists`, because the find
+	// record `stat` already needs carries the very `dwFileAttributes` word the answer is one bit of — two
+	// ways to ask ONE question. `__ManagedDirectory.exists` asks a question no find record is opened for: it
+	// takes a bare DIRECTORY path, not a search pattern, and `FindFirstFileA` on a bare directory returns a
+	// handle the caller would then have to `FindClose`, so routing it through the find record would COST a
+	// search handle to answer "is this a directory?". The bootstrap uses `GetFileAttributesA` here for
+	// exactly that reason (its `SyncOpDirExists`), and v1 reaches the same bit through `stat`.
+	osFileAttributes(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1315,6 +1360,10 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osFileRename(_, oldPathPtr, newPathPtr) then insertUsePair(referenced, a: oldPathPtr, b: newPathPtr)
 		osFileFindFirst(_, pathPtr, findDataPtr) then insertUsePair(referenced, a: pathPtr, b: findDataPtr)
 		osFileFindClose(handle) then referenced.insert(handle)
+		osFileFindNext(_, handle, findDataPtr) then insertUsePair(referenced, a: handle, b: findDataPtr)
+		osDirCreate(_, pathPtr) then referenced.insert(pathPtr)
+		osDirCurrentPath(_, bufLen, bufPtr) then insertUsePair(referenced, a: bufLen, b: bufPtr)
+		osFileAttributes(_, pathPtr) then referenced.insert(pathPtr)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1478,6 +1527,10 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
 		osFileFindFirst(resultId, pathPtr, findDataPtr) gives StdOp.osFileFindFirst(resultId, pathPtrId: remappedValue(pathPtr, subst: subst), findDataPtrId: remappedValue(findDataPtr, subst: subst))
 		osFileFindClose(handle) gives StdOp.osFileFindClose(remappedValue(handle, subst: subst))
+		osFileFindNext(resultId, handle, findDataPtr) gives StdOp.osFileFindNext(resultId, handleId: remappedValue(handle, subst: subst), findDataPtrId: remappedValue(findDataPtr, subst: subst))
+		osDirCreate(resultId, pathPtr) gives StdOp.osDirCreate(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
+		osDirCurrentPath(resultId, bufLen, bufPtr) gives StdOp.osDirCurrentPath(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
+		osFileAttributes(resultId, pathPtr) gives StdOp.osFileAttributes(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

@@ -211,6 +211,26 @@ export enum IatSlot
 	MoveFileExA
 	FindFirstFileA
 	FindClose
+	// ⭐ **R4.3 — THE FOUR DIRECTORY IMPORTS.** APPENDED AFTER `FindClose` so every existing slot INDEX (and
+	// hence every existing `iatCall` relocation) is unchanged; a reorder would silently repoint every prior
+	// import. All four are kernel32, so `Kernel32DirEntries` stays 1 — that constant counts import DIRECTORY
+	// entries (DLLs), not imports.
+	//
+	// ⚠ **`FindNextFileA` IS NEW, EVEN THOUGH `FindFirstFileA` AND `FindClose` ARE NOT.** R4.2 imported the
+	// first and the last for `stat`/`exists`, which open a search only to read ONE record and close it —
+	// neither ever iterates. This is the first rung that walks a directory.
+	//
+	// `CreateDirectoryA`/`GetCurrentDirectoryA` are `create()`/`currentPath()`. `GetFileAttributesA` answers
+	// `exists()`, which takes a bare DIRECTORY path rather than a search pattern — see the
+	// `osFileAttributes` op's own comment for why the "no second entry point" argument `FindFirstFileA`
+	// carries does not reach this case.
+	//
+	// ⚠ All four are the `A` variants for the reason `CreateFileA` above is, and inherit its stated
+	// LIMITATION unchanged: a non-ASCII path is read in the system ANSI codepage.
+	FindNextFileA
+	CreateDirectoryA
+	GetCurrentDirectoryA
+	GetFileAttributesA
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer

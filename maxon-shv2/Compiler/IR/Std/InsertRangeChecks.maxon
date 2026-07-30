@@ -707,7 +707,7 @@ type RangeCheckEmitter
 				// The wall-clock read produces no ranged-typealias value to range-check.
 				osReadWallClock then break 'c'
 				// R4.1 + R4.2: a raw OS handle, a Win32 BOOL and a byte count are not ranged-typealias values.
-				osFileOpenRead to osFileFindClose then break 'c'
+				osFileOpenRead to osFileAttributes then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -796,7 +796,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		// The wall-clock read is a body op, never a `ret`.
 		osReadWallClock gives false
 		// R4.1 + R4.2: every file op is a body op, never a `ret`.
-		osFileOpenRead to osFileFindClose gives false
+		osFileOpenRead to osFileAttributes gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -920,6 +920,13 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osFileRename(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileFindFirst(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileFindClose gives DefinedValueLookup.none
+		// R4.3. All four directory primitives answer in RAX and capture it: `FindNextFileA`/
+		// `CreateDirectoryA` a BOOL, `GetCurrentDirectoryA` a character count, `GetFileAttributesA` an
+		// attribute mask. None has a void twin, so none takes `none`.
+		osFileFindNext(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osDirCreate(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osDirCurrentPath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osFileAttributes(resultId, _) gives DefinedValueLookup.defines(resultId)
 	end 'r'
 end 'stdOpDefinedValue'
 
