@@ -1641,6 +1641,29 @@ export let CharacterSetBuiltinName = b"CharacterSet"
 // E2051 — it fails to RESOLVE, and resolving is exactly what registering the layout fixes.
 export let ManagedFileTypeName = b"__ManagedFile"
 
+// ⭐ **`__ManagedMemory` IS `Array with Byte`, NOT A TYPE OF ITS OWN (R4.1).** Registered as a builtin
+// GENERIC ALIAS — the same door `CharSet` goes through (`registerCharacterSetType`) — bound to the exact
+// instance `internArrayByteInstance()` mints, which is the instance `"…".toByteArray()` already yields
+// and the one a `b"…"` literal already has. So a `path __ManagedMemory` parameter and the argument handed
+// to it are ONE type by construction, and `.managed` is an identity rather than a conversion.
+//
+// ⚠ **THIS IS RIGHT FOR R4.1's SCOPE AND IS NOT ASSUMED TO SURVIVE R4.2 — the boundary was MEASURED.**
+// Nine of the eleven acceptance cases only ever use a `__ManagedMemory` as an opaque path buffer handed
+// to the OS: they never construct one, never read `.capacity`, never write into it. The other two
+// (`write-and-read`, `auto-close`) need `__ManagedMemory.create(size, elemSize)`, `setLength`, `setByte`
+// and `String.init(buffer)` — a real object surface — and they are R4.2's by the same measurement.
+// ⇒ **If R4.2 finds the alias cannot carry that surface, the thing to change is THIS binding, in one
+// place, not a second type that would then have to be reconciled with the ByteArray a caller passes.**
+// The Array record already carries a length, a capacity and a byte-addressable buffer, so extending it
+// is the likelier answer than splitting it — but that is R4.2's measurement to make, not this rung's
+// prediction.
+export let ManagedMemoryTypeName = b"__ManagedMemory"
+
+// The FIELD that yields it from a byte array — `stdlib/String.maxon:68`'s `var managed as ByteMemory`,
+// which the corpus reaches as `"…".toByteArray().managed`. An identity read; see the arm in
+// `Parser.dispatchArrayMethod`.
+export let ManagedMemoryFieldName = b"managed"
+
 // ⭐ **THE ONE PLACE THAT ANSWERS "is this a compiler builtin MANAGED type?"** — read by
 // `Parser.requireConstructible` to raise E3072, and the list a later slice extends when
 // `__ManagedMemory` and `__ManagedDirectory` arrive (E3072's own registry doc already names all three).
@@ -4040,6 +4063,13 @@ export type ProgramSignatures
 	// `ManagedFileTypeName` for why that difference is the point rather than an inconsistency: this type
 	// MUST be namable in a parameter and a field, and the corpus requires it.
 	export function registerManagedFileType()
+		// `__ManagedMemory` is an ALIAS, not a layout — see `ManagedMemoryTypeName`. Registered through the
+		// SAME `genericAliases` map a user `typealias` folds into, exactly as `CharSet` is, so a
+		// `__ManagedMemory` annotation reaches the ordinary `Array` paths with nothing special-cased.
+		// Upserted before the early return below because the two registrations are independent: the alias
+		// must exist even on a second call that finds the layout already there.
+		self.genericAliases.upsert(ManagedMemoryTypeName, value: self.internArrayByteInstance())
+
 		if self.structTypes.contains(ManagedFileTypeName) 'alreadyRegistered'
 			return
 		end 'alreadyRegistered'

@@ -5013,8 +5013,15 @@ export type Parser
 	// (`export var file as __ManagedFile`) and a declared PARAMETER — and a probe per position is three
 	// spellings of "this file needs the layout", the shape that drifts. The bare identifier covers all
 	// three because every one of them writes the name.
+	// ⚠ It matches EITHER name, because one call registers both (`registerManagedFileType` upserts the
+	// `__ManagedMemory` alias alongside the `__ManagedFile` layout) and a file may name only the memory —
+	// a helper taking `path __ManagedMemory` and forwarding it need never write `__ManagedFile`. Missing
+	// that file would leave its parameter annotation unresolvable while the program that calls it compiles.
 	function atManagedFileProducer() returns bool
-		return self.at(TokenKind.identifier) and self.current().value.equals(ManagedFileTypeName)
+		if not self.at(TokenKind.identifier) 'notAnIdentifier'
+			return false
+		end 'notAnIdentifier'
+		return self.current().value.equals(ManagedFileTypeName) or self.current().value.equals(ManagedMemoryTypeName)
 	end 'atManagedFileProducer'
 
 	// Is the cursor on `. <name>`? The shape every "does this file call builtin method X?" sweep probe
@@ -24338,6 +24345,31 @@ export type Parser
 		// the same instant. The rule above refuses a write through an immutable binding; this one records the
 		// write it permits, against the borrows still outstanding on that storage (`noteBorrowSubjectWrite`).
 		self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: mutatesReceiver)
+
+		// ⭐ **`.managed` IS AN IDENTITY (R4.1).** `__ManagedMemory` is bound to the very instance a byte
+		// array already has (see `ManagedMemoryTypeName`), so `bytes.managed` yields the receiver unchanged
+		// — no conversion, no allocation, no runtime call. The corpus reaches it exactly one way,
+		// `"…".toByteArray().managed`, to hand a path buffer to `__ManagedFile`.
+		//
+		// ⚠ It is a FIELD read, not a call: `stdlib/String.maxon:68` declares `var managed as ByteMemory`
+		// and the corpus writes no parentheses. So this arm returns BEFORE any argument list is consumed;
+		// routing it through the call arms below would demand a `(` the source does not write.
+		//
+		// ⚠ **GUARDED TO THE BYTE INSTANCE — BUT THE REFUSAL MAY NOT SAY THE FIELD IS BYTE-ONLY, BECAUSE IT
+		// IS NOT.** `stdlib/Array.maxon:106` declares `export var managed as ElementMemory` for EVERY
+		// element type, so `.managed` on an `Array with Wide` is legal Maxon yielding
+		// `__ManagedMemory with Wide`. What is true is narrower: shv2 binds `__ManagedMemory` to the BYTE
+		// instance alone at this rung (see `ManagedMemoryTypeName`), so it has no type to answer with for
+		// any other element. Saying otherwise would be a false statement about the language — exactly what
+		// `missingBaseLayout`'s header warns against for this very field, two doors away.
+		// ⇒ Returning the receiver for a non-byte array would be the worse bug: a word-strided record under
+		// a type that promises byte-addressable memory.
+		if methodTok.value.equals(ManagedMemoryFieldName) 'managedIdentity'
+			if giid != self.signatures.internArrayByteInstance() 'notAByteArray'
+				throw ParseError.unsupported("`.{String.from(ManagedMemoryFieldName)}` on this array: the field is real for every element type (`stdlib/Array.maxon` declares it), but shv2 binds `{String.from(ManagedMemoryTypeName)}` to a BYTE array only at this rung, so it has no type to give a non-byte element's buffer", line: methodTok.line, column: methodTok.column)
+			end 'notAByteArray'
+			return arr
+		end 'managedIdentity'
 
 		// Throwing accessors — a plain `call` the enclosing `try` rewrites; result is the element (get/first/
 		// last/pop/remove) or a discarded dummy (set). `resultUsed` is the try's concern, not checked here.
