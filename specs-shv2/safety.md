@@ -213,6 +213,50 @@ end 'main'
 42
 ```
 
+### A RUNTIME `-0.0` divisor throws too — both zeros, not just the one with a zero bit pattern
+
+`error.float-divide-by-negative-constant-zero` below pins `-0.0` as a *folded constant*, which the
+proof settles before any code is emitted. This case pins the other half: a `-0.0` that reaches the
+divide at RUNTIME. Nothing else in this suite reaches it — every other runtime float case here
+divides by `+0.0`, and `+0.0`'s bit pattern is 0, so it would pass even if the zero test read the
+divisor's bits as an integer. `-0.0` is `0x8000000000000000`, so it is the operand that tells a float
+compare apart from a bit compare.
+
+⚠ **What this case does NOT pin, measured rather than assumed.** Emitting that zero test as an
+INTEGER compare does not silently yield `-inf`: it is refused loudly by the x64 emitter's
+register-file guard (`requireClass`, `Targets/X64/X64Backend.maxon` — *"xmm0 is in the xmm register
+file where the gpr file is required"*), because the divisor is in an xmm and an integer compare wants
+a gpr. Verified by sabotage, and under that sabotage this case fails **together with**
+`float-divide-by-runtime-negative-zero`'s `+0.0` sibling rather than instead of it — so it does not
+discriminate there, and the structural guard is the real protection. What is left for this case to
+hold is the SEMANTICS (both zeros throw, and `x / -0.0` is not quietly `-inf`) and one future
+refactor the register guard cannot see: a deliberately well-typed bitcast of the divisor to an
+integer to avoid an xmm compare.
+
+<!-- test: float-divide-by-runtime-negative-zero -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+```maxon
+typealias Float = float(f64.min to f64.max)
+
+function opaque(x Float) returns Float
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let negZero = opaque(-0.0)
+	var result = 0
+	try (1.0 / negZero) otherwise (e) 'handle'
+		match e 'kind'
+			divisionByZero then result = 42
+		end 'kind'
+	end 'handle'
+	return result as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
 ### A possibly-zero divisor without `try` is refused (E3057)
 
 The divide is a throwing operation, so a bare one drops an error flag the caller never reads.
