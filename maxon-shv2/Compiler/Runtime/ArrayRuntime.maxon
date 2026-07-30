@@ -385,9 +385,19 @@ end 'isArrayRuntimeCallee'
 export function isThrowingArrayRuntimeCallee(callee ByteArray) returns bool
 	// R4.2 appends the three `__ManagedMemory` members, which throw `__ManagedMemoryError` rather than
 	// `ArrayError` — a different enum, but the same "throwing vs not" answer this predicate exists to give
-	// (`funcSignatureResultValTypes` reads `throwsClauseIsThrowing`, never the name's bytes).
-	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName) or callee.equals(ArrMemCreateName) or callee.equals(ArrSetLengthName) or callee.equals(ArrSetByteName)
+	// (`funcSignatureResultValTypes` reads `throwsClauseIsThrowing`, never the name's bytes). They arrive as
+	// the ONE list `isManagedMemoryRuntimeCallee` holds, because `GtRuntime.runtimeThrowsClause` needs the same
+	// three names and two hand-written lists of one set is what this file's guard exists to catch.
+	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName) or isManagedMemoryRuntimeCallee(callee)
 end 'isThrowingArrayRuntimeCallee'
+
+// The three `__ManagedMemory` members, as one list with two readers: `isThrowingArrayRuntimeCallee` (THAT they
+// throw) and `GtRuntime.runtimeThrowsClause` (which pairs this with `managedMemoryThrows`, the WHAT — it sits
+// with the three builders that stamp it, below). All three are throwing, so this set and the throwing set
+// coincide — which is exactly why they must not be spelled twice.
+export function isManagedMemoryRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(ArrMemCreateName) or callee.equals(ArrSetLengthName) or callee.equals(ArrSetByteName)
+end 'isManagedMemoryRuntimeCallee'
 
 // A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
 // is the bit offset of element byte `i`; `BitsPerByte` names the 8.
@@ -2032,11 +2042,21 @@ function buildArrSetByte(module StdModule)
 	module.functions.push(func)
 end 'buildArrSetByte'
 
-// The `throws __ManagedMemoryError` stamp the three `__ManagedMemory` members carry. A `__ManagedMemory`
-// member does NOT throw `ArrayError`: the reference gives it its own enum, whose `invalidLength` and
-// `invalidByteRange` name conditions `ArrayError` has no case for, and a handler that binds the error must
-// see the cases the operation can actually report.
-function managedMemoryThrows() returns ThrowsClause
+// ⭐ **THE `throws __ManagedMemoryError` STAMP the three `__ManagedMemory` members carry, AND WHAT A CALLER'S
+// `otherwise (e)` BINDING IS TYPED FROM.** A `__ManagedMemory` member does NOT throw `ArrayError`: the
+// reference gives it its own enum, whose `invalidLength` and `invalidByteRange` name conditions `ArrayError`
+// has no case for, and a handler that binds the error must see the cases the operation can actually report.
+//
+// ⚠ **EXPORTED IN REVIEW, BECAUSE UNTIL THEN `__ManagedMemoryError` HAD NO READER (R4.2).**
+// `ProgramSignatures.throwsOf` answered `none` for these three callees, so `e` bound with no type and
+// `match e 'k' invalidLength then …` was refused as `E2015: Unsupported: a match pattern naming
+// 'invalidLength' (… enum-case patterns arrive in a later wave)` — a diagnostic about a MISSING FEATURE for a
+// program whose feature is present, and the exact defect `throwsOf`'s own comment records R4.1 having fixed
+// for the file family. MEASURED against the control that the identical `match` over `__ManagedFileError`
+// compiles and runs. The rung made this enum's case ORDER a wire format precisely so a handler could
+// discriminate it, and a wire format with no reader is a claim nothing checks;
+// `managed-memory-error-variants` now pins all three reachable cases.
+export function managedMemoryThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ManagedMemoryErrorTypeName))
 end 'managedMemoryThrows'
 

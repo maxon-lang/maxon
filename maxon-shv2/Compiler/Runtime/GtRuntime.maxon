@@ -627,6 +627,37 @@ export function isThrowingRuntimeCallee(callee ByteArray) returns bool
 	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
+// ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
+// the predicate above, and the WHAT to its THAT. `ProgramSignatures.throwsOf` asks it once, so a family that
+// gains a discriminable error is added HERE and every caller's `otherwise (e)` binding is typed by it, rather
+// than `throwsOf` growing one `match` per family.
+//
+// ⚠ **A FAMILY THAT ANSWERS `none` IS A SCOPED STATEMENT, NOT AN OVERSIGHT**, and the reason is `throwsOf`'s
+// own: the GT and plain-`ArrayError` families throw too, but no committed case BINDS and discriminates their
+// error, so a clause for them would be an untested claim about their ordinals. Add the arm with the case that
+// needs it — which is what R4.1 did for the file family and what review did for the memory one.
+//
+// ⚠⚠ **IT PAIRS EACH FAMILY'S PREDICATE WITH ITS CLAUSE SPELLER AND RETURNS A `ThrowsClause`, AND THAT SHAPE
+// IS A MEASUREMENT rather than a preference.** The first cut composed two per-family
+// `…RuntimeThrowsClause(callee) returns ThrowsClauseOption` functions — an optional over a type that ALREADY
+// has a `none` arm — and the ladder read **+20 allocations at rung 0 DOUBLING to +640 at rung 5**, one extra
+// 16-byte union box per `try` in the program, because two families meant two optionals built per ask.
+// `ThrowsClauseOption` is gone with it: `ThrowsClause.none` already says "this callee throws nothing", so the
+// wrapper said one thing twice and charged for the second. ⭐ **A DEDUP THAT IS CORRECT CAN STILL BE
+// UNSCALABLE** — `docs/optimization-log.md` records the same +20-doubling-to-+640 signature once already,
+// from `joinCommaSeparated` on `checkEnumExhaustive`'s success path.
+export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
+	if isThrowingManagedFileRuntimeCallee(callee) 'fileFamily'
+		return managedFileThrows()
+	end 'fileFamily'
+
+	if isManagedMemoryRuntimeCallee(callee) 'memoryFamily'
+		return managedMemoryThrows()
+	end 'memoryFamily'
+
+	return ThrowsClause.none
+end 'runtimeThrowsClause'
+
 // The GT runtime's `.data` slots, appended to the user's globals before `layOut` orders them — ordinary
 // i64 slots in every respect, exactly like MmRuntime's `runtimeGlobals()`.
 export function gtRuntimeGlobals() returns DataSectionEntryArray

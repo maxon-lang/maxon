@@ -2762,15 +2762,16 @@ export type ProgramSignatures
 		// against the control: the identical `match` over a USER enum's error compiles and runs, so the gap
 		// was the binding's type, not the match.
 		//
-		// Only the file family answers here, and that is a scoped statement rather than an oversight: it is
-		// the only throwing runtime family whose error a corpus case BINDS and discriminates. The array and
-		// GT families throw too (`isThrowingRuntimeCallee` names all three), but no committed case matches on
-		// their error, so giving them a clause here would be an untested claim about their ordinals. Add the
-		// arm with the case that needs it.
-		match managedFileRuntimeThrowsClause(callee) 'runtimeCallee'
-			some(clause) then return clause
-			none then break 'runtimeCallee'
+		// ⚠ WHICH families answer is `runtimeThrowsClause`'s to say, not this function's — see it for why a
+		// family answering `none` is a scoped statement rather than an oversight. It is asked ONCE here so a
+		// family added there is typed at every `(e)` binding without this door growing a second `match`.
+		// (R4.2's `__ManagedMemory` members were the second family, and they were added in review: the rung
+		// declared an eight-case error enum that nothing could discriminate.)
+		let runtimeClause = runtimeThrowsClause(callee)
+		if throwsClauseIsThrowing(runtimeClause) 'runtimeCallee'
+			return runtimeClause
 		end 'runtimeCallee'
+
 		return try self.funcThrows.get(callee) otherwise ThrowsClause.none
 	end 'throwsOf'
 

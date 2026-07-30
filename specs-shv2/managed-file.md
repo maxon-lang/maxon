@@ -25,7 +25,10 @@ category: type-system
 - `__ManagedFile.openWriteExecutable(managed)` — As openWrite, with 0755 on Unix. Throws on failure.
 - `__ManagedFile.exists(managed)` — Returns 1 if the file exists (and is not a directory), 0 otherwise. Does not throw.
 - `__ManagedFile.delete(managed)` — Deletes a file. Throws `__ManagedFileError` on failure.
-- `__ManagedFile.stat(managed)` — Returns a raw stat buffer pointer. Throws on failure.
+- `__ManagedFile.rename(oldPath, newPath)` — Atomically renames a file, replacing an existing destination. Throws `__ManagedFileError` on failure (`deleteFailed` is the catch-all — the enum has no `renameFailed`, in either reference).
+- `__ManagedFile.stat(managed)` — Returns a raw stat buffer pointer. Throws on failure. **The caller OWNS that buffer and must hand it back to `statFree`**: it is a raw allocation the ownership model cannot see, so a `stat` whose buffer is never freed is a leak the exit-101 gate reports.
+- `__ManagedFile.statField(buffer, index)` — Reads field `index` of a stat buffer: `0` size, `1` modified, `2` created, `3` accessed (all three Unix SECONDS), `4` isDirectory, `5` isReadOnly. The two attribute fields are **0 or 1**, never a raw attribute mask. Does not throw — a null buffer or an index outside `[0, 6)` (a negative one included) is a caller invariant violation and ABORTS.
+- `__ManagedFile.statFree(buffer)` — Releases a stat buffer. Does not throw; aborts on a null buffer. Void and non-throwing, so it is written as a bare STATEMENT (`__ManagedFile.statFree(st)`), which is the only position it has.
 
 ### Instance Methods
 
@@ -434,4 +437,76 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: managed-file.stat-round-trip -->
+<!-- targets: x64-windows -->
+shv2-authored, and it is the case whose ABSENCE was the R4.2 review's first blocker: not one committed
+case reached a SUCCESSFUL `stat`. Every canonical `stat` exercise goes through `File.info`, and
+`stdlib/FilePath.maxon` is not whitelisted for shv2, so `stat-not-found-variant` — which throws before a
+buffer exists — was the whole of the coverage. `statField` and `statFree` had none at all.
+
+What that hid was total: `__ManagedFile.statFree(buffer)` is VOID and NON-THROWING, so a bare statement is
+the only position it can be written in, and the statement parser did not route a compiler-owned static
+there. The canonical spelling (`stdlib/File.maxon:186`, verbatim) died as
+`E2015: Unsupported: identifier statement`, which made the only release for `stat`'s raw `__mm_alloc` block
+UNREACHABLE — so every successful `stat` leaked 48 bytes and the program exited **101**. A rung that
+delivers `stat` and cannot free its result has not delivered `stat`.
+
+What the case pins, and why each half is here rather than one of them:
+- **the buffer is FREED** — this runs under the leak gate, so the fix is checked by the exit code, not by
+  reading the parser;
+- **the six FIELDS carry the packing** — `[0]` is the size (5, from a 5-byte write), `[32]`/`[40]` are the
+  two attribute bits published as **0/1** and never as the raw mask (`stdlib/File.maxon:183` compares
+  `attrs == 1`, so a leaked `0x10` would be a silent wrong answer), and `[8]`/`[16]`/`[24]` are Unix
+  SECONDS. A plausibility WINDOW is the strongest stable assertion available for a clock, and it is a real
+  one: a FILETIME that skipped the epoch subtraction reads ~1.3e10 s, and one that skipped the ÷10,000,000
+  reads ~1.7e16 — both far outside it;
+- **a DIRECTORY answers `isDirectory == 1`** through the same buffer, which is the other half of the bit
+  that `exists` reads as its whole answer.
+```maxon
+function main() returns ExitCode
+	let path = "test_managed_stat_round_trip.txt"
+	var f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
+		return 1
+	end 'openFail'
+	try f.write("abcde".toByteArray().managed) otherwise 'writeFail'
+		f.close()
+		return 2
+	end 'writeFail'
+	f.close()
+
+	let st = try __ManagedFile.stat(path.toByteArray().managed) otherwise 'statFail'
+		return 3
+	end 'statFail'
+	print("size={__ManagedFile.statField(st, 0)} isDirectory={__ManagedFile.statField(st, 4)} isReadOnly={__ManagedFile.statField(st, 5)}\n")
+	var implausible = 0
+	for i in 1 to 3 'stamps'
+		let t = __ManagedFile.statField(st, i)
+		if t < 1577836800 or t > 4102444800 'window'
+			implausible = implausible + 1
+		end 'window'
+	end 'stamps'
+	print("implausibleTimestamps={implausible}\n")
+	__ManagedFile.statFree(st)
+
+	let dst = try __ManagedFile.stat(".".toByteArray().managed) otherwise 'dirStatFail'
+		return 4
+	end 'dirStatFail'
+	print("dirIsDirectory={__ManagedFile.statField(dst, 4)}\n")
+	__ManagedFile.statFree(dst)
+
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise 'deleteFail'
+		return 5
+	end 'deleteFail'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+size=5 isDirectory=0 isReadOnly=0
+implausibleTimestamps=0
+dirIsDirectory=1
 ```

@@ -145,6 +145,19 @@ let ManagedFileRuntimePrefix = b"__mf_"
 // answers with one, and the test is always "is it zero?".
 let Win32False = 0 as ParsedInt
 
+// ⭐ **THE SCRATCH WORD A Win32 OUT-PARAMETER IS WRITTEN THROUGH** — `GetFileSizeEx`'s `PLARGE_INTEGER` and
+// `ReadFile`/`WriteFile`'s `lpNumberOfBytes*`. Named for THAT purpose rather than reusing `StatFieldBytes`
+// (which is a stat record's field STRIDE): the two are both 8 and mean different things, and one constant
+// standing for two facts is what a later change to either would silently move.
+//
+// ⚠ **8 BYTES FOR A 4-BYTE WRITE IS DELIBERATE, AND ITS CORRECTNESS RESTS ON THE SLAB'S ZEROING CONTRACT.**
+// `lpNumberOfBytesRead`/`Written` are `LPDWORD` — the OS writes FOUR bytes — yet the count is read back as a
+// full i64. That is right because `__mm_alloc` hands out zeroed memory and says so (see its refcount
+// comment: the zeroing is the allocator's stated guarantee, not a local accident), so the upper four bytes
+// are 0 and the word IS the DWORD. Masking here would be the caller re-establishing a guarantee the
+// allocator already makes — the precise habit `MmRuntime` warns against.
+let Win32OutWordBytes = 8 as ParsedInt
+
 // ⭐ **THE THIRTEEN ENTRY POINTS.** Twelve name a `__ManagedFile` method; `__mf_destruct` is the
 // compiler-INSERTED one — the drop a `__ManagedFile` box takes when its last owner goes away
 // (`SignatureIndex.managedNameDropCallee`), which is the whole of the RAII half of this type.
@@ -188,27 +201,21 @@ export function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns boo
 	return callee.equals(ManagedFileOpenReadName) or callee.equals(ManagedFileOpenWriteName) or callee.equals(ManagedFileSizeName) or callee.equals(ManagedFileReadName) or callee.equals(ManagedFileWriteName) or callee.equals(ManagedFileDeleteName) or callee.equals(ManagedFileRenameName) or callee.equals(ManagedFileStatName)
 end 'isThrowingManagedFileRuntimeCallee'
 
-// ⭐ **THE ERROR TYPE A FILE CALLEE THROWS — what `ProgramSignatures.throwsOf` answers with for a callee no
-// file declares (R4.1).** The throwing PREDICATE (`isThrowingManagedFileRuntimeCallee`) says THAT it throws;
-// this says WHAT, which is what types an `otherwise (e)` binding and therefore what makes `match e` see an
-// enum instead of a scalar. Kept beside the predicate deliberately: they are two halves of one fact, and
-// the drift guard in `installManagedFileRuntime` holds the predicate to the builders' stamps.
-export function managedFileRuntimeThrowsClause(callee ByteArray) returns ThrowsClauseOption
-	if not isThrowingManagedFileRuntimeCallee(callee) 'notOurs'
-		return ThrowsClauseOption.none
-	end 'notOurs'
-	return ThrowsClauseOption.some(ThrowsClause.throwing(String.from(ManagedFileErrorTypeName)))
-end 'managedFileRuntimeThrowsClause'
-
-// The optional a caller reads without paying a heap box on the common "not a file callee" answer.
-export union ThrowsClauseOption
-	none
-	some(clause ThrowsClause)
-end 'ThrowsClauseOption'
-
-// The `throws __ManagedFileError` stamp every throwing builder carries — written once so eight builders
-// cannot spell it eight ways.
-function managedFileThrows() returns ThrowsClause
+// ⭐ **THE ERROR TYPE A FILE CALLEE THROWS — the WHAT to the predicate's THAT.** `ProgramSignatures.throwsOf`
+// answers with it for a callee no file declares (R4.1), which is what types an `otherwise (e)` binding and
+// therefore what makes `match e` see an enum instead of a scalar; the eight throwing builders stamp it as
+// their `throws` clause. ONE speller for one fact — kept beside the predicate deliberately, because the two
+// are halves of it and the drift guard in `installManagedFileRuntime` holds the predicate to the stamps.
+//
+// ⚠ It is EXPORTED and there is no `…RuntimeThrowsClause` wrapper beside it any more. R4.1 had one, returning
+// a `ThrowsClauseOption` — an optional over a type that ALREADY has a `none` arm — and review measured what
+// that cost when a second family joined it: composing two of those optionals put **+20 allocations at rung 0
+// DOUBLING to +640 at rung 5** on the ladder, one extra 16-byte union box per `try` in the program. The
+// composer (`GtRuntime.runtimeThrowsClause`) now asks the two PREDICATES and returns a `ThrowsClause`
+// directly, so exactly one clause value is built per ask, as before. (`docs/optimization-log.md` already
+// records the identical signature once — `joinCommaSeparated` in `checkEnumExhaustive`, same
+// +20-doubling-to-+640 — under the heading *a dedup that is correct can still be unscalable*.)
+export function managedFileThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ManagedFileErrorTypeName))
 end 'managedFileThrows'
 
@@ -261,6 +268,41 @@ end 'emitRawAlloc'
 function emitRawFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(ptr)))
 end 'emitRawFree'
+
+// One `Win32OutWordBytes` scratch word for an OUT-PARAMETER — see that constant for the size and for why the
+// four bytes `ReadFile` does not write read back as zero. The caller owns it and releases it through
+// `emitWin32BoolOutcome`.
+function emitWin32OutWord(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let wordSize = emitConst(module, block: block, value: Win32OutWordBytes, ids: ids)
+	return emitRawAlloc(module, block: block, byteCount: wordSize, ids: ids)
+end 'emitWin32OutWord'
+
+// ⭐⭐ **THE TAIL OF EVERY "BOOL VERDICT PLUS AN OUT-PARAMETER WORD" CALL — ONE HOME, THREE CALLERS**
+// (`size`, `read`, `write`). The op itself differs in arity and operands and so stays at the call site; what
+// follows it does not, and was written out three times: capture the last error, read the answer the OS wrote,
+// release the scratch, test the BOOL, and route to the shared errno classification or to the success exit.
+//
+// ⚠ **THE ORDER OF THE FIRST THREE IS LOAD-BEARING, WHICH IS THE REASON TO STATE IT ONCE.** `osLastError`
+// comes IMMEDIATELY after the call — a `__mm_free` in between would run Win32 code of its own and could
+// overwrite the thread's last-error — and the READ of the out word comes before the FREE, which is what makes
+// the scratch released on BOTH exits rather than on one of them. Three copies of that ordering is three
+// chances to get one of them wrong, and the failure would be a wrong errno variant or a leak, not a
+// compile error.
+//
+// `failed` and `ok` arrive from the caller rather than being minted here so the function's block ORDER is the
+// caller's to state — it is what the emitted code's layout follows.
+function emitWin32BoolOutcome(module StdModule, func IrFunction, block IrBlock, verdict ValueId, out ValueId, failed IrBlock, ok IrBlock, fallbackFlag ParsedInt, ids ValueMinter)
+	let err = ids.mint()
+	module.appendOp(block, op: StdOp.osLastError(err))
+	let answer = emitLoadField(module, block: block, record: out, offset: 0 as ByteOffset, ids: ids)
+	emitRawFree(module, block: block, ptr: out, ids: ids)
+	let falseConst = emitConst(module, block: block, value: Win32False, ids: ids)
+	let failedCall = emitCmp(module, block: block, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(failedCall, thenBlockId: failed.id, elseBlockId: ok.id))
+
+	emitErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: fallbackFlag, ids: ids)
+	emitManagedFileOk(module, block: ok, value: answer, ids: ids)
+end 'emitWin32BoolOutcome'
 
 // ⭐⭐ **THE errno → VARIANT MAPPING, AND THE ONLY PLACE IT LIVES.** `err` is a `GetLastError` reading the
 // caller captured; this turns it into a `__ManagedFileError` and THROWS from `block`.
@@ -484,20 +526,10 @@ function buildManagedFileSize(module StdModule)
 	let box = 0 as ValueId
 	let handle = emitOpenHandleOrThrow(module, func: func, entry: entry, join: doSize, box: box, ids: ids)
 
-	let wordSize = emitConst(module, block: doSize, value: StatFieldBytes, ids: ids)
-	let out = emitRawAlloc(module, block: doSize, byteCount: wordSize, ids: ids)
+	let out = emitWin32OutWord(module, block: doSize, ids: ids)
 	let verdict = ids.mint()
 	module.appendOp(doSize, op: StdOp.osFileSize(verdict, handleId: handle, sizeOutPtrId: out))
-	let err = ids.mint()
-	module.appendOp(doSize, op: StdOp.osLastError(err))
-	let size = emitLoadField(module, block: doSize, record: out, offset: 0 as ByteOffset, ids: ids)
-	emitRawFree(module, block: doSize, ptr: out, ids: ids)
-	let falseConst = emitConst(module, block: doSize, value: Win32False, ids: ids)
-	let failedCall = emitCmp(module, block: doSize, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(doSize, op: StdOp.condBranch(failedCall, thenBlockId: failed.id, elseBlockId: ok.id))
-
-	emitErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedFileSizeFailedFlag, ids: ids)
-	emitManagedFileOk(module, block: ok, value: size, ids: ids)
+	emitWin32BoolOutcome(module, func: func, block: doSize, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileSizeFailedFlag, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedFileSize'
@@ -544,20 +576,10 @@ function buildManagedFileRead(module StdModule)
 	emitManagedFileThrow(module, block: tooBig, flag: ManagedFileReadFailedFlag, ids: ids)
 
 	let buffer = emitLoadField(module, block: doRead, record: arrRec, offset: ArrBufferOffset, ids: ids)
-	let wordSize = emitConst(module, block: doRead, value: StatFieldBytes, ids: ids)
-	let out = emitRawAlloc(module, block: doRead, byteCount: wordSize, ids: ids)
+	let out = emitWin32OutWord(module, block: doRead, ids: ids)
 	let verdict = ids.mint()
 	module.appendOp(doRead, op: StdOp.osReadFile(verdict, handleId: handle, bufId: buffer, lenId: size, bytesOutPtrId: out))
-	let err = ids.mint()
-	module.appendOp(doRead, op: StdOp.osLastError(err))
-	let bytesRead = emitLoadField(module, block: doRead, record: out, offset: 0 as ByteOffset, ids: ids)
-	emitRawFree(module, block: doRead, ptr: out, ids: ids)
-	let falseConst = emitConst(module, block: doRead, value: Win32False, ids: ids)
-	let failedCall = emitCmp(module, block: doRead, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(doRead, op: StdOp.condBranch(failedCall, thenBlockId: failed.id, elseBlockId: ok.id))
-
-	emitErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedFileReadFailedFlag, ids: ids)
-	emitManagedFileOk(module, block: ok, value: bytesRead, ids: ids)
+	emitWin32BoolOutcome(module, func: func, block: doRead, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileReadFailedFlag, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedFileRead'
@@ -584,20 +606,10 @@ function buildManagedFileWrite(module StdModule)
 
 	let buffer = emitLoadField(module, block: doWrite, record: arrRec, offset: ArrBufferOffset, ids: ids)
 	let byteLength = emitArrayByteExtent(module, block: doWrite, arrRec: arrRec, offset: ArrLengthOffset, ids: ids)
-	let wordSize = emitConst(module, block: doWrite, value: StatFieldBytes, ids: ids)
-	let out = emitRawAlloc(module, block: doWrite, byteCount: wordSize, ids: ids)
+	let out = emitWin32OutWord(module, block: doWrite, ids: ids)
 	let verdict = ids.mint()
 	module.appendOp(doWrite, op: StdOp.osWriteFile(verdict, handleId: handle, bufId: buffer, lenId: byteLength, bytesOutPtrId: out))
-	let err = ids.mint()
-	module.appendOp(doWrite, op: StdOp.osLastError(err))
-	let written = emitLoadField(module, block: doWrite, record: out, offset: 0 as ByteOffset, ids: ids)
-	emitRawFree(module, block: doWrite, ptr: out, ids: ids)
-	let falseConst = emitConst(module, block: doWrite, value: Win32False, ids: ids)
-	let failedCall = emitCmp(module, block: doWrite, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(doWrite, op: StdOp.condBranch(failedCall, thenBlockId: failed.id, elseBlockId: ok.id))
-
-	emitErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedFileWriteFailedFlag, ids: ids)
-	emitManagedFileOk(module, block: ok, value: written, ids: ids)
+	emitWin32BoolOutcome(module, func: func, block: doWrite, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileWriteFailedFlag, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedFileWrite'

@@ -699,3 +699,99 @@ false
 false
 false
 ```
+
+### `__ManagedMemoryError` is DISCRIMINABLE, not just thrown
+
+R4.2 gave the three delivered members (`create`/`setLength`/`setByte`) an error enum of their OWN rather
+than `ArrayError`, because `invalidLength` and `invalidByteRange` name conditions `ArrayError` has no case
+for — and it made the enum's case ORDER a wire format (the ordinal IS the flag the runtime returns) for
+exactly that reason. **A wire format with no reader is a claim nothing checks**, and until the review of
+that rung there was no reader: `ProgramSignatures.throwsOf` answered `none` for the three callees, so
+`otherwise (e)` bound `e` with no type and the `match` below was refused as
+`E2015: … a match pattern naming 'invalidAllocation' … enum-case patterns arrive in a later wave` — a
+diagnostic about a MISSING FEATURE, for a program whose feature is present. (The same defect R4.1 had to
+fix for `__ManagedFileError`; `runtimeThrowsClause` is now the one home both families answer through.)
+
+So this case pins the ORDINALS, not merely that a throw happens: six refusals across three members, each
+landing on the case the operation is documented to report. A shifted ordinal reroutes every arm at once and
+the `default panic` says which.
+
+<!-- test: managed-memory-error-variants -->
+```maxon
+function main() returns ExitCode
+	var seen = 0
+	try __ManagedMemory.create(4, 0) otherwise (e) 'zeroElementSize'
+		match e 'k'
+			invalidAllocation then seen = seen + 1
+			default panic("create(4, 0) must report invalidAllocation")
+		end 'k'
+	end 'zeroElementSize'
+	try __ManagedMemory.create(-1, 1) otherwise (e) 'negativeCount'
+		match e 'k'
+			invalidAllocation then seen = seen + 1
+			default panic("create(-1, 1) must report invalidAllocation")
+		end 'k'
+	end 'negativeCount'
+
+	var m = try __ManagedMemory.create(4, 1) otherwise 'createFail'
+		return 1
+	end 'createFail'
+	try m.setLength(5) otherwise (e) 'aboveCapacity'
+		match e 'k'
+			invalidLength then seen = seen + 1
+			default panic("setLength above capacity must report invalidLength")
+		end 'k'
+	end 'aboveCapacity'
+	try m.setLength(-1) otherwise (e) 'negativeLength'
+		match e 'k'
+			invalidLength then seen = seen + 1
+			default panic("setLength(-1) must report invalidLength")
+		end 'k'
+	end 'negativeLength'
+	try m.setByte(4, 65) otherwise (e) 'pastLength'
+		match e 'k'
+			invalidByteRange then seen = seen + 1
+			default panic("setByte at the live length must report invalidByteRange")
+		end 'k'
+	end 'pastLength'
+	try m.setByte(-1, 65) otherwise (e) 'negativeOffset'
+		match e 'k'
+			invalidByteRange then seen = seen + 1
+			default panic("setByte(-1) must report invalidByteRange")
+		end 'k'
+	end 'negativeOffset'
+
+	if seen == 6 'allSix'
+		return 42
+	end 'allSix'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+### The `__ManagedMemory` mutators are not `Array` methods, and a `let` receiver says so
+
+<!-- test: error.managed-memory-mutator-is-not-an-array-method -->
+
+`__ManagedMemory` IS an `Array with Byte` at this rung, so a `__ManagedMemory` member necessarily arrives on
+an array receiver and can only be gated on that INSTANCE. `setLength`/`setByte` are therefore dispatched only
+for the byte instance — and the immutable-receiver rule (E3019) has to be gated on the same answer, or it
+complains about MUTABILITY for a method the receiver has no dispatch arm for. R4.2 shipped it ungated: this
+program reported `E3019 cannot pass 'a' to function that mutates parameter 'self'`, while the identical
+program with `var` reported the unknown-method refusal below. Refused either way — but a program must be
+refused for the REASON that is true of it, and the true reason is that `Array with Int` has no `setLength`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	try a.setLength(2) otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:8: Unsupported: `Array` method 'setLength' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later
+```

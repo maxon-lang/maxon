@@ -2079,7 +2079,7 @@ let BuiltinsSleepName = b"__Builtins.sleep"
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
 // must never disagree: the intrinsic table in `parseCallNamed` (which dispatches on it) and the
-// STATEMENT door's `builtinsIntrinsicCallsAt` (which decides that `__Builtins.sleep(ms)` on a line of
+// STATEMENT door's `voidCompilerStaticCallsAt` (which decides that `__Builtins.sleep(ms)` on a line of
 // its own is a statement at all). Written once for the reason `isClockRuntimeCallee` is — a band's
 // membership question belongs with the band's names, not restated at each site.
 function isBuiltinsIntrinsicCallee(callee ByteArray) returns bool
@@ -2405,12 +2405,20 @@ let ArrayValueLabel = b"value"
 // ⚠ It is NOT `isArrayMoveInMutator`, and neither can be defined from the other: that one answers
 // "does this method take OWNERSHIP of an element?" (push/set/insert only), which is a question about
 // the ARGUMENT. This one is about the RECEIVER.
-function arrayMethodMutatesReceiver(name ByteArray) returns bool
+// ⚠ **`isManagedMemory` IS NOT DECORATION: the two `__ManagedMemory` mutators EXIST ONLY ON THE BYTE
+// INSTANCE**, so naming them unconditionally would apply the immutable-receiver rule to methods the receiver
+// has no dispatch arm for — E3019 for a `let` receiver where `var` correctly says the method is unknown. Every
+// other name here is a real `Array` method on every instance and needs no gate. (Found in review, R4.2.)
+function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) returns bool
 	// R4.2 appends the two `__ManagedMemory` MUTATORS. They belong in this list for the same reason `resize`
 	// and `set` do — both rewrite the record (`setLength` its `length@8` and the vacated bytes, `setByte` one
 	// byte of its buffer) — so a `let`-bound receiver is E3019 and an outstanding borrow is E3070, through the
 	// one home those two rules have. `length()` only reads and is deliberately absent.
-	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod) or name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod)
+	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod)) 'managedMemoryMutator'
+		return true
+	end 'managedMemoryMutator'
+
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
 end 'arrayMethodMutatesReceiver'
 
 // ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the same immutable-receiver rule,
@@ -9859,9 +9867,18 @@ export type Parser
 			// this is the chain case, dispatched for effect (`resultUsed: false`). A function field's trailing
 			// `(args)` goes through `parsePostfix` exactly as the one-hop `methodCallStmt` above.
 			_ = try self.parseFieldChainCall(func, resultUsed: false)
-		end 'fieldChainMethodStmt' else if self.builtinsIntrinsicCallsAt(self.pos) 'builtinsIntrinsicStmt'
-			// ⭐ `__Builtins.sleep(ms)` — A VOID COMPILER INTRINSIC CALLED FOR ITS EFFECT, and the reason a
-			// STATIC call is otherwise not a statement does not apply to it. `Point.create()` on a line of
+		end 'fieldChainMethodStmt' else if self.voidCompilerStaticCallsAt(self.pos) 'voidCompilerStaticStmt'
+			// ⭐ `__Builtins.sleep(ms)` / `__ManagedFile.statFree(buffer)` — A VOID COMPILER-OWNED STATIC
+			// CALLED FOR ITS EFFECT, and `statFree` is the case that makes the position load-bearing rather
+			// than a convenience: it is the ONLY thing that can release the raw block `stat` hands back, and
+			// it is void and non-throwing, so a statement is the only position it can be written in. Without
+			// this arm the canonical spelling (`stdlib/File.maxon:186`) died as
+			// `E2015: Unsupported: identifier statement` and every successful `stat` leaked 48 bytes — exit
+			// 101, measured (found in review, R4.2). The void-and-THROWING pair (`delete`/`rename`) never
+			// needed it: a `try` statement is their own form.
+			//
+			// The reason a
+			// STATIC call is otherwise not a statement does not apply to either. `Point.create()` on a line of
 			// its own is refused because it discards a box nothing would then free (`methodCallsAt`); an
 			// intrinsic allocates nothing, so a value-returning one written here simply has its result
 			// discarded, exactly as every other bare-call statement's is.
@@ -9878,7 +9895,7 @@ export type Parser
 			// so widening the statement door widens no name, it only routes them to the same answer
 			// expression position already gives.
 			_ = try self.parseQualifiedCall(func, resultUsed: false)
-		end 'builtinsIntrinsicStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+		end 'voidCompilerStaticStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
 			// HERE and nowhere else: this is the position that wants no value.
@@ -22614,7 +22631,7 @@ export type Parser
 	//   • a DECLARED callee under the mangled static name — every plain struct's `Widget.byteLength`, and
 	//     a user generic alias's `IntBox.create` through its base. The name is built by the SAME
 	//     expression `parseQualifiedCall` builds it with, `qualifiedCallBaseName` included, rather than
-	//     re-spelled here: two derivations of one callee name is the drift `builtinsIntrinsicCallsAt`
+	//     re-spelled here: two derivations of one callee name is the drift `voidCompilerStaticCallsAt`
 	//     documents at length, and its failure is a call accepted at one door and refused at the other.
 	function staticCallClaimsBase(index TokenIndex) returns bool
 		let baseName = self.tokenAt(index).value
@@ -23261,17 +23278,13 @@ export type Parser
 			return self.emitRuntimeCall(ManagedFileStatName, args: singletonArgs(path), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'stat'
 		if methodTok.value.equals(ManagedFileStatFieldMethod) 'statField'
-			try self.consume(TokenKind.leftParen)
-			let buffer = try self.parseBuiltinIntegerArg(func, paramName: ManagedFileBufferParamName, methodTok: methodTok)
-			try self.consume(TokenKind.comma)
-			let index = try self.parseBuiltinIntegerArg(func, paramName: ManagedFileIndexParamName, methodTok: methodTok)
-			try self.consume(TokenKind.rightParen)
-			return self.emitRuntimeCall(ManagedFileStatFieldName, args: pairArgs(buffer, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			let args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedFileBufferParamName, secondParam: ManagedFileIndexParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ManagedFileStatFieldName, args: args, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'statField'
+		// ⚠ VOID and NON-throwing, so a bare STATEMENT is the only position it has — see the
+		// `voidCompilerStaticStmt` arm, which exists for it.
 		if methodTok.value.equals(ManagedFileStatFreeMethod) 'statFree'
-			try self.consume(TokenKind.leftParen)
-			let buffer = try self.parseBuiltinIntegerArg(func, paramName: ManagedFileBufferParamName, methodTok: methodTok)
-			try self.consume(TokenKind.rightParen)
+			let buffer = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedFileBufferParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ManagedFileStatFreeName, args: singletonArgs(buffer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'statFree'
 
@@ -23317,6 +23330,34 @@ export type Parser
 		end 'notInteger'
 		return value
 	end 'parseBuiltinIntegerArg'
+
+	// `(<n>)` — the one-`int`-argument list `statFree` and `setLength` share. The `__ManagedMemory` sibling's
+	// `parseOneManagedMemoryArgList`, for its reason.
+	function parseOneBuiltinIntegerArgList(func IrFunction, paramName ByteArray, methodTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let value = try self.parseBuiltinIntegerArg(func, paramName: paramName, methodTok: methodTok)
+		try self.consume(TokenKind.rightParen)
+		return value
+	end 'parseOneBuiltinIntegerArgList'
+
+	// ⭐ **`(<a>, <b>)` — THE TWO-`int` ARGUMENT LIST, ONE HOME, THREE CALLERS** (`statField`,
+	// `__ManagedMemory.create`, `setByte`). It returns the argument ARRAY rather than the two values, because
+	// that is what all three callers then hand to `emitRuntimeCall`.
+	//
+	// ⚠ **THE PAREN/COMMA PROTOCOL IS THE FACT WORTH SINGLE-HOMING, not the two calls it brackets.** These
+	// builtins take their second argument POSITIONALLY (`statField(buf, 3)`), which every other call in the
+	// language may not — E2053 requires `name: value` past the first — and that exemption is the oracle's
+	// spelling (`stdlib/File.maxon:178-184`), not a shortcut. Written out per site it would be three places to
+	// change if it ever stopped being an exemption, and a site missed would go on ACCEPTING the old spelling:
+	// a wrong acceptance, not a compile error.
+	function parseTwoBuiltinIntegerArgList(func IrFunction, firstParam ByteArray, secondParam ByteArray, methodTok Token) returns ValueIdArray throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let first = try self.parseBuiltinIntegerArg(func, paramName: firstParam, methodTok: methodTok)
+		try self.consume(TokenKind.comma)
+		let second = try self.parseBuiltinIntegerArg(func, paramName: secondParam, methodTok: methodTok)
+		try self.consume(TokenKind.rightParen)
+		return pairArgs(first, second: second)
+	end 'parseTwoBuiltinIntegerArgList'
 
 	// ⭐ **`String.from(bytes)` — THE ONE `String` STATIC, AND THE CORPUS'S ONLY WAY BACK FROM BYTES (P1.8
 	// Slice E).** The reference exports exactly this overload (`stdlib/String.maxon:119-121`); its
@@ -23390,12 +23431,8 @@ export type Parser
 			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` static '{String.from(methodTok.value)}' — R4.2 provides `create(count, elementSize)`; the rest of the object surface (`fromCString`, `createCursor`) is R4.4's", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
 
-		try self.consume(TokenKind.leftParen)
-		let count = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryCountParamName, methodTok: methodTok)
-		try self.consume(TokenKind.comma)
-		let elementSize = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryElementSizeParamName, methodTok: methodTok)
-		try self.consume(TokenKind.rightParen)
-		return self.emitOwnedRuntimeResult(ArrMemCreateName, args: pairArgs(count, second: elementSize), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internArrayByteInstance(), range: range)
+		let args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryCountParamName, secondParam: ManagedMemoryElementSizeParamName, methodTok: methodTok)
+		return self.emitOwnedRuntimeResult(ArrMemCreateName, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internArrayByteInstance(), range: range)
 	end 'parseManagedMemoryStaticCall'
 
 	// The argument to `String.from` must be an `Array with Byte` — the instance a `b"…"` literal and a
@@ -24784,7 +24821,21 @@ export type Parser
 		// `noteReceiverWrite`, the ONE home this rule has for every container, and it is what makes
 		// the top-level managed `let` a CONSTANT rather than a value that silently mutates a copy at each
 		// read (`emitManagedConstant`).
-		let mutatesReceiver = arrayMethodMutatesReceiver(methodTok.value)
+		// ⭐⭐ **IS THIS RECEIVER A `__ManagedMemory`?** It is the byte instance and nothing else, because that
+		// is the ONE instance `ManagedMemoryTypeName` binds the alias to — so the `.managed` identity below,
+		// the three `__ManagedMemory` MEMBERS further down, and the mutates-receiver rule on the next line are
+		// gated on the same answer, asked once.
+		let isManagedMemory = giid == self.signatures.internArrayByteInstance()
+
+		// ⚠ **THE `__ManagedMemory` MUTATORS ARE GATED ON THE INSTANCE HERE TOO, or the E3019 rule names two
+		// methods the receiver does not have** (found in review, R4.2). Ungated, `let a = IntArray.create()`
+		// followed by `a.setLength(2)` reported `E3019 cannot pass 'a' to function that mutates parameter
+		// 'self'` — a MUTABILITY complaint about a method a non-byte array has no dispatch arm for; the same
+		// program with `var` correctly reports the unknown-method E2015. The program is refused either way, but
+		// the two spellings must be refused for the same reason, and the reason is that the method does not
+		// exist. (Every other name in the list is a real `Array` method, so this gate is new with the two that
+		// are conditional.)
+		let mutatesReceiver = arrayMethodMutatesReceiver(methodTok.value, isManagedMemory: isManagedMemory)
 		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutatesReceiver)
 
 		// ⭐ E3070's container door — the SAME `mutatesReceiver` answer, read once, asked of the SAME receiver at
@@ -24810,11 +24861,6 @@ export type Parser
 		// `missingBaseLayout`'s header warns against for this very field, two doors away.
 		// ⇒ Returning the receiver for a non-byte array would be the worse bug: a word-strided record under
 		// a type that promises byte-addressable memory.
-		// ⭐⭐ **IS THIS RECEIVER A `__ManagedMemory`?** It is the byte instance and nothing else, because that
-		// is the ONE instance `ManagedMemoryTypeName` binds the alias to — so the `.managed` identity below and
-		// the three `__ManagedMemory` MEMBERS further down are gated on the same answer, asked once.
-		let isManagedMemory = giid == self.signatures.internArrayByteInstance()
-
 		if methodTok.value.equals(ManagedMemoryFieldName) 'managedIdentity'
 			if not isManagedMemory 'notAByteArray'
 				throw ParseError.unsupported("`.{String.from(ManagedMemoryFieldName)}` on this array: the field is real for every element type (`stdlib/Array.maxon` declares it), but shv2 binds `{String.from(ManagedMemoryTypeName)}` to a BYTE array only at this rung, so it has no type to give a non-byte element's buffer", line: methodTok.line, column: methodTok.column)
@@ -24936,18 +24982,15 @@ export type Parser
 		// available HERE is a second type reconciled with the `ByteArray` every caller passes, which is
 		// exactly what `ManagedMemoryTypeName` argues against.
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetLengthMethod) 'setLength'
-			try self.consume(TokenKind.leftParen)
-			let newLength = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryNewLengthParamName, methodTok: methodTok)
-			try self.consume(TokenKind.rightParen)
+			let newLength = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewLengthParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ArrSetLengthName, args: pairArgs(arr, second: newLength), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'setLength'
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
-			try self.consume(TokenKind.leftParen)
-			let byteOffset = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryOffsetParamName, methodTok: methodTok)
-			try self.consume(TokenKind.comma)
-			let byteValue = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryValueParamName, methodTok: methodTok)
-			try self.consume(TokenKind.rightParen)
-			return self.emitRuntimeCall(ArrSetByteName, args: tripleArgs(arr, second: byteOffset, third: byteValue), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			// The RECEIVER is argument 0, so the two-int list's array is prepended to rather than rebuilt —
+			// the arg-list protocol stays in its one home and the receiver is added where it belongs.
+			var args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryOffsetParamName, secondParam: ManagedMemoryValueParamName, methodTok: methodTok)
+			args.insert(0, value: arr)
+			return self.emitRuntimeCall(ArrSetByteName, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'setByte'
 
 		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
@@ -30241,8 +30284,9 @@ export type Parser
 		end 'managed'
 	end 'methodCallsAt'
 
-	// **The token shape of a `__Builtins` INTRINSIC CALL STATEMENT** — `__Builtins . <member> (`, the one
-	// qualified call shape that IS a statement (see the `builtinsIntrinsicStmt` arm for why the others are not).
+	// **The token shape of a COMPILER-OWNED STATIC CALLED FOR ITS EFFECT** — `<compiler type> . <member> (`,
+	// the qualified call shapes that ARE statements (see the `voidCompilerStaticStmt` arm for why the others
+	// are not). Two families reach it: `__Builtins.sleep(ms)` and `__ManagedFile.statFree(buffer)`.
 	//
 	// It asks the intrinsic table's OWN question, `isBuiltinsIntrinsicCallee`, of the name `parseQualifiedCall`
 	// is about to mangle out of these same two tokens — rather than comparing the base token against a second
@@ -30262,13 +30306,28 @@ export type Parser
 	// cheaper statement form has declined, and `methodCallsAt` has already claimed every qualified shape whose
 	// base is a value in scope — so what reaches here is a static-call-shaped statement, which is either an
 	// intrinsic or a program that is about to be refused.
-	function builtinsIntrinsicCallsAt(index TokenIndex) returns bool
+	//
+	// ⚠⚠ **`__ManagedFile.statFree(buffer)` IS THE SECOND FAMILY, AND WITHOUT IT `stat` COULD NOT BE USED AT
+	// ALL (found in review, R4.2).** It is the only `__ManagedFile` static that is BOTH void and NON-throwing,
+	// so a statement is the only position it can ever be written in — the void-and-throwing pair
+	// (`delete`/`rename`) always arrives under a `try`, which is its own statement form. Left out, the
+	// canonical spelling `stdlib/File.maxon:186` uses verbatim died as
+	// `E2015: Unsupported: identifier statement` — and since `stat` hands back a raw `__mm_alloc` block that
+	// only `statFree` can release, EVERY successful `stat` then leaked it and the program exited 101. MEASURED
+	// both ways: the refusal at `:7:2`, and exit 101 with the correct field values printed.
+	// (This is `__Builtins.sleep`'s history repeating exactly — see the arm — and for the same structural
+	// reason: a VOID member of a family whose other members all return a value.)
+	function voidCompilerStaticCallsAt(index TokenIndex) returns bool
 		if self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.dot or self.kindAt(index + 2) != TokenKind.identifier or self.kindAt(index + 3) != TokenKind.leftParen 'notAQualifiedCall'
 			return false
 		end 'notAQualifiedCall'
 
+		if self.tokenAt(index).value.equals(ManagedFileTypeName) and self.tokenAt(index + 2).value.equals(ManagedFileStatFreeMethod) 'statFree'
+			return true
+		end 'statFree'
+
 		return isBuiltinsIntrinsicCallee(qualifiedMethodName(self.qualifiedCallBaseName(self.tokenAt(index).value), methodName: self.tokenAt(index + 2).value))
-	end 'builtinsIntrinsicCallsAt'
+	end 'voidCompilerStaticCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
 	// distinguishing a reassignment (`ident =`) from a bare identifier statement (`ident …`)
