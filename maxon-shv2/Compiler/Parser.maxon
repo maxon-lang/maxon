@@ -23756,7 +23756,7 @@ export type Parser
 			return self.emitRuntimeCall(ManagedFileStatFieldName, args: args, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'statField'
 		// ⚠ VOID and NON-throwing, so a bare STATEMENT is the only position it has — see the
-		// `voidCompilerStaticStmt` arm, which exists for it.
+		// `voidStaticStmt` arm, which exists for it.
 		if methodTok.value.equals(ManagedFileStatFreeMethod) 'statFree'
 			let buffer = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedFileBufferParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ManagedFileStatFreeName, args: singletonArgs(buffer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -31253,9 +31253,11 @@ export type Parser
 		end 'managed'
 	end 'methodCallsAt'
 
-	// **The token shape of a COMPILER-OWNED STATIC CALLED FOR ITS EFFECT** — `<compiler type> . <member> (`,
-	// the qualified call shapes that ARE statements (see the `voidCompilerStaticStmt` arm for why the others
-	// are not). Two families reach it: `__Builtins.sleep(ms)` and `__ManagedFile.statFree(buffer)`.
+	// **The token shape of A VOID STATIC CALLED FOR ITS EFFECT** — `<type> . <member> (`, the qualified call
+	// shapes that ARE statements (see the `voidStaticStmt` arm for why the others are not). Four families
+	// reach it: `__Builtins.sleep(ms)`, `__ManagedFile.statFree(buffer)`, ANY declared void static (D10, the
+	// index arm below), and a member of a declared struct that resolves to nothing — claimed so it is refused
+	// by NAME rather than by shape.
 	//
 	// It asks the intrinsic table's OWN question, `isBuiltinsIntrinsicCallee`, of the name `parseQualifiedCall`
 	// is about to mangle out of these same two tokens — rather than comparing the base token against a second
@@ -31286,8 +31288,21 @@ export type Parser
 	// both ways: the refusal at `:7:2`, and exit 101 with the correct field values printed.
 	// (This is `__Builtins.sleep`'s history repeating exactly — see the arm — and for the same structural
 	// reason: a VOID member of a family whose other members all return a value.)
+	//
+	// ⚠ **THE MEMBER HALF ASKS `namesMemberAt`, NOT A RAW `TokenKind.identifier` (D8).** A static may be
+	// DECLARED under a keyword — `export static function to()` — and expression position already calls it
+	// (`let x = Helper.to()` compiles and runs, measured). A raw kind test here refused the identical name in
+	// STATEMENT position as `E2015: Unsupported: identifier statement` while the oracle compiled and ran it,
+	// which is the very asymmetry this door was widened to remove, one level down. It is the same predicate
+	// `methodCallsAt`, `memberCallFollows` and `fieldAssignsAt` spell the member half with, so a new
+	// member-naming token is taught to all four at once rather than to three of them.
+	//
+	// The BASE half stays a plain identifier because a keyword cannot NAME a type: `type to` is refused at
+	// its declaration (`E2010: Expected 'identifier' but got 'to'`), and `parseQualifiedCall` — the routine
+	// this predicate hands the shape to — consumes the base with `consume(TokenKind.identifier)`. Widening
+	// it here would claim a shape that routine then cannot parse.
 	function voidStaticCallsAt(index TokenIndex) returns bool
-		if self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.dot or self.kindAt(index + 2) != TokenKind.identifier or self.kindAt(index + 3) != TokenKind.leftParen 'notAQualifiedCall'
+		if self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.dot or not self.namesMemberAt(index + 2) or self.kindAt(index + 3) != TokenKind.leftParen 'notAQualifiedCall'
 			return false
 		end 'notAQualifiedCall'
 
@@ -31295,7 +31310,11 @@ export type Parser
 			return true
 		end 'statFree'
 
-		let callee = qualifiedMethodName(self.qualifiedCallBaseName(self.tokenAt(index).value), methodName: self.tokenAt(index + 2).value)
+		// The base name is resolved ONCE and threaded to both readings below — the callee mangle and the
+		// declared-type claim. `qualifiedCallBaseName` is a registry lookup that can allocate, and two calls
+		// on one token are two derivations of one name, which is the drift this predicate's header is about.
+		let baseName = self.qualifiedCallBaseName(self.tokenAt(index).value)
+		let callee = qualifiedMethodName(baseName, methodName: self.tokenAt(index + 2).value)
 		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
 			return true
 		end 'builtinsIntrinsic'
@@ -31316,9 +31335,17 @@ export type Parser
 		// ASKED LAST, after both cheap compiler-owned arms, because `returnTypeOf` ADOPTS the return type
 		// into this file's interner and so allocates — on a path already documented as cold by construction
 		// (every cheaper statement form has declined, and `methodCallsAt` has taken every qualified shape
-		// whose base is a value in scope). During the tolerant declaration sweep the index is still building
-		// and this answers `undeclared` ⇒ false, which is sound for the same reason `constructorInstanceOf`
-		// gives: the sweep's artifact is discarded.
+		// whose base is a value in scope).
+		//
+		// ⚠ **BOTH ARMS BELOW READ A COMPLETE INDEX, AND THE REASON IS NOT `constructorInstanceOf`'S.** That
+		// one is written for a reader the TOLERANT SWEEP reaches, and answers "the sweep's artifact is
+		// discarded". This predicate is not such a reader: the sweep entry point is
+		// `foldDeclaredSignaturesInto`, which reads DECLARATIONS only and never a body — "a sweep types no
+		// call", as `Queries.queryProgramSignatures` puts it — and the constant evaluator's parser walks an
+		// INITIALIZER. `parseStatement` is reached from `parseModule` alone, and `queryProgramSignatures`
+		// sets `allFilesFolded` before the first file is parsed. So an `undeclared` here MEANS no file
+		// declares the callee; it never means "not swept yet", and neither arm can answer differently
+		// depending on how far a sweep had got.
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declaredStatic'
 			declared(returnType) then return maxonReturnTypeIsVoid(returnType)
 			undeclared then break 'declaredStatic'
@@ -31340,7 +31367,7 @@ export type Parser
 		// question with a leak argument behind it — see the dispatch site — and this rung does not answer it.
 		// ⇒ what moves here is exactly one case: a member NO file declares, from a refusal about SHAPE to a
 		// refusal about the NAME. Pinned by `static-method-statement.error.unknown-static-names-the-callee`.
-		return self.signatures.containsStruct(self.qualifiedCallBaseName(self.tokenAt(index).value))
+		return self.signatures.containsStruct(baseName)
 	end 'voidStaticCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:

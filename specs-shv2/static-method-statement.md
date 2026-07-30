@@ -125,3 +125,62 @@ end 'main'
 ```maxoncstderr
 error E3004: <fragment>:9:2: call to undefined function 'Helper.nope'
 ```
+
+<!-- test: static-method-statement.keyword-named-static-is-a-statement -->
+⭐⭐ A static DECLARED UNDER A KEYWORD (D8), called as a bare statement. Found in review: the statement
+door's shape check asked a raw `TokenKind.identifier` for the member, so `Helper.to()` was refused as
+`E2015: Unsupported: identifier statement` — while EXPRESSION position compiled and ran the identical
+name (`let x = Helper.to()`, measured), and so did the bootstrap oracle for this very program. That is
+the same asymmetry this rung was written to remove, surviving one level down in the shape check standing
+in front of the fix. The member half now asks `namesMemberAt`, the predicate `methodCallsAt`,
+`memberCallFollows` and `fieldAssignsAt` already share, so a member-naming token is taught to all four
+at once. Prints `mut`.
+```maxon
+type Helper
+	export static function match()
+		print("m")
+	end 'match'
+
+	export static function upto()
+		print("u")
+	end 'upto'
+
+	export static function to()
+		print("t")
+	end 'to'
+end 'Helper'
+
+function main() returns ExitCode
+	Helper.match()
+	Helper.upto()
+	Helper.to()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+mut
+```
+
+<!-- test: static-method-statement.error.unknown-keyword-named-static-names-the-callee -->
+The typo half of the case above, and what keeps the widened shape check from swallowing a name. A
+keyword-spelled member that no file declares is claimed by the same base-is-a-declared-struct arm an
+identifier-spelled one is, so it earns the positioned E3004 naming the callee rather than the shape
+message. Without this the widening would be provable only in its accepting direction.
+```maxon
+type Helper
+	export static function shout()
+		print("hi")
+	end 'shout'
+end 'Helper'
+
+function main() returns ExitCode
+	Helper.while()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:9:2: call to undefined function 'Helper.while'
+```

@@ -1,0 +1,73 @@
+// Test: static-method-statement.keyword-named-static-is-a-statement
+type Helper
+	export static function match()
+		print("m")
+	end 'match'
+
+	export static function upto()
+		print("u")
+	end 'upto'
+
+	export static function to()
+		print("t")
+	end 'to'
+end 'Helper'
+
+function main() returns ExitCode
+	Helper.match()
+	Helper.upto()
+	Helper.to()
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @Helper.match {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __print_string
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Helper.upto {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Helper.to {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect __print_string
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Helper.match
+    x64.callDirect Helper.upto
+    x64.callDirect Helper.to
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
