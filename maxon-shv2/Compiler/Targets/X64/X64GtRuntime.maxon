@@ -281,7 +281,9 @@ end 'buildGtTrampolineChunk'
 // the saved GT rsp on the system stack). This is BOTH the offset from `r10` — which points at the first pushed
 // word after `push r10 ; mov r10, rsp` — up to the original RSP where the GT-frame stack args sit, AND the pad
 // the reserved system-stack frame adds so the second push leaves RSP 16-aligned at the `call`.
-let ShimPushedWordBytes = 8 as StackSize
+// It IS `StackWordBytes` — "what a `push r64` moves rsp by" is that constant's own definition — and says so
+// rather than repeating an 8, for the reason `XmmSaveSlotBytes` does (X64PrologueEpilogue).
+let ShimPushedWordBytes = StackWordBytes as StackSize
 
 // The shim's scratch registers (see the header's register discipline). None is a Win64 argument register.
 let ShimGtReg = X64Register.r11  // currentGt in the guard, then the stack-arg copy shuttle, then reloaded post-call
@@ -420,7 +422,14 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	let stackArgWords = gtShimStackArgWords(slotIndex)
 	// reserve = (16-aligned shadow + stack args) + one pushed word — lands RSP 16-aligned at the `call` after
 	// the two pushes. Matches the C# bootstrap's `EmitSystemStackEnter(frameSize)` doing `sub rsp, frameSize+8`.
-	let frameSize = alignUp(ShadowSpaceBytes + (stackArgWords * (GtArgSlotBytes as StackSize)), alignment: StackFrameAlignment)
+	// ⚠ THE STRIDE IS `SpillSlotBytes` — the SAME constant `win64OutgoingArgDisp` places the ISEL's arg stores
+	// with (StdToX64Conversion). The copy below must read and write the exact addresses that rule computed, so
+	// the two ends are ONE number. It used to be `GtArgSlotBytes`, the async ARGUMENT-BUFFER stride, which is a
+	// different fact that merely happens to be 8 — the confusion `StackWordBytes`/`XmmSaveSlotBytes` were split
+	// out to end (GtRuntime.maxon, X64PrologueEpilogue.maxon), surviving here because the shim was not swept.
+	// Widen the outgoing-arg grid and the shim now follows it; under the old spelling it silently would not,
+	// copying from and to slots the isel never wrote and handing the kernel garbage stack arguments.
+	let frameSize = alignUp(ShadowSpaceBytes + (stackArgWords * SpillSlotBytes), alignment: StackFrameAlignment)
 	let reserve = frameSize + ShimPushedWordBytes
 
 	var shimFixups = ChunkRel32FixupArray.create()
@@ -448,8 +457,8 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// Copy the N true stack args from the GT frame (`[r10 + 8 + 0x20 + k*8]`, the anchor being 8 below the GT
 	// rsp) to the system stack (`[rsp + 0x20 + k*8]`), so the kernel reads its args from where it runs.
 	for k in 0 upto stackArgWords 'copyArg'
-		let srcDisp = (ShimPushedWordBytes + ShadowSpaceBytes + (k * (GtArgSlotBytes as StackSize))) as Imm32
-		let dstDisp = (ShadowSpaceBytes + (k * (GtArgSlotBytes as StackSize))) as Imm32
+		let srcDisp = (ShimPushedWordBytes + ShadowSpaceBytes + (k * SpillSlotBytes)) as Imm32
+		let dstDisp = (ShadowSpaceBytes + (k * SpillSlotBytes)) as Imm32
 		encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtRspReg, disp: srcDisp, wide: true)
 		encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: dstDisp, srcReg: ShimGtReg)
 	end 'copyArg'
