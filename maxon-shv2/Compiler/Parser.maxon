@@ -8678,18 +8678,29 @@ export type Parser
 
 			// ⭐ **AN ASSOCIATED-TYPE ALIAS (D6)** — `typealias ElementArray = Array with Element`, the shape
 			// `stdlib/Builtins.maxon:56` opens with. It is ACCEPTED AND RECORDED, never resolved or
-			// substituted: `readNestedTypeAlias` enters the bare member into `enclosingInnerAliases`, which is
-			// what makes the very next line's `static function init(value ElementArray)` read `ElementArray`
-			// as a type at all instead of E3011. Nothing SUBSTITUTES the instance for it, and nothing needs to
-			// — an interface EMITS NOTHING, and a requirement's parameter types exist only as the SOURCE
-			// STRINGS `checkConformance` compares (see `renderInterfaceTypeName`).
+			// substituted: `readNestedTypeAlias` enters the bare member into `enclosingInnerAliases`, so the
+			// very next line's `static function init(value ElementArray)` reads a name this interface actually
+			// DECLARES. Nothing SUBSTITUTES the instance for it, and nothing here needs to — an interface EMITS
+			// NOTHING, and a requirement's parameter types exist only as the SOURCE STRINGS `checkConformance`
+			// compares (`renderInterfaceTypeName`). Binding `Element := <arg>` at an `implements … with …` is a
+			// rung of its own; `specs-shv2/associated-types.md` carries its nine red cases.
 			//
-			// ⚠ **BOTH REFERENCES THROW THIS LINE AWAY** (bootstrap `2-Parser.cs:4276-4281`, v1
-			// `Parser.maxon:6578-6585` — each a `SkipToEndOfLine`), and v1's comment claims the alias
-			// "contributes to associated-type resolution" while no code reads it back. Skipping it would put
-			// `ElementArray` in no scope at all, so the requirement below would name an undeclared type; the
-			// references get away with it only because their conformance check skips STATIC methods entirely.
-			// Recording the name costs one set insert and leaves nothing asserted that is not true.
+			// ⚠ **BOTH REFERENCES THROW THIS LINE AWAY** — bootstrap `2-Parser.cs:4276-4281`, v1
+			// `Parser.maxon:6578-6585`, each a skip-to-end-of-line — and v1's comment claims the alias
+			// "contributes to associated-type resolution" while nothing reads it back. **A SKIP WOULD PARSE
+			// HERE TOO, AND THAT IS MEASURED RATHER THAN ASSUMED**: an interface requirement's declared types
+			// are never RESOLVED, only rendered, so `static function init(value Nonesuch)` — a requirement
+			// naming a type no file declares — compiles and runs clean today, no diagnostic. The reason not to
+			// skip is therefore not that it fails; it is that it works BY LEANING ON THAT HOLE. A skipped alias
+			// leaves `ElementArray` denoting nothing at all, matching the conformer only because the string
+			// happens to be spelled the same in both files (`stdlib/List.maxon:13`, `Set.maxon:14`), and the
+			// substitution rung has to resolve exactly these types.
+			//
+			// Recording it costs one set insert and buys the alias a real meaning: `Array with Element` is
+			// checked like any other instantiation, so `typealias A = Array with Nonesuch` inside an interface
+			// is **E3011 Unknown type 'Nonesuch'** where a skip reports nothing. That check is also what forces
+			// the `uses` scope installed above — without it the interface's own `Element` is the undeclared
+			// name E3011 fires on.
 			//
 			// The whole-program shape is DISCARDED here for the reason `parseTypeMember` discards it: an
 			// inner alias is keyed whole-program by the tolerant sweep, and the sweep records nothing for an

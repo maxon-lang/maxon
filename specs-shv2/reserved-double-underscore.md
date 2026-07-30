@@ -208,3 +208,32 @@ end 'main'
 ```maxoncstderr
 error E2051: specs/fragments/reserved-double-underscore/union-name.test:2:7: identifier '__Shape' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
+
+<!-- test: user-file-named-builtins-is-not-exempt -->
+`stdlib/Builtins.maxon` is the ONE file whose declarations may carry the reserved prefix — it DECLARES
+the reserved space (the error enums a builtin throws, the parse helpers `int.fromString` rewrites to)
+rather than merely using it, and shv2 exempts it at `requireUnreservedName` exactly as the bootstrap
+exempts it at `CheckReservedDeclName` (D6).
+
+This is the NEGATIVE CONTROL on that exemption, and it is the half that matters: the exemption is keyed
+on the FILE'S IDENTITY (`<stdlibDir>/Builtins.maxon`, both sides resolved), not on its basename. Keyed on
+the basename, any program could opt out of the reservation for a whole file by naming it `Builtins.maxon`
+— and every guarantee that leans on "no user `__` name can be declared" would leak through it.
+
+⚠ The POSITIVE direction is deliberately not pinned here, because a spec cannot express it: a test
+compiles a throwaway project, so it can never contain the checkout's own `stdlib/Builtins.maxon`. That
+module's load IS the positive case, and it arrives when the stdlib whitelist can list it — see the notes
+on `specs-shv2/parsable-interface.md`, which name the fallible-division rung that still blocks it.
+```maxon
+// --- file: Builtins.maxon
+export enum __ParseError implements Error
+	invalidFormat
+end '__ParseError'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2051: <fragment>:3:13: identifier '__ParseError' is reserved: declarations starting with '__' are reserved for compiler internals
+```
