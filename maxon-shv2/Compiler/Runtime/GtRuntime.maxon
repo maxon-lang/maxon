@@ -655,6 +655,19 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return managedMemoryThrows()
 	end 'memoryFamily'
 
+	// ⭐ **THE ARRAY FAMILY, ADDED WITH THE CASE THAT NEEDED IT (R4.4)** — precisely as the note above
+	// prescribes. `specs-shv2/array-slots.md` discriminates `ArrayError.emptySlot` from
+	// `ArrayError.indexOutOfBounds` on an `arr.get` failure, so this family's ordinals are now a checked claim
+	// rather than an untested one.
+	//
+	// ⚠ **IT MUST STAY BELOW THE MEMORY ARM**: `isThrowingArrayRuntimeCallee` INCLUDES
+	// `isManagedMemoryRuntimeCallee` (the buffer members are `__arr_`-prefixed — one record, one runtime), so
+	// asking it first would type every `__ManagedMemory` member's error as `ArrayError` and reroute the six
+	// cases `managed-memory-error-variants` pins.
+	if isThrowingArrayRuntimeCallee(callee) 'arrayFamily'
+		return arrayErrorThrows()
+	end 'arrayFamily'
+
 	return ThrowsClause.none
 end 'runtimeThrowsClause'
 

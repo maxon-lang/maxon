@@ -1716,6 +1716,20 @@ export function builtinManagedMemoryErrorEnum() returns EnumLayout
 	return layout
 end 'builtinManagedMemoryErrorEnum'
 
+// ⭐ **THE COMPILER-OWNED `ArrayError` (R4.4)** — what every throwing `Array` accessor throws, and the type
+// `specs-shv2/array-slots.md`'s four cases discriminate. Registered under the RESERVED name
+// `SignatureIndex.ArrayErrorTypeName` (`__ArrayError`); that constant carries the argument for the prefix and
+// for why its two case names are shared with `__ManagedMemoryError`'s first two.
+//
+// Seeded UNCONDITIONALLY beside the other two builtin error enums for their stated reason: `createEnumRegistry`
+// is the one door that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`.
+export function builtinArrayErrorEnum() returns EnumLayout
+	var layout = EnumLayout.create(ArrayErrorTypeName, isUnion: false)
+	addBuiltinEnumCase(layout, caseName: ManagedMemoryIndexOutOfBoundsCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedMemoryEmptySlotCaseName)
+	return layout
+end 'builtinArrayErrorEnum'
+
 // Append one payload-free case carrying the AUTO-INCREMENT tag a bare `enum` case gets. The case count so
 // far IS the next tag (`Parser.readEnumCaseInto`'s counter starts at 0 and steps by 1), so the tag is
 // DERIVED from declaration order rather than written down — this type's header explains why a tag and a
@@ -1776,6 +1790,8 @@ export function createEnumRegistry() returns EnumLayoutMap
 	registry.upsert(ManagedFileErrorTypeName, value: builtinManagedFileErrorEnum())
 	// R4.2: what the three `__ManagedMemory` members throw, seeded for the same reason and in the same way.
 	registry.upsert(ManagedMemoryErrorTypeName, value: builtinManagedMemoryErrorEnum())
+	// R4.4: what every throwing `Array` accessor throws. See `builtinArrayErrorEnum`.
+	registry.upsert(ArrayErrorTypeName, value: builtinArrayErrorEnum())
 	return registry
 end 'createEnumRegistry'
 

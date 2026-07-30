@@ -1660,22 +1660,28 @@ export let CharacterSetBuiltinName = b"CharacterSet"
 // E2051 — it fails to RESOLVE, and resolving is exactly what registering the layout fixes.
 export let ManagedFileTypeName = b"__ManagedFile"
 
-// ⭐ **`__ManagedMemory` IS `Array with Byte`, NOT A TYPE OF ITS OWN (R4.1).** Registered as a builtin
-// GENERIC ALIAS — the same door `CharSet` goes through (`registerCharacterSetType`) — bound to the exact
-// instance `internArrayByteInstance()` mints, which is the instance `"…".toByteArray()` already yields
-// and the one a `b"…"` literal already has. So a `path __ManagedMemory` parameter and the argument handed
-// to it are ONE type by construction, and `.managed` is an identity rather than a conversion.
+// ⭐ **`__ManagedMemory` IS AN `Array`, NOT A TYPE OF ITS OWN (R4.1, generalized by R4.4).** Registered as
+// a builtin GENERIC ALIAS — the same door `CharSet` goes through (`registerCharacterSetType`) — bound to
+// the exact instance `internArrayByteInstance()` mints, which is the instance `"…".toByteArray()` already
+// yields and the one a `b"…"` literal already has. So a `path __ManagedMemory` parameter and the argument
+// handed to it are ONE type by construction, and `.managed` is an identity rather than a conversion.
 //
-// ⚠ **THIS IS RIGHT FOR R4.1's SCOPE AND IS NOT ASSUMED TO SURVIVE R4.2 — the boundary was MEASURED.**
-// Nine of the eleven acceptance cases only ever use a `__ManagedMemory` as an opaque path buffer handed
-// to the OS: they never construct one, never read `.capacity`, never write into it. The other two
-// (`write-and-read`, `auto-close`) need `__ManagedMemory.create(size, elemSize)`, `setLength`, `setByte`
-// and `String.init(buffer)` — a real object surface — and they are R4.2's by the same measurement.
-// ⇒ **If R4.2 finds the alias cannot carry that surface, the thing to change is THIS binding, in one
-// place, not a second type that would then have to be reconciled with the ByteArray a caller passes.**
-// The Array record already carries a length, a capacity and a byte-addressable buffer, so extending it
-// is the likelier answer than splitting it — but that is R4.2's measurement to make, not this rung's
-// prediction.
+// ⭐⭐ **R4.4 KEPT THE BINDING AND MADE IT ELEMENT-AGNOSTIC, WHICH IS THE WHOLE OF THAT RUNG.** The
+// reference declares `__ManagedMemory` generic over ONE parameter named `Element` (v1
+// `LowerMaxonToStd.maxon:1608-1621`; bootstrap `2-Parser.cs:1254` + `:1391`) and implements `Array` ON it
+// (`stdlib/Array.maxon:104-106`: `typealias ElementMemory = __ManagedMemory with Element`, `export var
+// managed as ElementMemory`), so `__ManagedMemory with T` and `Array with T` describe ONE record. shv2
+// SYNTHESIZES that record instead of compiling `stdlib/Array.maxon`, so for shv2 they ARE one
+// `GenericInstanceId` — which is what makes `.managed` an identity read at EVERY element type and leaves
+// nothing to reconcile at `String.init`, `.toByteArray()`, `valueIsByteArray` or a `__ManagedFile`
+// parameter. A distinct generic base would mint a second id at each of those.
+// ⇒ The bare spelling (no `with`) keeps meaning the BYTE instance, because that is what every
+// `__ManagedFile` signature declares and what a path buffer is.
+//
+// ⚠ **THE TWO SURFACES OF ONE RECORD ARE THEREFORE TOLD APART BY PROVENANCE, NOT BY TYPE** — see
+// `Parser.valueIsBufferSurface`. The reference separates `Array.count()` from `ByteMemory.length()` with
+// two TYPES; shv2 has one, so it carries "this value denotes the BUFFER" on the value instead. That is the
+// price of the binding, and it is the smaller one: the alternative is two ids for one record.
 export let ManagedMemoryTypeName = b"__ManagedMemory"
 
 // ⭐ **THE THIRTEEN `__ManagedFile` METHODS — the surface BOTH references agree on line-for-line**
@@ -1716,19 +1722,38 @@ export let ManagedFileSizeParamName = b"size"
 export let ManagedFileBufferParamName = b"buffer"
 export let ManagedFileIndexParamName = b"index"
 
-// ⭐ **THE `__ManagedMemory` SURFACE R4.2 DELIVERS — the four members its acceptance path needs, and no
-// more.** `get`/`set`/`grow`/`append`/`slice`/`byteAt`/`capacity`/`clear` are R4.4's, together with TYPING
-// an element size other than 1; see `ManagedMemoryTypeName` for why the binding is what decides that.
+// ⭐ **THE `__ManagedMemory` OBJECT SURFACE, COMPLETE AS OF R4.4** — the twelve members the corpus reaches,
+// each of them the reference's own name (v1 `LowerMaxonToStd.maxon:1618-1660`, bootstrap
+// `2-Parser.cs:1470-1512`). SIX are spelled identically to an `Array` method and dispatch to the identical
+// runtime entry (`length`≡`count`, `capacity`, `get`, `set`, `append`, `slice`, `clear`); the rest are the
+// buffer's own (`setLength`, `setByte`, `grow`, `byteAt`).
+//
+// ⚠ **`elementSize`, `remove`, `swap`, `shiftLeft`/`shiftRight`, `toCString`, `makeCharFromBytes`,
+// `fromCString` and `createCursor` are DELIBERATELY ABSENT.** Not one of them is written by any case in
+// `/specs` that shv2 can reach — the four cstring/cursor members need a `cstring` type shv2 has no
+// producer for at all — and a member with no reachable caller is a mechanism handed a consumer that cannot
+// exercise it. `Parser.parseManagedMemoryStaticCall` / `dispatchManagedMemoryMember` name them in their
+// refusals so the gap is a diagnostic rather than a silence.
 export let ManagedMemoryCreateMethod = b"create"
 export let ManagedMemorySetLengthMethod = b"setLength"
 export let ManagedMemorySetByteMethod = b"setByte"
 export let ManagedMemoryLengthMethod = b"length"
+export let ManagedMemoryGrowMethod = b"grow"
+export let ManagedMemoryByteAtMethod = b"byteAt"
 
 // Its parameter names, the reference's own (`2-Parser.cs:1470-1511`) for the same reason the file's are.
+// ⚠ **`endIndex` IS v1's SPELLING AND THE BOOTSTRAP'S IS `end`** (`LowerMaxonToStd.maxon:1657` vs
+// `2-Parser.cs:1509`), and `specs/managed-memory-builtin.md:slice` writes `endIndex:` — that spec is
+// `status: selfhosted`, so v1's is the one the corpus pins, and it is also `Array.slice`'s own label
+// (`EndIndexArgLabel`), which the SAME dispatch arm serves. Measured: the bootstrap answers
+// `E3003 unknown parameter name: 'endIndex'` for it.
 export let ManagedMemoryCountParamName = b"count"
 export let ManagedMemoryElementSizeParamName = b"elementSize"
 export let ManagedMemoryNewLengthParamName = b"newLength"
+export let ManagedMemoryNewCapacityParamName = b"newCapacity"
 export let ManagedMemoryOffsetParamName = b"offset"
+export let ManagedMemoryIndexParamName = b"index"
+export let ManagedMemoryOtherParamName = b"other"
 export let ManagedMemoryValueParamName = b"value"
 
 // ⭐ **THE ERROR A `__ManagedMemory` MEMBER THROWS (R4.2)** — `stdlib/Builtins.maxon:151-160`, and NOT
@@ -1742,6 +1767,31 @@ export let ManagedMemoryValueParamName = b"value"
 // are positional, so a later rung that appends `sliceOutOfBounds` between two of them would silently reroute
 // every handler already written against the others.
 export let ManagedMemoryErrorTypeName = b"__ManagedMemoryError"
+
+// ⭐⭐ **`ArrayError` — WHAT EVERY THROWING `Array` ACCESSOR THROWS, AND WHY IT WEARS A RESERVED NAME (R4.4).**
+// `stdlib/Array.maxon:6-9` declares it with exactly two cases, and `specs-shv2/array-slots.md` discriminates
+// both (`emptySlot` for an index INSIDE `[0, count())` whose slot was never filled, `indexOutOfBounds` for one
+// that is not) — so the enum has to be REGISTERED, or `match e` over an `arr.get` failure reports a missing
+// FEATURE for a program whose feature is present. That is the same gap R4.1 closed for `__ManagedFileError` and
+// R4.2's review closed for `__ManagedMemoryError`; this is the third and last family.
+//
+// ⚠⚠ **IT IS THE BARE NAME, NOT A RESERVED `__ArrayError`, AND THAT WAS MEASURED RATHER THAN CHOSEN.** The
+// two sibling builtin error enums are `__`-prefixed (`StringIndexTypeName` gives the argument: a user
+// declaration of the same name would land in the same map bucket and the later write would win). This one
+// cannot be, because USER SOURCE ALREADY NAMES IT: four committed cases declare `function … throws ArrayError`
+// and PROPAGATE an array accessor's failure through it (`array-slice-managed-elements.md` ×3,
+// `borrow-liveness.md`). Under `__ArrayError` every one of them became
+// `E3059: try propagates '__ArrayError' but enclosing function throws 'ArrayError'` — one error type under two
+// spellings, which is the very confusion the prefix exists to prevent.
+// ⇒ So `ArrayError` is RESERVED PROGRAM-WIDE here, exactly as whitelisting a stdlib module reserves its type
+// names (`StdlibLoader`'s collision rule) and as `CharSet` already is — and for the same reason: shv2
+// synthesizes what `stdlib/Array.maxon` declares, so it owes that file's exported names.
+export let ArrayErrorTypeName = b"ArrayError"
+
+// ⭐ **`ArrayError`'s TWO CASES ARE `__ManagedMemoryError`'s FIRST TWO, IN THE SAME ORDER, AND THAT IS THE
+// REFERENCE'S OWN ARRANGEMENT** (`stdlib/Array.maxon:6-9` against `stdlib/Builtins.maxon:151-153`). So ONE pair
+// of name constants serves both enums: writing them twice would let the two orders drift apart while each file
+// still read "correct", and the ordinal IS the error flag a throwing runtime returns in both families.
 export let ManagedMemoryIndexOutOfBoundsCaseName = b"indexOutOfBounds"
 export let ManagedMemoryEmptySlotCaseName = b"emptySlot"
 export let ManagedMemorySliceOutOfBoundsCaseName = b"sliceOutOfBounds"
@@ -4221,6 +4271,14 @@ export type ProgramSignatures
 		// must exist even on a second call that finds the layout already there.
 		self.genericAliases.upsert(ManagedMemoryTypeName, value: self.internArrayByteInstance())
 
+		// ⭐ **BOTH `__ManagedMemory` ELEMENT INSTANCES ARE INTERNED HERE, BY THE SWEEP (R4.4)** — the
+		// machine-word one alongside the byte one, because `__ManagedMemory.create(n, elementSize: 8)` picks
+		// it (`managedMemoryInstanceForElementSize`) and the parser may only READ the registry, never be the
+		// first to write it. It is OVER-interned exactly as this whole probe is (a file merely NAMING
+		// `__ManagedMemory` registers the layout), which is the sweep's standing discipline: over-register
+		// rather than miss.
+		_ = self.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
+
 		if self.structTypes.contains(ManagedFileTypeName) 'alreadyRegistered'
 			return
 		end 'alreadyRegistered'
@@ -4757,6 +4815,31 @@ export type ProgramSignatures
 		self.arrayByteInstanceComputed = true
 		return self.arrayByteInstance
 	end 'internArrayByteInstance'
+
+	// ⭐⭐ **WHICH `Array` INSTANCE A `__ManagedMemory.create(count, elementSize)` YIELDS (R4.4)** — the one
+	// place the raw `elementSize` the source writes becomes a STATIC element type, and the reason it has to:
+	// `mm.get(0)` and `mm.set(0, value: 300)` are typed off the instance's element, so `300` fits at element
+	// size 8 and does not at 1 (`specs/managed-memory-builtin.md:setlength-then-get` writes exactly that).
+	// Under R4.2's byte-only binding that program was WRONGLY REJECTED.
+	//
+	// ⚠ **THE SPLIT IS `1 ⇒ Byte, ANYTHING ELSE ⇒ WORD`, WHICH IS v1's RULE VERBATIM** — its own layout comment
+	// says so of the field this size lands in: *"element_size i64 (sizeof(Element); 1 for Byte, 8 otherwise)"*
+	// (`Compiler/Runtime/runtime.std:4262`). It is the same two-way answer `trivialElementStorageBytes` already
+	// gives for every element type shv2 has: byte-PACKED, or a machine WORD (which is also every managed
+	// element's pointer, `ManagedArrayElementBytes`).
+	//
+	// ⚠ **IT DELIBERATELY REFUSES NOTHING, INCLUDING A NON-POSITIVE SIZE.** `managed-memory-methods`'s
+	// `managed-memory-error-variants` requires `__ManagedMemory.create(4, 0)` to COMPILE and report
+	// `invalidAllocation` at RUN TIME — the buffer's own guard (`__arr_mem_create`) is where a size the
+	// allocator cannot use is caught, and hoisting that into a parse-time refusal would turn a case the corpus
+	// pins as a caught throw into a compile error. Which instance a doomed `create` was typed as is unobservable.
+	export function managedMemoryInstanceForElementSize(elementSize ParsedInt) returns GenericInstanceId
+		if elementSize == ByteStringElementSize 'bytePacked'
+			return self.internArrayByteInstance()
+		end 'bytePacked'
+
+		return self.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
+	end 'managedMemoryInstanceForElementSize'
 
 	// ⭐ **THE `Array with String` / `Array with <aggregate>` INSTANCES FOR A MANAGED-ELEMENT LITERAL (P1.7
 	// slice 3).** A bare `["a","b"]` / `[p1,p2]` has no typealias to intern from, and — unlike the int/Byte

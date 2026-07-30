@@ -1051,6 +1051,12 @@ let sharedEmptyTupleLayouts = StructLayoutMap.create()
 // programs that never mark also never pay to ask.
 let sharedEmptyImmutableGlobalReads = ImmutableGlobalReadSet.create()
 
+// The module-level shared EMPTY buffer-surface mark set (R4.4), held as the initial value of
+// `bufferSurfaceValues` AND as the COW anchor its per-function reset points at —
+// `sharedEmptyImmutableGlobalReads`'s pattern, for its reason and with its invariant. Every program that
+// never names `__ManagedMemory` leaves it empty, which is the whole corpus bar a handful of files.
+let sharedEmptyBufferSurfaceValues = BufferSurfaceValueSet.create()
+
 // The module-level shared EMPTY iteration-lock stack (P1.8 slice A), held as the initial value of
 // `iterationLockedBindings` AND as the COW anchor its per-function reset points at —
 // `sharedEmptyInstanceAliasMap`'s pattern, for its reason and with its invariant. It is not a micro-
@@ -2405,16 +2411,22 @@ let ArrayValueLabel = b"value"
 // ⚠ It is NOT `isArrayMoveInMutator`, and neither can be defined from the other: that one answers
 // "does this method take OWNERSHIP of an element?" (push/set/insert only), which is a question about
 // the ARGUMENT. This one is about the RECEIVER.
-// ⚠ **`isManagedMemory` IS NOT DECORATION: the two `__ManagedMemory` mutators EXIST ONLY ON THE BYTE
-// INSTANCE**, so naming them unconditionally would apply the immutable-receiver rule to methods the receiver
-// has no dispatch arm for — E3019 for a `let` receiver where `var` correctly says the method is unknown. Every
-// other name here is a real `Array` method on every instance and needs no gate. (Found in review, R4.2.)
+// ⚠ **`isManagedMemory` IS NOT DECORATION: the buffer-only mutators EXIST ONLY ON THE BUFFER SURFACE**, so
+// naming them unconditionally would apply the immutable-receiver rule to methods the receiver has no dispatch
+// arm for — E3019 for a `let` receiver where `var` correctly says the method is unknown. Every other name here
+// is a real `Array` method on every instance and needs no gate. (Found in review, R4.2.)
+//
+// ⚠ **THE ANSWER IS STILL "DOES THIS WRITE THE RECEIVER'S STORAGE?", NOT "MAY IT?"** — E3019 is exempted for
+// a buffer at the ONE call site (`dispatchArrayMethod`, which clears the blame name), because both references
+// declare a buffer member on a plain `self`. E3070 and the storage-written mask read THIS, and for them a
+// buffer write is a write like any other.
 function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) returns bool
-	// R4.2 appends the two `__ManagedMemory` MUTATORS. They belong in this list for the same reason `resize`
-	// and `set` do — both rewrite the record (`setLength` its `length@8` and the vacated bytes, `setByte` one
-	// byte of its buffer) — so a `let`-bound receiver is E3019 and an outstanding borrow is E3070, through the
-	// one home those two rules have. `length()` only reads and is deliberately absent.
-	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod)) 'managedMemoryMutator'
+	// The buffer-only MUTATORS (`setLength`/`setByte` from R4.2, `grow` from R4.4). They belong in this list
+	// for the same reason `resize` and `set` do — each rewrites the record (`setLength` its `length@8` and the
+	// vacated bytes, `setByte` one byte of its buffer, `grow` its `buffer@0` and `capacity@16`) — so an
+	// outstanding borrow is E3070 through the one home that rule has. `length`/`capacity`/`byteAt` only read
+	// and are deliberately absent.
+	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod) or name.equals(ManagedMemoryGrowMethod)) 'managedMemoryMutator'
 		return true
 	end 'managedMemoryMutator'
 
@@ -3417,6 +3429,10 @@ typealias ValueInstanceAliasMap = Map with (ValueId, TypeNameId)
 // see `Parser.immutableGlobalReads` for what it decides and why it is a hash set rather than a list.
 typealias ImmutableGlobalReadSet = Set with ValueId
 
+// The per-function set of SSA values that denote a `__ManagedMemory` BUFFER rather than the `Array` around it
+// (R4.4) — see `Parser.bufferSurfaceValues` for what it decides and why the fact lives on the value.
+typealias BufferSurfaceValueSet = Set with ValueId
+
 // One enclosing loop on the parser's loop-context stack. `break`/`continue` read it
 // to find their targets (innermost, or by label) and to build the block-arg value
 // lists they carry to the exit / header. Because the header phis are created EAGERLY
@@ -4143,6 +4159,33 @@ export type Parser
 	// stayed flat at x1.99. It allocates almost nothing (the list's own geometric growth, +21 allocations at
 	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
 	var immutableGlobalReads as ImmutableGlobalReadSet
+	// ⭐⭐ **WHICH SSA VALUES DENOTE A `__ManagedMemory` BUFFER RATHER THAN THE `Array` AROUND IT (R4.4)** —
+	// the fact `SignatureIndex.ManagedMemoryTypeName` says the binding costs, kept where shv2 keeps such facts.
+	//
+	// The reference has TWO TYPES for one record: `Array with T` exposes `count`/`push`/`get`, and
+	// `__ManagedMemory with T` — reached through `Array`'s own `managed` field — exposes
+	// `length`/`setLength`/`setByte`/`grow`/`byteAt`. shv2 SYNTHESIZES that record instead of compiling
+	// `stdlib/Array.maxon`, so it has ONE `GenericInstanceId` for both and cannot tell the two surfaces apart
+	// by type. It tells them apart by PROVENANCE instead: a value MINTED as a buffer
+	// (`__ManagedMemory.create`, or a `slice` of one) carries the mark, and everything else is an ordinary
+	// array. So `arr.setByte(0, 65)` stays E2015 on a user's `ByteArray` — which is what the language says,
+	// and what `managed-memory-methods.error.managed-memory-mutator-is-not-an-array-method` pins.
+	//
+	// ⚠ **THE MARK KEYS ON THE VALUE, WHICH IS WHY A BINDING NEEDS NO ENTRY OF ITS OWN.** shv2 has no stack
+	// slots: `let mm = <the create call>` binds the NAME to the call's own `ValueId`
+	// (`declareValueBinding`), so `mm.setLength(3)` asks about the very value that was marked. The same
+	// property is what `valueInstanceAlias` and `immutableGlobalReads` rest on.
+	//
+	// ⚠ Its REACH ends at a function boundary and at a struct field, and that limit is a REFUSAL rather than
+	// a wrong answer: a `__ManagedMemory` PARAMETER carries no mark, so a buffer member called on one is the
+	// ordinary unknown-`Array`-method E2015. No corpus case writes that (every one reaches the surface
+	// through `.managed` or through `create`), and the day one does, the answer is a declared-type carrier,
+	// not a wider mark.
+	//
+	// A SPARSE set for `immutableGlobalReads`' reason — the population is zero in every program that never
+	// names `__ManagedMemory` — sharing the same module-level empty anchor discipline. Reset per function and
+	// SWAPPED across a closure body, exactly like the sibling value marks.
+	var bufferSurfaceValues as BufferSurfaceValueSet
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THE BARE IDENTIFIER `parseVariableReference` LAST RESOLVED**,
 	// empty when that binding may be written through. A scalar hand-off from the ONE resolution that can
 	// answer it to the ONE consumer that needs it (`bareArgImmutableName`, at a call argument), because a
@@ -4470,6 +4513,7 @@ export type Parser
 			valueClosureEnv: ValueIdArray.create(),
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
+			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
 			lastBareBindingImmutableName: EmptySourceText,
 			captureNames: ByteArrayArray.create(),
 			captureValues: ValueIdArray.create(),
@@ -8898,6 +8942,9 @@ export type Parser
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
+		// The buffer-surface marks (R4.4) are per-function for exactly that reason too — see
+		// `bufferSurfaceValues`.
+		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias name
 		// and the PARAMETER alias names are fixed by the DECLARED signature and known here, before the
 		// body is parsed and before `resolveTypes` erases either; the three site lists fill as the body
@@ -9849,7 +9896,7 @@ export type Parser
 			// predicate, and `assignedBindingsIn` reads only `assignsAt`: see `assignsAt` for why
 			// widening that one instead would have minted the loop's phi for the FIELD's name.
 			try self.parseFieldAssignment(func, block: block)
-		end 'fieldAssign' else if self.methodCallsAt(self.pos) 'methodCallStmt'
+		end 'fieldAssign' else if self.methodCallsAt(self.pos) or self.arrayManagedFieldAt(self.pos) 'methodCallStmt'
 			// `c.increment()` / `self.increment()` — a method call for its EFFECT. Void methods are
 			// most of what a type declares, and this is the only position that wants no value, so
 			// `resultUsed: false` is what makes them callable at all.
@@ -11596,6 +11643,11 @@ export type Parser
 		// `obj.m(…)` is not a field chain (`fieldChainMethodCallAt` needs 2+ hops) and falls to the arms below;
 		// a 2+-hop chain resolves to the array field and applies the method, leaving the `call __arr_get` as the
 		// last op for `rewriteLastCallToTryCall`.
+		// `try arr.managed.get(0) otherwise …` — asked BEFORE the field chain, which would otherwise claim the
+		// two-hop shape and resolve `.managed` as a field of a record that has none (see `arrayManagedFieldAt`).
+		if self.arrayManagedFieldAt(self.pos) 'managedFieldTarget'
+			return try self.parseMethodCall(func, resultUsed: false)
+		end 'managedFieldTarget'
 		if self.fieldChainMethodCallAt(self.pos) 'fieldChainTarget'
 			return try self.parseFieldChainCall(func, resultUsed: false)
 		end 'fieldChainTarget'
@@ -21506,7 +21558,9 @@ export type Parser
 		// VARIABLE's name — `p.add`, which no file declares — and report E3004 against a method that
 		// is right there in the type. `methodCallsAt` is where that scope test lives, shared with the
 		// statement dispatcher.
-		if self.methodCallsAt(self.pos) 'methodCall'
+		// `arr.managed` joins the method arm rather than the field arm below — see `arrayManagedFieldAt`. It is
+		// asked WITH `methodCallsAt` because both route to `parseMethodCall` and the two shapes are disjoint.
+		if self.methodCallsAt(self.pos) or self.arrayManagedFieldAt(self.pos) 'methodCall'
 			return try self.parseMethodCall(func, resultUsed: resultUsed)
 		end 'methodCall'
 
@@ -22339,7 +22393,10 @@ export type Parser
 		// the struct path (which would reject a generic instance as not a plain struct). The split is on the
 		// `genericInstance` tag being an `Array` instance — the parser's type oracle.
 		if recv.tag == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(recv.nameId) 'arrayMethod'
-			return try self.dispatchArrayMethod(func, arr: recv.value, giid: recv.nameId, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName))
+			// `viaManagedField: false` — a receiver that arrived here was named or produced, not reached
+			// through `.managed`; whether it nonetheless denotes a BUFFER is a question about the VALUE
+			// (`valueIsBufferSurface`), which the dispatcher asks for itself.
+			return try self.dispatchArrayMethod(func, arr: recv.value, giid: recv.nameId, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName), viaManagedField: false)
 		end 'arrayMethod'
 
 		// A SET RECEIVER (`s.insert(e)`, `s.contains(e)`) goes to the set runtime, like an array receiver
@@ -23350,10 +23407,17 @@ export type Parser
 	// spelling (`stdlib/File.maxon:178-184`), not a shortcut. Written out per site it would be three places to
 	// change if it ever stopped being an exemption, and a site missed would go on ACCEPTING the old spelling:
 	// a wrong acceptance, not a compile error.
+	//
+	// ⭐ **THE LABEL IS ALSO PERMITTED, AND CHECKED WHEN WRITTEN (R4.4)** — the exemption is that a label is not
+	// REQUIRED, never that it is refused. Both spellings are in the canonical corpus for the same member:
+	// `specs/managed-memory-builtin.md` writes `create(4, elementSize: 8)` and `setByte(0, value: 11)` while
+	// `specs/managed-memory-methods.md` and `stdlib/File.maxon:71` write both positionally. The rule and its
+	// diagnostic are `consumeArrayArgLabel`'s, so the two-argument members of the buffer surface — whether they
+	// arrive as a static here or as a method arm — answer a wrong label identically.
 	function parseTwoBuiltinIntegerArgList(func IrFunction, firstParam ByteArray, secondParam ByteArray, methodTok Token) returns ValueIdArray throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let first = try self.parseBuiltinIntegerArg(func, paramName: firstParam, methodTok: methodTok)
-		try self.consume(TokenKind.comma)
+		try self.consumeArrayArgLabel(secondParam, required: false)
 		let second = try self.parseBuiltinIntegerArg(func, paramName: secondParam, methodTok: methodTok)
 		try self.consume(TokenKind.rightParen)
 		return pairArgs(first, second: second)
@@ -23412,28 +23476,59 @@ export type Parser
 		throw ParseError.unsupported("`{String.from(StringConformerName)}` static '{String.from(methodTok.value)}' — the reference exports two, `from(bytes)` and `init(managed)`, and `fromOwnedBytes` is deliberately not exported", line: methodTok.line, column: methodTok.column)
 	end 'parseStringStaticCall'
 
-	// ⭐ **`__ManagedMemory.create(count, elementSize)` — THE ONE `__ManagedMemory` STATIC (R4.2).** It yields
-	// an OWNED `Array with Byte` record, so its scope-exit drop routes through `__arr_decref` (which frees the
-	// record AND its element buffer) exactly as a `.create()`d array's does.
+	// ⭐ **`__ManagedMemory.create(count, elementSize)` — THE ONE `__ManagedMemory` STATIC.** It yields an OWNED
+	// `Array` record, so its scope-exit drop routes through `__arr_decref` (which frees the record AND its
+	// element buffer) exactly as a `.create()`d array's does, and the value is MARKED as the buffer surface
+	// (`markBufferSurface`) so its members are reachable through it — the one thing that makes it more than an
+	// array to the code that follows.
 	//
-	// ⚠ **`elementSize` IS A REAL ARGUMENT — it is read and stored into the record's `element_size@24`** —
-	// but the RESULT's static type is `Array with Byte` whatever it says, because that is the one instance
-	// `__ManagedMemory` is bound to at this rung. For the `1` every acceptance path passes, the two agree.
-	// TYPING another element size is R4.4's row (`specs/managed-memory-builtin.md` is written against
-	// `create(4, elementSize: 8)`, which needs `__ManagedMemory` to be a generic of its own); the parameter is
-	// honest rather than hardcoded so that rung changes a binding and not a signature.
+	// ⚠ **`elementSize` IS BOTH A RUNTIME ARGUMENT AND A COMPILE-TIME DECISION, AND IT HAS TO BE BOTH.** The
+	// runtime stores it into `element_size@24` (the stride every accessor moves by); the FRONT END additionally
+	// picks the result's `Array` instance from it (`managedMemoryInstanceForElementSize`), because `get`/`set`
+	// are typed off the element and nothing later can recover a type from a register.
 	function parseManagedMemoryStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(typeTok, last: methodTok)
 
 		if not methodTok.value.equals(ManagedMemoryCreateMethod) 'unknownStatic'
-			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` static '{String.from(methodTok.value)}' — R4.2 provides `create(count, elementSize)`; the rest of the object surface (`fromCString`, `createCursor`) is R4.4's", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` static '{String.from(methodTok.value)}' — R4.4 provides `create(count, elementSize)`; `fromCString` and `createCursor` are not built: each needs a `cstring` / cursor type shv2 has no producer for, so no spec can reach one", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
 
+		let elementSizeStart = self.pos
 		let args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryCountParamName, secondParam: ManagedMemoryElementSizeParamName, methodTok: methodTok)
-		return self.emitOwnedRuntimeResult(ArrMemCreateName, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internArrayByteInstance(), range: range)
+		let elementSize = try args.get(1) otherwise panic("parseManagedMemoryStaticCall: the two-int arg list returned fewer than two values")
+		let created = self.emitOwnedRuntimeResult(ArrMemCreateName, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: try self.requireManagedMemoryElementSize(elementSize, argStart: elementSizeStart), range: range)
+		self.markBufferSurface(created)
+		return created
 	end 'parseManagedMemoryStaticCall'
+
+	// ⭐⭐ **THE `Array` INSTANCE A `create`'s `elementSize` NAMES — AND WHY THE ARGUMENT MUST BE A COMPILE-TIME
+	// CONSTANT.** `mm.get(0)` and `mm.set(0, value: 300)` are typed off the instance's ELEMENT, so the front end
+	// has to know the element size at the call; a size that only exists in a register would leave `get` with no
+	// type to give back and `set` with no range to check `300` against.
+	//
+	// ⚠ **THIS FOLLOWS THE BOOTSTRAP AND DIVERGES FROM v1, DELIBERATELY.** The bootstrap enforces exactly this
+	// (`ParseElementSizeConstant`, `2-Parser.cs:10640-10650`, called at `:11836-11859`); v1 passes `elementSize`
+	// through as a real runtime SSA value (`stdlib/Internals.maxon:3907-3918`) because its `__ManagedMemory` is a
+	// generic with an `Element` parameter the substitution pass binds — machinery shv2 does not have and does not
+	// need, since every call site in `/specs` and in `stdlib/` writes a literal.
+	// ⚠ And it REFUSES cleanly where the bootstrap's own lowering CRASHES on a non-positive size
+	// (`MaxonToStandardConversion.ManagedMemory.cs:695-696`). A crash is not a diagnostic.
+	//
+	// ⚠ **A NON-POSITIVE SIZE IS NOT REFUSED HERE, and `managedMemoryInstanceForElementSize` states why**: the
+	// corpus pins `create(4, 0)` as a CAUGHT `invalidAllocation` throw from the runtime, so a parse-time refusal
+	// would turn a case about error handling into a compile error.
+	//
+	// The constant comes from the parser's own fold (`constIsKnown`), so `let W = 8` then `create(n, W)` is
+	// admitted — a `let`'s use IS its literal in shv2 — while a parameter or a computed size is refused by name.
+	function requireManagedMemoryElementSize(elementSize ValueId, argStart TokenIndex) returns GenericInstanceId throws ParseError
+		if not self.constIsKnown(elementSize) 'notAConstant'
+			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}.{String.from(ManagedMemoryCreateMethod)}`'s `{String.from(ManagedMemoryElementSizeParamName)}` must be a compile-time constant — it picks the buffer's ELEMENT TYPE, which `get`/`set` are typed from, and a size that exists only at run time leaves them with no type. Write the literal ({ByteStringElementSize} for bytes, {primitiveTypeByteSize(ValueTypeTag.integer)} for words).", line: self.tokenAt(argStart).line, column: self.tokenAt(argStart).column)
+		end 'notAConstant'
+
+		return self.signatures.managedMemoryInstanceForElementSize(self.constOf(elementSize))
+	end 'requireManagedMemoryElementSize'
 
 	// The argument to `String.from` must be an `Array with Byte` — the instance a `b"…"` literal and a
 	// `.toByteArray()` both produce, and the one `__str_from_bytes` may read a byte at a time. Any other
@@ -24812,7 +24907,7 @@ export type Parser
 	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
 	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
 	// `requireOpaqueArrayCopyable` rejects.
-	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask, receiverStorage MutatedParamMask) returns ValueId throws ParseError
+	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask, receiverStorage MutatedParamMask, viaManagedField bool) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 
@@ -24821,52 +24916,74 @@ export type Parser
 		// `noteReceiverWrite`, the ONE home this rule has for every container, and it is what makes
 		// the top-level managed `let` a CONSTANT rather than a value that silently mutates a copy at each
 		// read (`emitManagedConstant`).
-		// ⭐⭐ **IS THIS RECEIVER A `__ManagedMemory`?** It is the byte instance and nothing else, because that
-		// is the ONE instance `ManagedMemoryTypeName` binds the alias to — so the `.managed` identity below,
-		// the three `__ManagedMemory` MEMBERS further down, and the mutates-receiver rule on the next line are
-		// gated on the same answer, asked once.
-		let isManagedMemory = giid == self.signatures.internArrayByteInstance()
+		// ⭐⭐ **IS THIS RECEIVER THE `__ManagedMemory` BUFFER SURFACE, OR THE `Array` AROUND IT?** One record,
+		// two surfaces (`SignatureIndex.ManagedMemoryTypeName`), and this is the one place the question is
+		// asked — the `.managed` arm below, the four buffer-only members further down, the label rule the
+		// two-argument members follow and the mutates-receiver rule on the next line all read this answer.
+		//
+		// ⭐ **TWO DOORS, AND NEITHER IS THE INSTANCE.** R4.2 asked `giid == internArrayByteInstance()`, which
+		// was right only while the alias was byte-only: it admitted a user's own `ByteArray` and refused a
+		// `__ManagedMemory` over any other element, and R4.4 makes the alias element-agnostic, so an element
+		// test can no longer answer. What answers is where the receiver CAME FROM — either it was reached
+		// through `.managed` (this call's `viaManagedField`), or the value itself was minted as a buffer
+		// (`valueIsBufferSurface`: a `__ManagedMemory.create`, or a `slice` of one).
+		let isManagedMemory = viaManagedField or self.valueIsBufferSurface(arr)
 
-		// ⚠ **THE `__ManagedMemory` MUTATORS ARE GATED ON THE INSTANCE HERE TOO, or the E3019 rule names two
-		// methods the receiver does not have** (found in review, R4.2). Ungated, `let a = IntArray.create()`
-		// followed by `a.setLength(2)` reported `E3019 cannot pass 'a' to function that mutates parameter
-		// 'self'` — a MUTABILITY complaint about a method a non-byte array has no dispatch arm for; the same
-		// program with `var` correctly reports the unknown-method E2015. The program is refused either way, but
-		// the two spellings must be refused for the same reason, and the reason is that the method does not
-		// exist. (Every other name in the list is a real `Array` method, so this gate is new with the two that
-		// are conditional.)
+		// ⚠ **THE BUFFER-ONLY MEMBERS ARE GATED ON THAT ANSWER HERE TOO, or the E3019 rule names methods the
+		// receiver does not have** (found in review, R4.2). Ungated, `let a = IntArray.create()` followed by
+		// `a.setLength(2)` reported `E3019 cannot pass 'a' to function that mutates parameter 'self'` — a
+		// MUTABILITY complaint about a method an `Array` has no dispatch arm for; the same program with `var`
+		// correctly reports the unknown-method E2015. The program is refused either way, but the two spellings
+		// must be refused for the same reason, and the reason is that the method does not exist.
 		let mutatesReceiver = arrayMethodMutatesReceiver(methodTok.value, isManagedMemory: isManagedMemory)
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutatesReceiver)
+
+		// ⭐⭐ **A BUFFER HAS NO IMMUTABLE-BINDING RULE, AND THAT IS THE REFERENCE'S SIGNATURE RATHER THAN A
+		// RELAXATION shv2 CHOSE.** Both references declare every `__ManagedMemory` member on a PLAIN `self`
+		// (v1 `LowerMaxonToStd.maxon:1618-1660`, bootstrap `2-Parser.cs:1470-1512`) where `stdlib/Array.maxon`
+		// declares `push`/`set`/`resize` by REFERENCE — so a `let`-bound BUFFER is writable through and a
+		// `let`-bound ARRAY is not. The corpus depends on it in both directions:
+		// `specs/managed-memory-builtin.md` writes `let mm = try __ManagedMemory.create(…)` and then
+		// `mm.setLength(3)` (E3019 would refuse ten of its eleven cases), while `specs-shv2/arrays.md`'s
+		// `error.let-array-*` cases require the ARRAY refusal to stand.
+		// ⇒ The exemption is spelled as the EMPTY blame name — the same answer `valueReceiver` gives for a
+		// temporary, meaning "no binding may be blamed for a write through this receiver" — rather than as a
+		// second `mutatesReceiver` value, because the write is REAL: E3070 and the storage-written mask below
+		// must still see it, and they read `mutatesReceiver`.
+		try self.noteReceiverWrite(func, immutableReceiverName: EmptySourceText if isManagedMemory else immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutatesReceiver)
 
 		// ⭐ E3070's container door — the SAME `mutatesReceiver` answer, read once, asked of the SAME receiver at
 		// the same instant. The rule above refuses a write through an immutable binding; this one records the
 		// write it permits, against the borrows still outstanding on that storage (`noteBorrowSubjectWrite`).
 		self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: mutatesReceiver)
 
-		// ⭐ **`.managed` IS AN IDENTITY (R4.1).** `__ManagedMemory` is bound to the very instance a byte
-		// array already has (see `ManagedMemoryTypeName`), so `bytes.managed` yields the receiver unchanged
-		// — no conversion, no allocation, no runtime call. The corpus reaches it exactly one way,
-		// `"…".toByteArray().managed`, to hand a path buffer to `__ManagedFile`.
+		// ⭐⭐ **`.managed` IS AN IDENTITY AT EVERY ELEMENT TYPE (R4.1, ungated by R4.4).**
+		// `stdlib/Array.maxon:106` declares `export var managed as ElementMemory` — `__ManagedMemory with
+		// Element` — and shv2 binds that to the array's OWN instance
+		// (`SignatureIndex.ManagedMemoryTypeName`), so `arr.managed` yields the receiver unchanged whatever
+		// the element is: no conversion, no allocation, no runtime call.
 		//
-		// ⚠ It is a FIELD read, not a call: `stdlib/String.maxon:68` declares `var managed as ByteMemory`
-		// and the corpus writes no parentheses. So this arm returns BEFORE any argument list is consumed;
-		// routing it through the call arms below would demand a `(` the source does not write.
+		// R4.1 guarded it to the byte instance because the alias was byte-only, and that guard's own comment
+		// called its refusal "a false statement about the language". It is gone: `array-slots.md`'s four cases
+		// reach `.managed` on an `Array with Slot` (a STRUCT element), `managed-memory-methods.md`'s seven on
+		// an `Array with Int` and its eighth on an `Array with String`.
 		//
-		// ⚠ **GUARDED TO THE BYTE INSTANCE — BUT THE REFUSAL MAY NOT SAY THE FIELD IS BYTE-ONLY, BECAUSE IT
-		// IS NOT.** `stdlib/Array.maxon:106` declares `export var managed as ElementMemory` for EVERY
-		// element type, so `.managed` on an `Array with Wide` is legal Maxon yielding
-		// `__ManagedMemory with Wide`. What is true is narrower: shv2 binds `__ManagedMemory` to the BYTE
-		// instance alone at this rung (see `ManagedMemoryTypeName`), so it has no type to answer with for
-		// any other element. Saying otherwise would be a false statement about the language — exactly what
-		// `missingBaseLayout`'s header warns against for this very field, two doors away.
-		// ⇒ Returning the receiver for a non-byte array would be the worse bug: a word-strided record under
-		// a type that promises byte-addressable memory.
-		if methodTok.value.equals(ManagedMemoryFieldName) 'managedIdentity'
-			if not isManagedMemory 'notAByteArray'
-				throw ParseError.unsupported("`.{String.from(ManagedMemoryFieldName)}` on this array: the field is real for every element type (`stdlib/Array.maxon` declares it), but shv2 binds `{String.from(ManagedMemoryTypeName)}` to a BYTE array only at this rung, so it has no type to give a non-byte element's buffer", line: methodTok.line, column: methodTok.column)
-			end 'notAByteArray'
-			return arr
-		end 'managedIdentity'
+		// ⚠ It is a FIELD read, not a call: the corpus writes no parentheses. So this arm never consumes an
+		// argument list; routing it through the call arms below would demand a `(` the source does not write.
+		//
+		// ⚠⚠ **A `.member(` AFTER IT RE-ENTERS THIS DISPATCH WITH THE BUFFER SURFACE, RATHER THAN RETURNING
+		// AND LETTING `parsePostfix` DISPATCH THE HOP.** The two are not interchangeable: `.managed` is an
+		// identity, so the value `parsePostfix` would carry is the ARRAY's own — indistinguishable from a bare
+		// `arr` — and `arr.managed.setByte(0, 65)` would arrive as `arr.setByte(0, 65)`, which the language
+		// does not give a `ByteArray`. The surface is a fact about what the SOURCE wrote here, and it is
+		// handed to the one dispatch that fact reaches.
+		if methodTok.value.equals(ManagedMemoryFieldName) 'managedField'
+			if not self.memberCallFollows(self.pos) 'bufferAsAValue'
+				return arr
+			end 'bufferAsAValue'
+
+			try self.consume(TokenKind.dot)
+			return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: immutableReceiverName, borrowSubjectName: borrowSubjectName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, viaManagedField: true)
+		end 'managedField'
 
 		// Throwing accessors — a plain `call` the enclosing `try` rewrites; result is the element (get/first/
 		// last/pop/remove) or a discarded dummy (set). `resultUsed` is the try's concern, not checked here.
@@ -24877,7 +24994,7 @@ export type Parser
 			return self.emitArrayElementAccessor(func, callee: ArrGetName, args: pairArgs(arr, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
 		if methodTok.value.equals(ArraySetMethod) 'set'
-			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrSetName, methodTok: methodTok, throwing: true, range: range)
+			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrSetName, methodTok: methodTok, throwing: true, secondArgLabelled: not isManagedMemory, range: range)
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.consumeEmptyArgList()
@@ -24897,8 +25014,17 @@ export type Parser
 		end 'remove'
 		if methodTok.value.equals(SliceMethod) 'slice'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
-			return try self.parseArraySlice(func, arr: arr, giid: giid, range: range)
+			return try self.parseArraySlice(func, arr: arr, giid: giid, bufferSurface: isManagedMemory, range: range)
 		end 'slice'
+
+		// ⭐ **`byteAt(index)` — THE BUFFER'S BYTE READER (R4.4)**, sitting with the throwing accessors because
+		// it YIELDS a value, where its `setByte` dual is void and sits with the mutators. Its bound is
+		// `length · element_size` and it throws `invalidByteRange`, both of which live in one place with the
+		// setter's (`ArrayRuntime.emitByteRangeGuard`).
+		if isManagedMemory and methodTok.value.equals(ManagedMemoryByteAtMethod) 'byteAt'
+			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ArrByteAtName, args: pairArgs(arr, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'byteAt'
 
 		// Non-throwing value accessors.
 		// ⭐ `__ManagedMemory.length()` IS `Array.count()` — both read `length@8` and nothing else — so the
@@ -24949,8 +25075,29 @@ export type Parser
 			return self.emitArrayVoidCall(ArrClearName, args: singletonArgs(arr), receiver: arr, range: range)
 		end 'clear'
 		if methodTok.value.equals(InsertMethod) 'insert'
-			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, methodTok: methodTok, throwing: false, range: range)
+			// `insert` is an `Array` method and nothing else — the buffer surface has no member of that name —
+			// so its `value:` label is required whichever surface the receiver wears.
+			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, methodTok: methodTok, throwing: false, secondArgLabelled: true, range: range)
 		end 'insert'
+		// ⭐⭐ **`append(other)` ON THE BUFFER SURFACE IS THROWING WHERE `Array.append` IS NOT, and the corpus is
+		// what says so**: `specs/managed-memory-builtin.md:append` writes `try a.append(b) otherwise return 7`,
+		// while `specs-shv2/arrays.md` writes `arr.append(other)` bare. shv2 refuses a `try` over a call that
+		// cannot fail (E3055), so the two cannot share one callee — and the difference is real, not notational:
+		// the buffer's append raises the capacity through the THROWING `__arr_mem_grow`, where `__arr_append`'s
+		// internal grow aborts the process on an overflow (see `ArrayRuntime.ArrMemAppendName`).
+		//
+		// ⚠ Its argument rule is the buffer's too, and that is what `builtin-type-checking`'s
+		// `error-managed-memory-append-int` pins: `E3005 argument type mismatch for 'other': expected
+		// '__ManagedMemory'`, naming the type the SIGNATURE declares, where `Array.append`'s refusal talks about
+		// element types. One shape test (`requireArrayAppendArg`), two verdicts — the split
+		// `requireByteArrayValue`/`requireManagedMemoryValue` already draws for a `ByteArray` parameter.
+		if isManagedMemory and methodTok.value.equals(AppendMethod) 'bufferAppend'
+			try self.consume(TokenKind.leftParen)
+			let other = try self.parseExpression(func, block: self.currentBlock)
+			try self.requireManagedMemoryAppendArg(other, giid: giid, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitRuntimeCall(ArrMemAppendName, args: pairArgs(arr, second: other), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'bufferAppend'
 		if methodTok.value.equals(AppendMethod) 'append'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			return try self.parseArrayAppend(func, arr: arr, giid: giid, range: range)
@@ -24974,13 +25121,12 @@ export type Parser
 		// created buffer. `parseArraySetOrInsert` already splits the same way for the same reason (its
 		// throwing arm calls `emitRuntimeCall`, its non-throwing one `emitArrayVoidCall`).
 		//
-		// ⚠ **THE COST OF THE R4.1 BINDING IS THAT ALL THREE ARE VISIBLE ON A USER'S `ByteArray` TOO**, which
-		// the language does not give it (`stdlib/Array.maxon` declares `resize`/`truncate`, not `setLength`).
-		// `__ManagedMemory` IS `Array with Byte` here, so a `__ManagedMemory` method necessarily arrives on an
-		// array receiver and can only be gated on that instance — a receiver carries no memory of the name it
-		// was spelled with. Giving `__ManagedMemory` an identity of its own is R4.4's row; the alternative
-		// available HERE is a second type reconciled with the `ByteArray` every caller passes, which is
-		// exactly what `ManagedMemoryTypeName` argues against.
+		// ⭐ **R4.4 CLOSED THE HOLE THIS BLOCK USED TO NAME.** R4.2's note here read "the cost of the R4.1
+		// binding is that all three are visible on a user's `ByteArray` too, which the language does not give
+		// it" — true while the gate was an ELEMENT test, because a `b"…"` literal and a
+		// `__ManagedMemory.create(n, 1)` were the same instance. The gate is now a PROVENANCE test
+		// (`isManagedMemory` above), so `"ab".toByteArray().setLength(0)` is the ordinary unknown-`Array`-method
+		// E2015 and only a real buffer reaches these arms.
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetLengthMethod) 'setLength'
 			let newLength = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewLengthParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ArrSetLengthName, args: pairArgs(arr, second: newLength), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -24992,6 +25138,26 @@ export type Parser
 			args.insert(0, value: arr)
 			return self.emitRuntimeCall(ArrSetByteName, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'setByte'
+
+		// ⭐ **`grow(newCapacity)` — THE BUFFER'S CAPACITY RAISER (R4.4).** Void and throwing, so it belongs
+		// with these two and takes `emitRuntimeCall` for their reason: under a `try`, `emitArrayVoidCall` would
+		// make the try's value the owned array record and the reconciliation would act on it (measured as an
+		// access violation, see above).
+		//
+		// ⚠ It is NOT `reserve` under another name: `reserve` GROWS by the doubling policy and never
+		// complains, `grow` raises the capacity to EXACTLY what it is asked for and THROWS `invalidCapacity`
+		// when asked to lower it. `specs/managed-memory-builtin.md:grow` asserts the exact capacity.
+		if isManagedMemory and methodTok.value.equals(ManagedMemoryGrowMethod) 'grow'
+			let newCapacity = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewCapacityParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ArrMemGrowName, args: pairArgs(arr, second: newCapacity), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'grow'
+
+		// ⚠ **THE REFUSAL NAMES WHICHEVER SURFACE THE RECEIVER WEARS, because the two rosters differ and a
+		// message listing the other one sends the reader to the wrong question** — `setLength` is not missing
+		// from `Array`, it is not an `Array` method at all, and `push` is not missing from a buffer.
+		if isManagedMemory 'bufferSurfaceRoster'
+			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` member '{String.from(methodTok.value)}' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for", line: methodTok.line, column: methodTok.column)
+		end 'bufferSurfaceRoster'
 
 		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
 	end 'dispatchArrayMethod'
@@ -25358,14 +25524,33 @@ export type Parser
 	end 'emitOwnedRuntimeResult'
 
 	// `slice(start, endIndex: end)` — the index positional, the end labelled `endIndex:` (mirroring `set`'s
-	// `value:`). Emits the throwing `__arr_slice(arr, start, end)` as the LAST op so the enclosing `try` rewrites
-	// it; returns the fresh owned array. Neither argument is a managed move-in (both are plain indices).
-	function parseArraySlice(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+	// `value:`, and OPTIONAL on the buffer surface — see `consumeArrayArgLabel`). Emits the throwing
+	// `__arr_slice(arr, start, end)` as the LAST op so the enclosing `try` rewrites it; returns the fresh owned
+	// array. Neither argument is a managed move-in (both are plain indices).
+	//
+	// ⭐ **A SLICE OF A BUFFER IS A BUFFER, WHICH IS WHY `bufferSurface` REACHES THE RESULT AND NOT ONLY THE
+	// LABEL (R4.4).** `specs/managed-memory-builtin.md:slice` reads `s.length()` off the result and
+	// `managed-memory-methods.bounds-slice-oob` does the same, so the surface must survive the operation — which
+	// it does by riding the VALUE (`markBufferSurface`), the only carrier available when both surfaces share one
+	// `GenericInstanceId` (see `Parser.bufferSurfaceValues`).
+	function parseArraySlice(func IrFunction, arr ValueId, giid GenericInstanceId, bufferSurface bool, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let start = try self.parseExpression(func, block: self.currentBlock)
-		try self.consumeArrayArgLabel(EndIndexArgLabel)
+		try self.consumeArrayArgLabel(EndIndexArgLabel, required: not bufferSurface)
 		let endIndex = try self.parseExpression(func, block: self.currentBlock)
 		try self.consume(TokenKind.rightParen)
+		let sliced = self.emitArraySliceCall(giid, arr: arr, start: start, endIndex: endIndex, range: range)
+		if bufferSurface 'sliceOfABuffer'
+			self.markBufferSurface(sliced)
+		end 'sliceOfABuffer'
+		return sliced
+	end 'parseArraySlice'
+
+	// Which of the three `slice` runtimes this instance's element takes — the trivial COW view, the per-element
+	// DEEP CLONE, or the descriptor-gated opaque wrapper. Split out of `parseArraySlice` so the buffer-surface
+	// mark has ONE value to name rather than one per arm; the three-way choice is `clone`'s and `append`'s
+	// verbatim.
+	function emitArraySliceCall(giid GenericInstanceId, arr ValueId, start ValueId, endIndex ValueId, range SourceRange) returns ValueId
 		if self.signatures.arrayElementIsOpaque(giid) 'opaqueSlice'
 			return self.emitOwnedRuntimeResult(ArrSliceOpaqueName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'opaqueSlice'
@@ -25373,7 +25558,7 @@ export type Parser
 			return self.emitOwnedRuntimeResult(ArrSliceManagedName, args: quadArgs(arr, second: start, third: endIndex, fourth: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'managedSlice'
 		return self.emitOwnedRuntimeResult(ArrSliceName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
-	end 'parseArraySlice'
+	end 'emitArraySliceCall'
 
 	// `append(other)` — append `other`'s elements to `self`. `other` is BORROWED (read-only, not moved) and
 	// PRESERVED (`append-preserves-originals`). Its element type must match the receiver's, which
@@ -25402,6 +25587,25 @@ export type Parser
 	// how the element interned). A MANAGED receiver deep-clones each element through the RECEIVER's own element
 	// cloner, which only fits `other`'s elements when `other` IS the same array instance — so a managed receiver
 	// requires `other` to be the identical giid (strict, since the element cloner is receiver-specific).
+	// ⭐ **THE BUFFER SURFACE'S `append` ARGUMENT RULE (R4.4)** — the same SHAPE test the trivial-receiver arm of
+	// `requireArrayAppendArg` makes (`sameTrivialArrayShape`, shared), under the diagnostic the buffer's SIGNATURE
+	// earns: its parameter is declared `__ManagedMemory`, so a mismatch names that type and its `other` label
+	// (`builtin-type-checking.error-managed-memory-append-int` pins the wording). A buffer's element is always
+	// trivial — byte-packed or a machine word (`managedMemoryInstanceForElementSize`) — so the managed and
+	// opaque arms of the `Array` rule cannot be reached from here.
+	function requireManagedMemoryAppendArg(other ValueId, giid GenericInstanceId, methodTok Token) throws ParseError
+		if self.tagOf(other) != ValueTypeTag.genericInstance or not self.signatures.isArrayInstance(self.valueNameId(other)) or not self.sameTrivialArrayShape(giid, otherGiid: self.valueNameId(other)) 'notABuffer'
+			throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
+		end 'notABuffer'
+	end 'requireManagedMemoryAppendArg'
+
+	// Do two array instances hold TRIVIAL elements of the same storage width — the honest "same array shape" for
+	// an operation that copies raw bytes sized by `element_size`? Read by both `append` argument rules, because
+	// the byte copy they authorize is one operation with one precondition; only the diagnostic differs.
+	function sameTrivialArrayShape(giid GenericInstanceId, otherGiid GenericInstanceId) returns bool
+		return not self.signatures.arrayElementIsManaged(otherGiid) and self.signatures.arrayElementSize(otherGiid) == self.signatures.arrayElementSize(giid)
+	end 'sameTrivialArrayShape'
+
 	function requireArrayAppendArg(other ValueId, giid GenericInstanceId, otherTok Token) throws ParseError
 		if self.tagOf(other) != ValueTypeTag.genericInstance or not self.signatures.isArrayInstance(self.valueNameId(other)) 'notArray'
 			throw ParseError.unsupported("`append` takes another `Array` of the same element type — got '{typeTagName(self.tagOf(other))}'", line: otherTok.line, column: otherTok.column)
@@ -25422,7 +25626,7 @@ export type Parser
 			end 'managedMismatch'
 			return
 		end 'managedReceiver'
-		if self.signatures.arrayElementIsManaged(otherGiid) or self.signatures.arrayElementSize(otherGiid) != self.signatures.arrayElementSize(giid) 'mismatch'
+		if not self.sameTrivialArrayShape(giid, otherGiid: otherGiid) 'mismatch'
 			throw ParseError.unsupported("`append` requires an `Array` with the same element type as the receiver", line: otherTok.line, column: otherTok.column)
 		end 'mismatch'
 	end 'requireArrayAppendArg'
@@ -25600,14 +25804,32 @@ export type Parser
 		return arg
 	end 'parseArrayOneArg'
 
-	// The ` , <label> : ` separating a two-argument array method's positional first argument from its LABELLED
-	// second — `set`/`insert`'s `value:`, `slice`'s `endIndex:`. ONE home for that shape, so a two-arg array
-	// method names its label and inherits the same "must be labelled `<label>:`" diagnostic; the cursor is left
-	// on the token that begins the second argument's value.
-	function consumeArrayArgLabel(label ByteArray) throws ParseError
+	// The ` , <label> : ` separating a two-argument array method's positional first argument from its second —
+	// `set`/`insert`'s `value:`, `slice`'s `endIndex:`. ONE home for that shape, so a two-arg array method names
+	// its label and inherits the same "must be labelled `<label>:`" diagnostic; the cursor is left on the token
+	// that begins the second argument's value.
+	//
+	// ⭐⭐ **THE LABEL IS REQUIRED ON AN `Array` AND OPTIONAL ON THE `__ManagedMemory` BUFFER, AND BOTH HALVES ARE
+	// MEASURED (R4.4).** `stdlib/Array.maxon` declares `set`/`slice` as ordinary methods, so E2053's "second and
+	// subsequent arguments must be named" applies — the bootstrap answers exactly that for `arr.set(0, 99)` on an
+	// `Array with Int`. A `__ManagedMemory` member is a compiler BUILTIN, and the bootstrap accepts both
+	// spellings for one: `mm.set(0, 99)` and `mm.set(0, value: 99)` both reach lowering there, and a WRONG label
+	// is `E3003 unknown parameter name`. The corpus needs both directions —
+	// `specs/managed-memory-builtin.md` writes `set(0, value: 11)` and `slice(1, endIndex: 4)` while
+	// `specs/managed-memory-methods.md` writes `set(10, 99)` and `slice(0, 10)` — so "optional, and checked when
+	// present" is the only rule that admits the corpus, and it may not leak onto `Array`.
+	//
+	// ⇒ The requirement rides in from the ONE surface answer (`dispatchArrayMethod`'s `isManagedMemory`), so
+	// there is no second derivation of which spelling a receiver takes.
+	function consumeArrayArgLabel(label ByteArray, required bool) throws ParseError
+		if not required and not self.atArgLabel(self.pos) 'positionalSecondArgument'
+			try self.consume(TokenKind.comma)
+			return
+		end 'positionalSecondArgument'
+
 		let labelTok = try self.consumeArgLabel()
 		if not labelTok.value.equals(label) 'wrongLabel'
-			throw ParseError.unsupported("the second argument of a two-argument array method must be labelled `{String.from(label)}:` (got '{String.from(labelTok.value)}:')", line: labelTok.line, column: labelTok.column)
+			throw ParseError.unsupported("the second argument of a two-argument builtin method must be labelled `{String.from(label)}:` (got '{String.from(labelTok.value)}:')", line: labelTok.line, column: labelTok.column)
 		end 'wrongLabel'
 	end 'consumeArrayArgLabel'
 
@@ -25624,14 +25846,23 @@ export type Parser
 		return labelTok
 	end 'consumeArgLabel'
 
+	// Is the ` , <name> : ` label shape at `index`? The LOOKAHEAD half of the consumer above — asked where a
+	// label is OPTIONAL, so a `,` that is not followed by one is read as a POSITIONAL argument rather than
+	// reported as a missing label (R4.4). It is the same relationship `memberCallFollows` has with the chain walk
+	// it stops: a predicate and a consumer over one shape, spelled once each and next to each other, so neither
+	// can come to admit a token the other rejects.
+	function atArgLabel(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.comma and self.kindAt(index + 1) == TokenKind.identifier and self.kindAt(index + 2) == TokenKind.colon
+	end 'atArgLabel'
+
 	// `set`/`insert` — `( index , value: X )`: the index positional, the value labelled `value:`. Emits the
 	// `__arr_set`/`__arr_insert` call (throwing for `set`, void for `insert`) and returns its result. The
 	// value argument is parsed AFTER the index so the throwing `set`'s call is the last op the enclosing
 	// `try` rewrites.
-	function parseArraySetOrInsert(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, methodTok Token, throwing bool, range SourceRange) returns ValueId throws ParseError
+	function parseArraySetOrInsert(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, methodTok Token, throwing bool, secondArgLabelled bool, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let index = try self.parseExpression(func, block: self.currentBlock)
-		try self.consumeArrayArgLabel(ArrayValueLabel)
+		try self.consumeArrayArgLabel(ArrayValueLabel, required: secondArgLabelled)
 		// The value is a managed-element MOVE-IN (`set`/`insert`), so it is consumed exactly as `push` is —
 		// `moveElementIntoArray` promotes a borrowed String, transfers an owned value, refuses a borrowed
 		// aggregate. `__arr_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
@@ -26666,13 +26897,17 @@ export type Parser
 	// whose header states the split. Only an instance reaches here; a `structRef` with no layout is an
 	// invariant break and panics at the call site above.
 	function missingBaseLayout(typeName ByteArray, baseTok Token) returns ParseError
-		// ⚠ **DO NOT SAY THE FIELD DOES NOT EXIST — IT VERY LIKELY DOES.** `stdlib/Array.maxon:106` declares
-		// `export var managed as ElementMemory`, so `arr.managed` is a real language feature and reporting it
-		// as an unknown field would be a false statement about Maxon (12 committed spec cases write exactly
-		// that access). What is true is narrower and is what this says: shv2 reads no stdlib and SYNTHESIZES
+		// ⚠ **DO NOT SAY THE FIELD DOES NOT EXIST — IT VERY LIKELY DOES.** shv2 reads no stdlib and SYNTHESIZES
 		// the `Array`/`Set` runtime record instead of compiling the declaration, so no `type` exists here to
-		// carry a field table at all. E2015 — a construct this compiler does not implement YET — is exactly
-		// the register that carries, and it is the same one the sibling `n.x` guard above reports in.
+		// carry a field table at all — the field is missing from this compiler, not from the language. E2015 —
+		// a construct this compiler does not implement YET — is exactly the register that carries, and it is
+		// the same one the sibling `n.x` guard above reports in.
+		//
+		// ⚠ **`Array`'s OWN `managed` FIELD NO LONGER REACHES HERE (R4.4).** It used to be the reason this arm
+		// existed — 12 committed spec cases write `arr.managed` — and it is now routed to the array method
+		// dispatcher before the field machinery is entered (`arrayManagedFieldAt`), because that field is an
+		// IDENTITY on the record rather than a slot inside it. What still reaches here is every OTHER field of a
+		// synthesized builtin record, for which this refusal remains the true answer.
 		//
 		// The wording names the stdlib file rather than a field, because the two builtins declare DIFFERENT
 		// fields (`Array` its `managed`, `Set` its `elements`/`states`/`hashes`) and a message that named one
@@ -27335,6 +27570,29 @@ export type Parser
 		self.immutableGlobalReads.insert(value)
 	end 'markImmutableGlobalRead'
 
+	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
+	// identical copy-on-write reason: a second insert site that skipped the identity test would write the
+	// MODULE-level shared empty set and leak a mark naming an unrelated value in every other function of
+	// every other file.
+	//
+	// Its two callers are the two producers of a buffer: `__ManagedMemory.create` and a `slice` taken
+	// THROUGH the buffer surface. Nothing else mints one — `.managed` is an identity read, so it produces no
+	// new value to mark and passes the surface along the dispatch instead (see `dispatchArrayMethod`).
+	function markBufferSurface(value ValueId)
+		if self.bufferSurfaceValues is sharedEmptyBufferSurfaceValues 'stillShared'
+			self.bufferSurfaceValues = BufferSurfaceValueSet.create()
+		end 'stillShared'
+
+		self.bufferSurfaceValues.insert(value)
+	end 'markBufferSurface'
+
+	// Does `value` denote a `__ManagedMemory` BUFFER rather than the `Array` around it? The read side of the
+	// mark above — asked once per array-method dispatch, and `Set.contains` on the shared zero-capacity set
+	// returns before it hashes anything, so a program that never names `__ManagedMemory` does not pay to ask.
+	function valueIsBufferSurface(value ValueId) returns bool
+		return self.bufferSurfaceValues.contains(value)
+	end 'valueIsBufferSurface'
+
 	// ⭐ **A BARE FUNCTION NAME USED AS A VALUE → a `functionRef`** (P1.5-A1), the last resort a name
 	// falls to after it is not a local, a self-field, a top-level constant or a `var`. It is what makes
 	// `let f = double`, `apply(triple, x: 10)` and `return double` bind a function VALUE — a code pointer.
@@ -27478,6 +27736,7 @@ export type Parser
 		let savedValueClosureEnv = self.valueClosureEnv
 		let savedValueInstanceAlias = self.valueInstanceAlias
 		let savedImmutableGlobalReads = self.immutableGlobalReads
+		let savedBufferSurfaceValues = self.bufferSurfaceValues
 		let savedCaptureNames = self.captureNames
 		let savedCaptureValues = self.captureValues
 		let savedCaptureTypes = self.captureTypes
@@ -27546,6 +27805,7 @@ export type Parser
 		self.valueClosureEnv = ValueIdArray.create()
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
+		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.captureNames = ByteArrayArray.create()
 		self.captureValues = ValueIdArray.create()
 		self.captureTypes = MaxonTypeArray.create()
@@ -27681,6 +27941,7 @@ export type Parser
 		self.valueClosureEnv = savedValueClosureEnv
 		self.valueInstanceAlias = savedValueInstanceAlias
 		self.immutableGlobalReads = savedImmutableGlobalReads
+		self.bufferSurfaceValues = savedBufferSurfaceValues
 		self.captureNames = savedCaptureNames
 		self.captureValues = savedCaptureValues
 		self.captureTypes = savedCaptureTypes
@@ -30236,6 +30497,57 @@ export type Parser
 	// ⚠ A STATIC call in statement position stays unsupported, and that is deliberate rather than an
 	// oversight of this predicate: `Point.create()` on a line of its own discards a value, and for a
 	// factory that value is a box nothing would then free.
+	// ⭐⭐ **`<arrayBinding> . managed` — THE FIELD DOOR (R4.4), AND WHY IT NEEDS A PREDICATE OF ITS OWN.**
+	//
+	// `.managed` is a FIELD: the corpus writes no parentheses (`arr.managed.setLength(2)`,
+	// `f(bytes.managed)`), so `methodCallsAt` — which requires a `(` at +3 — is false for it, and the
+	// statement/expression dispatchers fall through to the field-access path instead. There the base is an
+	// `Array`, whose 48-byte record shv2 SYNTHESIZES rather than compiling `stdlib/Array.maxon`, so
+	// `structLayoutOfType` finds no field table at all and `missingBaseLayout` reports E2015.
+	//
+	// ⭐ **THAT IS PURE PARSER ROUTING AND HAS NOTHING TO DO WITH THE ELEMENT TYPE, WHICH WAS MEASURED**:
+	// `arr.managed.setLength(1)` failed identically on an `Array with Byte` — the instance `__ManagedMemory` was
+	// already bound to — so every filed note in the corpus blaming the element binding was wrong about the cause.
+	// What the access needs is to reach `dispatchArrayMethod`, which has served `.managed` as a member since R4.1
+	// (a VALUE receiver, `"…".toByteArray().managed`, has always worked).
+	//
+	// ⇒ So this predicate routes the BINDING spelling to `parseMethodCall`, the very door `methodCallsAt` routes
+	// to, and the dispatcher's own `.managed` arm does the rest. It is asked beside `methodCallsAt` at each of the
+	// three sites that ask it, never instead of it: the two are disjoint by the `(` at +3.
+	//
+	// ⚠ **IT IS NARROW ON PURPOSE, IN TWO WAYS.** The member must be `managed` — `arr.someOtherField` keeps
+	// `missingBaseLayout`'s carefully-worded refusal, which is still the true answer for every other field of a
+	// synthesized record. And the base must be a binding in THIS function's scope, because that is what makes
+	// `parseMethodCall`'s `localReceiver` arm certain to fire; a captured or top-level array's `.managed` stays
+	// refused as before rather than reaching that function's impossible-state panic.
+	function arrayManagedFieldAt(index TokenIndex) returns bool
+		if not tokenCanBeAName(self.tokenAt(index)) 'notABase'
+			return false
+		end 'notABase'
+		if self.kindAt(index + 1) != TokenKind.dot or not self.tokenAt(index + 2).value.equals(ManagedMemoryFieldName) 'notTheManagedField'
+			return false
+		end 'notTheManagedField'
+		// ⚠ **A MEMBER CALL MUST FOLLOW, and the narrowness is the corpus's own shape.** Every `.managed` in
+		// `/specs` reached through a BINDING is `arr.managed.<member>(…)`; the bare value form
+		// (`return arr.managed`, `f(arr.managed)`) appears only on a VALUE receiver
+		// (`"…".toByteArray().managed`), which `parsePostfix` has served since R4.1 and which this predicate
+		// never sees. Claiming the bare binding form too would buy nothing — `.managed` is an IDENTITY, so the
+		// value it yields is the array's own — and would silently retire the refusal
+		// `generic-types.error.field-access-on-builtin-array-base` pins for a field access on a synthesized
+		// builtin record. The day a binding's buffer is genuinely wanted as a value, this is the line to widen,
+		// with the case that wants it.
+		if not self.memberCallFollows(index + 3) 'notAMemberOnTheBuffer'
+			return false
+		end 'notAMemberOnTheBuffer'
+
+		let baseName = self.baseBindingName(self.tokenAt(index))
+		if not self.scope.contains(baseName) 'notALocalBinding'
+			return false
+		end 'notALocalBinding'
+
+		return self.typeIsArrayInstance(self.scope.getInfo(baseName).varType)
+	end 'arrayManagedFieldAt'
+
 	function methodCallsAt(index TokenIndex) returns bool
 		// The BASE is anything `tokenCanBeAName` admits, which subsumes both the identifier and the `self`
 		// keyword this used to name explicitly, and adds a KEYWORD-named binding (D8 — `type.method()` where

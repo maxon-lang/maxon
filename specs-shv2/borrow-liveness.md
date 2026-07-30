@@ -723,6 +723,13 @@ error E3070: specs/fragments/borrow-liveness/match-gives-merges-every-arms-borro
 ### A PROPAGATING `try` binds the accessor's own value
 No merge, no phi, nothing to retarget — the borrow is the value the binding takes. The third of the
 parser's three value merges is therefore the only `try` form that needs one.
+
+⚠ `look` declares `throws ArrayError` — the error `arr.get` actually throws — and it did NOT until R4.4.
+It declared `throws Oops`, an unrelated enum, and compiled only because shv2 did not yet know the array
+family's error TYPE (`runtimeThrowsClause` answered `none`, so nothing checked the propagation). Registering
+that type made the mismatch visible, and the runnable oracle reports it identically:
+`E3059: try propagates 'ArrayError' but enclosing function throws 'Oops'`. The `Oops` enum stays declared but
+unused so the line numbers this case's expected diagnostic names do not move.
 ```maxon
 typealias StringArray = Array with String
 
@@ -730,7 +737,7 @@ enum Oops implements Error
 	failed
 end 'Oops'
 
-function look(arr StringArray) returns ExitCode throws Oops
+function look(arr StringArray) returns ExitCode throws ArrayError
 	let s = try arr.get(0)
 	arr.clear()
 	print("[{s}]\n")
