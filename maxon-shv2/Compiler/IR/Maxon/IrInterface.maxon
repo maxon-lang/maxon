@@ -224,6 +224,51 @@ end 'InterfaceMethodSig'
 
 export typealias InterfaceMethodSigArray = Array with InterfaceMethodSig
 
+// ⭐⭐ **THE ONE RENDERER OF A DECLARED TYPE TO THE SOURCE STRING A CONFORMANCE COMPARES AND PRINTS.**
+// BOTH sides of the conformance relation come through here — the INTERFACE side at parse time
+// (`Parser.renderInterfaceTypeName`, which adds only the `Self` arm on top of it) and the IMPL side at
+// check time (`ConformanceCheck.signatureMatches` / `formatActualSignature`) — and it is ONE function
+// because a rendered name is a type IDENTITY, not a caption: `signatureMatches` decides conformance by
+// comparing two of these strings. A tag the two sides spell DIFFERENTLY is a false REJECT; a tag they
+// both spell as one KIND WORD is a false ACCEPT, which no positive test can see.
+//
+// ⚠ **`maxonTypeName` ALONE CANNOT BE THAT RENDERER — two of its arms name a KIND rather than a TYPE**,
+// and this is the one site where that difference is a wrong answer instead of a cosmetic one:
+//
+//   • a `typeParameter`'s id is a POSITION in its declaring type's `uses` list and not an interner id, so
+//     `maxonTypeName` gives the literal `type parameter` for every one of them: `T` and `U` render alike
+//     and neither matches ITSELF, which rejected `type Box uses T implements Holder with T` — how every
+//     generic container in `stdlib/` declares conformance (R5).
+//   • a `genericInstance` renders as the literal `struct`, so `Array with Integer` and `Array with String`
+//     render alike — a FALSE ACCEPT. MEASURED (R5 review): shv2 compiled and ran a type whose
+//     `take(xs Array with String)` satisfied an interface requiring `take(xs Array with Integer)`, exit 42,
+//     where the bootstrap reports E3016 on the same program. An instance's identity is
+//     `ProgramSignatures.canonicalInstanceName` — the compiler's own answer to "are these two the same
+//     type?", which every OTHER comparison site already asks, and which collapses the two spellings of one
+//     instance to one string.
+//
+// The lists are the CALLER's because only the caller knows whose they are: the parser renders against the
+// declaration it is inside (`enclosingTypeParams`) and its file-local interner, the conformance check
+// against the conforming type's recorded `uses` names and the project interner. They are four PARAMETERS
+// and deliberately not one record: a record is a heap box, this is called once per rendered type, and the
+// ladder read the difference — +32/+48/+80/+144/+272/+528 allocations at 32 bytes each, measured A/B on
+// this branch, for nothing but a shorter call. The RULE lives here, once —
+// it was two copies for one rung, and the copies AGREED on the `genericInstance` hole, which is exactly why
+// the hole read as an acceptance rather than as a disagreement.
+export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, typeParamNames ByteArrayArray, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
+	let tag = maxonTypeTag(t)
+
+	if tag == ValueTypeTag.typeParameter 'typeParameterType'
+		return try typeParamNames.get(typeNameIdOf(t)) otherwise panic("renderDeclaredTypeName: type-parameter position {typeNameIdOf(t)} is outside '{String.from(declarationName)}'s own `uses` list of {typeParamNames.count()}, which is the list its signatures were resolved against")
+	end 'typeParameterType'
+
+	if tag == ValueTypeTag.genericInstance 'genericInstanceType'
+		return signatures.canonicalInstanceName(typeNameIdOf(t))
+	end 'genericInstanceType'
+
+	return maxonTypeName(t, typeNames: typeNames).toByteArray()
+end 'renderDeclaredTypeName'
+
 // A parsed (or synthesized) `interface`. `extendsInterfaces` are parent interface names
 // whose methods a conforming type must ALSO supply (`interface D extends B` — the check
 // projects B's methods into D at decl order); `associatedTypeNames` are the `uses`

@@ -789,3 +789,89 @@ end 'main'
 ```
 
 
+### A requirement typed by a GENERIC INSTANCE is checked by the instance's identity, not by its kind
+
+The third arm of the shared renderer (`IrInterface.renderDeclaredTypeName`), and the one that was a false
+ACCEPT rather than a false reject. `maxonTypeName` spells a `genericInstance` with the bare kind word
+`struct`, so `Array with Integer` and `Array with String` rendered to the same string and satisfied each
+other. MEASURED before the fix: shv2 COMPILED AND RAN this program (exit 42) where the bootstrap reports
+E3016 on it. Its identity is `ProgramSignatures.canonicalInstanceName` — the compiler's own answer to
+"are these two the same type?", which every other comparison site already asks.
+
+<!-- test: conformance-requirement-typed-by-a-generic-instance -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias StrArray = Array with String
+
+interface Bag
+	function take(xs IntArray) returns Integer
+end 'Bag'
+
+type Sack implements Bag
+	let n as Integer
+
+	function take(xs StrArray) returns Integer
+		return n + xs.count()
+	end 'take'
+
+	static function create() returns Self
+		return Self{n: 41}
+	end 'create'
+end 'Sack'
+
+function main() returns ExitCode
+	let s = Sack.create()
+	var f = StrArray.create()
+	f.push("a")
+	return s.take(f)
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:11:6: Partial interface implementation: type 'Sack' has 1 method(s) with wrong signature:
+  - take(xs Array_String) returns Integer (expected take(xs Array_Integer) returns Integer)
+```
+
+
+### …and TWO ALIAS SPELLINGS of ONE instance still conform, which is why the identity is the canonical name
+
+The negative control for the case above, and the reason the fix is the canonical instance name rather than
+a refusal to compare instances at all: `IntArray` and `AlsoIntArray` are two names for one type, and a
+comparison that read either alias's own spelling would REJECT this program. `canonicalInstanceName` collapses
+both to one string, exactly as it does for every other comparison site in the compiler.
+
+<!-- test: two-alias-spellings-of-one-generic-instance-conform -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias AlsoIntArray = Array with Integer
+
+interface Bag
+	function take(xs IntArray) returns Integer
+end 'Bag'
+
+type Sack implements Bag
+	let n as Integer
+
+	function take(xs AlsoIntArray) returns Integer
+		return n + xs.count()
+	end 'take'
+
+	static function create() returns Self
+		return Self{n: 41}
+	end 'create'
+end 'Sack'
+
+function main() returns ExitCode
+	let s = Sack.create()
+	var f = IntArray.create()
+	f.push(7)
+	return s.take(f)
+end 'main'
+```
+```exitcode
+42
+```
+

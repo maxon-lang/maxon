@@ -8815,10 +8815,13 @@ export type Parser
 
 	// Render a parsed interface-signature `MaxonType` to the SOURCE string the conformance check compares
 	// and prints. `Self` (a `structRef` whose id is the interface's own name) renders as `Self`; every
-	// other type defers to `maxonTypeName` (the alias name for a `named`, the type name for a struct, the
-	// tag word for a primitive) — all read off the LOCAL interner, but the STRING is interner-independent,
-	// so it matches the impl side rendered off the project interner (the same property `paramAggregateNames`
-	// relies on). Rendered at parse time, so `mergeArtifact` folds an interface with no id to remap.
+	// other type defers to the SHARED `renderDeclaredTypeName` — read off the LOCAL interner, but the STRING
+	// is interner-independent, so it matches the impl side rendered off the project interner (the same
+	// property `paramAggregateNames` relies on). Rendered at parse time, so `mergeArtifact` folds an
+	// interface with no id to remap.
+	//
+	// ⚠ The `Self` arm is the WHOLE of what this adds, and it is deliberately NOT in the shared renderer: a
+	// `Self` written in a conformance ARGUMENT means the conforming type's own name, not the string `Self`.
 	function renderInterfaceTypeName(t MaxonType, interfaceName ByteArray) returns ByteArray
 		let tag = maxonTypeTag(t)
 		if tag == ValueTypeTag.structRef 'structRefType'
@@ -8827,27 +8830,14 @@ export type Parser
 				return InterfaceSelfTypeName
 			end 'selfRef'
 		end 'structRefType'
-		return self.renderDeclaredTypeName(t)
-	end 'renderInterfaceTypeName'
 
-	// Render a parsed type to the SOURCE string every rendered-type consumer compares and prints, spelling a
-	// TYPE PARAMETER by the name its declaration gave it. The half of `renderInterfaceTypeName` above that is
-	// not about `Self`, split out because the OTHER writer of a rendered type string — an `implements … with
-	// <Arg>` conformance argument (R5) — needs exactly this and must NOT have the `Self` arm: a written `Self`
-	// in an argument position has already resolved to the enclosing type's own `structRef`
-	// (`enclosingSelfType`), and the conforming type's NAME is precisely what the binding must carry.
-	//
-	// An ASSOCIATED TYPE renders by the NAME the `uses` clause gave it (D6). It reaches here as a
-	// `typeParameter(pos)` — a POSITION in `enclosingTypeParams`, which for an interface body IS the
-	// associated-type list and for a `type` body is its own `uses` list — and `maxonTypeName` would spell it
-	// with the bare tag word, so two different parameters would render identically and a conformance mismatch
-	// would print a type that does not match itself.
-	function renderDeclaredTypeName(t MaxonType) returns ByteArray
-		if maxonTypeTag(t) == ValueTypeTag.typeParameter 'typeParameterType'
-			return try self.enclosingTypeParams.get(typeNameIdOf(t)) otherwise panic("renderDeclaredTypeName: type-parameter position {typeNameIdOf(t)} is outside the enclosing declaration's own `uses` list, which is the list it was resolved against")
-		end 'typeParameterType'
-		return maxonTypeName(t, typeNames: self.artifact.typeNames).toByteArray()
-	end 'renderDeclaredTypeName'
+		// Every other type goes through the ONE shared renderer (`IrInterface.renderDeclaredTypeName`) — the
+		// same function the IMPL side of the conformance uses, so an associated type, a type PARAMETER and a
+		// generic INSTANCE cannot be spelled one way here and another way there. `enclosingTypeParams` is the
+		// interface's own `uses` list inside an interface body, which is what a `typeParameter(pos)` in one of
+		// its signatures indexes.
+		return renderDeclaredTypeName(t, declarationName: interfaceName, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
+	end 'renderInterfaceTypeName'
 
 	// The `implements I1, I2 [with …]` conformance clause of a `type` declaration (P1.7a slice 1). Records
 	// a ConformanceDecl anchored on the type NAME token, or does nothing when there is no clause. Each
@@ -8942,8 +8932,14 @@ export type Parser
 	// source string the substitution carries. Spelled once because both arms above read an argument the same
 	// way, and a second spelling would be free to record the use in only one of them — which is exactly the
 	// bug the parenthesized arm already had.
+	//
+	// It renders through the SHARED renderer and NOT through `renderInterfaceTypeName`, which is the one
+	// difference between the two conformance-argument positions: a written `Self` here has already resolved
+	// to the enclosing type's own `structRef` (`enclosingSelfType`), and the conforming type's NAME is
+	// precisely what the binding must carry. `enclosingTypeParams` is the CONFORMING type's own `uses` list,
+	// which is what makes `type Box uses T implements Holder with T` bind `Element := T`.
 	function readConformanceWithArg() returns ByteArray throws ParseError
-		return self.renderDeclaredTypeName(try self.parseTypeReference())
+		return renderDeclaredTypeName(try self.parseTypeReference(), declarationName: self.enclosingType, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
 	end 'readConformanceWithArg'
 
 	// ⭐ **HOW MANY ARGUMENTS AN UNPARENTHESIZED `with` CLAUSE AFTER `interfaceName` TAKES (R5)** — the
@@ -8956,6 +8952,15 @@ export type Parser
 	// (`Parser.maxon:1959`) both do it, rather than refusing an interface they cannot resolve yet. A parse
 	// is a pure function of one file's tokens (see this file's header), so shv2's unresolvable set is the
 	// larger one — a cross-file interface is in it — and the consequence is bounded and LOUD TWICE OVER.
+	// ⚠ **AND THE UNRESOLVABLE SET INCLUDES AN INTERFACE DECLARED LOWER IN THIS SAME FILE**, because
+	// `artifact.interfaces` is filled by `recordInterface` as the linear parse reaches each declaration.
+	// MEASURED: `interface Duo uses P, Q` written BELOW `type Both implements Duo with Integer, Float` gives
+	// the same loud pair below, on a program the bootstrap compiles and runs (exit 42) — a DECLARATION-ORDER
+	// false reject, bounded to the unparenthesized spelling (`with (Integer, Float)` compiles, measured).
+	// It is the same same-file/declared-above limit `requireInterfaceForParse` already states for a `where`
+	// constraint's interface, not a new one; lifting it needs whole-program interface visibility at parse
+	// time, which is a rung and not a line.
+	//
 	// MEASURED on `interface Duo uses P, Q` in one file and `implements Duo with Integer, Float` in another:
 	// `E3016 … 'Both' does not define required associated type 'Q' from interface 'Duo'` AND `E3015 … implements
 	// unknown interface 'Float'` — the missing-binding check catches the truncation whole-program, where the
