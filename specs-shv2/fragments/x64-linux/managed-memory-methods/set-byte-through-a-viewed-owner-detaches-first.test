@@ -1,0 +1,138 @@
+// Test: set-byte-through-a-viewed-owner-detaches-first
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(11)
+	arr.push(22)
+	arr.push(33)
+	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
+	try arr.managed.setByte(0, value: 99) otherwise panic("setByte: offset 0 of a length-3 buffer")
+	let viewed = try sub.get(0) otherwise panic("get: index 0 of a length-2 view")
+	let owner = try arr.get(0) otherwise panic("get: index 0 of a length-3 array")
+	return (viewed + owner) as ExitCode
+end 'main'
+---
+ExitCode: 110
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 11
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 22
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 33
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_slice
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.movRegImm32 rdi, 134
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 99
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_set_byte
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.movRegImm32 rdi, 134
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rax, [rip + __str_rec_5]
+    x64.movRegImm32 rdi, 134
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rax, [rip + __str_rec_7]
+    x64.movRegImm32 rdi, 134
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.leaRegRegReg r13, r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
