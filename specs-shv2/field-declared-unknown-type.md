@@ -60,8 +60,9 @@ one the two `as`-cast sites and the generic-type-argument check ask — whether 
 type name denotes anything:
 
 * **it denotes something** (a declared `enum`/`union`, a ranged int alias, a qualified inner or
-  per-instance alias, `ExitCode` and the other compiler-owned names, a declared `type` named from
-  outside its own body) ⇒ the existing refusal stands, VERBATIM. A field access on a genuine `int`
+  per-instance alias, a declared `type` named from outside its own body, and five of the six
+  compiler-owned names — `ExitCode`, `HashValue`, `Codepoint`, `Ordering`, `CharSet`) ⇒ the existing
+  refusal stands, VERBATIM. A field access on a genuine `int`
   is a correct refusal with a fine message and it is pinned unchanged by
   `specs-shv2/struct-field-assign-precedence.md`'s `error.not-a-struct-outranks-immutable-instance`
   (a bare `let n = 5`) and `specs-shv2/self-field-struct-typed.md`'s
@@ -70,10 +71,17 @@ type name denotes anything:
   assumed:** widen the query to fire on every `named` and it reports
   `E3011: Unknown type 'Integer'` about a perfectly declared alias — and it is the ONLY case of 2540
   that goes red, so it is the single thing standing between this arm and a new false rejection.
+* **it is the SIXTH compiler-owned name, `CharacterSet`** ⇒ the existing refusal also stands. The
+  cascade genuinely says `notDeclared` for it — its layout is registered under `__CharacterSet`, not
+  under the name a source writes — so this is the one place the cascade's answer may not be read as
+  "the program declares no such type". `isCompilerOwnedTypeName` is the gate, and
+  `error.compiler-reserved-base-type-is-not-undeclared` below is what stops it being deleted.
 * **it denotes nothing** ⇒ the door reports **E3011 with `unknownTypeMessage`** — the authority's own
   code and the authority's own words — positioned at the base (or, for a method call, the member).
   Not a sentence of its own: `ParseError.unknownTypeName`, the one arm every positioned undeclared
-  type name in the compiler is rendered through.
+  type name in the compiler is rendered through. One `try`, not three copies of an ask-then-throw:
+  `Parser.requireDeclaredBaseTypeName` throws internally, so no door holds a "nothing to report"
+  value and none of them can word this fact for itself.
 
 The query is asked only on a path that has ALREADY decided to refuse, so it can never reject a
 program that compiles: it chooses the verdict and nothing else. And it is a diagnostic query only —
@@ -231,4 +239,43 @@ end 'main'
 ```
 ```maxoncstderr
 error E3011: <fragment>:6:11: Unknown type 'NoSuchTypeAtAll'
+```
+
+<!-- test: error.compiler-reserved-base-type-is-not-undeclared -->
+⭐ **A NAME THE COMPILER RESERVES IS NOT AN UNDECLARED NAME, AND `CharacterSet` IS THE ONE THAT SAYS SO.**
+`denotedNamedType` answers for five of the six `isCompilerOwnedTypeName` names — `ExitCode` by its own arm,
+`HashValue` and `Codepoint` through `isSynthesizedIntAliasName`, `Ordering` because `createEnumRegistry`
+seeds it, `CharSet` because `registerCharacterSetType` folds it into `genericAliases`. It answers for
+`CharacterSet` NOWHERE, and that is not an oversight: the layout is registered under the RESERVED spelling
+`__CharacterSet` (`SignatureIndex.CharacterSetTypeName`) precisely so a user `type CharacterSet` cannot
+contest its bucket, while the user-facing door is the bare `CharacterSet`
+(`SignatureIndex.CharacterSetBuiltinName`). So `containsStruct("CharacterSet")` is FALSE and the cascade
+raises `notDeclared` for a type the compiler ships and `CharacterSet.letters()` uses successfully (pinned
+by `specs-shv2/character-set.md`'s `supplementary-plane-category`).
+
+Which makes this the trap the whole rung is about, sprung by the rung's own fix: reading the cascade's
+`notDeclared` as "the program declares no such type" produced **`E3011: Unknown type 'CharacterSet'`** — a
+falsehood, and a more confident one than the `int` it replaced, which at least named `CharacterSet` as a
+member-carrying builtin in the same breath. `undeclaredBaseTypeNameOf` therefore claims nothing about a
+compiler-owned name and the pre-existing refusal stands, unchanged and correct: the type is real, it simply
+cannot be NAMED at a parameter yet (see `CharacterSetTypeName`'s own header on why it cannot cross a
+function boundary).
+
+⚠ **Delete that guard and this case reports `Unknown type 'CharacterSet'` again — MEASURED, and it is the
+ONLY case of 2541 that notices.** The two halves of the query are independently load-bearing and each has
+exactly one witness: remove the `isCompilerOwnedTypeName` gate and only this case reddens; widen the
+`denotedNamedType` ask to fire on every `named` and only `self-field-struct-typed`'s
+`error.scalar-field-base-is-not-a-struct` reddens.
+```maxon
+
+function hasIt(s CharacterSet, c Character) returns bool
+	return s.contains(c)
+end 'hasIt'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:11: Unsupported: a member access 'contains' on a 'int' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here
 ```

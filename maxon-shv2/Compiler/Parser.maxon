@@ -21665,13 +21665,10 @@ export type Parser
 		if not tagCarriesStructLayout(recv.tag) 'notAStruct'
 			let memberTok = self.current()
 
-			// ⚠ The third of `undeclaredBaseTypeNameOf`'s doors — a receiver with no binding to name, whose
+			// ⚠ The third of `requireDeclaredBaseTypeName`'s doors — a receiver with no binding to name, whose
 			// refusal called it a `'int'` value: the same invented type in a third wording, which is why the
 			// three doors now share the ONE verdict and none of them words this fact for itself.
-			let undeclared = self.undeclaredBaseTypeNameOf(recv.tag, nameId: recv.nameId)
-			if not undeclared.isEmpty() 'undeclaredBaseType'
-				throw ParseError.unknownTypeName(String.from(undeclared), line: memberTok.line, column: memberTok.column)
-			end 'undeclaredBaseType'
+			try self.requireDeclaredBaseTypeName(recv.tag, nameId: recv.nameId, tok: memberTok)
 
 			throw ParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{typeTagName(recv.tag)}' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here", line: memberTok.line, column: memberTok.column)
 		end 'notAStruct'
@@ -22103,14 +22100,12 @@ export type Parser
 	function capturedStructBase(baseTok Token, enclosing Scope) returns StructBase throws ParseError
 		let binding = enclosing.getInfo(baseTok.value)
 		let capturedTag = maxonTypeTag(binding.varType)
+		let capturedTypeNameId = typeNameIdOf(binding.varType)
 		if capturedTag != ValueTypeTag.structRef 'notAStruct'
-			// `requireStructBase`'s undeclared-name arm, reached through a `function(…) gives` instead of a
+			// `requireStructBase`'s undeclared-name guard, reached through a `function(…) gives` instead of a
 			// bare name — identically able to assert an invented `int` without it, which is the second of
-			// `undeclaredBaseTypeNameOf`'s three doors.
-			let undeclared = self.undeclaredBaseTypeNameOf(capturedTag, nameId: typeNameIdOf(binding.varType))
-			if not undeclared.isEmpty() 'undeclaredBaseType'
-				throw ParseError.unknownTypeName(String.from(undeclared), line: baseTok.line, column: baseTok.column)
-			end 'undeclaredBaseType'
+			// `requireDeclaredBaseTypeName`'s three doors.
+			try self.requireDeclaredBaseTypeName(capturedTag, nameId: capturedTypeNameId, tok: baseTok)
 
 			throw ParseError.unsupported("a field access or method call on the captured '{String.from(baseTok.value)}', which is declared '{typeTagName(capturedTag)}' and not a struct type (only a struct has fields and methods)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
@@ -22118,7 +22113,7 @@ export type Parser
 		// method call on a CAPTURED receiver cannot reach a binding of the enclosing body, and a captured
 		// managed CONTAINER — the only thing a borrow could be taken out of — is refused outright at this rung
 		// (`capturedStructBase` admits only a struct). There is no storage here for a conflict to be about.
-		return StructBase.create(try self.structLayoutOfType(capturedTag, nameId: typeNameIdOf(binding.varType), baseTok: baseTok), box: try self.emitCaptureRead(baseTok, enclosing: enclosing), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
+		return StructBase.create(try self.structLayoutOfType(capturedTag, nameId: capturedTypeNameId, baseTok: baseTok), box: try self.emitCaptureRead(baseTok, enclosing: enclosing), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
 	end 'capturedStructBase'
 
 	// A STRING'S BUILTIN METHODS -- s.append(t) and s.byteLength(). String is the one non-struct type
@@ -25483,14 +25478,12 @@ export type Parser
 		// resolve to a struct layout (the instance's base struct, its methods compiled once against the
 		// opaque `T`). Every other tag has no fields.
 		let baseTag = maxonTypeTag(binding.varType)
+		let baseTypeNameId = typeNameIdOf(binding.varType)
 		if not tagCarriesStructLayout(baseTag) 'notAStruct'
 			// ⚠ **A TYPE THE PROGRAM DOES NOT HAVE IS NOT "declared 'int'", AND IT IS NOT THIS ACCESS'S
 			// FAULT EITHER** — asked BEFORE the not-a-struct refusal below, because a name that denotes
-			// nothing has no struct-hood to be wrong about. See `undeclaredBaseTypeNameOf`.
-			let undeclared = self.undeclaredBaseTypeNameOf(baseTag, nameId: typeNameIdOf(binding.varType))
-			if not undeclared.isEmpty() 'undeclaredBaseType'
-				throw ParseError.unknownTypeName(String.from(undeclared), line: baseTok.line, column: baseTok.column)
-			end 'undeclaredBaseType'
+			// nothing has no struct-hood to be wrong about. See `requireDeclaredBaseTypeName`.
+			try self.requireDeclaredBaseTypeName(baseTag, nameId: baseTypeNameId, tok: baseTok)
 
 			throw ParseError.unsupported("a field access on '{String.from(baseTok.value)}', which is declared '{typeTagName(baseTag)}' and not a struct type (only a struct has fields)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
@@ -25512,7 +25505,7 @@ export type Parser
 			throw ParseError.unsupported(structTypedSelfFieldBaseMessage(baseTok.value), line: baseTok.line, column: baseTok.column)
 		end 'structTypedField'
 
-		return StructBase.create(try self.structLayoutOfType(baseTag, nameId: typeNameIdOf(binding.varType), baseTok: baseTok), box: binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: subjectName)
+		return StructBase.create(try self.structLayoutOfType(baseTag, nameId: baseTypeNameId, baseTok: baseTok), box: binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: subjectName)
 	end 'requireStructBase'
 
 	// The `StructLayout` a struct-typed (tag, nameId) pair names — the guarded layout half of
@@ -25588,12 +25581,26 @@ export type Parser
 		return ParseError.unsupported("a field access on '{String.from(baseTok.value)}': its type instantiates '{String.from(typeName)}', which no file declares as a generic `type`, so it has no fields — the `with` that names it is the error", line: baseTok.line, column: baseTok.column)
 	end 'missingBaseLayout'
 
-	// ⭐⭐ **THE BASE'S DECLARED TYPE NAME WHEN THE AUTHORITY DENOTES NOTHING BY IT, EMPTY OTHERWISE** —
-	// shared by the same three member-access doors `structLayoutOfType` above is: a local BINDING
+	// ⭐⭐ **A MEMBER-ACCESS BASE MAY NOT BE REFUSED IN TERMS OF A TYPE THE PROGRAM DOES NOT HAVE** — the
+	// guard the same three doors `structLayoutOfType` above serves stand behind: a local BINDING
 	// (`requireStructBase`, serving both the read and the write path), a CLOSURE CAPTURE
-	// (`capturedStructBase`) and a VALUE receiver with no binding to name (`structBaseOfReceiver`). A
-	// non-empty answer is `ParseError.unknownTypeName` — E3011, the authority's own code and its own
-	// wording; see that arm for why a parse-time door must report it at all.
+	// (`capturedStructBase`) and a VALUE receiver with no binding to name (`structBaseOfReceiver`). It
+	// raises `ParseError.unknownTypeName` — E3011, the authority's own code and its own wording; see that
+	// arm for why a parse-time door must report it at all.
+	//
+	// It THROWS rather than handing the name back for each door to throw with, so the ask-and-refuse is
+	// written once instead of three times and there is no "no undeclared name" value to represent. ⚠ It is
+	// deliberately NOT the `throw self.helperReturningAParseError(…)` shape
+	// `structTypedSelfFieldBaseMessage`'s header measures as leaking two allocations: nothing returns a
+	// `ParseError` here, it is constructed and thrown inside, exactly as the sibling `requireBindingLive`
+	// does at the top of `requireStructBase`.
+	//
+	// MEASURED rather than reasoned, because that header's rule was measured too: all seven programs that
+	// reach this guard still exit **1**, never 101. That is a real check and not a vacuous one — the shv2
+	// binary is emitted by the bootstrap, whose `mm_leak_check` sits on the SINGLE unconditional exit path
+	// taking main's return value as its argument and returning it unchanged only when the live allocation
+	// count is zero (`X86CodeEmitter.cs:562-572`). A failing compile returns from `main` like any other run,
+	// so the gate sees it; two leaked allocations would have come back as 101 instead of 1.
 	//
 	// ⚠ **IT EXISTS BECAUSE ALL THREE DOORS ASSERTED A TYPE THE COMPILER INVENTED.** Each worded its
 	// refusal around `typeTagName(<the base's tag>)`, and a `named` tag PRINTS AS `int` (TypeRules'
@@ -25612,37 +25619,54 @@ export type Parser
 	// ⭐ **IT ASKS `denotedNamedType`, AND ASKING ANYTHING ELSE IS THE WHOLE HAZARD HERE.** A `named` tag
 	// covers every spelling `parseTypeReference` settles at parse time and no further — a declared `type`
 	// named from OUTSIDE its own body, a declared `enum`/`union`, a ranged int alias, a qualified inner or
-	// per-instance alias, `ExitCode` and the other compiler-owned names, and a name nothing declares at all.
-	// Only the last is undeclared, and the list of the rest is exactly `denotedNamedType`'s cascade: the ONE
-	// place that knows what a `named` type denotes, asked here for the same reason `denotedCastTargetTag` and
+	// per-instance alias, five of the six compiler-owned names, and a name nothing declares at all. Only the
+	// last is undeclared, and the list of the rest is exactly `denotedNamedType`'s cascade: the ONE place
+	// that knows what a `named` type denotes, asked here for the same reason `denotedCastTargetTag` and
 	// `checkGenericArgType` ask it, so a member-access base and the resolution pass cannot come to disagree
 	// about what a name means. A re-derivation ("is it in the struct registry, the enum registry, …") is how
 	// this refusal would come to reject a name the authority accepts — and it would do it by asserting the
-	// name is undeclared, which is the very false statement this pair exists to remove.
+	// name is undeclared, which is the very false statement this guard exists to remove.
 	//
-	// ⚠ **THE ANSWER IS DISCARDED — only the THROW is read.** `resolveTypes` erases a `named` signature type
-	// and the parser deliberately does not (a `named` value's tag carries the alias NAME the shift rule and
-	// the per-instance identity checks read — see `emitFieldLoad`'s header), so substituting the denoted type
-	// for the base's would drop both. This is a DIAGNOSTIC query and nothing else.
+	// ⚠⚠ **FIVE OF SIX — AND THE SIXTH IS WHY THE `isCompilerOwnedTypeName` GATE IS HERE.** The cascade
+	// answers `ExitCode` by its own arm, `HashValue`/`Codepoint` through `isSynthesizedIntAliasName`,
+	// `Ordering` because `createEnumRegistry` seeds it, and `CharSet` because `registerCharacterSetType`
+	// folds it into `genericAliases`. It answers `CharacterSet` NOWHERE — the layout is registered under the
+	// RESERVED spelling `__CharacterSet` (`CharacterSetTypeName`) exactly so a user `type CharacterSet`
+	// cannot contest its bucket, while the user-facing door is the bare name (`CharacterSetBuiltinName`), so
+	// `containsStruct("CharacterSet")` is FALSE and the cascade raises `notDeclared` for a type the compiler
+	// SHIPS. MEASURED: without this gate, `function hasIt(s CharacterSet, …)` + `s.contains(c)` reported
+	// **`E3011: Unknown type 'CharacterSet'`** — a falsehood, and a more confident one than the `int` it
+	// replaced, which at least named `CharacterSet` as a member-carrying builtin in the same sentence.
+	//
+	// ⇒ **A NAME THE COMPILER RESERVES IS NEVER THE USER'S UNDECLARED NAME**, so this gate cannot swallow a
+	// genuine typo: `requireTypeNameNotCompilerOwned` refuses any user declaration that would bind one of
+	// the six, which is what makes "reserved" and "the program's own missing type" disjoint by construction.
+	// The pre-existing refusal then stands unchanged — and it is the RIGHT one, because the type is real and
+	// merely cannot be NAMED at a parameter yet (`CharacterSetTypeName`'s header states why it cannot cross
+	// a function boundary). Pinned by `field-declared-unknown-type`'s
+	// `error.compiler-reserved-base-type-is-not-undeclared`; the guard cannot be removed quietly.
+	//
+	// ⚠ **NOTHING IS SUBSTITUTED FOR THE BASE'S TYPE — only the throw is the point.** `resolveTypes` erases a
+	// `named` signature type and the parser deliberately does not (a `named` value's tag carries the alias
+	// NAME the shift rule and the per-instance identity checks read — see `emitFieldLoad`'s header), so
+	// resolving the base here would drop both. This is a DIAGNOSTIC query and nothing else.
 	//
 	// ⚠ **ONLY EVER CALLED ON A PATH THAT IS ALREADY THROWING**, which is what makes it free: it costs a name
 	// lookup and a registry cascade per REFUSED member access, never one per field read. It also means it
-	// cannot false-reject — the decision to refuse was taken before it was asked, and it only chooses the
-	// wording.
-	//
-	// EMPTY for "nothing to report" is this file's standing idiom for an optional name
-	// (`MethodReceiver.selfFieldName`, `StructBase.immutableName`) rather than a sentinel: a base whose type
-	// IS declared has no undeclared name, and that is a perfectly good answer.
-	function undeclaredBaseTypeNameOf(tag ValueTypeTag, nameId TypeNameId) returns ByteArray
+	// cannot false-reject — the decision to refuse was taken before it was asked, and it only chooses which
+	// refusal is reported.
+	function requireDeclaredBaseTypeName(tag ValueTypeTag, nameId TypeNameId, tok Token) throws ParseError
 		if tag != ValueTypeTag.named 'notANamedType'
-			return EmptySourceText
+			return
 		end 'notANamedType'
 
 		let name = self.internedName(nameId)
-		_ = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise return name
+		if isCompilerOwnedTypeName(name) 'compilerReserved'
+			return
+		end 'compilerReserved'
 
-		return EmptySourceText
-	end 'undeclaredBaseTypeNameOf'
+		_ = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise throw ParseError.unknownTypeName(String.from(name), line: tok.line, column: tok.column)
+	end 'requireDeclaredBaseTypeName'
 
 	// The BASE struct name a method/field base resolves to: the struct itself for a `structRef`, or the
 	// generic instance's base struct for a `genericInstance` (`Sizer with bool` ⇒ `Sizer`, P1.6-B1) — the
