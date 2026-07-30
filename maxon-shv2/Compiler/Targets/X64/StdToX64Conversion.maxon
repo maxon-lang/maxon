@@ -160,16 +160,19 @@ let FileShareNone = 0x0  // dwShareMode (the pipe is not shared)
 // which must not be shared, and would be wrong here — it would make a second `openRead` of the same path
 // fail with a sharing violation, which `managed-file.exists` (open, close, re-open) would trip over.
 let FileShareRead = 0x1  // dwShareMode for a read-only open
+
 // R4.2: a file opened for WRITING permits concurrent readers AND writers. `FileShareRead` alone would make
 // `__ManagedFile.openWrite` fail with `ERROR_SHARING_VIOLATION` whenever an editor, an indexer or a virus
 // scanner happens to hold a write handle on the path — an intermittent failure that depends on what else is
 // running on the box. The bootstrap's sync worker makes the same choice and says so.
 let FileShareReadWrite = 0x3  // dwShareMode for a write open: FILE_SHARE_READ | FILE_SHARE_WRITE
 let OpenExisting = 3  // dwCreationDisposition — connect to the already-created named pipe
+
 // R4.2: `openWrite` CREATES OR TRUNCATES. `specs/managed-file.md` documents it as "Opens a file for writing
 // (creates or overwrites)", which is exactly CREATE_ALWAYS — not OPEN_ALWAYS (which would leave a longer
 // previous file's tail behind the new bytes) and not CREATE_NEW (which fails on an existing path).
 let CreateAlways = 2  // dwCreationDisposition — create, truncating an existing file
+
 // R4.2: `MoveFileExA`'s dwFlags. REPLACE_EXISTING makes publishing the destination atomic rather than a
 // delete-then-rename with a window where neither name exists; WRITE_THROUGH flushes the metadata so a crash
 // straight after the call cannot lose the new name. Both are the bootstrap's, kept for its stated reasons.
