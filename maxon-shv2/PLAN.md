@@ -4500,27 +4500,55 @@ not ported from v1's `.mxc`.
   **arm64-macOS-specific**: the x64 lanes are green over `ranged-typealias` upstream (P1.9 closed at
   2352/0), and a double-decref would fire on every target, so the divergence is in the **bootstrap's
   arm64 emission of shv2's own source**. ⇒ **it is a `maxon-sharp` rung, gated by the full C# suite.**
-  **What is already ruled OUT, so the next agent does not re-derive it:**
-  - **It is NOT an over-decref of `helpText` by the diagnostic path. `helpText` is READ NOWHERE in the
-    entire compiler** — grepped: `Lexer.maxon:1310` declares it and `:1313` assigns it, and there is no
-    third mention. ⇒ the teardown of the global `keywordMap` is merely **where corruption SURFACES** (the
-    first decref to meet a zeroed header), not where it is caused. **Treat this as a use-after-free /
-    heap-corruption hunt, not a missing-incref hunt.**
-  - **It is NOT "a union case with two managed payloads".** `unexpectedToken(expected, got)`,
-    `returnTypeMismatch(got, expected)` and `comparisonTypeMismatch(left, right)` all carry two `String`s
-    and all run **clean** (measured individually).
-  - **It is NOT the enclosing report `match` or the alias-declaration path.** The two arms ADJACENT to it
-    in `Queries.maxon`'s match — `bareSizedTypeAlias` (`typealias Real = f64`) and
-    `unrepresentableIntegerRange` (`int(-1 to u64.max)`) — are both clean, as is a sibling throw from the
-    very same function (`int(0 to f64.max)` ⇒ E2015).
-  - **It is NOT the naive shape of the throw site.** `mismatchedRangeBoundTypes` is thrown at
-    `Parser.maxon:7186` as `throw ParseError.mismatchedRangeBoundTypes(low.spelling(), high: high.spelling(), …)`
-    — **two owned `String` temporaries from method calls in ONE argument list** — but a hand-written
-    minimal program of exactly that shape (struct method returning an interpolated `String`, two calls in
-    one arg list, boxed-union payload, matched and printed) **compiles and runs clean under BOTH
-    compilers** on this host. The real trigger needs more of the surrounding context.
-  ⚠ Both variants underflow (`i8.min to i32.max` and `i64.min to u64.max`), and so does the `upto`
-  spelling; the alias alone with no `main` is enough. **Anyone touching the bootstrap's arm64 emitter or
+  **⭐⭐ IT IS THE SAME DEFECT AS THE FILED-AND-UNOWNED `TargetOp` LANDMINE ABOVE** — identical signature
+  (`refcount underflow` inside a generated union destructor, in TEARDOWN, after a correct binary is
+  written), reached through `ParseError` instead. That filing said *"a synthetic 112-case union does not
+  reproduce it; something about THIS union's shape"* and was left unowned with no cheap repro. **This entry
+  supplies the repro: one line, deterministic, 11 s to rebuild and test.** `ParseError` has **101**
+  payload-carrying cases and the failing one is **#98** — so the "111" figure was `TargetOp`-specific and
+  is NOT the threshold.
+
+  **⭐ THE ONE POSITIVE DISCRIMINATOR, and it is the lead: THE THROWN CASE MUST CARRY A MANAGED PAYLOAD.**
+  Reducing `mismatchedRangeBoundTypes` to `(line, column)` — no `String` at all — makes the underflow
+  **GO AWAY** (verified on a build that succeeded; an earlier attempt at this experiment reported a false
+  "fixed" from a build that had failed, so check the binary exists). Its sibling
+  `unrepresentableIntegerRange(low ParsedInt, …)` — thrown from the SAME function on
+  `int(-1 to u64.max)` — carries a **scalar** and is clean, which is the same fact from the other side.
+
+  **NINE hypotheses RULED OUT by experiment, each a rebuild-and-run (do not re-derive these):**
+  1. **NOT `spelling()` or the argument computation.** Stubbing `spelling()` to a literal still underflows;
+     so does passing two bare string literals to the throw.
+  2. **NOT the payloads' USE.** Rewriting the report arm so it never interpolates `{low}`/`{high}` still
+     underflows — the payloads are never read and it still fires.
+  3. **NOT the payload COUNT.** Cutting the case from two `String`s to one still underflows. And three
+     other two-`String` cases (`unexpectedToken`, `returnTypeMismatch`, `comparisonTypeMismatch`) are clean.
+  4. **NOT the ternary** `MaxBoundField if self.isMax else MinBoundField` — rewriting it as `if`/`else`
+     changes nothing.
+  5. **NOT two owned temporaries in one argument list.** Hoisting both `spelling()` calls into `let`s first
+     still underflows.
+  6. **NOT the case's POSITION in the union.** Moving it from #98 to #1 changes nothing.
+  7. **NOT the `qualifier` borrow.** `ParsedRangeBound` stores `qualifier: typeTok.value` — a direct
+     reference to the token's `ByteArray` — but `.clone()`ing it at both construction sites changes nothing.
+  8. **NOT frame depth / the unwind through a nested call.** Moving the check and throw up into the caller
+     (`readTypeAliasDeclaration`, the same frame the CLEAN `bareSizedTypeAlias` throws from) still underflows.
+  9. **NOT `RefcountOptimizationPass`.** Disabling it outright in `3-MlirPipeline.cs` still underflows ⇒
+     the extra decref is emitted by **`MaxonToStandardConversion.Run(module, target)`**, the one stage that
+     is target-AWARE; every pass after it (`StoreForwarding`/`DSE`/`ParameterRetention`/refcount) takes only
+     `stdModule`. **That is where to look.**
+
+  ⚠ **AND IT IS A HEISENBUG: `--mm-trace` HIDES IT COMPLETELY** (169,960 trace lines, zero underflows,
+  clean teardown), while `--mm-debug` reproduces it with **no magic/canary/poison violation** — the box
+  header is intact and the refcount is honestly 0. So the object is over-decref'd rather than
+  used-after-free, and any instrumentation that wraps decrefs perturbs it away. **Do not expect a trace to
+  find this; bisect the emitted code.**
+  ⚠ **`helpText` is READ NOWHERE** (`Lexer.maxon:1310` declares, `:1313` assigns, no third mention), so the
+  global `keywordMap` teardown is only where it SURFACES — the corrupted object is reached by an unrelated
+  over-decref, not by anything that touches keyword help.
+  ⚠ A minimal hand-written program reproducing the *shape* (global `var` map of structs-with-`String`,
+  global `b"…"` `let`s, ternary over them, `String.from`, interpolation, a 2-`String` boxed-union payload
+  thrown/caught/matched) **runs clean under BOTH compilers** — this could not be minimized from the outside.
+
+  **Anyone touching the bootstrap's arm64 emitter or
   shv2's `ParsedRangeBound`/`spelling()` should start here — the repro is one line.**
 
 - **⬜ `E9001` ON LEGAL MAXON: ANY INSTANCE METHOD ON A `__ManagedMemory` OBTAINED FROM THE STATIC
