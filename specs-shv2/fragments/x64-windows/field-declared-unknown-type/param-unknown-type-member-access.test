@@ -1,0 +1,22 @@
+// Test: param-unknown-type-member-access
+
+typealias Small = int(0 to 1000)
+
+type Holder
+	export var v as Small
+
+	export static function make(n Small) returns Holder
+		return Self{v: n}
+	end 'make'
+end 'Holder'
+
+function takes(h NoSuchTypeAtAll) returns Small
+	return h.v
+end 'takes'
+
+function main() returns ExitCode
+	return takes(Holder.make(7))
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:9: Unsupported: a field access on 'h', whose declared type 'NoSuchTypeAtAll' names no type this program declares — so it has no fields and no methods. The DECLARATION is the error, not this access: declare 'NoSuchTypeAtAll', or correct the name

@@ -1266,6 +1266,40 @@ function structTypedSelfFieldBaseMessage(fieldName ByteArray) returns String
 	return "a field access through '{String.from(fieldName)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)"
 end 'structTypedSelfFieldBaseMessage'
 
+// ⭐⭐ **THE ONE SENTENCE FOR "THE BASE'S DECLARED TYPE NAMES NOTHING"** — asked by all THREE member-access
+// doors, exactly as `structTypedSelfFieldBaseMessage` above is: a local BINDING (`requireStructBase`, which
+// serves the read and the write path), a CLOSURE CAPTURE (`capturedStructBase`) and a VALUE receiver with no
+// binding to name (`structBaseOfReceiver`).
+//
+// ⚠ **IT EXISTS BECAUSE THE THREE MESSAGES IT REPLACES EACH ASSERTED A TYPE THE COMPILER INVENTED.** All
+// three word their refusal around `typeTagName(<the base's tag>)`, and a `named` tag PRINTS AS `int`
+// (TypeRules' `typeTagName`, whose `named` arm is right for the ranged alias it was written for). So a
+// parameter declared with a name no registry declares was reported as *"'h', which is declared 'int'"* —
+// a statement about the source that the source does not make, and the one kind of diagnostic that sends a
+// reader to the wrong line. MEASURED, on `function takes(h NoSuchTypeAtAll)` + `return h.v`: all three
+// doors said `int`, in three different sentences. The runnable oracle answers the same program
+// `Unknown type: NoSuchTypeAtAll`, blaming the DECLARATION — so the name the source wrote is the one fact
+// the refusal has to carry.
+//
+// ⚠ **THE DECLARATION, NOT THE ACCESS, IS WHAT THE READER MUST CHANGE — AND THAT HAS TO BE SAID HERE,
+// BECAUSE NOTHING ELSE WILL SAY IT.** `TypeResolution.resolveTypes` is the authority on what a `named` type
+// denotes and already reports this program's real error (E3011, unpositioned) at the parameter — but only
+// when the parse SUCCEEDS. A member access on such a base cannot: there is no `StructLayout` to resolve, so
+// the parser throws, and a thrown `ParseError` both stops the file before the pipeline runs and discards
+// this file's artifact diagnostics (`abortedParseArtifact`). The authority never gets to speak. This is the
+// identical bind `missingBaseLayout` records for its own undeclared-base arm, and it takes the identical
+// way out: the refusal carries the cause itself rather than deferring to a diagnostic the user will never
+// see.
+//
+// `access` is the door's own lead-in ("a field access on 'h'"), so each door still names what it was
+// parsing while the DIAGNOSIS — the half that is the same fact at all three — is written once.
+function undeclaredBaseTypeMessage(access String, typeName ByteArray) returns String
+	// Spelled once and reused: the name appears twice in the sentence (the fact, then the cure), and
+	// `String.from` allocates per call.
+	let spelled = String.from(typeName)
+	return "{access}, whose declared type '{spelled}' names no type this program declares — so it has no fields and no methods. The DECLARATION is the error, not this access: declare '{spelled}', or correct the name"
+end 'undeclaredBaseTypeMessage'
+
 // **CAN A VALUE OF THIS TAG CARRY A `StructLayout`?** — a plain struct box, or a generic INSTANCE (whose
 // base struct's layout its methods were compiled once against). It is exactly `structLayoutOfType`'s
 // stated precondition, and it is asked by BOTH gates standing in front of that one resolver: a BINDING
@@ -21642,6 +21676,16 @@ export type Parser
 	function structBaseOfReceiver(recv MethodReceiver) returns StructBase throws ParseError
 		if not tagCarriesStructLayout(recv.tag) 'notAStruct'
 			let memberTok = self.current()
+
+			// ⚠ The third of `undeclaredBaseTypeMessage`'s three doors, and the one whose sentence puts the
+			// type in the MIDDLE — so the lead-in cannot be shared the way the two field-access doors share
+			// theirs, only the diagnosis. Without this arm a receiver whose declared type name nothing
+			// declares was reported as a `'int'` value, the same invented type in a third wording.
+			let undeclared = self.undeclaredBaseTypeNameOf(recv.tag, nameId: recv.nameId)
+			if not undeclared.isEmpty() 'undeclaredBaseType'
+				throw ParseError.unsupported(undeclaredBaseTypeMessage("a member access '{String.from(memberTok.value)}' on a value", typeName: undeclared), line: memberTok.line, column: memberTok.column)
+			end 'undeclaredBaseType'
+
 			throw ParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{typeTagName(recv.tag)}' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here", line: memberTok.line, column: memberTok.column)
 		end 'notAStruct'
 
@@ -22071,14 +22115,24 @@ export type Parser
 	// struct carries fields and methods; a captured String's builtin methods are reached by no case here).
 	function capturedStructBase(baseTok Token, enclosing Scope) returns StructBase throws ParseError
 		let binding = enclosing.getInfo(baseTok.value)
-		if maxonTypeTag(binding.varType) != ValueTypeTag.structRef 'notAStruct'
-			throw ParseError.unsupported("a field access or method call on the captured '{String.from(baseTok.value)}', which is declared '{typeTagName(maxonTypeTag(binding.varType))}' and not a struct type (only a struct has fields and methods)", line: baseTok.line, column: baseTok.column)
+		let capturedTag = maxonTypeTag(binding.varType)
+		if capturedTag != ValueTypeTag.structRef 'notAStruct'
+			// Both refusals share the lead-in, and the undeclared-name arm is `requireStructBase`'s — reached
+			// through a `function(…) gives` instead of a bare name, and identically able to assert an invented
+			// `int` without it (see `undeclaredBaseTypeMessage`; a capture is the second of its three doors).
+			let access = "a field access or method call on the captured '{String.from(baseTok.value)}'"
+			let undeclared = self.undeclaredBaseTypeNameOf(capturedTag, nameId: typeNameIdOf(binding.varType))
+			if not undeclared.isEmpty() 'undeclaredBaseType'
+				throw ParseError.unsupported(undeclaredBaseTypeMessage(access, typeName: undeclared), line: baseTok.line, column: baseTok.column)
+			end 'undeclaredBaseType'
+
+			throw ParseError.unsupported("{access}, which is declared '{typeTagName(capturedTag)}' and not a struct type (only a struct has fields and methods)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
 		// E3070 exemption, and it is one this rung can prove rather than assume: capture is BY VALUE, so a
 		// method call on a CAPTURED receiver cannot reach a binding of the enclosing body, and a captured
 		// managed CONTAINER — the only thing a borrow could be taken out of — is refused outright at this rung
 		// (`capturedStructBase` admits only a struct). There is no storage here for a conflict to be about.
-		return StructBase.create(try self.structLayoutOfType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType), baseTok: baseTok), box: try self.emitCaptureRead(baseTok, enclosing: enclosing), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
+		return StructBase.create(try self.structLayoutOfType(capturedTag, nameId: typeNameIdOf(binding.varType), baseTok: baseTok), box: try self.emitCaptureRead(baseTok, enclosing: enclosing), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
 	end 'capturedStructBase'
 
 	// A STRING'S BUILTIN METHODS -- s.append(t) and s.byteLength(). String is the one non-struct type
@@ -25444,7 +25498,19 @@ export type Parser
 		// opaque `T`). Every other tag has no fields.
 		let baseTag = maxonTypeTag(binding.varType)
 		if not tagCarriesStructLayout(baseTag) 'notAStruct'
-			throw ParseError.unsupported("a field access on '{String.from(baseTok.value)}', which is declared '{typeTagName(baseTag)}' and not a struct type (only a struct has fields)", line: baseTok.line, column: baseTok.column)
+			// The lead-in is bound once and used by both refusals below, so the two cannot come to name the
+			// access differently — only the DIAGNOSIS after the comma differs between them.
+			let access = "a field access on '{String.from(baseTok.value)}'"
+
+			// ⚠ A DECLARED TYPE THE PROGRAM DOES NOT HAVE IS NOT "declared 'int'". See
+			// `undeclaredBaseTypeMessage` — a `named` tag prints as `int`, so without this arm the refusal
+			// asserted a type the compiler had invented for a name nothing declares.
+			let undeclared = self.undeclaredBaseTypeNameOf(baseTag, nameId: typeNameIdOf(binding.varType))
+			if not undeclared.isEmpty() 'undeclaredBaseType'
+				throw ParseError.unsupported(undeclaredBaseTypeMessage(access, typeName: undeclared), line: baseTok.line, column: baseTok.column)
+			end 'undeclaredBaseType'
+
+			throw ParseError.unsupported("{access}, which is declared '{typeTagName(baseTag)}' and not a struct type (only a struct has fields)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
 
 		// ⚠ **A STRUCT-TYPED FIELD USED AS A BASE IS REFUSED, NOT LOADED** — `next.a` inside `type
@@ -25539,6 +25605,45 @@ export type Parser
 		// message has to carry the cause on its own rather than defer to one the user will never see.
 		return ParseError.unsupported("a field access on '{String.from(baseTok.value)}': its type instantiates '{String.from(typeName)}', which no file declares as a generic `type`, so it has no fields — the `with` that names it is the error", line: baseTok.line, column: baseTok.column)
 	end 'missingBaseLayout'
+
+	// ⭐⭐ **THE BASE'S DECLARED TYPE NAME WHEN THE AUTHORITY DENOTES NOTHING BY IT, EMPTY OTHERWISE** — the
+	// predicate half of `undeclaredBaseTypeMessage` (see it for what the three doors were asserting without
+	// it), shared by the same three doors `structLayoutOfType` above is.
+	//
+	// ⭐ **IT ASKS `denotedNamedType`, AND ASKING ANYTHING ELSE IS THE WHOLE HAZARD HERE.** A `named` tag
+	// covers every spelling `parseTypeReference` settles at parse time and no further — a declared `type`
+	// named from OUTSIDE its own body, a declared `enum`/`union`, a ranged int alias, a qualified inner or
+	// per-instance alias, `ExitCode` and the other compiler-owned names, and a name nothing declares at all.
+	// Only the last is undeclared, and the list of the rest is exactly `denotedNamedType`'s cascade: the ONE
+	// place that knows what a `named` type denotes, asked here for the same reason `denotedCastTargetTag` and
+	// `checkGenericArgType` ask it, so a member-access base and the resolution pass cannot come to disagree
+	// about what a name means. A re-derivation ("is it in the struct registry, the enum registry, …") is how
+	// this refusal would come to reject a name the authority accepts — and it would do it by asserting the
+	// name is undeclared, which is the very false statement this pair exists to remove.
+	//
+	// ⚠ **THE ANSWER IS DISCARDED — only the THROW is read.** `resolveTypes` erases a `named` signature type
+	// and the parser deliberately does not (a `named` value's tag carries the alias NAME the shift rule and
+	// the per-instance identity checks read — see `emitFieldLoad`'s header), so substituting the denoted type
+	// for the base's would drop both. This is a DIAGNOSTIC query and nothing else.
+	//
+	// ⚠ **ONLY EVER CALLED ON A PATH THAT IS ALREADY THROWING**, which is what makes it free: it costs a name
+	// lookup and a registry cascade per REFUSED member access, never one per field read. It also means it
+	// cannot false-reject — the decision to refuse was taken before it was asked, and it only chooses the
+	// wording.
+	//
+	// EMPTY for "nothing to report" is this file's standing idiom for an optional name
+	// (`MethodReceiver.selfFieldName`, `StructBase.immutableName`) rather than a sentinel: a base whose type
+	// IS declared has no undeclared name, and that is a perfectly good answer.
+	function undeclaredBaseTypeNameOf(tag ValueTypeTag, nameId TypeNameId) returns ByteArray
+		if tag != ValueTypeTag.named 'notANamedType'
+			return EmptySourceText
+		end 'notANamedType'
+
+		let name = self.internedName(nameId)
+		_ = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise return name
+
+		return EmptySourceText
+	end 'undeclaredBaseTypeNameOf'
 
 	// The BASE struct name a method/field base resolves to: the struct itself for a `structRef`, or the
 	// generic instance's base struct for a `genericInstance` (`Sizer with bool` ⇒ `Sizer`, P1.6-B1) — the
