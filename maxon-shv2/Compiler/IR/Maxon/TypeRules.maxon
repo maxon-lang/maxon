@@ -453,6 +453,52 @@ export function namedAggregatesConflict(expected ByteArray, got ByteArray) retur
 	return not (expected.isEmpty() and got.isEmpty()) and not got.equals(expected)
 end 'namedAggregatesConflict'
 
+// ⭐⭐ **CAN THIS DECLARED TAG HOLD A NAMED AGGREGATE AT ALL? — the half of the rule above that its
+// callers were SKIPPING, and the reason an aggregate reached a scalar parameter in silence.**
+//
+// `namedAggregatesConflict` answers all four quadrants correctly, including "exactly one empty", which is
+// the aggregate-meets-scalar case its own header calls the one a tag check cannot see. But both callers
+// gated the ASK on the DECLARED side being an aggregate (`if not expected.isEmpty()`), so the quadrant
+// where the declared side is a SCALAR and the value is an AGGREGATE was never asked — and the tag check
+// cannot refuse it either, because `resolveTypes` erases a boxed-union PARAMETER to `integer` while the
+// ARGUMENT keeps its `named` tag, and `checkDeclaredType(named, integer)` is a legal widening (that is how
+// a ranged alias reaches an `int`). MEASURED, with no overload in the program at all:
+//
+//     union Shape circle(r Integer) square(s Integer) end 'Shape'
+//     function takesInt(x Integer) returns Integer  return x + 1  end 'takesInt'
+//     … let sh = Shape.circle(5)  return takesInt(sh)     ⇒ compiled, exit 25
+//
+// i.e. the boxed union's payload word was passed as an integer and had arithmetic done on it.
+//
+// ⚠ **IT IS DELIBERATELY THE FOUR DEFINITE SCALARS AND NOTHING ELSE.** Answering `true` for a tag that
+// legitimately admits an aggregate turns this into a FALSE REJECTION of a valid program, and three tags
+// do admit one: `typeParameter` (a generic's `T` takes any concrete type — `Box.create(v T)` handed a
+// struct is the whole point of P1.6), `unresolved` (agrees with everything by deferral) and `named`
+// (whose aggregate name comes back empty only when `aggregateNameFor` did not RECOGNIZE it, which is not
+// the same fact as "it is a scalar"). `structRef`/`genericInstance`/`string`/`character`/`function` are
+// already decided by the non-empty branch or by their own rules. So the narrow four is the only set that
+// is provably safe, and it is the set the measured hole needs.
+//
+// A full match, never a range arm or a `default`: a tag appended to `ValueTypeTag` must be classified
+// deliberately, and this file's own `tagIsIntegral` records what a range arm cost the last time.
+export function tagAdmitsNoAggregate(tag ValueTypeTag) returns bool
+	return match tag 'k'
+		boolean gives true
+		integer gives true
+		float gives true
+		exitCode gives true
+		named gives false
+		unresolved gives false
+		void gives false
+		structRef gives false
+		string gives false
+		function gives false
+		typeParameter gives false
+		genericInstance gives false
+		character gives false
+	end 'k'
+end 'tagAdmitsNoAggregate'
+
 // True for every tag that is DEFINITELY an integer — `int`, a ranged alias, `ExitCode`. It is the
 // `numeric` class minus `float`, and it is the half a float cannot reach without dropping its
 // fraction.

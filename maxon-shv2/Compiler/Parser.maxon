@@ -30324,22 +30324,38 @@ export type Parser
 			return
 		end 'notOpaque'
 
-		let concrete = self.instanceSubstitutedType(receiver, opaque: inner)
 		// The ownership bound stated in `retypeOpaqueMethodResult`: a managed concrete argument keeps the
 		// opaque tag, because the drop decision that tag governs has already been made.
-		if self.signatures.typeIsManaged(concrete) 'managedConcrete'
+		//
+		// ⚠ **ASKED OF THE INDEX-SPACE TYPE, NOT THE ADOPTED ONE — every `ProgramSignatures` classifier must
+		// be.** `typeIsManaged` resolves a `named` id through the INDEX's own interner, so handing it a type
+		// `instanceSubstitutedType` has already re-interned into THIS FILE's table asks about whatever name
+		// happens to sit at that id over there. It does not even panic: the two interners assign ids in
+		// their own insertion orders, so the answer is right exactly while they coincide and silently wrong
+		// when they drift. MEASURED wrong, on `Box with Shape` for a boxed union `Shape`: the guard read
+		// `false`, the retype fired on a managed type anyway, and `over(b.get())` chose an `over(x Integer)`
+		// overload that then did arithmetic on the payload word (exit 25 where 7 was correct). This is
+		// OPEN #56's interner mismatch — the reason `substitutedInstanceArg` and `adoptType` are two steps.
+		if self.signatures.typeIsManaged(self.instanceSubstitutedIndexType(receiver, opaque: inner)) 'managedConcrete'
 			return
 		end 'managedConcrete'
 
-		self.retypeValue(result, valueType: concrete)
+		self.retypeValue(result, valueType: self.instanceSubstitutedType(receiver, opaque: inner))
 	end 'retypeOpaqueReturnValue'
 
-	// The CONCRETE type a generic-instance receiver binds an opaque `T` to. The one spelling of that lookup,
-	// shared by the field read (`emitFieldLoad`) and the method return above — `substitutedInstanceArg`
-	// answers in the INDEX's interner and every caller needs it in this file's, so the adoption rides here
-	// rather than at each site.
+	// The CONCRETE type a generic-instance receiver binds an opaque `T` to, IN THE INDEX'S OWN INTERNER —
+	// where `ProgramSignatures` classifies it (`typeIsManaged` and every other `named`-resolving query). The
+	// one spelling of the lookup itself; `instanceSubstitutedType` is this plus the crossing into this file's
+	// interner, so neither space has a second speller and no caller can pick the wrong one by accident.
+	function instanceSubstitutedIndexType(receiver ValueId, opaque MaxonType) returns MaxonType
+		return self.signatures.substitutedInstanceArg(self.valueNameId(receiver), position: typeNameIdOf(opaque))
+	end 'instanceSubstitutedIndexType'
+
+	// The same type re-interned into THIS FILE's table, which is what a value's `valueNameIds` column and
+	// every `maxonTypeName` render against. Shared by the field read (`emitFieldLoad`) and the method return
+	// above, so the adoption rides here rather than at each site.
 	function instanceSubstitutedType(receiver ValueId, opaque MaxonType) returns MaxonType
-		return self.signatures.adoptType(self.signatures.substitutedInstanceArg(self.valueNameId(receiver), position: typeNameIdOf(opaque)), into: self.artifact.typeNames)
+		return self.signatures.adoptType(self.instanceSubstitutedIndexType(receiver, opaque: opaque), into: self.artifact.typeNames)
 	end 'instanceSubstitutedType'
 
 	// ⭐ **A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE (P1.9), and this is the door that used to

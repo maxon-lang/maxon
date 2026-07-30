@@ -122,6 +122,11 @@ end 'resolveOverloadedCalls'
 function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, callee ByteArray)
 	let members = try project.overloadSets.get(callee) otherwise return
 	let candidates = overloadCandidates(project, members: members)
+	if candidates.count() > 1 and callPassesOpaqueArg(func, op: op) 'cannotDiscriminate'
+		refuseOpaqueOverloadArgument(project, func: func, opIndex: opIndex, callee: callee)
+		return
+	end 'cannotDiscriminate'
+
 	match selectOverload(project, func: func, op: op, candidates: candidates) 'pick'
 		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, callee: callee, member: member)
 		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied)
@@ -129,6 +134,46 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFu
 		noMatch then break 'pick'
 	end 'pick'
 end 'resolveOneOverloadedCall'
+
+// ⭐⭐ **AN OPAQUE ARGUMENT CANNOT DISCRIMINATE, AND "CANNOT DISCRIMINATE" IS NOT "IS A SCALAR".**
+//
+// A `typeParameter` value is a generic's `T` that `retypeOpaqueMethodResult` could not make concrete — which
+// it declines to do exactly when the concrete type is MANAGED, because the drop decision the tag governs is
+// already emitted. An `unresolved` value is the same shape by deferral. Neither NAMES an aggregate, and that
+// is the trap: `aggregateNameFor` answers EMPTY for both, `namedAggregatesConflict` reads empty as "a
+// scalar", and the candidate with a SCALAR parameter therefore matched while the candidate with the
+// genuinely correct AGGREGATE parameter was refused for disagreeing with it. The answer inverted.
+//
+// MEASURED, on a `Box with Shape` for a boxed union `Shape`, `over(x Shape)` beside `over(x Integer)`:
+// `over(b.get())` selected the `Integer` member and did arithmetic on the payload word — exit 25 where 7 was
+// correct, and it stayed exit 25 once the scalar-vs-aggregate quadrant was closed, because an opaque
+// argument is not an aggregate at either end.
+//
+// So a set of two or more candidates and an argument nothing can identify is REFUSED. It cannot be a
+// selection (there is no fact to select on) and it must not be a silent one: `noMatch` would leave the bare
+// name, which is the FIRST member's registration name, so whichever overload happened to be written first
+// would take the call. A single candidate needs no discrimination and is left alone.
+function refuseOpaqueOverloadArgument(project Project, func IrFunction, opIndex OpIndex, callee ByteArray)
+	let range = project.opRanges.get(opIndex)
+	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "resolving an overload of '{bareMethodName(callee)}' against an argument of opaque generic type — the value is a type parameter whose concrete type is managed, so its type is not known at the call and no overload can be picked by it. Bind the argument to a concretely-typed local first, or give the overloads distinct names", line: range.line, column: range.column, filePath: func.sourceFilePath)
+end 'refuseOpaqueOverloadArgument'
+
+// Does this call supply an argument whose type nothing can identify? See `refuseOpaqueOverloadArgument`.
+function callPassesOpaqueArg(func IrFunction, op MaxonOp) returns bool
+	match overloadCallArgs(op) 'args'
+		supplied(args, _) then return valueTagsIncludeOpaque(func, args: args)
+	end 'args'
+end 'callPassesOpaqueArg'
+
+function valueTagsIncludeOpaque(func IrFunction, args ValueIdArray) returns bool
+	for argId in args 'each'
+		let tag = try func.valueTags.get(argId) otherwise panic("valueTagsIncludeOpaque: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+		if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.unresolved 'opaque'
+			return true
+		end 'opaque'
+	end 'each'
+	return false
+end 'valueTagsIncludeOpaque'
 
 // ⭐ **A FUNCTION VALUE OF AN OVERLOADED NAME HAS NO ARGUMENTS TO PICK BY, so it is REFUSED rather than bound
 // to whichever member happens to have registered first.** `let f = process` names a set, not a function, and
@@ -267,12 +312,17 @@ function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature,
 		if expected.isEmpty() 'erasedUnionParam'
 			expected = try sig.paramAggregateNames.get(i) otherwise panic("overloadArgTypeFit: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")
 		end 'erasedUnionParam'
-		if not expected.isEmpty() 'aggregateParam'
-			let argNameId = try func.valueNameIds.get(argId) otherwise panic("overloadArgTypeFit: value v{argId} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+		// ⚠ Ungated on the declared side for the reason `checkOneArgType` is: a SCALAR parameter meeting an
+		// AGGREGATE argument is a real conflict, and skipping it here is what let this resolver SELECT an
+		// `over(x Integer)` for a boxed-union argument (measured: exit 25 from arithmetic on the payload
+		// word). Asking the same question the argument check asks is also what makes this function's own
+		// promise true — that a candidate it accepts cannot then be rejected downstream.
+		let argNameId = try func.valueNameIds.get(argId) otherwise panic("overloadArgTypeFit: value v{argId} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+		if not expected.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
 			if namedAggregatesConflict(expected, got: aggregateNameFor(project, tag: argTag, nameId: argNameId)) 'aggregateMismatch'
 				return OverloadFit.incompatible
 			end 'aggregateMismatch'
-		end 'aggregateParam'
+		end 'aggregateComparable'
 
 		score = score + (ExactArgScore if argTag == paramTag else WideningArgScore)
 	end 'eachArg'
@@ -2479,14 +2529,19 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	if expectedAggregate.isEmpty() 'erasedUnionParam'
 		expectedAggregate = preErasedAggregate
 	end 'erasedUnionParam'
-	if not expectedAggregate.isEmpty() 'aggregateParam'
-		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+	// ⚠ The ask is NOT gated on the DECLARED side being an aggregate. It used to be, and that skipped the
+	// quadrant where a SCALAR parameter meets an AGGREGATE argument — which the tag check cannot refuse
+	// either, so `takesInt(x Integer)` accepted a boxed union and did arithmetic on its payload word.
+	// `tagAdmitsNoAggregate` is what keeps that safe for a `T` parameter, and `argAggregateCannotDecay` what
+	// keeps it off a byte enum or a per-instance alias, both of which legitimately coerce to an int.
+	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+	if not expectedAggregate.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
 		let gotAggregate = aggregateNameFor(project, tag: argTag, nameId: argNameId)
 		if namedAggregatesConflict(expectedAggregate, got: gotAggregate) 'aggregateArgMismatch'
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: String.from(expectedAggregate), got: aggregateArgDisplay(gotAggregate, tag: argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: String.from(expectedAggregate) if not expectedAggregate.isEmpty() else typeTagName(paramTag), got: aggregateArgDisplay(gotAggregate, tag: argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'
-	end 'aggregateParam'
+	end 'aggregateComparable'
 
 	// ⭐ **A FUNCTION VALUE MEETING A FUNCTION-TYPED PARAMETER — the ARGUMENT door.** It is checked HERE and
 	// not through a recorded `PendingFunctionTypeDoor` for the reason the parser's doors are recorded: the
@@ -2550,6 +2605,45 @@ end 'checkArgAgainstDeclaredTag'
 //   • every other tag names no aggregate.
 //
 // The "none" answer is `EmptySourceText`, which `namedAggregatesConflict` reads off `isEmpty()`.
+// ⭐⭐ **IS THIS VALUE AN AGGREGATE THAT CANNOT DECAY TO A SCALAR? — the ARGUMENT-side companion to
+// `tagAdmitsNoAggregate`, and the distinction that "does it NAME an aggregate?" does not draw.**
+//
+// `aggregateNameFor` answers a name for everything with a nominal identity, and two of those legitimately
+// coerce to an integer parameter, so its non-empty answer cannot be the refusal test:
+//
+//   • a NON-BOXED enum — `enum Ascii` over byte values IS its backing integer, and
+//     `byte-enum-comparison.enum-coerces-to-byte-arg` pins the coercion.
+//   • a PER-INSTANCE ranged alias (`WA.Idx`) — a ranged int wearing an instance-qualified name, which
+//     `per-instance-alias-decays-at-a-type-parameter-argument` and `cast-preserves-source` pin decaying.
+//
+// What genuinely cannot decay is a value whose scalar reading would be a POINTER or a record: a struct, a
+// generic instance, a String/Character record, and a BOXED union/enum. That last one is the measured hole
+// (`takesInt(Shape.circle(5))` returned arithmetic on the payload word), and boxed-ness is exactly the line
+// between it and the byte enum beside it — the same line `ProgramSignatures.typeIsManaged` draws one tier
+// down, for the same reason.
+function argAggregateCannotDecay(project Project, tag ValueTypeTag, nameId TypeNameId) returns bool
+	if tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.string or tag == ValueTypeTag.character 'alwaysARecord'
+		return true
+	end 'alwaysARecord'
+
+	if tag != ValueTypeTag.named 'notNamed'
+		return false
+	end 'notNamed'
+
+	let name = try project.typeNames.nameOf(nameId) otherwise panic("argAggregateCannotDecay: named id {nameId} is not in the project interner — a named value's name id is remapped project-global at merge (mergeArtifact)")
+	if project.structTypes.contains(name) 'namedStruct'
+		return true
+	end 'namedStruct'
+
+	if not project.enumTypes.contains(name) 'notEnum'
+		// A ranged int/float alias, per-instance or plain: a scalar wearing a name.
+		return false
+	end 'notEnum'
+
+	let layout = try project.enumTypes.get(name) otherwise panic("argAggregateCannotDecay: enumTypes.contains({String.from(name)}) is true but get failed")
+	return layout.isBoxed()
+end 'argAggregateCannotDecay'
+
 function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId) returns ByteArray
 	if tagIsStructRef(tag) 'struct'
 		return try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: structRef id {nameId} is not in the project interner — a structRef's name id is remapped project-global at merge (mergeArtifact)")
