@@ -1,0 +1,53 @@
+// Test: first-class-function.exitcode-return-through-alias
+typealias Thunk = function() returns ExitCode
+
+function nine() returns ExitCode
+	return 9
+end 'nine'
+
+function callThunk(t Thunk) returns ExitCode
+	return t()
+end 'callThunk'
+
+function main() returns ExitCode
+	return callThunk(nine)
+end 'main'
+---
+ExitCode: 9
+---
+func @nine {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 9
+    x64.popReg rbp
+    x64.ret
+}
+
+func @callThunk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + __fnref_nine]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect callThunk
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,20 @@
+// Test: error.fallthrough-into-a-scalar-binding-arm
+typealias Code = int(0 to 255)
+
+union U
+	a(x Code)
+	b(y Code)
+end 'U'
+
+function main() returns ExitCode
+	let u = U.a(9)
+	var t = 0 as Code
+	match u 'k'
+		a(n) then t = n and fallthrough
+		b(m) then t = t + m
+	end 'k'
+	return t as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:3: Unsupported: `and fallthrough` into the payload-binding arm 'b' of `union U` — the preceding arm matched a DIFFERENT case, so on that edge these bindings would destructure a case the value does not hold (reading another case's slots, or a slot that arm already moved out and nulled). Fall through into a payload-free arm, or give this arm its own body

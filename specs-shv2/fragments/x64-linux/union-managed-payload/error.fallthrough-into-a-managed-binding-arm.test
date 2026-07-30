@@ -1,0 +1,17 @@
+// Test: error.fallthrough-into-a-managed-binding-arm
+union U
+	a(x String)
+	b(y String)
+end 'U'
+
+function main() returns ExitCode
+	let u = U.a("the fallthrough source payload, long enough to be a heap string")
+	match u 'k'
+		a(s) then print(s) and fallthrough
+		b(t) then print(t)
+	end 'k'
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:11:3: Unsupported: `and fallthrough` into the payload-binding arm 'b' of `union U` — the preceding arm matched a DIFFERENT case, so on that edge these bindings would destructure a case the value does not hold (reading another case's slots, or a slot that arm already moved out and nulled). Fall through into a payload-free arm, or give this arm its own body

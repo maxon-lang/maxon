@@ -1,0 +1,71 @@
+// Test: first-class-function.ranged-alias-return-through-alias
+typealias Code = int(0 to u32.max)
+typealias CodeThunk = function() returns Code
+
+function nine() returns Code
+	return 9
+end 'nine'
+
+function callThunk(t CodeThunk) returns Code
+	return t()
+end 'callThunk'
+
+function main() returns ExitCode
+	return callThunk(nine) as ExitCode
+end 'main'
+---
+ExitCode: 9
+---
+func @nine {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 9
+    x64.popReg rbp
+    x64.ret
+}
+
+func @callThunk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.callReg rbx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + __fnref_nine]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect callThunk
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

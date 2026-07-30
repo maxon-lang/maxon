@@ -1,0 +1,23 @@
+// Test: error.re-match-the-consumed-scrutinee-inside-its-own-arm
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function main() returns ExitCode
+	let m = M.text("an owned payload string, long enough to be a real heap allocation")
+	let r = match m 'k'
+		silent gives 0 as Integer
+		text(s) gives match m 'again'
+			silent gives 1 as Integer
+			text(t) gives t.byteLength() as Integer
+		end 'again'
+	end 'k'
+	print("r={r}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:13:23: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
