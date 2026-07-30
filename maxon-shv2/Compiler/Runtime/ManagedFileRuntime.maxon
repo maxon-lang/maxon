@@ -69,6 +69,9 @@ let ManagedFileOpenFailedFlag = ManagedFileOpenFailedOrdinal + ErrorFlagOrdinalB
 
 // The one entry point this rung installs.
 export let ManagedFileOpenReadName = b"__mf_open_read"
+// The close. NON-throwing, which is what makes the drift guard below a real check rather than a
+// tautology: two callees, one throwing and one not, and the predicate must separate them.
+export let ManagedFileCloseName = b"__mf_close"
 
 // ⭐ **WHICH `__ManagedFile` CALLEES THROW** — the third composer behind `Parser.isThrowingRuntimeCallee`,
 // beside `isThrowingArrayRuntimeCallee` and `isThrowingGtRuntimeCallee`. Held to the builders by the
@@ -76,6 +79,9 @@ export let ManagedFileOpenReadName = b"__mf_open_read"
 // deliberately: a predicate and a `throws` stamp are one fact in two places, and this project keeps
 // finding that pair drifted.
 export function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns bool
+	// ⚠ `__mf_close` is DELIBERATELY ABSENT: the spec documents `close()` as "Does not throw", and its
+	// builder stamps no `throws` clause. Naming it here would make a `try` required on a call that cannot
+	// fail (E3055) — and the drift guard below catches exactly that mistake, which it did on first write.
 	return callee.equals(ManagedFileOpenReadName)
 end 'isThrowingManagedFileRuntimeCallee'
 
@@ -185,6 +191,42 @@ function buildManagedFileOpenRead(module StdModule)
 	module.functions.push(func)
 end 'buildManagedFileOpenRead'
 
+// `__mf_close(box)` — close the handle the box carries, idempotently. Returns nothing and THROWS nothing:
+// `specs/managed-file.md` documents `close()` as "Idempotent. Also called automatically via destructor.
+// Does not throw."
+//
+// ⭐ **IDEMPOTENCE IS THE WHOLE BODY.** The box is zeroed at allocation and this writes
+// `ManagedFileClosedHandle` back after closing, so an unopened box and an already-closed box carry the
+// same value and ONE guard covers both — which is what makes the documented "close then let the
+// destructor close again" sequence safe rather than a double `CloseHandle` on a handle the OS may have
+// reused for something else.
+function buildManagedFileClose(module StdModule)
+	var func = IrFunction.createFromStd(ManagedFileCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var doClose = module.addBlock(func, label: b"mfdo")
+	var done = module.addBlock(func, label: b"mfdone")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	let handle = emitLoadField(module, block: entry, record: box, offset: ManagedFileHandleOffset, ids: ids)
+	let closedConst = emitConst(module, block: entry, value: ManagedFileClosedHandle, ids: ids)
+	let alreadyClosed = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(alreadyClosed, lhs: handle, rhs: closedConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(alreadyClosed, thenBlockId: done.id, elseBlockId: doClose.id))
+
+	module.appendOp(doClose, op: StdOp.osFileClose(handle))
+	let zero = emitConst(module, block: doClose, value: ManagedFileClosedHandle, ids: ids)
+	module.appendOp(doClose, op: StdOp.storeIndirect(box, offset: ManagedFileHandleOffset, valueId: zero, valueType: StdType.i64))
+	module.setTerminator(doClose, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedFileClose'
+
 // One failure exit: no value, this variant's flag.
 function emitManagedFileThrow(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
@@ -202,6 +244,7 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 	end 'noManagedFile'
 
 	buildManagedFileOpenRead(module)
+	buildManagedFileClose(module)
 
 	for func in module.functions 'eachFunc'
 		if not isManagedFileRuntimeCallee(func.name) 'notOurs'
@@ -220,5 +263,5 @@ end 'installManagedFileRuntime'
 
 // Every callee this file installs — what the drift guard iterates. One name today; it grows with R4.2.
 export function isManagedFileRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(ManagedFileOpenReadName)
+	return callee.equals(ManagedFileOpenReadName) or callee.equals(ManagedFileCloseName)
 end 'isManagedFileRuntimeCallee'

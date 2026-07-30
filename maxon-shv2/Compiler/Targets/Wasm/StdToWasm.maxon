@@ -564,6 +564,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osReadWallClock then break 'k'
 		// R4.1: the file OPEN is x64-windows only (E3104 at the call site) and pulls in no wasm import.
 		osFileOpenRead then break 'k'
+		osFileClose then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -879,6 +880,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		osReadWallClock then break 'def'
 		// R4.1: the file OPEN is x64-windows only, so no wasm valtype is ever recorded for its def.
 		osFileOpenRead then break 'def'
+		osFileClose then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1128,6 +1130,7 @@ type WasmFuncEmitter
 			osPipeCreate to osWriteFile then panic("emitStraightLineTerminator: a P1.5 IOCP op is a body op, never a terminator")
 			osReadWallClock then panic("emitStraightLineTerminator: an `osReadWallClock` is a body op, never a terminator")
 			osFileOpenRead then panic("emitStraightLineTerminator: an `osFileOpenRead` is a body op, never a terminator")
+			osFileClose then panic("emitStraightLineTerminator: an `osFileClose` is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1202,6 +1205,7 @@ type WasmFuncEmitter
 			osPipeCreate to osWriteFile then panic("emitDispatcherTerminator: a P1.5 IOCP op is a body op, never a terminator")
 			osReadWallClock then panic("emitDispatcherTerminator: an `osReadWallClock` is a body op, never a terminator")
 			osFileOpenRead then panic("emitDispatcherTerminator: an `osFileOpenRead` is a body op, never a terminator")
+			osFileClose then panic("emitDispatcherTerminator: an `osFileClose` is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1273,6 +1277,7 @@ type WasmFuncEmitter
 			// the backstop for a compiler bug that got one past that gate, not the user-facing rejection.
 			osReadWallClock then panic("emitBodyOp: `osReadWallClock` is x64-windows only — the wall clock is x64-windows-gated at this rung")
 			osFileOpenRead then panic("emitBodyOp: `osFileOpenRead` is x64-windows only — file IO is x64-windows-gated at R4.1, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osFileClose then panic("emitBodyOp: `osFileClose` is x64-windows only — file IO is x64-windows-gated at R4.1, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -2365,6 +2370,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osPipeCreate to osWriteFile then panic("decideDispatcher: a P1.5 IOCP op is a body op, never a terminator")
 		osReadWallClock then panic("decideDispatcher: an `osReadWallClock` is a body op, never a terminator")
 		osFileOpenRead then panic("decideDispatcher: an `osFileOpenRead` is a body op, never a terminator")
+		osFileClose then panic("decideDispatcher: an `osFileClose` is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

@@ -229,7 +229,7 @@ delete failed as expected
 ```
 
 <!-- disabled-test: managed-file.auto-close -->
-<!-- R4.2 — needs `openWrite`/`write`/`size`/`close` AND the RAII destructor that closes the handle on drop. ⚠ R4.1 allocates the handle box through `__mm_alloc`, so its MEMORY is reclaimed and no leak gate fires, but nothing closes the OS HANDLE yet — a real resource leak that is invisible to exit 101. It is bounded (a program can only leak handles it opened) and it is the first thing R4.2 owes; `ManagedFileClosedHandle` already exists for the idempotent-close half. -->
+<!-- R4.2 — needs `openWrite`/`write`/`size` AND the RAII DESTRUCTOR that closes on drop. `close()` itself IS delivered (R4.1), which is what keeps this rung from shipping a handle leak: an explicit close reclaims the handle, and it is idempotent, so the destructor R4.2 adds can close again harmlessly. What is missing here is only the AUTOMATIC half — this case never calls close, it relies on `wf` going out of scope. -->
 ```maxon
 export enum TestFileError implements Error
 	openFailed
@@ -355,4 +355,31 @@ end 'main'
 ```
 ```maxoncstderr
 error E3072: specs/fragments/managed-file/managed-file.error-direct-construction.test:3:24: '__ManagedFile' is a compiler builtin type and cannot be constructed directly
+```
+
+<!-- test: managed-file.unknown-instance-method-is-refused-by-name -->
+<!-- targets: x64-windows -->
+shv2-authored, and it pins the DISPATCHER rather than a behaviour the oracle defines.
+
+R4.1 delivers `close()` and nothing else of the instance surface, so `size`/`read`/`write` are refused
+BY NAME. Left to fall through they would mangle into a callee no file declares and surface as `E3004`
+against a method the author did write and the language does have — the same argument
+`parseStringStaticCall` makes for `String`'s statics.
+
+⚠ It is a COMPILE-TIME case on purpose: `close()` on a real handle needs a file to exist in the
+runner's working directory, which no static this rung delivers can create. That behaviour is pinned by
+`managed-file.exists` and `managed-file.auto-close` when R4.2 supplies `openWrite`. What is pinned here
+is the half that needs no filesystem — that the receiver dispatches at all, and that an unknown member
+is a positioned refusal naming the rung.
+```maxon
+function main() returns ExitCode
+	let f = try __ManagedFile.openRead("nonexistent_unknown_method_xyz.txt".toByteArray().managed) otherwise 'nf'
+		return 1
+	end 'nf'
+	let n = f.size()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:12: Unsupported: `__ManagedFile` method 'size' — this rung provides `close()`; `size`, `read` and `write` arrive with the read/write slice
 ```

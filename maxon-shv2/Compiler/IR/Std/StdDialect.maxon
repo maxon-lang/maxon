@@ -1077,6 +1077,13 @@ export union StdOp
 	// three non-Windows lowerings are absent rather than stubbed. A stub would be a silent wrong answer on
 	// a lane the oracle cannot even check.
 	osFileOpenRead(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osFileClose(handle)` = `CloseHandle(handle)`. No result: the BOOL is ignored, exactly as
+	// `osWriteStdout` ignores `WriteFile`'s — a close that fails leaves nothing a caller could do.
+	//
+	// ⭐ It exists in the SAME rung as the open, and that is not symmetry for its own sake: an `openRead`
+	// with no way to close leaks an OS handle for the process lifetime, and that leak is invisible to the
+	// exit-101 memory gate. Appended past `osFileOpenRead` per the band-append invariant.
+	osFileClose(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1229,6 +1236,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		witnessTryCall(_, _, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
 		// R4.1: the file OPEN reads its path BUFFER address; `resultId` is a def and is skipped here.
 		osFileOpenRead(_, pathPtr) then referenced.insert(pathPtr)
+		// The close reads its HANDLE and defines nothing.
+		osFileClose(handle) then referenced.insert(handle)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1382,6 +1391,7 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// R4.1: rewrite the path buffer; `resultId` is a def and is carried through unremapped, exactly as
 		// every other defining system op's is.
 		osFileOpenRead(resultId, pathPtr) gives StdOp.osFileOpenRead(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
+		osFileClose(handle) gives StdOp.osFileClose(remappedValue(handle, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

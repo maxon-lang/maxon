@@ -22190,6 +22190,13 @@ export type Parser
 			return try self.dispatchBuiltinConformanceMethod(func, receiver: recv.value, conformer: receiverConformer, baseTok: recv.anchor)
 		end 'builtinConformer'
 
+		// A `__ManagedFile` RECEIVER (R4.1) — `f.close()`. Its own dispatcher for the reason the
+		// `StringIndex` arm above has one: the layout IS registered, so the struct path would accept the box
+		// and then resolve `close` against `funcSignatures`, where no file declares `__ManagedFile.close`.
+		if self.isManagedFileType(recv.tag, nameId: recv.nameId) 'managedFileMethod'
+			return try self.dispatchManagedFileMethod(recv)
+		end 'managedFileMethod'
+
 		// AN ENUM/UNION RECEIVER (D1) — `d.isNorth()`, `s.action()`, `self.isStop()`, and now also
 		// `pick().score()` and `Direction.south.score()`, which the oracle accepts (measured: 10) and which
 		// arrive here as VALUES because D1's arm was reached only from the binding door.
@@ -23355,6 +23362,37 @@ export type Parser
 	function managedFileNameId() returns TypeNameId
 		return self.artifact.typeNames.intern(ManagedFileTypeName)
 	end 'managedFileNameId'
+
+	// Is this receiver a `__ManagedFile`? A TAG cannot answer it — every struct box is `structRef` — so it
+	// is the interned NAME behind the tag, exactly as `isStringIndexType` asks.
+	function isManagedFileType(tag ValueTypeTag, nameId TypeNameId) returns bool
+		if tag != ValueTypeTag.structRef 'notAStruct'
+			return false
+		end 'notAStruct'
+		return nameId == self.managedFileNameId()
+	end 'isManagedFileType'
+
+	// ⭐ **`f.close()` — THE ONE `__ManagedFile` INSTANCE METHOD THIS RUNG DELIVERS (R4.1).** The cursor
+	// sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`).
+	//
+	// It exists in the same rung as `openRead` rather than waiting for R4.2, and the reason is a LEAK: an
+	// open with no close leaks an OS handle for the process lifetime, and that leak is invisible to the
+	// exit-101 memory gate because a handle is not memory. `size`/`read`/`write` genuinely can wait; this
+	// cannot.
+	//
+	// Non-throwing, per the spec's "Does not throw", and void — so an unknown method is refused by name
+	// here rather than mangled into a callee no file declares.
+	function dispatchManagedFileMethod(recv MethodReceiver) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(recv.anchor, last: methodTok)
+
+		if not methodTok.value.equals(ManagedFileCloseMethod) 'unknownMethod'
+			throw ParseError.unsupported("`{String.from(ManagedFileTypeName)}` method '{String.from(methodTok.value)}' — this rung provides `{String.from(ManagedFileCloseMethod)}()`; `size`, `read` and `write` arrive with the read/write slice", line: methodTok.line, column: methodTok.column)
+		end 'unknownMethod'
+
+		try self.consumeEmptyArgList()
+		return self.emitRuntimeCall(ManagedFileCloseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'dispatchManagedFileMethod'
 
 	// ⭐ **IS THIS THE `StringIndex` TYPE?** A TAG cannot answer it — every struct box is `structRef` — so it
 	// is the interned NAME behind the tag, which is the same identity `aggregateNameOf` publishes for a

@@ -787,6 +787,7 @@ type StdToX64Lowering
 			osReadWallClock gives 0
 			// R4.1: CreateFileW takes SEVEN arguments — four in registers, three on the stack.
 			osFileOpenRead gives win64OutgoingArgBytes(CreateFileStackArgWords)
+			osFileClose gives win64OutgoingArgBytes(CreateFileStackArgWords)
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -950,6 +951,7 @@ type StdToX64Lowering
 				osReadWallClock then break 'term'
 				// R4.1: the file OPEN is a value-producing body op, never a terminator.
 				osFileOpenRead then break 'term'
+				osFileClose then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1017,6 +1019,7 @@ type StdToX64Lowering
 				// wall-clock read it can be the last flag-writer before a branch — and, like a `call`, it is
 				// not the compare, so the scan stops.
 				osFileOpenRead then break 'isTheCompare'
+				osFileClose then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1094,6 +1097,7 @@ type StdToX64Lowering
 			osReadWallClock gives false
 			// R4.1: the file OPEN is never a terminator, so it reads no fused compare flags.
 			osFileOpenRead gives false
+			osFileClose gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -1165,6 +1169,8 @@ type StdToX64Lowering
 			osReadWallClock(ftPtrId) then self.lowerOsReadWallClock(ftPtrId, dstBlock: dstBlock)
 			// R4.1: open a file for reading; the raw handle lands in `resultId`.
 			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpenRead(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			// R4.1: close the handle. `CloseHandle`'s BOOL is discarded, so nothing is captured from RAX.
+			osFileClose(handleId) then self.lowerOsFileClose(handleId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1212,6 +1218,7 @@ type StdToX64Lowering
 			osPipeCreate to osWriteFile then panic("lowerStdToX64: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
 			osReadWallClock then panic("lowerStdToX64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
 			osFileOpenRead then panic("lowerStdToX64: an `osFileOpenRead` op appeared as a block terminator (lowering bug — a file open is a value-producing body op)")
+			osFileClose then panic("lowerStdToX64: an `osFileClose` op appeared as a block terminator (lowering bug — a file open is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2210,6 +2217,16 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileOpenReadWin64'
 
+	// ⭐ **R4.1: `CloseHandle(handle)`** — register-only (one argument in rcx), and the BOOL it returns is
+	// DISCARDED, exactly as `osWriteStdout` discards `WriteFile`'s. A close that fails leaves a caller
+	// nothing to do, and `close()` is documented idempotent, so there is no verdict worth capturing.
+	function lowerOsFileClose(handleId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.CloseHandle, arg0: handleId, dstBlock: dstBlock)
+			syscall then panic("lowerOsFileClose: CloseHandle is x64-windows only — file IO is x64-windows-gated at R4.1, and SemanticCheck refuses such a program at its source span (E3104)")
+		end 'route'
+	end 'lowerOsFileClose'
+
 	function lowerOsIocpCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsIocpCreateWin64(resultId, dstBlock: dstBlock)
@@ -2717,6 +2734,7 @@ type StdToX64Lowering
 			osReadWallClock gives false
 			// R4.1: the file OPEN is never a terminator, let alone a float-equality condBranch.
 			osFileOpenRead gives false
+			osFileClose gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2857,6 +2875,7 @@ type StdToX64Lowering
 			osPipeCreate to osWriteFile panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a P1.5 IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osReadWallClock panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osReadWallClock`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osFileOpenRead panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osFileOpenRead`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osFileClose panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osFileClose`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 
