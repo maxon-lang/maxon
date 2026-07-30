@@ -1,0 +1,57 @@
+// Test: first-class-function.bool-return-through-alias
+typealias Num = int(0 to 100)
+typealias Pred = function(Num) returns bool
+
+function isBig(n Num) returns bool
+	return n > 50
+end 'isBig'
+
+function callIt(p Pred) returns ExitCode
+	return 5 if p(90) else 0
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(isBig)
+end 'main'
+---
+ExitCode: 5
+---
+func @isBig {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 50
+    arm64.cset x0, gt
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @callIt {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 90
+    arm64.blr x19
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 5
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, __fnref_isBig
+    arm64.movImm x1, 0
+    arm64.bl callIt
+    arm64.epilogue 16
+    arm64.ret
+}

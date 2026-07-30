@@ -316,9 +316,20 @@ end 'applyStringBufferFixups'
 // It is a strict narrowing of that blanket refusal, not a new one — which is also why over-refusing the
 // rare slot that is never actually dispatched costs nothing.
 //
-// The RESULT half needs no such guard: `indirectCallResultValTypes` is the one door BOTH ends come through,
-// and the op's `resultType` is the impl's declared return type for every shape (`ExitCode` included, since
-// `Parser.interfaceReturnMaxonType` claims that name).
+// ⚠ **THE RESULT HALF NEEDS NO GUARD BECAUSE THE TWO ENDS AGREE — AND THAT AGREEMENT IS A CONVENTION FOUR
+// SITES KEEP, NOT A MECHANISM ONE SITE ENFORCES (corrected at W1).** `indirectCallResultValTypes` is indeed
+// the one door both ends come through, but what it is HANDED is a `resultType` the FRONT END derived, and
+// this comment used to credit that derivation to `Parser.interfaceReturnMaxonType` alone. There were three
+// more doors. A function typealias stores its return interner-free as a `(tag, NAME)` pair and rebuilt
+// `ExitCode` as a width-free `named` — so a `call_indirect` declared `() -> i64` against a `__fnref_` thunk
+// typed `() -> i32` and trapped here at run time, which is the defect W1 fixed and which THIS PARAGRAPH,
+// asserting the result half was safe, is why nobody looked for. All four doors now ask one table
+// (`TypeResolution.builtinTypeNameTag`); a FIFTH interner-free store of a declared type would re-open it,
+// and the only thing standing between that and a run-time trap is asking the same table.
+//
+// It genuinely cannot be closed the way the parameter half is: a narrow RESULT is legal and correct here
+// (`__fnref_nine` returning an `ExitCode` u32 is exactly what W1 enabled), so there is no valtype to refuse
+// — only a derivation to keep single-sourced.
 function requireIndirectlyReachableParamsAreMachineWords(globalData GlobalDataTable, calleeParamTypes CalleeParamTypesMap)
 	for reloc in globalData.pendingRdataRelocs 'eachSlot'
 		let params = try calleeParamTypes.get(reloc.funcName) otherwise panic("requireIndirectlyReachableParamsAreMachineWords: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references function '{String.from(reloc.funcName)}', which is in no Std function — it was never installed (a DCE-root gap where the slot's owner was built)")
@@ -698,7 +709,25 @@ end 'singletonValTypes'
 // A CROSS-DOMAIN coercion (int <-> float) is never generated: the frontend inserts an explicit
 // `siToFp`/`fpToSi` op for every domain change (int->int carries none, which is why the i32/i64 pair
 // IS handled here), so an int<->float pair reaching this point is a lowering bug, and the panic
-// names it as one. A signed widen matches `int`'s signedness.
+// names it as one.
+//
+// ⭐⭐ **THE WIDEN IS UNSIGNED, AND THAT IS THE WHOLE OF `ExitCode`'S VALUE ABOVE 2^31 (W1 review).** Every
+// narrow int shv2 puts in a VALUE is UNSIGNED — `valueTagToStdType` produces exactly `i1`, `u32`, `i64` and
+// `f64`, and the heap's byte band is `u8`; NOTHING in the tree constructs a `StdType.i8`/`i16`/`i32`. So the
+// i32 a narrow value sits in holds a ZERO-extended number, and re-widening it with `i64.extend_i32_s` reads
+// its top bit as a SIGN. MEASURED, on a `returns ExitCode` of 4,000,000,000: the host printed 4000000000 and
+// wasm printed **-294967296** — a silent wrong answer, not a trap, through all three doors that widen a
+// narrow call result (a DIRECT call, a witness dispatch, and — since W1 recovered the alias's width — a
+// function typealias). All three are pinned: the direct and alias readings together in
+// `first-class-function.exitcode-return-through-alias-high`, the witness one in
+// `where-clauses.witness-exitcode-return-high`. Each reads the number BACK with `print` rather than returning
+// it as a process status, because the OS truncates an exit code and an `exitcode` assertion could not see this.
+//
+// ⚠ It is unsigned because there is no SIGNED narrow type to be wrong about, not because a sign is never
+// wanted: `emitOsAllocPages` widens `memory.grow`'s -1 OOM sentinel and calls `i64ExtendI32S` DIRECTLY for
+// exactly that reason. If P1.9 (narrow int widths) ever gives a VALUE a signed sub-64 Std type, this
+// function's `(from, to)` valtype pair stops carrying enough to decide — the source's signedness has to
+// reach it, and `getValtype`'s table (WasmValType, not StdType) is where that information is dropped today.
 function coerceOnStack(body WasmBody, from WasmValType, to WasmValType)
 	if from == to 'same'
 		return
@@ -710,7 +739,7 @@ function coerceOnStack(body WasmBody, from WasmValType, to WasmValType)
 	end 'narrow'
 
 	if from == WasmValType.i32 and to == WasmValType.i64 'widen'
-		body.i64ExtendI32S()
+		body.i64ExtendI32U()
 		return
 	end 'widen'
 

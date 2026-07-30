@@ -100,11 +100,34 @@ let ExitCodeBuiltinName = b"ExitCode"
 // from the caller's interned id. Every caller feeds this straight into that rebuild, so there is no second
 // decision to keep in step and nothing to test the answer against.
 //
+// ⚠⚠ **BUT THE FALL-THROUGH IS SILENT ON EVERY REGISTER TARGET, AND ONLY THE wasm LANE MAKES IT LOUD (W1
+// review).** A name that BELONGS here and is missing gets `named` — an i64 — and an i64 and a u32 occupy the
+// same GPR, so x64 and arm64 compute the right answer and say nothing; wasm's `call_indirect` is the only
+// reader that checks. That is not a reason to distrust the classification, it is the reason the wasm lane is
+// a gate: the omission this table exists to prevent was found by wasm and by nothing else. `denotedNamedType`
+// now sources its own builtin arm from here, so a name the compiler resolves at all cannot be added there and
+// forgotten here — which closes the direction the omission was actually made in.
+//
+// ⚠⚠ **THE ANSWER IS ONLY VALID AT A DOOR THAT HOLDS A *RENDERED* TYPE NAME — NOT AT ONE ASKING WHAT A
+// `named` REFERENCE DENOTES.** `bool`/`int`/`float`/`String` are unreachable as a `named` reference's name
+// (the first three are KEYWORDS; `String` and `Character` are settled syntactically by
+// `Parser.parseTypeReference`), so they can only arrive here from a rendered interface signature — where
+// they mean the builtin. A user `enum String` is legal (measured: it compiles and runs), and its `Self`
+// arrives as `named("String")`, for which this table's answer would be WRONG. That is why
+// `denotedNamedType` admits only the `exitCode` answer and not every non-`named` one; a new caller must
+// decide the same question before it may read past the `exitCode` arm.
+//
 // ⚠ **`Character` IS DELIBERATELY ABSENT, and admitting it would be a FEATURE rather than a re-spelling.**
 // The set here is exactly the set the interface door already answered for, because this rung single-sources
 // that door and does not widen it. A function typealias cannot reach the question at all:
 // `parseTypeReference` answers `Character` (and `String`) SYNTACTICALLY, so an alias stores them by TAG with
-// an EMPTY name and the `named` arm is never asked about either. The interface door can reach it, and
+// an EMPTY name and the `named` arm is never asked about either. ⭐ That is not an argument but a
+// MEASUREMENT (W1 review): `typealias CharThunk = function() returns Character` and its `String` twin both
+// compile and run correctly on the host AND on wasm, which is only possible by the TAG route — the name
+// column is empty, so this table is never consulted. Both are pinned
+// (`first-class-function.character-return-through-alias`, `.string-return-through-alias`), so a future change
+// that started storing them by NAME would turn this reasoning red instead of quietly relying on it. The
+// interface door can reach it, and
 // MEASURED it is REFUSED — an interface method declared `returns Character`, dispatched through a witness,
 // reports `E3005 Cannot return 'int' from function declared to return 'Character'`. That is a clean refusal
 // rather than a wrong answer, and admitting it means adopting a managed record as an owned temp at the
@@ -736,8 +759,29 @@ end 'isCompilerOwnedTypeName'
 // with the PROGRAM, where every other cost of alias resolution grows only with the DECLARATIONS).
 // `UnknownTypeName` is payload-free, so it is a scalar; the caller already holds the name.
 export function denotedNamedType(signatures ProgramSignatures, name ByteArray, id TypeNameId) returns MaxonType throws UnknownTypeName
-	if name.equals(ExitCodeBuiltinName) 'isExitCode'
-		return MaxonType.exitCode
+	// ⭐⭐ **THE NAME *AND* THE ANSWER ARE `builtinTypeNameTag`'S — THIS ARM OWNS NEITHER (W1 review).** This
+	// used to spell `ExitCode` and `MaxonType.exitCode` itself, which made the AUTHORITY for what a type name
+	// denotes and the TABLE the interner-free doors re-derive from two independent lists of which builtin
+	// names carry a sub-64 width. They agreed; nothing made them. Adding the next such name here — the
+	// natural place, since without an arm here the name is E3011 everywhere — and forgetting the table is
+	// precisely the arrangement that dropped `ExitCode`'s width at the function-typealias door: silent on
+	// every register target, a `wasm trap: indirect call type mismatch` on wasm. Sourced from the table, the
+	// omission cannot be made in that direction at all; in the other direction (table, not here) the name is
+	// E3011, which is loud.
+	//
+	// ⚠ **ONLY `exitCode` IS ADMITTED, and the bound is MEASURED rather than cautious.** The table also
+	// answers for `bool`/`int`/`float`/`String`, and those answers are correct at the INTERFACE door (which
+	// asks about a RENDERED type name) and WRONG here (which asks what a `named` REFERENCE denotes):
+	// `bool`/`int`/`float` are keywords, `String`/`Character` are settled syntactically by
+	// `Parser.parseTypeReference`, so a `named` reference never carries one of those names from a type
+	// position — but a user `enum String` is legal (`String` is deliberately not in
+	// `isCompilerOwnedTypeName`) and `Self` is NOT settled syntactically, so `Self` inside it DOES arrive
+	// here as `named("String")`. MEASURED: `enum String` with an `export function flip() returns Self`
+	// compiles and runs on the host and on wasm. This arm precedes `containsEnum`, so admitting the table's
+	// `string` answer would resolve that user enum to the managed builtin instead of to its i64 tag.
+	let builtinTag = builtinTypeNameTag(name)
+	if builtinTag == ValueTypeTag.exitCode 'isExitCode'
+		return maxonTypeOfTag(builtinTag, nameId: id)
 	end 'isExitCode'
 
 	// ⭐ A COMPILER-SYNTHESIZED RANGED INT ALIAS — `HashValue`, the result type of `Hashable.hash()`. It is in

@@ -1953,13 +1953,16 @@ let TruncBuiltinName = b"trunc"
 // their own, because each has its own emit and its own operand rule.)
 let NumericBuiltinArity = 1 as ParamCount
 
-// **THE `String` BUILTIN TYPE'S NAME** (P1.2 wave A). Recognized SYNTACTICALLY in `parseTypeReference`
-// — like `Self`, a pure token test with no registry — so `function f(s String)` tags `s`'s value
-// `string` at PARSE time, which is what `s == t` / `print(s)` read. Recognizing it here (not only in
-// `TypeResolution`, the way `ExitCode` is) is load-bearing: `resolveTypes` rewrites SIGNATURES, never
-// the parser's `valueTags` column, so a String tagged `named` at parse time would stay `named` on the
-// value and the String operators would never see it.
-let StringBuiltinName = b"String"
+// **THE `String` BUILTIN TYPE'S NAME IS `StringConformerName`** (P1.2 wave A). Recognized SYNTACTICALLY in
+// `parseTypeReference` — like `Self`, a pure token test with no registry — so `function f(s String)` tags
+// `s`'s value `string` at PARSE time, which is what `s == t` / `print(s)` read. Recognizing it here (not only
+// in `TypeResolution`, the way `ExitCode` is) is load-bearing: `resolveTypes` rewrites SIGNATURES, never the
+// parser's `valueTags` column, so a String tagged `named` at parse time would stay `named` on the value and
+// the String operators would never see it.
+//
+// ⚠ This paragraph used to sit over a `StringBuiltinName = b"String"` of its own, which was a second
+// spelling of `IrInterface`'s canonical constant — the thing `BoolConformerName`'s header forbids outright.
+// Deleted at the W1 review; `Character`'s twin went the same way. See `StringConformerName`.
 
 // **THE `print` BUILTIN'S NAME** (P1.2 wave A). Like `trunc`, recognized by name after its arguments
 // are parsed (`parseCallNamed`): it takes ordinary call syntax but emits no `MaxonOp.call` to a user
@@ -2175,9 +2178,10 @@ let StringReplaceFirstMethod = b"replaceFirst"
 let CodepointViewMethod = b"codepoints"
 let Utf16ViewMethod = b"utf16"
 
-// The `Character` BUILTIN's type name — the `String` twin (`StringBuiltinName`), recognized
-// syntactically in a type position. Also the name a `for c in s` element binds under in a diagnostic.
-export let CharacterBuiltinName = b"Character"
+// The `Character` BUILTIN's type name is `CharacterConformerName` — the `String` twin
+// (`StringConformerName`), recognized syntactically in a type position, and also the name a `for c in s`
+// element binds under in a diagnostic. Its own `CharacterBuiltinName = b"Character"` was deleted at the W1
+// review for the reason recorded over `String`'s: one fact, one constant.
 
 // The two BARE FREE FUNCTIONS this rung exposes — the UAX #29 classifiers, which `specs/grapheme-clusters.md`
 // calls directly (`graphemeBreakProperty(65)`, `isExtendedPictographic(128512)`). They join the builtin
@@ -9480,8 +9484,8 @@ export type Parser
 			// The `String` BUILTIN — recognized SYNTACTICALLY, like `Self` below, so it needs no registry
 			// and both the declaration sweep and the real parse answer it identically. It resolves to its
 			// own `MaxonType.string` arm (NEVER `named`), which is what tags a `String` parameter's value
-			// `string` at parse time. See `StringBuiltinName`.
-			if tok.value.equals(StringBuiltinName) 'stringBuiltin'
+			// `string` at parse time. See `StringConformerName`.
+			if tok.value.equals(StringConformerName) 'stringBuiltin'
 				return MaxonType.string
 			end 'stringBuiltin'
 			// The `Character` BUILTIN (P1.8 slice B) — recognized SYNTACTICALLY, exactly as `String` is
@@ -9489,7 +9493,7 @@ export type Parser
 			// sweep and the real parse answer it the same way. It resolves to its own `MaxonType.character`
 			// arm (NEVER `named`), which is what tags a `Character` parameter's value `character` at parse
 			// time and keeps every `named`-reading rule from treating a record pointer as a ranged int.
-			if tok.value.equals(CharacterBuiltinName) 'characterBuiltin'
+			if tok.value.equals(CharacterConformerName) 'characterBuiltin'
 				return MaxonType.character
 			end 'characterBuiltin'
 			// The type's own name inside its own body means what `Self` means — for an `enum Toggle`'s
@@ -21987,7 +21991,7 @@ export type Parser
 		// `CharacterSet`'s reason and not for a new one: `String` is a BUILTIN with no `type` declaration
 		// behind it, so the mangled `String.from` below would name a callee no file declares (E3004), and
 		// the value it builds comes out of the string runtime rather than out of a user method.
-		if typeTok.value.equals(StringBuiltinName) 'stringStatic'
+		if typeTok.value.equals(StringConformerName) 'stringStatic'
 			return try self.parseStringStaticCall(func, typeTok: typeTok)
 		end 'stringStatic'
 
@@ -23241,7 +23245,7 @@ export type Parser
 		try self.consume(TokenKind.dot)
 		if not self.at(TokenKind.from) 'unknownStatic'
 			let methodTok = self.current()
-			throw ParseError.unsupported("`{String.from(StringBuiltinName)}` static '{String.from(methodTok.value)}' — the reference exports one, `from(bytes)`, and `fromOwnedBytes` is deliberately not exported", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("`{String.from(StringConformerName)}` static '{String.from(methodTok.value)}' — the reference exports one, `from(bytes)`, and `fromOwnedBytes` is deliberately not exported", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
 
 		let fromTok = try self.consume(TokenKind.from)
@@ -23249,7 +23253,7 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		let bytesTok = self.current()
 		let bytes = try self.parseExpression(func, block: self.currentBlock)
-		try self.requireByteArrayValue(bytes, subject: "{String.from(StringBuiltinName)}.from", anchor: bytesTok)
+		try self.requireByteArrayValue(bytes, subject: "{String.from(StringConformerName)}.from", anchor: bytesTok)
 		try self.consume(TokenKind.rightParen)
 		return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(bytes), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 	end 'parseStringStaticCall'

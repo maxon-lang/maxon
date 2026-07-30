@@ -570,6 +570,63 @@ end 'main'
 0
 ```
 
+<!-- test: where-clauses.witness-exitcode-return-high -->
+⭐⭐ **AN `ExitCode` RETURNED THROUGH A WITNESS, ABOVE 2^31 (W1 review).** `ExitCode` is the only builtin
+type NAME whose tag carries a sub-64 width — a **u32** (`valueTagToStdType`) — and an interface stores its
+method return type as a rendered source STRING, so a witness dispatch RE-DERIVES that width from the name.
+`where-clauses.witness-multi-arg-ranged-return` above already pins that a compiler-owned name survives the
+round trip; what it cannot pin is the VALUE, because every case in this file returns a small number, and a
+small number is the same under either extension rule.
+
+On wasm the recovered u32 lives in an `i32` and must be widened back to the `i64` world every Maxon value
+inhabits. MEASURED, before the fix: the host printed `4000000000` and wasm printed **-294967296** — the
+widen was `i64.extend_i32_s`, reading a u32's top bit as a sign. Silent on every register target, where the
+value never leaves its 64-bit GPR, which is why it needed a case that reads the number back rather than
+returning it as a process status (the OS truncates an exit code, so `exitcode` alone could never have
+caught this).
+```maxon
+typealias Num = int(0 to 10)
+
+interface Coded
+	function code() returns ExitCode
+end 'Coded'
+
+type Widget implements Coded
+	export var n as Num
+	export static function create(n Num) returns Self
+		return Self{ n: n }
+	end 'create'
+	export function code() returns ExitCode
+		return 4000000000
+	end 'code'
+end 'Widget'
+
+type Box uses T where T is Coded
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function show() returns ExitCode
+		let v = self.item.code()
+		print("witness={v}\n")
+		return 0
+	end 'show'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	let b = WidgetBox.create(Widget.create(1))
+	return b.show()
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+witness=4000000000
+```
+
 <!-- test: where-clauses.error.instantiate-nonconforming -->
 A concrete argument that does not implement the constrained interface is rejected at the instantiation (E3017).
 ```maxon

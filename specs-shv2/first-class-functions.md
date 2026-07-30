@@ -3147,3 +3147,183 @@ end 'main'
 ```exitcode
 9
 ```
+
+<!-- test: first-class-function.exitcode-return-through-alias-high -->
+⭐⭐ **THE WIDTH RECOVERED ABOVE 2^31 — THE CASE THE VALUE `9` CANNOT SEE (W1 review).** The case above
+proves an `ExitCode` returned through a function typealias is the right WIDTH; it cannot prove the
+right VALUE, because 9 is the same number under every extension rule. `ExitCode` is a **u32**
+(`valueTagToStdType`), so on wasm it lives in an `i32` and has to be widened back to the `i64` world
+every Maxon value inhabits — and widening it as SIGNED reads its top bit as a sign. MEASURED, before
+the fix: the host printed `4000000000` and wasm printed **-294967296**, through the alias and through
+a DIRECT call alike. A silent wrong answer, on the one lane that had just been taught to compute the
+width at all.
+
+Both readings are asserted, and the pair is the assertion: a fix that corrected only the indirect
+path would leave `direct=` red, and one that corrected only the declared functype would leave both
+red while `exitcode-return-through-alias` above stayed green. `4000000000` is chosen because it
+exceeds `i32.max` and fits `u32.max`, which is exactly the band where the two extensions disagree.
+```maxon
+typealias Thunk = function() returns ExitCode
+
+function big() returns ExitCode
+	return 4000000000
+end 'big'
+
+function viaAlias(t Thunk) returns ExitCode
+	let v = t()
+	print("alias={v}\n")
+	return 0
+end 'viaAlias'
+
+function main() returns ExitCode
+	print("direct={big()}\n")
+	return viaAlias(big)
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+direct=4000000000
+alias=4000000000
+```
+
+<!-- test: first-class-function.character-return-through-alias -->
+`Character` is DELIBERATELY absent from `TypeResolution.builtinTypeNameTag`, and this is the case that
+turns the reason into a measurement rather than an argument (W1 review). `parseTypeReference` settles
+`Character` SYNTACTICALLY, so a function typealias stores it by TAG with an EMPTY name and the
+name→tag table is never consulted for it — which is only true while the storage convention holds. If a
+later change ever routed `Character` through the NAME column, this case goes red at the door, instead
+of the omission being justified by prose nothing checks.
+```maxon
+typealias CharThunk = function() returns Character
+
+function ch() returns Character
+	return 'x'
+end 'ch'
+
+function callIt(f CharThunk) returns ExitCode
+	let c = f()
+	print("{c}\n")
+	return 7
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(ch)
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+x
+```
+
+<!-- test: first-class-function.string-return-through-alias -->
+`Character`'s twin, and the one that matters for OWNERSHIP rather than width (W1 review). A `String` is
+MANAGED, so a function typealias that returned it under the wrong tag would not merely mis-size the
+value — it would put it on the wrong side of the drop walk. It rides the TAG column for
+`Character`'s reason (`parseTypeReference` settles `String` syntactically, storing an empty name), so
+the table is never asked; the leak gate is what makes the ownership half of that an assertion.
+```maxon
+typealias Namer = function() returns String
+
+function name() returns String
+	return "abc"
+end 'name'
+
+function callIt(f Namer) returns ExitCode
+	let s = f()
+	print("{s}\n")
+	return 3
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(name)
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+abc
+```
+
+<!-- test: first-class-function.bool-return-through-alias -->
+The other keyword-settled tag, and the other sub-64 one: `bool` is an `i1` — a wasm `i32` — so a
+function typealias returning it has the same width to lose that `ExitCode` did. It cannot lose it by
+the same route (`bool` is a KEYWORD, so it can never arrive as a `named` name), and that asymmetry is
+what this case pins beside `exitcode-return-through-alias`: the two sub-64 returns reach their width
+through DIFFERENT columns, and only one of them was ever at risk.
+```maxon
+typealias Num = int(0 to 100)
+typealias Pred = function(Num) returns bool
+
+function isBig(n Num) returns bool
+	return n > 50
+end 'isBig'
+
+function callIt(p Pred) returns ExitCode
+	return 5 if p(90) else 0
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(isBig)
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: first-class-function.exitcode-through-alias-struct-field -->
+A THIRD door into the function-alias registry, and one no case reached before (W1 review): the alias
+names a struct FIELD's type, so the recovered return width has to survive being stored in a box and
+loaded back out before the indirect call is made. A width recovered only where a PARAMETER is typed
+would leave this one declaring `() -> i64` against a `() -> i32` thunk, which is the original trap
+arriving through a different door.
+```maxon
+typealias Thunk = function() returns ExitCode
+
+type Holder
+	export let cb as Thunk
+	export static function create(cb Thunk) returns Self
+		return Self{ cb: cb }
+	end 'create'
+end 'Holder'
+
+function nine() returns ExitCode
+	return 9
+end 'nine'
+
+function main() returns ExitCode
+	let h = Holder.create(nine)
+	return h.cb()
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: first-class-function.exitcode-through-alias-array-element -->
+The FOURTH door — the alias as an `Array` ELEMENT type (W1 review). It is the struct-field case's twin
+with one difference that is worth its own case: the element type reaches the alias registry through
+the GENERIC instance machinery rather than a field declaration, so the two are separate readers of the
+same stored `(tag, name)` pair, and either could have been left behind.
+```maxon
+typealias Thunk = function() returns ExitCode
+typealias ThunkArray = Array with Thunk
+
+function nine() returns ExitCode
+	return 9
+end 'nine'
+
+function main() returns ExitCode
+	var a = ThunkArray.create()
+	a.push(nine)
+	let f = try a.get(0) otherwise panic("a.get(0) on a one-element array")
+	return f()
+end 'main'
+```
+```exitcode
+9
+```
