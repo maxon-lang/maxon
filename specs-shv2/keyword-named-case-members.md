@@ -37,13 +37,24 @@ Both shapes are now ONE predicate (`keywordIsAName`), because they are one fact:
   at token 60 but the parser closed the last body at token 69`. Every block statement that runs a token
   scan was affected: `if`, `while`, `for`, and a `match`'s scrutinee and arm bodies.
 
-⚠ **`Kw.if`, `Kw.else` and `Kw.otherwise` never panicked, and pinning them is the point.** Those three
-keywords are not unconditional block markers — an `if` opens a block only at STATEMENT START
-(`ifBeginsStatement`), an `else` only after a then-branch's `end` (`elseFollowsBlockEnd`), an
-`otherwise` only in its two block-handler shapes (`otherwiseOpensBlock`) — and a member name satisfies
-none of those. So they were already excluded, **by a position test that has nothing to do with being a
-name.** They are pinned here because a case that passes for an unrelated reason is exactly the case a
-later rung deletes as redundant, and because the lookbehind now covers all seven uniformly.
+⚠ **`Kw.if` and `Kw.else` never panicked, and pinning them is the point.** Neither is an unconditional
+block marker — an `if` opens a block only at STATEMENT START (`ifBeginsStatement`), an `else` only after
+a then-branch's `end` (`elseFollowsBlockEnd`) — and a member name satisfies neither. So they were already
+excluded, **by a position test that has nothing to do with being a name.** They are pinned here because a
+case that passes for an unrelated reason is exactly the case a later rung deletes as redundant, and
+because the lookbehind now covers all seven uniformly.
+
+⚠⚠ **`Kw.otherwise` WAS THE EXCEPTION, AND THIS FILE USED TO CLAIM OTHERWISE — the claim was FALSE and a
+compiler PANIC lived behind it.** The reasoning was the same as for `if`/`else`: an `otherwise` opens a
+block only in its two handler shapes (`otherwiseOpensBlock`), and a member name was said to satisfy
+neither. But one of those shapes is `otherwise 'label'`, and a member read that ENDS A BLOCK HEADER is
+followed by that header's own block label — so `while k == Kw.otherwise 'loop'` satisfies it exactly, in
+the same way `match Kw.end 'm'` satisfies the labelled-closer shape below. Found by D8's independent
+review, on the same day D8 made `.otherwise` reachable a second way (a keyword-named METHOD:
+`while Ops.otherwise(i) 'loop'`, whose `( <ident> ) <label>` tail is the caught-error binding form).
+`handler-case-member-spelling-a-labelled-otherwise-in-a-header` pins it. **The lesson is the file's own:
+"excluded by an unrelated position test" is not an exclusion, and the three keywords whose arms did their
+own thinking were the three worth doubting.**
 
 ⚠ **Two shapes are worse than the rest and each gets its own case, because in both a keyword member
 spells a real piece of block syntax character for character:**
@@ -293,6 +304,40 @@ function main() returns ExitCode
 		end 'done'
 	end 'spin'
 	return acc as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: handler-case-member-spelling-a-labelled-otherwise-in-a-header -->
+⚠⚠ **THE THIRD SHAPE, AND IT WAS A LIVE PANIC UNTIL D8's REVIEW** — the exact twin of the `end 'm'` case
+above, for the OTHER keyword that has a labelled block form. A member read `Kw.otherwise` at the end of a
+block header puts `otherwise` immediately before the construct's own block label, which is
+`otherwiseOpensBlock`'s `otherwise 'label'` form character for character — so the header opened a second
+block nothing closed and `assertScanAligned` took the compiler down. It is why the claim above that a
+member name "satisfies none of those" position tests was WRONG for `otherwise`: it satisfies the label
+form whenever the member is the header's last token. The cure is that `opensBlockAt` now asks the
+keyword-as-a-name exclusion ONCE, ahead of every arm, instead of per arm — three arms had it and the
+`otherwise` arm did not.
+```maxon
+enum Kw
+	otherwise
+	alpha
+end 'Kw'
+
+function main() returns ExitCode
+	var k = Kw.alpha
+	var i = 0
+	while k == Kw.otherwise 'loop'
+		i = i + 1
+	end 'loop'
+
+	if k == Kw.otherwise 'chk'
+		i = 9
+	end 'chk'
+
+	return (42 + i) as ExitCode
 end 'main'
 ```
 ```exitcode

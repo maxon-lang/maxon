@@ -304,8 +304,16 @@ end 'main'
 read of a binding named `while`/`match`/`for`/`end` is a NAME to the expression parser and BLOCK
 STRUCTURE to the token scans, whose verdict for those four does not depend on position. The scans see
 raw tokens and have no scope, so they cannot know the name is bound; accepted, the program panics in
-`assertScanAligned`. `if`/`else`/`otherwise` are NOT refused — their position tests already answer no
-for an operand — which is why the case above reads `from` and `to` freely.
+`assertScanAligned`. `if` and `else` are NOT refused — their position tests already answer no for an
+operand — which is why the case above reads `from` and `to` freely.
+
+⚠ **`otherwise` IS refused, but only in ONE position, and NOT because it was listed** — the refusal set is
+DERIVED by asking `opensBlockAt`/`closesBlockAt` at the cursor, so it answers per program rather than per
+keyword. A bare `otherwise` read as a whole block condition puts the header's label straight after it
+(`while otherwise 'loop'`), which is `otherwiseOpensBlock`'s labelled-handler form — so that one program
+is refused with the same E2015, while `acc + otherwise` is not. The derivation is what makes the set
+right without anyone maintaining it; the prose that tried to summarise the set as three exempt keywords
+was wrong, and the review that found it also found the missing exclusion behind it (below).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -389,6 +397,101 @@ end 'classify'
 
 function main() returns ExitCode
 	return classify(Kw.function, p: Pick.one) + classify(Kw.function, p: Pick.two) + classify(Kw.alpha, p: Pick.one)
+end 'main'
+```
+```exitcode
+42
+```
+
+### The two defects the INDEPENDENT review found — both compiler PANICS on a correct program
+
+⭐⭐ **BOTH WERE THE SAME MISTAKE: A SCAN THAT ASKED A RAW `TokenKind` INSTEAD OF THE ONE PREDICATE THAT
+KNOWS A KEYWORD MAY BE A NAME.** Neither was in the grammar, neither was caught by 2551 green tests, and
+in both the widened DECLARATION position is what made an old unguarded scan reachable. The cure in both
+places is to delete the raw test, not to add a case to it.
+
+<!-- test: a-keyword-named-METHOD-CALL-ending-a-block-HEADER -->
+⛔ **`opensBlockAt` spelled the keyword-as-a-name exclusion once PER ARM, and the `otherwise` arm had no
+copy.** `otherwiseOpensBlock`'s caught-error handler form is `otherwise ( <ident> ) <label>` — which a
+keyword-named METHOD CALL at the end of a block header spells character for character, `.otherwise`
+having become a legal member name in this very rung. So `while Ops.otherwise(i) 'loop'` opened a second
+block nothing closed and the extent scan ran past the loop's `end`:
+`panic: parseWhileStatement: the token scan predicted the closing 'end' at token 76 but the parser closed
+the last body at token 68`. The `if` form panics identically. The exclusion is now asked ONCE, ahead of
+every arm — an arm decides whether this POSITION opens a block, and whether the token is block structure
+AT ALL is not an arm's business.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Ops
+	export static function otherwise(n Integer) returns bool
+		return n < 3
+	end 'otherwise'
+end 'Ops'
+
+function main() returns ExitCode
+	var i = 0
+	while Ops.otherwise(i) 'loop'
+		i = i + 1
+	end 'loop'
+
+	if Ops.otherwise(i) 'lbl'
+		i = 99
+	end 'lbl'
+
+	return (i * 14) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: keyword-named-INTERFACE-REQUIREMENTS-among-others -->
+⛔ **THE DECLARATION SWEEP CLOSED AN `interface` BODY ON A RAW `end`, WHICH THIS RUNG HAD JUST MADE A
+LEGAL REQUIREMENT NAME.** `recordScannedInterface` must consume the whole declaration itself — its
+bodiless signatures would otherwise trip the sweep's `function` arm and leave `depth` permanently one too
+deep — and it found its terminator by testing `TokenKind.end`. A `function end(…)` requirement stopped the
+walk ON THAT NAME, mid-signature, and the requirements after it fell to the outer loop and did exactly the
+damage the routine exists to prevent: every `depth == 0` gate (`type`, `enum`, `interface`) stopped firing
+for the rest of the file. `panic: requireConstructible: type Cell is being parsed right now, but the
+declaration sweep never recorded it`.
+
+⚠ **IT TAKES THREE REQUIREMENTS TO SEE, AND THAT IS THE INTERESTING PART.** With exactly ONE requirement
+after the `end`-named one, the stray `function`'s `+1` happened to cancel the interface's own `end` and
+the file compiled — a green answer from a broken scan, off an arithmetic coincidence. A two-case probe
+would have called this clean.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Bounded
+	function end(k Integer) returns Integer
+	function while(k Integer) returns Integer
+	function match(k Integer) returns Integer
+end 'Bounded'
+
+type Span implements Bounded
+	export let lo as Integer
+
+	export static function from(k Integer) returns Self
+		return Self{lo: k}
+	end 'from'
+
+	export function end(k Integer) returns Integer
+		return lo + k
+	end 'end'
+
+	export function while(k Integer) returns Integer
+		return k
+	end 'while'
+
+	export function match(k Integer) returns Integer
+		return k
+	end 'match'
+end 'Span'
+
+function main() returns ExitCode
+	let s = Span.from(40)
+	return s.end(2) as ExitCode
 end 'main'
 ```
 ```exitcode

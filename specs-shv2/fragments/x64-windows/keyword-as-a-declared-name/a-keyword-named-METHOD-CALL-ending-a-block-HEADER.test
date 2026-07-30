@@ -1,0 +1,70 @@
+// Test: a-keyword-named-METHOD-CALL-ending-a-block-HEADER
+typealias Integer = int(i64.min to i64.max)
+
+type Ops
+	export static function otherwise(n Integer) returns bool
+		return n < 3
+	end 'otherwise'
+end 'Ops'
+
+function main() returns ExitCode
+	var i = 0
+	while Ops.otherwise(i) 'loop'
+		i = i + 1
+	end 'loop'
+
+	if Ops.otherwise(i) 'lbl'
+		i = 99
+	end 'lbl'
+
+	return (i * 14) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @Ops.otherwise {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 3
+    x64.setccReg less, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Ops.otherwise
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, loop
+    x64.jmp whileexit
+  loop:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Ops.otherwise
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, lbl
+    x64.jmp critsplit
+  lbl:
+    x64.movRegImm32 rax, 99
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.imulRegRegImm32 r8, rax, 14
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

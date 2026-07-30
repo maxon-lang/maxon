@@ -1,0 +1,51 @@
+// Test: handler-case-member-spelling-a-labelled-otherwise-in-a-header
+enum Kw
+	otherwise
+	alpha
+end 'Kw'
+
+function main() returns ExitCode
+	var k = Kw.alpha
+	var i = 0
+	while k == Kw.otherwise 'loop'
+		i = i + 1
+	end 'loop'
+
+	if k == Kw.otherwise 'chk'
+		i = 9
+	end 'chk'
+
+	return (42 + i) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, loop
+    x64.jmp whileexit
+  loop:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, chk
+    x64.jmp critsplit
+  chk:
+    x64.movRegImm32 rax, 9
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, rcx
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegImm32 r8, rax, 42
+    x64.popReg rbp
+    x64.ret
+}

@@ -3483,11 +3483,12 @@ end 'tokenIsLiteralKind'
 // `opensBlockAt`/`closesBlockAt` can ever answer `true` for, and therefore exactly the kinds whose meaning
 // the keyword-as-a-NAME exclusion can suppress (`keywordIsAName` is consulted about no other).
 //
-// ⚠ **IT IS LOAD-BEARING, NOT DOCUMENTATION**: `opensBlockAt` early-returns on it, so a construct added to
-// that chain WITHOUT being added here never opens a block at all — a loud drift-guard panic on the first
-// program that nests it, rather than a silent divergence between two spellings of one list. Its second
-// reader is `parenGroupCanBeAParameterList`, which needs the same set to tell a parameter list from an
-// arbitrary parenthesized expression.
+// ⚠ **IT IS LOAD-BEARING, NOT DOCUMENTATION, AND IT IS GUARDED IN BOTH DIRECTIONS**: `opensBlockAt`
+// early-returns on it, so a construct added to that chain WITHOUT being added here never opens a block at
+// all — a loud drift-guard panic on the first program that nests it, rather than a silent divergence between
+// two spellings of one list. And a kind added HERE without an arm in that chain now hits `opensBlockAt`'s own
+// tail panic, so neither half can be extended alone. Its third reader is `parenGroupCanBeAParameterList`,
+// which needs the same set to tell a parameter list from an arbitrary parenthesized expression.
 function kindSpellsBlockStructure(kind TokenKind) returns bool
 	return kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for or kind == TokenKind.if or kind == TokenKind.else or kind == TokenKind.otherwise or kind == TokenKind.end
 end 'kindSpellsBlockStructure'
@@ -6368,7 +6369,13 @@ export type Parser
 
 		var depth = 0 as BlockDepth
 		while not self.isEof() 'body'
-			if depth == 0 and self.at(TokenKind.end) 'closesType'
+			// `closesBlockAt`, not a `TokenKind.end` test of its own — the sweep's twin of
+			// `recordScannedInterface`'s fix, and for its reason. Unreachable here today (a member always
+			// begins at `export`/`static`/`function`/`var`/`let`/`typealias`/`where`, so a method NAMED `end`
+			// is never at this loop head), which is exactly why it must not be left resting on that: the one
+			// place the "an `end` may be a NAME" rule lives is `closesBlockAt`, and a scan that spells the
+			// test itself is the next reachable panic waiting for a member form to be added.
+			if depth == 0 and self.closesBlockAt(self.pos) 'closesType'
 				self.advance()
 				self.skipOptionalLabel()
 				break
@@ -6444,11 +6451,25 @@ export type Parser
 	// block-depth counter with no matching `end` to decrement it, corrupting the scan for the rest of the
 	// file. So the whole declaration is consumed here, records NOTHING (the real parse builds
 	// `project.interfaces`, and the conformance check reads that), and lands the cursor past the closing
-	// `end`. An interface body opens no blocks, so the FIRST `end` closes it.
+	// `end`. An interface body opens no blocks, so the first `end` that is not a NAME closes it.
+	//
+	// ⚠⚠ **AND "NOT A NAME" IS THE WHOLE OF IT — asked through `closesBlockAt`, never `TokenKind.end`.** D8
+	// made a REQUIREMENT's name a declared name (`parseInterfaceMethod` reads it with `consumeNameToken`), so
+	// `function end() returns Integer` is a legal interface method — and a raw `end` test stopped the walk ON
+	// THAT NAME, returning with the cursor mid-signature. The remaining signatures then fell to the sweep's
+	// outer loop, which is exactly the corruption the paragraph above describes: each tripped the `function`
+	// arm and left `depth` one too deep, so every `depth == 0` gate — `type`, `enum`, `interface` — stopped
+	// firing for the REST OF THE FILE. MEASURED on an interface declaring `end()` plus two more requirements
+	// ahead of a `type Cell`: **`panic: requireConstructible: type Cell is being parsed right now, but the
+	// declaration sweep never recorded it`**. (With exactly ONE trailing requirement the stray `function`'s
+	// +1 happened to cancel the interface's own `end`, so the file compiled — an accident of arithmetic, and
+	// the reason this needed a THIRD requirement to show itself.) A keyword-named PARAMETER inside a
+	// requirement (`function scale(end Integer)`) is covered by the same call, through
+	// `keywordIsAName`'s declaration-name index.
 	function recordScannedInterface()
 		try self.consume(TokenKind.interface) otherwise return
 		while not self.isEof() 'body'
-			if self.at(TokenKind.end) 'closes'
+			if self.closesBlockAt(self.pos) 'closes'
 				self.advance()
 				self.skipOptionalLabel()
 				return
@@ -14778,13 +14799,21 @@ export type Parser
 	// statement. This is the one place `blockStatementEndIndex` decides an `if` chain
 	// continues, so a missed `else` under-approximates the extent — which the drift guard
 	// converts to a loud panic rather than a silent lost phi.
+	//
+	// ⚠ **AND THE `else` IT FINDS MUST NOT BE A NAME**, the same care `elseFollowsBlockEnd` — its BACKWARD
+	// twin — takes by asking `closesBlockAt` rather than testing `TokenKind.end`. `else` is a legal case name
+	// and a legal declared name (D8), so `end 'x' else gives …` spells a labelled closer followed by a match
+	// ARM named `else`. Left raw, one of the two twins knew the exclusion and the other did not — and the
+	// failure is a MIS-PREDICTED EXTENT, which is a panic rather than a compile error. I could not construct a
+	// reaching program (an arm is newline-separated from the `end` above it, and a newline breaks the
+	// adjacency this needs), so this is the asymmetry closed, not a repro fixed.
 	function elseFollowsEnd(endIndex TokenIndex) returns bool
 		var next = endIndex + 1
 		if self.kindAt(next) == TokenKind.charLiteral 'skipLabel'
 			next = next + 1
 		end 'skipLabel'
 
-		return self.kindAt(next) == TokenKind.else
+		return self.kindAt(next) == TokenKind.else and not self.keywordIsAName(next)
 	end 'elseFollowsEnd'
 
 	// Does the token at `index` open a block that a matching `end` closes?
@@ -14828,27 +14857,58 @@ export type Parser
 			return false
 		end 'notBlockStructure'
 
+		// `end` only ever CLOSES — `closesBlockAt` owns it — so it opens nothing, whatever it names. Answered
+		// HERE rather than by falling off the end of the chain below, which is what lets that tail be a loud
+		// drift panic instead of a silent `false`.
+		if kind == TokenKind.end 'closerOnly'
+			return false
+		end 'closerOnly'
+
+		// ⭐⭐ **THE KEYWORD-AS-A-NAME EXCLUSION, ONCE, AHEAD OF EVERY ARM — and it is one check rather than
+		// one per arm because the arm that FORGOT it was a reachable compiler PANIC.** Three arms spelled
+		// `not self.keywordIsAName(index)` for themselves and the fourth, `otherwise`, answered purely from
+		// its position test. But `otherwiseOpensBlock`'s caught-error binding form is `otherwise ( <ident> )
+		// <label>` — which a keyword-named METHOD CALL at the end of a block header spells character for
+		// character. `while Ops.otherwise(i) 'loop'` (D8 made `.otherwise` a legal member name) and
+		// `while k == Kw.otherwise 'loop'` (a keyword-named enum CASE member, legal since
+		// `keyword-named-case-members.md`) both opened a block nothing closed, and `assertScanAligned` took
+		// the compiler down on a correct program. It is the same shape that spec already pins for `end`
+		// (`match Kw.end 'm'` — a member plus a block label spelling a labelled closer); `otherwise` has a
+		// labelled form too, and the exclusion had not reached it.
+		//
+		// ⚠ So the exclusion is NOT an arm's business. An arm decides whether this POSITION opens a block;
+		// whether the token is block structure AT ALL is one question, asked once, that a new arm cannot
+		// fail to inherit. `closesBlockAt` is the same single check for the closing half.
+		if self.keywordIsAName(index) 'aName'
+			return false
+		end 'aName'
+
 		if kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for 'alwaysOpens'
-			return not self.keywordIsAName(index)
+			return true
 		end 'alwaysOpens'
 
 		if kind == TokenKind.if 'ifKw'
-			return self.ifBeginsStatement(index) and not self.keywordIsAName(index)
+			return self.ifBeginsStatement(index)
 		end 'ifKw'
 
 		if kind == TokenKind.otherwise 'tryBlock'
 			return self.otherwiseOpensBlock(index)
 		end 'tryBlock'
 
-		if kind != TokenKind.else 'notElse'
-			return false
-		end 'notElse'
+		if kind == TokenKind.else 'elseKw'
+			// An `else if` opens NOTHING of its own: the else branch simply IS a nested `if` statement, and
+			// that `if` is the opener whose `end` closes it.
+			if self.kindAt(index + 1) == TokenKind.if 'elseIf'
+				return false
+			end 'elseIf'
 
-		if self.kindAt(index + 1) == TokenKind.if or self.keywordIsAName(index) 'notBlockElse'
-			return false
-		end 'notBlockElse'
+			return self.elseFollowsBlockEnd(index)
+		end 'elseKw'
 
-		return self.elseFollowsBlockEnd(index)
+		// ⚠ **THE DRIFT GUARD `kindSpellsBlockStructure`'s HEADER PROMISES.** Every kind that set admits has
+		// an arm above, so this is unreachable — and a kind ADDED to that set without an arm here lands
+		// loudly, on the first program that spells it, rather than silently opening no block at all.
+		panic("opensBlockAt: '{kind.rawValue}' spells block structure but no arm here answers for it — a kind added to `kindSpellsBlockStructure` needs an arm here too")
 	end 'opensBlockAt'
 
 	// Does the token at `index` CLOSE a block — `opensBlockAt`'s counterpart, and its own predicate for the
@@ -14963,7 +15023,7 @@ export type Parser
 	//     program stays refused, and the rung that lifts THAT restriction is the one that must add `or`
 	//     here. `keyword-named-case-members.md` pins the payload arms AND the parenthesized-condition
 	//     shapes that forbid the wider set.
-	//   • **A LABEL — the `:` LOOKAHEAD.** `weigh(i, for: 3)`, `Self{end: 3}`. See the arm below.
+	//   • **A LABEL — the `:` LOOKAHEAD.** `weigh(i, for: 3)`. See the arm below.
 	//   • **A MEMBER NAME — the LOOKBEHIND.** `Kw.end`, `Kw.while`, `obj.end()`. A `.` is followed by a
 	//     member name and by nothing else in this grammar (Maxon has no `..` range and a float literal
 	//     is one token), so a keyword whose PREVIOUS token is a `.` is a name, whatever follows it.
@@ -14993,8 +15053,10 @@ export type Parser
 		end 'matchCaseName'
 
 		// ⭐ **A LABEL — the OTHER lookahead, and it is a `:` (D8).** `weigh(i, for: 3, match: 4)` labels a
-		// keyword-named PARAMETER, and `Self{end: 3}` names a keyword-named field the same way. A `:` follows a
-		// NAME and nothing else in this grammar — no `if`/`while`/`match`/`for` header may be followed by one,
+		// keyword-named PARAMETER. (An ARGUMENT label is the only reader: a struct literal's `Self{x: 3}` keys
+		// on a FIELD name, and a field DECLARATION admits no keyword — `var end as Integer` is
+		// `E2010 Expected 'identifier' but got 'end'` — so there is no keyword-named field to label.) A `:`
+		// follows a NAME and nothing else in this grammar — no `if`/`while`/`match`/`for` header may be followed by one,
 		// and Maxon has no `?:` and no label syntax that puts a colon after a keyword — so a keyword whose next
 		// token is `:` is a name, whatever precedes it. Unexcluded, `for: 3` opened a block nothing closes and
 		// `assertScanAligned` took the compiler down on the program `keyword-as-a-declared-name.md` pins.
@@ -19958,9 +20020,16 @@ export type Parser
 	// STRUCTURE to `opensBlockAt`/`closesBlockAt`, whose verdict for those four is position-INDEPENDENT
 	// (`alwaysOpens`, and `end` closes wherever it stands). The scans run over raw tokens with no scope, so
 	// they cannot know the name is bound; accepted here, the program panics in `assertScanAligned` instead of
-	// compiling. `if`/`else`/`otherwise` need no such care and are not refused — their POSITION tests already
-	// answer no for an operand (`ifBeginsStatement`, `elseFollowsBlockEnd`, `otherwiseOpensBlock`), which is
-	// the same reason `keyword-named-case-members.md` gives for those three never having panicked.
+	// compiling. `if` and `else` need no such care and are never refused — their POSITION tests already answer
+	// no for an operand (`ifBeginsStatement`, `elseFollowsBlockEnd`).
+	//
+	// ⚠ **`otherwise` IS REFUSED IN EXACTLY ONE POSITION, AND THE DERIVATION IS WHY THAT COMES OUT RIGHT
+	// WITHOUT ANYONE KNOWING IT.** This comment used to group it with `if`/`else` as never-refused, which was
+	// FALSE: `otherwiseOpensBlock`'s labelled-handler form is `otherwise 'label'`, and a bare `otherwise` read
+	// as a WHOLE block condition is followed by that block's own label — so `while otherwise 'loop'` is
+	// refused while `acc + otherwise` compiles (both measured). Nothing had to be corrected in the CODE for
+	// that, because the code asks the scans rather than consulting a list; only the prose was wrong. **That is
+	// the argument for deriving a set: a list would have carried the same error into the behaviour.**
 	//
 	// ⭐ **THE SET IS DERIVED, NOT LISTED**: the question is exactly "would a scan read THIS token, HERE, as
 	// block structure?", so it is asked of the scans themselves. A rung that teaches them the operand-position
@@ -28672,8 +28741,20 @@ export type Parser
 	// same `immutableReceiverNameOf`. `parseCallArgs` clears it before every argument, so a one-token
 	// identifier that resolved through some OTHER primary path — one that publishes nothing — answers
 	// "writable" rather than inheriting a neighbouring argument's name.
+	//
+	// ⚠ **A BARE NAME MAY BE SPELLED WITH A KEYWORD (D8), so the one-token test asks `tokenCanBeAName`** —
+	// the LAST copy of "is this a bare name?" that still said `identifier` after D8 taught the other twelve
+	// otherwise, and the one whose asker is the resolution itself: `parseVariableReference` publishes
+	// `lastBareBindingImmutableName` for a keyword-named binding, and this gate then threw that answer away.
+	// The consequence is a MISSING E3019 — a mutation through an immutable binding accepted because of how
+	// the binding is SPELLED — which is a wrong answer, not a compile error. Widening claims nothing extra:
+	// the name still comes from the resolution, `parseCallArgs` clears it before every argument, and a
+	// keyword that resolved through some other primary path publishes nothing and still answers "writable".
+	// ⚠ Honest scope: I could not construct a program that REACHES the blame with either spelling (the
+	// identifier control does not raise E3019 either on every shape I tried), so this closes an asymmetry
+	// rather than a reproduced defect.
 	function bareArgImmutableName(valueTok Token, valueStart TokenIndex) returns ByteArray
-		if valueTok.kind != TokenKind.identifier or self.pos != valueStart + 1 'notABareName'
+		if not tokenCanBeAName(valueTok) or self.pos != valueStart + 1 'notABareName'
 			return EmptySourceText
 		end 'notABareName'
 
