@@ -2337,6 +2337,16 @@ end 'buildArrByteAt'
 // ⭐ **`addressesBytes` — WHICH UNIT THE OFFSET IS IN.** A byte member's limit is `limit · element_size`; an
 // element member's is the limit itself. The two coincide at element size 1 and at no other size, which is the
 // whole reason `setByte` is not `set`'s alias.
+//
+// ⚠⚠ **ALL THREE CALLERS NOW SEE ONLY TRIVIAL-ELEMENT RECEIVERS, BY FRONT-END RULE, AND THIS GUARD IS WHERE
+// THAT IS WRITTEN DOWN BECAUSE IT IS WHAT THEY SHARE.** ⚖ Two user rulings of 2026-07-30, both enforced in
+// `Parser`: a MANAGED element may not reach `set` (**E3109**, `requireBufferSetOwnsWhatItStores` — the staging
+// region owns nothing), nor `setByte`/`byteAt` (**E3110**, `requireBufferBytesAreNotAPointer` — a managed
+// element is a POINTER, so byte access reads or corrupts an address). Both were MEASURED reachable through
+// this guard before they were refused: `setByte` at exit 101, and `byteAt` returning NONZERO address bytes as
+// data, silently. ⚠ Nothing here relies on either rule — the guard is a bounds test and is correct for any
+// element — but a future member added to `addressesBytes: true` inherits the hazard and not the refusal,
+// which is why the pointer-versus-data fact is stated at the guard and not only at the two gates.
 function emitBufferAccessGuard(module StdModule, func IrFunction, block IrBlock, checkHigh IrBlock, bad IrBlock, ok IrBlock, arr ValueId, offset ValueId, isWrite bool, addressesBytes bool, ids ValueMinter)
 	// A BlockId rather than a rebound block handle: threading an `IrBlock` through a reassigned `var` trips
 	// the struct-aliasing policy (E3078), and a terminator names an id anyway.

@@ -761,6 +761,14 @@ export union ParseError implements Error
 	// a refusal rather than a fix, and `ArrayRuntime.ArrMemSetName` for the five operations whose reliance
 	// on `[length, capacity)` reading ZERO is what makes the alternative expensive.
 	bufferSetManagedElement(elementType String, line LineNumber, column ColumnNumber)
+	// ⭐ RAW BYTE ACCESS — `arr.managed.setByte(o, value:)` / `arr.managed.byteAt(o)` — on a MANAGED element.
+	// Renders as **E3110**, positioned at the method token, naming both the MEMBER (the two share a message,
+	// so it must say which one was written) and the element. ⚠ **A DIFFERENT REASON FROM THE ARM ABOVE, AND
+	// THE TWO MUST NOT BE COLLAPSED even though one predicate answers both**: `set`'s is about OWNERSHIP of a
+	// staged element and therefore has a harmless half; this one is about the element's REPRESENTATION — a
+	// managed element is a POINTER, so these members address the bytes of an ADDRESS at EVERY offset,
+	// published or not. There is no bound that rescues it and no other spelling that does the same thing.
+	bufferByteAccessManagedElement(member String, elementType String, line LineNumber, column ColumnNumber)
 	// ⭐ A LABELLED CONTROL-FLOW BLOCK WITH NO STATEMENTS IN IT — `if c 'x' end 'x'`, and the same for
 	// `else`, `while`, `for` and a block-form `otherwise` handler. Renders as **E3082**, positioned at
 	// the closing `end` (which is where the missing statements would have gone) and naming the block's
@@ -25599,6 +25607,7 @@ export type Parser
 		// `length · element_size` and it throws `invalidByteRange`, both of which live in one place with the
 		// setter's (`ArrayRuntime.emitByteRangeGuard`).
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryByteAtMethod) 'byteAt'
+			try self.requireBufferBytesAreNotAPointer(giid, methodTok: methodTok)
 			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ArrByteAtName, args: pairArgs(arr, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'byteAt'
@@ -25709,6 +25718,7 @@ export type Parser
 			return self.emitRuntimeCall(ArrSetLengthName, args: pairArgs(arr, second: newLength), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'setLength'
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
+			try self.requireBufferBytesAreNotAPointer(giid, methodTok: methodTok)
 			// The RECEIVER is argument 0, so the two-int list's array is prepended to rather than rebuilt —
 			// the arg-list protocol stays in its one home and the receiver is added where it belongs.
 			var args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryOffsetParamName, secondParam: ManagedMemoryValueParamName, methodTok: methodTok)
@@ -25990,6 +26000,38 @@ export type Parser
 
 		throw ParseError.bufferSetManagedElement(self.signatures.arrayElementDisplayName(giid), line: methodTok.line, column: methodTok.column)
 	end 'requireBufferSetOwnsWhatItStores'
+
+	// ⭐⭐ **A MANAGED ELEMENT'S BYTES ARE A POINTER, NOT DATA, SO RAW BYTE ACCESS IS REFUSED (E3110, R4.6
+	// review).** ⚖ USER RULING, 2026-07-30. `setByte` writes into a live heap ADDRESS — corruption in place,
+	// after which the element it named is unreachable and unreleasable (MEASURED: exit **101** writing offset
+	// 0 of an `Array with String`). `byteAt` READS one and hands the fragment back as though it were a value
+	// (MEASURED: returned NONZERO for offsets 0 and 1 of a live `String` pointer) — a silent wrong answer, and
+	// an address disclosure.
+	//
+	// ⚠⚠ **`byteAt` IS REFUSED ALONGSIDE `setByte`, NOT AFTER IT, AND THAT IS THE WHOLE POINT OF DOING BOTH
+	// AT ONCE.** It returns a value: it corrupts nothing, trips no leak gate, and raises no error, so it is
+	// exactly the half that stays green forever if only the writer is fixed. The reader was found only
+	// because the writer's fix prompted someone to ask what its dual did.
+	//
+	// ⚠ **IT SHARES `requireBufferSetOwnsWhatItStores`'s PREDICATE AND MUST NOT SHARE ITS MESSAGE.** The
+	// question ("is this element managed?") is one fact and is asked once, through
+	// `signatures.arrayElementIsManaged`. The ANSWER's consequence is two different facts: `set` is refused
+	// for OWNERSHIP and only past the published length, so it has a harmless half and an exact replacement
+	// (`arr.set(i, value:)`) the message names; these two are refused for REPRESENTATION, at every offset,
+	// with no replacement — byte access to a pointer is not something a correct program wants. Folding the
+	// two messages would put a rationale on one refusal that is true only of the other, which is the failure
+	// this review already corrected once on `emitBufferAccessGuard`'s `isWrite`.
+	//
+	// ⚠ TRIVIAL elements are untouched, and that is the load-bearing half of the rule rather than an
+	// exemption: `__ManagedMemory.create` can only ever yield a trivial element, so string building and the
+	// NUL terminator `stdlib/File.maxon` writes at the length boundary go through here unchanged.
+	function requireBufferBytesAreNotAPointer(giid GenericInstanceId, methodTok Token) throws ParseError
+		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+			return
+		end 'trivial'
+
+		throw ParseError.bufferByteAccessManagedElement(String.from(methodTok.value), elementType: self.signatures.arrayElementDisplayName(giid), line: methodTok.line, column: methodTok.column)
+	end 'requireBufferBytesAreNotAPointer'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append`, routed by element KIND (P1.7 slice 3b-vi-b).** An OPAQUE-`T`
 	// element (a generic body's shared `Array with <type parameter>`) copies through the descriptor's `copyFunc@32`

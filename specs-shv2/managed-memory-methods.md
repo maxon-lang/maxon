@@ -1369,3 +1369,89 @@ end 'main'
 ```exitcode
 110
 ```
+
+### R4.6 review — a managed element's bytes are a POINTER, so raw byte access is refused
+
+⚖ **USER RULING, 2026-07-30.** `setByte` and `byteAt` address the buffer at BYTE granularity. A managed
+element does not live there as data — it lives there as a POINTER to a heap allocation — so those two members
+address the bytes of an ADDRESS. **This is not E3109's reason and the two are not collapsed:** that one is
+about OWNERSHIP of a staged element, applies only past the published length, and has an exact replacement;
+this one is about the element's REPRESENTATION, holds at EVERY offset, and has no replacement, because byte
+access to a pointer is not something a correct program wants. One predicate, two reasons, two messages.
+
+<!-- test: error.set-byte-on-a-managed-element-buffer-is-refused -->
+
+MEASURED before the refusal: this program exited **101**. The write went into a live `String`'s pointer, after
+which the element it named was unreachable and unreleasable.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("a published string, long enough to require an allocation")
+	try xs.managed.setByte(0, value: 65) otherwise return 1
+	return 42
+end 'main'
+```
+```maxoncstderr
+error E3110: <fragment>:7:17: 'managed.setByte' cannot address the bytes of an element of 'String': a managed element is stored as a POINTER, so those bytes are a heap ADDRESS, not data — reading them discloses one and writing them corrupts it. Raw byte access is for a buffer of trivial elements
+```
+
+<!-- test: error.byte-at-on-a-managed-element-buffer-is-refused -->
+
+⭐⭐ **THE HALF THAT WOULD HAVE SURVIVED A FIX TO THE WRITER ALONE, WHICH IS WHY IT HAS ITS OWN CASE.** `byteAt`
+returns a value: it corrupts nothing, leaks nothing, and raises no error, so no gate in this project could see
+it. MEASURED before the refusal: offsets 0 and 1 of a live `String` pointer both returned **NONZERO** — the
+program was handed fragments of a heap address as though they were data. A silent wrong answer, and an
+information disclosure. It was found only because the writer's fix prompted the question "what does its dual
+do?", and it is pinned separately so a future narrowing of the rule to writers cannot pass.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("a published string, long enough to require an allocation")
+	let b = try xs.managed.byteAt(0) otherwise return 1
+	return b as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3110: <fragment>:7:25: 'managed.byteAt' cannot address the bytes of an element of 'String': a managed element is stored as a POINTER, so those bytes are a heap ADDRESS, not data — reading them discloses one and writing them corrupts it. Raw byte access is for a buffer of trivial elements
+```
+
+<!-- test: raw-byte-access-still-works-for-every-trivial-element-kind -->
+
+⭐ **THE FALSE-REJECT GUARD, and the case that makes the two refusals above safe to keep.** Byte access is the
+buffer surface's whole reason for existing, and refusing it for the wrong receiver would be a far larger
+regression than the bug. Four trivial receivers in one program: a 1-byte-element `__ManagedMemory` (the
+`create`-then-`setByte`-then-`setLength` idiom, which is how `stdlib/File.maxon` writes its NUL terminator at
+the length boundary), an 8-byte WORD buffer, an `Array with Int` reached through `.managed`, and an
+`.rdata`-backed byte-string literal. `__ManagedMemory.create` can only ever yield a trivial element, so this
+is the path the corpus actually walks and none of it may move.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var total = 0
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	try mm.setByte(3, value: 65) otherwise return 3
+	try mm.setLength(4) otherwise return 4
+	total = total + (try mm.byteAt(3) otherwise return 5)
+	let words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 6
+	try words.setByte(0, value: 9) otherwise return 7
+	try words.setLength(1) otherwise return 8
+	total = total + (try words.byteAt(0) otherwise return 9)
+	var xs = IntArray.create()
+	xs.push(7)
+	try xs.managed.setByte(0, value: 3) otherwise return 10
+	total = total + (try xs.managed.byteAt(0) otherwise return 11)
+	var s = b"hello"
+	total = total + (try s.managed.byteAt(1) otherwise return 12)
+	return (total - 136) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```

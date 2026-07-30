@@ -1202,6 +1202,30 @@ E3109 SemanticBufferSetManagedElement
 	doc generic body at all (a field access through it is refused one step earlier), so every site
 	doc this rule can see has a concrete element.
 
+E3110 SemanticBufferByteAccessManagedElement
+	shv2 semanticBufferByteAccessManagedElement
+	doc The BUFFER surface's RAW BYTE access -- `arr.managed.setByte(offset, value:)` or
+	doc `arr.managed.byteAt(offset)` -- is used on an array whose ELEMENT TYPE IS MANAGED: a struct,
+	doc a `String`, a nested container, a boxed union.
+	doc A managed element does not live in the buffer as DATA. It lives there as a POINTER to a heap
+	doc allocation, so the bytes those two members address are the bytes of an ADDRESS. Reading one
+	doc hands a fragment of a heap address back to the program as though it were a value -- a silent
+	doc wrong answer, and an information disclosure. Writing one corrupts the pointer in place, and
+	doc the element it named is then unreachable and unreleasable.
+	doc This is NOT the reason E3109 refuses `managed.set`, and the two must not be collapsed. That
+	doc one is about OWNERSHIP of a staged element and applies only past the published length, so it
+	doc has a harmless half and an exact replacement. This one is about the element's REPRESENTATION,
+	doc so it holds at EVERY offset, published or staged, and there is no bound that would rescue it
+	doc and no other spelling that does the same thing. Byte access to a managed element is not a
+	doc thing a correct program wants.
+	doc `byteAt` is refused alongside `setByte` rather than after it. It returns a value, so it
+	doc corrupts nothing and trips no leak gate -- it is precisely the half that stays green forever
+	doc if only the writer is fixed.
+	doc TRIVIAL elements are untouched, which is the whole point of the rule being about the element
+	doc type: `__ManagedMemory.create` can only ever yield a trivial element, so the byte-level
+	doc staging the buffer surface exists for -- string building, a NUL terminator written at the
+	doc length boundary -- is unaffected.
+
 E3107 SemanticDuplicateTestName
 	csharp SemanticDuplicateTestName
 	doc Two `test` declarations in one file carry names that SANITIZE to the same symbol. A test has

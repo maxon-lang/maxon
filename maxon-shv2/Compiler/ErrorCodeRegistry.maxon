@@ -499,6 +499,28 @@ export enum ErrorCode
 	// generic body at all (a field access through it is refused one step earlier), so every site
 	// this rule can see has a concrete element.
 	semanticBufferSetManagedElement = "E3109"
+	// The BUFFER surface's RAW BYTE access -- `arr.managed.setByte(offset, value:)` or
+	// `arr.managed.byteAt(offset)` -- is used on an array whose ELEMENT TYPE IS MANAGED: a struct,
+	// a `String`, a nested container, a boxed union.
+	// A managed element does not live in the buffer as DATA. It lives there as a POINTER to a heap
+	// allocation, so the bytes those two members address are the bytes of an ADDRESS. Reading one
+	// hands a fragment of a heap address back to the program as though it were a value -- a silent
+	// wrong answer, and an information disclosure. Writing one corrupts the pointer in place, and
+	// the element it named is then unreachable and unreleasable.
+	// This is NOT the reason E3109 refuses `managed.set`, and the two must not be collapsed. That
+	// one is about OWNERSHIP of a staged element and applies only past the published length, so it
+	// has a harmless half and an exact replacement. This one is about the element's REPRESENTATION,
+	// so it holds at EVERY offset, published or staged, and there is no bound that would rescue it
+	// and no other spelling that does the same thing. Byte access to a managed element is not a
+	// thing a correct program wants.
+	// `byteAt` is refused alongside `setByte` rather than after it. It returns a value, so it
+	// corrupts nothing and trips no leak gate -- it is precisely the half that stays green forever
+	// if only the writer is fixed.
+	// TRIVIAL elements are untouched, which is the whole point of the rule being about the element
+	// type: `__ManagedMemory.create` can only ever yield a trivial element, so the byte-level
+	// staging the buffer surface exists for -- string building, a NUL terminator written at the
+	// length boundary -- is unaffected.
+	semanticBufferByteAccessManagedElement = "E3110"
 
 	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 	registerPressure = "E5001"

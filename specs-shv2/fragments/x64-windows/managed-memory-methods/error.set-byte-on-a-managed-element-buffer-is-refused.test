@@ -1,0 +1,12 @@
+// Test: error.set-byte-on-a-managed-element-buffer-is-refused
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("a published string, long enough to require an allocation")
+	try xs.managed.setByte(0, value: 65) otherwise return 1
+	return 42
+end 'main'
+---
+CompilerError:
+error E3110: <fragment>:7:17: 'managed.setByte' cannot address the bytes of an element of 'String': a managed element is stored as a POINTER, so those bytes are a heap ADDRESS, not data — reading them discloses one and writing them corrupts it. Raw byte access is for a buffer of trivial elements
