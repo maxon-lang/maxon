@@ -79,6 +79,24 @@ export function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns boo
 	return callee.equals(ManagedFileOpenReadName)
 end 'isThrowingManagedFileRuntimeCallee'
 
+// ⭐ **THE ERROR TYPE A FILE CALLEE THROWS — what `ProgramSignatures.throwsOf` answers with for a callee no
+// file declares (R4.1).** The throwing PREDICATE (`isThrowingManagedFileRuntimeCallee`) says THAT it throws;
+// this says WHAT, which is what types an `otherwise (e)` binding and therefore what makes `match e` see an
+// enum instead of a scalar. Kept beside the predicate deliberately: they are two halves of one fact, and
+// the drift guard in `installManagedFileRuntime` holds the predicate to the builders' stamps.
+export function managedFileRuntimeThrowsClause(callee ByteArray) returns ThrowsClauseOption
+	if not isThrowingManagedFileRuntimeCallee(callee) 'notOurs'
+		return ThrowsClauseOption.none
+	end 'notOurs'
+	return ThrowsClauseOption.some(ThrowsClause.throwing(String.from(ManagedFileErrorTypeName)))
+end 'managedFileRuntimeThrowsClause'
+
+// The optional a caller reads without paying a heap box on the common "not a file callee" answer.
+export union ThrowsClauseOption
+	none
+	some(clause ThrowsClause)
+end 'ThrowsClauseOption'
+
 // `__mf_open_read(pathRec) -> (box, flag)` — open a file for reading, or throw `__ManagedFileError`.
 //
 // ⚠ **THE PATH IS COPIED INTO A NUL-TERMINATED SCRATCH BUFFER, AND IT HAS TO BE.** `CreateFileA` takes an

@@ -2636,6 +2636,25 @@ export type ProgramSignatures
 	// and what error type does it throw? `none` (no recorded entry) is every non-throwing function and the
 	// common case. Read by the parser (to type an `(e)` binding) and by SemanticCheck (E3055/E3057).
 	export function throwsOf(callee ByteArray) returns ThrowsClause
+		// ⭐ **A COMPILER-INTERNAL RUNTIME CALLEE IS NOT IN `funcThrows`, AND CANNOT BE (R4.1).** That map is
+		// filled by the declaration sweep from DECLARED functions; `__mf_open_read` is minted at lowering and
+		// no file declares it, so the map will never hold it however the sweep is extended.
+		//
+		// ⚠ **Until this arm existed the consequence was invisible and specific:** `try … otherwise (e)` bound
+		// `e` with NO type, so `match e` fell to the scalar path and reported "enum-case patterns arrive in a
+		// later wave" — a message about a missing FEATURE, for a program whose feature is present. MEASURED
+		// against the control: the identical `match` over a USER enum's error compiles and runs, so the gap
+		// was the binding's type, not the match.
+		//
+		// Only the file family answers here, and that is a scoped statement rather than an oversight: it is
+		// the only throwing runtime family whose error a corpus case BINDS and discriminates. The array and
+		// GT families throw too (`isThrowingRuntimeCallee` names all three), but no committed case matches on
+		// their error, so giving them a clause here would be an untested claim about their ordinals. Add the
+		// arm with the case that needs it.
+		match managedFileRuntimeThrowsClause(callee) 'runtimeCallee'
+			some(clause) then return clause
+			none then break 'runtimeCallee'
+		end 'runtimeCallee'
 		return try self.funcThrows.get(callee) otherwise ThrowsClause.none
 	end 'throwsOf'
 

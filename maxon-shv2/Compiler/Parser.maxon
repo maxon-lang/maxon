@@ -2541,14 +2541,13 @@ function comparisonOpSpelling(op MaxonCmpOp) returns String
 	end 'op'
 end 'comparisonOpSpelling'
 
-// What a whole-file token walk is looking for (`Parser.fileNamesAnyToken`). A payload-free enum for
-// `IrInterface.BuiltinConformer`'s measured reason: the question is asked once per token of every file, so
-// a union with an associated value would heap-box on that path.
-enum TokenProbe
-	stringIndexProducer
-	characterSetProducer
-	managedFileProducer
-end 'TokenProbe'
+// Which compiler-owned layouts a file names — the answer `fileNamesProducerMask` walks the tokens once to
+// build, where three separate walks used to build it three times.
+typealias ProducerMask = int(0 to 7)
+let StringIndexProducerBit = 1 as ProducerMask
+let CharacterSetProducerBit = 2 as ProducerMask
+let ManagedFileProducerBit = 4 as ProducerMask
+let AllProducerBits = 7 as ProducerMask
 
 // --- Character literals ---
 //
@@ -4663,11 +4662,12 @@ export type Parser
 		// compiler down at `stringIndexLayoutOrPanic`, and a method that merely BOUND an index took it down
 		// at `managedNameDropCallee` ("neither a declared struct nor a declared enum/union"). So the probe
 		// gets its OWN complete walk of the token array, which nothing can skip.
-		let hasStringIndexProducer = self.fileNamesStringIndexProducer()
-		// The `CharacterSet` layout's own complete walk, for `hasStringIndexProducer`'s reason (P1.8 Slice D).
-		let hasCharacterSetProducer = self.fileNamesCharacterSetProducer()
-		// The `__ManagedFile` layout's own complete walk, for `hasStringIndexProducer`'s reason (R4.1).
-		let hasManagedFileProducer = self.fileNamesManagedFileProducer()
+		// ⇒ ONE such walk answers all three (`fileNamesProducerMask`, R4.1). The completeness the paragraph
+		// above demands is a property of what the walk VISITS, not of how many walks there are.
+		let producers = self.fileNamesProducerMask()
+		let hasStringIndexProducer = (producers and StringIndexProducerBit) != 0
+		let hasCharacterSetProducer = (producers and CharacterSetProducerBit) != 0
+		let hasManagedFileProducer = (producers and ManagedFileProducerBit) != 0
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -4927,9 +4927,7 @@ export type Parser
 	//
 	// A question about the whole file is therefore answered by reading the whole file. It restores the
 	// cursor, so it is invisible to the caller, and it stops at the first hit — the answer is a bool.
-	function fileNamesStringIndexProducer() returns bool
-		return self.fileNamesAnyToken(TokenProbe.stringIndexProducer)
-	end 'fileNamesStringIndexProducer'
+	// ⇒ That walk is now shared: `fileNamesProducerMask` asks this probe and the two below on one pass.
 
 	// ⭐ **DOES THIS FILE NAME A `CharacterSet` PRODUCER ANYWHERE? (P1.8 Slice D)** — the `StringIndex`
 	// twin, and it needs its OWN complete walk for the identical reason (see above): a `CharacterSet` built
@@ -4950,47 +4948,50 @@ export type Parser
 	// `CharacterSet.from(…)`) and calling a NO-ARGUMENT trim, which builds
 	// `CharacterSet.whitespacesAndNewlines()` for the caller. A trim that PASSES a set names the type
 	// anyway, so the second probe is exactly the no-argument case.
-	function fileNamesCharacterSetProducer() returns bool
-		return self.fileNamesAnyToken(TokenProbe.characterSetProducer)
-	end 'fileNamesCharacterSetProducer'
+	// ⇒ Asked on the shared walk (`fileNamesProducerMask`), not on one of its own.
 
-	// Does this file name `__ManagedFile` anywhere (R4.1)? See `atManagedFileProducer` for why the bare
-	// identifier is the whole probe.
-	function fileNamesManagedFileProducer() returns bool
-		return self.fileNamesAnyToken(TokenProbe.managedFileProducer)
-	end 'fileNamesManagedFileProducer'
+	// The `__ManagedFile` probe (R4.1) is `atManagedFileProducer`, asked on the same shared walk.
 
 	// ⭐ **ONE COMPLETE WALK OF THE TOKEN ARRAY, ASKING ONE PROBE** — the shared body of the two whole-file
 	// questions above. It restores the cursor, so it is invisible to the caller, and stops at the first hit
 	// because the answer is a bool. Written once so a third such question cannot arrive with its own idea of
 	// how to walk a file.
-	function fileNamesAnyToken(probe TokenProbe) returns bool
+	// ⭐ **ALL THREE LAYOUT PROBES IN ONE WALK (R4.1).** Each probe needs its own COMPLETE pass over the
+	// tokens — the reason is stated at the call site and it is a measured crash, not caution — but "complete"
+	// constrains WHAT is visited, not HOW MANY TIMES. Three sequential `fileNamesAnyToken` calls walked the
+	// array three times to answer three independent questions about the same tokens; this asks all three per
+	// token and walks once.
+	//
+	// ⚠ It cannot stop at the first hit the way a single-probe walk does, because a later token may be the
+	// only producer for a DIFFERENT probe — so it exits early only once all three are satisfied. That makes
+	// the worst case one full scan where it used to be three, and the best case unchanged.
+	//
+	// Returns a bitmask rather than a struct because a struct literal is constructible only inside its own
+	// type (E3076) and this needs no identity — the same reason `MutatedParamMask`/`ArgFloatMask` are masks.
+	function fileNamesProducerMask() returns ProducerMask
 		let resume = self.pos
 		self.pos = 0
-		var found = false
+		var mask = 0 as ProducerMask
 
 		while not self.isEof() 'scan'
-			if self.probeMatchesHere(probe) 'hit'
-				found = true
+			if (mask and StringIndexProducerBit) == 0 and self.atStringIndexProducer() 'si'
+				mask = (mask or StringIndexProducerBit) as ProducerMask
+			end 'si'
+			if (mask and CharacterSetProducerBit) == 0 and self.atCharacterSetProducer() 'cs'
+				mask = (mask or CharacterSetProducerBit) as ProducerMask
+			end 'cs'
+			if (mask and ManagedFileProducerBit) == 0 and self.atManagedFileProducer() 'mf'
+				mask = (mask or ManagedFileProducerBit) as ProducerMask
+			end 'mf'
+			if mask == AllProducerBits 'allFound'
 				break
-			end 'hit'
+			end 'allFound'
 			self.advance()
 		end 'scan'
 
 		self.pos = resume
-		return found
-	end 'fileNamesAnyToken'
-
-	// What `fileNamesAnyToken` is looking for at the cursor. A payload-free enum for
-	// `IrInterface.BuiltinConformer`'s measured reason — this is asked once per token of every file, and a
-	// closure or a union with an associated value would allocate on that path.
-	function probeMatchesHere(probe TokenProbe) returns bool
-		match probe 'probe'
-			stringIndexProducer then return self.atStringIndexProducer()
-			characterSetProducer then return self.atCharacterSetProducer()
-			managedFileProducer then return self.atManagedFileProducer()
-		end 'probe'
-	end 'probeMatchesHere'
+		return mask
+	end 'fileNamesProducerMask'
 
 	// A `CharacterSet` identifier, or a `.trim`/`.trimStart`/`.trimEnd` — see
 	// `fileNamesCharacterSetProducer` for why those are the two. Deliberately TOLERANT, like every sweep
@@ -20928,8 +20929,17 @@ export type Parser
 		// be legal in and no user-reachable constructor at all — its handle comes from the OS. So the
 		// location question never applies to it, and asking it first would answer a program's
 		// `__ManagedFile{_handle: 0}` by recommending `__ManagedFile.create(...)`, which does not exist.
+		// ⚠ **ANCHORED INSIDE THE BRACE, NOT AT THE TYPE NAME, AND THAT IS THE ORACLE'S CHOICE RATHER THAN
+		// THIS COMPILER'S.** `specs/managed-file.md` pins column 24 of `let f = __ManagedFile{_handle: 0}`,
+		// which is `_handle` — the first token after the `{` — where the type name is column 10. Anchoring at
+		// the type would read better to me, and that is not a reason: the spec is the acceptance criterion and
+		// a divergence needs an argument stronger than preference.
+		// The cursor sits ON the `{` here (`readStructLiteralTypeName` consumed the name and the brace is
+		// consumed by the caller), so the token after it is the one the oracle blames. An EMPTY literal
+		// anchors at the `}`, which is still the brace interior and still inside the construct.
 		if isBuiltinManagedTypeName(typeName) 'builtinManagedType'
-			throw ParseError.builtinTypeConstruction(String.from(typeName), line: anchor.line, column: anchor.column)
+			let insideBrace = self.tokenAt(self.pos + 1)
+			throw ParseError.builtinTypeConstruction(String.from(typeName), line: insideBrace.line, column: insideBrace.column)
 		end 'builtinManagedType'
 
 		if not self.namesEnclosingType(typeName) 'outsideItsOwnBody'
@@ -23053,7 +23063,7 @@ export type Parser
 		// The SAME argument rule `String.from` applies, and for the same reason stated there: any other
 		// `Array` instance would be read at ITS element stride, so the path handed to the OS would be
 		// whichever bytes fell on the stride boundaries.
-		try self.requireByteArrayValue(path, anchor: pathTok)
+		try self.requireByteArrayValue(path, subject: "{String.from(ManagedFileTypeName)}.{String.from(ManagedFileOpenReadMethod)}", anchor: pathTok)
 		try self.consume(TokenKind.rightParen)
 
 		return self.emitOwnedRuntimeResult(ManagedFileOpenReadName, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedFileNameId(), range: range)
@@ -23084,7 +23094,7 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		let bytesTok = self.current()
 		let bytes = try self.parseExpression(func, block: self.currentBlock)
-		try self.requireByteArrayValue(bytes, anchor: bytesTok)
+		try self.requireByteArrayValue(bytes, subject: "{String.from(StringBuiltinName)}.from", anchor: bytesTok)
 		try self.consume(TokenKind.rightParen)
 		return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(bytes), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 	end 'parseStringStaticCall'
@@ -23093,12 +23103,16 @@ export type Parser
 	// `.toByteArray()` both produce, and the one `__str_from_bytes` may read a byte at a time. Any other
 	// `Array` instance would be read at ITS element stride and give back a string of whichever bytes
 	// happened to fall on the byte boundaries: a silent wrong answer, so it is refused at the argument.
-	function requireByteArrayValue(value ValueId, anchor Token) throws ParseError
+	// ⚠ **THE SUBJECT IS A PARAMETER (R4.1), and it has to be.** This rule had ONE caller and named it in the
+	// message as a literal; `__ManagedFile.openRead(path)` is now a second caller with the same rule and a
+	// different name, and inheriting the old literal would have reported `String.from` about a call the
+	// author never wrote — a diagnostic naming the wrong function is worse than a vague one.
+	function requireByteArrayValue(value ValueId, subject String, anchor Token) throws ParseError
 		if self.tagOf(value) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(value)) and self.signatures.arrayElementSize(self.valueNameId(value)) == ByteStringElementSize 'isByteArray'
 			return
 		end 'isByteArray'
 
-		throw ParseError.builtinOperandType("{String.from(StringBuiltinName)}.from", required: "Array with Byte", got: self.giveTypeName(self.tagOf(value), aggregateName: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))), line: anchor.line, column: anchor.column)
+		throw ParseError.builtinOperandType(subject, required: "Array with Byte", got: self.giveTypeName(self.tagOf(value), aggregateName: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))), line: anchor.line, column: anchor.column)
 	end 'requireByteArrayValue'
 
 	// ⭐ **BUILD ONE PREDEFINED SET: its explicit members into a fresh `Set with Character`, then the box.**

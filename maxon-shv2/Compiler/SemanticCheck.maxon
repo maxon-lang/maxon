@@ -1336,7 +1336,10 @@ end 'functionTypeDoorSite'
 // drags in, not a subprocess-specific op. Bringing them in is the same piece of work as the async op kinds
 // and is not bolted on here; nothing this rung makes reachable calls them on another target.
 export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
-	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee)
+	// R4.1's file-IO entries join the clock and sleep ones: `osFileOpenRead` lowers only on x64-windows
+	// (the ruling of 2026-07-30 scoped file IO host-only), and the three other backends panic rather than
+	// fake it — so the program must be refused HERE, at the call's own span, before it reaches one.
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote
