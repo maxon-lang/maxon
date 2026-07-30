@@ -8518,7 +8518,11 @@ export type Parser
 	// is what is wanted; false for an int alias and for expression position (`let x = u16.max`),
 	// where a float bound has no integer value to carry and is rejected.
 	function parseTypeQualifiedBound(isFloat bool) returns ParsedRangeBound throws ParseError
-		let typeTok = try self.consume(TokenKind.identifier)
+		// Read through `consumeTypeBaseToken` for the reason every other type-named base is (D9): this is the
+		// LAST-RESORT arm of `parseDottedPrimary`, so it is where a `Self.<member>` that is neither an enum
+		// case nor a static call lands — and it must report what the same program spelled `<TypeName>.<member>`
+		// reports ("expected a sized numeric type … but got 'Box'"), not an E2010 about the keyword.
+		let typeTok = try self.consumeTypeBaseToken()
 		try self.consume(TokenKind.dot)
 		let fieldTok = try self.consume(TokenKind.identifier)
 		let wantMax = try self.boundFieldIsMax(fieldTok)
@@ -10153,17 +10157,25 @@ export type Parser
 	//
 	// The kind is read off `enclosingTypeIsEnum` rather than the signature index for that field's stated
 	// reason: this routine answers in the tolerant SWEEP too, where the enum being declared is not folded.
+	function enclosingSelfType(anchor Token) returns MaxonType throws ParseError
+		let id = self.artifact.typeNames.intern(try self.requireEnclosingTypeName(anchor))
+		return MaxonType.named(id) if self.enclosingTypeIsEnum else MaxonType.structRef(id)
+	end 'enclosingSelfType'
+
+	// **THE NAME `Self` DENOTES** — the enclosing declaration's own. One reader for both positions the
+	// keyword stands in: the TYPE position above, and the EXPRESSION position (`typeBaseTokenAt`, D9). They
+	// must not disagree, since `returns Self` and `Self.create(…)` in one body name one type.
+	// `anchor` is only the token a diagnostic points at.
 	//
 	// A `Self` at FILE SCOPE has no type to refer to. It is a positioned `unsupported` rather than a
 	// panic because the source can perfectly well write one, and it is not `unexpectedToken` because
 	// `Self` is a type reference — it simply names nothing here.
-	function enclosingSelfType(anchor Token) returns MaxonType throws ParseError
+	function requireEnclosingTypeName(anchor Token) returns ByteArray throws ParseError
 		if self.enclosingType.isEmpty() 'outsideAType'
 			throw ParseError.unsupported("'{anchor.kind.rawValue}' outside a type declaration (`Self` names the type whose body encloses it, and there is none here)", line: anchor.line, column: anchor.column)
 		end 'outsideAType'
-		let id = self.artifact.typeNames.intern(self.enclosingType)
-		return MaxonType.named(id) if self.enclosingTypeIsEnum else MaxonType.structRef(id)
-	end 'enclosingSelfType'
+		return self.enclosingType
+	end 'requireEnclosingTypeName'
 
 	// Does `name` name the type currently being declared? False at file scope, where there is no
 	// enclosing type for any name to be — which is what makes the `isEmpty` test load-bearing
@@ -12142,7 +12154,8 @@ export type Parser
 	end 'parseTryCallTarget'
 
 	// The PRIMARY a `try` target's postfix chain starts from — a free call `f(…)`, a method/qualified call
-	// `obj.m(…)` / `Type.m(…)`, a `self.m(…)`, a field-chain call, or an array / byte-string LITERAL receiver.
+	// `obj.m(…)` / `Type.m(…)` / `Self.m(…)`, a `self.m(…)`, a field-chain call, or an array / byte-string
+	// LITERAL receiver.
 	// Split from `parseTryCallTarget` so the postfix continuation is applied to EVERY form in one place rather
 	// than per arm (it was applied to the two literal arms only, which is how the free-call arm came to stop
 	// at the first callee — OPEN #107).
@@ -12171,6 +12184,13 @@ export type Parser
 				return try self.parseDottedPrimary(func, resultUsed: false)
 			end 'dotted'
 		end 'named'
+		// `try Self.check(v) otherwise …` — the `Self.` spelling of the qualified static the arm above serves
+		// (D9). `Self` is its own keyword token, so it cannot ride that arm; and it opens the DOTTED form ONLY,
+		// which is why it is not simply folded into it — there is no `Self(…)` free call for the sibling
+		// sub-arm to serve. `parseDottedPrimary` resolves the base, so nothing here learns what `Self` means.
+		if self.at(TokenKind.selfType) and self.peekKind() == TokenKind.dot 'selfDottedTarget'
+			return try self.parseDottedPrimary(func, resultUsed: false)
+		end 'selfDottedTarget'
 		// `try [10,20,30].get(0) otherwise …` — a throwing method on an array LITERAL (P1.7 slice 1), and its
 		// exact byte-string analogue `try b"…".get(0)` (P1.7 slice 2). Each parses to an owned array temp that
 		// the postfix chain applies its method to; the temp is a FORK temporary, dropped once per edge by
@@ -20708,12 +20728,17 @@ export type Parser
 			return try self.parseClosureExpression(func)
 		end 'closureLiteral'
 
-		// `Self{…}` — a struct literal naming the enclosing type. `Self` is its own KEYWORD token, not
-		// an identifier, so it cannot ride the identifier arm below; and `{` is what tells it from
-		// `Self` in a type position, which never reaches an expression at all.
-		if self.at(TokenKind.selfType) 'selfLiteral'
+		// `Self{…}` — a struct literal naming the enclosing type — and `Self.<member>`, which is every DOTTED
+		// form the enclosing type's own NAME has (D9). `Self` is its own KEYWORD token, not an identifier, so
+		// it cannot ride the identifier arm below; but the `{`-vs-`.` lookahead that splits the two here is
+		// the SAME split that arm makes for a name, and it routes to the SAME two routines. (`Self` in a TYPE
+		// position never reaches an expression at all.)
+		if self.at(TokenKind.selfType) 'selfPrimary'
+			if self.peekKind() == TokenKind.dot 'selfDotted'
+				return try self.parseDottedPrimary(func, resultUsed: true)
+			end 'selfDotted'
 			return try self.parseStructLiteral(func)
-		end 'selfLiteral'
+		end 'selfPrimary'
 
 		// `self.x` / `self.m(…)` — the RECEIVER, which is a different keyword from `Self` the TYPE
 		// (`self` vs `selfType`; the lexer splits them, so nothing here has to). Its own arm for the
@@ -21603,9 +21628,10 @@ export type Parser
 	// borrowed struct/union value has no `clone`, so moving one into durable storage is refused
 	// (`moveInPayload` — the transitive cross-call consume the call-graph fixpoint owns).
 	function parseStructLiteral(func IrFunction) returns ValueId throws ParseError
-		let typeTok = self.current()
-		let typeName = try self.readStructLiteralTypeName()
-		let layout = try self.requireConstructible(typeName, anchor: typeTok)
+		// `Self{…}` and `Point{…}` arrive as ONE token here — `typeBaseTokenAt` has already turned the keyword
+		// into the name it denotes — so the literal's own reader knows nothing about `Self`.
+		let typeTok = try self.consumeTypeBaseToken()
+		let layout = try self.requireConstructible(typeTok.value, anchor: typeTok)
 
 		try self.consume(TokenKind.leftBrace)
 		// Parallel to the LAYOUT, not to the source: `fieldValues[i]` is the value for the field the
@@ -21636,20 +21662,6 @@ export type Parser
 		return try self.emitStructLiteral(layout, fieldValues: fieldValues, fieldBareLocal: fieldBareLocal, anchor: typeTok, range: SourceRange.between(typeTok, last: rbraceTok))
 	end 'parseStructLiteral'
 
-	// The type a struct literal names: `Self` (the enclosing type) or a bare identifier. Consumes it.
-	function readStructLiteralTypeName() returns ByteArray throws ParseError
-		if self.at(TokenKind.selfType) 'selfLiteral'
-			let tok = try self.consume(TokenKind.selfType)
-			if self.enclosingType.isEmpty() 'outsideAType'
-				throw ParseError.unsupported("'{tok.kind.rawValue}' outside a type declaration (`Self` names the type whose body encloses it, and there is none here)", line: tok.line, column: tok.column)
-			end 'outsideAType'
-			return self.enclosingType
-		end 'selfLiteral'
-
-		let nameTok = try self.consume(TokenKind.identifier)
-		return nameTok.value
-	end 'readStructLiteralTypeName'
-
 	// ⭐ **E3076 — CONSTRUCTION IS RESTRICTED TO THE TYPE'S OWN BODY.** `Self{…}` and `Point{…}`
 	// inside `type Point`; nothing anywhere else. An external caller goes through
 	// `Point.create(…)`.
@@ -21677,7 +21689,7 @@ export type Parser
 		// which is `_handle` — the first token after the `{` — where the type name is column 10. Anchoring at
 		// the type would read better to me, and that is not a reason: the spec is the acceptance criterion and
 		// a divergence needs an argument stronger than preference.
-		// The cursor sits ON the `{` here (`readStructLiteralTypeName` consumed the name and the brace is
+		// The cursor sits ON the `{` here (`consumeTypeBaseToken` consumed the name and the brace is
 		// consumed by the caller), so the token after it is the one the oracle blames. An EMPTY literal
 		// anchors at the `}`, which is still the brace interior and still inside the construct.
 		if isBuiltinManagedTypeName(typeName) 'builtinManagedType'
@@ -21689,13 +21701,28 @@ export type Parser
 			throw ParseError.constructorRestricted(String.from(typeName), line: anchor.line, column: anchor.column)
 		end 'outsideItsOwnBody'
 
+		// ⛔ **AN `enum`/`union` HAS NO FIELDS TO WRITE, SO A STRUCT LITERAL CANNOT CONSTRUCT ONE (D9)** — the
+		// exact twin of `enclosingLayout`'s enum guard, one door over, and reached the same way: the check
+		// above has just established the name IS the enclosing declaration, which for an enum body means the
+		// lookup below asks the STRUCT registry for a name only the ENUM registry holds. It took the compiler
+		// down at the panic below while blaming the declaration sweep for a disagreement that never happened —
+		// `Self{}` and `Toggle{}` inside `enum Toggle`'s own body, both of them.
+		//
+		// A positioned refusal, because the source can perfectly well write it (⚠ **and BOTH reference
+		// compilers CRASH on it** — the bootstrap with an unhandled `IrEnumType`→`IrStructType` cast inside
+		// `ParseStructLiteral`, reported as an internal `E9001`; so there is no oracle spelling to match here
+		// and the message names the cure instead).
+		if self.enclosingTypeIsEnum 'enumBody'
+			throw ParseError.unsupported("a struct literal naming `enum`/`union` `{String.from(typeName)}` — an enum/union declares no fields to write; a value of it is a CASE (`{String.from(typeName)}.<case>`, or `Self.<case>` from inside its own body)", line: anchor.line, column: anchor.column)
+		end 'enumBody'
+
 		match self.signatures.structOf(typeName) 'declared'
 			declared(layout) then return layout
-			// Unreachable: `namesEnclosingType` just held, so this IS the type currently being
-			// declared — and the declaration sweep recorded every `type` in the program before this
-			// file's parse began. A miss means the sweep and the real parse disagree about what a
-			// type declaration is, which is the drift `ProgramSignatures.declaredOutcome` panics on
-			// for a constant, stated here for a type.
+			// Unreachable: `namesEnclosingType` held and the enclosing declaration is a `type`, so this IS
+			// the struct currently being declared — and the declaration sweep recorded every `type` in the
+			// program before this file's parse began. A miss means the sweep and the real parse disagree
+			// about what a type declaration is, which is the drift `ProgramSignatures.declaredOutcome`
+			// panics on for a constant, stated here for a type.
 			undeclared then panic("requireConstructible: `type {String.from(typeName)}` is being parsed right now, but the declaration sweep never recorded it — `recordScannedType` and `parseTypeDeclaration` disagree about what opens a type declaration")
 		end 'declared'
 	end 'requireConstructible'
@@ -22085,6 +22112,19 @@ export type Parser
 			return try self.parseFieldAccess()
 		end 'capturedFieldAccess'
 
+		// ⭐ **EVERY FORM BELOW NAMES A TYPE, AND ITS BASE IS READ THROUGH `typeBaseTokenAt` — WHICH IS WHERE
+		// `Self` BECOMES THE TYPE IT DENOTES (D9).** So `Self.off` inside `enum Toggle` takes the enum-case arm
+		// `Toggle.off` takes, and `Self.make(v)` inside `type Box` takes the static-call arm `Box.make(v)`
+		// takes. There is deliberately no `Self` arm anywhere: the two spellings converge at the ONE token a
+		// type-named form reads its base from, so an arm added here serves both without knowing that.
+		//
+		// ⚠ **THE VALUE-BASED ARMS ABOVE DELIBERATELY READ THE RAW TOKEN, AND THAT ORDER IS THE RULE THAT
+		// `Self` IS A TYPE AND NEVER A VALUE.** A local binding named after the enclosing type (`let Box = 1`
+		// inside `type Box`) shadows `Box.` — that is the "a value outranks a type name" rule above — and must
+		// NOT capture `Self.`, which cannot mean a local under any spelling. Resolving the base before those
+		// arms would hand `Self.make(v)` to `parseMethodCall` on that binding.
+		let baseTok = try self.typeBaseTokenAt(self.pos)
+
 		// `Color.red` and `Move.walk(Direction.east)` — an ENUM CASE reference or a UNION CONSTRUCT,
 		// the base being a declared enum/union. Asked AFTER the scope-based forms above (a bound base
 		// outranks a type name, exactly as `u16.max` is the last resort) but BEFORE the qualified STATIC
@@ -22096,10 +22136,10 @@ export type Parser
 		// dotted primary, and `enumOf` would box a throwaway `DeclaredEnum.undeclared` for every
 		// `Point.create(...)` (scale-test charged exactly that — see `ProgramSignatures.containsEnum`).
 		// The `enumOf` inside the guard runs only for a real enum reference, which is rare.
-		if self.signatures.containsEnum(self.current().value) 'enumRef'
-			match self.signatures.enumOf(self.current().value) 'declared'
+		if self.signatures.containsEnum(baseTok.value) 'enumRef'
+			match self.signatures.enumOf(baseTok.value) 'declared'
 				declared(layout) then return try self.parseEnumLiteral(func, layout: layout)
-				undeclared then panic("parseDottedPrimary: containsEnum answered yes but enumOf answered undeclared — the two read the same enum registry")
+				undeclared then panic("parseDottedPrimary: containsEnum answered yes but enumOf answered undeclared — the two read the same enum registry, under the same key")
 			end 'declared'
 		end 'enumRef'
 
@@ -22120,7 +22160,8 @@ export type Parser
 	// (a `named` op-type would hit `maxonTypeToStdType`'s panic). Both collapse to i64, so the value's
 	// register class and its lowering agree — see `emitEnumTagLiteral`.
 	function parseEnumLiteral(func IrFunction, layout EnumLayout) returns ValueId throws ParseError
-		let typeTok = try self.consume(TokenKind.identifier)
+		// `Self.off` reaches here as `Toggle.off` (D9) — see `typeBaseTokenAt`.
+		let typeTok = try self.consumeTypeBaseToken()
 		try self.consume(TokenKind.dot)
 
 		let caseTok = try self.consumeNameToken(NamePosition.enumCase)
@@ -22560,7 +22601,9 @@ export type Parser
 	// the receiver, which is not this routine's doing and is not restated here — see the receiver
 	// prepend in `parseCallNamed`, the one place that causes it, for both callers.)
 	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
-		let typeTok = try self.consume(TokenKind.identifier)
+		// `Self.create(…)` reaches here as `Point.create(…)` — `consumeTypeBaseToken` resolved the keyword, so
+		// the callee mangling, the alias interceptions and the E3062 use hook below all see one spelling (D9).
+		let typeTok = try self.consumeTypeBaseToken()
 		// A `Type.method()` base NAMES a type, so it is a USE for the E3062 check — and it is the only
 		// place many generic-instance aliases are ever named (`IntArray.create()`). It never reaches
 		// `parseTypeReference`, which is why this second hook exists at all (`recordTypeNameUse`).
@@ -27336,8 +27379,9 @@ export type Parser
 			panic("enclosingLayout: asked for the enclosing type's layout at {anchor.line}:{anchor.column}, but the cursor is at file scope — every caller is inside an instance method, whose body only `parseTypeDeclaration` reaches")
 		end 'noEnclosingType'
 
-		// ⛔ **AN `enum`/`union` HAS NO LAYOUT TO ASK FOR (D1)** — and this is the ONE door that has to say
-		// so, because both spellings of a receiver field access come through it (`parseExplicitSelfFieldRead`
+		// ⛔ **AN `enum`/`union` HAS NO LAYOUT TO ASK FOR (D1)** — and this is the one door the RECEIVER-FIELD
+		// family has to say so at, because both spellings of a receiver field access come through it
+		// (`parseExplicitSelfFieldRead`
 		// and `parseExplicitSelfFieldAssignment`; the bare-name spellings cannot arrive, since `parseFunction`
 		// declares no self-field aliases for an enum). Without it, `self.reason` inside a `union` method — the
 		// first thing a reader tries on a payload-bearing case — reached the `undeclared` panic below and took
@@ -31635,6 +31679,55 @@ export type Parser
 		self.advance()
 		return tok
 	end 'consumeNameToken'
+
+	// ⭐⭐ **THE TOKEN NAMING A TYPE AT `index`, WITH `Self` ALREADY RESOLVED TO THE NAME IT DENOTES (D9)** —
+	// `consumeNameToken`'s sibling for the other half of a dotted expression: that one reads the MEMBER, this
+	// one reads the BASE. It is the ONE place the `Self` keyword becomes the enclosing declaration's own name
+	// in an expression, and it is a token REWRITE rather than a flag every reader would have to test.
+	//
+	// ⭐ **THAT IS WHY THERE IS NO `Self` DISPATCHER.** `Self.off` inside `enum Toggle` IS `Toggle.off` and
+	// `Self.make(v)` inside `type Box` IS `Box.make(v)`, so the two spellings converge HERE — at the single
+	// token every type-named form reads its base through — and every arm downstream (`parseDottedPrimary`'s
+	// enum-case and static-call split, `parseQualifiedCall`'s callee mangling, `parseEnumLiteral`, the struct
+	// literal, the type-qualified bound) answers for both without knowing the keyword exists. Before this,
+	// `Self` in an expression could be exactly ONE thing — `Self{…}` — so `Self.` fell off that expectation
+	// and surfaced as `E2010 Expected '{' but got '.'` in a `type` body and as a `requireConstructible`
+	// PANIC in an enum's.
+	//
+	// The rewritten token keeps the `Self` token's line, column and source SPAN, so a diagnostic still points
+	// at what the author wrote while NAMING the type it means — which is also what the reference bootstrap
+	// reports (measured: `Self.nope` inside `type Box` is *"'Box' is a type and cannot be used directly as a
+	// value"*, anchored at the `Self`). It is `identifier`-kinded for `memberNameTokenAt`'s reason: the token
+	// is a NAME now, and no later reader may re-decide it was a keyword.
+	//
+	// ⚠ **IT MOVES NO CURSOR**, because the two askers need different things from it: `parseDottedPrimary`
+	// PEEKS to pick an arm, and the arm it picks then consumes the base itself.
+	function typeBaseTokenAt(index TokenIndex) returns Token throws ParseError
+		let tok = self.tokenAt(index)
+		if tok.kind == TokenKind.identifier 'plainTypeName'
+			return tok
+		end 'plainTypeName'
+
+		// Anything else is the mismatch `consume(TokenKind.identifier)` reported before this reader existed,
+		// on the same token and in the same words — a base position admits a type NAME and the one keyword
+		// that stands for one, and nothing else.
+		if tok.kind != TokenKind.selfType 'notATypeName'
+			throw ParseError.unexpectedToken(TokenKind.identifier.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column)
+		end 'notATypeName'
+
+		// The name is bound before the call rather than passed inline: the bootstrap cannot lower a `try`
+		// expression in this argument position (`E9001 … not in valueMap; assigning to '__arg_pin_7'`).
+		let denoted = try self.requireEnclosingTypeName(tok)
+		return Token.create(TokenKind.identifier, line: tok.line, column: tok.column, value: denoted, startByte: tok.startByte, endByte: tok.endByte)
+	end 'typeBaseTokenAt'
+
+	// The type-naming token at the cursor, consumed — `typeBaseTokenAt` plus the advance, split for the
+	// reason `consumeMemberNameToken` is split from `memberNameTokenAt`.
+	function consumeTypeBaseToken() returns Token throws ParseError
+		let tok = try self.typeBaseTokenAt(self.pos)
+		self.advance()
+		return tok
+	end 'consumeTypeBaseToken'
 
 	// Advance the cursor past any newlines — `indexPastNewlines` applied to the cursor, so the MOVER and the
 	// LOOKAHEAD read one definition of "which tokens are layout" rather than two copies of it. Two copies

@@ -1,0 +1,58 @@
+// Test: enum-case-name-through-Self
+enum Toggle
+	off
+	on
+
+	export function flipped() returns Toggle
+		if self == Self.off 'isOff'
+			return Self.on
+		end 'isOff'
+		return Self.off
+	end 'flipped'
+end 'Toggle'
+
+function main() returns ExitCode
+	let t = Toggle.off
+	if t.flipped() == Toggle.on 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @Toggle.flipped {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, isOff
+    arm64.b ifcont
+  isOff:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl Toggle.flipped
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

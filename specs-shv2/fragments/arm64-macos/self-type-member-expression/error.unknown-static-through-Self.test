@@ -1,0 +1,21 @@
+// Test: error.unknown-static-through-Self
+typealias Num = int(0 to 1000)
+
+type Gate
+	export var n as Num
+
+	export static function make(v Num) returns Gate
+		return Self{n: v}
+	end 'make'
+
+	export function bad() returns Num
+		return Self.nope()
+	end 'bad'
+end 'Gate'
+
+function main() returns ExitCode
+	return Gate.make(0).n
+end 'main'
+---
+CompilerError:
+error E3004: <fragment>:12:10: call to undefined function 'Gate.nope'
