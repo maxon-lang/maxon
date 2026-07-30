@@ -21818,6 +21818,13 @@ export type Parser
 			return try self.parseCharacterSetStaticCall(func, typeTok: typeTok)
 		end 'characterSetStatic'
 
+		// `__ManagedFile.openRead(path)` — the compiler-owned handle type's statics (R4.1). Intercepted here
+		// for `CharacterSet`'s reason: the type has a registered LAYOUT but no `type` declaration and no user
+		// methods, so the mangled `__ManagedFile.openRead` below would name a callee no file declares.
+		if typeTok.value.equals(ManagedFileTypeName) 'managedFileStatic'
+			return try self.parseManagedFileStaticCall(func, typeTok: typeTok)
+		end 'managedFileStatic'
+
 		// `String.from(bytes)` — the one exported `String` static (P1.8 Slice E). Intercepted here for
 		// `CharacterSet`'s reason and not for a new one: `String` is a BUILTIN with no `type` declaration
 		// behind it, so the mangled `String.from` below would name a callee no file declares (E3004), and
@@ -23015,6 +23022,43 @@ export type Parser
 		throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` static '{String.from(methodTok.value)}' — shv2 provides the eleven predefined sets and `from(chars)`", line: methodTok.line, column: methodTok.column)
 	end 'parseCharacterSetStaticCall'
 
+	// ⭐ **`__ManagedFile.openRead(path)` — THE ONE STATIC THIS RUNG DELIVERS (R4.1).**
+	//
+	// The other four the corpus uses (`openWrite`, `exists`, `delete`, `stat`) are R4.2's, and each is
+	// REFUSED BY NAME here rather than left to fall through: falling through would mangle
+	// `__ManagedFile.exists` into a callee no file declares and surface as E3004 against a name the author
+	// did write and the language does have — the same "reject positioned, do not mangle" argument
+	// `parseStringStaticCall` makes two functions down.
+	//
+	// ⚠ The result is a MANAGED box (`__mm_alloc`'d by `__mf_open_read`), so it goes through
+	// `emitOwnedRuntimeResult` and is tracked as an owned temporary — not `emitRuntimeCall`, which would
+	// leak it. Its tag is `structRef` over the registered `__ManagedFile` layout, which is what lets it be
+	// stored into a `var file as __ManagedFile` field.
+	//
+	// ⚠ Throwing-ness is NOT decided here. `isThrowingManagedFileRuntimeCallee` names the callee and the
+	// composed `isThrowingRuntimeCallee` is read by the parser's E3055 accept and SemanticCheck's E3057
+	// reject, so a `try` is required at exactly the places those two agree on.
+	function parseManagedFileStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(typeTok, last: methodTok)
+
+		if not methodTok.value.equals(ManagedFileOpenReadMethod) 'unknownStatic'
+			throw ParseError.unsupported("`{String.from(ManagedFileTypeName)}` static '{String.from(methodTok.value)}' — this rung provides `{String.from(ManagedFileOpenReadMethod)}(path)`; `openWrite`, `exists`, `delete` and `stat` arrive with the read/write slice", line: methodTok.line, column: methodTok.column)
+		end 'unknownStatic'
+
+		try self.consume(TokenKind.leftParen)
+		let pathTok = self.current()
+		let path = try self.parseExpression(func, block: self.currentBlock)
+		// The SAME argument rule `String.from` applies, and for the same reason stated there: any other
+		// `Array` instance would be read at ITS element stride, so the path handed to the OS would be
+		// whichever bytes fell on the stride boundaries.
+		try self.requireByteArrayValue(path, anchor: pathTok)
+		try self.consume(TokenKind.rightParen)
+
+		return self.emitOwnedRuntimeResult(ManagedFileOpenReadName, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedFileNameId(), range: range)
+	end 'parseManagedFileStaticCall'
+
 	// ⭐ **`String.from(bytes)` — THE ONE `String` STATIC, AND THE CORPUS'S ONLY WAY BACK FROM BYTES (P1.8
 	// Slice E).** The reference exports exactly this overload (`stdlib/String.maxon:119-121`); its
 	// `fromOwnedBytes` sibling is deliberately NOT exported ("take these bytes and trust me about them" is
@@ -23291,6 +23335,12 @@ export type Parser
 	function stringIndexNameId() returns TypeNameId
 		return self.artifact.typeNames.intern(StringIndexTypeName)
 	end 'stringIndexNameId'
+
+	// The `__ManagedFile` type's interned name (R4.1) — `stringIndexNameId`'s twin, and interned against
+	// the ARTIFACT's interner for its reason: that is the one a value's `nameId` column is read against.
+	function managedFileNameId() returns TypeNameId
+		return self.artifact.typeNames.intern(ManagedFileTypeName)
+	end 'managedFileNameId'
 
 	// ⭐ **IS THIS THE `StringIndex` TYPE?** A TAG cannot answer it — every struct box is `structRef` — so it
 	// is the interned NAME behind the tag, which is the same identity `aggregateNameOf` publishes for a
