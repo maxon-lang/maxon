@@ -211,6 +211,49 @@ export function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns boo
 	return callee.equals(ManagedFileOpenReadName) or callee.equals(ManagedFileOpenWriteName) or callee.equals(ManagedFileSizeName) or callee.equals(ManagedFileReadName) or callee.equals(ManagedFileWriteName) or callee.equals(ManagedFileDeleteName) or callee.equals(ManagedFileRenameName) or callee.equals(ManagedFileStatName)
 end 'isThrowingManagedFileRuntimeCallee'
 
+// ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `managedDirectorySourceMethodName`, and read
+// through the same composer (`GtRuntime.runtimeCalleeSourceMethod`). Until D12 an `__ManagedFile.openRead(p)`
+// written without a `try` was told it was a "throwing array accessor": the right E3057, naming a construct
+// the program does not contain.
+//
+// ⚠ **IT IS A MAP ONTO THE PARSER'S OWN CONSTANTS, NOT A SECOND SPELLING** — each arm answers with the very
+// `ManagedFile*Method` byte string `parseManagedFileStaticCall`/`dispatchManagedFileMethod` dispatched on, so
+// nothing here can disagree with what the source was matched against. Asked only on the COLD path, and only
+// behind `isThrowingManagedFileRuntimeCallee`, which is what the panic states rather than answers.
+//
+// ⚠⚠ **`__mf_open_write` ANSWERS `openWrite` FOR BOTH SPELLINGS THAT REACH IT**, because at this rung they
+// are ONE call: `openWriteExecutable` adds only a Unix 0755 bit, shv2's file IO is host-only Windows by the
+// R4.1 ruling, and the parser's `openWriteExecutable` arm therefore emits `__mf_open_write` (see the entry-
+// point block above). So the callee genuinely carries no evidence of which word was typed, and a POSIX lane
+// that splits the two entry points splits this answer with them at no extra cost.
+export function managedFileSourceMethodName(callee ByteArray) returns ByteArray
+	if callee.equals(ManagedFileOpenReadName) 'openRead'
+		return ManagedFileOpenReadMethod
+	end 'openRead'
+	if callee.equals(ManagedFileOpenWriteName) 'openWrite'
+		return ManagedFileOpenWriteMethod
+	end 'openWrite'
+	if callee.equals(ManagedFileSizeName) 'size'
+		return ManagedFileSizeMethod
+	end 'size'
+	if callee.equals(ManagedFileReadName) 'read'
+		return ManagedFileReadMethod
+	end 'read'
+	if callee.equals(ManagedFileWriteName) 'write'
+		return ManagedFileWriteMethod
+	end 'write'
+	if callee.equals(ManagedFileDeleteName) 'delete'
+		return ManagedFileDeleteMethod
+	end 'delete'
+	if callee.equals(ManagedFileRenameName) 'rename'
+		return ManagedFileRenameMethod
+	end 'rename'
+	if callee.equals(ManagedFileStatName) 'stat'
+		return ManagedFileStatMethod
+	end 'stat'
+	panic("managedFileSourceMethodName: '{String.from(callee)}' is not a throwing `__ManagedFile` callee — only the eight `isThrowingManagedFileRuntimeCallee` names can reach an E3057, and this is asked behind that predicate")
+end 'managedFileSourceMethodName'
+
 // ⭐ **THE ERROR TYPE A FILE CALLEE THROWS — the WHAT to the predicate's THAT.** `ProgramSignatures.throwsOf`
 // answers with it for a callee no file declares (R4.1), which is what types an `otherwise (e)` binding and
 // therefore what makes `match e` see an enum instead of a scalar; the eight throwing builders stamp it as

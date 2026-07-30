@@ -2390,10 +2390,11 @@ let StringTrimEndMethod = b"trimEnd"
 //
 // `charIndex`/`bytePos` are the reference's own accessor names (`stdlib/String.maxon:925-931`), and they
 // are METHODS rather than field reads there and here alike — the two fields are non-exported.
+// ⚠ `StringFindFirstMethod`/`StringFindLastMethod` are `SignatureIndex`'s (D12) — the two searches are the
+// only `String` methods whose runtime callee reaches an E3057, and the diagnostic's source-method map has to
+// answer with the very constant this dispatch matches on.
 let StringStartIndexMethod = b"startIndex"
 let StringEndIndexMethod = b"endIndex"
-let StringFindFirstMethod = b"findFirst"
-let StringFindLastMethod = b"findLast"
 let StringIndexCharIndexMethod = b"charIndex"
 let StringIndexBytePosMethod = b"bytePos"
 
@@ -2491,7 +2492,6 @@ end 'quadArgs'
 let CreateMethod = b"create"
 let ArrayPushMethod = b"push"
 let ArrayGetMethod = b"get"
-let ArraySetMethod = b"set"
 let ArrayCapacityMethod = b"capacity"
 let ArrayReserveMethod = b"reserve"
 let ArrayResizeMethod = b"resize"
@@ -2531,9 +2531,12 @@ let RemoveMethod = b"remove"
 //
 // A rename that reached one copy and not the other was a WRONG ANSWER with no diagnostic: `Array.count`
 // and `Set.count` would answer to different tokens, each dispatcher still compiling.
+//
+// ⚠ `ArraySetMethod`/`AppendMethod` are `SignatureIndex`'s (D12), for that same reason one step further out:
+// `__arr_mem_set`/`__arr_mem_append` are buffer-owned throwing callees, and their E3057 source-method map
+// answers with the constant THIS dispatch matches on rather than a second spelling of it.
 let SliceMethod = b"slice"
 let CloneMethod = b"clone"
-let AppendMethod = b"append"
 let CountMethod = b"count"
 let IsEmptyMethod = b"isEmpty"
 

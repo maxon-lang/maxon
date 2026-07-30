@@ -89,6 +89,26 @@ export function isThrowingStringIndexRuntimeCallee(callee ByteArray) returns boo
 	return callee.equals(StrIndexFirstName) or callee.equals(StrIndexLastName)
 end 'isThrowingStringIndexRuntimeCallee'
 
+// ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `managedDirectorySourceMethodName`, read through
+// the same composer (`GtRuntime.runtimeCalleeSourceMethod`). Until D12 an `s.findFirst(n)` written without a
+// `try` was told it was a "throwing array accessor": the right E3057, naming a construct the program does not
+// contain — and a `String` search is about as far from an array accessor as this family's wording could land.
+//
+// ⚠ **IT IS A MAP ONTO THE PARSER'S OWN CONSTANTS, NOT A SECOND SPELLING.** `StringFindFirstMethod` /
+// `StringFindLastMethod` are the byte strings `dispatchStringMethod` matches the source token against; they
+// moved from a file-private `let` in `Parser.maxon` to `SignatureIndex` at D12 for exactly this, since every
+// sibling family's method constants already lived there. Asked only on the COLD path, and only behind
+// `isThrowingStringIndexRuntimeCallee` — which is what the panic states rather than answers.
+export function stringIndexSourceMethodName(callee ByteArray) returns ByteArray
+	if callee.equals(StrIndexFirstName) 'findFirst'
+		return StringFindFirstMethod
+	end 'findFirst'
+	if callee.equals(StrIndexLastName) 'findLast'
+		return StringFindLastMethod
+	end 'findLast'
+	panic("stringIndexSourceMethodName: '{String.from(callee)}' is not a throwing `StringIndex` callee — only the two `isThrowingStringIndexRuntimeCallee` names can reach an E3057, and this is asked behind that predicate")
+end 'stringIndexSourceMethodName'
+
 // Install the referenced `StringIndex` runtime functions into the lowered Std module. Called AFTER the
 // pipeline (like `installStringRuntime`), so these are appended already-lowered and never re-optimized.
 // Each is installed ONLY when referenced — vocabulary does not ship ahead of its consumer.

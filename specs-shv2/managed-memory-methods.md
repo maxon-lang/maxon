@@ -1455,3 +1455,26 @@ end 'main'
 ```exitcode
 42
 ```
+
+### A throwing buffer read written without `try` names the buffer method
+
+<!-- test: error.byte-at-without-try -->
+
+⭐ **THE SAME E3057 RULE, THE `__ManagedMemory` FAMILY'S NOUN (D12).** `byteAt` throws
+`__ManagedMemoryError.indexOutOfBounds`, so a bare call drops the flag and hands back a dummy 0 — a wrong
+answer. The family reaches the diagnostic THROUGH `isThrowingArrayRuntimeCallee`, which is why it used to
+inherit "throwing array accessor" although the receiver is a buffer and the method is the buffer's own.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	_ = arr.managed.byteAt(100)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/managed-memory-methods/error.byte-at-without-try.test:8:18: throwing function requires try: 'byteAt'
+```

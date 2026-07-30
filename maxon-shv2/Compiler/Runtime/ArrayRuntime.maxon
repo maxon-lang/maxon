@@ -517,6 +517,45 @@ export function isManagedMemoryRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(ArrMemCreateName) or callee.equals(ArrSetLengthName) or callee.equals(ArrSetByteName) or callee.equals(ArrByteAtName) or callee.equals(ArrMemGrowName) or callee.equals(ArrMemAppendName) or callee.equals(ArrMemSetName)
 end 'isManagedMemoryRuntimeCallee'
 
+// ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `managedDirectorySourceMethodName`, read through
+// the same composer (`GtRuntime.runtimeCalleeSourceMethod`). It is the family the wrong noun hid in longest:
+// the seven names above reach `isThrowingArrayRuntimeCallee` BY COMPOSITION, so a `buf.byteAt(i)` written
+// without a `try` INHERITED the array-accessor wording — the right E3057 describing a construct the program
+// does not contain. Separating the two costs an ORDERING in the message chain, not a second predicate: the
+// composer asks this list BEFORE the array one, so what still reaches the array arm is a genuine `Arr*`
+// accessor.
+//
+// ⚠ **IT IS A MAP ONTO THE PARSER'S OWN CONSTANTS, NOT A SECOND SPELLING** — each arm answers with the byte
+// string `parseManagedMemoryStaticCall`/`dispatchManagedMemoryMember` matched the source token against. Two
+// of them (`set`, `append`) are the shared `Array` spellings and moved from a file-private `let` in
+// `Parser.maxon` to `SignatureIndex` at D12 so this map could name them; see that block. Asked only on the
+// COLD path, and only behind `isManagedMemoryRuntimeCallee` — which is what the panic states rather than
+// answers.
+export function managedMemorySourceMethodName(callee ByteArray) returns ByteArray
+	if callee.equals(ArrMemCreateName) 'create'
+		return ManagedMemoryCreateMethod
+	end 'create'
+	if callee.equals(ArrSetLengthName) 'setLength'
+		return ManagedMemorySetLengthMethod
+	end 'setLength'
+	if callee.equals(ArrSetByteName) 'setByte'
+		return ManagedMemorySetByteMethod
+	end 'setByte'
+	if callee.equals(ArrByteAtName) 'byteAt'
+		return ManagedMemoryByteAtMethod
+	end 'byteAt'
+	if callee.equals(ArrMemGrowName) 'grow'
+		return ManagedMemoryGrowMethod
+	end 'grow'
+	if callee.equals(ArrMemAppendName) 'append'
+		return AppendMethod
+	end 'append'
+	if callee.equals(ArrMemSetName) 'set'
+		return ArraySetMethod
+	end 'set'
+	panic("managedMemorySourceMethodName: '{String.from(callee)}' is not a `__ManagedMemory` runtime callee — only the seven `isManagedMemoryRuntimeCallee` names can reach an E3057, and this is asked behind that predicate")
+end 'managedMemorySourceMethodName'
+
 // A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
 // is the bit offset of element byte `i`; `BitsPerByte` names the 8.
 let BitsPerByte = 8 as ParsedInt

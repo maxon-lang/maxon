@@ -510,3 +510,23 @@ size=5 isDirectory=0 isReadOnly=0
 implausibleTimestamps=0
 dirIsDirectory=1
 ```
+
+<!-- test: managed-file.open-read-without-try -->
+<!-- targets: x64-windows -->
+
+⭐ **E3057 MUST NAME THE CONSTRUCT THE AUTHOR WROTE (D12).** `openRead` throws, so a bare call branches on
+nothing and its error flag is discarded — the same defect `managed-directory.next-without-try` pins for the
+sibling family, and it gets the same sentence, quoting the author's own spelling rather than the
+`__mf_open_read` they have never heard of. Before D12 it read `throwing array accessor requires try: …`:
+the right code, naming a construct this program does not contain.
+
+⚠ Compile-time on purpose — it needs no file to exist in the runner's working directory.
+```maxon
+function main() returns ExitCode
+	_ = __ManagedFile.openRead("nonexistent_open_read_without_try_xyz.txt".toByteArray().managed)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/managed-file/managed-file.open-read-without-try.test:3:6: throwing function requires try: 'openRead'
+```

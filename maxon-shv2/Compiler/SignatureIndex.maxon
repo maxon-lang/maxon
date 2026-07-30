@@ -1762,6 +1762,18 @@ export let ManagedMemoryLengthMethod = b"length"
 export let ManagedMemoryGrowMethod = b"grow"
 export let ManagedMemoryByteAtMethod = b"byteAt"
 
+// ⭐ **THE TWO SHARED SPELLINGS THAT ALSO HAVE A BUFFER-OWNED RUNTIME (D12).** `set` and `append` are two of
+// the six members spelled identically to an `Array` method, so their constants were the PARSER's array ones
+// and lived file-private in `Parser.maxon`. They moved here when the buffer family gained its source-method
+// map (`ArrayRuntime.managedMemorySourceMethodName`): that map answers with the parser's own constant, and a
+// map cannot name a constant its file cannot see — the alternative, a second `b"set"` beside the first, is
+// exactly the drift these blocks exist to prevent.
+// ⚠ Neither carries a family prefix, and that is the fact rather than an omission: ONE spelling serves
+// `String.append`, `Array.append`/`Array.set` and the buffer's `__arr_mem_append`/`__arr_mem_set` alike, and
+// the parser dispatches all of them on this one byte string.
+export let ArraySetMethod = b"set"
+export let AppendMethod = b"append"
+
 // Its parameter names, the reference's own (`2-Parser.cs:1470-1511`) for the same reason the file's are.
 // ⚠ **`endIndex` IS v1's SPELLING AND THE BOOTSTRAP'S IS `end`** (`LowerMaxonToStd.maxon:1657` vs
 // `2-Parser.cs:1509`), and `specs/managed-memory-builtin.md:slice` writes `endIndex:` — that spec is
@@ -1836,6 +1848,14 @@ export let ManagedMemoryInvalidAllocationCaseName = b"invalidAllocation"
 // `__ManagedMemory` to a `String`. Its parameter name is the reference's.
 export let StringInitMethod = b"init"
 export let StringInitManagedParamName = b"managed"
+
+// ⭐ **THE TWO THROWING `String` SEARCHES (P1.8 slice B2), MOVED OUT OF `Parser.maxon` AT D12.** They are the
+// only `String` methods whose runtime callee can reach an E3057, so `StringIndexRuntime` needs their source
+// spelling to name the construct the author wrote — and every sibling family's method constants already live
+// here. A file-private `let` in the parser forced the alternative: a second `b"findFirst"` in the runtime
+// file, one spelling of one fact in two places.
+export let StringFindFirstMethod = b"findFirst"
+export let StringFindLastMethod = b"findLast"
 
 // ⭐ **THE ERROR EVERY `__ManagedFile` OPERATION THROWS (R4.1)**, and the type a handler's `match e`
 // discriminates. Its three cases and the reason their ORDER is load-bearing live with the layout, in

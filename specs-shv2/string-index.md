@@ -489,3 +489,22 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:5:12: Unsupported: `__StringIndex` method 'offset' -- shv2 provides `charIndex` and `bytePos`; the reference's `equals`/`compare` are reached through `==`/`<` instead, and `String.charAt`/`indexAfter`/`indexBefore` (the other consumers of an index) need a BACKWARD UAX#29 segmenter
 ```
+
+### A throwing search written without `try` names the search
+
+<!-- test: error.find-first-without-try -->
+
+⭐ **THE SAME E3057 RULE, THE `StringIndex` FAMILY'S NOUN (D12).** `findFirst` throws `StringError.notFound`
+through the dual-register `errorReturn` ABI, so a bare call reads only the value register and takes a miss
+for an answer. The author wrote `findFirst`, not `__strix_first`, and the sentence says so — before D12 it
+called their search a "throwing array accessor".
+```maxon
+function main() returns ExitCode
+	let s = "a b"
+	_ = s.findFirst(" ")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/string-index/error.find-first-without-try.test:4:6: throwing function requires try: 'findFirst'
+```

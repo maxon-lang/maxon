@@ -684,6 +684,53 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	return ThrowsClause.none
 end 'runtimeThrowsClause'
 
+// The outcome of asking a runtime callee what the AUTHOR called it. `found` carries the source method name;
+// `notFound` says this callee has no user-written spelling to quote — a `__arr_get` is reached by writing
+// `get`, but through an accessor family whose diagnostic words itself differently, and a family added
+// tomorrow has no map at all. A union rather than an empty `ByteArray`, so the absent state is structurally
+// distinct instead of a sentinel.
+export union RuntimeCalleeSourceMethod
+	found(method ByteArray)
+	notFound
+end 'RuntimeCalleeSourceMethod'
+
+// ⭐⭐ **THE ONE HOME OF "WHAT DID THE AUTHOR CALL THIS RUNTIME CALLEE?"** — the third composer beside
+// `isThrowingRuntimeCallee` (THAT it throws) and `runtimeThrowsClause` (WHAT it throws), pairing each family's
+// predicate with that family's own map. `SemanticCheck.throwingRuntimeCalleeMessage` asks it ONCE and builds
+// ONE sentence from the answer, so the four families that name a method share a single spelling of it rather
+// than an inline copy each.
+//
+// ⚠ **A FAMILY WITHOUT A MAP ANSWERS `notFound`, AND THAT IS THE POINT.** Before D12 the wording chain ended
+// in the array-accessor sentence, so three families that never added an arm (`__strix_*`, `__mf_*` and the
+// `__ManagedMemory` members) silently inherited a noun for a construct their programs did not contain — while
+// the comment above that chain claimed the last arm "names the callee rather than pretending to know what it
+// is". It does now: `notFound` is what makes that true, and a sixth family joining without a map gets its own
+// callee named rather than another family's word.
+//
+// ⚠ **THE MEMORY ARM MUST STAY ABOVE ANY ARRAY TEST, FOR `runtimeThrowsClause`'s REASON ONE LINE OF
+// REASONING FURTHER ON**: `isThrowingArrayRuntimeCallee` INCLUDES `isManagedMemoryRuntimeCallee` (one record,
+// one runtime, `__arr_`-prefixed), so answering here first is exactly what leaves the caller's array arm
+// holding none but genuine `Arr*` accessors — the separation costs an ORDERING, not a second predicate.
+export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalleeSourceMethod
+	if isThrowingManagedDirectoryRuntimeCallee(callee) 'directoryFamily'
+		return RuntimeCalleeSourceMethod.found(managedDirectorySourceMethodName(callee))
+	end 'directoryFamily'
+
+	if isThrowingManagedFileRuntimeCallee(callee) 'fileFamily'
+		return RuntimeCalleeSourceMethod.found(managedFileSourceMethodName(callee))
+	end 'fileFamily'
+
+	if isThrowingStringIndexRuntimeCallee(callee) 'stringIndexFamily'
+		return RuntimeCalleeSourceMethod.found(stringIndexSourceMethodName(callee))
+	end 'stringIndexFamily'
+
+	if isManagedMemoryRuntimeCallee(callee) 'memoryFamily'
+		return RuntimeCalleeSourceMethod.found(managedMemorySourceMethodName(callee))
+	end 'memoryFamily'
+
+	return RuntimeCalleeSourceMethod.notFound
+end 'runtimeCalleeSourceMethod'
+
 // The GT runtime's `.data` slots, appended to the user's globals before `layOut` orders them — ordinary
 // i64 slots in every respect, exactly like MmRuntime's `runtimeGlobals()`.
 export function gtRuntimeGlobals() returns DataSectionEntryArray

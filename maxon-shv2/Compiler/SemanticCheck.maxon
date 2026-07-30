@@ -1646,31 +1646,62 @@ function requireTriedWitnessDispatch(project Project, func IrFunction, opIndex O
 	reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing interface method requires try: wrap the witness dispatch as `try <receiver>.<method>(…)` — a bare call drops the error flag the method returns", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 end 'requireTriedWitnessDispatch'
 
-// ⭐⭐ **WHAT AN E3057 SAYS ABOUT A COMPILER-OWNED THROWING CALLEE — ONE ARM PER FAMILY, AND A FAMILY
-// WITHOUT ONE IS A DEFECT RATHER THAN A DEFAULT.** The user never wrote `__arr_get` or `__md_next`, so the
-// sentence has to name the construct they DID write; a family that falls through to another family's
-// wording gets the right code and the wrong noun.
+// ⭐⭐ **THE ONE SPELLING OF "A THROWING CALL NEEDS `try`", NAMING WHAT THE AUTHOR WROTE.** FIVE producers
+// reach it — an ordinary user function, plus the four compiler-owned families that can hand back a source
+// method name (directory, file, string-search, buffer). Before D12 two of them spelled it inline and the
+// other three had no arm at all, which is how they came to inherit the array-accessor noun; giving each its
+// own inline arm would have made FIVE copies of one sentence, and a later reword that reaches four of them
+// is the drift this project keeps finding. So it is spelled here and nowhere else.
+//
+// ⚠ It takes the name as the caller HAS it (a `ByteArray`, which is what both a callee and a method constant
+// are) rather than the callee plus a flag, so the sentence has no branch inside it to get wrong.
+function throwingCallRequiresTryMessage(name ByteArray) returns String
+	return "throwing function requires try: '{String.from(name)}'"
+end 'throwingCallRequiresTryMessage'
+
+// ⭐⭐ **WHAT AN E3057 SAYS ABOUT A COMPILER-OWNED THROWING CALLEE.** The user never wrote `__arr_get` or
+// `__md_next`, so the sentence has to name the construct they DID write; a family that falls through to
+// another family's wording gets the right code and the wrong noun.
 //
 // ⚠ **THE SELECTION USED TO BE A BINARY GT-else-ARRAY EXPRESSION**, and its own comment said a third family
 // must add an arm here. Three joined it without one (`__strix_*` at P1.8, `__mf_*` at R4.1/R4.2, and
 // `__ManagedMemory`'s members at R4.2), so a `s.findFirst(n)` or a `f.openRead(p)` written without `try` was
-// told it was a "throwing array accessor". Recast as an explicit chain so a NEW family cannot inherit a
-// wording silently: it falls to the LAST arm, which names the callee rather than pretending to know what it
-// is. ⚠ The two families still without an arm keep the array wording; fixing each needs its own
-// callee → source-name map and its own case, and neither is R4.3's.
+// told it was a "throwing array accessor". R4.3 recast the chain and claimed a new family would now "fall to
+// the LAST arm, which names the callee rather than pretending to know what it is" — but the last arm WAS the
+// array wording, so it pretended exactly, and a sentence asserting a guard that does not exist is worse than
+// no sentence at all.
+//
+// ⇒ D12 makes that claim true. The four families with a source-method map answer through ONE composed lookup
+// (`GtRuntime.runtimeCalleeSourceMethod`), so this function holds WORDING and not family knowledge; the array
+// arm became EXPLICIT; and what falls past everything now names the callee, which is honest about being the
+// only name it has. A sixth family that adds no map gets that fallback rather than another family's noun.
+//
+// ⚠ **THE ARRAY ARM MUST STAY BELOW THE LOOKUP.** `isThrowingArrayRuntimeCallee` INCLUDES the seven
+// `__ManagedMemory` members (one record, one runtime, all `__arr_`-prefixed) and may not be narrowed — it is
+// held to the builders by `verifyThrowingAccessorsMatchPredicate` at install time. The ordering is what
+// separates them, exactly as it already does in `runtimeThrowsClause`, and it leaves this arm holding none
+// but genuine `Arr*` accessors — which is what `try-postfix-target.error.two-throwing-calls-in-one-chain`
+// pins this wording for.
 function throwingRuntimeCalleeMessage(callee ByteArray) returns String
+	// The subprocess family words itself from the CALL rather than from a method name: `runProcess` is a free
+	// function, and what a bare one drops is a spawn failure, not an index.
 	if isThrowingGtRuntimeCallee(callee) 'subprocessFamily'
 		return "throwing subprocess call requires try: wrap `runProcess(…)` as `try runProcess(…) otherwise …` — a bare call drops the spawn-failure error"
 	end 'subprocessFamily'
-	// ⭐ **THE DIRECTORY FAMILY NAMES THE USER'S OWN METHOD (R4.3)**, which is what
-	// `specs/managed-directory.md`'s `next-without-try` pins: `throwing function requires try: 'next'`. It is
-	// the SAME wording an ordinary user function gets, and that is right — a `dir.next()` is a method call
-	// like any other as far as the author is concerned. `managedDirectorySourceMethodName` is what turns the
-	// runtime callee back into the word they typed.
-	if isThrowingManagedDirectoryRuntimeCallee(callee) 'directoryFamily'
-		return "throwing function requires try: '{String.from(managedDirectorySourceMethodName(callee))}'"
-	end 'directoryFamily'
-	return "throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error"
+
+	// ⭐ A FAMILY THAT KNOWS THE AUTHOR'S OWN METHOD GETS THE ORDINARY USER-FUNCTION SENTENCE, and that is
+	// right rather than merely convenient: a `dir.next()` or an `f.openRead(p)` is a method call like any
+	// other as far as the author is concerned. `specs-shv2/managed-directory.md`'s `next-without-try` pins it.
+	match runtimeCalleeSourceMethod(callee) 'sourceMethod'
+		found(method) then return throwingCallRequiresTryMessage(method)
+		notFound then break 'sourceMethod'
+	end 'sourceMethod'
+
+	if isThrowingArrayRuntimeCallee(callee) 'arrayAccessor'
+		return "throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error"
+	end 'arrayAccessor'
+
+	return throwingCallRequiresTryMessage(callee)
 end 'throwingRuntimeCalleeMessage'
 
 // A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
@@ -1698,7 +1729,7 @@ function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, re
 	// of the program's calls that is not to a throwing callee, i.e. almost all of them).
 	if throwsMap.contains(callee) 'throwing'
 		let callRange = project.opRanges.get(opIndex)
-		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing function requires try: '{String.from(callee)}'", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallRequiresTryMessage(callee), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 	end 'throwing'
 end 'validatePlainCall'
 
