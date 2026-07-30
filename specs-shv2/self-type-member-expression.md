@@ -1013,3 +1013,59 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: error.store-through-Self-is-not-captured-by-a-Self-named-parameter -->
+### A STORE through `Self.` is refused the same way whether or not a parameter shadows the name
+The third door onto the shadowing rule, and the last one that was still shadowable: a chain store
+RESOLVES its base (it wants the binding's `VarInfo`, not a yes/no), so it carries its own copy of the
+scope test. With `bad(Self Gate)` in scope it resolved to the PARAMETER and reported *"cannot assign to
+immutable variable: 'Self'"*. No wrong answer was reachable through it — only a parameter may be named
+`Self` and a parameter is immutable, so the store could never have succeeded — but the rule then held at
+two doors of three. It now reports exactly what the `Gate.n = 5` spelling reports, on the same token.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Gate
+	export var n as Num
+
+	export static function make(v Num) returns Gate
+		return Self{n: v}
+	end 'make'
+
+	export function bad(Self Gate) returns Num
+		Self.n = 5
+		return 1
+	end 'bad'
+end 'Gate'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:12:3: Undefined variable 'Self'
+```
+
+<!-- test: error.store-through-the-enclosing-type-name -->
+### …and the type-named spelling it has to agree with
+Pinned separately for the reason the enum struct-literal pair is: only one of the two is `Self`, and a
+guard taught the keyword alone would let these two drift apart without a compile error anywhere.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Gate
+	export var n as Num
+
+	export function bad() returns Num
+		Gate.n = 5
+		return 1
+	end 'bad'
+end 'Gate'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:8:3: Undefined variable 'Gate'
+```

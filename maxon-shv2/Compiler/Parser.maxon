@@ -26913,23 +26913,45 @@ export type Parser
 		// which `baseBindingName` maps. A single-hop `self.field` read/write resolves elsewhere; this is the 2+-hop
 		// chain and the chain-method-call spine, which `fieldChainMethodCallAt` already admits a `self` base to.
 		let baseTok = try self.consumeChainBaseToken()
-		let baseName = self.baseBindingName(baseTok)
-		if self.scope.contains(baseName) 'localBase'
-			let baseBinding = self.scope.getInfo(baseName)
-			// ⚠ E3070 exemption with an EXPIRY: this base resolves a FIELD CHAIN, whose trailing call is
-			// refused today (a nested struct method `o.inner.m()` is E2015 at `parseFieldChainCall`), so no
-			// method dispatch can reach the empty subject from here. The rung that lands that call must pass
-			// `borrowSubjectNameAt` of the chain's base instead, or it inherits this exemption in silence.
-			let base = try self.requireStructBase(baseBinding, baseTok: baseTok, subjectName: EmptySourceText)
-			return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: baseBinding)
-		end 'localBase'
-		// A CAPTURED enclosing struct is the base (P1.5-A2b-2): `level.rawValue` inside a closure that captures
-		// `level`. The base is not in the closure's own scope; `resolveCapturedFieldChain` reads the box out of
-		// the env and resolves its layout the same way `requireStructBase` does.
-		match try self.captureScopeOf(baseTok) 'captured'
-			found(enclosing) then return try self.resolveCapturedFieldChain(baseTok, enclosing: enclosing)
-			notCaptured then break 'captured'
-		end 'captured'
+
+		// ⭐ **THE GATE IS THE SHARED PREDICATE; THE ARMS INSIDE IT DO THE RESOLVING.** This door needs more
+		// than a bool — a local base wants its `VarInfo`, a captured one its enclosing `Scope` — so it cannot
+		// simply BE `baseNamesAValueInScope`. It can still ASK it, which is what keeps the "a value outranks a
+		// type name" rule single-sourced across all three doors that read it: the statement door
+		// (`methodCallsAt`), the expression door (`parseDottedPrimary`) and this one, which RESOLVES a chain
+		// rather than merely recognizing the shape of one.
+		//
+		// ⚠ **`Self` IS THEREFORE EXCLUDED HERE TOO (D9 review), AND IT WAS THE LAST DOOR STILL SHADOWABLE.**
+		// `Self.n = 5` inside `bad(Self Gate)` resolved to the PARAMETER and reported *"cannot assign to
+		// immutable variable: 'Self'"*; it now falls to the tail and reports what the `Gate.n = 5` spelling
+		// reports on the same token. No wrong answer was reachable through it — every binding a store could
+		// have succeeded against is refused elsewhere, since only a PARAMETER may be named `Self` and a
+		// parameter is immutable — but the rule held at two doors of three, and a rule that holds at two doors
+		// of three is the shape this project keeps paying for.
+		//
+		// The gate cannot pass a base the arms then drop: `captureBinds` true means `captureScopeOf` answers
+		// `found` or throws its nested-frame error, never `notCaptured`.
+		if self.baseNamesAValueInScope(baseTok) 'valueBase'
+			let baseName = self.baseBindingName(baseTok)
+			if self.scope.contains(baseName) 'localBase'
+				let baseBinding = self.scope.getInfo(baseName)
+				// ⚠ E3070 exemption with an EXPIRY: this base resolves a FIELD CHAIN, whose trailing call is
+				// refused today (a nested struct method `o.inner.m()` is E2015 at `parseFieldChainCall`), so no
+				// method dispatch can reach the empty subject from here. The rung that lands that call must pass
+				// `borrowSubjectNameAt` of the chain's base instead, or it inherits this exemption in silence.
+				let base = try self.requireStructBase(baseBinding, baseTok: baseTok, subjectName: EmptySourceText)
+				return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: baseBinding)
+			end 'localBase'
+
+			// A CAPTURED enclosing struct is the base (P1.5-A2b-2): `level.rawValue` inside a closure that captures
+			// `level`. The base is not in the closure's own scope; `resolveCapturedFieldChain` reads the box out of
+			// the env and resolves its layout the same way `requireStructBase` does.
+			match try self.captureScopeOf(baseTok) 'captured'
+				found(enclosing) then return try self.resolveCapturedFieldChain(baseTok, enclosing: enclosing)
+				notCaptured then break 'captured'
+			end 'captured'
+		end 'valueBase'
+
 		throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
 	end 'resolveFieldChain'
 
