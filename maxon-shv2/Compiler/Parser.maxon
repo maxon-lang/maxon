@@ -25535,8 +25535,28 @@ export type Parser
 			let index = try self.parseArrayOneArg(func)
 			return self.emitArrayElementAccessor(func, callee: ArrGetName, args: pairArgs(arr, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
+		// ⭐⭐ **ONE SPELLING, TWO ENTRIES — THE BUFFER'S `set` IS BOUNDED BY CAPACITY AND THE `Array`'s BY LENGTH
+		// (R4.6).** ⚖ The capacity bound is a USER RULING of 2026-07-30, taken after a measured three-way
+		// contradiction the runnable oracle could not arbitrate; `ArrayRuntime.ArrMemSetName` carries the ruling,
+		// its date and the argument that settles it (a length bound forbids the exact stage-then-publish idiom
+		// canonical `setLength`'s own contract prescribes). **`specs/managed-memory-methods.md:21` says LENGTH and
+		// is treated as stale — do not "fix" this back toward it.**
+		//
+		// ⚠ **`Array.set` MUST NOT MOVE**: `specs/arrays.md` and the array corpus are written against the length
+		// bound, and the record is shared — so the surface answer that already decides this call's LABEL rule
+		// decides its CALLEE too, and there is no second discriminator.
+		//
+		// ⚠ The callee is picked into a `var` rather than written as a conditional EXPRESSION in the argument
+		// list, because the bootstrap that compiles this file cannot lower a second such expression in this
+		// function's arguments: `error E9001: … assign value %97103 (kind=MaxonInteger) not in valueMap;
+		// assigning to '__arg_pin_27'`. `noteReceiverWrite`'s call above already spends one.
 		if methodTok.value.equals(ArraySetMethod) 'set'
-			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrSetName, methodTok: methodTok, throwing: true, secondArgLabelled: not isManagedMemory, range: range)
+			var setCallee = ArrSetName
+			if isManagedMemory 'capacityBoundedSetter'
+				setCallee = ArrMemSetName
+			end 'capacityBoundedSetter'
+
+			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: setCallee, methodTok: methodTok, throwing: true, secondArgLabelled: not isManagedMemory, range: range)
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.consumeEmptyArgList()

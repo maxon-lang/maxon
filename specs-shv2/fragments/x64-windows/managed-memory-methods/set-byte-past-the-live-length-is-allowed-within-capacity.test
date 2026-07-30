@@ -1,14 +1,14 @@
-// Test: byte-at-reads-the-word-buffer-a-byte-at-a-time
+// Test: set-byte-past-the-live-length-is-allowed-within-capacity
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
-	try mm.setLength(1) otherwise return 2
-	try mm.set(0, value: 258) otherwise return 3
-	let lo = try mm.byteAt(0) otherwise return 4
-	let hi = try mm.byteAt(1) otherwise return 5
-	return (lo + hi) as ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	try mm.setByte(3, value: 65) otherwise return 3
+	try mm.setLength(4) otherwise return 4
+	let v = try mm.byteAt(3) otherwise return 5
+	return v as ExitCode
 end 'main'
 ---
-ExitCode: 3
+ExitCode: 65
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -23,8 +23,8 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rcx, 2
-    x64.movRegImm32 rdx, 8
+    x64.movRegImm32 rcx, 4
+    x64.movRegImm32 rdx, 1
     x64.callDirect __arr_mem_create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
@@ -38,7 +38,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_set_length
     x64.cmpRegImm32 r10, 0
@@ -55,10 +55,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 258
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rax, 65
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_mem_set
+    x64.callDirect __arr_set_byte
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -73,10 +73,9 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rdx, 4
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_byte_at
-    x64.movRegReg r12, r8
+    x64.callDirect __arr_set_length
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -91,9 +90,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_byte_at
+    x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -108,7 +108,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.leaRegRegReg r12, r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref
     x64.movRegReg r8, r12

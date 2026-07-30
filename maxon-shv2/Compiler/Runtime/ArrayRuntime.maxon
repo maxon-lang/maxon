@@ -320,8 +320,9 @@ export let ArrSetByteName = b"__arr_set_byte"
 // the point: a member can be missing, or it can be present and wrong for this surface, and only the first is
 // an absence you could find by grepping the roster.
 // Every other `__ManagedMemory` member dispatches to an entry above — `length`→`__arr_count`,
-// `capacity`→`__arr_capacity`, `get`→`__arr_get`, `set`→`__arr_set`, `slice`→`__arr_slice`,
-// `clear`→`__arr_clear` — because the two types are one record (`SignatureIndex.ManagedMemoryTypeName`).
+// `capacity`→`__arr_capacity`, `get`→`__arr_get`, `slice`→`__arr_slice`, `clear`→`__arr_clear` — because the
+// two types are one record (`SignatureIndex.ManagedMemoryTypeName`). `set` USED to be on that list and is not
+// any more; see `ArrMemSetName` (R4.6).
 //
 // ⚠ **NEITHER FOLDS ONTO THE `Array` OPERATION IT RESEMBLES, AND AGAIN THE REASONS ARE SEPARATE.**
 //   • `__arr_mem_grow(arr, newCapacity)` raises the capacity to EXACTLY `newCapacity` and THROWS
@@ -348,13 +349,48 @@ export let ArrByteAtName = b"__arr_byte_at"
 // ONLY the byte copy — which is `__arr_append`'s whole remaining job once the buffer already fits.
 export let ArrMemAppendName = b"__arr_mem_append"
 
-// The `__ManagedMemoryError` ordinals these three throw, as error FLAGS — positional facts about
+// ⭐⭐ **`__arr_mem_set` — THE BUFFER'S ELEMENT WRITE, BOUNDED BY CAPACITY (R4.6).**
+//
+// ⚖ **USER RULING, 2026-07-30: a `__ManagedMemory` write is bounded by CAPACITY, not by length.** Three
+// sources disagreed and the runnable oracle could not arbitrate (`E9001` on the discriminating program):
+// `specs/managed-memory-methods.md:21` says `set` panics at `index >= length`, `stdlib/File.maxon:117-127`
+// behaves as though `setByte` did, and v1 says CAPACITY for BOTH setters
+// (`stdlib/Internals.maxon:3296-3307` for this one, `:3527-3530` for `setByte`). The ruling follows v1 and
+// treats the canonical `set`/`setByte` lines as stale. **A future reader WILL find those lines; do not
+// "correct" this back.**
+//
+// ⭐ **THE RULING IS WHAT MAKES `setLength`'s OWN DOCUMENTED CONTRACT IMPLEMENTABLE**, which is the argument
+// that settles it rather than a preference between two references. Canonical `setLength` says growing "must
+// NOT initialize the exposed slots itself: its callers (`push`, `insert`, string building) stage the new
+// elements FIRST and use `setLength` to publish them" — and staging is possible only if a write may land in
+// `[length, capacity)`. A length bound forbids exactly the idiom the neighbouring bullet prescribes.
+//
+// ⚠ **IT DOES NOT FOLD ONTO `__arr_set`, AND `Array.set` MUST NOT MOVE.** `specs/arrays.md` and the whole
+// array corpus are written against a length bound (`arrays.md`'s own `set` past the count is an error), and
+// `__arr_set` is shared — so the two surfaces need two entries, exactly as `append` did one rung earlier.
+// Which one a receiver gets is decided by PROVENANCE at the single door (`Parser.dispatchArrayMethod`'s
+// `isManagedMemory`), never by the element type.
+//
+// ⚠ It owns only what differs — the CAPACITY bound, the detach that bound needs, and the complaint — and
+// delegates the write itself to `emitElementStoreAndOkReturn`, which is `__arr_set`'s tail verbatim
+// (`__arr_mem_append`'s precedent: own the arithmetic, delegate the copy).
+export let ArrMemSetName = b"__arr_mem_set"
+
+// The `__ManagedMemoryError` ordinals these members throw, as error FLAGS — positional facts about
 // `Project.builtinManagedMemoryErrorEnum`'s case order, exactly as `ArrIndexOutOfBoundsFlag` is about
-// `ArrayError`'s. DERIVED from the one bias rather than spelled 4/7/8.
+// `ArrayError`'s. DERIVED from the one bias rather than spelled 1/4/7/8.
+//
+// ⚠ `MemoryIndexOutOfBoundsOrdinal` is 0, the same ordinal `ArrIndexOutOfBoundsOrdinal` names — the two enums
+// share their first two cases BY CONSTRUCTION (`SignatureIndex.ManagedMemoryIndexOutOfBoundsCaseName` is one
+// constant read by both layouts). It is still declared here rather than aliased to the `ArrayError` flag,
+// because "these two enums agree today" is a fact about their case lists and not a fact about this family's
+// wire format; folding them would make a later divergence in either list silently reroute the other's arms.
+let MemoryIndexOutOfBoundsOrdinal = 0 as ParsedInt
 let MemoryInvalidLengthOrdinal = 3 as ParsedInt
 let MemoryInvalidCapacityOrdinal = 4 as ParsedInt
 let MemoryInvalidByteRangeOrdinal = 6 as ParsedInt
 let MemoryInvalidAllocationOrdinal = 7 as ParsedInt
+let MemoryIndexOutOfBoundsFlag = MemoryIndexOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidLengthFlag = MemoryInvalidLengthOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidCapacityFlag = MemoryInvalidCapacityOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidByteRangeFlag = MemoryInvalidByteRangeOrdinal + ErrorFlagOrdinalBias
@@ -445,12 +481,21 @@ end 'isThrowingArrayRuntimeCallee'
 // sits with the builders that stamp it, below). All are throwing, so this set and the throwing set coincide —
 // which is exactly why they must not be spelled twice.
 //
-// ⚠ It names only the members with a runtime of their OWN. The six that dispatch to an `Array` entry
-// (`get`/`set`/`slice`/`append`/`count`/`capacity`) throw whatever THAT entry throws — `ArrayError` for the
-// three throwing ones — and are already covered by the list above. That is the binding's consequence, not an
-// omission: one record, one runtime, so one throws clause per callee.
+// ⚠ It names only the members with a runtime of their OWN. The ones that dispatch to an `Array` entry
+// (`get`/`slice`/`count`/`capacity`) throw whatever THAT entry throws — `ArrayError` for the two throwing
+// ones — and are already covered by the list above. That is the binding's consequence, not an omission: one
+// record, one runtime, so one throws clause per callee.
+//
+// ⚠⚠ **`set` LEFT THAT GROUP IN R4.6 AND CHANGED ERROR FAMILY WITH IT**, which is worth stating because it
+// is the one member whose thrown TYPE moved: `__arr_mem_set` throws `__ManagedMemoryError.indexOutOfBounds`
+// where the shared `__arr_set` throws `ArrayError.indexOutOfBounds`. The ORDINAL is identical (both enums'
+// first case, by the shared name constant), so no handler's arms move and no `otherwise` value changes —
+// what changes is the type an `otherwise (e)` binds, and it is now the surface's own, as v1 has it
+// (`stdlib/Internals.maxon:3296`). ⚠ `get` and `slice` remain on `ArrayError`, so a user function cannot
+// declare ONE `throws` clause and propagate a buffer `set` and a buffer `get` through it; moving those two
+// needs buffer entries of their own (`get` carries the empty-slot arm) and is a rung, not a rename.
 export function isManagedMemoryRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(ArrMemCreateName) or callee.equals(ArrSetLengthName) or callee.equals(ArrSetByteName) or callee.equals(ArrByteAtName) or callee.equals(ArrMemGrowName) or callee.equals(ArrMemAppendName)
+	return callee.equals(ArrMemCreateName) or callee.equals(ArrSetLengthName) or callee.equals(ArrSetByteName) or callee.equals(ArrByteAtName) or callee.equals(ArrMemGrowName) or callee.equals(ArrMemAppendName) or callee.equals(ArrMemSetName)
 end 'isManagedMemoryRuntimeCallee'
 
 // A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
@@ -494,16 +539,17 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrClone(module)
 	buildArrAppend(module)
 	buildArrDecref(module)
-	// The `__ManagedMemory` members with a runtime of their own (three from R4.2, two from R4.4) — part of the
-	// all-or-nothing `usesArray` install for the reason the header gives: `__`-prefixed functions are excluded
-	// from the goldens, so an unreferenced one costs nothing a fragment can see, and these call
-	// `__arr_create`/`__arr_reserve`/`__arr_cow_detach` anyway.
+	// The `__ManagedMemory` members with a runtime of their own (three from R4.2, three from R4.4, one from
+	// R4.6) — part of the all-or-nothing `usesArray` install for the reason the header gives: `__`-prefixed
+	// functions are excluded from the goldens, so an unreferenced one costs nothing a fragment can see, and
+	// these call `__arr_create`/`__arr_reserve`/`__arr_cow_detach` anyway.
 	buildArrMemCreate(module)
 	buildArrSetLength(module)
 	buildArrSetByte(module)
 	buildArrByteAt(module)
 	buildArrMemGrow(module)
 	buildArrMemAppend(module)
+	buildArrMemSet(module)
 	// The MANAGED-element copies (P1.7 slice 3b-vi-b) — installed under their OWN bit, so a trivial-array
 	// program (the common one) does not carry them. `usesManagedArrayCopy` implies `usesArray` (they are
 	// `__arr_`-prefixed), so this install is always reached when the bit is set.
@@ -1417,7 +1463,12 @@ function buildArrGetUnchecked(module StdModule)
 	module.functions.push(func)
 end 'buildArrGetUnchecked'
 
-// `__arr_set(arr, index, value) -> (_, flag)` — bounds-checked element write (throws indexOutOfBounds).
+// `__arr_set(arr, index, value) -> (_, flag)` — LENGTH-bounded element write (throws indexOutOfBounds).
+//
+// ⚠ **THE LENGTH BOUND IS `Array.set`'s CONTRACT AND MUST NOT BECOME THE BUFFER'S CAPACITY BOUND.** The two
+// surfaces sit on one record and this entry is the `Array` one; `__arr_mem_set` is the buffer's, and R4.6
+// exists because they were the same function. `specs/arrays.md` and the array corpus are written against
+// this bound.
 function buildArrSet(module StdModule)
 	var func = IrFunction.createFromStd(ArrSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(3)
@@ -1435,17 +1486,44 @@ function buildArrSet(module StdModule)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: store.id))
 
-	emitOobReturn(module, block: oob, ids: ids)
+	var afterReject = emitDestroyRejectedElement(module, func: func, cur: oob, record: arr, value: value, ids: ids)
+	emitOobReturn(module, block: afterReject, ids: ids)
 
 	// Detach BEFORE the buffer pointer is loaded (`__arr_cow_detach` trap 1), and after the bounds check, so a
-	// throwing `set` — which writes nothing — allocates nothing.
+	// throwing `set` — which writes nothing — allocates nothing. `__arr_mem_set` detaches EARLIER, inside its
+	// guard, because its bound is the capacity and a non-owned record's capacity is a negative sentinel.
 	emitCowDetach(module, block: store, arr: arr, ids: ids)
+	emitElementStoreAndOkReturn(module, func: func, store: store, arr: arr, index: index, value: value, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrSet'
+
+// ⭐⭐ **THE WRITE ITSELF, SHARED BY THE TWO ELEMENT SETTERS.** `__arr_set` and `__arr_mem_set` differ in
+// exactly two things — the LIMIT their index is checked against and WHEN the buffer is made this record's —
+// and in nothing else, so the store is written once here. The caller has already bounds-checked `index` and
+// detached; this destroys the occupant, stores, and ok-returns.
+//
+// ⭐ **DESTROY THE OCCUPANT A SET OVERWRITES (P1.7 slice 3a).** A managed array's `set` moves a new owner into
+// the slot, so whatever the slot held must be destroyed first or it leaks (the parser consumes the new value
+// into the array — nothing else drops the old one). Destroy exactly the one slot `[index, index+1)` through
+// the shared gate (a trivial-element array skips it and stores directly), THEN store the new value.
+//
+// ⭐⭐ **AND THAT WALK IS ALREADY CORRECT FOR A SLOT PAST THE LENGTH, WHICH IS WHY R4.6 ADDS NOTHING HERE.**
+// `__arr_mem_set` may address `[length, capacity)`, a slot that was never live. By the capacity-slot
+// invariant every such slot reads ZERO — every vacating operation erases on the way out and fresh capacity
+// comes zeroed from the allocator — and `emitElementDestroyRange`'s per-slot NULL GUARD skips a zero slot, so
+// no destructor is ever called on a null.
+//
+// ⚠ **v1 ADDITIONALLY GATES THE RELEASE ON `idx < length` (`stdlib/Internals.maxon:3319-3331`) AND shv2
+// DELIBERATELY DOES NOT.** v1 can afford it because staging there is a compiler-internal idiom that writes
+// each fresh slot exactly once (its own comment says so: "`push` writes at idx == length … so it is correctly
+// excluded"). shv2 makes staging USER-reachable, so a slot may be staged TWICE before it is published — and
+// under an `idx < length` gate the first staged value would never be released. The null guard releases it,
+// costs nothing extra, and is pinned by `managed-memory-methods.staging-a-managed-element-twice-releases-
+// the-first` (a leak there is exit 101).
+function emitElementStoreAndOkReturn(module StdModule, func IrFunction, store IrBlock, arr ValueId, index ValueId, value ValueId, ids ValueMinter)
 	let buffer = emitLoadField(module, block: store, record: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: store, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	// ⭐ **DESTROY THE OCCUPANT `set` OVERWRITES (P1.7 slice 3a).** A managed array's `set` moves a new owner into
-	// a LIVE slot, so the element it replaces must be destroyed first or it leaks (the parser consumes the new
-	// value into the array — nothing else drops the old one). Destroy exactly the one slot `[index, index+1)`
-	// through the shared gate (a trivial-element array skips it and stores directly), THEN store the new value.
 	let one = emitConst(module, block: store, value: 1, ids: ids)
 	let indexPlusOne = emitBin(module, block: store, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
 	var doStore = emitDestroyRangeIfManaged(module, func: func, cur: store, record: arr, buffer: buffer, start: index, stop: indexPlusOne, elementSize: es, ids: ids)
@@ -1453,9 +1531,42 @@ function buildArrSet(module StdModule)
 	var afterStore = emitStoreElem(module, func: func, cur: doStore, addr: slot, value: value, size: es, ids: ids)
 	let okVal = emitConst(module, block: afterStore, value: 0, ids: ids)
 	emitOkReturn(module, block: afterStore, value: okVal, ids: ids)
+end 'emitElementStoreAndOkReturn'
 
-	module.functions.push(func)
-end 'buildArrSet'
+// ⭐⭐ **DESTROY AN ELEMENT THE SETTER REFUSED TO STORE — THE THROW PATH'S HALF OF THE MOVE-IN CONTRACT
+// (found and fixed in R4.6).** `Parser.parseArraySetOrInsert` MOVES the value into the call
+// (`moveElementIntoArray`), so from that point the callee owns it and the caller's scope-exit drop is
+// suppressed. On the success path the array becomes the owner; on the out-of-range path nothing did, and the
+// element simply leaked.
+//
+// ⚠ **MEASURED, on the tree R4.6 received:** `var xs = StrArray.create(); xs.push(…); try xs.set(99, value:
+// "<heap string>") otherwise return 0` exited **101**, while the identical program over an `Array with Int`
+// exited 0 — the control that says this is the managed move-in and not the throw. It is a defect of
+// `Array.set` (P1.7 slice 3a) that R4.6 fixes because `__arr_mem_set` would otherwise ship the identical
+// leak on the day it was written, and two spellings of one ownership contract is what this file refuses.
+//
+// The null guard is `emitElementDestructorCall`'s stated precondition ("the caller has already loaded
+// `destroy` and confirmed it non-null"), honoured at a second call site rather than assumed away.
+// Threads `cur` and returns the continuation block.
+function emitDestroyRejectedElement(module StdModule, func IrFunction, cur IrBlock, record ValueId, value ValueId, ids ValueMinter) returns IrBlock
+	var checkNull = module.addBlock(func, label: b"rejchk")
+	var drop = module.addBlock(func, label: b"rejdrop")
+	let cont = module.addBlock(func, label: b"rejcont")
+
+	let dtor = emitLoadField(module, block: cur, record: record, offset: ArrElementDestroyOffset, ids: ids)
+	let zeroDtor = emitConst(module, block: cur, value: 0, ids: ids)
+	let hasDtor = emitCmp(module, block: cur, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(hasDtor, thenBlockId: checkNull.id, elseBlockId: cont.id))
+
+	let zeroVal = emitConst(module, block: checkNull, value: 0, ids: ids)
+	let nonNull = emitCmp(module, block: checkNull, a: value, b: zeroVal, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(checkNull, op: StdOp.condBranch(nonNull, thenBlockId: drop.id, elseBlockId: cont.id))
+
+	emitElementDestructorCall(module, block: drop, destroy: dtor, elem: value, ids: ids)
+	module.setTerminator(drop, op: StdOp.branch(cont.id))
+
+	return cont
+end 'emitDestroyRejectedElement'
 
 // `__arr_count(arr) -> length`.
 function buildArrCount(module StdModule)
@@ -2097,9 +2208,9 @@ end 'buildArrSetLength'
 // `invalidByteRange`. VOID and throwing.
 //
 // ⚠ **THE OFFSET IS A BYTE OFFSET, NOT AN ELEMENT INDEX**, and the bound is `[0, capacity * element_size)`.
-// It coincides with `__arr_set`'s element index at element size 1 and at no other size, which is why this is
-// its own entry rather than that one's alias. The bound, the detach and the reason both differ from
-// `__arr_byte_at`'s live — in one place, `emitByteRangeGuard`.
+// It coincides with `__arr_mem_set`'s element index at element size 1 and at no other size, which is why this
+// is its own entry rather than that one's alias. The bound, the detach and the reason both differ from
+// `__arr_byte_at`'s live — in one place, `emitBufferAccessGuard`.
 function buildArrSetByte(module StdModule)
 	var func = IrFunction.createFromStd(ArrSetByteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(3)
@@ -2114,7 +2225,8 @@ function buildArrSetByte(module StdModule)
 	let byteOffset = 1 as ValueId
 	let value = 2 as ValueId
 
-	emitByteRangeGuard(module, func: func, block: entry, checkHigh: checkHigh, bad: bad, ok: store, arr: arr, byteOffset: byteOffset, limitOffset: ArrCapacityOffset, detachIfNotOwned: true, ids: ids)
+	emitBufferAccessGuard(module, func: func, block: entry, checkHigh: checkHigh, bad: bad, ok: store, arr: arr, offset: byteOffset, isWrite: true, addressesBytes: true, ids: ids)
+	emitMemoryThrow(module, block: bad, flag: MemoryInvalidByteRangeFlag, ids: ids)
 
 	let buffer = emitLoadField(module, block: store, record: arr, offset: ArrBufferOffset, ids: ids)
 	let addr = emitBin(module, block: store, a: buffer, b: byteOffset, opcode: StdBinOpcode.add, ids: ids)
@@ -2144,7 +2256,8 @@ function buildArrByteAt(module StdModule)
 	let arr = 0 as ValueId
 	let byteOffset = 1 as ValueId
 
-	emitByteRangeGuard(module, func: func, block: entry, checkHigh: checkHigh, bad: bad, ok: load, arr: arr, byteOffset: byteOffset, limitOffset: ArrLengthOffset, detachIfNotOwned: false, ids: ids)
+	emitBufferAccessGuard(module, func: func, block: entry, checkHigh: checkHigh, bad: bad, ok: load, arr: arr, offset: byteOffset, isWrite: false, addressesBytes: true, ids: ids)
+	emitMemoryThrow(module, block: bad, flag: MemoryInvalidByteRangeFlag, ids: ids)
 
 	let buffer = emitLoadField(module, block: load, record: arr, offset: ArrBufferOffset, ids: ids)
 	let addr = emitBin(module, block: load, a: buffer, b: byteOffset, opcode: StdBinOpcode.add, ids: ids)
@@ -2155,51 +2268,103 @@ function buildArrByteAt(module StdModule)
 	module.functions.push(func)
 end 'buildArrByteAt'
 
-// ⭐⭐ **`0 <= byteOffset < <limit> · element_size`, OR `invalidByteRange` — THE ONE BYTE-ADDRESSING BOUND,
-// read by the byte setter and the byte reader.** It terminates every block it is given bar `ok` (`block` on
-// the sign test, `checkHigh` on the limit, `bad` with the throw), so the two members differ in nothing but
-// what they do to the byte — and in the two parameters below, which are the whole of the asymmetry.
+// ⭐⭐ **`0 <= offset < limit`, THE ONE BOUND EVERY `__ManagedMemory` ACCESSOR IS CHECKED AGAINST** — the byte
+// setter, the byte reader and (R4.6) the element setter. It terminates `block` (the sign test) and
+// `checkHigh` (the limit test), branching to `bad` or `ok`; the CALLER terminates `bad` with its own
+// complaint, because what an out-of-range access reports is a fact about the member, not about the bound.
 //
-// ⭐ **THE SETTER'S LIMIT IS THE CAPACITY AND THE READER'S IS THE LIVE LENGTH. THAT ASYMMETRY IS v1's, AND IT
-// IS DELIBERATE** (`stdlib/Internals.maxon:3507-3519` for the reader, `:3527-3530` for the writer). It exists
-// because `create` publishes length 0: the create-then-`setByte`-then-`setLength` idiom — which
-// `stdlib/Character.maxon:170-182` and every string builder use — writes into freshly ALLOCATED slots before
-// a length publishes them, and a length gate would refuse every such write (`0 >= 0`). Reading an unpublished
-// slot has no such need: there is nothing there yet. Do not "fix" it into one bound; the two members are
-// asking different questions.
+// **The three members differ along exactly TWO axes, and each is one parameter:**
 //
-// ⭐ **AND THE WRITER, ALONE, MUST OWN ITS BUFFER BEFORE THE LIMIT IS EVEN READABLE.** A zero-copy view or an
+// ⭐ **`isWrite` — THE WRITER'S LIMIT IS THE CAPACITY AND THE READER'S IS THE LIVE LENGTH, AND THE WRITER
+// ALONE MUST OWN ITS BUFFER FIRST. THAT ASYMMETRY IS v1's AND IT IS DELIBERATE**
+// (`stdlib/Internals.maxon:3507-3519` for the reader, `:3527-3530` and `:3296-3307` for the two writers). It
+// exists because `create` publishes length 0: the stage-then-publish idiom — which `stdlib/Character.maxon:
+// 170-182`, every string builder, and canonical `setLength`'s own documented contract use — writes into
+// freshly ALLOCATED slots before a length publishes them, and a length gate would refuse every such write
+// (`0 >= 0`). Reading an unpublished slot has no such need: there is nothing there yet. ⚖ The CAPACITY bound
+// is the USER RULING of 2026-07-30 (see `ArrMemSetName`); the canonical `set`/`setByte` lines say LENGTH and
+// are stale. Do not "fix" the two bounds into one — the members are asking different questions.
+//
+// ⇒ The ownership half rides the SAME parameter because it is the same fact: a zero-copy view or an
 // `.rdata`-backed literal carries a NEGATIVE `capacity@16` (the `BufferOwnership` encoding), so a capacity
-// limit read off one would refuse EVERY offset; and a write through a shared buffer would rewrite someone
-// else's bytes. So the setter detaches first — CONDITIONALLY, only when the buffer is not its own, so a
-// doomed write still allocates nothing (the defect `__arr_set_length`'s header records). A READ needs neither:
-// it reads the live length, which is always real, and reading THROUGH a shared buffer is exactly what a view
-// is for.
-function emitByteRangeGuard(module StdModule, func IrFunction, block IrBlock, checkHigh IrBlock, bad IrBlock, ok IrBlock, arr ValueId, byteOffset ValueId, limitOffset ByteOffset, detachIfNotOwned bool, ids ValueMinter)
+// limit read off one would refuse EVERY offset, and a write through a shared buffer would rewrite someone
+// else's bytes. A READ needs neither — it reads the live length, which is always real, and reading THROUGH a
+// shared buffer is exactly what a view is for.
+//
+// ⚠⚠ **THE DETACH IS UNCONDITIONAL, AND R4.4's CONDITIONAL ONE WAS A MEASURED WRONG ANSWER (fixed R4.6).**
+// It used to run only under a hand-written copy of `emitBufferNotOwned` — `capacity < 0` — which is arm 1 of
+// `__arr_cow_detach`'s TWO arms. Arm 2 is "the buffer IS this record's, but a view is reading it", and a
+// `setByte` through the owner of a viewed buffer therefore wrote straight through the sharing: measured at
+// **198 where the answer is 110** (`managed-memory-methods.set-byte-through-a-viewed-owner-detaches-first`).
+// `__arr_cow_detach` answers both arms and early-outs when there is nothing to do, so calling it and letting
+// it decide is both correct and shorter — which is the gating rule `buildArrCowDetach`'s own header states
+// ("a mutator either calls `__arr_grow` before it touches the buffer, or it calls `__arr_cow_detach`
+// itself"). Re-deriving one of its arms at a call site is exactly the drifting checklist that header rejects.
+// The cost of the honesty is that a doomed OUT-OF-RANGE write on a non-owned record now detaches before it
+// throws; that is unavoidable in either shape, since the capacity it is checked against does not exist until
+// the detach has published it.
+//
+// ⭐ **`addressesBytes` — WHICH UNIT THE OFFSET IS IN.** A byte member's limit is `limit · element_size`; an
+// element member's is the limit itself. The two coincide at element size 1 and at no other size, which is the
+// whole reason `setByte` is not `set`'s alias.
+function emitBufferAccessGuard(module StdModule, func IrFunction, block IrBlock, checkHigh IrBlock, bad IrBlock, ok IrBlock, arr ValueId, offset ValueId, isWrite bool, addressesBytes bool, ids ValueMinter)
 	// A BlockId rather than a rebound block handle: threading an `IrBlock` through a reassigned `var` trips
 	// the struct-aliasing policy (E3078), and a terminator names an id anyway.
 	var limitEntryId = checkHigh.id
-	if detachIfNotOwned 'writerMustOwnItsBuffer'
-		var checkOwned = module.addBlock(func, label: b"chkowned")
+	if isWrite 'writerMustOwnItsBuffer'
 		var detach = module.addBlock(func, label: b"detach")
-		limitEntryId = checkOwned.id
-		let notOwned = emitBufferNotOwned(module, block: checkOwned, record: arr, slots: arrayBufferSlots(), ids: ids)
-		module.setTerminator(checkOwned, op: StdOp.condBranch(notOwned, thenBlockId: detach.id, elseBlockId: checkHigh.id))
+		limitEntryId = detach.id
 		emitCowDetach(module, block: detach, arr: arr, ids: ids)
 		module.setTerminator(detach, op: StdOp.branch(checkHigh.id))
 	end 'writerMustOwnItsBuffer'
 
-	let negative = emitIsNegative(module, block: block, value: byteOffset, ids: ids)
+	let negative = emitIsNegative(module, block: block, value: offset, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(negative, thenBlockId: bad.id, elseBlockId: limitEntryId))
 
-	let limit = emitLoadField(module, block: checkHigh, record: arr, offset: limitOffset, ids: ids)
-	let es = emitLoadField(module, block: checkHigh, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	let byteLimit = emitBin(module, block: checkHigh, a: limit, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	let pastEnd = emitCmp(module, block: checkHigh, a: byteOffset, b: byteLimit, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(checkHigh, op: StdOp.condBranch(pastEnd, thenBlockId: bad.id, elseBlockId: ok.id))
+	let declaredLimit = emitLoadField(module, block: checkHigh, record: arr, offset: ArrCapacityOffset if isWrite else ArrLengthOffset, ids: ids)
+	var limit = declaredLimit
+	if addressesBytes 'byteAddressed'
+		let es = emitLoadField(module, block: checkHigh, record: arr, offset: ArrElementSizeOffset, ids: ids)
+		limit = emitBin(module, block: checkHigh, a: declaredLimit, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	end 'byteAddressed'
 
-	emitMemoryThrow(module, block: bad, flag: MemoryInvalidByteRangeFlag, ids: ids)
-end 'emitByteRangeGuard'
+	let pastEnd = emitCmp(module, block: checkHigh, a: offset, b: limit, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(checkHigh, op: StdOp.condBranch(pastEnd, thenBlockId: bad.id, elseBlockId: ok.id))
+end 'emitBufferAccessGuard'
+
+// ⭐ `__arr_mem_set(arr, index, value) -> (_, flag)` — the buffer's CAPACITY-bounded element write, throwing
+// `__ManagedMemoryError.indexOutOfBounds`. See `ArrMemSetName` for the user ruling that fixes the bound and
+// for why it is not `__arr_set`.
+//
+// It owns the guard and the complaint; the write itself is `__arr_set`'s, through
+// `emitElementStoreAndOkReturn`. ⚠ It must NOT detach again in the store block: the guard already has,
+// necessarily so — the capacity it checked against does not exist on a non-owned record until then.
+//
+// ⚠ **A REFUSED WRITE STILL OWNS THE ELEMENT IT WAS HANDED**, so the throw path destroys it; see
+// `emitDestroyRejectedElement`, whose whole reason this shares with `__arr_set`.
+function buildArrMemSet(module StdModule)
+	var func = IrFunction.createFromStd(ArrMemSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkHigh = module.addBlock(func, label: b"chkhigh")
+	var bad = module.addBlock(func, label: b"badindex")
+	var store = module.addBlock(func, label: b"store")
+
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+	let value = 2 as ValueId
+
+	emitBufferAccessGuard(module, func: func, block: entry, checkHigh: checkHigh, bad: bad, ok: store, arr: arr, offset: index, isWrite: true, addressesBytes: false, ids: ids)
+
+	var afterReject = emitDestroyRejectedElement(module, func: func, cur: bad, record: arr, value: value, ids: ids)
+	emitMemoryThrow(module, block: afterReject, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
+
+	emitElementStoreAndOkReturn(module, func: func, store: store, arr: arr, index: index, value: value, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrMemSet'
 
 // ⭐ `__arr_mem_append(self, other)` — concatenate `other`'s live elements onto `self`, growing first. VOID
 // and throwing; see `ArrMemAppendName` for why it exists beside `__arr_append`.

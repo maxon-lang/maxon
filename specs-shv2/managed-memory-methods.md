@@ -956,3 +956,299 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:10:12: Unsupported: `Array` method 'setByte' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later
 ```
+
+### R4.6 — the buffer's `set` is bounded by CAPACITY, and the `Array`'s is not
+
+⚖ **USER RULING, 2026-07-30: `__ManagedMemory`'s element and byte writes are bounded by CAPACITY, not by
+length.** Three sources disagreed. The `setByte` line of the Documentation above (`panics if index >= length *
+elementSize`) says LENGTH; `stdlib/File.maxon:117-127` behaves as though it did, doing `setLength(len+1)`
+before `setByte(len, 0)` and commenting *"at the length boundary, so temporarily extend length to allow
+setByte at that index"*; v1 says CAPACITY, in a comment that gives the reason
+(`stdlib/Internals.maxon:3527-3530`, *"Byte writes are bounded by CAPACITY (the allocated region), NOT length
+— mirroring `__managed_mem_set`"*); and the runnable oracle could arbitrate neither, crashing with `E9001` on
+the discriminating program. **The ruling is CAPACITY. v1 is followed and the `setByte` documentation line above
+is treated as stale — do not "fix" shv2 back toward it.**
+
+⭐ **The ruling is what makes `setLength`'s OWN documented contract implementable.** That bullet says growing
+"must NOT initialize the exposed slots itself: its callers … **stage the new elements FIRST and use
+`setLength` to publish them**". Staging is only possible if a write may land in `[length, capacity)` — exactly
+what a capacity bound permits and a length bound forbids. Nothing in either corpus tested that round trip; the
+first case below is it.
+
+<!-- test: set-stages-into-capacity-then-set-length-publishes -->
+
+The round trip `setLength`'s contract names: four elements written while `length()` is still 0, then ONE
+`setLength` publishing all four at once. Under a length bound the first `set` is refused (`0 >= 0`) and the
+idiom has no spelling at all.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	if mm.length() != 0 'createPublishesNothing'
+		return 2
+	end 'createPublishesNothing'
+	try mm.set(0, value: 10) otherwise return 3
+	try mm.set(1, value: 20) otherwise return 3
+	try mm.set(2, value: 30) otherwise return 3
+	try mm.set(3, value: 40) otherwise return 3
+	try mm.setLength(4) otherwise return 4
+	let a = try mm.get(0) otherwise return 5
+	let b = try mm.get(1) otherwise return 5
+	let c = try mm.get(2) otherwise return 5
+	let d = try mm.get(3) otherwise return 5
+	return (a + b + c + d) as ExitCode
+end 'main'
+```
+```exitcode
+100
+```
+
+<!-- test: set-past-the-live-length-lands-and-reads-back-published -->
+
+The same rule with a NON-zero length, so the staged slot is genuinely past a live range rather than past an
+empty one: index 2 is written while the length is 2, and reads back once the length reaches 3.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	try mm.set(0, value: 1) otherwise return 3
+	try mm.set(1, value: 2) otherwise return 3
+	try mm.set(2, value: 39) otherwise return 4
+	try mm.setLength(3) otherwise return 5
+	let v = try mm.get(2) otherwise return 6
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+39
+```
+
+<!-- test: set-at-the-capacity-and-below-zero-is-refused -->
+
+The bound is the capacity, so the LAST slot inside it takes a write and the first slot outside it does not.
+The pairing is what makes this case discriminate: an `at capacity → throws` assertion on its own is satisfied
+by a LENGTH bound too, and settles nothing (`managed-memory-error-variants`'s `setByte(4, …)` on a capacity-4
+buffer is exactly that shape). The negative index is a separate compare — `StdCmpPred` is signed, so `-1 >= cap`
+is FALSE and an at-or-over test alone reads it as in range.
+```maxon
+function main() returns ExitCode
+	var seen = 0
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let cap = mm.capacity()
+	try mm.set(cap - 1, value: 7) otherwise return 2
+	try mm.set(cap, value: 7) otherwise (e) 'atCapacity'
+		match e 'k'
+			indexOutOfBounds then seen = seen + 1
+			default panic("set at the capacity must report indexOutOfBounds")
+		end 'k'
+	end 'atCapacity'
+	try mm.set(cap + 1, value: 7) otherwise (e) 'pastCapacity'
+		match e 'k'
+			indexOutOfBounds then seen = seen + 1
+			default panic("set past the capacity must report indexOutOfBounds")
+		end 'k'
+	end 'pastCapacity'
+	try mm.set(-1, value: 7) otherwise (e) 'negativeIndex'
+		match e 'k'
+			indexOutOfBounds then seen = seen + 1
+			default panic("set at a negative index must report indexOutOfBounds")
+		end 'k'
+	end 'negativeIndex'
+	if seen == 3 'allThree'
+		return 42
+	end 'allThree'
+	return 5
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: get-stops-at-the-live-length-where-set-does-not -->
+
+The ASYMMETRY, pinned in one program so the two bounds cannot silently converge: index 1 accepts a write while
+the length is 1 and refuses a read at the same instant, and the read starts working the moment `setLength`
+publishes it. Reading an unpublished slot has nothing to see; writing one is the whole point.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(1) otherwise return 2
+	try mm.set(1, value: 77) otherwise return 3
+	let unpublished = try mm.get(1) otherwise 42
+	if unpublished != 42 'readPastLength'
+		return 4
+	end 'readPastLength'
+	try mm.setLength(2) otherwise return 5
+	let published = try mm.get(1) otherwise return 6
+	return published as ExitCode
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- test: staging-a-managed-element-twice-releases-the-first -->
+
+⭐⭐ **THE DESTRUCTOR DECISION, AND THE CASE THAT DECIDES IT.** `__arr_set` destroys the slot it overwrites,
+which is right for a slot inside `[0, length)` — it holds a live element that nothing else will drop. A staged
+slot in `[length, capacity)` holds a NULL by the capacity-slot invariant, so the destroy walk's existing
+null-guard skips it and no destructor ever runs on a null.
+
+v1 additionally gates the release on `idx < length` (`stdlib/Internals.maxon:3319-3331`), which shv2 does NOT
+copy — and this program is why. v1 can afford it because staging there is a compiler-internal idiom that writes
+each fresh slot once; shv2 makes staging USER-reachable, so a slot may be staged TWICE before it is published,
+and under an `idx < length` gate the first heap string would never be released. The null guard releases it.
+Runs under the leak gate, so a leak is exit 101.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("first published string, long enough to require an allocation")
+	xs.push("second published string, long enough to require an allocation")
+	if xs.managed.capacity() < 3 'needsAStagingSlot'
+		return 1
+	end 'needsAStagingSlot'
+	try xs.managed.set(2, value: "staged heap string number one, long enough to require an allocation") otherwise return 2
+	try xs.managed.set(2, value: "restaged heap string number two, long enough to require an allocation") otherwise return 3
+	try xs.managed.setLength(3) otherwise return 4
+	let published = try xs.get(2) otherwise return 5
+	return published.byteLength() as ExitCode
+end 'main'
+```
+```exitcode
+69
+```
+
+<!-- test: set-byte-past-the-live-length-is-allowed-within-capacity -->
+
+⚖ The USER RULING of 2026-07-30 itself, pinned as behaviour rather than as prose: `setByte` at an offset past
+the live length but inside the capacity is ALLOWED. This case is GREEN before the rung as well as after — the
+ruling keeps R4.4's `setByte` exactly as it shipped — so it is a regression guard, not an unlock. It exists
+because the Documentation section above still carries the stale LENGTH wording and a future reader will find it.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	try mm.setByte(3, value: 65) otherwise return 3
+	try mm.setLength(4) otherwise return 4
+	let v = try mm.byteAt(3) otherwise return 5
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+65
+```
+
+<!-- test: array-set-is-still-bounded-by-the-live-length -->
+
+⭐ **THE NEGATIVE CONTROL, and the case that makes the six above trustworthy.** `Array.set` must NOT move:
+`specs/arrays.md` and the whole array corpus are written against a length bound, and `__arr_set` is shared.
+Without this case a change that made BOTH surfaces capacity-bounded would satisfy every other case here.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	arr.push(2)
+	if arr.capacity() < 4 'needsASlotPastTheLength'
+		return 1
+	end 'needsASlotPastTheLength'
+	try arr.set(2, value: 3) otherwise 'pastLength'
+		return 42
+	end 'pastLength'
+	return 5
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: set-on-a-view-detaches-before-it-reads-a-capacity -->
+
+⚠ **A VIEW CARRIES A NEGATIVE CAPACITY** (`BufferOwnership.ViewBufferCapacity` is exactly `-1`), so a capacity
+bound read off one before the detach refuses EVERY index — `0 >= -1`. The detach republishes `capacity@16` as
+the live length, so on a detached view the two bounds coincide: index 1 lands, index 2 does not. The parent is
+read back to prove the write went to the view's own private buffer.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(11)
+	arr.push(22)
+	arr.push(33)
+	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
+	try sub.managed.set(1, value: 99) otherwise return 1
+	try sub.managed.set(2, value: 99) otherwise 'pastTheDetachedCapacity'
+		let parent = try arr.get(1) otherwise panic("get: index 1 of a length-3 array")
+		return (sub.managed.length() + parent) as ExitCode
+	end 'pastTheDetachedCapacity'
+	return 5
+end 'main'
+```
+```exitcode
+24
+```
+
+<!-- test: a-refused-set-does-not-leak-the-element-it-was-given -->
+
+⭐⭐ **A SECOND BUG R4.6 FOUND AND FIXED, THIS ONE ON THE `Array` SURFACE (P1.7 slice 3a).** The parser MOVES
+a managed element into `set` (`moveElementIntoArray`), so the callee owns it from the call onward and the
+caller's scope-exit drop is suppressed. On the success path the array becomes the owner — and on the
+out-of-range path nothing did, so the element simply leaked. MEASURED before the fix: the first `try` below
+exited **101**, while the identical program over an `Array with Int` exited 0 (the control that says this is
+the managed move-in, not the throw). R4.6 fixes it because `__arr_mem_set` would otherwise have been written
+with the identical leak on its first day. Both surfaces are asserted, because both take the move-in.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var refused = 0
+	var xs = StrArray.create()
+	xs.push("a published string, long enough to require an allocation")
+	try xs.set(99, value: "a string the array setter refuses, long enough to allocate") otherwise 'arraySurface'
+		refused = refused + 1
+	end 'arraySurface'
+	try xs.managed.set(99, value: "a string the buffer setter refuses, long enough to allocate") otherwise 'bufferSurface'
+		refused = refused + 1
+	end 'bufferSurface'
+	if refused == 2 'both'
+		return 42
+	end 'both'
+	return 5
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: set-byte-through-a-viewed-owner-detaches-first -->
+
+⭐⭐ **A BUG R4.6 FOUND AND FIXED IN R4.4's WRITE GUARD.** `__arr_cow_detach` has TWO arms — a buffer that is
+not this record's (`capacity < 0`), and one that IS but is being read by a view — and R4.4's guard called the
+detach only under a hand-written copy of the FIRST arm (`emitBufferNotOwned`). So a `setByte` through the
+OWNER of a viewed buffer wrote straight through the sharing. MEASURED before the fix: this program returned
+**198**, the view reading back the owner's 99. The guard now calls `__arr_cow_detach` unconditionally and lets
+it answer both arms, which is the gating rule `buildArrCowDetach`'s own header states.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(11)
+	arr.push(22)
+	arr.push(33)
+	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
+	try arr.managed.setByte(0, value: 99) otherwise panic("setByte: offset 0 of a length-3 buffer")
+	let viewed = try sub.get(0) otherwise panic("get: index 0 of a length-2 view")
+	let owner = try arr.get(0) otherwise panic("get: index 0 of a length-3 array")
+	return (viewed + owner) as ExitCode
+end 'main'
+```
+```exitcode
+110
+```
