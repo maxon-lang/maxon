@@ -2399,6 +2399,16 @@ typealias InterfaceArityMap = Map with (ByteArray, ElementCount)
 // `interface Plain` supplies the FACT 0. Folding the two into one number would write the guess where the
 // fact is known — and the two coincide only because today's single reader stops at the first argument either
 // way.
+//
+// ⚠ **NO TEST GUARDS THAT SPLIT, AND NONE CAN BE WRITTEN WHILE THIS IS THE ONLY READER — MEASURED (R7
+// review), so it is recorded HERE rather than left to be rediscovered.** `parseConformanceWithArgs` asks the
+// arity only after one argument is already read, and loops `while args.count() < arity`, so `declared(0)` and
+// `undeclared`'s guess of 1 stop at the identical token. Collapsing the two — returning the guess for
+// `declared(0)` — and rebuilding leaves the whole suite green at **2812/0**. The split is kept because the
+// separate answer is the TRUE one and a sentinel count would be the sentinel-return this codebase forbids,
+// NOT because anything checks it; the first reader that can tell 0 from 1 apart (a surplus-argument
+// diagnostic is the one `ConformanceCheck.checkOneInterfaceConformance` explicitly leaves open) is the one
+// that owes this union its case.
 export union DeclaredInterfaceArity
 	declared(arity ElementCount)
 	undeclared

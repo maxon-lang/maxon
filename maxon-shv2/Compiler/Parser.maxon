@@ -9003,9 +9003,12 @@ export type Parser
 	// ⚠ **AN INTERFACE NO FILE DECLARES DEFAULTS TO ONE, AND THAT DEFAULT IS COPIED DELIBERATELY** —
 	// bootstrap `GetAssociatedTypeCount` (`2-Parser.cs:2939`) and v1 `lookupInterfaceUsesParamCount`
 	// (`Parser.maxon:1959`) both do it, rather than refusing a name they cannot resolve. After R7 that set is
-	// exactly the TYPOS: the sweep visits every source path in the program, stdlib included, before any file
-	// is parsed. Refusing instead would turn a misspelled interface into a parse error where the whole-program
-	// `E3015 … implements unknown interface` already names it precisely.
+	// the TYPOS plus the interfaces whose HEADER THE SWEEP COULD NOT READ, and nothing else: the sweep visits
+	// every source path in the program, stdlib included, before any file is parsed, and it is TOLERANT — a
+	// malformed header records no arity (`recordScannedInterfaceArity`), which is the one non-typo way to land
+	// here and is a program the real parse rejects on its own line anyway. Refusing instead would turn a
+	// misspelled interface into a parse error where the whole-program `E3015 … implements unknown interface`
+	// already names it precisely.
 	function interfaceUsesArity(interfaceName ByteArray) returns ElementCount
 		match builtinInterface(interfaceName) 'builtin'
 			found(iface) then return iface.associatedTypeNames.count()

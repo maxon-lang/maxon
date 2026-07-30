@@ -900,15 +900,22 @@ end 'main'
 ```
 
 
-### A forward interface with NO `uses` clause has arity ZERO, and zero is an ANSWER
+### A forward interface with NO `uses` clause does not swallow the conformance that follows it
 
 `Plain` declares no associated type, so its surplus `with Score` binds nothing (the rule the case below
 states) and the comma after it opens the SIBLING `Duo` — whose own two `uses` names then take BOTH of the
 remaining arguments. Every interface here is declared below the type, so the arity of each comes from the
 whole-program sweep. It fails before R7 the way the two cases above do — `Duo` truncates at `Score` and
-`Weight` is read as an interface — and it pins the arity-0 half: an interface the sweep recorded with NO
-`uses` clause must not be handed the unresolvable default of 1, which is the number a genuinely undeclared
-name gets.
+`Weight` is read as an interface — so what it pins is that a FORWARD `Plain` still stops its own comma
+loop while a FORWARD `Duo` continues one, in a single `implements` list.
+
+⚠ **IT DOES NOT PIN ARITY 0 AS DISTINCT FROM THE UNRESOLVABLE DEFAULT OF 1, AND NO CASE CAN — MEASURED
+(R7 review).** `parseConformanceWithArgs` consults the arity only once a first argument is already read
+and its loop is `while args.count() < arity`, so 0 and 1 stop at exactly the same token through the sole
+reader that exists. Collapsing `DeclaredInterfaceArity.declared(0)` into that default and rebuilding
+leaves the WHOLE suite green at 2812/0 — so the 0-vs-undeclared split in `SignatureIndex.maxon` is
+correct modelling that today's corpus cannot exercise, and a future edit that breaks it will be caught by
+nothing here. Do not read this case as its guard.
 
 <!-- test: forward-interface-with-no-uses-clause -->
 ```maxon
