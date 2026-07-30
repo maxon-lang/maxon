@@ -2068,7 +2068,7 @@ end 'requireAbiParamCount'
 
 // **THE BUILTIN STRING METHODS** (P1.2 wave D; the byte/ASCII family P1.8 Slice C). `append` grows a `var`
 // String in place; `byteLength` reads its byte count. String is the one non-struct type with methods at this
-// rung, dispatched by name in `parseStringMethodCall` off a String-typed receiver.
+// rung, dispatched by name in `dispatchStringMethod` off a String-typed receiver.
 let StringByteLengthMethod = b"byteLength"
 
 // ⭐ **THE P1.8 SLICE B METHOD NAMES.** `count`/`bytes` are String's; `bytes`/`byteLength`/`asciiValue`
@@ -2237,7 +2237,7 @@ function quadArgs(first ValueId, second ValueId, third ValueId, fourth ValueId) 
 end 'quadArgs'
 
 // **THE BUILTIN `Array` METHODS** (P1.7 slice 1). `create` is a static factory; the rest are instance
-// methods dispatched by name in `parseArrayMethodCall` off an `Array`-instance receiver. `get`/`set`/
+// methods dispatched by name in `dispatchArrayMethod` off an `Array`-instance receiver. `get`/`set`/
 // `first`/`last`/`pop`/`remove` are THROWING (they ride `try … otherwise`); the rest are non-throwing.
 let CreateMethod = b"create"
 let ArrayPushMethod = b"push"
@@ -4729,7 +4729,7 @@ export type Parser
 	// A `.startIndex` / `.endIndex` / `.findFirst` / `.findLast` at the cursor — the four methods that
 	// PRODUCE a `StringIndex` (P1.8 Slice B2), for whose compiler-owned layout the sweep is the write.
 	// The four are asked in ONE predicate because they are one question ("can this file make an index?"),
-	// and a fifth producer added to `parseStringMethodCall` without a line here would register no layout —
+	// and a fifth producer added to `dispatchStringMethod` without a line here would register no layout —
 	// which is why `stringIndexLayoutOrPanic` panics rather than answering when the entry is missing.
 	function atStringIndexProducer() returns bool
 		return self.atBuiltinMethodCall(StringStartIndexMethod) or self.atBuiltinMethodCall(StringEndIndexMethod) or self.atBuiltinMethodCall(StringFindFirstMethod) or self.atBuiltinMethodCall(StringFindLastMethod)
@@ -14187,7 +14187,7 @@ export type Parser
 	// reason: it is not defensive, it IS the cost.
 	//
 	// ⚠ **TWO SITES DERIVE THE SUBJECT FIRST ANYWAY, AND THAT IS MEASURED RATHER THAN OVERLOOKED.** A method
-	// call on an array or a struct resolves its subject unconditionally (`parseArrayMethodCall`,
+	// call on an array or a struct resolves its subject unconditionally (`dispatchMethodOnBinding`,
 	// `dispatchMethodOnBinding`), because the name is needed to MINT a borrow as well as to record a write —
 	// and minting happens precisely when no borrow exists yet, so the gate cannot be hoisted in front of it.
 	// The optimizer measured the one variant that could be — gating the array-method derivation on
@@ -14404,7 +14404,7 @@ export type Parser
 		// ⚠ **AN UNNAMED CALLEE IS A WITNESS DISPATCH, AND THE QUESTION IS UNASKABLE — NOT MERELY UNASKED.**
 		// The conflict this door records is "does the CALLEE write the storage this argument names?", answered
 		// from the by-callee mutation summary. Under dictionary-passing a witness dispatch resolves to no one
-		// impl, so there is no callee to key on (`parseWitnessMethodOnValue` passes empty, for the same reason
+		// impl, so there is no callee to key on (`dispatchWitnessMethod` passes empty, for the same reason
 		// it discards `argImmutableNames` — E3019 cannot ask there either). Refused HERE, explicitly, because
 		// recording a site whose summary lookup is guaranteed to miss would be a silent no-op wearing the shape
 		// of a check.
@@ -19004,7 +19004,7 @@ export type Parser
 	// (or negate) its bool; `<`/`>`/`<=`/`>=` dispatch `Comparable.compare` and test its `Ordering` against a
 	// case tag. The receiver choice, the constraint search, the `Self`-argument check, the result typing and the
 	// emit are therefore written ONCE, and only the (method, interface) pair and the verdict differ. The
-	// dispatch shape is exactly what `parseWitnessMethodOnValue` builds for `<T>.equals(other)` /
+	// dispatch shape is exactly what `dispatchWitnessMethod` builds for `<T>.equals(other)` /
 	// `<T>.compare(other)`, so the operator form and the method form cannot come to mean different things.
 	//
 	// The `typeParameter` operand is the witness receiver. Equality is symmetric, so a `T`-vs-value mix may use
@@ -21285,7 +21285,7 @@ export type Parser
 		// ⭐ **A `var` RECEIVER IS THE SLOT'S CURRENT OCCUPANT, LOADED — AND IT IS NOT STORED BACK.** Every
 		// receiver-writing method rewrites the RECORD in place and never moves it: `__str_append` grows a
 		// String through `buffer@0`/`length@8`, and an `Array`'s `push`/`set`/`clear` detach or rewrite the
-		// element buffer while the 48-byte record stays put (`parseArrayMethodCall` states the same
+		// element buffer while the 48-byte record stays put (`dispatchArrayMethod` states the same
 		// invariant for a local receiver). So the pointer in the `.data` slot is still the right pointer
 		// after the call, and a store-back would be a second write of a value that did not change. The
 		// loaded pointer is BORROWED — the slot owns it (see `emitGlobalLoad`) — so nothing drops it here
@@ -22421,7 +22421,7 @@ export type Parser
 	end 'parseTrimCharacterSet'
 
 	// ⭐ **A `StringIndex`'S BUILTIN METHODS (P1.8 slice B2)** — `charIndex()` and `bytePos()`, the reference's
-	// own two accessors (`stdlib/String.maxon:925-931`). Its own dispatcher for `parseCharacterMethodCall`'s
+	// own two accessors (`stdlib/String.maxon:925-931`). Its own dispatcher for `dispatchCharacterMethod`'s
 	// reason: sharing the struct dispatcher would send these to `dispatchMethodOnBase`, which resolves a
 	// method NAME against `funcSignatures` — and no file declares `__StringIndex.charIndex`, so every call
 	// would be E3004 against a method that is right there in the type.
