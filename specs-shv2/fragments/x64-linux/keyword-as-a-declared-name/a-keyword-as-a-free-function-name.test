@@ -1,0 +1,33 @@
+// Test: a-keyword-as-a-free-function-name
+typealias Integer = int(i64.min to i64.max)
+
+function from(n Integer) returns Integer
+	return n + 1
+end 'from'
+
+function main() returns ExitCode
+	return from(41)
+end 'main'
+---
+ExitCode: 42
+---
+func @from {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 41
+    x64.callDirect from
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

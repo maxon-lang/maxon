@@ -1,0 +1,90 @@
+// Test: a-keyword-case-arm-whose-value-is-a-PARENTHESIZED-match
+typealias Integer = int(i64.min to i64.max)
+
+enum Kw
+	function
+	alpha
+end 'Kw'
+
+enum Pick
+	one
+	two
+end 'Pick'
+
+function classify(k Kw, p Pick) returns Integer
+	return match k 'outer'
+		function gives (match p 'inner'
+			one gives 40
+			two gives 2
+		end 'inner')
+		alpha gives 0
+	end 'outer'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Kw.function, p: Pick.one) + classify(Kw.function, p: Pick.two) + classify(Kw.alpha, p: Pick.one)
+end 'main'
+---
+ExitCode: 42
+---
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rax, 40
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg r8, rax
+    x64.jmp matchcont
+  matchdead:
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.callDirect classify
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 1
+    x64.callDirect classify
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect classify
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

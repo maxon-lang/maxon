@@ -1,0 +1,445 @@
+---
+feature: keyword-as-a-declared-name
+status: experimental
+keywords: [parser, keyword, function, parameter, declaration, block-structure, token-scan]
+category: parser-edge-cases
+---
+
+# A KEYWORD MAY BE A DECLARED NAME
+
+## Documentation
+
+`keyword-parameter-names.md` is the canonical spec for one half of this rule, but every one of its
+cases also needs `module typealias` — a separate feature with no stdlib consumer — so it is shelved
+whole and this file carries the mechanism in SINGLE-FILE form.
+
+**The rule is one sentence: a declaration position that expects an identifier accepts a KEYWORD
+TOKEN as a NAME.** A function's declared name and a parameter's name are both such positions —
+nothing else may stand there — so a keyword written in one is a name and not the construct it
+usually opens. Measured on the reference bootstrap: `function from`, `function if` and
+`function match` all compile, and to a byte-identical output size, because the name never reaches
+codegen.
+
+**`stdlib/FilePath.maxon:34` is the consumer** — `export static function from (path String) returns
+FilePath throws FilePathError` — and `from` is the only keyword any `stdlib/` file declares as a
+function name (4 sites, all `from`). `FilePath` gates `Process`/`File`/`Directory`.
+
+⚠ **THE RULE IS POSITION-SENSITIVE, AND THAT IS THE WHOLE DESIGN.** A keyword accepted as a name
+where a name is *already required* takes nothing away from the keyword: `from` still opens a
+`Set from […]` construction, `while`/`for`/`match`/`if`/`else`/`end` still open and close blocks, and
+`type` still declares a type. Every case below keeps the keyword's real syntactic role ALIVE in the
+same program as the declaration that borrows its spelling, because a rule that only ever ran on a
+program with no loops in it would not have been tested at all.
+
+⚠⚠ **THE BLOCK-STRUCTURE KEYWORDS ARE THE DANGEROUS ONES, AND THEY ARE DANGEROUS IN THE TOKEN SCANS
+RATHER THAN IN THE GRAMMAR.** `Parser.maxon` re-derives Maxon's block structure from the raw token
+array (`opensBlockAt` / `closesBlockAt`, and every scan that counts depth through them). A
+`function while(…)` declaration whose name is not recognized as a NAME reads as a block that never
+closes, and a `function f(end Integer)` parameter reads as a closer that never opened — so the
+file's whole block-extent index shifts, the declaration sweep's depth never returns to zero, and the
+drift guards fire as a compiler PANIC on a correct program. `keywordIsAName` is where the exclusion
+lives; this is the same fact `keyword-named-case-members.md` pins one layer down, for a keyword
+spelled as an enum CASE name.
+
+⚠ **A KEYWORD-NAMED PARAMETER MUST ALSO BE READABLE**, or the declaration is decoration: `return
+type` inside `function identity(type Integer)` reads the parameter. Every keyword that has an
+expression meaning of its own keeps it — `match`, `try`, `function`, `self`, `Self`, `sizeof`,
+`true`, `false` in operand position, and `not`/`async`/`await` as prefix operators — so those may be
+DECLARED as names but not read bare, which is exactly what the reference bootstrap does. `return
+end` is a BARE return for the same reason (`end` terminates a value-less `return`).
+
+## Tests
+
+### The declaration positions
+
+<!-- test: a-keyword-as-a-free-function-name -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function from(n Integer) returns Integer
+	return n + 1
+end 'from'
+
+function main() returns ExitCode
+	return from(41)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-keyword-as-a-static-method-name -->
+The shape `stdlib/FilePath.maxon:34` declares.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export let v as Integer
+
+	export static function from(n Integer) returns Self
+		return Self{v: n}
+	end 'from'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.from(42)
+	return b.v
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-keyword-as-an-instance-method-name -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export let base as Integer
+
+	export static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	export function to() returns Integer
+		return base + 2
+	end 'to'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.create(40)
+	return c.to()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-keyword-as-an-interface-METHOD-name -->
+An interface REQUIREMENT is a declared name in the same sense a function's own name is, so it admits a
+keyword too — a requirement a conforming type could not spell would be one no type could satisfy.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Scaled
+	function to() returns Integer
+end 'Scaled'
+
+type Cell implements Scaled
+	export let n as Integer
+
+	export static function from(n Integer) returns Self
+		return Self{n: n}
+	end 'from'
+
+	export function to() returns Integer
+		return n * 3
+	end 'to'
+end 'Cell'
+
+function main() returns ExitCode
+	return Cell.from(14).to()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-keyword-as-a-parameter-name-read-in-the-body -->
+The single-file form of `keyword-parameter-names.md`'s `type-as-parameter-name-crossfile`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function identity(type Integer) returns Integer
+	return type
+end 'identity'
+
+function main() returns ExitCode
+	return identity(42)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: four-different-keywords-as-parameter-names -->
+`type`, `enum`, `union` and `interface` — the four `keyword-parameter-names.md` names — in ONE
+parameter list, each read in the body. The second and later parameters are LABELLED with their own
+keyword spelling, so the argument-label position accepts a keyword too; a parameter that cannot be
+labelled cannot be passed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function combine(type Integer, enum Integer, union Integer, interface Integer) returns Integer
+	return type + enum + union + interface
+end 'combine'
+
+function main() returns ExitCode
+	return combine(1, enum: 2, union: 4, interface: 35)
+end 'main'
+```
+```exitcode
+42
+```
+
+### The block-structure keywords, beside their real role
+
+<!-- test: block-keywords-as-function-names-beside-real-blocks -->
+`while`, `for`, `end`, `match` and `if` are declared as function NAMES in a program that also runs a
+real `while` loop, a real `for` loop, a real `if`/`else` chain and a real `match` — so a token scan
+that read any of those names as block structure would mis-predict a construct's `end` and take the
+compiler down in `assertScanAligned`. Three of them are declared as STATIC METHODS and called
+`Ops.while(i)`, where the `.` before the keyword is what lets the scans exclude it; a fourth is a
+top-level free function (a different scan context — the depth-counting declaration sweep) declared but
+not called, because a bare `while(…)`/`end(…)`/`for(…)`/`match(…)` is the refused shape the last case
+in this file pins. A free `if` IS callable bare, because `if`'s own position test already excludes it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Grade
+	low
+	high
+end 'Grade'
+
+type Ops
+	export static function while(n Integer) returns Integer
+		return n * 2
+	end 'while'
+
+	export static function for(n Integer) returns Integer
+		return n + 3
+	end 'for'
+
+	export static function end(n Integer) returns Integer
+		return n - 1
+	end 'end'
+end 'Ops'
+
+function match(n Integer) returns Integer
+	return n + 1
+end 'match'
+
+function if(n Integer) returns Integer
+	if n > 4 'big'
+		return 2
+	end 'big'
+	return 1
+end 'if'
+
+function grade(n Integer) returns Grade
+	if n > 1 'high'
+		return Grade.high
+	end 'high'
+	return Grade.low
+end 'grade'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 3 'count'
+		total = total + Ops.while(i)
+		i = i + 1
+	end 'count'
+
+	for j in 0 upto 3 'walk'
+		total = total + Ops.for(j)
+	end 'walk'
+
+	if total > 0 'positive'
+		total = total + Ops.end(10)
+	end 'positive' else 'negative'
+		total = total - 1
+	end 'negative'
+
+	let bonus = match grade(if(5)) 'pick'
+		low gives 5
+		high gives 15
+	end 'pick'
+
+	return total + bonus
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: block-keywords-as-parameter-names-beside-real-blocks -->
+The same keywords in the PARAMETER position, which is the shape whose miscount is a spurious closer
+rather than a spurious opener, and LABELLED at the call site, which is the shape whose miscount is a
+spurious opener. The body of the function that declares them runs a real `while` and a real `if`, and
+its caller runs a real `for`. The two parameters that are READ are the non-block keywords `from` and
+`to`; the case below pins why a bare read of the other three is refused instead.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function weigh(while Integer, for Integer, match Integer, from Integer, to Integer) returns Integer
+	var acc = 0
+	var k = 0
+	while k < 3 'spin'
+		acc = acc + from
+		k = k + 1
+	end 'spin'
+
+	if acc > 2 'over'
+		acc = acc + to
+	end 'over'
+
+	return acc
+end 'weigh'
+
+function main() returns ExitCode
+	var total = 0
+	for i in 1 upto 4 'walk'
+		total = total + weigh(i, for: 3, match: 4, from: 2, to: 8)
+	end 'walk'
+	return total
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.a-bare-read-of-a-block-keyword-parameter -->
+⛔ **THE ONE SHAPE OF THIS RULE SHV2 REFUSES, and it is refused rather than mis-compiled.** A bare
+read of a binding named `while`/`match`/`for`/`end` is a NAME to the expression parser and BLOCK
+STRUCTURE to the token scans, whose verdict for those four does not depend on position. The scans see
+raw tokens and have no scope, so they cannot know the name is bound; accepted, the program panics in
+`assertScanAligned`. `if`/`else`/`otherwise` are NOT refused — their position tests already answer no
+for an operand — which is why the case above reads `from` and `to` freely.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function weigh(while Integer) returns Integer
+	return 1 + while
+end 'weigh'
+
+function main() returns ExitCode
+	return weigh(41)
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/keyword-as-a-declared-name/error.a-bare-read-of-a-block-keyword-parameter.test:5:13: Unsupported: reading 'while' as a value here — it is a legal DECLARED name, but the token scans that re-derive Maxon's block structure read a bare `while` in this position as block structure and have no scope to tell them otherwise. Pass it under a different name, or read a differently-named binding
+```
+
+### The two defects this rung's own review found, and neither was in the grammar
+
+<!-- test: a-keyword-named-parameter-that-a-CONSTRUCTOR-CONSUMES -->
+⚠⚠ **A KEYWORD-NAMED PARAMETER IS STILL A PARAMETER TO THE OWNERSHIP MACHINERY, and the token scans
+that decide "does this constructor CONSUME parameter k?" read a reference to one by TOKEN KIND.** Taught
+the declaration and not those scans, `Self{value: from}` recorded no consume: the caller kept its `+1`,
+the box owned the same `String`, and both dropped it. Measured before the fix — **SIGSEGV, exit 139** —
+and renaming the parameter to anything that is not a keyword was the entire difference between a crash
+and the right answer. The monomorphic twin did not crash but emitted a spurious `__mm_alloc` +
+`__str_copy` per construction, which is a wrong COST driven by a name's spelling.
+```maxon
+type Box uses T
+	export var value as T
+
+	export static function create(from T) returns Self
+		return Self{value: from}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	var n = 7
+	let msg = "hello{n}"
+	let b = StrBox.create(msg)
+	return b.value.byteLength() * 7 as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-keyword-case-arm-whose-value-is-a-PARENTHESIZED-match -->
+⚠⚠ **`function gives (…)` SPELLS `function <name> (` CHARACTER FOR CHARACTER**, because `function` is a
+legal case NAME and `gives` is word-shaped. So a match ARM was read as a function declaration and the
+parenthesized expression as its parameter list — and everything inside it, the nested `match` and its own
+`end` included, was recorded as a declared name. `closesBlockAt` then stopped seeing that `end`, the
+inner arm loop read it as one more case, and shv2 refused a program the reference bootstrap compiles:
+**`E3034 unknown enum case: 'end'`**, pointing at the closing `end`.
+
+The cure is that "no block structure may appear inside a parameter list" — the argument the recording
+walk rests on — is now a CHECK (`parenGroupCanBeAParameterList`) rather than a claim: a block keyword may
+stand in a parameter list only where a NAME may, so one anywhere else proves the group is an expression.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Kw
+	function
+	alpha
+end 'Kw'
+
+enum Pick
+	one
+	two
+end 'Pick'
+
+function classify(k Kw, p Pick) returns Integer
+	return match k 'outer'
+		function gives (match p 'inner'
+			one gives 40
+			two gives 2
+		end 'inner')
+		alpha gives 0
+	end 'outer'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Kw.function, p: Pick.one) + classify(Kw.function, p: Pick.two) + classify(Kw.alpha, p: Pick.one)
+end 'main'
+```
+```exitcode
+42
+```
+
+### The keyword keeps its own role in the same program
+
+<!-- test: a-function-named-from-beside-a-set-from-construction -->
+`from` opens a `Set from […]` construction. Declaring a function named `from` in the same program
+must not disturb it, and calling that function must not be read as one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function from(n Integer) returns Integer
+	return n * 7
+end 'from'
+
+function main() returns ExitCode
+	let s = Set from [10, 20, 30, 40, 50, 60]
+	return from(s.count())
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-parameter-named-type-beside-a-real-type-declaration -->
+`type` declares a type. A parameter named `type` in the same program must not be read as one — the
+historical failure this rule's canonical spec was written for was a token pre-scanner that read
+`type StdType` inside a parameter list as a top-level `type StdType` declaration and shadowed the
+real one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder
+	export let n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Holder'
+
+function unwrap(type Holder) returns Integer
+	return type.n
+end 'unwrap'
+
+function main() returns ExitCode
+	return unwrap(Holder.create(42))
+end 'main'
+```
+```exitcode
+42
+```

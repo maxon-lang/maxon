@@ -1,0 +1,157 @@
+// Test: cross-file-keyword-case-and-range
+// --- file: kind.maxon
+export enum Kind
+	boolean
+	integer
+	float
+	named
+	function
+	unresolved
+	other
+end 'Kind'
+
+// --- file: main.maxon
+function isScalar(k Kind) returns bool
+	return match k 'check'
+		boolean to float gives true
+		named to other gives false
+	end 'check'
+end 'isScalar'
+
+function pickFloat() returns Kind
+	return Kind.float
+end 'pickFloat'
+
+function pickBoolean() returns Kind
+	return Kind.boolean
+end 'pickBoolean'
+
+function pickNamed() returns Kind
+	return Kind.named
+end 'pickNamed'
+
+function main() returns ExitCode
+	var score = 0
+	if isScalar(pickFloat()) 'f'
+		score = score + 1
+	end 'f'
+	if isScalar(pickBoolean()) 'b'
+		score = score + 2
+	end 'b'
+	if isScalar(pickNamed()) 'n'
+		score = score + 4
+	end 'n'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+func @isScalar {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 rcx, 2
+    x64.setccReg lessEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 3
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 rcx, 6
+    x64.setccReg lessEqual, rcx
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @pickFloat {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pickBoolean {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pickNamed {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.callDirect pickFloat
+    x64.movRegReg rcx, r8
+    x64.callDirect isScalar
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, f
+    x64.jmp critsplit
+  f:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.callDirect pickBoolean
+    x64.movRegReg rcx, r8
+    x64.callDirect isScalar
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.callDirect pickNamed
+    x64.movRegReg rcx, r8
+    x64.callDirect isScalar
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, n
+    x64.jmp critsplit
+  n:
+    x64.leaRegRegImm32 r8, rbx, 4
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

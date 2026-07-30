@@ -1,0 +1,38 @@
+// Test: four-different-keywords-as-parameter-names
+typealias Integer = int(i64.min to i64.max)
+
+function combine(type Integer, enum Integer, union Integer, interface Integer) returns Integer
+	return type + enum + union + interface
+end 'combine'
+
+function main() returns ExitCode
+	return combine(1, enum: 2, union: 4, interface: 35)
+end 'main'
+---
+ExitCode: 42
+---
+func @combine {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg r8, rax, r9
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 4
+    x64.movRegImm32 r9, 35
+    x64.callDirect combine
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

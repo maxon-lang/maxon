@@ -3354,6 +3354,12 @@ end 'insertCarriedPosition'
 // per-opener heap object would be one live allocation per construct, on the token array's own scale.
 typealias TokenIndexColumn = Array with TokenIndex
 
+// The INITIAL `Parser.declaredNameKeywords`, AND the anchor whose `is`-identity says that list has not been
+// built yet — `sharedEmptyBlockExtentEnds`'s pattern, for its reason and with its invariant: the builder
+// REPLACES the field with a fresh list rather than mutating this one, so it stays empty and is safe to share
+// across the per-file parse fan-out.
+let sharedEmptyDeclaredNameKeywords = TokenIndexColumn.create()
+
 // The INITIAL `Parser.blockExtentEnds`, AND the anchor whose `is`-identity says the index has not been built
 // yet — `sharedEmptyInstanceAliasMap`'s pattern, for its reason and with its invariant. A parser that never
 // asks where a block closes (the signature sweep, a file with no `if`/`while`/`match`) allocates nothing
@@ -3473,14 +3479,41 @@ function tokenIsLiteralKind(kind TokenKind) returns bool
 	return kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.charLiteral or kind == TokenKind.byteStringLiteral
 end 'tokenIsLiteralKind'
 
-// Can `tok` serve as an enum/union CASE NAME? An identifier, or a KEYWORD used as one — `enum
-// TokenType { function return end if … }` is legal (`keyword-as-case-name.md`), and a keyword
-// carries its source spelling in `.value` (the lexer emits it through the same path an identifier
-// takes). The signal that a token is word-shaped rather than punctuation is that it carries text: a
-// punctuator, `newline` and EOF all carry the shared EMPTY slice (see Token.value), while a literal
-// carries text but is ruled out by its KIND. So a case name is an identifier, or any non-literal
-// token that carries a spelling.
-function tokenNamesEnumCase(tok Token) returns bool
+// ⭐ **THE TOKEN KINDS MAXON'S BLOCK STRUCTURE IS SPELLED WITH** — exactly the kinds
+// `opensBlockAt`/`closesBlockAt` can ever answer `true` for, and therefore exactly the kinds whose meaning
+// the keyword-as-a-NAME exclusion can suppress (`keywordIsAName` is consulted about no other).
+//
+// ⚠ **IT IS LOAD-BEARING, NOT DOCUMENTATION**: `opensBlockAt` early-returns on it, so a construct added to
+// that chain WITHOUT being added here never opens a block at all — a loud drift-guard panic on the first
+// program that nests it, rather than a silent divergence between two spellings of one list. Its second
+// reader is `parenGroupCanBeAParameterList`, which needs the same set to tell a parameter list from an
+// arbitrary parenthesized expression.
+function kindSpellsBlockStructure(kind TokenKind) returns bool
+	return kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for or kind == TokenKind.if or kind == TokenKind.else or kind == TokenKind.otherwise or kind == TokenKind.end
+end 'kindSpellsBlockStructure'
+
+// ⭐ **CAN `tok` SERVE AS A NAME — in any position where a name is the ONLY thing that may stand?** An
+// identifier, or a KEYWORD spelled there. A keyword carries its source spelling in `.value` (the lexer
+// emits it through the same path an identifier takes), and the signal that a token is word-shaped rather
+// than punctuation is exactly that it carries text: a punctuator, `newline` and EOF all carry the shared
+// EMPTY slice (see Token.value), while a literal carries text but is ruled out by its KIND. So a name is
+// an identifier, or any non-literal token that carries a spelling.
+//
+// **THREE POSITIONS ASK IT, AND THEY ARE ONE QUESTION** — which is why it is one predicate rather than a
+// per-position list of admitted keywords:
+//
+//   • an enum/union CASE name — `enum TokenType { function return end if … }` (`keyword-as-case-name.md`);
+//   • a DECLARED name — a function's own name and a parameter's name (`keyword-as-a-declared-name.md`,
+//     D8): `export static function from (path String)` is `stdlib/FilePath.maxon:34`, and it is the only
+//     keyword any `stdlib/` file declares as a function name;
+//   • a MEMBER name after a `.` — `Box.from(7)`, `p.to()` (`memberNameTokenAt`).
+//
+// ⚠ **IT IS THE POSITION THAT LICENSES THIS, NOT THE KEYWORD**, so it takes nothing away from the
+// keyword: `from` still opens a `Set from […]`, `while`/`for`/`match` still open blocks, `type` still
+// declares a type. An allowlist of "harmless" keywords would be the same fact written down twice — once
+// here and once in whichever grammar rule the keyword really belongs to — and would silently refuse the
+// next keyword a corpus file declares.
+function tokenCanBeAName(tok Token) returns bool
 	if tok.kind == TokenKind.identifier 'plainIdentifier'
 		return true
 	end 'plainIdentifier'
@@ -3488,7 +3521,35 @@ function tokenNamesEnumCase(tok Token) returns bool
 		return false
 	end 'punctuationOrEof'
 	return not tokenIsLiteralKind(tok.kind)
-end 'tokenNamesEnumCase'
+end 'tokenCanBeAName'
+
+// What a `consumeNameToken` mismatch names when the position wanted an enum/union CASE name — the
+// bootstrap's phrasing, and the one spelling of it, so the declaration reader and the `Color.red`
+// reader cannot report the same malformed program two different ways.
+let EnumCaseNameExpectation = "an enum case name"
+
+// ⚡ **WHICH NAME A `consumeNameToken` MISMATCH SHOULD SAY IT WANTED — a payload-free enum, for
+// `IrInterface.BuiltinConformer`'s MEASURED reason.** `consumeNameToken` sits on a per-token path (every
+// declaration, parameter, callee, method name, argument label and variable READ in the program), and passing
+// the expectation as a rendered `String` allocates one at each of them for a diagnostic almost none of them
+// raises. MEASURED on the scale ladder, against a parent-commit binary at the same path: passing
+// `TokenKind.identifier.rawValue` eagerly cost **+5,495 allocations at rung 0, doubling per rung**. The text
+// is now built only on the throw.
+enum NamePosition
+	// A DECLARATION's own name, a parameter, a callee or method name, an argument label — every position whose
+	// mismatch the spec corpus pins as E2010 `Expected 'identifier' but got '<x>'`.
+	declaration
+	// An enum/union CASE name, whose wording is the bootstrap's.
+	enumCase
+end 'NamePosition'
+
+// The expectation text for a `NamePosition`, rendered on the FAILURE path only (see `NamePosition`).
+function nameExpectationOf(position NamePosition) returns String
+	match position 'which'
+		declaration then return TokenKind.identifier.rawValue
+		enumCase then return EnumCaseNameExpectation
+	end 'which'
+end 'nameExpectationOf'
 
 // Does a scrutinee's type name resolve to a declared enum/union? The predicate `parseMatchCommon`
 // branches enum-vs-scalar on, factored out so the flag and the layout extraction below cannot come
@@ -3872,6 +3933,29 @@ export type Parser
 	// yet": a file that opens no block at all still gets a FRESH column, so an empty index and an absent one
 	// are never confused.
 	var blockExtentEnds as TokenIndexColumn
+	// ⭐ **THE FILE'S KEYWORD TOKENS THAT ARE DECLARED NAMES, ASCENDING** — a function's own name and each of
+	// its parameters' names, kept only where the source spelled a KEYWORD there (D8). It exists for exactly
+	// one reader, `keywordIsAName`: a keyword written in one of those positions is a NAME, so the block-extent
+	// scans must not read `function while(…)` as a block that never closes nor `function f(end Integer)` as a
+	// close that never opened.
+	//
+	// It is an INDEX and not an O(1) lookbehind because no bounded lookaround can answer the parameter case:
+	// `(` `match` `x` is a parenthesized match EXPRESSION inside a call, and `(` `match` `X` is a parameter
+	// named `match`, and the two are the same token shape — only the enclosing list's OWNER tells them apart.
+	// It is filled by ONE linear pass whose inputs are paren matching and `functionDeclarationAt`, neither of
+	// which knows anything about block structure, so it cannot be circular with the extent index that reads it.
+	//
+	// ⚡ **SPARSE, NOT A PER-TOKEN COLUMN, and that is a MEASURED choice.** A keyword-named declaration is
+	// rare — `stdlib/FilePath.maxon` is the ONLY `stdlib/` file with one — so this list is EMPTY for very
+	// nearly every file, and `namesADeclaration` answers off its `count()`. The dense `BoolArray` of
+	// tokenCount this started as cost **+5,487 allocations and +268 KB at rung 0 of the scale ladder, doubling
+	// per rung** (a same-path A/B against the parent commit); sparse, the same A/B reads a per-file empty
+	// array. `blockExtentEnds` next door is dense because its answer is DENSE — a block opens at a great many
+	// tokens — and this one's is not.
+	//
+	// FILE-scoped and keyed by an ABSOLUTE token index, `blockExtentEnds`'s discipline for its reason, and it
+	// points at the shared empty until the first query with that `is`-identity as the "have I run?" gate.
+	var declaredNameKeywords as TokenIndexColumn
 	// THE BLOCK EXPRESSION PARSING IS EMITTING INTO, and it MOVES. Until P1.0d.2 an
 	// expression always ended in the block it started in, so "where do ops go" could be a
 	// parameter threaded down from the statement. A short-circuit `and`/`or` ends that: it
@@ -4340,6 +4424,7 @@ export type Parser
 			iterationLockedBindings: sharedEmptyIterationLocks,
 			lastBlockBodyEnd: 0,
 			blockExtentEnds: sharedEmptyBlockExtentEnds,
+			declaredNameKeywords: sharedEmptyDeclaredNameKeywords,
 			currentBlock: IrBlock.create(0, label: DetachedBlockLabel),
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
@@ -4756,8 +4841,13 @@ export type Parser
 	// body the same overshoot swallows the NEXT type's members into this one's layout, which is a wrong
 	// ANSWER: the swallowed type's factory is registered under this type's name, so a call to it is typed
 	// from the wrong signature.
+	// ⭐ The NAME half asks `tokenCanBeAName`, not `kindAt(index + 1) == identifier`: a keyword is a legal
+	// declared name (D8), and a `function while(…)` this predicate did not recognize would leave the sweep's
+	// `depth` one too deep for the rest of the file — the exact failure the header above describes, reached
+	// by a keyword rather than by a closure. A closure literal is still excluded by construction: its `(`
+	// sits where the name would, and a punctuator carries no spelling.
 	function functionDeclarationAt(index TokenIndex) returns bool
-		return self.kindAt(index) == TokenKind.function and self.kindAt(index + 1) == TokenKind.identifier and self.kindAt(index + 2) == TokenKind.leftParen
+		return self.kindAt(index) == TokenKind.function and tokenCanBeAName(self.tokenAt(index + 1)) and self.kindAt(index + 2) == TokenKind.leftParen
 	end 'functionDeclarationAt'
 
 	// Is the cursor on a `Set from` construction — a bare `Set` identifier immediately followed by `from`
@@ -5228,10 +5318,11 @@ export type Parser
 			if self.closesBlockAt(q) 'typeEnd'
 				break
 			end 'typeEnd'
-			// A named `function <ident>` at the member level opens a method body (a closure is `function(` —
+			// A named `function <name>` at the member level opens a method body (a closure is `function(` —
 			// no name, no `end`). Its whole body is scanned in one nested pass, and the walk resumes past its
-			// `end` — so this outer loop only ever sees member-level tokens.
-			if self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.identifier 'method'
+			// `end` — so this outer loop only ever sees member-level tokens. Asked through the SHARED
+			// `functionDeclarationAt` so a KEYWORD-named method (D8) is a method here too.
+			if self.functionDeclarationAt(q) 'method'
 				let methodName = self.tokenAt(q + 1).value
 				let scan = self.scanOneMethodDescriptorSignals(q + 2)
 				// ⭐ A method that DROPS a consumed opaque ARRAY feed parameter needs the descriptor too (P1.7
@@ -5347,7 +5438,12 @@ export type Parser
 			// call would leave its caller with no descriptor to forward (a `forwardCallerLayout` panic). A
 			// callee that is NOT a sibling (a free function, a builtin) is dropped by the fixpoint's name->index
 			// filter, so over-including here is harmless.
-			if kind == TokenKind.identifier and self.isBareCallAt(q) 'bareCall'
+			// ⚠ A sibling's name may be a KEYWORD (D8: `to(item)` resolving to `self.to(item)`), so the callee is
+			// read through `tokenCanBeAName` — MINUS the block-structure kinds, which is not a hedge: a
+			// parenthesized loop condition IS `while (`, and a bare call to a sibling literally named
+			// `while`/`match`/`for`/`end` is a program `keywordIsANameInOperandPosition` already refuses, so the
+			// seven can only be false positives here.
+			if tokenCanBeAName(self.tokenAt(q)) and not kindSpellsBlockStructure(kind) and self.isBareCallAt(q) 'bareCall'
 				callees.push(self.tokenAt(q).value)
 			end 'bareCall'
 
@@ -5372,9 +5468,11 @@ export type Parser
 	end 'scanOneMethodDescriptorSignals'
 
 	// Is the token at `selfPos` the start of a `self.<method>(` call — the self-call the descriptor-need
-	// fixpoint threads through? `self` `.` `<ident>` `(`, four contiguous tokens.
+	// fixpoint threads through? `self` `.` `<name>` `(`, four contiguous tokens — the NAME asked through the
+	// shared `namesMemberAt`, so a KEYWORD-named method (D8: `self.to(item)`) is a self-call here too. Missed,
+	// the forward edge is never collected and the fixpoint leaves the forwarder's own argument borrowed.
 	function isSelfMethodCallAt(selfPos TokenIndex) returns bool
-		return self.kindAt(selfPos + 1) == TokenKind.dot and self.kindAt(selfPos + 2) == TokenKind.identifier and self.kindAt(selfPos + 3) == TokenKind.leftParen
+		return self.kindAt(selfPos + 1) == TokenKind.dot and self.namesMemberAt(selfPos + 2) and self.kindAt(selfPos + 3) == TokenKind.leftParen
 	end 'isSelfMethodCallAt'
 
 	// Is the identifier at `q` a BARE call `<identifier>(` — followed by `(` and NOT preceded by a `.` (which
@@ -5610,9 +5708,16 @@ export type Parser
 			q = q + 1
 		end 'stripOpen'
 
-		if self.kindAt(q) != TokenKind.identifier 'notIdentifier'
+		// ⚠ **A PARAMETER'S NAME MAY BE A KEYWORD (D8), SO THE REFERENCE TO IT IS ONE TOO** — asked through
+		// `tokenCanBeAName` and not `== identifier`. MEASURED before this: `Self{value: from}` inside
+		// `static function create(from T)` on a `Box uses T` instantiated `with String` recorded NO consume,
+		// so the caller kept its +1 while the box also owned it — `StrBox.create(msg)` SEGFAULTED on a
+		// double free, where the identical program spelling the parameter `v` ran. Widening claims nothing
+		// extra: the name is looked up in `paramNames` below, and a keyword that names no parameter is
+		// dropped exactly as an unrelated identifier is.
+		if not tokenCanBeAName(self.tokenAt(q)) 'notAName'
 			return paramNames.count()
-		end 'notIdentifier'
+		end 'notAName'
 		let idx = self.paramIndexIn(paramNames, name: self.tokenAt(q).value)
 		if idx >= paramNames.count() 'notParam'
 			return paramNames.count()
@@ -5681,7 +5786,10 @@ export type Parser
 				if kind == TokenKind.rightParen 'closeArg'
 					depth = depth - 1
 				end 'closeArg' else 'notClose'
-					if depth == 1 and kind == TokenKind.identifier and self.isBareArgValueAt(p) 'candidate'
+					// A parameter's name may be a KEYWORD (D8), so the bare reference to it is one too — through
+					// `tokenCanBeAName`, `consumedParamAfterColon`'s rule and for its measured reason (a missed feed
+					// leaves the concrete call site BORROWING a managed argument the owner then destroys).
+					if depth == 1 and tokenCanBeAName(self.tokenAt(p)) and self.isBareArgValueAt(p) 'candidate'
 						let idx = self.paramIndexIn(paramNames, name: self.tokenAt(p).value)
 						if idx < paramNames.count() and self.paramIsTypeParamTyped(typeParamPositions, index: idx) 'typeParamArg'
 							try feeds.set(idx, value: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: idx))) otherwise panic("markOpaqueArrayMutatorFeeds: feeds.set OOB at {idx} despite idx < paramNames.count()")
@@ -5715,7 +5823,10 @@ export type Parser
 		// lives in the descriptor scan (`opaqueFieldReassignAt`) and the emit (`emitOpaqueFieldReassign`), which
 		// run in the real parse where the layout is known — the two agree on a valid program, and disagree only
 		// on one the real parse already refuses.
-		if not self.fieldReassignHeadAt(selfPos) or self.kindAt(selfPos + 4) != TokenKind.identifier 'notReassignShape'
+		// The RHS is a PARAMETER reference, whose name may be a KEYWORD (D8) — `tokenCanBeAName`, for
+		// `consumedParamAfterColon`'s measured reason. The FIELD name (`selfPos + 2`, inside
+		// `fieldReassignHeadAt`) stays an identifier: a field DECLARATION admits no keyword.
+		if not self.fieldReassignHeadAt(selfPos) or not tokenCanBeAName(self.tokenAt(selfPos + 4)) 'notReassignShape'
 			return false
 		end 'notReassignShape'
 		// The RHS must be JUST the parameter — a `.`/`(` after it would make it `next.x`/`next(...)`, a type error
@@ -5770,7 +5881,7 @@ export type Parser
 
 	// Walk the generic type's body once, returning one `MethodFeedScan` per method — its call-aligned parameters,
 	// direct array-mutator feeds, and self-call forward edges. Mirrors `computeTypeDescriptorNeeds`' body walk: a
-	// named `function <ident>` opens a method whose whole body is scanned in one nested pass
+	// named `function <name>` opens a method whose whole body is scanned in one nested pass
 	// (`scanOneMethodFeedSignals`), and the walk resumes past its `end`, so this outer loop only ever sees
 	// member-level tokens. A `static` method is scanned uniformly: it has no `self`, so it contributes no direct
 	// feed and no self-call edge — inert in the fixpoint (it is never published), so it needs no special case.
@@ -5781,7 +5892,7 @@ export type Parser
 			if self.closesBlockAt(q) 'typeEnd'
 				break
 			end 'typeEnd'
-			if self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.identifier 'method'
+			if self.functionDeclarationAt(q) 'method'
 				var typeParamPositions = TypeParamIdArray.create()
 				let paramNames = self.callAlignedInstanceParams(q + 2, typeParamPositionsOut: typeParamPositions)
 				let scan = self.scanOneMethodFeedSignals(q + 2, funcName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 1).value), paramNames: paramNames, typeParamPositions: typeParamPositions)
@@ -5822,7 +5933,9 @@ export type Parser
 				// A BARE sibling call `N(param)` (#65) lowers to `self.N(param)`, so it forwards exactly as an explicit
 				// self-call does. The callee is qualified to `<enclosingType>.N`; a call to a name that is not a sibling
 				// method is dropped by the fixpoint's name->index filter, so over-including here is harmless.
-				if kind == TokenKind.identifier and self.isBareCallAt(q) 'bareCall'
+				// A sibling's name may be a KEYWORD (D8), read through `tokenCanBeAName` minus the block-structure
+				// kinds — the twin of the descriptor scan's bare-call test, for the reason given there.
+				if tokenCanBeAName(self.tokenAt(q)) and not kindSpellsBlockStructure(kind) and self.isBareCallAt(q) 'bareCall'
 					self.collectForwardFeedEdges(q + 2, calleeName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q).value), paramNames: paramNames, typeParamPositions: typeParamPositions, edges: edges)
 				end 'bareCall'
 			end 'notSelf'
@@ -5860,7 +5973,10 @@ export type Parser
 				if kind == TokenKind.rightParen 'closeArg'
 					depth = depth - 1
 				end 'closeArg' else 'notClose'
-					if depth == 1 and kind == TokenKind.identifier and self.isBareArgValueAt(p) 'candidate'
+					// A parameter's name may be a KEYWORD (D8), so the bare reference to it is one too — through
+					// `tokenCanBeAName`, `consumedParamAfterColon`'s rule and for its measured reason (a missed feed
+					// leaves the concrete call site BORROWING a managed argument the owner then destroys).
+					if depth == 1 and tokenCanBeAName(self.tokenAt(p)) and self.isBareArgValueAt(p) 'candidate'
 						let idx = self.paramIndexIn(paramNames, name: self.tokenAt(p).value)
 						if idx < paramNames.count() and self.paramIsTypeParamTyped(typeParamPositions, index: idx) 'typeParamArg'
 							edges.push(ForwardFeedEdge.create(idx, calleeName: calleeName, argLabel: self.argLabelBefore(p)))
@@ -5876,8 +5992,12 @@ export type Parser
 	// POSITIONAL argument. A labelled argument is `label : value`, so the label is two tokens back; a positional one
 	// is bounded by `(` or `,`. Mirrors how a call site slots a labelled argument by name and the first argument by
 	// position (`slotCallArgs`).
+	// ⚠ A LABEL MAY BE SPELLED WITH A KEYWORD (D8), because the PARAMETER it names may be
+	// (`combine(1, enum: 2)`) — so the label token is read through `tokenCanBeAName`. Missed, the label read
+	// as EMPTY, which means "the first POSITIONAL argument": the forward edge would resolve to the callee's
+	// parameter 0 instead of the one actually named, and the fixpoint would mark the wrong parameter a feed.
 	function argLabelBefore(valuePos TokenIndex) returns ByteArray
-		if self.kindAt((valuePos - 1) as TokenIndex) == TokenKind.colon and self.kindAt((valuePos - 2) as TokenIndex) == TokenKind.identifier 'labelled'
+		if self.kindAt((valuePos - 1) as TokenIndex) == TokenKind.colon and tokenCanBeAName(self.tokenAt((valuePos - 2) as TokenIndex)) 'labelled'
 			return self.tokenAt((valuePos - 2) as TokenIndex).value
 		end 'labelled'
 		return EmptySourceText
@@ -6027,6 +6147,11 @@ export type Parser
 	// `collectTypeParamFlags` is false — every function OUTSIDE a generic type, i.e. all of them on the
 	// generics-free corpus — the position work is skipped and `typeParamPositionsOut` is left untouched (the
 	// caller passes the SHARED empty array, ⚡ so the hot path allocates no per-function array).
+	//
+	// ⚠ **`recordParamNameKeywords` (D8) DELIBERATELY DOES NOT SHARE THIS WALK, and that is not an oversight**
+	// — see there: it needs a strictly COARSER answer that this grammar cannot give more cheaply, and a shared
+	// walk that returned index COLUMNS measured **+7,794 allocations at rung 0 of the scale ladder, doubling
+	// per rung**, because it put three heap objects on a once-per-function path.
 	function paramNamesIn(parenPos TokenIndex, typeParamPositionsOut TypeParamIdArray, collectTypeParamFlags bool) returns ByteArrayArray
 		var names = ByteArrayArray.create()
 		var q = parenPos
@@ -8037,7 +8162,10 @@ export type Parser
 		end 'staticMethod'
 
 		try self.consume(TokenKind.function)
-		let nameTok = try self.consume(TokenKind.identifier)
+		// An interface method's name is a DECLARED name exactly as `parseFunction`'s is, so it admits a keyword
+		// too (D8) — a conforming type may declare `function to()`, and a requirement it could not spell would
+		// be a requirement no type could satisfy.
+		let nameTok = try self.consumeNameToken(NamePosition.declaration)
 
 		var paramNames = ByteArrayArray.create()
 		var paramTypes = MaxonTypeArray.create()
@@ -8409,12 +8537,7 @@ export type Parser
 			throw ParseError.unsupported("a string- or char-backed enum/union case ({String.from(tok.value)}) — string/char backing, and the `.rawValue`/`.name` accessors that read it, arrive with String (P1.2)", line: tok.line, column: tok.column)
 		end 'stringCharBacking'
 
-		if not tokenNamesEnumCase(tok) 'notACaseName'
-			throw ParseError.unexpectedToken("an enum case name", got: tok.kind.rawValue, line: tok.line, column: tok.column)
-		end 'notACaseName'
-
-		self.advance()
-		return tok
+		return try self.consumeNameToken(NamePosition.enumCase)
 	end 'readEnumCaseNameToken'
 
 	// Parse an INTEGER raw value (`= 200`, `= -1`) — the same literal reading `parseRangeBound` does,
@@ -8528,7 +8651,12 @@ export type Parser
 	// register 0.
 	function parseFunction(visibility Visibility, takesReceiver bool) throws ParseError
 		try self.consume(TokenKind.function)
-		let nameTok = try self.consume(TokenKind.identifier)
+		// ⭐ A KEYWORD MAY BE THE DECLARED NAME (D8) — `export static function from (path String)` is
+		// `stdlib/FilePath.maxon:34`. Nothing but a name may stand here, so a keyword written here is one;
+		// see `consumeNameToken`. The token scans that re-derive block structure learn the same fact through
+		// `keywordIsAName`'s declaration-name shape, or a `function while(…)` would read as a block nothing
+		// closes.
+		let nameTok = try self.consumeNameToken(NamePosition.declaration)
 		// The BARE name only — a method's `Type.` qualification is applied below by
 		// `declaredMethodName`, so `Point.create` is checked as `create` and the reserved test never
 		// sees the type prefix (`Self` is fine; a `__method` name is not).
@@ -8984,7 +9112,11 @@ export type Parser
 		end 'noParams'
 
 		while true 'paramLoop'
-			let nameTok = try self.consume(TokenKind.identifier)
+			// ⭐ A KEYWORD MAY BE A PARAMETER'S NAME (D8) — `function identity(type Integer)`, the shape
+			// `keyword-parameter-names.md` is written for. A parameter list admits nothing but `name type` in
+			// this position, so the keyword is a name; `keywordIsAName` learns the same fact for the token
+			// scans, or a `function f(end Integer)` would read as a block CLOSE that never opened.
+			let nameTok = try self.consumeNameToken(NamePosition.declaration)
 			try self.requireUnreservedName(nameTok)
 			let paramType = try self.parseTypeReference()
 
@@ -12819,9 +12951,18 @@ export type Parser
 		end 'notSingleToken'
 
 		let tok = self.tokenAt(lo)
-		if tok.kind != TokenKind.identifier 'notIdentifier'
+		// ⚠ **THE ONE TOKEN MAY BE A KEYWORD (D8), because a BINDING's name may be** — asked through
+		// `tokenCanBeAName`, exactly as `consumedParamAfterColon` (the SWEEP's copy of this same question, and
+		// its header names this routine) asks it. The two MUST agree, and the failure when they do not is a
+		// wrong ANSWER: `Self{value: from}` inside `static function create(from String)` had the sweep saying
+		// "the callee consumes it" while this said "the RHS is not a bare local", so the parameter was never
+		// poisoned and the callee dropped at scope exit what it had just stored into the field — a SEGFAULT
+		// on `Box.create(msg)` where the identical program spelling the parameter `path` ran. It stays a
+		// sound over-approximation: `scope.contains` below, and `poisonMoveSource`'s own owned-set match,
+		// keep the authority.
+		if not tokenCanBeAName(tok) 'notAName'
 			return false
-		end 'notIdentifier'
+		end 'notAName'
 
 		return self.scope.contains(tok.value) and not self.scope.isSelfField(tok.value)
 	end 'rhsWasBareLocalReference'
@@ -14680,6 +14821,13 @@ export type Parser
 	// list of regions that settle their own.
 	function opensBlockAt(index TokenIndex) returns bool
 		let kind = self.kindAt(index)
+		// Asked through the SHARED set rather than left to the chain below to answer by exhaustion, so that
+		// set is a real dependency of this routine and not a comment about it — see
+		// `kindSpellsBlockStructure`.
+		if not kindSpellsBlockStructure(kind) 'notBlockStructure'
+			return false
+		end 'notBlockStructure'
+
 		if kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for 'alwaysOpens'
 			return not self.keywordIsAName(index)
 		end 'alwaysOpens'
@@ -14766,7 +14914,7 @@ export type Parser
 	// `otherwise ignore`, a fallback VALUE, and the single-statement `return`/`break`/`continue`/
 	// `throw`/`panic`. This is `parseOtherwiseHandler`'s split written down a second time (the drift
 	// guard keeps them honest), but with ONE extra care it does not need: `otherwise` IS a legal
-	// enum case name (`tokenNamesEnumCase`), so a keyword-spelled match arm `otherwise(x) then` also
+	// enum case name (`tokenCanBeAName`), so a keyword-spelled match arm `otherwise(x) then` also
 	// leads with `otherwise (`. The binding form is told apart by its full SHAPE — `( identifier )`
 	// followed by the label charLiteral — which a payload case (`( bindings ) then/gives`, or
 	// multi-binding `( a , b )`) never matches. `parseOtherwiseHandler` needs no such check because
@@ -14815,6 +14963,7 @@ export type Parser
 	//     program stays refused, and the rung that lifts THAT restriction is the one that must add `or`
 	//     here. `keyword-named-case-members.md` pins the payload arms AND the parenthesized-condition
 	//     shapes that forbid the wider set.
+	//   • **A LABEL — the `:` LOOKAHEAD.** `weigh(i, for: 3)`, `Self{end: 3}`. See the arm below.
 	//   • **A MEMBER NAME — the LOOKBEHIND.** `Kw.end`, `Kw.while`, `obj.end()`. A `.` is followed by a
 	//     member name and by nothing else in this grammar (Maxon has no `..` range and a float literal
 	//     is one token), so a keyword whose PREVIOUS token is a `.` is a name, whatever follows it.
@@ -14826,11 +14975,32 @@ export type Parser
 	//     (`Kw.if`/`Kw.else`/`Kw.otherwise` never panicked, because those three are not unconditional
 	//     block markers and their POSITION tests already refused a member — an unrelated reason, which
 	//     is why they are pinned too.)
+	//   • **A DECLARED NAME — an INDEX, not a lookaround (D8).** `function while(n Integer)` names a function
+	//     `while`, and `function f(end Integer)` names a parameter `end`; both are legal
+	//     (`keyword-as-a-declared-name.md`), and both are exactly as dangerous here as a case member was.
+	//     Unexcluded, the first opens a block nothing closes and the second closes one that never opened —
+	//     so the file's whole extent index shifts and the declaration sweep's depth never returns to zero.
+	//     ⚠ **THIS ONE CANNOT BE A LOOKAROUND, WHICH IS WHY IT COSTS AN INDEX.** The function NAME could be
+	//     (`functionDeclarationAt(index - 1)`), but the PARAMETER cannot: `( match x` is a parenthesized
+	//     match EXPRESSION and `( match X` is a parameter named `match`, and those are the same token shape
+	//     — only the enclosing list's OWNER separates them, which no bounded lookaround can reach. See
+	//     `buildDeclaredNameIndex`, whose one linear pass reads paren matching and `functionDeclarationAt`
+	//     and NOTHING about block structure, so it cannot be circular with the extent index that reads it.
 	function keywordIsAName(index TokenIndex) returns bool
 		let next = self.kindAt(index + 1)
 		if next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or 'matchCaseName'
 			return true
 		end 'matchCaseName'
+
+		// ⭐ **A LABEL — the OTHER lookahead, and it is a `:` (D8).** `weigh(i, for: 3, match: 4)` labels a
+		// keyword-named PARAMETER, and `Self{end: 3}` names a keyword-named field the same way. A `:` follows a
+		// NAME and nothing else in this grammar — no `if`/`while`/`match`/`for` header may be followed by one,
+		// and Maxon has no `?:` and no label syntax that puts a colon after a keyword — so a keyword whose next
+		// token is `:` is a name, whatever precedes it. Unexcluded, `for: 3` opened a block nothing closes and
+		// `assertScanAligned` took the compiler down on the program `keyword-as-a-declared-name.md` pins.
+		if next == TokenKind.colon 'argumentOrFieldLabel'
+			return true
+		end 'argumentOrFieldLabel'
 
 		// ⚠ **A POSITIVE ANSWER ONLY — it must FALL THROUGH to the lookbehind, never answer `false` for
 		// it.** A keyword followed by `(` can equally be a member READ of a keyword-named case that
@@ -14846,13 +15016,199 @@ export type Parser
 			end 'armSeparator'
 		end 'payloadBindingList'
 
-		// Index 0 has no previous token, so it cannot be a member name.
+		// Index 0 has no previous token, so it cannot be a member name — and no declaration spells a name
+		// there either, since every one of them is introduced by a keyword that sits before it.
 		if index == 0 'atFileStart'
 			return false
 		end 'atFileStart'
 
-		return self.kindAt(index - 1) == TokenKind.dot
+		if self.kindAt(index - 1) == TokenKind.dot 'memberName'
+			return true
+		end 'memberName'
+
+		// LAST, because it is the only shape that can trigger a build: the three above are O(1) lookarounds,
+		// and a real closing `end` — the overwhelmingly common token this is asked about — reaches here.
+		return self.namesADeclaration(index)
 	end 'keywordIsAName'
+
+	// Does a DECLARATION spell its NAME at `index` — a function's own name, or one of its parameters' (D8)?
+	//
+	// ⚡ A BISECT of the ascending `declaredNameKeywords`, and the `count()` read is the whole cost for very
+	// nearly every file: only a file that actually declares a keyword-named function or parameter has any
+	// entry at all (see the field).
+	function namesADeclaration(index TokenIndex) returns bool
+		self.buildDeclaredNameIndex()
+		var lo = 0
+		var hi = self.declaredNameKeywords.count()
+		while lo < hi 'bisect'
+			let mid = lo + (hi - lo) / 2
+			let atMid = try self.declaredNameKeywords.get(mid) otherwise panic("namesADeclaration: declaredNameKeywords.get OOB at {mid} of {self.declaredNameKeywords.count()}")
+			if atMid == index 'hit'
+				return true
+			end 'hit'
+
+			if atMid < index 'above'
+				lo = mid + 1
+			end 'above' else 'below'
+				hi = mid
+			end 'below'
+		end 'bisect'
+
+		return false
+	end 'namesADeclaration'
+
+	// ⭐ **BUILD `declaredNameKeywords`: the KEYWORD tokens at which a declaration spells a name.** One linear
+	// pass — at every `function` keyword, record the declared NAME (if the spelling has one) and every name
+	// position in the parameter list that follows, keeping only the tokens that are not plain identifiers.
+	//
+	// **BOTH SPELLINGS OF `function` ARE COVERED, and deliberately.** A DECLARATION (`function <name> (`)
+	// records its name and its parameters; a CLOSURE LITERAL (`function (`) has no name but records its
+	// parameters just the same — a closure's parameters go through the very same `parseFunctionParameters`,
+	// so they may be keyword-named too, and a closure body sits INSIDE a statement whose extent scan reads
+	// those tokens.
+	//
+	// ⚠ **THE CURSOR RESUMES PAST THE PARAMETER LIST, AND THAT IS WHAT KEEPS THE LIST ASCENDING** — which the
+	// bisect in `namesADeclaration` rests on. A `function(` inside a parameter TYPE (`cb function(Integer)
+	// returns Integer`) would otherwise be reached by the outer walk AFTER its enclosing list had already
+	// contributed, pushing lower indices behind higher ones and duplicating them. Skipping the list also costs
+	// nothing to correctness: a function TYPE's parenthesized part names types, never parameters.
+	//
+	// Idempotent, and the shared-empty `is`-identity of the list is the "have I run?" gate (see the field): the
+	// fresh list installed below is what says it has run, whether or not the file declares anything.
+	//
+	// ⚡ LINEAR, and provably: every token is visited at most twice — once by the outer walk, once by
+	// `recordParamNameKeywords` — because the walk resumes past each list it descends into. Nothing is
+	// allocated per function.
+	function buildDeclaredNameIndex()
+		if self.declaredNameKeywords is sharedEmptyDeclaredNameKeywords 'notBuiltYet'
+			let tokenCount = self.tokens.count()
+			var found = TokenIndexColumn.create()
+
+			var i = 0 as TokenIndex
+			while i < tokenCount 'scan'
+				if self.kindAt(i) == TokenKind.function 'functionKeyword'
+					// A named declaration's list starts one token later than a closure literal's, because the name
+					// sits between the keyword and the `(`.
+					var listAt = i + 1
+					if self.functionDeclarationAt(i) 'named'
+						self.recordNameKeyword(found, index: i + 1)
+						listAt = i + 2
+					end 'named'
+					i = self.recordParamNameKeywords(found, parenPos: listAt)
+					continue
+				end 'functionKeyword'
+
+				i = i + 1
+			end 'scan'
+
+			self.declaredNameKeywords = found
+		end 'notBuiltYet'
+	end 'buildDeclaredNameIndex'
+
+	// Append `index` to the ascending index if the token there is a KEYWORD rather than a plain identifier.
+	// Identifiers are dropped because no scan ever asks about one: `keywordIsAName` is consulted only for the
+	// seven block-structure keywords, so an identifier entry would be a list entry nothing can ever match.
+	function recordNameKeyword(found TokenIndexColumn, index TokenIndex)
+		if self.kindAt(index) == TokenKind.identifier 'plainIdentifier'
+			return
+		end 'plainIdentifier'
+		found.push(index)
+	end 'recordNameKeyword'
+
+	// ⭐ Record the parameter NAMES of the list at `parenPos` — by offering EVERY word-shaped token inside its
+	// parentheses, which is deliberately COARSER than the parameter grammar and is what makes this walk both
+	// exact enough and free. Returns the index the outer walk resumes at: past the list, or `parenPos` itself
+	// when there is no list to descend into.
+	//
+	// **THE ARGUMENT: NO BLOCK STRUCTURE MAY APPEAR INSIDE A PARAMETER LIST.** A list holds names and TYPES —
+	// `int(0 to 100)`, `function(X) returns Y`, `Array with T` — and not one statement, so there is no real
+	// `while`/`match`/`for`/`end`/`if`/`else`/`otherwise` in there for an over-record to HIDE. The only reader
+	// asks solely about those seven (`opensBlockAt`/`closesBlockAt`), so recording a type's `to` or `with`
+	// costs nothing: no scan ever asks about them. UNDER-recording is the failure mode that matters, and
+	// recording everything cannot under-record.
+	//
+	// ⚡ **AND IT IS WHY THIS DOES NOT SHARE `paramNamesIn`'s WALK.** That walk cannot answer without producing
+	// per-parameter INDEXES, and the shared-index-columns version of this measured **+7,794 allocations at
+	// rung 0 of the scale ladder, doubling per rung** — linear, but three heap objects on a path taken once
+	// per `function` keyword in every file. This loop allocates nothing and duplicates no grammar: it does not
+	// use the parameter grammar at all.
+	//
+	// TOLERANT at both ends, like every sweep helper: a bare `function` keyword (a legal enum CASE name)
+	// reaches here with whatever token follows it, and an UNTERMINATED list records nothing rather than
+	// swallowing the rest of the file. Both are the real parse's to report, with a position.
+	//
+	// ⚠ **AND THE "NO BLOCK STRUCTURE IN HERE" PREMISE IS CHECKED, NOT ASSUMED** — see
+	// `parenGroupCanBeAParameterList`. It has to be, because the caller reaches this off a pure TOKEN SHAPE.
+	function recordParamNameKeywords(found TokenIndexColumn, parenPos TokenIndex) returns TokenIndex
+		if self.kindAt(parenPos) != TokenKind.leftParen 'noParamList'
+			return parenPos
+		end 'noParamList'
+
+		let listEnd = self.matchingRightParenOf(parenPos)
+		if self.kindAt(listEnd) != TokenKind.rightParen 'unterminated'
+			return parenPos
+		end 'unterminated'
+
+		if not self.parenGroupCanBeAParameterList(parenPos, listEnd: listEnd) 'notAParameterList'
+			return parenPos
+		end 'notAParameterList'
+
+		var q = parenPos + 1
+		while q < listEnd 'eachToken'
+			if tokenCanBeAName(self.tokenAt(q)) 'wordShaped'
+				self.recordNameKeyword(found, index: q)
+			end 'wordShaped'
+			q = q + 1
+		end 'eachToken'
+
+		return listEnd
+	end 'recordParamNameKeywords'
+
+	// ⭐⭐ **IS THE `( … )` SPANNING `[parenPos, listEnd]` REALLY A PARAMETER LIST?** The CHECK that
+	// `recordParamNameKeywords`' safety argument used to be a COMMENT about, and it needs to be one: that
+	// routine offers EVERY word-shaped token inside the parentheses, which hides nothing only while nothing
+	// in there is REAL block structure — true of a parameter list, which holds names and TYPES and not one
+	// statement, and NOT true of an arbitrary expression.
+	//
+	// ⚠ **AND AN ARBITRARY EXPRESSION DOES REACH IT, because `functionDeclarationAt` is a pure TOKEN SHAPE.**
+	// `function` is itself a legal enum CASE name (`keyword-as-case-name.md`), so a `gives` arm spelled
+	// `function gives (…)` matches `function <name> (` exactly as a declaration does — and its parentheses
+	// hold whatever the arm's value is. MEASURED before this check existed: a `function gives (match y 'n' one
+	// gives 1 two gives 2 end 'n')` arm recorded the inner match's `match` AND its `end` as declared names,
+	// so `closesBlockAt` stopped seeing that `end`, the inner match's arm loop read it as one more case name,
+	// and the program was refused `E3034 unknown enum case: 'end'` — while the reference bootstrap compiles it.
+	//
+	// **THE TEST IS WHERE A BLOCK KEYWORD STANDS, because that is the entire difference.** In a parameter list
+	// one may stand only as a NAME — immediately after the `(`, or after a top-level `,` — and a parameter's
+	// TYPE (`Integer`, `int(0 to 100)`, `function(X) returns Y`, `Array with T`) can never contain one. So a
+	// block keyword anywhere else says this group is an expression: nothing in it is recorded, and the caller
+	// resumes at the `(` rather than past it, so the outer walk still descends and still finds a closure
+	// literal nested inside.
+	function parenGroupCanBeAParameterList(parenPos TokenIndex, listEnd TokenIndex) returns bool
+		var depth = 0
+		var namePosition = true
+		var q = parenPos + 1
+		while q < listEnd 'eachToken'
+			let kind = self.kindAt(q)
+			if not namePosition and kindSpellsBlockStructure(kind) 'blockStructureOutsideANamePosition'
+				return false
+			end 'blockStructureOutsideANamePosition'
+
+			if kind == TokenKind.leftParen 'nestedOpen'
+				depth = depth + 1
+			end 'nestedOpen'
+			if kind == TokenKind.rightParen 'nestedClose'
+				depth = depth - 1
+			end 'nestedClose'
+
+			// The token AFTER a top-level `,` is the next parameter's name; every other token is inside a type.
+			namePosition = depth == 0 and kind == TokenKind.comma
+
+			q = q + 1
+		end 'eachToken'
+
+		return true
+	end 'parenGroupCanBeAParameterList'
 
 	// ⭐ **THE FILE'S BLOCK-EXTENT INDEX: per token, the `end` that closes the block opened there** — one
 	// linear bracket-matching pass over the token array, run on the first construct that asks and shared
@@ -16958,7 +17314,7 @@ export type Parser
 	// type name (the bootstrap's anchor). An unknown case is E3034, at the case name.
 	function resolveEnumArmCase(layout EnumLayout) returns CaseIndex throws ParseError
 		let caseTok = self.current()
-		if not tokenNamesEnumCase(caseTok) 'notACaseName'
+		if not tokenCanBeAName(caseTok) 'notACaseName'
 			throw ParseError.expectedExpression(caseTok.kind.rawValue, line: caseTok.line, column: caseTok.column)
 		end 'notACaseName'
 
@@ -19525,7 +19881,13 @@ export type Parser
 			return try self.parseSizeof()
 		end 'sizeofExpr'
 
-		if self.at(TokenKind.identifier) 'namedPrimary'
+		// ⭐ **A KEYWORD JOINS THE NAMED ARM WHEN A NAME IS ALL IT CAN BE (D8)** — `return type` reading the
+		// parameter of `function identity(type Integer)`, `return from(41)` calling a function named `from`.
+		// It is the SAME arm and not a parallel one, so a keyword-named value gets the four forms an
+		// identifier gets (call, struct literal, dotted, bare read) rather than a subset that would diverge.
+		// See `keywordIsANameInOperandPosition` for why the ORDER of the arms above is the whole safety
+		// argument.
+		if self.at(TokenKind.identifier) or try self.keywordIsANameInOperandPosition() 'namedPrimary'
 			// `Set from [1, 2, 3]` — a builtin `Set` CONSTRUCTED from an array literal (P1.7b slice B). The bare
 			// `Set` identifier followed by `from` is a construction, NOT a variable reference (`Set` names no
 			// binding, so the plain path below reports E2004 `Undefined variable 'Set'`). Its element type is
@@ -19564,6 +19926,61 @@ export type Parser
 		let tok = self.current()
 		throw ParseError.expectedExpression(tok.kind.rawValue, line: tok.line, column: tok.column)
 	end 'parsePrimary'
+
+	// ⭐ **IS THE KEYWORD AT THE CURSOR A NAME HERE, in OPERAND position (D8)?** A keyword-named PARAMETER
+	// has to be readable or the declaration is decoration (`return type`), and a keyword-named FUNCTION has
+	// to be callable or it is dead code the author cannot reach (`return from(41)`).
+	//
+	// ⭐⭐ **THE SAFETY ARGUMENT IS THE ARM ORDER ABOVE, AND IT IS THE SAME POSITION-SENSITIVITY ARGUMENT
+	// `tokenCanBeAName` rests on.** Every keyword with an expression meaning of its own has already been
+	// claimed by the time this is asked: `match`, `try`, `function`, `Self`, `self`, `sizeof`, `true` and
+	// `false` by the arms directly above; `not`, `async`, `await` and a prefix `-` by `parseUnary`, which
+	// runs before `parsePrimary` is ever reached. So a keyword still standing at an operand's first token
+	// opens NOTHING, and a name is the only reading left. Those eight therefore may be DECLARED as names but
+	// not READ bare — which is exactly what the reference bootstrap does (measured: a parameter named `match`
+	// declares and compiles, and `return match` there is `Expected expression but got '+'`).
+	//
+	// ⚠ **IT IS GATED ON THE NAME ACTUALLY RESOLVING, so no diagnostic moves.** A keyword that names nothing
+	// falls through to the same `expectedExpression` it has always reported, on the same token. Two shapes
+	// resolve, and they are the two the grammar can distinguish without a signature lookup:
+	//   • a `(` after it makes it a CALL — the callee's existence is `SemanticCheck`'s to answer (E3004,
+	//     which names the callee and is the better message anyway), exactly as it is for an identifier;
+	//   • a BINDING of that name, local or captured, makes it a value READ.
+	//
+	// ⚠ A keyword-named free function called as a STATEMENT (`from(3)` on a line of its own) is NOT covered,
+	// and cannot be by this argument: the statement dispatcher's own arms mean `while (…)` and `if (…)` are
+	// a loop and a conditional with a parenthesized condition, so `<keyword> (` at statement start is
+	// genuinely ambiguous rather than merely unclaimed. No corpus file calls a keyword-named function for
+	// its effect, and both reference compilers reject the whole shape (see the file header).
+	//
+	// ⛔ **AND ONE SHAPE IS REFUSED HERE RATHER THAN ACCEPTED, BECAUSE THE TOKEN SCANS CANNOT SEE IT.** A BARE
+	// read of a binding named `while`/`match`/`for`/`end` — `acc + while` — is a NAME to this arm and BLOCK
+	// STRUCTURE to `opensBlockAt`/`closesBlockAt`, whose verdict for those four is position-INDEPENDENT
+	// (`alwaysOpens`, and `end` closes wherever it stands). The scans run over raw tokens with no scope, so
+	// they cannot know the name is bound; accepted here, the program panics in `assertScanAligned` instead of
+	// compiling. `if`/`else`/`otherwise` need no such care and are not refused — their POSITION tests already
+	// answer no for an operand (`ifBeginsStatement`, `elseFollowsBlockEnd`, `otherwiseOpensBlock`), which is
+	// the same reason `keyword-named-case-members.md` gives for those three never having panicked.
+	//
+	// ⭐ **THE SET IS DERIVED, NOT LISTED**: the question is exactly "would a scan read THIS token, HERE, as
+	// block structure?", so it is asked of the scans themselves. A rung that teaches them the operand-position
+	// exclusion turns this refusal off by construction, with nothing to remember.
+	function keywordIsANameInOperandPosition() returns bool throws ParseError
+		let tok = self.current()
+		if tok.kind == TokenKind.identifier or not tokenCanBeAName(tok) 'notAnUnclaimedKeyword'
+			return false
+		end 'notAnUnclaimedKeyword'
+
+		if not (self.peekKind() == TokenKind.leftParen or self.scope.contains(tok.value) or self.captureBinds(tok)) 'namesNothingHere'
+			return false
+		end 'namesNothingHere'
+
+		if self.opensBlockAt(self.pos) or self.closesBlockAt(self.pos) 'readAsBlockStructure'
+			throw ParseError.unsupported("reading '{String.from(tok.value)}' as a value here — it is a legal DECLARED name, but the token scans that re-derive Maxon's block structure read a bare `{String.from(tok.value)}` in this position as block structure and have no scope to tell them otherwise. Pass it under a different name, or read a differently-named binding", line: tok.line, column: tok.column)
+		end 'readAsBlockStructure'
+
+		return true
+	end 'keywordIsANameInOperandPosition'
 
 	// ⭐ **`sizeof(Type)`** (P1.6-B1) — the byte size of a type. Two outcomes, decided by the operand:
 	//
@@ -20830,11 +21247,7 @@ export type Parser
 		let typeTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.dot)
 
-		let caseTok = self.current()
-		if not tokenNamesEnumCase(caseTok) 'notACaseName'
-			throw ParseError.unexpectedToken("an enum case name", got: caseTok.kind.rawValue, line: caseTok.line, column: caseTok.column)
-		end 'notACaseName'
-		self.advance()
+		let caseTok = try self.consumeNameToken(NamePosition.enumCase)
 
 		let index = try self.enumCaseIndexOrThrow(layout, nameTok: caseTok, posTok: typeTok)
 		let range = SourceRange.ofToken(typeTok)
@@ -22489,9 +22902,11 @@ export type Parser
 	// would surface as E3004 against a name the author never wrote.
 	//
 	// ⚠ **`from` IS A KEYWORD, NOT AN IDENTIFIER** — it opens a `Set from […]` construction — so it is
-	// consumed by TOKEN KIND, exactly as `CharacterSet.from` is one function up. That is also what made this
-	// call fail to PARSE before this slice: `E2010 Expected 'identifier' but got 'from'`, from
-	// `parseQualifiedCall`'s ordinary method-name consume.
+	// consumed by TOKEN KIND, exactly as `CharacterSet.from` is one function up. That was ALSO what made this
+	// call fail to parse before P1.8 Slice E (`E2010 Expected 'identifier' but got 'from'`, from the ordinary
+	// method-name consume), and that half is no longer the reason: D8 made the general method-name position
+	// accept a keyword (`consumeNameToken`). What survives is the DISPATCH — this static is recognized by kind
+	// so it never reaches the mangled `String.from` callee no file declares.
 	function parseStringStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		if not self.at(TokenKind.from) 'unknownStatic'
@@ -23741,8 +24156,10 @@ export type Parser
 	// exactly that write (`bindingIsIterationLocked`). Teach one a new chain shape and not the other and
 	// the lock silently stops covering the door it was built to cover.
 	function fieldChainEndAfter(index TokenIndex, minHops FieldHopCount) returns TokenIndex
-		let baseKind = self.kindAt(index)
-		if baseKind != TokenKind.identifier and baseKind != TokenKind.self 'notABase'
+		// The base is anything `tokenCanBeAName` admits — which subsumes the identifier and the `self` keyword
+		// this used to name one at a time, and adds a KEYWORD-named binding (D8). One predicate for the base
+		// exactly as `namesMemberAt` is one for the hop, and for the header's reason.
+		if not tokenCanBeAName(self.tokenAt(index)) 'notABase'
 			return index
 		end 'notABase'
 
@@ -24687,7 +25104,10 @@ export type Parser
 	// that cannot reach it through the chain walk.
 	function memberNameTokenAt(index TokenIndex) returns Token throws ParseError
 		let tok = self.tokenAt(index)
-		if tok.kind == TokenKind.identifier 'namedMember'
+		// A KEYWORD after a `.` is a member NAME (D8) — `Box.from(7)`, `p.to()`. A `.` is followed by a member
+		// name and by nothing else in this grammar, which is the same lookbehind `keywordIsAName` already draws
+		// for the block-extent scans; so the reader admits exactly what those scans already exclude.
+		if tokenCanBeAName(tok) 'namedMember'
 			return tok
 		end 'namedMember'
 		if tok.kind != TokenKind.intLiteral 'notAMemberName'
@@ -24697,14 +25117,14 @@ export type Parser
 		return Token.create(TokenKind.identifier, line: tok.line, column: tok.column, value: tupleFieldName(tok.value))
 	end 'memberNameTokenAt'
 
-	// **The token kinds that may NAME a member after a `.`** — an identifier, or the int literal of a tuple's
-	// positional access. Spelled once, so the dispatch predicates that decide a statement is a field store or
-	// a chained call (`fieldAssignsAt`, `fieldChainEndAfter`) and the consumer above cannot come to disagree
-	// about where a chain's hop ends. They already MUST agree: `fieldChainEndAfter`'s header states that a
-	// divergence between its two askers is a use-after-free rather than a compile error.
+	// **The token kinds that may NAME a member after a `.`** — anything `tokenCanBeAName` admits (an identifier,
+	// or a KEYWORD, which after a `.` is a name — D8), or the int literal of a tuple's positional access.
+	// Spelled once, so the dispatch predicates that decide a statement is a field store or a chained call
+	// (`fieldAssignsAt`, `fieldChainEndAfter`) and the consumer above cannot come to disagree about where a
+	// chain's hop ends. They already MUST agree: `fieldChainEndAfter`'s header states that a divergence
+	// between its two askers is a use-after-free rather than a compile error.
 	function namesMemberAt(index TokenIndex) returns bool
-		let kind = self.kindAt(index)
-		return kind == TokenKind.identifier or kind == TokenKind.intLiteral
+		return self.kindAt(index) == TokenKind.intLiteral or tokenCanBeAName(self.tokenAt(index))
 	end 'namesMemberAt'
 
 	// **Is the `.member` at `index` a CALL — `. <member> (`?** The one question that tells a field-chain HOP
@@ -24732,7 +25152,10 @@ export type Parser
 			self.advance()
 			return tok
 		end 'selfBase'
-		return try self.consume(TokenKind.identifier)
+		// A KEYWORD-named binding may be the base (D8) — `type.n` where `type` is a struct-typed parameter.
+		// It resolves through the same `scope.contains` test an identifier base does; a keyword that names
+		// nothing reaches the same `undefinedVariable` below.
+		return try self.consumeNameToken(NamePosition.declaration)
 	end 'consumeChainBaseToken'
 
 	function resolveFieldChain() returns FieldChainStep throws ParseError
@@ -25911,7 +26334,10 @@ export type Parser
 	// `bareArgImmutableName`). Each arm that can answer sets it, through the same `immutableReceiverNameOf`
 	// a receiver asks, so an argument and a receiver naming the same binding get the same verdict.
 	function parseVariableReference() returns ValueId throws ParseError
-		let tok = try self.consume(TokenKind.identifier)
+		// A KEYWORD-named binding is read here too (D8) — `return type` inside `function identity(type Integer)`.
+		// `parsePrimary`'s keyword arm has already established that the name RESOLVES, so this consume never
+		// admits a keyword the resolution below would then have to reject.
+		let tok = try self.consumeNameToken(NamePosition.declaration)
 
 		if self.scope.isSelfField(tok.value) 'selfField'
 			// A self field's writability is the FIELD's own `var`/`let`, exactly as it is for a self-field
@@ -27532,10 +27958,10 @@ export type Parser
 		var q = self.enclosingTypeBodyStart
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			// A member method is `function <name>` — a closure is `function(` (no name, and no `end`), and no
-			// other construct pairs `function` with an identifier, so this cannot mistake one for a method. It
+			// other construct pairs `function` with a NAME, so this cannot mistake one for a method. It
 			// opens the method's own block, which `opensBlockAt` does NOT count (it knows if/while/match, not
 			// `function`), so counting it here is the +1 that balances the method's `end`.
-			let isMethod = self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.identifier
+			let isMethod = self.functionDeclarationAt(q)
 			if isMethod 'method'
 				// A method with no `static` modifier takes the hidden `self` receiver — the SAME token-level test
 				// the descriptor sweep uses (`functionDeclIsStatic`), so the two scans agree by construction.
@@ -27614,7 +28040,10 @@ export type Parser
 	// which for a qualified call is the TYPE name — the start of what the user wrote, and the same
 	// anchor the span runs from.
 	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
-		try self.consume(TokenKind.identifier)
+		// The callee's final name token may be a KEYWORD (D8) — `FilePath.from(path)`, `c.to()`, `from(41)`.
+		// The `callee` bytes the caller passed were read off this very token, so refusing it here would have
+		// refused every call to a name the declaration now accepts.
+		try self.consumeNameToken(NamePosition.declaration)
 		try self.consume(TokenKind.leftParen)
 
 		var args = ValueIdArray.create()
@@ -28267,9 +28696,14 @@ export type Parser
 	// its method-call site (`Parser.maxon:14409`: "the receiver may be interface/type-param-typed, which
 	// permits a named first arg"). It is a PARAMETER rather than a fork of this function because the
 	// E2053 half is unrelaxed and must stay one copy: only the first argument's verdict moves.
+	// ⭐ **A LABEL MAY BE SPELLED WITH A KEYWORD (D8), because the PARAMETER it names may be** —
+	// `combine(1, enum: 2)` against `function combine(type Integer, enum Integer, …)`. A parameter that
+	// cannot be labelled cannot be passed, so the declaration position and this one are one rule; the
+	// trailing `:` is what makes the reading unambiguous, since no argument VALUE is a bare keyword
+	// followed by a colon.
 	function consumeArgLabel(argIndex ParamCount, allowFirstNamed bool) returns ByteArray throws ParseError
 		let labelTok = self.current()
-		let isNamed = labelTok.kind == TokenKind.identifier and self.peekKind() == TokenKind.colon
+		let isNamed = tokenCanBeAName(labelTok) and self.peekKind() == TokenKind.colon
 
 		if argIndex == 0 and isNamed and not allowFirstNamed 'firstNamed'
 			throw ParseError.firstArgNamed(labelTok.line, column: labelTok.column)
@@ -28284,7 +28718,7 @@ export type Parser
 			return EmptySourceText
 		end 'positional'
 
-		try self.consume(TokenKind.identifier)
+		try self.consumeNameToken(NamePosition.declaration)
 		try self.consume(TokenKind.colon)
 		return labelTok.value
 	end 'consumeArgLabel'
@@ -29060,7 +29494,11 @@ export type Parser
 	// dispatch predicate and the parser agree on where a chained store begins and ends. A `.method()` chain
 	// ends in `(` (not `=`) and a comparison in `==`, so neither is mistaken for a store.
 	function fieldAssignsAt(index TokenIndex) returns bool
-		if self.kindAt(index) != TokenKind.identifier 'notBase'
+		// The base is anything `tokenCanBeAName` admits, `fieldChainEndAfter`'s rule — so a store through a
+		// KEYWORD-named binding (D8) is a field store and not an `unsupported` statement. `self` reaches
+		// `selfFieldAssignsAt` first, which is asked ahead of this one by the statement dispatcher, so
+		// admitting it here changes nothing.
+		if not tokenCanBeAName(self.tokenAt(index)) 'notBase'
 			return false
 		end 'notBase'
 		var q = index + 1
@@ -29098,11 +29536,17 @@ export type Parser
 	// oversight of this predicate: `Point.create()` on a line of its own discards a value, and for a
 	// factory that value is a box nothing would then free.
 	function methodCallsAt(index TokenIndex) returns bool
-		let baseKind = self.kindAt(index)
-		if baseKind != TokenKind.identifier and baseKind != TokenKind.self 'notABase'
+		// The BASE is anything `tokenCanBeAName` admits, which subsumes both the identifier and the `self`
+		// keyword this used to name explicitly, and adds a KEYWORD-named binding (D8 — `type.method()` where
+		// `type` is a parameter). Widening it claims no new program on its own: the SCOPE test below is the
+		// predicate (see the header), and a keyword only ever names a binding because a declaration made it one.
+		if not tokenCanBeAName(self.tokenAt(index)) 'notABase'
 			return false
 		end 'notABase'
-		if self.kindAt(index + 1) != TokenKind.dot or self.kindAt(index + 2) != TokenKind.identifier or self.kindAt(index + 3) != TokenKind.leftParen 'notADottedCall'
+		// The METHOD half asks the shared `namesMemberAt`, which admits a keyword-named member (D8) — so
+		// `c.to()` routes here rather than falling through to the type-bound reading, exactly as `c.next()`
+		// does. It is the same predicate `fieldAssignsAt` and the chain walk read, for their stated reason.
+		if self.kindAt(index + 1) != TokenKind.dot or not self.namesMemberAt(index + 2) or self.kindAt(index + 3) != TokenKind.leftParen 'notADottedCall'
 			return false
 		end 'notADottedCall'
 		// A LOCAL receiver, a CAPTURED enclosing one (`b.doubled()` inside a closure — P1.5-A2b-2), or a
@@ -29197,6 +29641,25 @@ export type Parser
 		self.advance()
 		return tok
 	end 'consume'
+
+	// ⭐ **CONSUME A TOKEN IN A POSITION WHERE ONLY A NAME MAY STAND (D8)** — a declaration's name, a
+	// parameter's name, a callee/method name, an enum case name. An identifier, or a KEYWORD spelled there
+	// (`function from(…)`, `FilePath.from(…)`): see `tokenCanBeAName` for why the POSITION is what licenses
+	// the keyword, and `keyword-as-a-declared-name.md` for the rule.
+	//
+	// `position` says what the mismatch diagnostic names, because the positions differ in what they are
+	// ASKING for and not in what they accept — `'identifier'` for a declaration or a callee (the E2010 text
+	// the spec corpus pins), `an enum case name` for a case. ONE reader, so a position taught to admit a
+	// keyword cannot be one a sibling still refuses. ⚡ It is an ENUM and not the rendered text: see
+	// `NamePosition` for the measurement that says why.
+	function consumeNameToken(position NamePosition) returns Token throws ParseError
+		let tok = self.current()
+		if not tokenCanBeAName(tok) 'notAName'
+			throw ParseError.unexpectedToken(nameExpectationOf(position), got: tok.kind.rawValue, line: tok.line, column: tok.column)
+		end 'notAName'
+		self.advance()
+		return tok
+	end 'consumeNameToken'
 
 	// Advance the cursor past any newlines — `indexPastNewlines` applied to the cursor, so the MOVER and the
 	// LOOKAHEAD read one definition of "which tokens are layout" rather than two copies of it. Two copies
