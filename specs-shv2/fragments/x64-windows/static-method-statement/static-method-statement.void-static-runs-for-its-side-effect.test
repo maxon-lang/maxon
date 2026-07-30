@@ -1,0 +1,39 @@
+// Test: static-method-statement.void-static-runs-for-its-side-effect
+type Announce
+	export static function line()
+		print("tick")
+	end 'line'
+end 'Announce'
+
+function main() returns ExitCode
+	Announce.line()
+	Announce.line()
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @Announce.line {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __print_string
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Announce.line
+    x64.callDirect Announce.line
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

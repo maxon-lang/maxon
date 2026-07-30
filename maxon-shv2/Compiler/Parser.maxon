@@ -2211,7 +2211,7 @@ let BuiltinsSleepName = b"__Builtins.sleep"
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
 // must never disagree: the intrinsic table in `parseCallNamed` (which dispatches on it) and the
-// STATEMENT door's `voidCompilerStaticCallsAt` (which decides that `__Builtins.sleep(ms)` on a line of
+// STATEMENT door's `voidStaticCallsAt` (which decides that `__Builtins.sleep(ms)` on a line of
 // its own is a statement at all). Written once for the reason `isClockRuntimeCallee` is — a band's
 // membership question belongs with the band's names, not restated at each site.
 function isBuiltinsIntrinsicCallee(callee ByteArray) returns bool
@@ -10316,7 +10316,7 @@ export type Parser
 			// this is the chain case, dispatched for effect (`resultUsed: false`). A function field's trailing
 			// `(args)` goes through `parsePostfix` exactly as the one-hop `methodCallStmt` above.
 			_ = try self.parseFieldChainCall(func, resultUsed: false)
-		end 'fieldChainMethodStmt' else if self.voidCompilerStaticCallsAt(self.pos) 'voidCompilerStaticStmt'
+		end 'fieldChainMethodStmt' else if self.voidStaticCallsAt(self.pos) 'voidStaticStmt'
 			// ⭐ `__Builtins.sleep(ms)` / `__ManagedFile.statFree(buffer)` — A VOID COMPILER-OWNED STATIC
 			// CALLED FOR ITS EFFECT, and `statFree` is the case that makes the position load-bearing rather
 			// than a convenience: it is the ONLY thing that can release the raw block `stat` hands back, and
@@ -10344,7 +10344,7 @@ export type Parser
 			// so widening the statement door widens no name, it only routes them to the same answer
 			// expression position already gives.
 			_ = try self.parseQualifiedCall(func, resultUsed: false)
-		end 'voidCompilerStaticStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+		end 'voidStaticStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
 			// HERE and nowhere else: this is the position that wants no value.
@@ -23105,7 +23105,7 @@ export type Parser
 	//   • a DECLARED callee under the mangled static name — every plain struct's `Widget.byteLength`, and
 	//     a user generic alias's `IntBox.create` through its base. The name is built by the SAME
 	//     expression `parseQualifiedCall` builds it with, `qualifiedCallBaseName` included, rather than
-	//     re-spelled here: two derivations of one callee name is the drift `voidCompilerStaticCallsAt`
+	//     re-spelled here: two derivations of one callee name is the drift `voidStaticCallsAt`
 	//     documents at length, and its failure is a call accepted at one door and refused at the other.
 	function staticCallClaimsBase(index TokenIndex) returns bool
 		let baseName = self.tokenAt(index).value
@@ -31286,7 +31286,7 @@ export type Parser
 	// both ways: the refusal at `:7:2`, and exit 101 with the correct field values printed.
 	// (This is `__Builtins.sleep`'s history repeating exactly — see the arm — and for the same structural
 	// reason: a VOID member of a family whose other members all return a value.)
-	function voidCompilerStaticCallsAt(index TokenIndex) returns bool
+	function voidStaticCallsAt(index TokenIndex) returns bool
 		if self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.dot or self.kindAt(index + 2) != TokenKind.identifier or self.kindAt(index + 3) != TokenKind.leftParen 'notAQualifiedCall'
 			return false
 		end 'notAQualifiedCall'
@@ -31295,8 +31295,53 @@ export type Parser
 			return true
 		end 'statFree'
 
-		return isBuiltinsIntrinsicCallee(qualifiedMethodName(self.qualifiedCallBaseName(self.tokenAt(index).value), methodName: self.tokenAt(index + 2).value))
-	end 'voidCompilerStaticCallsAt'
+		let callee = qualifiedMethodName(self.qualifiedCallBaseName(self.tokenAt(index).value), methodName: self.tokenAt(index + 2).value)
+		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
+			return true
+		end 'builtinsIntrinsic'
+
+		// ⭐ **A USER TYPE'S VOID STATIC — the same position, asked of the whole-program index instead of a
+		// table (D10).** `Helper.shout()` on a line of its own was `E2015: Unsupported: identifier statement`
+		// while `__Builtins.sleep(ms)` two arms up was accepted, and the asymmetry was not a rule — it was
+		// which callees happened to have a recognizer. The oracle compiles and runs the user form (measured:
+		// prints, exit 0), so shv2 was refusing a correct program.
+		//
+		// ⚠ **VOID IS THE WHOLE CONDITION, and the reason is the one this arm's own dispatch site states**:
+		// a value-returning static is refused here because it discards a box nothing would then free, which
+		// is a LEAK argument. It does not reach a void static — there is no value to discard, and the call is
+		// the entire point of writing it. So this asks the index for the callee's return type and accepts
+		// only `void`; a value-returning `Point.create()` still falls through to the same refusal it always
+		// had, unchanged.
+		//
+		// ASKED LAST, after both cheap compiler-owned arms, because `returnTypeOf` ADOPTS the return type
+		// into this file's interner and so allocates — on a path already documented as cold by construction
+		// (every cheaper statement form has declined, and `methodCallsAt` has taken every qualified shape
+		// whose base is a value in scope). During the tolerant declaration sweep the index is still building
+		// and this answers `undeclared` ⇒ false, which is sound for the same reason `constructorInstanceOf`
+		// gives: the sweep's artifact is discarded.
+		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declaredStatic'
+			declared(returnType) then return maxonReturnTypeIsVoid(returnType)
+			undeclared then break 'declaredStatic'
+		end 'declaredStatic'
+
+		// ⭐⭐ **AN UNKNOWN MEMBER ON A DECLARED TYPE IS CLAIMED TOO — SO IT CAN BE REFUSED BY NAME RATHER
+		// THAN BY SHAPE.** `Helper.nope()` is not a void static, so the arm above declined it; left to fall
+		// through, it died as `E2015: Unsupported: identifier statement` — and THAT MESSAGE BECAME FALSE THE
+		// MOMENT THIS RUNG LANDED. The construct IS supported now; it is the NAME that is wrong, and E2015
+		// says nothing about a name. Claiming the shape here routes it to `parseCallNamed`, which reports the
+		// positioned **E3004 `call to undefined function 'Helper.nope'`** — the identical answer EXPRESSION
+		// position already gives for the same typo, and the identical answer `__Builtins.nope()` already gets
+		// in THIS position (measured both ways). The compiler-owned half was never refused by shape; this is
+		// the user half catching up, which is the same asymmetry the void arm above closes.
+		//
+		// ⚠ **A VALUE-RETURNING static is NOT claimed, and that is deliberate rather than an oversight.** It
+		// is `declared` with a non-void return, so the arm above returns false and it keeps the refusal it has
+		// always had. Whether a bare `Point.create()` should instead be a discard (`_ =`) is a different
+		// question with a leak argument behind it — see the dispatch site — and this rung does not answer it.
+		// ⇒ what moves here is exactly one case: a member NO file declares, from a refusal about SHAPE to a
+		// refusal about the NAME. Pinned by `static-method-statement.error.unknown-static-names-the-callee`.
+		return self.signatures.containsStruct(self.qualifiedCallBaseName(self.tokenAt(index).value))
+	end 'voidStaticCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
 	// distinguishing a reassignment (`ident =`) from a bare identifier statement (`ident …`)
