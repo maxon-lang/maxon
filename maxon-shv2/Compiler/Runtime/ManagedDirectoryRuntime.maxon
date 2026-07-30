@@ -67,10 +67,20 @@ export let ManagedDirectoryBoxBytes = 8 as ParsedInt
 // ⚠ The flag is a full WORD rather than the bootstrap's byte. The Std tier's `accessWidthFor` carries `byte`
 // and `word64` and nothing between, so either would lower; a word costs the same 336 bytes (328 + 8 is the
 // bootstrap's own total) and keeps every access in this file at one width.
+//
+// ⚠⚠ **THE TWO TAIL NUMBERS ARE DERIVED, NOT TRANSCRIBED, AND THAT IS THE POINT** (review, R4.3). `328` and
+// `336` are `8 + FindDataBytes` and that plus one word — so writing them as literals would be a THIRD copy
+// of "a `WIN32_FIND_DATAA` is 320 bytes", the first two being `ManagedFileRuntime.FindDataBytes` (which
+// `stat`/`exists` allocate by) and the Win32 header itself. Nothing would make the copies agree: correct
+// the size in one place and this block silently UNDER-ALLOCATES, at which point the kernel writes the tail
+// of the find record straight over the pending flag on every `FindNextFileA` — a wrong answer with no
+// compile error and no failing test. `FindDataBytes` is exported for exactly this reader.
 let FindBlockHandleOffset = 0 as ByteOffset
 let FindBlockFindDataOffset = 8 as ByteOffset
-let FindBlockPendingOffset = 328 as ByteOffset
-let FindBlockBytes = 336 as ParsedInt
+// The pending flag's own width — see above for why it is a word and not the bootstrap's byte.
+let FindBlockPendingBytes = 8 as ParsedInt
+let FindBlockPendingOffset = ((FindBlockFindDataOffset as ParsedInt) + FindDataBytes) as ByteOffset
+let FindBlockBytes = (FindBlockPendingOffset as ParsedInt) + FindBlockPendingBytes
 
 // The pending flag's two values. Named rather than spelled `1`/`0` at four sites: the flag reads as a
 // direction ("consume in place" vs "fetch") and a bare literal at a branch says neither.
@@ -244,30 +254,6 @@ function emitLoadByte(module StdModule, block IrBlock, base ValueId, index Value
 	return loaded
 end 'emitLoadByte'
 
-// ⭐ **THE LIVE HANDLE OF AN OPEN SEARCH, OR A `closed` THROW** — `ManagedFileRuntime.emitOpenHandleOrThrow`'s
-// twin, one level down (the handle lives in the find block, not in the box).
-//
-// ⚠⚠ **THIS GUARD IS A DELIBERATE DIVERGENCE FROM BOTH REFERENCES, AND IT PREVENTS A WRONG ANSWER RATHER
-// THAN A CRASH.** Neither reference ever throws `__ManagedDirectoryError.closed`; the bootstrap's `next()`
-// on a closed search reaches `FindNextFileA(NULL)`, and the entry that would then be returned is whatever
-// the pending flag still says. Without a guard the sequence `d.close()` then `d.next()` REPLAYS the first
-// entry of the search and reports it as found — a silent wrong answer, which is the one class this rung may
-// not ship. Throwing `closed` names the exact fact instead, and it is shv2's own established contract for
-// this family: `__ManagedFile`'s `size`/`read`/`write` throw `__ManagedFileError.closed` from the identical
-// guard, for the identical reason. `managed-directory.next-after-close-throws-closed` pins it.
-//
-// Emits the test into `entry` and routes the live path to `join`; the handle is defined in `entry`, which
-// dominates `join`.
-function emitOpenSearchOrThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, findBlock ValueId, ids ValueMinter) returns ValueId
-	let handle = emitLoadField(module, block: entry, record: findBlock, offset: FindBlockHandleOffset, ids: ids)
-	let closedConst = emitConst(module, block: entry, value: ManagedDirectoryClosedHandle, ids: ids)
-	let isClosed = emitCmp(module, block: entry, a: handle, b: closedConst, pred: StdCmpPred.eq, ids: ids)
-	var closedBlock = module.addBlock(func, label: b"mdclosed")
-	module.setTerminator(entry, op: StdOp.condBranch(isClosed, thenBlockId: closedBlock.id, elseBlockId: join.id))
-	emitErrorReturn(module, block: closedBlock, flag: ManagedDirectoryClosedFlag, ids: ids)
-	return handle
-end 'emitOpenSearchOrThrow'
-
 // ⭐⭐ **A NUL-TERMINATED cstring → A FRESH OWNED `__ManagedMemory`, AND THE CALLER OWNS THE RESULT.**
 // `filename()` and `currentPath()` both answer with one, and both would otherwise be twenty lines of the
 // same loop.
@@ -383,7 +369,7 @@ end 'buildManagedDirectoryOpenSearch'
 // The shape both references share: consume the pending entry if there is one, otherwise fetch; then test the
 // entry against `.`/`..` and go round again if it is one; a real entry answers 1.
 //
-//   entry     → the closed guard (`emitOpenSearchOrThrow`)
+//   entry     → the closed guard (`ManagedFileRuntime.emitLiveHandleOrClosedThrow`)
 //   checkPend → pending? consume it in place : fetch
 //   fetch     → `FindNextFileA`; FALSE + `ERROR_NO_MORE_FILES` ⇒ EOF, FALSE + anything else ⇒ throw
 //   dotCheck  → is the current name `.` or `..`? yes ⇒ back to `fetch`, no ⇒ found
@@ -410,7 +396,19 @@ function buildManagedDirectoryNext(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 	let findBlock = emitLoadFindBlock(module, block: entry, box: box, ids: ids)
-	let handle = emitOpenSearchOrThrow(module, func: func, entry: entry, join: checkPend, findBlock: findBlock, ids: ids)
+
+	// ⚠⚠ **THE `closed` GUARD IS A DELIBERATE DIVERGENCE FROM BOTH REFERENCES, AND IT PREVENTS A CRASH AS
+	// WELL AS A WRONG ANSWER.** Neither reference ever throws `__ManagedDirectoryError.closed`; the
+	// bootstrap's `next()` on a closed search reaches `FindNextFileA(NULL)` while the pending flag may still
+	// claim an entry, so `d.close()` then `d.next()` either REPLAYS the first entry as found or faults.
+	// MEASURED with the guard defeated: exit **0xC0000005**, an access violation.
+	// `managed-directory.next-after-close-throws-closed` pins it. The guard's SHAPE is
+	// `ManagedFileRuntime.emitLiveHandleOrClosedThrow`, shared with `__ManagedFile`'s `size`/`read`/`write`,
+	// which throw `__ManagedFileError.closed` from the identical test for the identical reason — only the
+	// record, the offset, the sentinel and the flag are this family's. The handle sits one level down (in
+	// the find block, not in the box), which is exactly what the `record`/`handleOffset` pair carries. It is
+	// called directly rather than through a directory-family wrapper because there is ONE site.
+	let handle = emitLiveHandleOrClosedThrow(module, func: func, entry: entry, join: checkPend, record: findBlock, handleOffset: FindBlockHandleOffset, closedSentinel: ManagedDirectoryClosedHandle, closedFlag: ManagedDirectoryClosedFlag, ids: ids)
 
 	// Pending? Then `FindFirstFileA`'s entry is still unconsumed: clear the flag and go straight to the dot
 	// check, WITHOUT fetching. This is the half that keeps the first entry of every search.

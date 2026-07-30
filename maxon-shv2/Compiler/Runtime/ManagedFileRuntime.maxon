@@ -365,19 +365,40 @@ end 'emitFileErrnoClassifiedThrow'
 // are `MmRuntime.emitErrorReturn`/`emitOkReturn` — the identical three-line bodies `ArrayRuntime` also had.
 // R4.3 would have been the third copy; see their header in `MmRuntime` for why they now have one home.
 
-// ⭐ **THE HANDLE OF AN OPEN BOX, OR A `closed` THROW.** `size`/`read`/`write` all begin here: the box's
-// `_handle` is `ManagedFileClosedHandle` both before an open and after a close (one sentinel, two facts —
-// see its declaration), so ONE test covers "never opened" and "already closed", and operating on either is
-// exactly what `__ManagedFileError.closed` names. Emits the test into `entry` and routes the live path to
-// `join`; the handle is defined in `entry`, which dominates `join`.
-function emitOpenHandleOrThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, box ValueId, ids ValueMinter) returns ValueId
-	let handle = emitLoadField(module, block: entry, record: box, offset: ManagedFileHandleOffset, ids: ids)
-	let closedConst = emitConst(module, block: entry, value: ManagedFileClosedHandle, ids: ids)
+// ⭐⭐ **THE LIVE OS HANDLE OF A RECORD, OR THIS FAMILY'S `closed` THROW — ONE HOME FOR THE GUARD ITSELF.**
+// A handle-owning box carries its family's CLOSED SENTINEL both before an open and after a close (one
+// sentinel, two facts — see `ManagedFileClosedHandle`), so ONE test covers "never opened" and "already
+// closed", and operating on either is exactly what a `closed` case names. Emits the test into `entry` and
+// routes the live path to `join`; the handle is defined in `entry`, which dominates `join`.
+//
+// ⚠ **THE PROTOCOL IS WHAT IS SHARED, NOT THE CONSTANTS** (R4.3). `__ManagedFile`'s `size`/`read`/`write`
+// and `__ManagedDirectory`'s `next` had this same six-line body twice, differing only in which record the
+// handle sits in, which sentinel means closed, and which enum's `closed` flag to throw — all four now
+// parameters. The part that was copied is the part that is easy to get silently wrong: which way round the
+// `condBranch` goes, and that the throw block is a SEPARATE block dominated by `entry`. Swap the two edges
+// in one copy and the other keeps working, while that family's guard stops firing — measured, on the
+// directory side, as a **0xC0000005 access violation** from `FindNextFileA(NULL)`, not as a test that
+// merely returns the wrong number.
+//
+// ⚠ The `closed` block's LABEL is deliberately family-neutral and NOT a parameter: labels are diagnostic
+// strings only (identity is `block.id`), and `emitErrnoClassifiedThrow` — shared by both families since
+// R4.3 — already emits `mf`-prefixed labels inside directory functions.
+export function emitLiveHandleOrClosedThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, record ValueId, handleOffset ByteOffset, closedSentinel ParsedInt, closedFlag ParsedInt, ids ValueMinter) returns ValueId
+	let handle = emitLoadField(module, block: entry, record: record, offset: handleOffset, ids: ids)
+	let closedConst = emitConst(module, block: entry, value: closedSentinel, ids: ids)
 	let isClosed = emitCmp(module, block: entry, a: handle, b: closedConst, pred: StdCmpPred.eq, ids: ids)
-	var closedBlock = module.addBlock(func, label: b"mfclosed")
+	var closedBlock = module.addBlock(func, label: b"closedthrow")
 	module.setTerminator(entry, op: StdOp.condBranch(isClosed, thenBlockId: closedBlock.id, elseBlockId: join.id))
-	emitErrorReturn(module, block: closedBlock, flag: ManagedFileClosedFlag, ids: ids)
+	emitErrorReturn(module, block: closedBlock, flag: closedFlag, ids: ids)
 	return handle
+end 'emitLiveHandleOrClosedThrow'
+
+// The guard with THIS family's three fixed facts supplied — the handle lives in the box itself, at
+// `ManagedFileHandleOffset`. Every `__ManagedFile` caller throws `__ManagedFileError.closed`, so those three
+// are a per-FILE fact rather than a per-call one. Not a thin wrapper: it is what keeps the triple out of
+// `size`, `read` and `write`.
+function emitOpenHandleOrThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, box ValueId, ids ValueMinter) returns ValueId
+	return emitLiveHandleOrClosedThrow(module, func: func, entry: entry, join: join, record: box, handleOffset: ManagedFileHandleOffset, closedSentinel: ManagedFileClosedHandle, closedFlag: ManagedFileClosedFlag, ids: ids)
 end 'emitOpenHandleOrThrow'
 
 // The BYTE capacity/length of an `Array` record: its element count times `element_size@24`. Both the read's
@@ -821,8 +842,10 @@ function buildManagedFileStat(module StdModule)
 end 'buildManagedFileStat'
 
 // One unsigned DWORD out of the find record — see `DwordMask` for why it is a word load and a mask rather
-// than a 4-byte access.
-export function emitLoadDword(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+// than a 4-byte access. ⚠ Not exported: R4.3 exported it for the directory family and the directory family
+// does not load a DWORD out of MEMORY — `__md_exists` masks a value `GetFileAttributesA` returned in a
+// REGISTER, which is `DwordMask` (exported) and no load at all.
+function emitLoadDword(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let word = emitLoadField(module, block: block, record: record, offset: offset, ids: ids)
 	let mask = emitConst(module, block: block, value: DwordMask, ids: ids)
 	return emitBin(module, block: block, a: word, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)

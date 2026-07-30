@@ -297,9 +297,10 @@ error E3072: specs/fragments/managed-directory/managed-directory.error-direct-co
 `## Tests` to the NEXT `## ` heading, so a second-level heading here would shelve
 every case below it silently.
 
-The seven cases below are shv2's own, added by R4.3's adversarial probing. Each
-pins something the ten ported cases above do not reach — and every one of them
-was written because a probe found the mechanism, not to restate a passing one.
+The nine cases below are shv2's own, added by R4.3's adversarial probing (seven)
+and by its independent review (the last two). Each pins something the ten ported
+cases above do not reach — and every one of them was written because a probe
+found the mechanism, not to restate a passing one.
 
 <!-- test: managed-directory.next-does-not-skip-the-first-match -->
 <!-- targets: x64-windows -->
@@ -545,4 +546,122 @@ end 'main'
 ```
 ```maxoncstderr
 error E2051: <fragment>:2:13: identifier '__ManagedDirectoryError' is reserved: declarations starting with '__' are reserved for compiler internals
+```
+
+<!-- test: managed-directory.dotfiles-are-entries-not-dot-pseudo-entries -->
+<!-- targets: x64-windows -->
+
+⭐ **THE DOT FILTER IS THREE BYTES, AND ALL SEVENTEEN CASES ABOVE PASS IF IT IS
+ONE.** `.` is byte0 `.` + NUL, `..` is `.` `.` + NUL — so a filter that tested
+only the leading byte would hide **every dotfile in the directory** while still
+discarding exactly the two pseudo-entries the other cases care about. Nothing
+above can see the difference: `search-and-list` and
+`next-does-not-skip-the-first-match` list directories that contain no dotfile,
+and `filename-round-trip` searches `*.txt`. This one lists a directory holding
+`.gitignore` (byte1 is not NUL), `..config` (byte1 IS `.`, byte2 is not NUL) and
+a plain file, and requires all three back. MEASURED: with `dot1` routed
+unconditionally back to the fetch, this returns 1 and the other seventeen stay
+green.
+
+```maxon
+export enum ProbeError implements Error
+	failed
+end 'ProbeError'
+
+function writeFile(path String) throws ProbeError
+	var f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
+		throw ProbeError.failed
+	end 'openFail'
+	try f.write("x".toByteArray().managed) otherwise 'writeFail'
+		f.close()
+		throw ProbeError.failed
+	end 'writeFail'
+	f.close()
+end 'writeFile'
+
+function main() returns ExitCode
+	let dirPath = "test_md_dotfiles"
+	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
+		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
+	end 'needCreate'
+	try writeFile("{dirPath}/.gitignore") otherwise return 2
+	try writeFile("{dirPath}/..config") otherwise return 2
+	try writeFile("{dirPath}/plain.txt") otherwise return 2
+
+	var dir = try __ManagedDirectory.openSearch("{dirPath}/*".toByteArray().managed) otherwise return 3
+	var seen = 0
+	var dots = 0
+	while (try dir.next() otherwise return 4) != 0 'loop'
+		let name = String.init(dir.filename())
+		if name == ".gitignore" 'hidden'
+			seen = seen + 1
+		end 'hidden'
+		if name == "..config" 'doubleLeading'
+			seen = seen + 1
+		end 'doubleLeading'
+		if name == "plain.txt" 'ordinary'
+			seen = seen + 1
+		end 'ordinary'
+		if name == "." 'singleDot'
+			dots = dots + 1
+		end 'singleDot'
+		if name == ".." 'doubleDot'
+			dots = dots + 1
+		end 'doubleDot'
+	end 'loop'
+	dir.close()
+
+	try __ManagedFile.delete("{dirPath}/.gitignore".toByteArray().managed) otherwise return 5
+	try __ManagedFile.delete("{dirPath}/..config".toByteArray().managed) otherwise return 5
+	try __ManagedFile.delete("{dirPath}/plain.txt".toByteArray().managed) otherwise return 5
+
+	if dots != 0 'pseudoEntryLeaked'
+		return 6
+	end 'pseudoEntryLeaked'
+	if seen == 3 'allThree'
+		return 42
+	end 'allThree'
+	return seen
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: managed-directory.eof-and-close-are-both-idempotent -->
+<!-- targets: x64-windows -->
+
+Two contracts nothing above states. **EOF is a plain 0 and stays one**: an empty
+directory's very first `next()` is the end of the iteration, and a `next()` past
+it must answer 0 again rather than throw `nextFailed` or replay — `FindNextFileA`
+keeps reporting `ERROR_NO_MORE_FILES`, and only the `GetLastError` arm makes that
+an ordinary end. **`close()` is idempotent**: the spec says so, `__md_destruct`
+depends on it (an explicit `close()` followed by the scope-exit drop calls it
+twice), and `search-and-list` exercises close-then-drop but never close-then-close
+in one program.
+
+```maxon
+function main() returns ExitCode
+	let dirPath = "test_md_empty_search"
+	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
+		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
+	end 'needCreate'
+
+	var dir = try __ManagedDirectory.openSearch("{dirPath}/*".toByteArray().managed) otherwise return 2
+	let first = try dir.next() otherwise return 3
+	if first != 0 'emptyDirectoryHasNoRealEntry'
+		return 4
+	end 'emptyDirectoryHasNoRealEntry'
+	let second = try dir.next() otherwise return 5
+	if second != 0 'eofStaysEof'
+		return 6
+	end 'eofStaysEof'
+
+	dir.close()
+	dir.close()
+	return 42
+end 'main'
+```
+```exitcode
+42
 ```
