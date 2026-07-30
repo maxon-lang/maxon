@@ -599,3 +599,193 @@ end 'main'
 ```
 
 
+### shv2 regression cases
+
+(A `###` and not a `##`: the active-test region runs from `## Tests` to the NEXT `## ` heading, so a
+second-level heading here would shelve every case below it — see `Testing/SpecParser.maxon`.)
+
+The cases above are the canonical `/specs/associated-types.md` corpus, byte-identical. The four below are
+shv2's own, found by probing the substitution rung (R5) for false rejects and false accepts. Each names the
+mechanism it pins.
+
+### A conformance may bind an associated type to the CONFORMER'S OWN type parameter
+
+`type ArrayIterator uses Element implements BidirectionalIterator with Element` is how every generic
+container in `stdlib/` declares its conformance (`Array.maxon:490`, `List.maxon:158`, `Map.maxon:343`,
+`Set.maxon:356`), so this is the shape the feature exists for and not a corner.
+
+It was a wrong REJECTION until R5, on the IMPL side rather than the interface side: an interface requirement
+already spelled a type parameter by its declared name, but the impl method's types went through
+`maxonTypeName`, whose fallback for a `typeParameter` is the bare tag word — so the comparison read
+`held() returns type parameter` against `held() returns T` and could never agree, whatever the program said.
+Measured before the fix: `E3016 … held() returns type parameter (expected held() returns T)`; the bootstrap
+compiles and runs the same program (exit 42).
+
+<!-- test: conformance-argument-is-the-conformers-own-type-parameter -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Holder uses Element
+	function held() returns Element
+end 'Holder'
+
+type Box uses T implements Holder with T
+	let value as T
+
+	function held() returns T
+		return value
+	end 'held'
+
+	static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let b = IntBox.create(42)
+	return b.held()
+end 'main'
+```
+```exitcode
+42
+```
+
+
+### …and the WRONG type parameter is still a mismatch, named
+
+The other half of the same rendering fix, and the reason it is a fix and not a relaxation: with every
+parameter rendered as one string, a diagnostic could not tell `T` from `U`. Here the conformance binds
+`Element := T` and the method returns `U`.
+
+<!-- test: conformance-argument-type-parameter-mismatch -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Holder uses Element
+	function held() returns Element
+end 'Holder'
+
+type Pair uses T, U implements Holder with T
+	let first as T
+	let second as U
+
+	function held() returns U
+		return second
+	end 'held'
+
+	static function create(first T, second U) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+
+typealias IntPair = Pair with (Integer, Integer)
+
+function main() returns ExitCode
+	let p = IntPair.create(1, second: 2)
+	return p.held()
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:9:6: Partial interface implementation: type 'Pair' has 1 method(s) with wrong signature:
+  - held() returns U (expected held() returns T)
+```
+
+
+### An `implements` list mixes bound and unbound interfaces, and the comma belongs to whichever takes it
+
+R5 made an unparenthesized `with` read as many arguments as the interface has `uses` names, so the comma
+after an argument is ambiguous between "another argument" and "another interface" and the ARITY is what
+settles it. `Alpha` takes one, so the comma after `Integer` opens a sibling conformance;
+`stdlib/List.maxon:12` is written in exactly this shape. A greedy reader eats `Beta` as an argument.
+
+<!-- test: mixed-bound-and-unbound-interfaces -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+interface Alpha uses A
+	function one() returns A
+end 'Alpha'
+
+interface Beta uses B
+	function two() returns B
+end 'Beta'
+
+interface Plain
+	function three() returns Integer
+end 'Plain'
+
+type Multi implements Alpha with Integer, Beta with Float, Plain
+	let n as Integer
+
+	function one() returns Integer
+		return n
+	end 'one'
+
+	function two() returns Float
+		return 1.0
+	end 'two'
+
+	function three() returns Integer
+		return 42
+	end 'three'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Multi'
+
+function main() returns ExitCode
+	let m = Multi.create(7)
+	return m.one() + m.three()
+end 'main'
+```
+```exitcode
+49
+```
+
+
+### A `with` argument an interface declares no `uses` name for is IGNORED, not rejected
+
+The two reference compilers disagree here — the bootstrap binds `min(names, args)` and drops the rest, v1
+rejects the arity — and shv2 takes the bootstrap's answer. See `ConformanceCheck.checkOneInterfaceConformance`
+for the argument in full; the short form is that a surplus rejection would also refuse
+`implements Sub with Score` where `Sub extends` an interface whose `uses` name it inherits, a shape v1
+supports and shv2 does not yet, so refusing it here would be preemptive.
+
+<!-- test: surplus-conformance-argument-is-ignored -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface NoUses
+	function value() returns Integer
+end 'NoUses'
+
+type Odd implements NoUses with Integer
+	let n as Integer
+
+	function value() returns Integer
+		return n
+	end 'value'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Odd'
+
+function main() returns ExitCode
+	let o = Odd.create(42)
+	return o.value()
+end 'main'
+```
+```exitcode
+42
+```
+
+
