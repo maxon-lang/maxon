@@ -1,0 +1,29 @@
+// Test: a-keyword-as-a-free-function-name
+typealias Integer = int(i64.min to i64.max)
+
+function from(n Integer) returns Integer
+	return n + 1
+end 'from'
+
+function main() returns ExitCode
+	return from(41)
+end 'main'
+---
+ExitCode: 42
+---
+func @from {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 41
+    arm64.bl from
+    arm64.epilogue 16
+    arm64.ret
+}

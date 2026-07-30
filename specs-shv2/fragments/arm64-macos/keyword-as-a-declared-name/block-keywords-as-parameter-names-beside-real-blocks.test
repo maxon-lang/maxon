@@ -1,0 +1,94 @@
+// Test: block-keywords-as-parameter-names-beside-real-blocks
+typealias Integer = int(i64.min to i64.max)
+
+function weigh(while Integer, for Integer, match Integer, from Integer, to Integer) returns Integer
+	var acc = 0
+	var k = 0
+	while k < 3 'spin'
+		acc = acc + from
+		k = k + 1
+	end 'spin'
+
+	if acc > 2 'over'
+		acc = acc + to
+	end 'over'
+
+	return acc
+end 'weigh'
+
+function main() returns ExitCode
+	var total = 0
+	for i in 1 upto 4 'walk'
+		total = total + weigh(i, for: 3, match: 4, from: 2, to: 8)
+	end 'walk'
+	return total
+end 'main'
+---
+ExitCode: 42
+---
+func @weigh {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x6, x3
+    arm64.movRegReg x7, x4
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 3
+    arm64.cset x2, lt
+    arm64.cbnz x2, spin
+    arm64.b whileexit
+  spin:
+    arm64.add x0, x0, x6
+    arm64.add x1, x1, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x0, 2
+    arm64.cset x1, gt
+    arm64.cbnz x1, over
+    arm64.b critsplit
+  over:
+    arm64.add x0, x0, x7
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 1
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, 4
+    arm64.cset x0, lt
+    arm64.cbnz x0, walk
+    arm64.b forexit
+  walk:
+    arm64.movImm x1, 3
+    arm64.movImm x2, 4
+    arm64.movImm x6, 2
+    arm64.movImm x7, 8
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x3, x6
+    arm64.movRegReg x4, x7
+    arm64.bl weigh
+    arm64.add x19, x19, x0
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

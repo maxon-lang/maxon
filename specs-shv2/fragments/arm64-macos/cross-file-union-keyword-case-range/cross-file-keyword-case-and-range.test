@@ -1,0 +1,142 @@
+// Test: cross-file-keyword-case-and-range
+// --- file: kind.maxon
+export enum Kind
+	boolean
+	integer
+	float
+	named
+	function
+	unresolved
+	other
+end 'Kind'
+
+// --- file: main.maxon
+function isScalar(k Kind) returns bool
+	return match k 'check'
+		boolean to float gives true
+		named to other gives false
+	end 'check'
+end 'isScalar'
+
+function pickFloat() returns Kind
+	return Kind.float
+end 'pickFloat'
+
+function pickBoolean() returns Kind
+	return Kind.boolean
+end 'pickBoolean'
+
+function pickNamed() returns Kind
+	return Kind.named
+end 'pickNamed'
+
+function main() returns ExitCode
+	var score = 0
+	if isScalar(pickFloat()) 'f'
+		score = score + 1
+	end 'f'
+	if isScalar(pickBoolean()) 'b'
+		score = score + 2
+	end 'b'
+	if isScalar(pickNamed()) 'n'
+		score = score + 4
+	end 'n'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+func @isScalar {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, ge
+    arm64.cmp x0, 2
+    arm64.cset x2, le
+    arm64.and x1, x1, x2
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 3
+    arm64.cset x1, ge
+    arm64.cmp x0, 6
+    arm64.cset x0, le
+    arm64.and x0, x1, x0
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @pickFloat {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @pickBoolean {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @pickNamed {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.bl pickFloat
+    arm64.bl isScalar
+    arm64.cbnz x0, f
+    arm64.b critsplit
+  f:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.bl pickBoolean
+    arm64.bl isScalar
+    arm64.cbnz x0, b
+    arm64.b critsplit
+  b:
+    arm64.add x19, x19, 2
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.bl pickNamed
+    arm64.bl isScalar
+    arm64.cbnz x0, n
+    arm64.b critsplit
+  n:
+    arm64.add x0, x19, 4
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

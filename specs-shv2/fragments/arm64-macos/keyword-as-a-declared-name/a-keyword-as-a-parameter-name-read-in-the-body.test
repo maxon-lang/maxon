@@ -1,0 +1,28 @@
+// Test: a-keyword-as-a-parameter-name-read-in-the-body
+typealias Integer = int(i64.min to i64.max)
+
+function identity(type Integer) returns Integer
+	return type
+end 'identity'
+
+function main() returns ExitCode
+	return identity(42)
+end 'main'
+---
+ExitCode: 42
+---
+func @identity {
+  entry:
+    arm64.prologue 16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.bl identity
+    arm64.epilogue 16
+    arm64.ret
+}
