@@ -66,23 +66,44 @@ type name denotes anything:
   `specs-shv2/struct-field-assign-precedence.md`'s `error.not-a-struct-outranks-immutable-instance`
   (a bare `let n = 5`) and `specs-shv2/self-field-struct-typed.md`'s
   `error.scalar-field-base-is-not-a-struct` (a field declared with a ranged alias, whose tag is
-  `named` — the case that turns red if the new arm is widened to fire on every `named`).
-* **it denotes nothing** ⇒ the refusal names the type **the source wrote** and says the DECLARATION
-  is what has to change. One sentence for all three doors
-  (`Parser.undeclaredBaseTypeMessage`), because it is one fact met at three spellings.
+  `named`). ⭐ **That second one is the whole corpus's coverage of this branch, measured rather than
+  assumed:** widen the query to fire on every `named` and it reports
+  `E3011: Unknown type 'Integer'` about a perfectly declared alias — and it is the ONLY case of 2540
+  that goes red, so it is the single thing standing between this arm and a new false rejection.
+* **it denotes nothing** ⇒ the door reports **E3011 with `unknownTypeMessage`** — the authority's own
+  code and the authority's own words — positioned at the base (or, for a method call, the member).
+  Not a sentence of its own: `ParseError.unknownTypeName`, the one arm every positioned undeclared
+  type name in the compiler is rendered through.
 
 The query is asked only on a path that has ALREADY decided to refuse, so it can never reject a
-program that compiles: it chooses the wording and nothing else. And it is a diagnostic query only —
+program that compiles: it chooses the verdict and nothing else. And it is a diagnostic query only —
 the denoted type is discarded, never substituted for the base's, because the parser deliberately
 keeps a `named` value's alias name (the shift rule and the per-instance identity checks read it)
 where `resolveTypes` erases it.
 
-⚠ **The CODE on this route is still E2015 and not E3011.** The meaning is E3011's, and the parser
-already raises E3011 positioned at two other sites (both `as` casts, via
-`ParseError.unknownCastTargetType`) — but that variant is named for the cast and the shared
-`Queries.reportParseError` mapping is the only place a new arm could be rendered, so promoting this
-route to E3011 is a separate change to that mapper. What is fixed here is the assertion, which was
-the wrong ANSWER; the code is a register question with no wrong answer in it.
+### The code is E3011, and the first cut of this fix got that wrong
+
+⚠ **A BETTER SENTENCE UNDER THE WRONG CODE IS STILL A SECOND HOME FOR ONE FACT.** The first cut kept
+each door's *"a field access on 'h', …"* framing and merely swapped the invented type for the real
+name. That removed the false assertion — but it left `E2015 ParserUnsupportedFeature` (*"a construct
+this compiler does not implement yet"*, which is not what is wrong with the program) carrying a fact
+`E3011 SemanticUnknownType` is registered for, in a second wording, beside the one
+`TypeResolution.unknownTypeMessage` exists to make unique. The registry keys a code to a MEANING, so
+the register is not cosmetic.
+
+**So the arm the two `as`-cast sites already used was renamed to what it always was**:
+`ParseError.unknownCastTargetType` → **`ParseError.unknownTypeName`**. Its payload was never
+cast-specific — a type name and a position — and the cast was simply its only raiser at the time.
+One authority (`denotedNamedType`), one code (E3011), one text (`unknownTypeMessage`), and now SIX
+anchors: a parameter, a return type and a field report it unpositioned from `resolveTypes`; a body
+`as` cast and a top-level `let`'s cast report it at the `as`; a generic type argument reports it at
+the argument; and these three member-access doors report it at the base. The cast diagnostics are
+byte-for-byte unchanged — `specs-shv2/cast-target-type-resolution.md` pins all four of them.
+
+**Why a parse-time door reports a code the authority also reports, and why that is not a second
+producer.** It supplies neither the predicate nor the words. What it supplies is a report on a route
+the authority cannot reach — the `abortedParseArtifact` discard above. On every route where the parse
+SUCCEEDS, `resolveTypes` is still the only reporter.
 
 ## Tests
 
@@ -160,7 +181,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:14:9: Unsupported: a field access on 'h', whose declared type 'NoSuchTypeAtAll' names no type this program declares — so it has no fields and no methods. The DECLARATION is the error, not this access: declare 'NoSuchTypeAtAll', or correct the name
+error E3011: <fragment>:14:9: Unknown type 'NoSuchTypeAtAll'
 ```
 
 <!-- test: param-unknown-type-captured-member-access -->
@@ -186,7 +207,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:11:41: Unsupported: a field access or method call on the captured 'h', whose declared type 'NoSuchTypeAtAll' names no type this program declares — so it has no fields and no methods. The DECLARATION is the error, not this access: declare 'NoSuchTypeAtAll', or correct the name
+error E3011: <fragment>:11:41: Unknown type 'NoSuchTypeAtAll'
 ```
 
 <!-- test: param-unknown-type-method-call -->
@@ -209,5 +230,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:11: Unsupported: a member access 'readIt' on a value, whose declared type 'NoSuchTypeAtAll' names no type this program declares — so it has no fields and no methods. The DECLARATION is the error, not this access: declare 'NoSuchTypeAtAll', or correct the name
+error E3011: <fragment>:6:11: Unknown type 'NoSuchTypeAtAll'
 ```
