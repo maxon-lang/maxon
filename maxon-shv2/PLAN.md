@@ -4492,6 +4492,29 @@ not ported from v1's `.mxc`.
 
 ### Bootstrap (`maxon-sharp`) oracle bugs — silent wrong answers to fix when the subsystem is next touched
 
+- **🔴 `__ManagedFile` IN A STANDALONE MODULE CRASHES THE BOOTSTRAP — `E9001 … Index was out of range`
+  in `MaxonToStandardConversion.Run`.** Found 2026-07-30 while surveying **R4.1**, whose acceptance
+  specs these are. **The `/specs` suite is GREEN over it (11/11) because the runner BATCHES** — its own
+  log reads *"Batching: 8 test(s) in 1 batch(es), 3 test(s) per-fragment"*, and the 8 batched cases are
+  the ones that use `__ManagedFile`. Compile any one of them **alone** and the bootstrap dies.
+  **2-line repro:**
+  ```maxon
+  function main() returns ExitCode
+  	let e = __ManagedFile.exists("nope.txt".toByteArray().managed)
+  	return e
+  end 'main'
+  ```
+  ⚠ **The narrowing matters, because it locates the bug away from the obvious suspect:**
+  `"abc".toByteArray().managed` **on its own compiles fine** (it reaches `E3012 unused variable`), so
+  `.managed` and `__ManagedMemory` are NOT implicated — it is specifically a `__ManagedFile.*` call
+  reaching the Maxon→Standard lowering in a module that contains nothing else.
+  ⚠⚠ **CONSEQUENCE FOR R4.1, and it is a process cost rather than a defect in shv2: THE ORACLE CANNOT
+  BE PROBED AD HOC FOR THIS ENTIRE SUBSYSTEM.** Every other rung has used `run_program compiler=csharp`
+  to ask *"what should this actually DO?"*; for `__ManagedFile` that route answers with a crash, so the
+  only oracle available is `spec_test_outcome` over the committed cases — which can confirm the 11
+  cases the corpus already has and **cannot answer a question the corpus does not already ask.**
+  Same E9001 family as the `return self.method(...)` tail-return crash filed at P1.7 Slice 1.
+
 - **🔴🔴 arm64-macOS: A REACHABLE REFCOUNT UNDERFLOW IN shv2's GLOBAL TEARDOWN — 2 SUITE FAILURES, AND
   IT IS THE LAST THING BETWEEN AN arm64-macOS HOST AND A GREEN `specs-shv2`.** Found 2026-07-30 by the
   arm64-macos golden sweep (`01ca36bd0`), which took the lane 62 red → **2**; these are the 2, and
