@@ -252,8 +252,7 @@ error E3016: specs/fragments/associated-types/docs-example-5.test:9:6: Partial i
 
 ## Tests
 
-<!-- disabled-test: basic-associated-type -->
-<!-- ASSOCIATED-TYPE SUBSTITUTION AT CONFORMANCE — a rung of its own, and the half D6 was told not to build. shv2 parses `uses` and records the names on `IrInterface.associatedTypeNames`, and D6 made an interface's `uses` its TYPE-PARAMETER SCOPE so a `typealias ElementArray = Array with Element` inside one resolves. What nothing does is BIND them: `implements I with Integer` must substitute the associated type for its argument BEFORE `checkConformance` compares a requirement's rendered signature against the impl's, so today the comparison reads the associated type's own NAME. `associatedTypeNames` has no reader at all — that reader is the rung. MEASURED: `E3016 … 'IntBox' has 1 method(s) with wrong signature: unwrap() returns Integer (expected unwrap() returns Inner)` — `Inner` unbound where `implements Boxed with Integer` binds it. -->
+<!-- test: basic-associated-type -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -284,8 +283,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: associated-type-in-param -->
-<!-- ASSOCIATED-TYPE SUBSTITUTION AT CONFORMANCE — a rung of its own, and the half D6 was told not to build. shv2 parses `uses` and records the names on `IrInterface.associatedTypeNames`, and D6 made an interface's `uses` its TYPE-PARAMETER SCOPE so a `typealias ElementArray = Array with Element` inside one resolves. What nothing does is BIND them: `implements I with Integer` must substitute the associated type for its argument BEFORE `checkConformance` compares a requirement's rendered signature against the impl's, so today the comparison reads the associated type's own NAME. `associatedTypeNames` has no reader at all — that reader is the rung. MEASURED: `E3016 … 'IntSum' has 1 method(s) with wrong signature: add(item Integer) returns IntSum (expected add(item Item) returns Self)` — the PARAMETER position, same unbound name. -->
+<!-- test: associated-type-in-param -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -323,8 +321,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: multiple-associated-types -->
-<!-- ASSOCIATED-TYPE SUBSTITUTION AT CONFORMANCE — a rung of its own, and the half D6 was told not to build. shv2 parses `uses` and records the names on `IrInterface.associatedTypeNames`, and D6 made an interface's `uses` its TYPE-PARAMETER SCOPE so a `typealias ElementArray = Array with Element` inside one resolves. What nothing does is BIND them: `implements I with Integer` must substitute the associated type for its argument BEFORE `checkConformance` compares a requirement's rendered signature against the impl's, so today the comparison reads the associated type's own NAME. `associatedTypeNames` has no reader at all — that reader is the rung. MEASURED: `E3016 … 'IntFloat' has 2 method(s) with wrong signature: getFirst() returns Integer (expected getFirst() returns First)` and the same for `Second`. ⚠ AND A SECOND, INDEPENDENT DIVERGENCE IN THE SAME CASE, which the substitution rung must fix too: this is the only case here whose `with` clause carries TWO arguments UNPARENTHESIZED (`implements Pair with Integer, Float`), and `skipOptionalWithClause`'s unparenthesized arm consumes exactly ONE type reference — so `parseTypeImplementsClause`'s comma loop reads `, Float` as a SECOND INTERFACE and adds a spurious `E3015: type 'IntFloat' implements unknown interface 'Float'`. How many arguments the clause takes is the interface's `uses` ARITY, which is precisely the fact binding needs. The oracle accepts the program (build 0, run 42 — measured). -->
+<!-- test: multiple-associated-types -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -398,8 +395,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: byte-element-type -->
-<!-- ASSOCIATED-TYPE SUBSTITUTION AT CONFORMANCE — a rung of its own, and the half D6 was told not to build. shv2 parses `uses` and records the names on `IrInterface.associatedTypeNames`, and D6 made an interface's `uses` its TYPE-PARAMETER SCOPE so a `typealias ElementArray = Array with Element` inside one resolves. What nothing does is BIND them: `implements I with Integer` must substitute the associated type for its argument BEFORE `checkConformance` compares a requirement's rendered signature against the impl's, so today the comparison reads the associated type's own NAME. `associatedTypeNames` has no reader at all — that reader is the rung. MEASURED: `E3016 … 'SingleByte' has 1 method(s) with wrong signature: getByte() returns Byte (expected getByte() returns Element)` — the argument here is a RANGED alias, which changes nothing: the requirement still reads `Element`. -->
+<!-- test: byte-element-type -->
 ```maxon
 
 typealias Byte = int(0 to u8.max)
@@ -431,8 +427,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: missing-type-binding-error -->
-<!-- ASSOCIATED-TYPE SUBSTITUTION AT CONFORMANCE — a rung of its own, and the half D6 was told not to build. shv2 parses `uses` and records the names on `IrInterface.associatedTypeNames`, and D6 made an interface's `uses` its TYPE-PARAMETER SCOPE so a `typealias ElementArray = Array with Element` inside one resolves. What nothing does is BIND them: `implements I with Integer` must substitute the associated type for its argument BEFORE `checkConformance` compares a requirement's rendered signature against the impl's, so today the comparison reads the associated type's own NAME. `associatedTypeNames` has no reader at all — that reader is the rung. This case wants the substitution rung's OWN DIAGNOSTIC, not just a substituted message: expected `E3016 … Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'`, a check for an `implements` that binds nothing, which shv2 does not have. MEASURED instead: `E3016 … 'Missing' has 1 method(s) with wrong signature: get() returns Integer (expected get() returns Element)` — the same fact reported as a signature mismatch, which is the consequence rather than the diagnosis. -->
+<!-- test: missing-type-binding-error -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -458,8 +453,7 @@ error E3016: specs/fragments/associated-types/missing-type-binding-error.test:9:
 ```
 
 
-<!-- disabled-test: partial-implementation-error -->
-<!-- ASSOCIATED-TYPE SUBSTITUTION AT CONFORMANCE — a rung of its own, and the half D6 was told not to build. shv2 parses `uses` and records the names on `IrInterface.associatedTypeNames`, and D6 made an interface's `uses` its TYPE-PARAMETER SCOPE so a `typealias ElementArray = Array with Element` inside one resolves. What nothing does is BIND them: `implements I with Integer` must substitute the associated type for its argument BEFORE `checkConformance` compares a requirement's rendered signature against the impl's, so today the comparison reads the associated type's own NAME. `associatedTypeNames` has no reader at all — that reader is the rung. The missing-method LIST is right and only its TEXT is unsubstituted — expected `- second() returns Integer`, MEASURED `- second() returns Element`. The case is red on the message alone, so it is the cheapest proof that substitution reaches the DIAGNOSTIC and not only the comparison. -->
+<!-- test: partial-implementation-error -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -487,8 +481,7 @@ error E3016: specs/fragments/associated-types/partial-implementation-error.test:
 ```
 
 
-<!-- disabled-test: wrong-return-type-error -->
-<!-- ASSOCIATED-TYPE SUBSTITUTION AT CONFORMANCE — a rung of its own, and the half D6 was told not to build. shv2 parses `uses` and records the names on `IrInterface.associatedTypeNames`, and D6 made an interface's `uses` its TYPE-PARAMETER SCOPE so a `typealias ElementArray = Array with Element` inside one resolves. What nothing does is BIND them: `implements I with Integer` must substitute the associated type for its argument BEFORE `checkConformance` compares a requirement's rendered signature against the impl's, so today the comparison reads the associated type's own NAME. `associatedTypeNames` has no reader at all — that reader is the rung. Expected `(expected make() returns Float)`, MEASURED `(expected make() returns Output)`. The REJECTION is correct today and only the name it prints is unbound — so substitution must not be mistaken for something that merely relaxes the check. -->
+<!-- test: wrong-return-type-error -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -516,8 +509,7 @@ error E3016: specs/fragments/associated-types/wrong-return-type-error.test:10:6:
 ```
 
 
-<!-- disabled-test: wrong-param-type-error -->
-<!-- ASSOCIATED-TYPE SUBSTITUTION AT CONFORMANCE — a rung of its own, and the half D6 was told not to build. shv2 parses `uses` and records the names on `IrInterface.associatedTypeNames`, and D6 made an interface's `uses` its TYPE-PARAMETER SCOPE so a `typealias ElementArray = Array with Element` inside one resolves. What nothing does is BIND them: `implements I with Integer` must substitute the associated type for its argument BEFORE `checkConformance` compares a requirement's rendered signature against the impl's, so today the comparison reads the associated type's own NAME. `associatedTypeNames` has no reader at all — that reader is the rung. Expected `(expected accept(val Float) returns Integer)`, MEASURED `(expected accept(val Input) returns Integer)`. The parameter-position twin of the case above. -->
+<!-- test: wrong-param-type-error -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
