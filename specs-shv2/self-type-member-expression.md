@@ -41,6 +41,12 @@ and the refusal names the cure instead.
 refuses the `Self` spelling too (`E2001 unexpected token: 'Self'`). Both spellings are pinned below so
 that a rung which opens one cannot leave the other behind.
 
+Every case below was a **hand probe first** (D9, 2026-07-30), and each was run against the reference
+bootstrap as well as against shv2 — the accepting ones agree with it on the exit code, and the two
+refusals it *also* refuses (`Self.nope` on an enum, `let Self = …`) agree with it character for
+character. The ones that found nothing are here for the reason `enum-union-method-receiver.md` gives:
+next rung, only a committed case still runs.
+
 ## Tests
 
 <!-- test: enum-case-name-through-Self -->
@@ -495,4 +501,307 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:12:3: Unsupported: identifier statement
+```
+
+<!-- test: keyword-named-enum-case-through-Self -->
+### A KEYWORD-named enum case through `Self`
+Where D9 crosses D8: a case may be spelled with a keyword, and `Self.while` has to read `while` as the
+member name while `Self` is itself a keyword being read as a type name. Two keyword rewrites in one
+three-token expression.
+```maxon
+enum Kw
+	while
+	end
+
+	export function pick() returns Kw
+		if self == Self.while 'w'
+			return Self.end
+		end 'w'
+		return Self.while
+	end 'pick'
+end 'Kw'
+
+function main() returns ExitCode
+	let k = Kw.while
+	if k.pick() == Kw.end 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: Self-case-in-every-arm-of-a-match -->
+### `Self.<case>` in every arm of a `match`, payload-carrying and payload-free
+Each arm rebuilds the union through `Self`, so the box the arm CONSTRUCTS and the box the arm
+DESTRUCTURED are live at the same time — the shape a per-arm refcount error shows up in.
+```maxon
+typealias Num = int(0 to 100)
+
+union R
+	a(v Num)
+	b(v Num)
+	c
+
+	export function norm() returns R
+		return match self 'k'
+			a(v) gives Self.b(v)
+			b(v) gives Self.a(v)
+			c gives Self.c
+		end 'k'
+	end 'norm'
+end 'R'
+
+function main() returns ExitCode
+	let x = R.a(42)
+	let y = x.norm()
+	return match y 'k'
+		a gives 1
+		b(v) gives v as ExitCode
+		c gives 2
+	end 'k'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: managed-payload-case-through-Self -->
+### A MANAGED payload constructed through `Self`
+The payload is a `String`, so the construct allocates and the box must be dropped exactly once — an
+unbalanced refcount here is exit 101, not a wrong number.
+```maxon
+union Msg
+	text(s String)
+	silent
+
+	export function shout() returns Msg
+		return Self.text("hi")
+	end 'shout'
+end 'Msg'
+
+function main() returns ExitCode
+	let m = Msg.silent
+	let n = m.shout()
+	return match n 'k'
+		text(s) gives s.byteLength() as ExitCode
+		silent gives 1
+	end 'k'
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: Self-static-result-as-a-call-argument -->
+### A `Self.` static's result passed as a call ARGUMENT
+Argument position is its own drop site — the box is an unbound owned temporary here, freed at statement
+end rather than at a binding's scope exit.
+```maxon
+typealias Num = int(0 to 1000)
+
+function take(g Num) returns Num
+	return g
+end 'take'
+
+type Gate
+	export var n as Num
+
+	export static function make(v Num) returns Gate
+		return Self{n: v}
+	end 'make'
+
+	export function arg() returns Num
+		return take(Self.make(42).n)
+	end 'arg'
+end 'Gate'
+
+function main() returns ExitCode
+	return Gate.make(0).arg()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-local-named-after-the-enclosing-type-does-not-capture-Self -->
+### A local named after the enclosing TYPE does not capture `Self.`
+The arm-order safety argument, and the only case that pins it: `Gate.` would resolve to the local
+binding (a value outranks a type name), and `Self.` must not — it cannot mean a local under any
+spelling. Resolving the base before the scope-based arms would send this to `parseMethodCall`.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Gate
+	export var n as Num
+
+	export static function make(v Num) returns Gate
+		return Self{n: v}
+	end 'make'
+
+	export function twin() returns Num
+		let Gate = 1
+		return Self.make(41).n + Gate
+	end 'twin'
+end 'Gate'
+
+function main() returns ExitCode
+	return Gate.make(0).twin()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: Self-static-called-from-an-instance-method-of-a-generic -->
+### `Self.` in a generic type's INSTANCE method
+The sibling of the static-to-static generic case above: the receiver exists here, and `Self` still comes
+from the enclosing DECLARATION rather than from the instance's type argument.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Holder uses T
+	export var v as T
+
+	export static function make(x T) returns Self
+		return Self{v: x}
+	end 'make'
+
+	export function twin() returns T
+		return Self.make(self.v).v
+	end 'twin'
+end 'Holder'
+
+typealias NumHolder = Holder with Num
+
+function main() returns ExitCode
+	return NumHolder.make(42).twin()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: Self-static-across-a-file-boundary -->
+### `Self.` in a type declared in ANOTHER file
+The rewritten token's name is a slice of THIS file's source buffer and it feeds this file's own artifact
+interner, so a `Self.` resolved in one file must not leak an id the other file's merge cannot resolve.
+⚠ The reference bootstrap does not compile this program at all (`E4006 Unknown type 'Gate' in field
+access chain`) — a bootstrap gap in directory projects, not a divergence shv2 owes anything to.
+```maxon
+// --- file: gate.maxon
+typealias Num = int(0 to 1000)
+
+export type Gate
+	export var n as Num
+
+	export static function make(v Num) returns Gate
+		return Self{n: v}
+	end 'make'
+
+	export static function twice(v Num) returns Gate
+		return Self.make(v + v)
+	end 'twice'
+end 'Gate'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return Gate.twice(21).n
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.unknown-case-through-Self-on-an-enum -->
+### A case that does not exist, named through `Self`
+The enum-side twin of the unknown-static refusal, and it is the reference bootstrap's diagnostic
+character for character — the `Self` spelling reaches the same `E3034` on the same column the
+`Toggle.nope` spelling does.
+```maxon
+enum Toggle
+	off
+	on
+
+	export function bad() returns Toggle
+		return Self.nope
+	end 'bad'
+end 'Toggle'
+
+function main() returns ExitCode
+	let t = Toggle.off
+	if t == Toggle.off 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3034: <fragment>:7:10: unknown enum case: 'nope'
+```
+
+<!-- test: error.struct-literal-naming-the-enclosing-union -->
+### A struct literal naming the enclosing `union`
+The `union` half of the enum refusal — the same guard, reached through the same door, and pinned
+separately because it is a different declaration keyword arriving at it.
+```maxon
+typealias Num = int(0 to 100)
+
+union Res
+	ok(v Num)
+	none
+
+	export function bad() returns Res
+		return Self{}
+	end 'bad'
+end 'Res'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:9:10: Unsupported: a struct literal naming `enum`/`union` `Res` — an enum/union declares no fields to write; a value of it is a CASE (`Res.<case>`, or `Self.<case>` from inside its own body)
+```
+
+<!-- test: error.bare-Self-in-an-expression -->
+### A bare `Self` in an expression, with neither `{` nor `.`
+Now that `.` is handled, `{` genuinely IS the only continuation left — so the "Expected `{`" the D9 bug
+used to report for `Self.` becomes an honest message here rather than a misleading one. (The reference
+bootstrap reports `E3003 'Gate' is a type and cannot be used directly as a value` instead; both refuse,
+and shv2's names the token it stopped at.)
+```maxon
+typealias Num = int(0 to 1000)
+
+type Gate
+	export var n as Num
+
+	export function bad() returns Num
+		return Self
+	end 'bad'
+end 'Gate'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:8:14: Expected '\{' but got 'newline'
+```
+
+<!-- test: error.Self-as-a-binding-name -->
+### `Self` cannot be bound as a name
+The reason the arm order above is safe by construction rather than by care: no binding named `Self` can
+exist, so `Self.` has no local reading to be captured by. The reference bootstrap's own words, character
+for character apart from its unquoted `identifier`.
+```maxon
+function main() returns ExitCode
+	let Self = 5
+	return Self
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:3:6: Expected 'identifier' but got 'Self'
 ```
