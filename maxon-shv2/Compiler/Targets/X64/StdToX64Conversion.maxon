@@ -2178,9 +2178,13 @@ type StdToX64Lowering
 	// Lower `osIocpCreate` to `CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1)`. INVALID_HANDLE_VALUE is a
 	// FULL 64-bit -1, so it uses `movRegImm` (64-bit) — `movRegImm32` would zero-extend to 0x00000000FFFFFFFF, a
 	// different (invalid) handle.
-	// ⭐ **R4.1: `CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-	// NULL)`** — the file-IO runtime's OPEN primitive, the third `CreateFileW` call site in this file and the
-	// first that opens an actual FILE rather than the far end of a named pipe.
+	// ⭐ **R4.1: `CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+	// NULL)`** — the file-IO runtime's OPEN primitive, and the first site in this file that opens an actual
+	// FILE rather than the far end of a named pipe.
+	//
+	// ⚠ **THE `A` ENTRY POINT, NOT THE `W` ONE ALREADY IMPORTED FOR THE PIPES — see `IatSlot.CreateFileA`.**
+	// A Maxon path is a UTF-8 BYTE buffer, and `CreateFileW` would read those bytes as UTF-16 code units,
+	// which is wrong even for pure ASCII.
 	//
 	// The failure classification is NOT here: this yields the raw handle (or `INVALID_HANDLE_VALUE`) and
 	// `ManagedFileRuntime`'s builder-built Std reads `osLastError` to choose the error variant. See the
@@ -2202,7 +2206,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rdx), value: GenericRead))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: FileShareRead))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateFileW)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateFileA)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileOpenReadWin64'
 

@@ -176,6 +176,21 @@ export enum IatSlot
 	GetCurrentProcessId
 	CancelIoEx
 	GetSystemTimeAsFileTime
+	// ⭐ **R4.1 — THE `A` VARIANT, DELIBERATELY, WHERE `CreateFileW` IS ALREADY IMPORTED TWO LINES UP.**
+	// This is v1's decision and it is followed for its reason, not copied: v1 opens FILES with
+	// `CreateFileA` (`Targets/X64/MirToX64Conversion.maxon:232`) and reserves `CreateFileW` for wide DEVICE
+	// names and pipe ends, which is exactly the split shv2 already has — its two `CreateFileW` sites are
+	// both named-pipe plumbing.
+	// ⇒ The reason is that a Maxon path arrives as a UTF-8 BYTE array, and handing those bytes to
+	// `CreateFileW` is broken even for pure ASCII: `"abc"` is the bytes `61 62 63`, which the W entry point
+	// reads as the single UTF-16 unit `0x6261`. Using it would require a UTF-8→UTF-16 widening pass that
+	// buys nothing the corpus needs.
+	// ⚠ **KNOWN LIMITATION, matching the reference rather than exceeding it:** `CreateFileA` interprets its
+	// bytes in the system ANSI codepage, so a non-ASCII path is misread on a host whose codepage is not
+	// UTF-8. Every acceptance path in `specs/managed-file.md` is ASCII. The eventual fix is the W entry
+	// point plus a real widening of the byte buffer; it is not this rung's, and it is written down rather
+	// than discovered later.
+	CreateFileA
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer
