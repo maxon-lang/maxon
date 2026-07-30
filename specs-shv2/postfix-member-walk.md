@@ -332,3 +332,203 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:14:18: Unsupported: a member access 'x' on a 'function' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here
 ```
+
+**A FIELD READ OFF A TEMPORARY — THE BORROW WHOSE OWNER DIES AT THE SEMICOLON.**
+
+A field read is a **borrow**: `Parser.emitFieldLoad` never marks its result owned, so the box keeps
+its `+1` and drops what the read points at **at the box's own scope exit**. Every field access in
+the language rests on that, and it holds because a box is reached through a NAME that outlives the
+read.
+
+⚠ **A receiver bound to no name breaks it, and this rung is the first door that can hand one over.**
+`Box.make("hello")` is enrolled as a statement-scoped owned temporary; the statement's pending drops
+free it at the semicolon. A MANAGED field read out of it therefore hands back a pointer into freed
+memory the moment the result outlives the statement. Measured, before the refusal below existed,
+on every managed field kind — each of them a program the C# oracle runs and prints:
+
+| written | shv2 |
+|---|---|
+| `let s = Box.make("hello").name` (String field) | **0xC0000005**, no diagnostic |
+| `let o = Box.make().ops` then `o.get(0)` (Array field) | **0xC0000005**, no diagnostic |
+| `let i = Outer.make(Inner.make(3)).inner` (struct field) | exit **0x3F3F3F3F** — the freed-fill byte read back as user data: a **wrong answer with no crash** |
+| `let s = makePair().1` (tuple element) | **0xC0000005**, no diagnostic |
+
+It is **refused**, for the reason the struct-typed self-field base is
+(`self-field-struct-typed.md`): keeping a temporary alive for a borrow taken out of it is an
+ownership ruling, and a mechanism shipped without one is the `mintPhi` trap. A **SCALAR** field is
+copied rather than borrowed, so `Leaf.make(4).tally` above is untouched — the gate is the managed
+classifier, not the temporary.
+
+<!-- test: error.managed-field-read-out-of-a-temporary -->
+A `String` field read out of a call result. The refusal is positioned at the MEMBER, which is the
+part that cannot be done.
+```maxon
+
+type Box
+	export var name as String
+
+	export static function make(n String) returns Self
+		return Self{name: n}
+	end 'make'
+end 'Box'
+
+function main() returns ExitCode
+	let s = Box.make("hello").name
+	return s.byteLength()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:28: Unsupported: reading the managed field 'name' out of a TEMPORARY `Box` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```
+
+<!-- test: error.struct-field-read-out-of-a-temporary -->
+⭐ **The one of the four that a suite of exit codes would never have caught**: a STRUCT field read
+out of a temporary did not crash, it returned `0x3F3F3F3F` — the freed-memory fill byte — as the
+program's answer.
+```maxon
+
+typealias Wide = int(i64.min to i64.max)
+
+type Inner
+	export var v as Wide
+
+	export static function make(v Wide) returns Self
+		return Self{v: v}
+	end 'make'
+
+	export function get() returns Wide
+		return self.v
+	end 'get'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	export static function make(i Inner) returns Self
+		return Self{inner: i}
+	end 'make'
+end 'Outer'
+
+function main() returns ExitCode
+	let i = Outer.make(Inner.make(3)).inner
+	return i.get()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:26:36: Unsupported: reading the managed field 'inner' out of a TEMPORARY `Outer` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```
+
+<!-- test: error.tuple-element-read-out-of-a-temporary -->
+A TUPLE needs no arm of its own — it is a synthesized struct, so its positional member rides the
+same layout and the same classifier. The member is named `_1` because `memberNameTokenAt` has
+already rewritten `.1`, which is why the suggestion says "read the field off the binding" rather
+than spelling an access back that the language would not accept.
+```maxon
+
+typealias Wide = int(i64.min to i64.max)
+typealias Pair = (Wide, String)
+
+function makePair() returns Pair
+	return (7, "hello")
+end 'makePair'
+
+function main() returns ExitCode
+	let s = makePair().1
+	return s.byteLength()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:11:21: Unsupported: reading the managed field '_1' out of a TEMPORARY `__Tuple2.int.String` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```
+
+<!-- test: managed-field-read-off-a-binding-is-unaffected -->
+**The CONTROL, and it is the half that keeps the refusal honest.** The identical field read through
+a NAME is the ordinary borrow it has always been: the binding owns the box, the box outlives the
+read. A guard that refused this too would have "fixed" the crash by deleting the feature.
+```maxon
+
+type Box
+	export var name as String
+
+	export static function make(n String) returns Self
+		return Self{name: n}
+	end 'make'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.make("hello")
+	let s = b.name
+	return s.byteLength()
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: method-on-a-temporary-may-still-return-its-managed-field -->
+The refusal is scoped to the READ, not to the temporary. A METHOD on the same temporary that reads
+the same field is fine, because the callee borrows the receiver only for the duration of the call —
+which ends before the statement does. Measured against the oracle; a leak here would be exit 101.
+```maxon
+
+type Box
+	export var name as String
+
+	export static function make(n String) returns Self
+		return Self{name: n}
+	end 'make'
+
+	export function len() returns ExitCode
+		return self.name.byteLength()
+	end 'len'
+end 'Box'
+
+function main() returns ExitCode
+	return Box.make("hello").len()
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: mutating-method-on-a-temporary -->
+⭐ **A mutating method on a temporary is LEGAL, and that is the provenance argument paying out.**
+The receiver is bound to no name, so no `let` promises anything about it and there is nothing for
+E3019 to blame — the empty blame name is the correct answer rather than a missing one. The clone is
+then dropped at statement end, so a leak here is exit 101 and the untouched `s` still reads 3.
+```maxon
+
+function main() returns ExitCode
+	var s = "abc"
+	s.clone().append("XYZ")
+	return s.byteLength()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: error.unknown-field-on-a-call-result -->
+An unknown member with no `(` after it cannot be a method, so it is reported as the missing FIELD it
+is. Left to the method path it reached `parseCallNamed` and complained about the PUNCTUATION —
+`E2010: Expected '(' but got 'newline'` — while the BINDING spelling of the identical access
+answered E3018. One question may not have two answers because of the door it came through.
+```maxon
+
+typealias Wide = int(i64.min to i64.max)
+
+type Leaf
+	export var tally as Wide
+
+	export static function make(t Wide) returns Self
+		return Self{tally: t}
+	end 'make'
+end 'Leaf'
+
+function main() returns ExitCode
+	return Leaf.make(4).nope
+end 'main'
+```
+```maxoncstderr
+error E3018: <fragment>:14:22: type 'Leaf' has no field named 'nope'
+```

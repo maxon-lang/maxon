@@ -1259,6 +1259,18 @@ function structTypedSelfFieldBaseMessage(fieldName ByteArray) returns String
 	return "a field access through '{String.from(fieldName)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)"
 end 'structTypedSelfFieldBaseMessage'
 
+// **CAN A VALUE OF THIS TAG CARRY A `StructLayout`?** — a plain struct box, or a generic INSTANCE (whose
+// base struct's layout its methods were compiled once against). It is exactly `structLayoutOfType`'s
+// stated precondition, and it is asked by BOTH gates standing in front of that one resolver: a BINDING
+// base (`requireStructBase`) and a VALUE receiver (`structBaseOfReceiver`). The two differ only in what
+// their diagnostic can name — a binding has a name, a temporary has only the member — never in which
+// tags they admit, so the admitted SET is written once. Written twice, a third aggregate tag taught to
+// one door would be accepted at one spelling of a member access and refused at the other: a wrong
+// answer at whichever spelling was not updated, and no compile error at either.
+function tagCarriesStructLayout(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.structRef or tag == ValueTypeTag.genericInstance
+end 'tagCarriesStructLayout'
+
 // The resolved END of a field-access chain `base.f1.…fN` (P1.4a wave 2): the `box` its LAST field lives in
 // (the base's box for a single field, an intermediate struct field's loaded box for a chain), the `layout`
 // that box has, the `lastFieldTok` naming the field still to read or write, and the `baseTok`/`baseBinding`
@@ -21461,7 +21473,7 @@ export type Parser
 	// result, an enum value, a function value. The message names the member rather than the type's fields,
 	// because reaching this point means a `.` followed a value the language gives no member access to.
 	function structBaseOfReceiver(recv MethodReceiver) returns StructBase throws ParseError
-		if recv.tag != ValueTypeTag.structRef and recv.tag != ValueTypeTag.genericInstance 'notAStruct'
+		if not tagCarriesStructLayout(recv.tag) 'notAStruct'
 			let memberTok = self.current()
 			throw ParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{typeTagName(recv.tag)}' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here", line: memberTok.line, column: memberTok.column)
 		end 'notAStruct'
@@ -21701,6 +21713,10 @@ export type Parser
 		// PEEKED, not consumed: the method path below hands the cursor to `parseCallNamed`, which consumes
 		// the name itself. Only the field-read branch advances.
 		let memberTok = try self.memberNameTokenAt(self.pos)
+		// Read ONCE and threaded to both decisions below, which are the two halves of one question: a member
+		// followed by `(` is a CALL, and a member not followed by one is a READ — so "is it a field?" and
+		// "may it be reported as a missing field?" cannot come to disagree about which shape they saw.
+		let callFollows = self.kindAt(self.pos + 1) == TokenKind.leftParen
 		let fieldIndex = base.layout.indexOfField(memberTok.value)
 		if fieldIndex < base.layout.fieldCount() 'fieldMember'
 			// A member that is a FIELD is READ, in two cases: a FUNCTION-typed one however it is spelled (the
@@ -21711,12 +21727,24 @@ export type Parser
 			// A NON-function field WITH a `(` falls through to the method path deliberately: `p.count(…)` on
 			// an int field `count` is not a call through the field, and it must report the unknown method
 			// (E3004) rather than silently reading the field and applying parens to an integer.
-			if maxonTypeTag(self.signatures.fieldTypeOf(base.layout.name, index: fieldIndex, into: self.artifact.typeNames)) == ValueTypeTag.function or self.kindAt(self.pos + 1) != TokenKind.leftParen 'fieldRead'
+			if maxonTypeTag(self.signatures.fieldTypeOf(base.layout.name, index: fieldIndex, into: self.artifact.typeNames)) == ValueTypeTag.function or not callFollows 'fieldRead'
 				self.advance()
 				try self.requireFieldAccessible(base.layout, index: fieldIndex, fieldTok: memberTok)
+				try self.requireFieldOutlivesItsRead(base, index: fieldIndex, memberTok: memberTok)
 				return self.emitFieldLoad(base.box, layout: base.layout, index: fieldIndex, range: SourceRange.between(baseTok, last: memberTok))
 			end 'fieldRead'
 		end 'fieldMember'
+
+		// ⭐ **A MEMBER WITH NO `(` AFTER IT CANNOT BE A METHOD CALL, so it is an UNKNOWN FIELD and is
+		// reported as one.** Left to fall through, the method path hands the cursor to `parseCallNamed`,
+		// which consumes the name and then reports the PUNCTUATION it wanted — `E2010: Expected '(' but got
+		// 'newline'` for `Leaf.make(4).nope` — a complaint about the syntax when what is wrong is the NAME.
+		// The BINDING spelling of the identical access already answers E3018 through `requireFieldIndex`
+		// (`let l = Leaf.make(4)` then `l.nope`), and this rung's whole thesis is that the two spellings are
+		// one question: the door a receiver came through may not change what the answer IS.
+		if not callFollows 'unknownFieldRead'
+			throw ParseError.unknownField(String.from(base.layout.name), fieldName: String.from(memberTok.value), line: memberTok.line, column: memberTok.column)
+		end 'unknownFieldRead'
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
 
@@ -21724,6 +21752,57 @@ export type Parser
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 		return result
 	end 'dispatchMethodOnBase'
+
+	// ⚠⚠ **A MANAGED FIELD MAY NOT BE READ OUT OF A TEMPORARY — the read is a BORROW, and the box that owns
+	// what it borrows dies at the end of THIS statement.** `emitFieldLoad`'s header states the invariant the
+	// borrow rests on in full: *"the read is a BORROW … so the box keeps its +1 and drops the value at ITS
+	// scope exit; a `let s = b.value` re-reads a live pointer and is never double-dropped."* A box bound to
+	// NO NAME has no scope exit later than the statement — `trackOwnedTemp` enrolled it, the statement's
+	// pending drops free it — so any result that outlives the statement is a pointer into freed memory. The
+	// invariant did not change; this rung is the first door that can hand it a box the invariant is false of.
+	//
+	// **MEASURED on this rung's own new door, all four managed field kinds, every one of them a program the
+	// C# oracle RUNS:**
+	//   • `let s = Box.make("hello").name`          — String field:  **0xC0000005**, no diagnostic anywhere
+	//   • `let o = Box.make().ops` then `o.get(0)`  — Array field:   **0xC0000005**, no diagnostic anywhere
+	//   • `let i = Outer.make(Inner.make(3)).inner` — struct field:  exit **0x3F3F3F3F** — the freed-memory
+	//     fill byte read back as user data. A WRONG ANSWER with no crash at all, which is the one of the
+	//     four that a suite full of exit codes would never have noticed.
+	//   • `let s = makePair().1`                    — tuple element: **0xC0000005** (a tuple is a synthesized
+	//     struct, so it needs no arm of its own — that is the point of it being one)
+	//
+	// It REFUSES rather than loading, for the reason the struct-typed self-field base two functions up is
+	// refused: keeping a temporary alive for a borrow taken out of it is an OWNERSHIP ruling, and a
+	// mechanism shipped without one is the `mintPhi` trap. Binding the receiver first (`let b = …` then
+	// `b.name`) is the spelling that already works, and is what the message says.
+	//
+	// A SCALAR field is COPIED, not borrowed, so it is untouched — which is exactly what keeps
+	// `postfix.field-read-on-a-call-result` (`Leaf.make(4).tally`) green, and what makes the gate the
+	// managed classifier and not the temporary.
+	function requireFieldOutlivesItsRead(base StructBase, index FieldIndex, memberTok Token) throws ParseError
+		// A box owned by a NAME — a local, a parameter, `self`, a captured env slot — or a borrow of one
+		// outlives the statement, and the read is the ordinary borrow every field chain already is. Only an
+		// UNCONSUMED owned temporary is the dying case, which is precisely what this list holds.
+		if not self.pendingTempsContain(base.box) 'boxOutlivesTheStatement'
+			return
+		end 'boxOutlivesTheStatement'
+
+		// ⭐ A generic INSTANCE must SUBSTITUTE its opaque arguments before it can answer (an `Element` field
+		// is managed for `Box with String` and inert for `Box with Int`), and it is asked through the very
+		// door the box's own DESTRUCTOR decides this field's drop through. "The box frees it at drop" and
+		// "the read borrows it" are then one answer and cannot come apart — a field this refusal let through
+		// while the destructor freed it would be exactly the crash above, wearing a guard.
+		let borrowsManagedHeap = self.signatures.genericInstanceFieldIsManaged(self.valueNameId(base.box), index: index) if self.tagOf(base.box) == ValueTypeTag.genericInstance else self.signatures.typeIsManaged(self.signatures.fieldTypeOf(base.layout.name, index: index, into: self.artifact.typeNames))
+		if not borrowsManagedHeap 'scalarFieldIsCopiedNotBorrowed'
+			return
+		end 'scalarFieldIsCopiedNotBorrowed'
+
+		// ⚠ The member is named from `memberTok`, which for a TUPLE's positional access has already been
+		// rewritten (`memberNameTokenAt`: `.1` ⇒ `_1`) — so the suggestion says "read it off the binding"
+		// and does NOT spell the access back, because `b._1` is not a spelling the language accepts and
+		// advice a user cannot type is worse than none.
+		throw ParseError.unsupported("reading the managed field '{String.from(memberTok.value)}' out of a TEMPORARY `{String.from(base.layout.name)}` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this", line: memberTok.line, column: memberTok.column)
+	end 'requireFieldOutlivesItsRead'
 
 	// ⭐ **THE CONCRETE INSTANCE A METHOD'S RECEIVER SUPPLIES TO THE CALLER-SIDE CONSUME (P1.7 slice 3b-iii).**
 	// A `genericInstance` receiver (`sc` of type `Container with String`) knows its instance gid at the call
@@ -24429,9 +24508,16 @@ export type Parser
 	// **Is the `.member` at `index` a CALL — `. <member> (`?** The one question that tells a field-chain HOP
 	// from the chain's END: a member followed by `(` is a method (or a call through a function-typed field),
 	// which is not a field the walk may consume, and the value it is called ON is the chain's result.
-	// Spelled once, beside `namesMemberAt`, because `resolveFieldChainFrom` (which stops on it) and
-	// `fieldChainMethodCallAt` (which decides the statement IS such a call) must agree about where a chain
-	// ends — the divergence `fieldChainEndAfter`'s header describes.
+	//
+	// ⚠ **IT IS THE WALK'S STOP CONDITION, NOT THE STATEMENT DISPATCHER'S — and those are two derivations,
+	// which is worth saying because it reads like one.** `resolveFieldChainFrom` asks THIS, hop by hop, of
+	// the cursor it is standing on; `fieldChainMethodCallAt` asks `fieldChainEndAfter` for the index just
+	// past the WHOLE chain and then tests `(` there. They agree today, and the agreement is structural
+	// rather than shared: `fieldChainEndAfter`'s loop consumes a `.member` only while the NEXT tokens are
+	// again `. <member>`, so the hop it stops before is exactly the one this predicate stops before. Both
+	// spell the member half through `namesMemberAt`, which is the piece that genuinely has one home — teach
+	// a new member-naming token to that and both walks learn it at once, which is the divergence
+	// `fieldChainEndAfter`'s own header is about.
 	function memberCallFollows(index TokenIndex) returns bool
 		return self.kindAt(index) == TokenKind.dot and self.namesMemberAt(index + 1) and self.kindAt(index + 2) == TokenKind.leftParen
 	end 'memberCallFollows'
@@ -25190,7 +25276,7 @@ export type Parser
 		// resolve to a struct layout (the instance's base struct, its methods compiled once against the
 		// opaque `T`). Every other tag has no fields.
 		let baseTag = maxonTypeTag(binding.varType)
-		if baseTag != ValueTypeTag.structRef and baseTag != ValueTypeTag.genericInstance 'notAStruct'
+		if not tagCarriesStructLayout(baseTag) 'notAStruct'
 			throw ParseError.unsupported("a field access on '{String.from(baseTok.value)}', which is declared '{typeTagName(baseTag)}' and not a struct type (only a struct has fields)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
 
