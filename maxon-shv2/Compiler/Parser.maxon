@@ -4639,6 +4639,19 @@ export type Parser
 	// and asked only of a `typealias` declaration (`typeAliasVisibility`). It is what makes a
 	// stdlib-internal alias nameable from every file without a path probe anywhere near the hot path.
 	let isStdlibSource as bool
+	// ⭐ **MAY THIS FILE DECLARE `__`-PREFIXED NAMES (D6)?** True for exactly `stdlib/Builtins.maxon` —
+	// the module that DECLARES the reserved space rather than merely using it (`__ManagedFileError`,
+	// `__int_fromString`), which is what its own header calls itself. Decided once per file by `Queries`,
+	// the only tier holding the project, and read by the one choke point every new declaration goes
+	// through (`requireUnreservedName`).
+	//
+	// ⚠ **IT IS DELIBERATELY NOT `isStdlibSource`, AND THE TWO ANSWER DIFFERENT QUESTIONS.**
+	// `isStdlibSource` decides VISIBILITY, and its root-inside-`stdlib/` arm hands a project rooted under
+	// `stdlib/` its own files back as the USER's — correctly, for visibility. Reused here it would make
+	// `maxon-shv2 build stdlib/Builtins.maxon` — the command `StdlibLoader`'s collision rule prescribes for
+	// checking whether a module is ready to be listed — refuse the very module the loader is about to list.
+	// Being the compiler's internal bridge is a property of the FILE, not of how a command line spelled it.
+	let declaresCompilerInternalNames as bool
 	var usedTypeNames as UsedTypeNameSet
 	// ⭐ **DOES THIS WALK COLLECT USES AT ALL?** Set by `parseModule` and false everywhere else, because
 	// `parseModule` is the only entry point that ever REPORTS (`reportUnusedTypeAliases`). The
@@ -4657,7 +4670,7 @@ export type Parser
 	var declaredFuncNames as DeclaredFuncNameSet
 	var overloadMembers as OverloadMemberMap
 
-	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool) returns Parser
+	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool) returns Parser
 		return Self{
 			tokens: tokens,
 			pos: 0,
@@ -4726,6 +4739,7 @@ export type Parser
 			closureCaptureScopes: ScopeArray.create(),
 			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()),
 			isStdlibSource: isStdlibSource,
+			declaresCompilerInternalNames: declaresCompilerInternalNames,
 			usedTypeNames: sharedEmptyUsedTypeNames,
 			collectsTypeNameUses: false,
 			declaredTypeAliases: sharedEmptyDeferredNameDiagnostics,
@@ -8639,6 +8653,17 @@ export type Parser
 		var extendsInterfaces = ByteArrayArray.create()
 		var associatedTypeNames = ByteArrayArray.create()
 		try self.parseInterfaceHeaderClauses(extendsInterfaces, associatedTypeNames: associatedTypeNames)
+		// ⭐ **AN INTERFACE'S `uses` NAMES ARE ITS TYPE-PARAMETER SCOPE (D6)** — the same field a `type`'s
+		// `uses` sets (`openTypeParamScope`), because the body asks the same question of it: inside
+		// `interface InitableFromArrayLiteral uses Element`, a written `Element` denotes the associated type
+		// and nothing else. Without it a `typealias ElementArray = Array with Element` below reads `Element`
+		// as an ordinary `named` type, and `checkGenericArgType`'s rule 3 refuses it with **E3011 Unknown
+		// type 'Element'** — a diagnostic against a name the interface's own header declares.
+		// A `uses`-less interface keeps the SHARED empty list `enterTypeScope` just installed, so it
+		// allocates nothing (`openTypeParamScope`'s discipline).
+		if associatedTypeNames.count() != 0 'hasAssociatedTypes'
+			self.enclosingTypeParams = associatedTypeNames
+		end 'hasAssociatedTypes'
 
 		var methods = InterfaceMethodSigArray.create()
 		while true 'members'
@@ -8650,6 +8675,30 @@ export type Parser
 				let tok = self.current()
 				throw ParseError.unexpectedEof(tok.line, column: tok.column)
 			end 'eof'
+
+			// ⭐ **AN ASSOCIATED-TYPE ALIAS (D6)** — `typealias ElementArray = Array with Element`, the shape
+			// `stdlib/Builtins.maxon:56` opens with. It is ACCEPTED AND RECORDED, never resolved or
+			// substituted: `readNestedTypeAlias` enters the bare member into `enclosingInnerAliases`, which is
+			// what makes the very next line's `static function init(value ElementArray)` read `ElementArray`
+			// as a type at all instead of E3011. Nothing SUBSTITUTES the instance for it, and nothing needs to
+			// — an interface EMITS NOTHING, and a requirement's parameter types exist only as the SOURCE
+			// STRINGS `checkConformance` compares (see `renderInterfaceTypeName`).
+			//
+			// ⚠ **BOTH REFERENCES THROW THIS LINE AWAY** (bootstrap `2-Parser.cs:4276-4281`, v1
+			// `Parser.maxon:6578-6585` — each a `SkipToEndOfLine`), and v1's comment claims the alias
+			// "contributes to associated-type resolution" while no code reads it back. Skipping it would put
+			// `ElementArray` in no scope at all, so the requirement below would name an undeclared type; the
+			// references get away with it only because their conformance check skips STATIC methods entirely.
+			// Recording the name costs one set insert and leaves nothing asserted that is not true.
+			//
+			// The whole-program shape is DISCARDED here for the reason `parseTypeMember` discards it: an
+			// inner alias is keyed whole-program by the tolerant sweep, and the sweep records nothing for an
+			// interface (`recordScannedInterface`) because an interface contributes no layout, no signature
+			// and no emitted symbol for a later pass to look one up from.
+			if self.atTypeAliasDeclaration() 'associatedTypeAlias'
+				_ = try self.readNestedTypeAlias(self.consumeOptionalExport())
+				continue
+			end 'associatedTypeAlias'
 
 			methods.push(try self.parseInterfaceMethod(nameTok.value))
 		end 'members'
@@ -8751,12 +8800,22 @@ export type Parser
 	// so it matches the impl side rendered off the project interner (the same property `paramAggregateNames`
 	// relies on). Rendered at parse time, so `mergeArtifact` folds an interface with no id to remap.
 	function renderInterfaceTypeName(t MaxonType, interfaceName ByteArray) returns ByteArray
-		if maxonTypeTag(t) == ValueTypeTag.structRef 'structRefType'
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.structRef 'structRefType'
 			let refName = try self.artifact.typeNames.nameOf(typeNameIdOf(t)) otherwise panic("renderInterfaceTypeName: structRef id {typeNameIdOf(t)} not in the local interner")
 			if refName.equals(interfaceName) 'selfRef'
 				return InterfaceSelfTypeName
 			end 'selfRef'
 		end 'structRefType'
+		// An ASSOCIATED TYPE renders by the NAME the `uses` clause gave it (D6). It reaches here as a
+		// `typeParameter(pos)` — a POSITION in `enclosingTypeParams`, which for an interface body IS the
+		// associated-type list — and `maxonTypeName` would spell it with the bare tag word, so two different
+		// associated types would render identically and a conformance mismatch would print a type that does
+		// not match itself. Restated: this arm is what keeps the rendered string exactly what it was before
+		// the `uses` names became a parameter scope.
+		if tag == ValueTypeTag.typeParameter 'associatedType'
+			return try self.enclosingTypeParams.get(typeNameIdOf(t)) otherwise panic("renderInterfaceTypeName: type-parameter position {typeNameIdOf(t)} is outside interface '{String.from(interfaceName)}'s own `uses` list, which is the list it was resolved against")
+		end 'associatedType'
 		return maxonTypeName(t, typeNames: self.artifact.typeNames).toByteArray()
 	end 'renderInterfaceTypeName'
 
@@ -11238,6 +11297,21 @@ export type Parser
 	// safe to lean on: once no user `__` name can be declared, `MmRuntime.isCompilerInternalCallee`'s
 	// "skip the user-function checks" shortcut is provably sound rather than a hopeful one.
 	function requireUnreservedName(nameTok Token) throws ParseError
+		// ⭐ **THE ONE FILE THAT DECLARES THE RESERVED SPACE IS EXEMPT (D6)** — `stdlib/Builtins.maxon`,
+		// whose whole content is the type-system bridge to compiler intrinsics: the error enums a builtin
+		// throws (`__ManagedFileError`) and the parse helpers `int.fromString` rewrites to
+		// (`__int_fromString`). Nothing else in `stdlib/` may, which is what keeps the paragraph above
+		// true for every other file: the reservation still holds everywhere a user can write.
+		//
+		// The exemption is on the FILE (`declaresCompilerInternalNames`) and not on a per-name allowlist,
+		// which is the reference's shape too (bootstrap `2-Parser.cs:24672-24673` exempts three stdlib
+		// files by basename). A name list would have to be kept in lockstep with a file it does not live
+		// in — and the compiler already learns each of these names by parsing the declaration, so a second
+		// copy could only ever be the stale one.
+		if self.declaresCompilerInternalNames 'theReservedSpacesOwnFile'
+			return
+		end 'theReservedSpacesOwnFile'
+
 		if bytesStartWith(nameTok.value, prefix: ReservedNamePrefix) 'reserved'
 			throw ParseError.reservedIdentifier(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'reserved'

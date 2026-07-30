@@ -199,7 +199,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 		// the real parse cannot drift on what `returns X` means (see `foldDeclaredSignaturesInto`). It
 		// is handed the index it is BUILDING, which is safe because a sweep types no call and so never
 		// reads it; nothing else in the Parser needs a signature.
-		var scanner = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSourceFile(project, path: path))
+		var scanner = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path))
 		scanner.foldDeclaredSignaturesInto(signatures)
 		recordPhase(project, phase: CompilePhase.signatures, probe: probe)
 	end 'eachFile'
@@ -273,7 +273,7 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 
 	// M1 single-file build: namespace is empty (no cross-file qualification).
 	// Namespace derivation from the path grows with multi-file builds at M2.
-	var parser = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSourceFile(project, path: path))
+	var parser = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path))
 	let errorCountBefore = project.diagnostics.count()
 	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		reportParseError(project, path: path, error: parseErr)
@@ -462,6 +462,28 @@ function isStdlibSourceFile(project Project, path FilePath) returns bool
 
 	return resolvedPath.isInside(project.stdlibDir)
 end 'isStdlibSourceFile'
+
+// The one module whose declarations MAY carry the reserved `__` prefix — `stdlib/Builtins.maxon`, the
+// type-system bridge to the compiler's intrinsics (the error enums a builtin throws, the parse helpers
+// `int.fromString` rewrites to). Named RELATIVE to `stdlib/` and joined against `project.stdlibDir`, the
+// same construction `StdlibLoader.listWhitelistedModule` uses, so the two spell one file one way.
+let CompilerInternalDeclaringModule = "Builtins.maxon"
+
+// ⭐ **IS THIS FILE THE ONE THAT DECLARES THE RESERVED NAMESPACE (D6)?** Read by the parser's single
+// declaration choke point (`Parser.requireUnreservedName`, where the rule and its bootstrap lineage are
+// stated in full).
+//
+// ⚠ **AN IDENTITY TEST, NOT A CONTAINMENT ONE, AND NOT `isStdlibSourceFile`'s ANSWER.** That function
+// decides VISIBILITY and deliberately hands a project rooted under `stdlib/` its own files back as the
+// USER's; being the compiler's internal bridge is a property of the FILE, so it must not turn on how a
+// command line spelled it — see `Parser.declaresCompilerInternalNames`. Both sides are resolved before
+// comparing, for the reason `isStdlibSourceFile` states: `FilePath.equals` compares SPELLINGS.
+function declaresCompilerInternalNames(project Project, path FilePath) returns bool
+	// Interpolated so the argument is a committed `String`: a bare module-`let` literal stays untyped and
+	// matches BOTH `FilePath.join` overloads (String / FilePath) — an E3007 ambiguity — exactly as
+	// `StdlibSource.locateStdlibDir` records for `StdlibDirName`.
+	return path.resolve(Directory.currentPath()).equals(project.stdlibDir.join("{CompilerInternalDeclaringModule}"))
+end 'declaresCompilerInternalNames'
 
 // Clear the registries that `mergeArtifact` rebuilds from artifacts, so a
 // queryAllModule miss re-derives them cleanly rather than compounding a prior

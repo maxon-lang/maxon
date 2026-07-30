@@ -3328,7 +3328,10 @@ export type ProgramSignatures
 	function walkConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstEvalOutcome
 		// `isStdlibSource: false` is exact rather than a default: this walk reads an INITIALIZER, and the
 		// only thing the flag governs is a `typealias` DECLARATION, which an initializer cannot contain.
-		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: "", signatures: self, isStdlibSource: false)
+		// `declaresCompilerInternalNames: false` is exact for the same reason and its own: an initializer
+		// declares no NAME at all, so the reserved-prefix rule this walk would exempt has no site to fire
+		// at — and the decl whose initializer this is has already been through the real parse's check.
+		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: "", signatures: self, isStdlibSource: false, declaresCompilerInternalNames: false)
 		let folded = try parser.evalConstInitializer(decl, stack: stack) otherwise (err) 'noValue'
 			return self.recordFailure(decl, error: err)
 		end 'noValue'
