@@ -1,0 +1,52 @@
+// Test: crossfile-float-alias-field-off-a-temporary
+// --- file: scale.maxon
+typealias Weight = float(0.0 to 1000.0)
+
+export type Scale
+	export var w as Weight
+
+	export static function make() returns Scale
+		return Scale{w: 42.0}
+	end 'make'
+end 'Scale'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return Scale.make().w as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Scale.make {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, d8
+    arm64.fpLoadRdata d8, [rdata + __fconst_0]
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], d8
+    arm64.loadRegSlot d8, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Scale.make
+    arm64.loadRegBaseDisp.word64 d0, [x0 + 0]
+    arm64.fcvtzs x19, d0
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

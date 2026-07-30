@@ -11254,7 +11254,12 @@ export type Parser
 		let stored = try self.assignableValue(nameTok, value: value, declared: maxonTypeTag(valueType), declaredNameId: typeNameIdOf(valueType), door: FunctionTypeDoor.global)
 
 		let range = SourceRange.ofToken(nameTok)
-		if not self.signatures.typeIsManaged(valueType) 'scalarGlobal'
+		// `from:` names the interner `valueType`'s ids would live in — this file's own. A global's type comes
+		// from its INITIALIZER (`constantValueType` / `managedConstValueType` / `constArrayValueType`), none of
+		// which mint a `named`, so nothing is resolved through it today; it is stated because the alternative
+		// is a query whose answer depends on which table the caller happened to hold, which is precisely the
+		// cross-file misclassification T1 fixed one door along.
+		if not self.signatures.typeIsManaged(valueType, from: self.artifact.typeNames) 'scalarGlobal'
 			self.emitGlobalStore(label, valueType: valueType, value: stored, range: range)
 			return
 		end 'scalarGlobal'
@@ -23306,12 +23311,24 @@ export type Parser
 			return
 		end 'boxOutlivesTheStatement'
 
-		// ⭐ A generic INSTANCE must SUBSTITUTE its opaque arguments before it can answer (an `Element` field
-		// is managed for `Box with String` and inert for `Box with Int`), and it is asked through the very
-		// door the box's own DESTRUCTOR decides this field's drop through. "The box frees it at drop" and
-		// "the read borrows it" are then one answer and cannot come apart — a field this refusal let through
-		// while the destructor freed it would be exactly the crash above, wearing a guard.
-		let borrowsManagedHeap = self.signatures.genericInstanceFieldIsManaged(self.valueNameId(base.box), index: index) if self.tagOf(base.box) == ValueTypeTag.genericInstance else self.signatures.typeIsManaged(self.signatures.fieldTypeOf(base.layout.name, index: index, into: self.artifact.typeNames))
+		// ⭐ **BOTH ARMS ARE THE DOOR THE BOX'S OWN DESTRUCTOR DECIDES THIS FIELD'S DROP THROUGH.** A generic
+		// INSTANCE must SUBSTITUTE its opaque arguments before it can answer (an `Element` field is managed
+		// for `Box with String` and inert for `Box with Int`); a plain struct field is `structFieldIsManaged`,
+		// which is literally the per-field predicate `__destruct_<T>`'s cascade loops over. "The box frees it
+		// at drop" and "the read borrows it" are then one answer and cannot come apart — a field this refusal
+		// let through while the destructor freed it would be exactly the crash above, wearing a guard.
+		//
+		// ⚠ **IT ASKS THE STRUCT AND THE INDEX, NOT A TYPE, AND THAT IS THE FIX FOR A MEASURED CROSS-FILE
+		// USE-AFTER-FREE (T1).** The former spelling routed the field type out through `fieldTypeOf(…, into:
+		// self.artifact.typeNames)` — which ADOPTS it, re-interning a `named` against THIS FILE's table — and
+		// then asked `typeIsManaged`, which resolved that id against the PROGRAM-WIDE one. Same number,
+		// different table, so the classification followed the interning ORDER: cross-file, a scalar alias
+		// field read MANAGED (a false `E2015` on a legal `Gate.twice(21).n`) and a boxed-UNION field read
+		// SCALAR, admitting the very borrow-out-of-a-temporary above and hanging on the freed box. Asking by
+		// STRUCT NAME and INDEX never lets a type cross an interner boundary at all, so there is no id to get
+		// wrong, and the guard and the cascade read one column. `typeIsManaged` now demands its interner by
+		// name (`from:`) so the two-step cannot be rebuilt by accident.
+		let borrowsManagedHeap = self.signatures.genericInstanceFieldIsManaged(self.valueNameId(base.box), index: index) if self.tagOf(base.box) == ValueTypeTag.genericInstance else self.signatures.structFieldIsManaged(base.layout.name, index: index)
 		if not borrowsManagedHeap 'scalarFieldIsCopiedNotBorrowed'
 			return
 		end 'scalarFieldIsCopiedNotBorrowed'

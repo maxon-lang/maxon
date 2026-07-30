@@ -1706,6 +1706,7 @@ export let ManagedMemoryTypeName = b"__ManagedMemory"
 // would be shv2 inventing surface the language does not have.
 export let ManagedFileOpenReadMethod = b"openRead"
 export let ManagedFileOpenWriteMethod = b"openWrite"
+
 // ⭐ It is a distinct METHOD and NOT a distinct op: its only difference in either reference is a Unix 0755
 // permission bit, and shv2's file IO is host-only Windows by the R4.1 ruling — so it lowers to exactly
 // `openWrite`'s `osFileOpenWrite`. A POSIX lane splits them on the day it exists.
@@ -1839,6 +1840,7 @@ export let ManagedFileErrorTypeName = b"__ManagedFileError"
 export let ManagedFileNotFoundCaseName = b"notFound"
 export let ManagedFileAccessDeniedCaseName = b"accessDenied"
 export let ManagedFileOpenFailedCaseName = b"openFailed"
+
 // The eight R4.2 cases, APPENDED in v1's exact order (`LowerMaxonToStd.maxon:1781-1795`). Appending is not
 // a style choice: the ordinal IS the wire format the runtime returns as an error flag, so inserting or
 // reordering one silently reroutes every handler in the corpus.
@@ -4780,7 +4782,7 @@ export type ProgramSignatures
 	// per-key destroy walk for (P1.7b). A trivial key (int / ranged-int) is stored inline and owns nothing. The
 	// `Set` twin of `arrayElementIsManaged`, reading the SAME `typeIsManaged` boundary the drop cascade decides on.
 	export function setKeyIsManaged(id GenericInstanceId) returns bool
-		return self.typeIsManaged(self.setKeyType(id))
+		return self.typeIsManaged(self.setKeyType(id), from: self.typeNames)
 	end 'setKeyIsManaged'
 
 	// The key DESTRUCTOR callee for a managed-key `Set with T` (P1.7b) — the runtime entry the set's teardown /
@@ -4797,7 +4799,7 @@ export type ProgramSignatures
 	// rejected with a clean E2015 until then. A trivial element (int / Byte / ranged-int / bool) is stored
 	// inline and owns nothing.
 	export function arrayElementIsManaged(id GenericInstanceId) returns bool
-		return self.typeIsManaged(self.arrayElementType(id))
+		return self.typeIsManaged(self.arrayElementType(id), from: self.typeNames)
 	end 'arrayElementIsManaged'
 
 	// Is `Array with T`'s element an OPAQUE TYPE PARAMETER — a `T` from an enclosing generic type's shared body
@@ -5807,7 +5809,7 @@ export type ProgramSignatures
 	// trivial instance), and the reassign reject refuses it. A String/owning aggregate (`typeArgIsOwned` true)
 	// is consumed, not co-owned-by-retain, and a scalar owns no heap — both answer false.
 	export function typeArgIsCoOwnedTrivial(t MaxonType) returns bool
-		return self.typeIsManaged(t) and not self.typeArgIsOwned(t)
+		return self.typeIsManaged(t, from: self.typeNames) and not self.typeArgIsOwned(t)
 	end 'typeArgIsCoOwnedTrivial'
 
 	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS OPAQUE ARRAY ELEMENT AT `position`
@@ -5870,9 +5872,9 @@ export type ProgramSignatures
 	export function genericInstanceFieldIsManaged(id GenericInstanceId, index FieldIndex) returns bool
 		let baseFieldType = try self.baseLayoutOf(id).fieldTypes.get(index) otherwise panic("ProgramSignatures.genericInstanceFieldIsManaged: field {index} out of range for instance {id}'s base struct")
 		if maxonTypeTag(baseFieldType) == ValueTypeTag.typeParameter 'typeParamField'
-			return self.typeIsManaged(self.substituteInstanceFieldType(id, index: index))
+			return self.typeIsManaged(self.substituteInstanceFieldType(id, index: index), from: self.typeNames)
 		end 'typeParamField'
-		return self.typeIsManaged(baseFieldType)
+		return self.typeIsManaged(baseFieldType, from: self.typeNames)
 	end 'genericInstanceFieldIsManaged'
 
 	// The drop callee for managed instance field `index` — routed through the shared `managedFieldDropCallee`
@@ -6118,7 +6120,7 @@ export type ProgramSignatures
 	export function structFieldIsManaged(structName ByteArray, index FieldIndex) returns bool
 		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldIsManaged: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
 		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.structFieldIsManaged: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
-		return self.typeIsManaged(fieldType)
+		return self.typeIsManaged(fieldType, from: self.typeNames)
 	end 'structFieldIsManaged'
 
 	// Does struct `structName` DIRECTLY own an `Array` field — the `usesArray` gate for its destructor (P1.7).
@@ -6278,20 +6280,40 @@ export type ProgramSignatures
 		return ManagedOpaqueArrayElement.absent
 	end 'managedOpaqueArrayElementOf'
 
-	// ⭐ **THE ONE "does this type own droppable heap?" CLASSIFIER**, over `self.typeNames` — the interner
-	// every field/arg/payload id this index stores lives in. A String (`__str_decref`), a struct box (a
-	// struct is always a heap box, dropped through its `__destruct_<T>` or the trivial `__mm_decref`), a
-	// boxed union, and a GENERIC INSTANCE (a base-struct box, P1.6-B2, dropped through its own instance
-	// destructor or `__mm_decref`) are managed; a scalar (int/bool/float/ExitCode, a ranged alias, a
-	// payload-free enum), a function code pointer, and an opaque type PARAMETER (a borrow at this rung) are
-	// not. `structFieldIsManaged` (a struct field), `classifyUnionPayload` (a union payload) and the
-	// generic-instance field classification all delegate here, so "managed" means ONE thing across struct,
-	// union and instance — the dropped set, the moved-in set and the usage gates agree by construction.
+	// ⭐ **THE ONE "does this type own droppable heap?" CLASSIFIER.** A String (`__str_decref`), a struct
+	// box (a struct is always a heap box, dropped through its `__destruct_<T>` or the trivial
+	// `__mm_decref`), a boxed union, and a GENERIC INSTANCE (a base-struct box, P1.6-B2, dropped through
+	// its own instance destructor or `__mm_decref`) are managed; a scalar (int/bool/float/ExitCode, a
+	// ranged alias, a payload-free enum), a function code pointer, and an opaque type PARAMETER (a borrow
+	// at this rung) are not. `structFieldIsManaged` (a struct field), `classifyUnionPayload` (a union
+	// payload) and the generic-instance field classification all delegate here, so "managed" means ONE
+	// thing across struct, union and instance — the dropped set, the moved-in set and the usage gates
+	// agree by construction.
+	//
+	// ⚠⚠ **`from` IS THE INTERNER `fieldType`'s `named` ID WAS MINTED AGAINST, AND IT IS A PARAMETER
+	// BECAUSE THE ANSWER IS OTHERWISE DECIDED BY INTERNING ORDER.** A `named` type is only a NUMBER; the
+	// name — and with it struct-hood, union-hood and alias-hood — comes out of the table that assigned it.
+	// This index's own callers pass `self.typeNames`; a caller holding a type that has been ADOPTED into a
+	// file-local artifact interner (`fieldTypeOf(…, into:)`) passes THAT one. It is the same discipline
+	// `classifyUnionPayload`, `managedFieldDropCallee` and `foreignNameOf` already state — a type crossing
+	// into this index carries the interner named alongside it — and this was the ONE type-taking query
+	// that did not, which is exactly how it went wrong:
+	//
+	// **MEASURED (T1), a cross-file directory project, both directions and both silent.** The parser's
+	// field-read guard resolved an artifact-interned id against `self.typeNames`, so the classification
+	// followed whatever name held that NUMBER in the program-wide table:
+	//   • a scalar `int(0 to 1000)`-alias field (and a payload-free `enum` field) read MANAGED, and a legal
+	//     `Gate.twice(21).n` was refused `E2015` — while the byte-identical single-file program ran 42,
+	//     because a single file's two tables are folded in the same order and every id coincides;
+	//   • a boxed-UNION field read SCALAR, so `requireFieldOutlivesItsRead` ADMITTED the borrow out of a
+	//     temporary that D2 exists to refuse — the program compiled and HUNG on the freed box. The verdict
+	//     flipped at the FOURTH unrelated `typealias` in the reading file.
+	// Both are pinned by `specs-shv2/cross-file-field-classification.md`.
 	//
 	// It is answered allocation-free for the overwhelming scalar-field majority (a tag test, then a
 	// `Map.contains`), exactly as the code it replaced was — which matters because a scalar field must reach
 	// the `false` return without boxing a `DeclaredStruct`/`DeclaredEnum`.
-	export function typeIsManaged(fieldType MaxonType) returns bool
+	export function typeIsManaged(fieldType MaxonType, from TypeNameInterner) returns bool
 		let tag = maxonTypeTag(fieldType)
 		// `tagIsByteRecord`: "does this own heap?" is a question about the REPRESENTATION, and a Character
 		// owns exactly the record a String does. This is the root every other managed classifier delegates
@@ -6303,7 +6325,9 @@ export type ProgramSignatures
 			return false
 		end 'notNamed'
 
-		let name = try self.typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("ProgramSignatures.typeIsManaged: a `named` type's id is not in this index's interner — every field/arg type this index stores was minted against exactly this table")
+		// The three lookups below are keyed by the NAME, so they are interner-independent once it is in hand
+		// — `classifyUnionPayload`'s arrangement, for its reason.
+		let name = foreignNameOf(from, id: typeNameIdOf(fieldType))
 		if self.structTypes.contains(name) 'namedStruct'
 			return true
 		end 'namedStruct'
@@ -6360,7 +6384,7 @@ export type ProgramSignatures
 	// same field, which is correct.
 	export function typeSupportsDeepClone(type MaxonType, asElement bool, visited ClonerSet) returns bool
 		let tag = maxonTypeTag(type)
-		if not self.typeIsManaged(type) 'trivialLeaf'
+		if not self.typeIsManaged(type, from: self.typeNames) 'trivialLeaf'
 			return true
 		end 'trivialLeaf'
 		if tagIsByteRecord(tag) 'byteRecord'
