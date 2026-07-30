@@ -429,6 +429,13 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// out to end (GtRuntime.maxon, X64PrologueEpilogue.maxon), surviving here because the shim was not swept.
 	// Widen the outgoing-arg grid and the shim now follows it; under the old spelling it silently would not,
 	// copying from and to slots the isel never wrote and handing the kernel garbage stack arguments.
+	// ⚠ **DELIBERATELY NOT `win64OutgoingArgDisp(stackArgWords)`, THOUGH THE ARITHMETIC IS IDENTICAL.** This is
+	// a frame SIZE — how many bytes the shim must reserve — and that function answers a DISPLACEMENT, where one
+	// named slot begins. They coincide today because the frame ends exactly where the next slot would start, and
+	// folding them would make a size and an address one expression on the strength of a coincidence. That is the
+	// error 7a's review found one function away, where `GtArgSlotBytes` and `SpillSlotBytes` were two facts
+	// sharing the number 8 — and it is the error this rung exists to remove, not to commit in reverse. Both
+	// derive from the same two constants, which is the part that has to be true.
 	let frameSize = alignUp(ShadowSpaceBytes + (stackArgWords * SpillSlotBytes), alignment: StackFrameAlignment)
 	let reserve = frameSize + ShimPushedWordBytes
 
@@ -457,8 +464,12 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// Copy the N true stack args from the GT frame (`[r10 + 8 + 0x20 + k*8]`, the anchor being 8 below the GT
 	// rsp) to the system stack (`[rsp + 0x20 + k*8]`), so the kernel reads its args from where it runs.
 	for k in 0 upto stackArgWords 'copyArg'
-		let srcDisp = (ShimPushedWordBytes + ShadowSpaceBytes + (k * SpillSlotBytes)) as Imm32
-		let dstDisp = (ShadowSpaceBytes + (k * SpillSlotBytes)) as Imm32
+		// Both ends ask `win64OutgoingArgDisp` — the SAME rule the ISEL placed these words by — so the copy
+		// cannot address a different slot than the store did. The source adds only `ShimPushedWordBytes`,
+		// because the GT-frame anchor sits one pushed word below the GT rsp; that is a property of THIS shim's
+		// prologue and not of the arg layout, which is why it is the one term added here rather than folded in.
+		let dstDisp = win64OutgoingArgDisp(k)
+		let srcDisp = (ShimPushedWordBytes + (dstDisp as StackSize)) as Imm32
 		encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtRspReg, disp: srcDisp, wide: true)
 		encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: dstDisp, srcReg: ShimGtReg)
 	end 'copyArg'
@@ -870,7 +881,6 @@ let IoLoopBytesLocalDisp = (0 - 0x08) as Imm32  // lpNumberOfBytesTransferred ou
 let IoLoopKeyLocalDisp = (0 - 0x10) as Imm32  // lpCompletionKey out-param (unused)
 let IoLoopOverlappedLocalDisp = (0 - 0x18) as Imm32  // lpOverlapped out-param → the completing GT's OVERLAPPED
 let IoLoopGtLocalDisp = (0 - 0x20) as Imm32  // the recovered GT pointer, spilled across the Win32/enqueue calls
-let IoLoopFifthArgDisp = 0x20 as Imm32  // GetQueuedCompletionStatus's 5th argument (dwMilliseconds) on the stack
 let IoLoopInfiniteTimeout = 0xFFFFFFFF  // INFINITE
 
 // The completion loop's own forward/backward branch targets, resolved against a LOOP-LOCAL fixup list + offset map
@@ -917,7 +927,13 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeLeaRegRegImm32(code, dest: X64Register.r8, base: X64Register.rbp, disp: IoLoopKeyLocalDisp)
 	encodeLeaRegRegImm32(code, dest: X64Register.r9, base: X64Register.rbp, disp: IoLoopOverlappedLocalDisp)
 	encodeMovRegImm32(code, dest: X64Register.rax, value: IoLoopInfiniteTimeout)
-	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: IoLoopFifthArgDisp, srcReg: X64Register.rax)
+	// `GetQueuedCompletionStatus`'s 5th argument (dwMilliseconds) goes in outgoing stack SLOT 0 of this loop's
+	// own frame, so the displacement is `win64OutgoingArgDisp(0)` — the SAME rule the ISEL and the GT shim place
+	// their stack arguments by — and not the bare `0x20` it used to be. Asked HERE rather than bound to a global
+	// `let`, which may hold no function call. This is also the site that makes 7a's
+	// `GetQueuedCompletionStatusStackArgWords` load-bearing: that constant says this import has ONE stack
+	// argument, and this is the one place that writes it.
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: win64OutgoingArgDisp(0), srcReg: X64Register.rax)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetQueuedCompletionStatus))
 	// overlapped == NULL → shutdown sentinel → exit (defensive; the slice never posts one).
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopOverlappedLocalDisp, wide: true)

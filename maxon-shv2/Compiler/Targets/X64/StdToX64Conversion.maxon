@@ -265,7 +265,15 @@ let PipeCreateOutgoingSlots = CreateNamedPipeStackArgWords
 // definition is "scratch a callee may clobber", and `outgoingArgSize` would have to mean two different
 // things depending on which kind of call needed it. Skipping the 32 bytes costs a frame that is already
 // reserving them nothing at all.
-function win64OutgoingArgDisp(slot MachineWord) returns Imm32
+// ⭐ **EXPORTED: THIS IS THE ONE ADDRESSING RULE FOR AN OUTGOING STACK ARGUMENT, AND TWO OTHER PLACES MUST
+// REPRODUCE THE EXACT ADDRESSES IT PLACES (7b2).** The ISEL stores every >4-argument import's stack arguments
+// through this; the GT syscall SHIM then copies those same words onto the system stack, and the hand-assembled
+// IO completion loop writes `GetQueuedCompletionStatus`'s 5th argument into slot 0 of its own frame. While it
+// was file-private both of those respelled it — the shim as an inline sum (with the WRONG stride, which 7a's
+// review caught), the loop as the bare literal `0x20`. Three spellings of one rule, on a path where a
+// disagreement is uninitialised KERNEL arguments and where no test fails, because the corpus combines no
+// `async` with OS calls. Exported so there is one.
+export function win64OutgoingArgDisp(slot MachineWord) returns Imm32
 	return (ShadowSpaceBytes + slot * SpillSlotBytes) as Imm32
 end 'win64OutgoingArgDisp'
 
