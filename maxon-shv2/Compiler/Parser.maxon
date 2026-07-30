@@ -8955,10 +8955,13 @@ export type Parser
 	// bootstrap `GetAssociatedTypeCount` (`2-Parser.cs:2939`) and v1 `lookupInterfaceUsesParamCount`
 	// (`Parser.maxon:1959`) both do it, rather than refusing an interface they cannot resolve yet. A parse
 	// is a pure function of one file's tokens (see this file's header), so shv2's unresolvable set is the
-	// larger one — a cross-file interface is in it — and the consequence is bounded and loud: a cross-file
-	// interface with two `uses` names must write `with (A, B)`, since the bare `with A, B` reads `B` as a
-	// sibling interface and reports E3015 against it. Refusing instead would reject `implements <anything
-	// cross-file> with X`, which is the overwhelmingly common shape.
+	// larger one — a cross-file interface is in it — and the consequence is bounded and LOUD TWICE OVER.
+	// MEASURED on `interface Duo uses P, Q` in one file and `implements Duo with Integer, Float` in another:
+	// `E3016 … 'Both' does not define required associated type 'Q' from interface 'Duo'` AND `E3015 … implements
+	// unknown interface 'Float'` — the missing-binding check catches the truncation whole-program, where the
+	// parse could not. The parenthesized spelling needs no arity and compiles cross-file (measured: exit 42).
+	// Refusing an unresolvable interface instead would reject `implements <anything cross-file> with X`, which
+	// is the overwhelmingly common shape.
 	function interfaceUsesArity(interfaceName ByteArray) returns ElementCount
 		match builtinInterface(interfaceName) 'builtin'
 			found(iface) then return iface.associatedTypeNames.count()
