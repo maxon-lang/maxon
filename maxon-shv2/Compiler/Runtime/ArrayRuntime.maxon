@@ -376,23 +376,23 @@ export let ArrMemAppendName = b"__arr_mem_append"
 // delegates the write itself to `emitElementStoreAndOkReturn`, which is `__arr_set`'s tail verbatim
 // (`__arr_mem_append`'s precedent: own the arithmetic, delegate the copy).
 //
-// ⚠⚠ **THE STAGING REGION `[length, capacity)` CARRIES NO OWNERSHIP, AND THE RULING IS WHAT MAKES THAT A
-// USER-VISIBLE FACT RATHER THAN AN INTERNAL ONE** (measured in R4.6 review, and left as it is DELIBERATELY —
-// see below). A managed element written there is owned by NOBODY until `setLength` publishes it: `__arr_decref`
-// destroys only `[0, length)`, `__arr_push`/`__arr_insert`/`__arr_mem_append` store AT `length` without
-// destroying the occupant (before R4.6 that slot was provably NULL, so there was nothing to destroy), and a
-// grow or a detach copies only `length · element_size` live bytes and abandons the rest. MEASURED, both at
-// exit **101**: staging a heap String and never publishing it; and staging one, then `push`ing over it.
+// ⚠⚠ **THE STAGING REGION `[length, capacity)` CARRIES NO OWNERSHIP, WHICH IS WHY A MANAGED ELEMENT MAY NOT
+// REACH THIS ENTRY AT ALL.** ⚖ USER RULING, 2026-07-30 (the second on this member): the front end REFUSES
+// `arr.managed.set` when the element type is managed — `Parser.requireBufferSetOwnsWhatItStores`, **E3109**.
+// A managed element written past the length would be owned by NOBODY until `setLength` published it:
+// `__arr_decref` destroys only `[0, length)`, `__arr_push`/`__arr_insert`/`__arr_mem_append` store AT `length`
+// WITHOUT destroying the occupant (before R4.6 that slot was provably NULL, so there was nothing to destroy),
+// and a grow or a detach copies only `length · element_size` live bytes and abandons the rest. MEASURED in
+// R4.6 review, all at exit **101**: a `String` staged and never published; one staged then `push`ed over; and
+// a boxed STRUCT element staged past the length, which is why the rule is "managed" and not "String".
 //
-// ⚠ **THAT IS THE PROTOCOL, NOT A DEFECT, AND THE DISTINCTION IS WHAT DECIDED IT.** Every one of those routes
-// requires the caller to break the contract `setLength`'s own documentation states — *"stage the new elements
-// FIRST and use `setLength` to publish them"* — exactly as `__mm_alloc` without a release does; follow the
-// contract and every staged element is published and owned. Contrast the leak R4.6 DID fix
-// (`emitDestroyRejectedElement`), which was reachable from CORRECT code, because a bounds check refusing an
-// index is ordinary control flow and not a protocol violation. And the failure here is LOUD: the leak gate
-// reports it at exit. ⚠ Making `push` destroy the occupant of slot `length` would close it, at a dtor gate
-// plus a null test on every managed `push` — a hot path, and a semantic decision about who owns a staged
-// element. Do not take it as a tidy-up; it needs a ruling.
+// ⭐ **REJECTED RATHER THAN FIXED, and the reason is this file's own invariant.** Making the staged slot owned
+// means a destructor gate on every managed `push` — a hot path — and it makes `[length, capacity)`-reads-ZERO
+// CONDITIONAL, which `__arr_push`, `__arr_insert`, `__arr_mem_append`, `emitReallocateToCapacity` and
+// `__arr_cow_detach` all rely on. Refusing costs neither, and costs no capability: `[0, length)` is exactly
+// what `__arr_set` covers, which owns what it stores. **So this entry only ever sees a TRIVIAL element**, and
+// the staging story the ruling exists to serve — `__ManagedMemory.create`, which can only yield a trivial
+// element — is untouched.
 export let ArrMemSetName = b"__arr_mem_set"
 
 // The `__ManagedMemoryError` ordinals these members throw, as error FLAGS — positional facts about
@@ -2372,6 +2372,17 @@ end 'emitBufferAccessGuard'
 //
 // ⚠ **A REFUSED WRITE STILL OWNS THE ELEMENT IT WAS HANDED**, so the throw path destroys it; see
 // `emitDestroyRejectedElement`, whose whole reason this shares with `__arr_set`.
+//
+// ⚠⚠ **AND THAT CALL IS CURRENTLY UNREACHABLE, DELIBERATELY, AND NO TEST CAN REDDEN IT.** Since the E3109
+// refusal (`Parser.requireBufferSetOwnsWhatItStores`) this entry only ever sees a TRIVIAL element, whose
+// `element_destroy@40` is 0 — so `emitDestroyRejectedElement`'s gate is never taken and a sabotage that
+// deletes this line stays green. It is kept anyway, for the reason `buildArrCowDetach`'s header gives about
+// its own placement: a runtime that is correct on its own outlives a front-end rule that may move, and the
+// day `__arr_mem_set` gains a second door is the day this would have been the missing half. **The dependency
+// runs BOTH ways and is written down at both ends** — the refusal's own header says the runtime does not rely
+// on it, this says the runtime does not assume it — exactly as `requireArrayResizeHasZeroElement` and
+// `ArrGetUncheckedName` pin each other. Relax the refusal and this call becomes load-bearing again with no
+// edit; delete this call and nothing will tell you.
 function buildArrMemSet(module StdModule)
 	var func = IrFunction.createFromStd(ArrMemSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(3)

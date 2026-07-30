@@ -1,0 +1,23 @@
+// Test: error.staging-a-managed-struct-element-is-refused-the-same-way
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var xs = SlotArray.create()
+	xs.push(Slot.create(7))
+	xs.reserve(4)
+	try xs.managed.set(1, value: Slot.create(9)) otherwise return 1
+	return 0
+end 'main'
+---
+CompilerError:
+error E3109: <fragment>:18:17: 'managed.set' cannot store an element of 'Slot': it is bounded by the CAPACITY, so it writes slots no length has published, and nothing owns a managed element staged there until 'setLength' publishes it. Use the array's own 'set(index, value:)', which is bounded by the length

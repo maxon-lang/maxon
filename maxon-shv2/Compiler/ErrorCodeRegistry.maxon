@@ -478,6 +478,27 @@ export enum ErrorCode
 	// write. The layer where an unwritten slot is a defined state is `__ManagedMemory.setLength`,
 	// and it stays available.
 	semanticArrayResizeManagedElement = "E3106"
+	// The BUFFER surface's `set` (`arr.managed.set(index, value:)`) is called on an array whose
+	// ELEMENT TYPE IS MANAGED -- a struct, a `String`, a nested container, a boxed union. That
+	// setter is bounded by CAPACITY rather than by length (a 2026-07-30 user ruling), so it can
+	// write into `[length, capacity)` -- slots no length has published yet. For a TRIVIAL element
+	// that is the whole point: it is the stage-then-`setLength`-to-publish idiom the buffer surface
+	// exists to support. For a MANAGED element it opens a hole, because that region carries no
+	// OWNERSHIP: `__arr_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT
+	// `length` without destroying the occupant, and a grow or a copy-on-write detach copies only
+	// the live bytes and abandons the rest. A staged element is therefore owned by NOBODY until a
+	// `setLength` publishes it, and is leaked outright if one never comes.
+	// Refused rather than fixed, and the choice is deliberate. Making ownership follow the staged
+	// slot would put a destructor gate on every managed `push` -- a hot path -- and would make the
+	// `[length, capacity)`-reads-ZERO invariant conditional, which five separate array operations
+	// currently rely on. Refusing costs none of that, and costs no capability: `[0, length)` is
+	// exactly what the ARRAY surface's own `set(index, value:)` covers, which is length-bounded,
+	// owns what it stores, and is unaffected. So the message names it.
+	// Refused at the call site, naming the element type, and only where that type is KNOWN. It
+	// needs no carve-out for an unbound type parameter: `.managed` is unreachable through a shared
+	// generic body at all (a field access through it is refused one step earlier), so every site
+	// this rule can see has a concrete element.
+	semanticBufferSetManagedElement = "E3109"
 
 	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 	registerPressure = "E5001"

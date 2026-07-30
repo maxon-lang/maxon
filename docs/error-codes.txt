@@ -1179,6 +1179,29 @@ E3106 SemanticArrayResizeManagedElement
 	doc write. The layer where an unwritten slot is a defined state is `__ManagedMemory.setLength`,
 	doc and it stays available.
 
+E3109 SemanticBufferSetManagedElement
+	shv2 semanticBufferSetManagedElement
+	doc The BUFFER surface's `set` (`arr.managed.set(index, value:)`) is called on an array whose
+	doc ELEMENT TYPE IS MANAGED -- a struct, a `String`, a nested container, a boxed union. That
+	doc setter is bounded by CAPACITY rather than by length (a 2026-07-30 user ruling), so it can
+	doc write into `[length, capacity)` -- slots no length has published yet. For a TRIVIAL element
+	doc that is the whole point: it is the stage-then-`setLength`-to-publish idiom the buffer surface
+	doc exists to support. For a MANAGED element it opens a hole, because that region carries no
+	doc OWNERSHIP: `__arr_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT
+	doc `length` without destroying the occupant, and a grow or a copy-on-write detach copies only
+	doc the live bytes and abandons the rest. A staged element is therefore owned by NOBODY until a
+	doc `setLength` publishes it, and is leaked outright if one never comes.
+	doc Refused rather than fixed, and the choice is deliberate. Making ownership follow the staged
+	doc slot would put a destructor gate on every managed `push` -- a hot path -- and would make the
+	doc `[length, capacity)`-reads-ZERO invariant conditional, which five separate array operations
+	doc currently rely on. Refusing costs none of that, and costs no capability: `[0, length)` is
+	doc exactly what the ARRAY surface's own `set(index, value:)` covers, which is length-bounded,
+	doc owns what it stores, and is unaffected. So the message names it.
+	doc Refused at the call site, naming the element type, and only where that type is KNOWN. It
+	doc needs no carve-out for an unbound type parameter: `.managed` is unreachable through a shared
+	doc generic body at all (a field access through it is refused one step earlier), so every site
+	doc this rule can see has a concrete element.
+
 E3107 SemanticDuplicateTestName
 	csharp SemanticDuplicateTestName
 	doc Two `test` declarations in one file carry names that SANITIZE to the same symbol. A test has

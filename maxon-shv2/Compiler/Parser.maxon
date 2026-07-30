@@ -752,6 +752,15 @@ export union ParseError implements Error
 	// the slot empty. `elementType` names the element, which is the whole point of refusing HERE: the
 	// runtime cannot name it and the caller cannot see it.
 	arrayResizeManagedElement(elementType String, line LineNumber, column ColumnNumber)
+	// ⭐ THE BUFFER SURFACE'S `set` ON A MANAGED ELEMENT — `arr.managed.set(i, value: x)` where the element
+	// is a `String`/struct/container/boxed union. Renders as **E3109**, positioned at the method token and
+	// naming the element. The sibling of the arm above, and refused for the MIRROR of its reason: `resize`
+	// exposes a slot with NOTHING in it, while this one puts something in a slot NOTHING OWNS. The buffer
+	// `set` is bounded by CAPACITY (the 2026-07-30 ruling), so it reaches `[length, capacity)` — which is
+	// the stage-then-publish region, and which carries no ownership. See the registry entry for why this is
+	// a refusal rather than a fix, and `ArrayRuntime.ArrMemSetName` for the five operations whose reliance
+	// on `[length, capacity)` reading ZERO is what makes the alternative expensive.
+	bufferSetManagedElement(elementType String, line LineNumber, column ColumnNumber)
 	// ⭐ A LABELLED CONTROL-FLOW BLOCK WITH NO STATEMENTS IN IT — `if c 'x' end 'x'`, and the same for
 	// `else`, `while`, `for` and a block-form `otherwise` handler. Renders as **E3082**, positioned at
 	// the closing `end` (which is where the missing statements would have gone) and naming the block's
@@ -25558,6 +25567,7 @@ export type Parser
 		if methodTok.value.equals(ArraySetMethod) 'set'
 			var setCallee = ArrSetName
 			if isManagedMemory 'capacityBoundedSetter'
+				try self.requireBufferSetOwnsWhatItStores(giid, methodTok: methodTok)
 				setCallee = ArrMemSetName
 			end 'capacityBoundedSetter'
 
@@ -25942,6 +25952,44 @@ export type Parser
 		end 'trivial'
 		throw ParseError.arrayResizeManagedElement(self.signatures.arrayElementDisplayName(giid), line: methodTok.line, column: methodTok.column)
 	end 'requireArrayResizeHasZeroElement'
+
+	// ⭐⭐ **THE BUFFER `set` MUST OWN WHAT IT STORES, SO A MANAGED ELEMENT IS REFUSED (E3109, R4.6 review).**
+	// ⚖ USER RULING, 2026-07-30: the buffer surface's `set` is bounded by CAPACITY, which is what makes the
+	// stage-then-`setLength`-to-publish idiom spellable — and what puts a write into `[length, capacity)`, a
+	// region that carries NO OWNERSHIP. For a TRIVIAL element that is exactly the intent. For a MANAGED one
+	// the staged element is owned by nobody until a `setLength` publishes it, and by nobody at all if one
+	// never comes: MEASURED at exit **101** by two programs that break no stated contract — `reserve(4)` then
+	// `set(0, "staged")` and return; and stage, then `push` over the staged slot (`__arr_push` stores AT
+	// `length` without destroying the occupant, because before the ruling that slot was PROVABLY NULL).
+	//
+	// ⚖ **RULED A REJECTION RATHER THAN A FIX (user, 2026-07-30), and the reasons are worth keeping because
+	// they are what a future "why not just make ownership follow?" has to answer.** Making the staged slot
+	// owned means a destructor gate on every managed `push` — a hot path — and it makes the
+	// `[length, capacity)`-reads-ZERO invariant CONDITIONAL, which `push`, `insert`, `append`, the grow
+	// realloc and `__arr_cow_detach` all currently rely on. Refusing costs neither, and costs no capability:
+	// `[0, length)` is precisely what the ARRAY surface's own length-bounded `set` covers, which owns what it
+	// stores and is untouched — so the message names it as the spelling to use.
+	//
+	// ⭐ **IT IS COARSER THAN THE RULE IT ENFORCES, DELIBERATELY, AND THE COST WAS MEASURED RATHER THAN
+	// ASSUMED.** The rule is about the INDEX (`>= length`), which is a runtime expression no parser holds, so
+	// a parse-time refusal has to refuse the whole managed-element buffer `set` including the `[0, length)`
+	// half that leaks nothing. A census of the corpus found every `.managed.set` site is a TRIVIAL element
+	// bar the two this rung had just added, and the harmless half has an exact replacement one word shorter
+	// (`arr.set(i, value: x)`). Refusing at compile time makes the leak IMPOSSIBLE where a runtime throw
+	// would only make it reported — and buys the runtime setter no check at all.
+	//
+	// ⚠ **NO OPAQUE-`T` CARVE-OUT IS NEEDED, and that is checked rather than inherited from
+	// `requireArrayResizeHasZeroElement`'s note** (which does need one). `.managed` is not reachable inside a
+	// shared generic body: `self.items.managed` is refused a step earlier as a field access through a
+	// non-struct, so every site this rule can see has a CONCRETE element and a statically known answer.
+	// `arrayElementIsManaged` answering false for a type parameter is therefore not what makes this sound.
+	function requireBufferSetOwnsWhatItStores(giid GenericInstanceId, methodTok Token) throws ParseError
+		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+			return
+		end 'trivial'
+
+		throw ParseError.bufferSetManagedElement(self.signatures.arrayElementDisplayName(giid), line: methodTok.line, column: methodTok.column)
+	end 'requireBufferSetOwnsWhatItStores'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append`, routed by element KIND (P1.7 slice 3b-vi-b).** An OPAQUE-`T`
 	// element (a generic body's shared `Array with <type parameter>`) copies through the descriptor's `copyFunc@32`

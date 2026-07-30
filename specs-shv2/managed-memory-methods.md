@@ -1086,18 +1086,23 @@ end 'main'
 77
 ```
 
-<!-- test: staging-a-managed-element-twice-releases-the-first -->
+<!-- test: error.staging-a-managed-element-into-unpublished-capacity -->
 
-⭐⭐ **THE DESTRUCTOR DECISION, AND THE CASE THAT DECIDES IT.** `__arr_set` destroys the slot it overwrites,
-which is right for a slot inside `[0, length)` — it holds a live element that nothing else will drop. A staged
-slot in `[length, capacity)` holds a NULL by the capacity-slot invariant, so the destroy walk's existing
-null-guard skips it and no destructor ever runs on a null.
+⚖ **USER RULING, 2026-07-30 (the SECOND one on this member): staging a MANAGED element is REFUSED — E3109.**
+This case asserted the opposite until R4.6 review, and it was testing a capability that should not exist.
 
-v1 additionally gates the release on `idx < length` (`stdlib/Internals.maxon:3319-3331`), which shv2 does NOT
-copy — and this program is why. v1 can afford it because staging there is a compiler-internal idiom that writes
-each fresh slot once; shv2 makes staging USER-reachable, so a slot may be staged TWICE before it is published,
-and under an `idx < length` gate the first heap string would never be released. The null guard releases it.
-Runs under the leak gate, so a leak is exit 101.
+The capacity bound is what makes `[length, capacity)` writable, and that region carries **no ownership**:
+`__arr_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT `length` without destroying the
+occupant (before the ruling that slot was PROVABLY NULL), and a grow or a detach copies only the live bytes
+and abandons the rest. So a staged managed element is owned by nobody until `setLength` publishes it — and by
+nobody at all if one never does. MEASURED at exit **101** with the gate lifted, for a `String` element AND for
+a `Slot` STRUCT element (a struct is boxed, so it leaks identically — which is why the rule is "managed", not
+"String").
+
+⭐ **REJECTED rather than fixed, and the reason is the invariant.** Making the staged slot owned puts a
+destructor gate on every managed `push` — a hot path — and makes `[length, capacity)`-reads-ZERO conditional,
+which five array operations rely on. Refusing costs neither and costs no capability: `[0, length)` is exactly
+what the ARRAY surface's length-bounded `set` covers, and the message says so.
 ```maxon
 typealias StrArray = Array with String
 
@@ -1105,18 +1110,94 @@ function main() returns ExitCode
 	var xs = StrArray.create()
 	xs.push("first published string, long enough to require an allocation")
 	xs.push("second published string, long enough to require an allocation")
-	if xs.managed.capacity() < 3 'needsAStagingSlot'
-		return 1
-	end 'needsAStagingSlot'
 	try xs.managed.set(2, value: "staged heap string number one, long enough to require an allocation") otherwise return 2
-	try xs.managed.set(2, value: "restaged heap string number two, long enough to require an allocation") otherwise return 3
-	try xs.managed.setLength(3) otherwise return 4
-	let published = try xs.get(2) otherwise return 5
-	return published.byteLength() as ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3109: <fragment>:8:17: 'managed.set' cannot store an element of 'String': it is bounded by the CAPACITY, so it writes slots no length has published, and nothing owns a managed element staged there until 'setLength' publishes it. Use the array's own 'set(index, value:)', which is bounded by the length
+```
+
+<!-- test: error.staging-a-managed-struct-element-is-refused-the-same-way -->
+
+⭐ **THE RULE IS "MANAGED", NOT "`String`" — and this is the case that says so.** A struct element is boxed on
+the heap exactly as a `String` is, so it leaks exactly as one: MEASURED at exit **101** with the gate lifted,
+staging a `Slot` past the live length. Without this case the refusal could be narrowed to text elements and
+every other boxed element would silently regain the leak. It is the same relationship
+`array-slots.md`'s `error.resize-struct-element` has with its `error.resize-string-element`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var xs = SlotArray.create()
+	xs.push(Slot.create(7))
+	xs.reserve(4)
+	try xs.managed.set(1, value: Slot.create(9)) otherwise return 1
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3109: <fragment>:18:17: 'managed.set' cannot store an element of 'Slot': it is bounded by the CAPACITY, so it writes slots no length has published, and nothing owns a managed element staged there until 'setLength' publishes it. Use the array's own 'set(index, value:)', which is bounded by the length
+```
+
+<!-- test: error.reserve-then-stage-without-publishing-is-refused -->
+
+⭐⭐ **THE FIVE LINES THAT DECIDED THE RULING (coordinator, 2026-07-30).** Nothing here looks like a contract
+violation — `reserve` then `set(0, …)` then return — and before R4.6 that `set` was simply refused, because
+`__arr_set` was length-bounded. The capacity ruling is what made it reachable, which is what put it under
+"a reachable leak a rung ENABLES is fixed or the causing construct REJECTED before merge". MEASURED at exit
+**101** before the refusal landed. It is the shortest program in the family and the one to keep.
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var a = StringArray.create()
+	a.reserve(4)
+	try a.managed.set(0, value: "staged") otherwise return 1
+	return 42
+end 'main'
+```
+```maxoncstderr
+error E3109: <fragment>:7:16: 'managed.set' cannot store an element of 'String': it is bounded by the CAPACITY, so it writes slots no length has published, and nothing owns a managed element staged there until 'setLength' publishes it. Use the array's own 'set(index, value:)', which is bounded by the length
+```
+
+<!-- test: staging-a-trivial-element-twice-releases-nothing-and-still-publishes -->
+
+⭐ **THE RULING'S MAIN LINE, KEPT ALIVE FOR THE ELEMENT KIND THAT STILL HAS IT.** The refusal above takes the
+managed half of the staging story away; the TRIVIAL half is the whole reason the capacity bound was ruled, and
+`__ManagedMemory.create` can only ever produce a trivial element, so this is the path the corpus actually
+walks. It is the managed case's exact shape — stage three times into one slot, publish, shrink it away,
+restage, publish again — which is what pins the destroy walk's per-slot NULL GUARD rather than v1's
+`idx < length` gate: a shrink destroys AND zeroes, so the restage sees a null and releases nothing.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(1) otherwise return 2
+	try mm.set(1, value: 5) otherwise return 3
+	try mm.set(1, value: 6) otherwise return 4
+	try mm.set(1, value: 7) otherwise return 5
+	try mm.setLength(2) otherwise return 6
+	total = total + (try mm.get(1) otherwise return 7)
+	try mm.setLength(1) otherwise return 8
+	try mm.set(1, value: 30) otherwise return 9
+	try mm.setLength(2) otherwise return 10
+	total = total + (try mm.get(1) otherwise return 11)
+	return total as ExitCode
 end 'main'
 ```
 ```exitcode
-69
+37
 ```
 
 <!-- test: set-byte-past-the-live-length-is-allowed-within-capacity -->
@@ -1201,7 +1282,14 @@ caller's scope-exit drop is suppressed. On the success path the array becomes th
 out-of-range path nothing did, so the element simply leaked. MEASURED before the fix: the first `try` below
 exited **101**, while the identical program over an `Array with Int` exited 0 (the control that says this is
 the managed move-in, not the throw). R4.6 fixes it because `__arr_mem_set` would otherwise have been written
-with the identical leak on its first day. Both surfaces are asserted, because both take the move-in.
+with the identical leak on its first day.
+
+⚠ **IT ASSERTS ONLY THE ARRAY SURFACE, AND THE MISSING HALF IS NOT AN OMISSION.** It asserted both until R4.6
+review; the buffer half is now a COMPILE error (E3109 — a managed element cannot reach `managed.set` at all),
+which is a strictly stronger guarantee than "the refusal does not leak". The consequence is worth stating
+where a sabotage-runner will look: `__arr_mem_set`'s own `emitDestroyRejectedElement` call is now unreachable
+from any spelling the front end admits, so no test can redden it. It is kept deliberately — see
+`buildArrMemSet` — and this line is why breaking it is silent.
 ```maxon
 typealias StrArray = Array with String
 
@@ -1212,9 +1300,9 @@ function main() returns ExitCode
 	try xs.set(99, value: "a string the array setter refuses, long enough to allocate") otherwise 'arraySurface'
 		refused = refused + 1
 	end 'arraySurface'
-	try xs.managed.set(99, value: "a string the buffer setter refuses, long enough to allocate") otherwise 'bufferSurface'
+	try xs.set(-1, value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
 		refused = refused + 1
-	end 'bufferSurface'
+	end 'negativeIndex'
 	if refused == 2 'both'
 		return 42
 	end 'both'

@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "82dceeae6b9c8dbb",
+  "sourceHash": "220c609d2886bacb",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1228,6 +1228,15 @@
       "doc": "A `test` declaration needs something from `stdlib/Testing.maxon` that this compile cannot\nsee. Two symbols there are reachable WITHOUT the author naming them: `TestFailure`, which\nevery `test` implicitly throws, and `__TestReport`, which the handler the compiler\nsynthesizes for an uncaught foreign error reports through.\nBecause neither name is written by the program, neither can be a misspelling -- so the\nmessage names the missing symbol AND the file that has to supply it, rather than reporting\nan unknown type or an unknown function at a line whose source mentions neither.\nONE code for both, because it is one condition seen from two sides: a compile whose Testing\nmodule is absent or truncated. Two codes would let a reader fix half the cause and meet the\nother half on the next build.",
       "emittedBy": {"csharp": "SemanticTestingStdlibUnavailable"},
       "notEmittedBy": ["selfhosted", "shv2"]
+    },
+    {
+      "code": 3109,
+      "tag": "E3109",
+      "name": "SemanticBufferSetManagedElement",
+      "stage": "semantic",
+      "doc": "The BUFFER surface's `set` (`arr.managed.set(index, value:)`) is called on an array whose\nELEMENT TYPE IS MANAGED -- a struct, a `String`, a nested container, a boxed union. That\nsetter is bounded by CAPACITY rather than by length (a 2026-07-30 user ruling), so it can\nwrite into `[length, capacity)` -- slots no length has published yet. For a TRIVIAL element\nthat is the whole point: it is the stage-then-`setLength`-to-publish idiom the buffer surface\nexists to support. For a MANAGED element it opens a hole, because that region carries no\nOWNERSHIP: `__arr_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT\n`length` without destroying the occupant, and a grow or a copy-on-write detach copies only\nthe live bytes and abandons the rest. A staged element is therefore owned by NOBODY until a\n`setLength` publishes it, and is leaked outright if one never comes.\nRefused rather than fixed, and the choice is deliberate. Making ownership follow the staged\nslot would put a destructor gate on every managed `push` -- a hot path -- and would make the\n`[length, capacity)`-reads-ZERO invariant conditional, which five separate array operations\ncurrently rely on. Refusing costs none of that, and costs no capability: `[0, length)` is\nexactly what the ARRAY surface's own `set(index, value:)` covers, which is length-bounded,\nowns what it stores, and is unaffected. So the message names it.\nRefused at the call site, naming the element type, and only where that type is KNOWN. It\nneeds no carve-out for an unbound type parameter: `.managed` is unreachable through a shared\ngeneric body at all (a field access through it is refused one step earlier), so every site\nthis rule can see has a concrete element.",
+      "emittedBy": {"shv2": "semanticBufferSetManagedElement"},
+      "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
       "code": 4001,

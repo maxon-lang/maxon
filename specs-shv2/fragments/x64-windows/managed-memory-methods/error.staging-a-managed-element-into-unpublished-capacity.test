@@ -1,0 +1,13 @@
+// Test: error.staging-a-managed-element-into-unpublished-capacity
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("first published string, long enough to require an allocation")
+	xs.push("second published string, long enough to require an allocation")
+	try xs.managed.set(2, value: "staged heap string number one, long enough to require an allocation") otherwise return 2
+	return 0
+end 'main'
+---
+CompilerError:
+error E3109: <fragment>:8:17: 'managed.set' cannot store an element of 'String': it is bounded by the CAPACITY, so it writes slots no length has published, and nothing owns a managed element staged there until 'setLength' publishes it. Use the array's own 'set(index, value:)', which is bounded by the length
