@@ -236,6 +236,13 @@ export let CreateNamedPipeStackArgWords = 4 as MachineWord  // args 5-8: nOutBuf
 export let CreateFileStackArgWords = 3 as MachineWord  // args 5-7: dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile
 export let CreateThreadStackArgWords = 2 as MachineWord  // args 5-6: dwCreationFlags, lpThreadId
 export let ReadFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
+// ⚠ **NOT RESERVED BY `stdOpOutgoingArgBytes`, AND DELIBERATELY STATED ANYWAY (7a).** Unlike its five
+// neighbours above, `GetQueuedCompletionStatus` is never emitted as an `iatCall`: the completion loop is
+// hand-assembled and calls it DIRECTLY, so no Std op reserves a GT frame for it and there is nothing here
+// for a reservation to derive from. It is stated because `gtShimStackArgWordsOf` is exhaustive over
+// `IatSlot` and must give it an answer — and the honest answer is its real ABI count, not the 0 its current
+// unreachability would excuse. If it is ever routed through the shim, the copy is already right.
+export let GetQueuedCompletionStatusStackArgWords = 1 as MachineWord  // arg 5: dwMilliseconds
 
 // `osPipeCreate` reserves the MAX outgoing stack-arg count across its calls (CreateNamedPipeW's 4 dominates
 // CreateFileW's 3), so its single GT-frame region holds either call's stack args at `[rsp + shadow + k*8]`.

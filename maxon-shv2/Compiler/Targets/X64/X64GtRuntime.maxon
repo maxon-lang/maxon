@@ -300,53 +300,97 @@ let ShimDoneLabel = 1 as BlockId
 // layout it must match, never a second copy that could drift into a silent CreateProcessA/WriteFile miscompile
 // (too few words copied ⇒ the kernel reads garbage stack args). A ≤4-arg (register-only) import passes nothing
 // on the stack and copies nothing.
+// ⭐⭐ **THE SHIM'S PER-IMPORT COPY COUNT — TOTAL OVER `IatSlot`, SO AN OMISSION IS A COMPILE ERROR (7a).**
+//
+// This was an int-keyed `if`-chain ending in a bare `return 0`: a table that must be COMPLETE, whose
+// incompleteness was SILENT and whose silent answer was the dangerous one. It has already cost a wrong
+// answer once — R4.1 added `CreateFileA` beside `CreateFileW` and did not add it here, so a
+// `__ManagedFile.open*` reached from a SPAWNED green thread copied ZERO words onto the system stack and
+// `dwCreationDisposition`, `dwFlagsAndAttributes` and `hTemplateFile` were whatever happened to be in that
+// memory. Reachable only OFF the main thread, which is why a green suite never saw it (the corpus combines
+// no `async` with file IO), and it is the project's own "no silent unhandled cases" rule broken in a table
+// where the default is indistinguishable from a correct answer.
+//
+// ⇒ **The `match` below is EXHAUSTIVE over the enum, so adding an `IatSlot` does not compile until its
+// count is stated.** That is the whole point of the rung: the next `CreateFileA` cannot be forgotten,
+// because forgetting it is no longer expressible. There is no `default` arm and there must never be one —
+// a `default gives 0` would restore the exact defect, wearing a `match`'s clothes.
+//
+// ⚠ **A `0` HERE IS A CLAIM, NOT A BLANK.** It says the import passes four or fewer arguments, so Win64
+// puts every one in rcx/rdx/r8/r9 and there is nothing on the stack to copy. Each such arm carries its
+// argument count so the claim can be checked against MSDN without reading the emitter.
+//
+// ⚠ **THE SEVEN NON-ZERO COUNTS ARE NOT SPELLED HERE.** They are the SAME constants
+// `StdToX64Conversion.stdOpOutgoingArgBytes` reserves the GT frame with, so the copy and the reservation
+// cannot disagree about how many words the kernel reads — the property those constants' own headers exist
+// to hold. This function maps slots to them; it does not restate them.
 function gtShimStackArgWords(slotIndex RelocSlotIndex) returns StackSize
-	if slotIndex == iatSlotIndex(IatSlot.CreateProcessA) 'createProcess'
-		return CreateProcessStackArgWords as StackSize
-	end 'createProcess'
+	for slot in IatSlot.allCases 'each'
+		if iatSlotIndex(slot) == slotIndex 'found'
+			return gtShimStackArgWordsOf(slot)
+		end 'found'
+	end 'each'
 
-	if slotIndex == iatSlotIndex(IatSlot.WriteFile) 'writeFile'
-		return WriteFileStackArgWords as StackSize
-	end 'writeFile'
-
-	// P1.5 slice 1a-ii: the IOCP-substrate imports a SHIMMED (main-thread) call reaches — the pipe creation and the
-	// overlapped read run on the reading GT (possibly a spawned GT, so the switched path copies stack args), and
-	// CreateThread runs in `__io_init` on GT0 (direct path, but a correct count is still required). GetQueuedComplet-
-	// ionStatus / SetEvent are NOT here — they are called only from the hand-assembled completion loop (direct, never
-	// shimmed). Each count is the import's single source (StdToX64Conversion), so the copy cannot drift from the layout.
-	if slotIndex == iatSlotIndex(IatSlot.CreateNamedPipeW) 'createNamedPipe'
-		return CreateNamedPipeStackArgWords as StackSize
-	end 'createNamedPipe'
-
-	if slotIndex == iatSlotIndex(IatSlot.CreateFileW) 'createFile'
-		return CreateFileStackArgWords as StackSize
-	end 'createFile'
-
-	if slotIndex == iatSlotIndex(IatSlot.CreateThread) 'createThread'
-		return CreateThreadStackArgWords as StackSize
-	end 'createThread'
-
-	if slotIndex == iatSlotIndex(IatSlot.ReadFile) 'readFile'
-		return ReadFileStackArgWords as StackSize
-	end 'readFile'
-
-	// ⚠ **R4.2 FIX — `CreateFileA` WAS MISSING, AND ITS ABSENCE READ AS "NO STACK ARGUMENTS".** R4.1 added
-	// the `A` entry point beside the pipes' `CreateFileW` but did not add it here, so a `__ManagedFile.open*`
-	// reached from a SPAWNED green thread took the switched path and copied ZERO words onto the system stack
-	// — leaving `dwCreationDisposition`, `dwFlagsAndAttributes` and `hTemplateFile` as whatever happened to
-	// be there. It needs the same three words its `W` sibling does; both derive from the one
-	// `CreateFileStackArgWords`, so neither can drift from the argument layout `StdToX64Conversion` writes.
-	// (Unreachable in the corpus today, which combines no `async` with file IO — which is exactly why a
-	// silent zero survived a green suite.)
-	if slotIndex == iatSlotIndex(IatSlot.CreateFileA) 'createFileAnsi'
-		return CreateFileStackArgWords as StackSize
-	end 'createFileAnsi'
-
-	// The five R4.2 file imports (`GetFileSizeEx`, `DeleteFileA`, `MoveFileExA`, `FindFirstFileA`,
-	// `FindClose`) are all ≤4-argument register-only calls, so the 0 below is their CORRECT count, not a
-	// missing entry — `stdOpOutgoingArgBytes` reserves 0 outgoing words for each and there is nothing to copy.
-	return 0
+	panic("gtShimStackArgWords: slot index {slotIndex} names no IatSlot — every `iatCall` relocation is minted from `iatSlotIndex(IatSlot.…)`, so an index outside the enum means the op carried a hand-built number")
 end 'gtShimStackArgWords'
+
+// The stack-argument word count of ONE import, exhaustive over `IatSlot`. See `gtShimStackArgWords`.
+function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
+	return match slot 'k'
+		// --- the imports the kernel reads stack arguments for: the counts live with the arg layout ---
+		CreateProcessA gives CreateProcessStackArgWords
+		WriteFile gives WriteFileStackArgWords
+		CreateNamedPipeW gives CreateNamedPipeStackArgWords
+		CreateFileW gives CreateFileStackArgWords
+		// The `A` variant takes the SAME seven arguments as its `W` sibling, so it derives from the same
+		// constant. This is the entry R4.1 omitted and R4.2 restored — the defect this rung makes unrepeatable.
+		CreateFileA gives CreateFileStackArgWords
+		CreateThread gives CreateThreadStackArgWords
+		ReadFile gives ReadFileStackArgWords
+
+		// ⚠ FIVE arguments, so ONE lands on the stack — and this arm is why the enum is worth being exhaustive
+		// over. It sat in the old `return 0` fallthrough, where the answer was WRONG but harmless because the
+		// completion loop is hand-assembled and calls it DIRECTLY, never through the shim. Stated at its true
+		// ABI count rather than at the 0 its current unreachability would excuse, so the answer stays right if
+		// it is ever emitted as an `iatCall`.
+		GetQueuedCompletionStatus gives GetQueuedCompletionStatusStackArgWords
+
+		// --- four arguments or fewer: register-only, nothing on the stack ---
+		ExitProcess gives 0            // 1: uExitCode
+		GetStdHandle gives 0           // 1: nStdHandle
+		AddVectoredExceptionHandler gives 0  // 2: First, Handler
+		VirtualAlloc gives 0           // 4: lpAddress, dwSize, flAllocationType, flProtect
+		QueryPerformanceCounter gives 0      // 1: lpPerformanceCount
+		QueryPerformanceFrequency gives 0    // 1: lpFrequency
+		Sleep gives 0                  // 1: dwMilliseconds
+		GetExitCodeProcess gives 0     // 2: hProcess, lpExitCode
+		WaitForSingleObject gives 0    // 2: hHandle, dwMilliseconds
+		WaitForMultipleObjects gives 0 // 4: nCount, lpHandles, bWaitAll, dwMilliseconds
+		CloseHandle gives 0            // 1: hObject
+		VirtualFree gives 0            // 3: lpAddress, dwSize, dwFreeType
+		SetHandleInformation gives 0   // 3: hObject, dwMask, dwFlags
+		CreateIoCompletionPort gives 0 // 4: FileHandle, ExistingCompletionPort, CompletionKey, NumberOfConcurrentThreads
+		SetFileCompletionNotificationModes gives 0  // 2: FileHandle, Flags
+		CreateEventA gives 0           // 4: lpEventAttributes, bManualReset, bInitialState, lpName
+		SetEvent gives 0               // 1: hEvent
+		InitializeCriticalSection gives 0    // 1: lpCriticalSection
+		EnterCriticalSection gives 0   // 1: lpCriticalSection
+		LeaveCriticalSection gives 0   // 1: lpCriticalSection
+		GetLastError gives 0           // 0
+		GetCurrentProcessId gives 0    // 0
+		CancelIoEx gives 0             // 2: hFile, lpOverlapped
+		GetSystemTimeAsFileTime gives 0      // 1: lpSystemTimeAsFileTime
+		GetFileSizeEx gives 0          // 2: hFile, lpFileSize
+		DeleteFileA gives 0            // 1: lpFileName
+		MoveFileExA gives 0            // 3: lpExistingFileName, lpNewFileName, dwFlags
+		FindFirstFileA gives 0         // 2: lpFileName, lpFindFileData
+		FindClose gives 0              // 1: hFindFile
+		FindNextFileA gives 0          // 2: hFindFile, lpFindFileData
+		CreateDirectoryA gives 0       // 2: lpPathName, lpSecurityAttributes
+		GetCurrentDirectoryA gives 0   // 2: nBufferLength, lpBuffer
+		GetFileAttributesA gives 0     // 1: lpFileName
+	end 'k'
+end 'gtShimStackArgWordsOf'
 
 // Emit an `iatCall`, wrapped in the system-stack shim iff the module carries the GT scheduler (see the header).
 export function emitGtGatedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, slotIndex RelocSlotIndex, usesGt bool)
