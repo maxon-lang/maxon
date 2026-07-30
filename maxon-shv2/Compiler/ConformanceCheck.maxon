@@ -20,6 +20,13 @@
 // ⭐ **DIVERGENCE FROM THE BOOTSTRAP (toward v1): an UNKNOWN interface is E3015.** The C# bootstrap
 // SILENTLY accepts `implements Bogus`; v1 emits E3015, and so does shv2 — a typo'd interface name should
 // not pass. See the rung report.
+//
+// ⭐⭐ **AN ASSOCIATED TYPE IS SUBSTITUTED ONCE, AT COLLECTION, AND EVERY LATER READER SEES ONLY THE RESULT
+// (R5).** `type Box implements Container with Score` binds `Element := Score` before a single requirement is
+// compared, so the requirement a verdict is computed from and the requirement a diagnostic prints ARE THE
+// SAME STRING. `collectInterfaceMethods` is that one site; `signatureMatches` and
+// `formatInterfaceMethodSignature` do no binding of their own. See that function's header for why this is
+// v1's shape and not the bootstrap's two.
 
 // The impl side of a conforming type's methods, read off the MERGED module. `maxonParamTypes` /
 // `maxonReturnType` are the REMAPPED (project-interner) types — `funcSignatures`' param types are
@@ -142,8 +149,8 @@ function buildDeclaredConformanceMap(project Project) returns DeclaredConformanc
 	// on one type is E3006, reported before this runs.
 	for conformance in project.conformances 'eachDecl'
 		var interfaces = InterfaceNameSet.create()
-		for i in 0 upto conformance.interfaceNames.count() 'eachIface'
-			interfaces.insert(try conformance.interfaceNames.get(i) otherwise panic("buildDeclaredConformanceMap: interfaceNames.get OOB at {i}"))
+		for i in 0 upto conformance.interfaces.count() 'eachIface'
+			interfaces.insert((try conformance.interfaces.get(i) otherwise panic("buildDeclaredConformanceMap: interfaces.get OOB at {i}")).interfaceName)
 		end 'eachIface'
 		declared.upsert(conformance.typeName, value: interfaces)
 	end 'eachDecl'
@@ -171,14 +178,50 @@ end 'buildFunctionByNameMap'
 
 // Check one `type X implements I1, I2` declaration against each named interface.
 function checkOneConformance(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl)
-	for i in 0 upto conformance.interfaceNames.count() 'eachIface'
-		let ifaceName = try conformance.interfaceNames.get(i) otherwise panic("checkOneConformance: interfaceNames.get OOB at {i}")
-		match resolveInterface(project, name: ifaceName) 'resolve'
-			notFound then reportPositioned(project, code: ErrorCode.semanticUnknownInterface, message: "type '{String.from(conformance.typeName)}' implements unknown interface '{String.from(ifaceName)}'", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
-			found(iface) then checkInterfaceMethods(project, functionsByName: functionsByName, conformance: conformance, ifaceName: ifaceName, iface: iface)
+	for i in 0 upto conformance.interfaces.count() 'eachIface'
+		let entry = try conformance.interfaces.get(i) otherwise panic("checkOneConformance: interfaces.get OOB at {i}")
+		match resolveInterface(project, name: entry.interfaceName) 'resolve'
+			notFound then reportPositioned(project, code: ErrorCode.semanticUnknownInterface, message: "type '{String.from(conformance.typeName)}' implements unknown interface '{String.from(entry.interfaceName)}'", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
+			found(iface) then checkOneInterfaceConformance(project, functionsByName: functionsByName, conformance: conformance, entry: entry, iface: iface)
 		end 'resolve'
 	end 'eachIface'
 end 'checkOneConformance'
+
+// ⭐ **EVERY ASSOCIATED TYPE THE INTERFACE DECLARES MUST BE BOUND, AND THAT IS ASKED BEFORE ANY SIGNATURE
+// IS COMPARED (R5).** `type Broken implements HasElement` against `interface HasElement uses Element`
+// leaves `Element` denoting nothing, so every requirement mentioning it would be reported as a WRONG
+// SIGNATURE — the consequence of the mistake rather than the mistake, and a message telling the author to
+// change a method that is already right. Both references diagnose it first and by name (bootstrap
+// `2-Parser.cs:3401-3407`, v1 `TypeResolution.maxon:1161-1164`) and the spec pins the sentence.
+//
+// Bindings are POSITIONAL — `withArgs[i]` binds `associatedTypeNames[i]` — so "unbound" is exactly "at an
+// index the argument list does not reach", and the FIRST such name is the one reported. Naming one rather
+// than listing all of them is the references' shape, and it is the right one: a missing binding is written
+// at a single site the author fixes in one edit.
+//
+// ⚠ **A SURPLUS ARGUMENT IS DELIBERATELY NOT DIAGNOSED, AND THE TWO REFERENCES DISAGREE ABOUT IT.** The
+// bootstrap binds `min(names, args)` and ignores the rest (`ResolveWithTypeParams`, `2-Parser.cs:2947-2953`);
+// v1 rejects an arity mismatch in either direction (`TypeResolution.maxon:1152-1168`, as an E3015). shv2
+// takes the bootstrap's, for two reasons and not as a coin flip:
+//
+//   • ONE rule then covers both shapes a conformance can get wrong. An argument list that is too SHORT is a
+//     NAMED missing binding whatever its length, so `Pair with Integer` against `uses First, Second` says
+//     `Second` — where v1 reaches its arity arm and reports a count instead, needing a second wording.
+//   • **A surplus rejection would collide with INHERITED `uses` NAMES, which shv2 does not implement and
+//     must not preemptively refuse.** `interface Sub extends Base` where `Base uses Element` leaves `Sub`
+//     with an empty `associatedTypeNames` here, so `implements Sub with Score` — a shape v1 supports
+//     outright (`findInheritedBindings`) — would be rejected for having "too many" arguments against an
+//     interface that transitively requires exactly that one. Ignoring the surplus leaves that program
+//     behaving exactly as it does today, which is the only honest answer while the binding is not inherited.
+function checkOneInterfaceConformance(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface)
+	if entry.withArgs.count() < iface.associatedTypeNames.count() 'unboundAssociatedType'
+		let unbound = try iface.associatedTypeNames.get(entry.withArgs.count()) otherwise panic("checkOneInterfaceConformance: associatedTypeNames.get OOB at {entry.withArgs.count()} below count {iface.associatedTypeNames.count()}")
+		reportPositioned(project, code: ErrorCode.semanticPartialInterfaceImpl, message: "Type '{String.from(conformance.typeName)}' does not define required associated type '{String.from(unbound)}' from interface '{String.from(entry.interfaceName)}'", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
+		return
+	end 'unboundAssociatedType'
+
+	checkInterfaceMethods(project, functionsByName: functionsByName, conformance: conformance, entry: entry, iface: iface)
+end 'checkOneInterfaceConformance'
 
 // Resolve an interface NAME to its definition — a synthesized builtin (Stringable, Hashable, …) FIRST,
 // then a user-declared one, else `notFound`. Builtins win so a user cannot shadow `Stringable` with a
@@ -199,10 +242,10 @@ end 'resolveInterface'
 // Validate that a conforming type supplies every method the interface requires (its own AND its
 // `extends`-inherited), each with a matching signature. Reports E3016 with the MISSING methods, else with
 // the WRONG-SIGNATURE ones — missing first and mutually exclusive, mirroring the oracle's throw-on-first.
-function checkInterfaceMethods(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, ifaceName ByteArray, iface IrInterface)
+function checkInterfaceMethods(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface)
 	var collected = CollectedInterfaceMethodArray.create()
 	var visited = InterfaceNameSet.create()
-	collectInterfaceMethods(project, iface: iface, ifaceName: ifaceName, out: collected, visited: visited)
+	collectInterfaceMethods(project, iface: iface, ifaceName: entry.interfaceName, associatedTypeNames: iface.associatedTypeNames, boundTypeNames: entry.withArgs, out: collected, visited: visited)
 
 	var missing = StringArray.create()
 	var wrongSignature = StringArray.create()
@@ -214,7 +257,7 @@ function checkInterfaceMethods(project Project, functionsByName FunctionByNameMa
 			continue
 		end 'staticMethod'
 
-		checkOneMethod(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, rootInterfaceName: ifaceName, missing: missing, wrongSignature: wrongSignature)
+		checkOneMethod(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, rootInterfaceName: entry.interfaceName, missing: missing, wrongSignature: wrongSignature)
 	end 'eachMethod'
 
 	if missing.count() > 0 'hasMissing'
@@ -231,26 +274,85 @@ end 'checkInterfaceMethods'
 // it was DECLARED on (so a missing inherited method reports `(from Parent)`). `visited` guards against a
 // cyclic `extends` chain (a parent already seen contributes nothing). Own methods precede inherited ones,
 // matching the oracle's `CollectInterfaceMethods` order.
-function collectInterfaceMethods(project Project, iface IrInterface, ifaceName ByteArray, out CollectedInterfaceMethodArray, visited InterfaceNameSet)
+//
+// ⭐⭐ **THIS IS WHERE ASSOCIATED TYPES ARE SUBSTITUTED, AND IT IS THE ONLY PLACE THEY ARE (R5).** A
+// collected requirement is ALREADY substituted, so the two things that read one — `signatureMatches`, which
+// decides the verdict, and `formatInterfaceMethodSignature`, which writes the sentence — are reading one
+// string rather than each deriving their own. That is v1's shape (`substituteMethodSig` builds
+// `expectedMethods` once, `TypeResolution.maxon:1253+`, and `checkConformanceForType` +
+// `formatMethodSig` both read it) and deliberately NOT the bootstrap's, which substitutes twice off one
+// dict — `ResolveInterfaceTypeName` inside `SignatureMatches` and `FormatResolved` at the message
+// (`2-Parser.cs:3577`, `MlirType.cs`). Under the two-site shape a substitution that reaches the comparison
+// and misses the message yields a CORRECT VERDICT WITH A WRONG SENTENCE, which no positive test can see.
+//
+// The binding pair is the ROOT conformance's, threaded unchanged into every parent: an `extends` parent
+// that re-declares the same `uses` NAME is substituted by it (substitution is by name, which is the only
+// vocabulary the two interfaces share), and a parent declaring a name of its own is left denoting itself —
+// exactly as before this rung. `boundTypeNames` is indexable at every position `associatedTypeNames` has,
+// because `checkOneInterfaceConformance` returned early otherwise.
+function collectInterfaceMethods(project Project, iface IrInterface, ifaceName ByteArray, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray, out CollectedInterfaceMethodArray, visited InterfaceNameSet)
 	if visited.contains(ifaceName) 'alreadySeen'
 		return
 	end 'alreadySeen'
 	visited.insert(ifaceName)
 
 	for i in 0 upto iface.methods.count() 'eachMethod'
-		out.push(CollectedInterfaceMethod.create(try iface.methods.get(i) otherwise panic("collectInterfaceMethods: methods.get OOB at {i}"), sourceInterfaceName: ifaceName))
+		let declared = try iface.methods.get(i) otherwise panic("collectInterfaceMethods: methods.get OOB at {i}")
+		out.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(declared, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames), sourceInterfaceName: ifaceName))
 	end 'eachMethod'
 
 	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'
 		let parentName = try iface.extendsInterfaces.get(j) otherwise panic("collectInterfaceMethods: extendsInterfaces.get OOB at {j}")
 		match resolveInterface(project, name: parentName) 'parent'
-			found(parentIface) then collectInterfaceMethods(project, iface: parentIface, ifaceName: parentName, out: out, visited: visited)
+			found(parentIface) then collectInterfaceMethods(project, iface: parentIface, ifaceName: parentName, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames, out: out, visited: visited)
 			// A parent named by `extends` that does not resolve is not diagnosed here (slice 1 does not
 			// report a bad `extends` target); its methods simply cannot be projected.
 			notFound then break 'parent'
 		end 'parent'
 	end 'eachParent'
 end 'collectInterfaceMethods'
+
+// One requirement with every associated type replaced by what the conformance bound it to (R5) — the
+// substitution the header above says happens exactly once. An interface that declares no associated type
+// (every conformance in the corpus outside `specs-shv2/associated-types.md`) hands its own signature
+// straight back, so the common path allocates nothing at all.
+function substituteAssociatedTypes(method InterfaceMethodSig, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns InterfaceMethodSig
+	if associatedTypeNames.count() == 0 'noAssociatedTypes'
+		return method
+	end 'noAssociatedTypes'
+
+	var paramTypeNames = ByteArrayArray.create()
+	for i in 0 upto method.paramTypeNames.count() 'eachParam'
+		paramTypeNames.push(boundTypeName(try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i}"), associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames))
+	end 'eachParam'
+
+	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, returnTypeName: boundTypeName(method.returnTypeName, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames), isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames))
+end 'substituteAssociatedTypes'
+
+// What ONE written type name in a requirement denotes under this conformance's bindings: the argument bound
+// at the associated type's position, or the name itself when it names no associated type. A linear scan and
+// not a map — an interface declares a handful of `uses` names at most, so the scan is cheaper than building
+// a map would be, and it needs no allocation on a path the whole corpus walks.
+function boundTypeName(name ByteArray, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns ByteArray
+	for i in 0 upto associatedTypeNames.count() 'eachAssociatedType'
+		if (try associatedTypeNames.get(i) otherwise panic("boundTypeName: associatedTypeNames.get OOB at {i}")).equals(name) 'isAssociatedType'
+			return try boundTypeNames.get(i) otherwise panic("boundTypeName: boundTypeNames.get OOB at {i} below associated-type count {associatedTypeNames.count()} — `checkOneInterfaceConformance` reports a short argument list and returns before any requirement is collected")
+		end 'isAssociatedType'
+	end 'eachAssociatedType'
+	return name
+end 'boundTypeName'
+
+// The `throws E` clause under the same bindings. It substitutes for the reason every other position does —
+// `function next() throws Element` is as much an associated-type USE as a parameter is, and the throws
+// relation is compared by NAME (`requireSameErrorType`), so an unsubstituted clause would reject a
+// conforming impl. v1 substitutes it too, and says why in one line (`substituteThrowsName`,
+// `TypeResolution.maxon:1249-1252`).
+function substituteThrowsClause(clause ThrowsClause, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns ThrowsClause
+	match clause 'declared'
+		none then return ThrowsClause.none
+		throwing(name) then return ThrowsClause.throwing(String.from(boundTypeName(name.toByteArray(), associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames)))
+	end 'declared'
+end 'substituteThrowsClause'
 
 // Check ONE interface method against the conforming type: absent -> `missing`, present but mismatched ->
 // `wrongSignature`. A missing method's expected signature is tagged `(from Parent)` when it was inherited.
@@ -263,7 +365,7 @@ function checkOneMethod(project Project, functionsByName FunctionByNameMap, conf
 		// function present in the module without a signature is a merge-invariant violation, not a miss.
 		let implSig = try project.funcSignatures.get(qualifiedName) otherwise panic("checkOneMethod: '{String.from(qualifiedName)}' is in the module but has no funcSignatures entry")
 		if not signatureMatches(project, method: method, typeName: conformance.typeName, implFunc: implFunc, implSig: implSig) 'mismatch'
-			wrongSignature.push("{formatActualSignature(project, methodName: method.name, implFunc: implFunc, implSig: implSig)} (expected {formatInterfaceMethodSignature(method)})")
+			wrongSignature.push("{formatActualSignature(project, methodName: method.name, implFunc: implFunc, implSig: implSig, conformingType: conformance.typeName)} (expected {formatInterfaceMethodSignature(method)})")
 		end 'mismatch' else 'signatureOk'
 			// The THROWS relation is checked only once the structural signature agrees, mirroring the oracle's
 			// `else if (method.ThrowsTypeName != null)` branch: on a shape mismatch the throws question is noise.
@@ -373,6 +475,15 @@ end 'throwsConformanceSubject'
 // position 0, dropped on both sides; a `Self` in the interface substitutes the conforming type. Each side's
 // type is run through `canonicalTypeName` before comparing, so a ranged alias matches by its underlying
 // primitive (shv2's actual type identity) rather than by its source name — the message still prints the name.
+//
+// ⚠ **`method` IS ALREADY ASSOCIATED-TYPE-SUBSTITUTED and this function must not do it again** — see
+// `collectInterfaceMethods`. What it still substitutes is `Self`, and that ASYMMETRY WITH THE MESSAGE IS
+// DELIBERATE AND PINNED: a `Self` requirement compares against the conforming type but PRINTS as `Self`
+// (`specs-shv2/comparable.md` pins `- compare(other Self) returns Ordering` and
+// `(expected compare(other Self) returns Ordering)`), which is the bootstrap's split too — its comparison
+// maps the interface name through `ResolveInterfaceTypeName` while its message formatter is handed only the
+// associated-type dict. `Self` reads better in a diagnostic than the reader's own type name repeated back;
+// an associated type does not, because its name is meaningless outside the interface that declared it.
 function signatureMatches(project Project, method InterfaceMethodSig, typeName ByteArray, implFunc IrFunction, implSig FuncSignature) returns bool
 	let selfOffset = 1 if implSig.takesReceiver() else 0
 	if method.paramNames.count() != implFunc.maxonParamTypes.count() - selfOffset 'arityDiffers'
@@ -381,15 +492,41 @@ function signatureMatches(project Project, method InterfaceMethodSig, typeName B
 
 	for i in 0 upto method.paramNames.count() 'eachParam'
 		let expected = substituteSelf(try method.paramTypeNames.get(i) otherwise panic("signatureMatches: paramTypeNames.get OOB at {i}"), conformingType: typeName)
-		let actual = maxonTypeName(try implFunc.maxonParamTypes.get(i + selfOffset) otherwise panic("signatureMatches: maxonParamTypes.get OOB at {i + selfOffset}"), typeNames: project.typeNames).toByteArray()
+		let actual = renderImplTypeName(project, t: try implFunc.maxonParamTypes.get(i + selfOffset) otherwise panic("signatureMatches: maxonParamTypes.get OOB at {i + selfOffset}"), conformingType: typeName)
 		if not canonicalTypeName(project, name: expected).equals(canonicalTypeName(project, name: actual)) 'paramDiffers'
 			return false
 		end 'paramDiffers'
 	end 'eachParam'
 
 	let expectedReturn = substituteSelf(method.returnTypeName, conformingType: typeName)
-	return canonicalTypeName(project, name: expectedReturn).equals(canonicalTypeName(project, name: renderReturnType(project, returnType: implFunc.maxonReturnType)))
+	return canonicalTypeName(project, name: expectedReturn).equals(canonicalTypeName(project, name: renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: typeName)))
 end 'signatureMatches'
+
+// ⭐ **RENDER ONE OF THE IMPL METHOD'S TYPES, SPELLING A TYPE PARAMETER BY THE NAME ITS OWN `uses` CLAUSE
+// GAVE IT (R5).** The twin of `Parser.renderDeclaredTypeName`, which is what rendered the conformance's
+// `with` ARGUMENT — so `type ArrayIterator uses Element implements BidirectionalIterator with Element`
+// compares `Element` against `Element` and conforms.
+//
+// ⚠ **`maxonTypeName` CANNOT DO THIS AND MUST NOT BE ASKED TO.** A `typeParameter`'s id is a POSITION in
+// the declaring type's parameter list, not an interner id, so `maxonTypeName` falls through to the bare tag
+// word: EVERY type parameter rendered as the one literal string `type parameter`. The interface side has
+// never had that hole (`Parser.renderInterfaceTypeName` spells the name), so the two sides could never
+// agree and a parameter-typed method was a wrong REJECTION whatever it returned — of the exact shape
+// `stdlib/Array.maxon:490`, `List.maxon:158`, `Map.maxon:343` and `Set.maxon:356` are written in, and which
+// the bootstrap accepts (MEASURED, both halves: `E3016 … held() returns type parameter (expected held()
+// returns T)` from shv2, exit 42 from the bootstrap on the same program). The diagnostic was the second
+// defect: it named a type that does not match itself, and named the SAME type for `T` and for `U`, so it
+// could not tell an author which parameter was wrong.
+//
+// The registry lookup happens only for a parameter-typed position, i.e. never in a non-generic conformance,
+// which is the whole corpus outside these specs.
+function renderImplTypeName(project Project, t MaxonType, conformingType ByteArray) returns ByteArray
+	if maxonTypeTag(t) == ValueTypeTag.typeParameter 'typeParameterType'
+		let layout = try project.structTypes.get(conformingType) otherwise panic("renderImplTypeName: conforming type '{String.from(conformingType)}' has a method typed by one of its own type parameters but is in no struct registry — only a declared `type` records a ConformanceDecl")
+		return try layout.typeParamNames.get(typeNameIdOf(t)) otherwise panic("renderImplTypeName: type-parameter position {typeNameIdOf(t)} is outside '{String.from(conformingType)}'s own `uses` list of {layout.typeParamNames.count()}, which is the list its methods were parsed against")
+	end 'typeParameterType'
+	return maxonTypeName(t, typeNames: project.typeNames).toByteArray()
+end 'renderImplTypeName'
 
 // ⭐ **COLLAPSE A RENDERED TYPE-NAME TO THE IDENTITY shv2'S TYPE SYSTEM ACTUALLY COMPARES BY.** A ranged
 // typealias resolves to its UNDERLYING primitive — `resolveNamedType` returns `alias.underlying` and DROPS
@@ -416,19 +553,21 @@ end 'canonicalTypeName'
 // come from `funcSignatures` (interner-free); param TYPES from the module's REMAPPED `maxonParamTypes`.
 // Both are rendered to the same source-string columns the interface stores, then handed to the ONE
 // signature assembler — so an actual and an expected signature cannot drift in format.
-function formatActualSignature(project Project, methodName ByteArray, implFunc IrFunction, implSig FuncSignature) returns String
+function formatActualSignature(project Project, methodName ByteArray, implFunc IrFunction, implSig FuncSignature, conformingType ByteArray) returns String
 	let selfOffset = 1 if implSig.takesReceiver() else 0
 	var paramNames = ByteArrayArray.create()
 	var paramTypes = ByteArrayArray.create()
 	for i in selfOffset upto implFunc.maxonParamTypes.count() 'eachParam'
 		paramNames.push(try implSig.paramNames.get(i) otherwise panic("formatActualSignature: paramNames.get OOB at {i}"))
-		paramTypes.push(maxonTypeName(try implFunc.maxonParamTypes.get(i) otherwise panic("formatActualSignature: maxonParamTypes.get OOB at {i}"), typeNames: project.typeNames).toByteArray())
+		paramTypes.push(renderImplTypeName(project, t: try implFunc.maxonParamTypes.get(i) otherwise panic("formatActualSignature: maxonParamTypes.get OOB at {i}"), conformingType: conformingType))
 	end 'eachParam'
-	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: renderReturnType(project, returnType: implFunc.maxonReturnType))
+	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType))
 end 'formatActualSignature'
 
 // An interface method's signature as a source string — `process(value Integer) returns Integer` — from
-// its stored (already source-rendered) columns, through the same assembler the impl side uses.
+// its stored (already source-rendered, already associated-type-substituted) columns, through the same
+// assembler the impl side uses. It performs NO substitution of its own, which is the whole point: the
+// sentence and the verdict read one string (`collectInterfaceMethods`).
 function formatInterfaceMethodSignature(method InterfaceMethodSig) returns String
 	return assembleMethodSignature(method.name, paramNames: method.paramNames, paramTypes: method.paramTypeNames, returnType: method.returnTypeName)
 end 'formatInterfaceMethodSignature'
@@ -452,10 +591,10 @@ end 'assembleMethodSignature'
 // Render an impl method's RETURN as a source string — `void` for a void return, else the type name off the
 // project interner. Returns a ByteArray so it feeds BOTH the string comparison in `signatureMatches` and
 // the message assembly in `formatActualSignature` without a re-conversion at either.
-function renderReturnType(project Project, returnType MaxonReturnType) returns ByteArray
+function renderReturnType(project Project, returnType MaxonReturnType, conformingType ByteArray) returns ByteArray
 	return match returnType 'r'
 		void gives InterfaceVoidTypeName
-		value(inner) gives maxonTypeName(inner, typeNames: project.typeNames).toByteArray()
+		value(inner) gives renderImplTypeName(project, t: inner, conformingType: conformingType)
 	end 'r'
 end 'renderReturnType'
 

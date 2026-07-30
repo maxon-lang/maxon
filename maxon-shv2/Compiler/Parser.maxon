@@ -1207,6 +1207,11 @@ export typealias MethodFeedScanArray = Array with MethodFeedScan
 // rule that `__` is reserved is what binds them, not a shared symbol.
 let ReservedNamePrefix = b"__"
 
+// How many arguments an unparenthesized `implements I with …` clause takes when THIS FILE cannot see
+// `I`'s declaration (R5) — see `interfaceUsesArity`, which is where the choice is argued. Named because
+// it is a deliberate default copied from both reference compilers, not an incidental literal.
+let UnresolvableInterfaceUsesArity = 1 as ElementCount
+
 // The receiver a call carries, if any. A union rather than a `ValueId` plus a bool, and rather
 // than a reserved id: `ValueId` has no empty value and a sentinel would be READ as a real argument
 // by everything downstream (`retVoid` exists in the Maxon dialect for precisely this reason).
@@ -8822,78 +8827,152 @@ export type Parser
 				return InterfaceSelfTypeName
 			end 'selfRef'
 		end 'structRefType'
-		// An ASSOCIATED TYPE renders by the NAME the `uses` clause gave it (D6). It reaches here as a
-		// `typeParameter(pos)` — a POSITION in `enclosingTypeParams`, which for an interface body IS the
-		// associated-type list — and `maxonTypeName` would spell it with the bare tag word, so two different
-		// associated types would render identically and a conformance mismatch would print a type that does
-		// not match itself. Restated: this arm is what keeps the rendered string exactly what it was before
-		// the `uses` names became a parameter scope.
-		if tag == ValueTypeTag.typeParameter 'associatedType'
-			return try self.enclosingTypeParams.get(typeNameIdOf(t)) otherwise panic("renderInterfaceTypeName: type-parameter position {typeNameIdOf(t)} is outside interface '{String.from(interfaceName)}'s own `uses` list, which is the list it was resolved against")
-		end 'associatedType'
-		return maxonTypeName(t, typeNames: self.artifact.typeNames).toByteArray()
+		return self.renderDeclaredTypeName(t)
 	end 'renderInterfaceTypeName'
 
+	// Render a parsed type to the SOURCE string every rendered-type consumer compares and prints, spelling a
+	// TYPE PARAMETER by the name its declaration gave it. The half of `renderInterfaceTypeName` above that is
+	// not about `Self`, split out because the OTHER writer of a rendered type string — an `implements … with
+	// <Arg>` conformance argument (R5) — needs exactly this and must NOT have the `Self` arm: a written `Self`
+	// in an argument position has already resolved to the enclosing type's own `structRef`
+	// (`enclosingSelfType`), and the conforming type's NAME is precisely what the binding must carry.
+	//
+	// An ASSOCIATED TYPE renders by the NAME the `uses` clause gave it (D6). It reaches here as a
+	// `typeParameter(pos)` — a POSITION in `enclosingTypeParams`, which for an interface body IS the
+	// associated-type list and for a `type` body is its own `uses` list — and `maxonTypeName` would spell it
+	// with the bare tag word, so two different parameters would render identically and a conformance mismatch
+	// would print a type that does not match itself.
+	function renderDeclaredTypeName(t MaxonType) returns ByteArray
+		if maxonTypeTag(t) == ValueTypeTag.typeParameter 'typeParameterType'
+			return try self.enclosingTypeParams.get(typeNameIdOf(t)) otherwise panic("renderDeclaredTypeName: type-parameter position {typeNameIdOf(t)} is outside the enclosing declaration's own `uses` list, which is the list it was resolved against")
+		end 'typeParameterType'
+		return maxonTypeName(t, typeNames: self.artifact.typeNames).toByteArray()
+	end 'renderDeclaredTypeName'
+
 	// The `implements I1, I2 [with …]` conformance clause of a `type` declaration (P1.7a slice 1). Records
-	// a ConformanceDecl anchored on the type NAME token, or does nothing when there is no clause. A `with`
-	// binds an interface's associated types (slice 2); it is consumed and dropped so a conforming type that
-	// names one still parses.
+	// a ConformanceDecl anchored on the type NAME token, or does nothing when there is no clause. Each
+	// interface carries its own `with` bindings (R5), which `checkConformance` substitutes into that
+	// interface's requirements before it compares them.
 	function parseTypeImplementsClause(nameTok Token) throws ParseError
 		if not self.at(TokenKind.implements) 'noImplements'
 			return
 		end 'noImplements'
 		try self.consume(TokenKind.implements)
 
-		var interfaceNames = ByteArrayArray.create()
-		interfaceNames.push((try self.consume(TokenKind.identifier)).value)
-		try self.skipOptionalWithClause()
+		var interfaces = InterfaceConformanceArray.create()
+		interfaces.push(try self.parseOneConformance())
 		while self.at(TokenKind.comma) 'moreInterfaces'
 			try self.consume(TokenKind.comma)
-			interfaceNames.push((try self.consume(TokenKind.identifier)).value)
-			try self.skipOptionalWithClause()
+			interfaces.push(try self.parseOneConformance())
 		end 'moreInterfaces'
 
-		self.artifact.recordConformance(ConformanceDecl.create(nameTok.value, interfaceNames: interfaceNames, nameLine: nameTok.line, nameColumn: nameTok.column, filePath: self.filePath))
+		self.artifact.recordConformance(ConformanceDecl.create(nameTok.value, interfaces: interfaces, nameLine: nameTok.line, nameColumn: nameTok.column, filePath: self.filePath))
 	end 'parseTypeImplementsClause'
 
-	// A `with <TypeArg>` / `with (<TypeArgs>)` associated-type binding after an interface name in an
-	// `implements` clause (slice 2). The BINDINGS themselves are dropped — slice 1 records only the
-	// interface NAMES, and no enabled case binds one — but every argument is READ as a type reference
-	// rather than skipped, in BOTH spellings.
+	// One `I [with …]` entry of an `implements` list (R5) — the interface name and the arguments bound to
+	// its `uses` names, which are only meaningful as a pair (`InterfaceConformance`).
+	function parseOneConformance() returns InterfaceConformance throws ParseError
+		let ifaceTok = try self.consume(TokenKind.identifier)
+		if not self.at(TokenKind.with) 'bindsNothing'
+			return InterfaceConformance.withoutBindings(ifaceTok.value)
+		end 'bindsNothing'
+
+		try self.consume(TokenKind.with)
+		return InterfaceConformance.create(ifaceTok.value, withArgs: try self.parseConformanceWithArgs(ifaceTok.value))
+	end 'parseOneConformance'
+
+	// ⭐ **THE `with <TypeArg>` / `with (<TypeArgs>)` ASSOCIATED-TYPE BINDING, IN BOTH SPELLINGS (R5).**
+	// Every argument is READ as a type reference and RENDERED to the source string `checkConformance`
+	// substitutes into a requirement's signature — the conformance's whole contribution.
+	//
+	// ⚠ **HOW MANY ARGUMENTS THE UNPARENTHESIZED FORM TAKES IS THE INTERFACE'S `uses` ARITY, and reading
+	// exactly one was a wrong answer.** `implements Pair with Integer, Float` against `interface Pair uses
+	// First, Second` left `, Float` to `parseTypeImplementsClause`'s comma loop, which pushed `Float` as a
+	// second INTERFACE and produced a spurious `E3015 … implements unknown interface 'Float'` on a program
+	// both reference compilers accept. Both fix it the same way and with the same loop shape — bootstrap
+	// `ParseWithTypeArgs(GetAssociatedTypeCount(iface))` (`2-Parser.cs:2912-2940`), v1's `moreSingle` over
+	// `lookupInterfaceUsesParamCount` (`Parser.maxon:2007-2018`) — so the arity is consulted here rather
+	// than becoming a parser fix of its own.
+	//
+	// The arity is asked ONLY after a first argument is followed by a comma, so no program that parses
+	// today pays the lookup at all.
 	//
 	// ⚠ **THE PARENTHESIZED ARM USED TO SKIP BALANCED TOKENS, WHICH MADE IT A TYPE POSITION THE E3062
 	// USE CHECK COULD NOT SEE** (P1.9 review). `parseTypeReference` is where a written type name is
 	// recorded as USED (`recordTypeNameUse`), so a file whose only mention of an alias was
 	// `implements Container with (Score)` had that alias reported UNUSED — a legal program refused, and
 	// refused in only ONE of the two spellings, since the single-argument arm already went through the
-	// reference parser. Measured before this fix: `error E3062 … unused typealias: 'Score'` on a program
+	// reference parser. Measured before that fix: `error E3062 … unused typealias: 'Score'` on a program
 	// naming it, with the same program clean the moment the parentheses came off. The two arms are one
-	// rule now, so a use cannot be visible in one spelling of it and invisible in the other.
+	// rule, so a use cannot be visible in one spelling of it and invisible in the other.
 	//
 	// It reads a LEAF reference per argument rather than reaching for `parseGenericArgNodes`: that
-	// reader also VALIDATES what it reads (`checkGenericInstance` / `checkGenericArgType`), and this
-	// clause binds nothing, so borrowing it would add diagnostics to a position that has none.
-	function skipOptionalWithClause() throws ParseError
-		if not self.at(TokenKind.with) 'noWith'
-			return
-		end 'noWith'
-		try self.consume(TokenKind.with)
+	// reader also VALIDATES what it reads (`checkGenericInstance` / `checkGenericArgType`), and a
+	// conformance argument is checked whole-program by `checkConformance` instead, which is the only
+	// place the interface it binds against is reachable.
+	function parseConformanceWithArgs(interfaceName ByteArray) returns ByteArrayArray throws ParseError
+		var args = ByteArrayArray.create()
+		if self.at(TokenKind.leftParen) 'parenthesized'
+			try self.consume(TokenKind.leftParen)
+			while true 'eachArg'
+				args.push(try self.readConformanceWithArg())
+				if not self.at(TokenKind.comma) 'lastArg'
+					break
+				end 'lastArg'
+				try self.consume(TokenKind.comma)
+			end 'eachArg'
+			try self.consume(TokenKind.rightParen)
+			return args
+		end 'parenthesized'
 
-		if not self.at(TokenKind.leftParen) 'singleArg'
-			_ = try self.parseTypeReference()
-			return
+		args.push(try self.readConformanceWithArg())
+		if not self.at(TokenKind.comma) 'singleArg'
+			return args
 		end 'singleArg'
 
-		try self.consume(TokenKind.leftParen)
-		while true 'eachArg'
-			_ = try self.parseTypeReference()
-			if not self.at(TokenKind.comma) 'lastArg'
-				break
-			end 'lastArg'
+		let arity = self.interfaceUsesArity(interfaceName)
+		while args.count() < arity and self.at(TokenKind.comma) 'moreArgs'
 			try self.consume(TokenKind.comma)
-		end 'eachArg'
-		try self.consume(TokenKind.rightParen)
-	end 'skipOptionalWithClause'
+			args.push(try self.readConformanceWithArg())
+		end 'moreArgs'
+		return args
+	end 'parseConformanceWithArgs'
+
+	// One conformance argument: read as a type reference (so it records the alias USE) and rendered to the
+	// source string the substitution carries. Spelled once because both arms above read an argument the same
+	// way, and a second spelling would be free to record the use in only one of them — which is exactly the
+	// bug the parenthesized arm already had.
+	function readConformanceWithArg() returns ByteArray throws ParseError
+		return self.renderDeclaredTypeName(try self.parseTypeReference())
+	end 'readConformanceWithArg'
+
+	// ⭐ **HOW MANY ARGUMENTS AN UNPARENTHESIZED `with` CLAUSE AFTER `interfaceName` TAKES (R5)** — the
+	// count of that interface's `uses` names. A synthesized protocol first (matching
+	// `ConformanceCheck.resolveInterface` and `requireInterfaceForParse`; every one of them declares no
+	// associated type), then an interface declared in THIS file.
+	//
+	// ⚠ **AN INTERFACE THIS FILE CANNOT SEE DEFAULTS TO ONE, AND THAT DEFAULT IS COPIED DELIBERATELY** —
+	// bootstrap `GetAssociatedTypeCount` (`2-Parser.cs:2939`) and v1 `lookupInterfaceUsesParamCount`
+	// (`Parser.maxon:1959`) both do it, rather than refusing an interface they cannot resolve yet. A parse
+	// is a pure function of one file's tokens (see this file's header), so shv2's unresolvable set is the
+	// larger one — a cross-file interface is in it — and the consequence is bounded and loud: a cross-file
+	// interface with two `uses` names must write `with (A, B)`, since the bare `with A, B` reads `B` as a
+	// sibling interface and reports E3015 against it. Refusing instead would reject `implements <anything
+	// cross-file> with X`, which is the overwhelmingly common shape.
+	function interfaceUsesArity(interfaceName ByteArray) returns ElementCount
+		match builtinInterface(interfaceName) 'builtin'
+			found(iface) then return iface.associatedTypeNames.count()
+			notFound then break 'builtin'
+		end 'builtin'
+
+		for iface in self.artifact.interfaces 'declaredInThisFile'
+			if iface.name.equals(interfaceName) 'hit'
+				return iface.associatedTypeNames.count()
+			end 'hit'
+		end 'declaredInThisFile'
+
+		return UnresolvableInterfaceUsesArity
+	end 'interfaceUsesArity'
 
 	// Parse an `enum`/`union` declaration (P1.1b wave B):
 	//

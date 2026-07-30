@@ -227,7 +227,9 @@ export typealias InterfaceMethodSigArray = Array with InterfaceMethodSig
 // A parsed (or synthesized) `interface`. `extendsInterfaces` are parent interface names
 // whose methods a conforming type must ALSO supply (`interface D extends B` — the check
 // projects B's methods into D at decl order); `associatedTypeNames` are the `uses`
-// parameters (kept for slice 2 — the enabled slice-1 corpus declares none).
+// parameters, POSITIONALLY bound by a conformance's `with` arguments (R5) — the list
+// `InterfaceConformance.withArgs` lines up against, and the list an unbound name is
+// reported from.
 export type IrInterface
 	export let name as ByteArray
 	export let methods as InterfaceMethodSigArray
@@ -245,18 +247,50 @@ export typealias IrInterfaceMap = Map with (ByteArray, IrInterface)
 // whole-program `IrInterfaceMap` by `mergeArtifact`.
 export typealias IrInterfaceArray = Array with IrInterface
 
+// The SHARED EMPTY `with` argument list every conformance that writes no `with` clause holds (R5) —
+// which is every conformance in the corpus but the associated-type specs. `InterfaceConformance` binds
+// it with `let` and the substitution only READS it, so one allocation serves them all, the discipline
+// `Project.sharedEmptyWhereConstraints` states in full. It is the reason `withoutBindings` exists as a
+// second constructor rather than each caller spelling `ByteArrayArray.create()`: a caller that allocated
+// its own empty list would pay one heap object per declared conformance and nothing would notice.
+let sharedEmptyWithArgs = ByteArrayArray.create()
+
+// ⭐ **ONE `I [with A, B]` ENTRY OF AN `implements` CLAUSE (R5).** The interface NAME and this
+// conformance's POSITIONAL bindings for that interface's `uses` names, kept together because they mean
+// nothing apart: `withArgs[i]` binds `iface.associatedTypeNames[i]`. Two parallel columns on the decl
+// would be the same data with an alignment hazard a record makes unrepresentable.
+//
+// The arguments are RENDERED SOURCE STRINGS for `InterfaceMethodSig`'s reason (see this file's header):
+// what they substitute INTO is a requirement's rendered type string, and the E3016 message prints the
+// result — `implements Typed with Float` must print `expected make() returns Float`.
+export type InterfaceConformance
+	export let interfaceName as ByteArray
+	export let withArgs as ByteArrayArray
+
+	export static function create(interfaceName ByteArray, withArgs ByteArrayArray) returns InterfaceConformance
+		return Self{interfaceName: interfaceName, withArgs: withArgs}
+	end 'create'
+
+	// A conformance that wrote no `with` clause at all — it binds nothing, and shares the one empty list.
+	export static function withoutBindings(interfaceName ByteArray) returns InterfaceConformance
+		return Self{interfaceName: interfaceName, withArgs: sharedEmptyWithArgs}
+	end 'withoutBindings'
+end 'InterfaceConformance'
+
+export typealias InterfaceConformanceArray = Array with InterfaceConformance
+
 // A `type X implements I1, I2` conformance declaration. Carries the type NAME token
 // position (line/column/file) so the E3015/E3016 diagnostic lands ON the type name —
 // the anchor both reference compilers use (`nameToken` / `conf.line, conf.column`).
 export type ConformanceDecl
 	export let typeName as ByteArray
-	export let interfaceNames as ByteArrayArray
+	export let interfaces as InterfaceConformanceArray
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
 	export let filePath as FilePath
 
-	export static function create(typeName ByteArray, interfaceNames ByteArrayArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns ConformanceDecl
-		return Self{typeName: typeName, interfaceNames: interfaceNames, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
+	export static function create(typeName ByteArray, interfaces InterfaceConformanceArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns ConformanceDecl
+		return Self{typeName: typeName, interfaces: interfaces, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
 	end 'create'
 end 'ConformanceDecl'
 
