@@ -291,8 +291,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: struct-field-default -->
-<!-- FUNCTION OVERLOADING — not field defaults, which P1.1a wave 2 landed. This case declares `Counter.create` TWICE (arity 0 and arity 2), and the whole-program duplicate check reports `E3006: duplicate definition of function 'Counter.create'` before anything reaches a default. Overloading appears nowhere on the ladder; `field-initialization.md`'s `all-defaults` is the enabled default case. -->
+<!-- test: struct-field-default -->
 ```maxon
 type Counter
 	export var value = 0

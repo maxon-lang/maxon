@@ -1,0 +1,37 @@
+// Test: basic-type-disambiguation
+typealias Integer = int(i64.min to i64.max)
+
+function process(value Integer) returns Integer
+	return value * 2
+end 'process'
+
+function process(value String) returns Integer
+	return value.count()
+end 'process'
+
+function main() returns ExitCode
+	return process(21)
+end 'main'
+---
+ExitCode: 42
+---
+func @process {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 21
+    x64.callDirect process
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

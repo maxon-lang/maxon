@@ -24,6 +24,12 @@ let MainWrongReturnMessage = "Function 'main' must return ExitCode"
 // parameter's) — the checks that need the callee's signature, which only the whole-program
 // `funcSignatures` registry carries.
 export function semanticCheck(project Project, module MaxonModule)
+	// ⭐ **OVERLOAD RESOLUTION RUNS FIRST, BEFORE ANYTHING READS A CALLEE** (D7). Until it has run, a call to
+	// an overloaded name carries the BARE name the source wrote, which is the registration name of the FIRST
+	// declaration only — so `checkCalls` would validate every one of them against that member's signature and
+	// `lowerMaxonToStd` would emit a call to it. It rewrites the ops in place, so every pass below (and the
+	// whole backend) sees the member the call actually meant.
+	resolveOverloadedCalls(project, module: module)
 	checkMainFunction(project)
 	checkMainCannotThrow(project, module: module)
 	// The whole-program throws map (name -> its `throws` clause, throwing functions only) — built once
@@ -54,6 +60,460 @@ export function semanticCheck(project Project, module MaxonModule)
 	// E3100 (P1.5-B2a): a green thread awaited more than once on a single flow path.
 	checkLinearAwait(project, module: module)
 end 'semanticCheck'
+
+// ⭐⭐ **PICK THE OVERLOAD EACH CALL MEANT, AND REWRITE THE CALL TO NAME IT** (D7).
+//
+// **WHY IT IS HERE AND NOT IN THE PARSER, WHICH IS WHERE BOTH REFERENCE COMPILERS DO IT.** The bootstrap
+// selects while parsing the call, before its arguments are even parsed, from a token PEEK that guesses each
+// argument's type (`SelectOverloadByNamedArgs` / `PeekArgTypes`); v1 selects during type resolution off a
+// `project.overloadedNames` bucket its parser filled. Neither is available here: shv2's parser writes only
+// into a per-file artifact and learns about other files exclusively through the pre-parse DECLARATION SWEEP,
+// which reads tokens and deliberately records NO parameter types — so at parse time there is no candidate
+// list to score against. This pass is the first point that holds both halves: RESOLVED parameter types for
+// every candidate (`resolveTypes` ran) and a real type for every argument (the parser's per-value columns).
+//
+// ⭐ That is not merely a forced move, it is a BETTER-INFORMED one. The `method-call-argument-*` family exists
+// because the bootstrap's peek has to guess the type of `over(a.count())` from tokens, and its own doc admits
+// a wrong guess "can rule the only correct overload incompatible"; here `a.count()`'s type is simply the tag
+// the parser minted for that value. The nine cases the oracle needs a postfix-chain walker for are, in shv2,
+// one array read.
+//
+// The SELECTION ORDER follows the bootstrap, which is canonical for `/specs`:
+//   1. **candidates** — the set's members that survived to the registry at all (see `overloadCandidates`).
+//   2. **labels + arity, together, through `slotCallArgs`** — the ONE label→position mapping in the compiler.
+//      A candidate the call cannot be slotted against is out: that is the bootstrap's step 1 (every named
+//      argument must name a parameter) and step 2 (the arity must match) asked as one question, by the
+//      function that already owns the rule. Asking them separately would be a second copy of it.
+//   3. **argument-type SCORE** — `ExactArgScore` for a tag-for-tag match, `WideningArgScore` for a legal
+//      coercion, and INCOMPATIBLE (dropped) for anything `checkDeclaredType` refuses. Summed over the
+//      arguments; the unique highest total wins. Same shape and same numbers as the oracle.
+//   4. **a tie is E3007**, anchored at the call, listing the tied candidates in declaration order.
+//   5. **no compatible candidate leaves the op ALONE** — the bare name is the first member's registration
+//      name, so `checkCalls` then reports its own per-argument mismatch, which names the offending argument.
+//      "Ambiguous" would be the wrong sentence for a call that matches nothing.
+//
+// The two heuristics the bootstrap has after scoring — a first-argument token-shape test and an
+// enclosing-type tie-break — are deliberately absent. The first exists to recover the type information its
+// peek could not get (a `[` means a collection, a `'c'` means a Character); shv2 has the real type and needs
+// no proxy for it. The second breaks ties between same-named methods of DIFFERENT types, which in shv2 are
+// not one overload set at all — a method is registered `Type.method`, so `Box.contains` and `Bag.contains`
+// never contend.
+function resolveOverloadedCalls(project Project, module MaxonModule)
+	// The overwhelming program declares no overload, and then there is nothing here to do and nothing to
+	// pay: no walk, and no per-op `MaxonOpCallee` union (see `maxonOpCallee`, which allocates one per ask).
+	if project.overloadSets.count() == 0 'noOverloadInThisProgram'
+		return
+	end 'noOverloadInThisProgram'
+
+	for func in module.functions 'eachFunc'
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCalls: opIdx {opIdx} from liveOpIndices is not in module.ops")
+			match maxonOpCallee(op) 'callee'
+				direct(callee) then resolveOneOverloadedCall(project, module: module, func: func, opIndex: opIdx, op: op, callee: callee)
+				functionValue(name) then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: name)
+				none then break 'callee'
+			end 'callee'
+		end 'eachOp'
+	end 'eachFunc'
+end 'resolveOverloadedCalls'
+
+// One call. A callee that names no overload set is left exactly as the parser wrote it, which is every call
+// in the program but the handful this rung is about.
+function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, callee ByteArray)
+	let members = try project.overloadSets.get(callee) otherwise return
+	let candidates = overloadCandidates(project, members: members)
+	match selectOverload(project, func: func, op: op, candidates: candidates) 'pick'
+		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, callee: callee, member: member)
+		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied)
+		// Nothing the call could mean. Left alone deliberately — see this pass's header, step 5.
+		noMatch then break 'pick'
+	end 'pick'
+end 'resolveOneOverloadedCall'
+
+// ⭐ **A FUNCTION VALUE OF AN OVERLOADED NAME HAS NO ARGUMENTS TO PICK BY, so it is REFUSED rather than bound
+// to whichever member happens to have registered first.** `let f = process` names a set, not a function, and
+// the first member's registration name IS the bare name — so without this the value would silently take one
+// overload's body and one overload's signature, and every indirect call through it would be checked against
+// them. Neither reference compiler diagnoses this (v1's `firstOverloadVariant` picks member 0 on purpose);
+// shv2 has no way to be right, so it says so.
+function refuseOverloadedFunctionValue(project Project, func IrFunction, opIndex OpIndex, name ByteArray)
+	if not project.overloadSets.contains(name) 'notOverloaded'
+		return
+	end 'notOverloaded'
+
+	let range = project.opRanges.get(opIndex)
+	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "taking a function value of the overloaded name '{String.from(name)}' — a function value carries no arguments, so there is nothing to pick an overload by. Give the overloads distinct names, or call it directly", line: range.line, column: range.column, filePath: func.sourceFilePath)
+end 'refuseOverloadedFunctionValue'
+
+// The members of a set that are actually in the signature registry, in declaration order. A member absent
+// from it is one left behind by a previous fold of a project whose sources have since changed (see
+// `OverloadSetMap`, which is deliberately not reset); skipping it is what makes that staleness inert.
+function overloadCandidates(project Project, members ByteArrayArray) returns ByteArrayArray
+	var candidates = ByteArrayArray.create()
+	for member in members 'each'
+		if project.funcSignatures.contains(member) 'live'
+			candidates.push(member)
+		end 'live'
+	end 'each'
+	return candidates
+end 'overloadCandidates'
+
+// The outcome of scoring a call against an overload set's candidates. `ambiguous` carries the TIED candidates
+// (not all of them) because that is what the diagnostic lists — the ones the call genuinely cannot choose
+// between, which is the set the oracle prints too.
+union OverloadPick
+	chosen(member ByteArray)
+	ambiguous(tied ByteArrayArray)
+	noMatch
+end 'OverloadPick'
+
+// A candidate scores `ExactArgScore` per argument whose tag matches its parameter's exactly and
+// `WideningArgScore` per argument that merely coerces legally (an int at a `float`, an int at an `ExitCode`).
+// The numbers only have to ORDER the candidates, and these are the oracle's own.
+let ExactArgScore = 2 as OverloadArgScore
+let WideningArgScore = 1 as OverloadArgScore
+
+// Wide enough for `ExactArgScore` at every parameter of the widest signature the ABI admits.
+typealias OverloadArgScore = int(0 to 128)
+
+// Score every candidate and answer which one the call meant. Two sweeps rather than an array of scores: the
+// first finds the best total, the second collects who holds it — so the common single-winner case allocates
+// nothing but the answer.
+function selectOverload(project Project, func IrFunction, op MaxonOp, candidates ByteArrayArray) returns OverloadPick
+	var best = NoCompatibleOverloadScore
+	for candidate in candidates 'eachCandidate'
+		match overloadCandidateScore(project, func: func, op: op, candidate: candidate) 'fit'
+			fits(score) then best = overloadBetterScore(best, candidate: score)
+			incompatible then break 'fit'
+		end 'fit'
+	end 'eachCandidate'
+
+	if best == NoCompatibleOverloadScore 'nothingFits'
+		return OverloadPick.noMatch
+	end 'nothingFits'
+
+	var tied = ByteArrayArray.create()
+	for candidate in candidates 'eachWinner'
+		if overloadCandidateHoldsScore(project, func: func, op: op, candidate: candidate, score: best) 'winner'
+			tied.push(candidate)
+		end 'winner'
+	end 'eachWinner'
+
+	if tied.count() == 1 'unique'
+		return OverloadPick.chosen(try tied.get(0) otherwise panic("selectOverload: tied.count() == 1 but get(0) failed"))
+	end 'unique'
+	return OverloadPick.ambiguous(tied)
+end 'selectOverload'
+
+// A score no candidate can reach, so "did anything fit?" needs no second flag. It is not a sentinel RETURN:
+// nothing outside `selectOverload` sees it, and the answer it produces is a union arm.
+let NoCompatibleOverloadScore = 0 as OverloadArgScore
+
+function overloadBetterScore(best OverloadArgScore, candidate OverloadArgScore) returns OverloadArgScore
+	return candidate if candidate > best else best
+end 'overloadBetterScore'
+
+// Does this candidate score exactly `score`? The second sweep's question, kept a `bool` so the winner
+// collection does not have to re-match the fit union at its own call site.
+function overloadCandidateHoldsScore(project Project, func IrFunction, op MaxonOp, candidate ByteArray, score OverloadArgScore) returns bool
+	return match overloadCandidateScore(project, func: func, op: op, candidate: candidate) 'fit'
+		fits(candidateScore) gives candidateScore == score
+		incompatible gives false
+	end 'fit'
+end 'overloadCandidateHoldsScore'
+
+union OverloadFit
+	fits(score OverloadArgScore)
+	incompatible
+end 'OverloadFit'
+
+// One candidate's fit. The call's arguments are slotted to the candidate's parameters through the shared
+// `slotCallArgs` — which is simultaneously the label test and the arity test — and then each slotted argument
+// is measured against its parameter by the SAME coercion rule `checkOneArgType` reports against, so a
+// candidate this function accepts cannot then be rejected by the argument check downstream.
+function overloadCandidateScore(project Project, func IrFunction, op MaxonOp, candidate ByteArray) returns OverloadFit
+	let sig = try project.funcSignatures.get(candidate) otherwise panic("overloadCandidateScore: candidate '{String.from(candidate)}' is not in funcSignatures — `overloadCandidates` filtered on exactly that")
+	match overloadCallArgs(op) 'args'
+		supplied(args, argLabels) then return overloadSlottedFit(project, func: func, sig: sig, args: args, argLabels: argLabels)
+		default panic("overloadCandidateScore: asked of an op that supplies no argument list — `maxonOpCallee` answers `direct` for exactly the three ops `overloadCallArgs` covers")
+	end 'args'
+end 'overloadCandidateScore'
+
+function overloadSlottedFit(project Project, func IrFunction, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray) returns OverloadFit
+	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
+		ordered(argIds) then return overloadArgTypeFit(project, func: func, sig: sig, argIds: argIds)
+		// An arity mismatch, a label naming no parameter, or two arguments at one parameter: this candidate is
+		// not what the call was written against.
+		arityMismatch to duplicateArg then return OverloadFit.incompatible
+	end 'slot'
+end 'overloadSlottedFit'
+
+function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray) returns OverloadFit
+	var score = NoCompatibleOverloadScore
+	for i in 0 upto argIds.count() 'eachArg'
+		let argId = try argIds.get(i) otherwise panic("overloadArgTypeFit: argIds.get OOB at {i} inside its own count()")
+		let paramType = try sig.paramTypes.get(i) otherwise panic("overloadArgTypeFit: paramTypes.get OOB at {i} — `slotCallArgs` answered `ordered`, so the counts agree")
+		let argTag = try func.valueTags.get(argId) otherwise panic("overloadArgTypeFit: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+		let paramTag = maxonTypeTag(paramType)
+		if checkDeclaredType(argTag, declared: paramTag) != DeclaredTypeMatch.ok 'refused'
+			return OverloadFit.incompatible
+		end 'refused'
+
+		// ⭐ TWO DIFFERENT AGGREGATES SHARE ONE TAG — two structs are both `structRef`, two boxed unions both
+		// erased to `integer` — so the verdict above accepts `over(aBag)` at an `over(x Box)`. Identity is the
+		// interned NAME, and it is the same rule `checkOneArgType` applies at the same pair, asked here so a
+		// candidate is not selected on a tag agreement its own argument check will refuse.
+		var expected = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+		if expected.isEmpty() 'erasedUnionParam'
+			expected = try sig.paramAggregateNames.get(i) otherwise panic("overloadArgTypeFit: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")
+		end 'erasedUnionParam'
+		if not expected.isEmpty() 'aggregateParam'
+			let argNameId = try func.valueNameIds.get(argId) otherwise panic("overloadArgTypeFit: value v{argId} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+			if namedAggregatesConflict(expected, got: aggregateNameFor(project, tag: argTag, nameId: argNameId)) 'aggregateMismatch'
+				return OverloadFit.incompatible
+			end 'aggregateMismatch'
+		end 'aggregateParam'
+
+		score = score + (ExactArgScore if argTag == paramTag else WideningArgScore)
+	end 'eachArg'
+
+	// A ZERO-ARGUMENT candidate scored nothing, and it still FITS — `Counter.create()` beside
+	// `Counter.create(value Integer)` is a legitimate arity-only pair, and the arity test that separated them
+	// already ran. It reaches `WideningArgScore` rather than the "nothing fits" floor so the answer stays a
+	// score the caller can compare.
+	return OverloadFit.fits(score if score > NoCompatibleOverloadScore else WideningArgScore)
+end 'overloadArgTypeFit'
+
+// ⭐⭐ **A CONSTANT ARGUMENT'S RANGE IS CHECKED AGAINST A CALLEE'S DECLARED PARAMETER ALIAS, AND THAT SITE WAS
+// RECORDED PER NAME AT PARSE TIME (P1.9) — so it has to be RETARGETED when the call resolves elsewhere.**
+//
+// `Parser.recordConstantArgRangeChecks` files a `RangeCheckArgSite` carrying the callee NAME the source wrote;
+// `InsertRangeChecks` then reads that callee's `paramAliasNames` to decide whether the constant fits. When the
+// call resolves to a member registered under a MANGLED name, a site left naming the bare one aims the check at
+// the FIRST declaration's parameter list. MEASURED before this retarget existed, with `Small = int(0 to 10)`
+// and `f(x String)` declared first:
+//
+//     function f(x String) returns ExitCode … end 'f'
+//     function f(x Small)  returns ExitCode … end 'f'
+//     return f(99)          ⇒ compiled, exit 99
+//
+// while the identical program with only the `Small` overload is correctly `E3005: Value 99 is outside the
+// range of 'Small'`. A silent wrong answer, reachable only through this rung.
+//
+// ⚠ **A SITE IS KEYED BY ITS ARGUMENT'S `ValueId`, NOT BY ITS CALL**, so the retarget matches on that value
+// being one of THIS call's arguments — exact for every program in which a value reaches one call, which is
+// every program where the argument is a literal (each literal mints its own value). The one shape it cannot
+// separate is a BINDING passed to two calls of the same bare name that resolve to DIFFERENT members: the two
+// sites are then indistinguishable, so the second claim is refused rather than allowed to overwrite the
+// first. The cure for that residual is to key the site by its call's op index, which is a change to the P1.9
+// record and its pass, not to this one.
+function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, callee ByteArray, member ByteArray)
+	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, member: member)
+	if member.equals(callee) 'firstMemberKeptTheBareName'
+		return
+	end 'firstMemberKeptTheBareName'
+
+	match overloadCallArgs(op) 'args'
+		supplied(args, _) then retargetArgRangeSites(project, func: func, opIndex: opIndex, callee: callee, member: member, args: args)
+	end 'args'
+end 'bindOverloadChoice'
+
+// Point every constant-argument range-check site this call owns at the member it resolved to. A function with
+// no such site files no entry at all (`Parser.commitRangeChecks`), which is the common case and costs one
+// lookup.
+function retargetArgRangeSites(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, args ValueIdArray)
+	let checks = try project.rangeChecks.get(func.name) otherwise return
+	// Index-based, so `site` is a mutable binding: the retarget writes the record's own `callee` field, and a
+	// `for x in …` loop variable is immutable.
+	for i in 0 upto checks.argSites.count() 'eachSite'
+		var site = try checks.argSites.get(i) otherwise panic("retargetArgRangeSites: argSites.get OOB at {i} inside its own count()")
+		if not valueIdArrayContains(args, value: site.value) 'notThisCall'
+			continue
+		end 'notThisCall'
+
+		if site.callee.equals(callee) 'stillBare'
+			site.callee = member
+			continue
+		end 'stillBare'
+
+		// Already claimed — by this same member (a second argument of one call, or a re-run of this pass over
+		// the memoized module) or, the residual the header names, by a DIFFERENT member.
+		if not site.callee.equals(member) 'claimedByAnotherMember'
+			let range = project.opRanges.get(opIndex)
+			reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "two calls to different overloads of '{String.from(callee)}' pass the SAME binding as a constant argument whose range must be checked against the callee's declared parameter type. That check is recorded against the argument's value, before any overload is known, so the two calls cannot be told apart and one would be checked against the other's parameters. Bind the argument separately for each call, or give the overloads distinct names", line: range.line, column: range.column, filePath: func.sourceFilePath)
+		end 'claimedByAnotherMember'
+	end 'eachSite'
+end 'retargetArgRangeSites'
+
+// Is `value` one of these ids? A linear scan over an argument list, which is tiny — and asked only for a call
+// that resolved to a mangled overload member in a function that has a range-check site at all.
+function valueIdArrayContains(values ValueIdArray, value ValueId) returns bool
+	for candidate in values 'each'
+		if candidate == value 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'valueIdArrayContains'
+
+// Bind the call to the member it chose: rewrite the op's callee IN PLACE, at the same `module.ops` index —
+// `block.opRefs` indexes that array, so appending a replacement instead would orphan every reference to it —
+// and then reconcile the RESULT's type.
+function commitOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, member ByteArray)
+	try module.ops.set(opIndex, value: withRewrittenCallee(op, callee: member)) otherwise panic("commitOverloadChoice: ops.set({opIndex}) OOB — the index came from liveOpIndices")
+	reconcileOverloadResultType(project, func: func, opIndex: opIndex, op: op, member: member)
+end 'commitOverloadChoice'
+
+// ⭐⭐ **THE ONE THING SELECTING LATE COSTS: the parser has ALREADY TYPED the call's result, and it typed it
+// from a registry that cannot tell overloads apart.**
+//
+// A call's result value is minted during the parse (`Parser.mintCallResult`) from
+// `ProgramSignatures.returnTypeOf`, whose table is keyed by the name the SOURCE wrote and is LAST-WINS over
+// duplicate declarations — so for an overloaded name every call in the program was typed from ONE member's
+// return type, whichever declaration the sweep read last. When the member this call actually resolves to
+// returns something else, that tag is wrong, and it is wrong in a way that reaches the machine: the tag is
+// what `lowerMaxonToStd` reads to pick the Std type of the call's result, so a `bool`-tagged result of an
+// i64-returning callee is read one byte wide.
+//
+// So the tag is REPAIRED here — but only where the repair is provably complete:
+//
+//   • **Same STORAGE ⇒ nothing to do.** A ranged alias's `named` tag against a resolved `integer` is the
+//     common case and must NOT be rewritten: the parser keeps `named` on purpose (the alias name carries the
+//     signedness `valueIsUnsigned` reads), so "correcting" it would change codegen.
+//   • **Different storage, both PLAIN SCALARS ⇒ retype.** `integer`/`boolean`/`exitCode` carry no name, own
+//     no heap and travel in a GPR, so nothing the parser emitted for the value encodes which of the three it
+//     was: the type is read from this column at lowering and nowhere else.
+//   • **Anything else ⇒ REFUSED.** A managed↔scalar divergence is the case that matters: had the parser known
+//     the result was a `String` it would have enrolled a scope-exit drop, and no retype can add an op that
+//     was never emitted — the program would LEAK. A float↔int divergence changes the register FILE, and a
+//     void↔value one changes whether there is a result at all. Each is refused with the reason, rather than
+//     silently retyped into a wrong answer.
+//
+// ⚠ **The narrow residual, stated where it lives:** if the divergence IS scalar-to-scalar, the parser may
+// already have rejected or reshaped an expression using the stale tag (`if <int-tagged>`, `<bool> + 1`). That
+// is a false diagnostic, not a wrong answer, and it cannot arise for a set whose members agree on their
+// return type — which no `/specs` case violates except through labels, where the resolver is exact. The real
+// cure is per-member return types in the declaration sweep.
+function reconcileOverloadResultType(project Project, func IrFunction, opIndex OpIndex, op MaxonOp, member ByteArray)
+	match overloadResultValue(op) 'result'
+		defines(result) then reconcileOverloadResultTag(project, func: func, opIndex: opIndex, result: result, member: member)
+		definesNothing then break 'result'
+	end 'result'
+end 'reconcileOverloadResultType'
+
+function reconcileOverloadResultTag(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray)
+	let declared = try project.funcReturnTypes.get(member) otherwise return
+	match declared 'declared'
+		value(returnType) then requireOverloadResultTagAgrees(project, func: func, opIndex: opIndex, result: result, member: member, declared: returnType)
+		// A VOID member cannot have been chosen for a call whose result is read: the parser refuses a void
+		// call in value position, and in statement position the result tag is `void` already.
+		void then break 'declared'
+	end 'declared'
+end 'reconcileOverloadResultTag'
+
+function requireOverloadResultTagAgrees(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray, declared MaxonType)
+	let currentTag = try func.valueTags.get(result) otherwise panic("requireOverloadResultTagAgrees: value v{result} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+	let declaredTag = maxonTypeTag(declared)
+	if overloadResultTagAgrees(currentTag, declared: declaredTag) 'alreadyRight'
+		return
+	end 'alreadyRight'
+
+	if not tagIsPlainOverloadScalar(currentTag) or not tagIsPlainOverloadScalar(declaredTag) 'notRepairable'
+		let range = project.opRanges.get(opIndex)
+		reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "the overloads of '{String.from(member)}' do not agree on their return type ('{typeTagName(currentTag)}' and '{typeTagName(declaredTag)}'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type", line: range.line, column: range.column, filePath: func.sourceFilePath)
+		return
+	end 'notRepairable'
+
+	try func.valueTags.set(result, value: declaredTag) otherwise panic("requireOverloadResultTagAgrees: valueTags.set({result}) OOB inside its own count()")
+	try func.valueNameIds.set(result, value: typeNameIdOf(declared)) otherwise panic("requireOverloadResultTagAgrees: valueNameIds.set({result}) OOB — the two type columns are minted in lockstep")
+end 'requireOverloadResultTagAgrees'
+
+// ⭐ **IS THE PARSER'S TAG STILL RIGHT FOR THIS MEMBER'S DECLARED RETURN? — asked so that RESOLUTION cannot
+// be mistaken for disagreement.** The value's tag was minted PRE-resolution and the member's return type is
+// read POST-resolution, so the two spell one type two ways all the time: a `returns ExitCode` call is tagged
+// `named`/`exitCode` at the parse and `exitCode` in the registry, and a ranged alias is `named` against
+// `integer`. Comparing them literally — or by storage width, which was the first attempt — reports every
+// alias-returning overload as a disagreement (measured: `closure-capture.block-local-overload-arg`, whose two
+// overloads BOTH return `ExitCode`, was refused with "'int' and 'int'").
+//
+// So agreement is the language's own coercion rule, plus the one thing that rule cannot see: a float and an
+// int AGREE under it (they must, or `5 + 2.0` would not compile) while living in DIFFERENT REGISTER FILES, so
+// a value tagged `integer` standing for a `float` return is a cross-file read whatever the rule says.
+function overloadResultTagAgrees(current ValueTypeTag, declared ValueTypeTag) returns bool
+	return checkDeclaredType(current, declared: declared) == DeclaredTypeMatch.ok and tagIsFloat(current) == tagIsFloat(declared)
+end 'overloadResultTagAgrees'
+
+// Is this tag one of the three the retype above may cross between — unmanaged, un-named, non-float, GPR? See
+// `reconcileOverloadResultType` for why each exclusion is load-bearing.
+function tagIsPlainOverloadScalar(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean or tag == ValueTypeTag.exitCode
+end 'tagIsPlainOverloadScalar'
+
+// The value an overload-resolvable op DEFINES. All three define one — a `call` in statement position defines
+// a `void`-tagged value it never reads — so the `definesNothing` arm exists for the op set to grow into
+// rather than for a case that occurs today.
+union OverloadResultValue
+	defines(result ValueId)
+	definesNothing
+end 'OverloadResultValue'
+
+function overloadResultValue(op MaxonOp) returns OverloadResultValue
+	return match op 'op'
+		call(result, _, _, _, _, _) gives OverloadResultValue.defines(result)
+		tryCall(result, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
+		asyncCall(result, _, _, _, _, _) gives OverloadResultValue.defines(result)
+		default panic("overloadResultValue: asked of an op that binds no direct callee — `maxonOpCallee` answers `direct` for exactly these three")
+	end 'op'
+end 'overloadResultValue'
+
+// **E3007 — the call cannot pick.** Anchored at the call (`opRanges` puts that at the callee token, which is
+// where the author must add a label), naming the callee as WRITTEN with its type qualifier stripped, and
+// listing the tied candidates' parameter lists in declaration order. The wording is the oracle's, verbatim,
+// because `specs-shv2/function-overloads.md` compares it byte for byte.
+function reportAmbiguousOverload(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, tied ByteArrayArray)
+	let range = project.opRanges.get(opIndex)
+	reportPositioned(project, code: ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{bareMethodName(callee)}': multiple overloads match. Candidates: {renderOverloadCandidates(project, tied: tied)}", line: range.line, column: range.column, filePath: func.sourceFilePath)
+end 'reportAmbiguousOverload'
+
+// `(name String), (label String)` — each tied candidate's parameter list, receiver excluded. Post-resolution
+// types, so a ranged alias reads as the primitive it is; the oracle prints its own mangled spelling and the
+// two agree on every aggregate, which is what the one spec case pins.
+function renderOverloadCandidates(project Project, tied ByteArrayArray) returns String
+	var rendered = ""
+	for candidate in tied 'each'
+		let sig = try project.funcSignatures.get(candidate) otherwise panic("renderOverloadCandidates: candidate '{String.from(candidate)}' is not in funcSignatures — the tie was scored against that entry")
+		rendered = "{rendered}, " if not rendered.isEmpty() else rendered
+		rendered = "{rendered}({renderOverloadParams(project, sig: sig)})"
+	end 'each'
+	return rendered
+end 'renderOverloadCandidates'
+
+function renderOverloadParams(project Project, sig FuncSignature) returns String
+	var rendered = ""
+	for i in firstUserParamIndex(sig.takesReceiver()) upto sig.paramNames.count() 'eachParam'
+		rendered = "{rendered}, " if not rendered.isEmpty() else rendered
+		let paramName = try sig.paramNames.get(i) otherwise panic("renderOverloadParams: paramNames.get OOB at {i} inside its own count()")
+		let paramType = try sig.paramTypes.get(i) otherwise panic("renderOverloadParams: paramTypes.get OOB at {i} — a signature's param columns are built in lockstep")
+		rendered = "{rendered}{String.from(paramName)} {maxonTypeName(paramType, typeNames: project.typeNames)}"
+	end 'eachParam'
+	return rendered
+end 'renderOverloadParams'
+
+// The argument list an overload-resolvable op supplies. A THIRD match over the same three variants would be
+// one too many, but this one asks a different question from `maxonOpCallee`'s and cannot be folded into it:
+// that answer is built once per op, this one is read once per CANDIDATE.
+union OverloadCallArgs
+	supplied(args ValueIdArray, argLabels ByteArrayArray)
+end 'OverloadCallArgs'
+
+function overloadCallArgs(op MaxonOp) returns OverloadCallArgs
+	return match op 'op'
+		call(_, _, args, argLabels, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
+		tryCall(_, _, _, args, argLabels, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
+		asyncCall(_, _, args, argLabels, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
+		default panic("overloadCallArgs: asked of an op that supplies no argument list — `maxonOpCallee` answers `direct` for exactly these three")
+	end 'op'
+end 'overloadCallArgs'
 
 // E3054 — `main` cannot declare `throws`: there is no caller left to handle the error. Scans the merged
 // module for `main`'s function (whose `throwsTypeName` the parser stamped), positioned at its name token.

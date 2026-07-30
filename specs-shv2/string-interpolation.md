@@ -736,7 +736,7 @@ end 'main'
 ### Stringable with Format Specifier
 
 <!-- disabled-test: stringable-format-spec -->
-<!-- P1.7a-s2: method overloading (Counter declares toString() AND toString(format String); shv2's non-mangled `Type.method` naming collides them into E3006) + FormattedStringable 2-arg interp dispatch + `{x:spec}` format-spec interp parsing -->
+<!-- P1.7a-s2: FormattedStringable 2-arg interp dispatch + `{x:spec}` format-spec interp parsing. The METHOD OVERLOAD half is closed — `Counter.toString()` and `Counter.toString(format String)` now register as distinct members (D7) — but the two remaining halves are a Stringable-protocol rung, not an overloading one. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

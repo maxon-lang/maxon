@@ -1,0 +1,40 @@
+// Test: method-call-argument-receiver-type-is-wrong
+typealias Wide = int(i64.min to i64.max)
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let s = "hello"
+	return over(s.count())
+end 'main'
+---
+ExitCode: 105
+---
+func @over#Wide {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 100
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __gr_count
+    x64.movRegReg rcx, r8
+    x64.callDirect over#Wide
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

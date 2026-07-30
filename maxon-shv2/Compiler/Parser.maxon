@@ -1492,6 +1492,132 @@ export function qualifiedMethodName(typeName ByteArray, methodName ByteArray) re
 	return "{String.from(typeName)}{MethodNameSeparator}{String.from(methodName)}".toByteArray()
 end 'qualifiedMethodName'
 
+// Every function name this FILE has registered — bare names and mangled overload members alike. THE answer
+// to "is this name already claimed here?", which is the whole contest test `overloadRegistrationNameFor`
+// runs, and the reason it is a set rather than a scan of the artifact's contributions: it is asked once per
+// declaration, so a scan would be quadratic in the file's function count.
+typealias DeclaredFuncNameSet = Set with ByteArray
+
+// ⭐ **ONE MEMBER OF AN OVERLOAD SET, as the DECLARATION side needs it** — the name it registered under plus
+// the two suffixes a later sibling's contest is decided against. The suffixes are kept rather than
+// recomputed because the contest asks about EVERY member and each recomputation would re-render every
+// parameter type; they never leave the parser (the artifact carries the registration names alone, which is
+// all the resolver needs).
+type OverloadMember
+	export let registered as ByteArray
+	export let typeSuffix as ByteArray
+	export let labelSuffix as ByteArray
+	// Does this member declare a parameter whose OWNERSHIP a call can transfer — a managed value or an opaque
+	// `T`? The bit `Parser.requireOverloadableName` needs about EVERY member, recorded per member because the
+	// signature it is read from is only in hand while that member's own declaration is being parsed.
+	export let hasTransferableParam as bool
+
+	export static function create(registered ByteArray, typeSuffix ByteArray, labelSuffix ByteArray, hasTransferableParam bool) returns OverloadMember
+		return Self{registered: registered, typeSuffix: typeSuffix, labelSuffix: labelSuffix, hasTransferableParam: hasTransferableParam}
+	end 'create'
+end 'OverloadMember'
+
+typealias OverloadMemberArray = Array with OverloadMember
+typealias OverloadMemberMap = Map with (ByteArray, OverloadMemberArray)
+
+// ⭐ `Point.create` ⇒ `create` — `qualifiedMethodName`'s INVERSE, and here beside it for that reason. A free
+// function's name has no qualifier and comes back unchanged. Read by the E3007 diagnostic, which names the
+// callee the way the AUTHOR wrote it at the call (`c.convert(21)` mentions `convert`, not `Converter.convert`)
+// — the same choice both reference compilers make for that message.
+// It answers a `String` because its one reader is a diagnostic, which needs one — and because splitting on
+// the separator this file already spells as a `String` keeps the join and its inverse reading the same
+// constant. A cold path: nothing but a rejected program asks.
+export function bareMethodName(name ByteArray) returns String
+	let segments = String.from(name).split(MethodNameSeparator)
+	return try segments.get(segments.count() - 1) otherwise String.from(name)
+end 'bareMethodName'
+
+// Where a signature's USER parameters begin — past the receiver an instance method carries at slot 0. Stated
+// once because both halves of an overload key skip the same slot for the same reason (see
+// `Parser.overloadTypeSuffix`).
+export function firstUserParamIndex(takesReceiver bool) returns ParamCount
+	return 1 if takesReceiver else 0
+end 'firstUserParamIndex'
+
+// The LABEL half of an overload key: every parameter's declared NAME, receiver excluded. The escalation the
+// TYPE half falls back to when two overloads' parameter types are spelled identically — `/specs`'
+// "disambiguation by parameter names", and the shape both reference compilers keep a dedicated rung for.
+function overloadLabelSuffix(paramNames ByteArrayArray, takesReceiver bool) returns ByteArray
+	var rendered = ""
+	for i in firstUserParamIndex(takesReceiver) upto paramNames.count() 'eachParam'
+		rendered = overloadSuffixPart(rendered, part: String.from(try paramNames.get(i) otherwise panic("overloadLabelSuffix: paramNames.get OOB at {i} inside its own count()")))
+	end 'eachParam'
+	return rendered.toByteArray()
+end 'overloadLabelSuffix'
+
+// Is a member with BOTH of these suffixes already registered — i.e. is the declaration being read a genuine
+// REDECLARATION rather than an overload? Both halves, because either alone is a legitimate difference: same
+// types with different labels is the label-escalated overload, and same labels with different types is the
+// type-keyed one.
+function overloadMembersHoldSignature(members OverloadMemberArray, typeSuffix ByteArray, labelSuffix ByteArray) returns bool
+	for member in members 'each'
+		if member.typeSuffix.equals(typeSuffix) and member.labelSuffix.equals(labelSuffix) 'same'
+			return true
+		end 'same'
+	end 'each'
+	return false
+end 'overloadMembersHoldSignature'
+
+// Does any member of the set declare an ownership-transferable parameter? See
+// `Parser.requireOverloadableName`, which is the only asker and states why the answer decides a refusal.
+function overloadMembersTransferOwnership(members OverloadMemberArray) returns bool
+	for member in members 'each'
+		if member.hasTransferableParam 'transferable'
+			return true
+		end 'transferable'
+	end 'each'
+	return false
+end 'overloadMembersTransferOwnership'
+
+function overloadMembersHoldTypeSuffix(members OverloadMemberArray, typeSuffix ByteArray) returns bool
+	for member in members 'each'
+		if member.typeSuffix.equals(typeSuffix) 'same'
+			return true
+		end 'same'
+	end 'each'
+	return false
+end 'overloadMembersHoldTypeSuffix'
+
+// The members' registration names, in declaration order — the artifact's whole contribution, DERIVED from
+// the member records rather than accumulated beside them, so the two cannot fall out of step.
+function overloadMemberNames(members OverloadMemberArray) returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	for member in members 'each'
+		names.push(member.registered)
+	end 'each'
+	return names
+end 'overloadMemberNames'
+
+// Does the sweep's answer for a name carry consume facts at all — the `consumes` case rather than
+// `borrowsAll`? A `bool` because the CalleeConsume payload is not what the question is about; see
+// `Parser.requireOverloadableName`.
+function overloadBlockingConsume(consume CalleeConsume) returns bool
+	return match consume 'c'
+		consumes gives true
+		borrowsAll gives false
+	end 'c'
+end 'overloadBlockingConsume'
+
+// The first ordinal the pathological-collision escape hatch tries. `2` because the un-ordinalled name IS
+// the first spelling of that suffix (see `Parser.unclaimedRegistrationName`).
+let FirstOverloadNameOrdinal = 2
+
+// The module-level shared EMPTY declared-name set and overload-member table (D7), held as the INITIAL values
+// of `Parser.declaredFuncNames` / `Parser.overloadMembers` AND as the COW anchors their first writes key on —
+// `sharedEmptyIterationLocks`'s pattern, for its reason and with its invariant. Both matter for that reason
+// rather than as a micro-optimization: a `Parser` is built per file by the tolerant declaration sweep and PER
+// TOP-LEVEL CONSTANT by `SignatureIndex.walkConstInitializer`, and neither declares a function, so an
+// unconditional `create()` here would bill two allocations to every file and every constant in the program.
+// The member table additionally stays empty for every REAL parse that overloads nothing, which is nearly all
+// of them.
+let sharedEmptyDeclaredFuncNames = DeclaredFuncNameSet.create()
+let sharedEmptyOverloadMembers = OverloadMemberMap.create()
+
 // ⭐ **DOES `name` WEAR `typeName`'S QUALIFIER — i.e. is it `qualifiedMethodName(typeName, <anything>)`?**
 // The join's INVERSE, and deliberately allocation-free: its caller
 // (`IrInterface.isBuiltinConformanceImplName` → `MmRuntime.isCompilerInternalCallee`) is asked of EVERY
@@ -4508,6 +4634,11 @@ export type Parser
 	// ever be a false positive), which is why the filter is at the RECORDING site and not at the report:
 	// a candidate that could never be reported should not be built.
 	var declaredTypeAliases as DeferredNameDiagnosticArray
+	// ⭐ Every function name this file has REGISTERED, and every overloaded bare name's members (D7). See
+	// `DeclaredFuncNameSet` and `overloadRegistrationNameFor`. The member map stays EMPTY — and so
+	// allocation-neutral against the shared empty — until a name is actually declared twice.
+	var declaredFuncNames as DeclaredFuncNameSet
+	var overloadMembers as OverloadMemberMap
 
 	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool) returns Parser
 		return Self{
@@ -4580,7 +4711,9 @@ export type Parser
 			isStdlibSource: isStdlibSource,
 			usedTypeNames: sharedEmptyUsedTypeNames,
 			collectsTypeNameUses: false,
-			declaredTypeAliases: sharedEmptyDeferredNameDiagnostics
+			declaredTypeAliases: sharedEmptyDeferredNameDiagnostics,
+			declaredFuncNames: sharedEmptyDeclaredFuncNames,
+			overloadMembers: sharedEmptyOverloadMembers
 		}
 	end 'create'
 
@@ -6443,6 +6576,209 @@ export type Parser
 		end 'freeFunction'
 		return qualifiedMethodName(self.enclosingType, methodName: nameTok.value)
 	end 'declaredMethodName'
+
+	// ⭐⭐ **THE REGISTRATION NAME A DECLARATION CLAIMS — bare for the first of its name, MANGLED for a
+	// later overload of it** (D7). Every registry this function's declaration reaches is keyed by what this
+	// returns (`funcSignatures`, `funcReturnTypes`, `rangeChecks`, the `IrFunction` itself, and so the
+	// emitted symbol), which is exactly why it is decided HERE — before `IrFunction.create` — rather than at
+	// the merge: a name chosen later would have to be re-keyed through all of them, and a lifted closure
+	// parsed inside the body already derives ITS name from this one (`<enclosing>$closure_<k>`).
+	//
+	// ⭐ **THE FIRST DECLARATION KEEPS THE BARE NAME.** Mangling ON CONTEST ONLY is what makes this rung
+	// golden-neutral: a program that overloads nothing registers every function under exactly the name it
+	// did before, so no committed fragment moves. It is the same construction
+	// `ProgramSignatures.mangleGenericInstance` uses for a contested instance name, and both reference
+	// compilers independently arrived at it (v1's `tryRegisterOverload` re-keys the incumbent instead, which
+	// shv2 does not need to: the incumbent's bare name is a perfectly good member key).
+	//
+	// The escalation ladder, and each rung's reason:
+	//   1. **bare name** — nothing has claimed it in this file.
+	//   2. **the TYPE suffix** (`process#String`) — the name is claimed and the parameter TYPES differ.
+	//      Types first, because that is what "overloading" means: the suffix then survives a parameter
+	//      RENAME, so renaming a parameter cannot silently move a symbol.
+	//   3. **the LABEL suffix** (`create#label`) — the types collide, so only the labels can tell the two
+	//      apart. This is the `slice(start, endIndex)` / `slice(start, length)` case both references carry
+	//      a dedicated fallback for, and the one `/specs` documents under "disambiguation by parameter
+	//      names". Two overloads that reach here are indistinguishable at a POSITIONAL call, which the
+	//      resolver reports as E3007 — a call-site fact, not a declaration-site one, which is why they are
+	//      both registered rather than refused.
+	//   4. **BOTH suffixes already claimed** ⇒ this is a genuine REDECLARATION. It keeps the bare name, so
+	//      it collides in `commitFuncSignatures` and earns the E3006 it always did.
+	//
+	// ⚠ **UNIQUENESS IS ESTABLISHED BY CONSTRUCTION, NOT BY AN INJECTIVITY ARGUMENT.** A suffix is built
+	// from names, and however carefully it joins them there is always a pathological program whose label
+	// spells another program's type; two functions sharing one symbol is a wild dispatch, so the last step
+	// simply asks whether the file has already registered the name and counts up until it has not. The
+	// ordinal is unreachable for any program a human writes and costs one `Set.contains` when it is.
+	//
+	// ⚠ **THE CONTEST IS SEEN WITHIN ONE FILE ONLY.** Two FILES declaring one name still collide at the
+	// merge (E3006), because the parser is a pure function of its own file and the whole-program declaration
+	// sweep publishes no parameter types to contest against. That is a boundary, not a silent one.
+	function overloadRegistrationNameFor(base ByteArray, paramTypes MaxonTypeArray, paramNames ByteArrayArray, takesReceiver bool, nameTok Token) returns ByteArray throws ParseError
+		if not self.declaredFuncNames.contains(base) 'firstOfThisName'
+			self.claimFuncName(base)
+			return base
+		end 'firstOfThisName'
+
+		var members = self.overloadMembersOf(base)
+		let hasTransferableParam = self.declaresTransferableParam(paramTypes, takesReceiver: takesReceiver)
+		try self.requireOverloadableName(base, nameTok: nameTok, members: members, newcomerTransfers: hasTransferableParam)
+		let typeSuffix = self.overloadTypeSuffix(paramTypes, takesReceiver: takesReceiver)
+		let labelSuffix = overloadLabelSuffix(paramNames, takesReceiver: takesReceiver)
+		if overloadMembersHoldSignature(members, typeSuffix: typeSuffix, labelSuffix: labelSuffix) 'redeclaration'
+			return base
+		end 'redeclaration'
+
+		let suffix = labelSuffix if overloadMembersHoldTypeSuffix(members, typeSuffix: typeSuffix) else typeSuffix
+		let registered = self.unclaimedRegistrationName(base, suffix: suffix)
+		self.claimFuncName(registered)
+		members.push(OverloadMember.create(registered, typeSuffix: typeSuffix, labelSuffix: labelSuffix, hasTransferableParam: hasTransferableParam))
+		self.artifact.recordOverloadSet(base, members: overloadMemberNames(members))
+		return registered
+	end 'overloadRegistrationNameFor'
+
+	// ⭐⭐ **THE TWO FACTS THE PRE-PARSE DECLARATION SWEEP PUBLISHES PER BARE NAME, WHICH IS WHY THEY CANNOT
+	// BE OVERLOADED** (D7). `ProgramSignatures` is built from a TOKEN sweep before any file is parsed and is
+	// keyed by the name the source wrote, so two declarations of one name leave ONE entry — and the parser
+	// commits to it STRUCTURALLY, at both ends of a call:
+	//
+	//   • **CONSUME/FEED bits** decide whether a call MOVES its argument (`applyCallerConsume` poisons the
+	//     source binding, so the caller stops dropping it) and whether the callee's own parameter is owned
+	//     (`bindParameters`). Applying one member's bits at a call that resolves to another is a LEAK in one
+	//     direction and a USE-AFTER-FREE in the other — neither is a diagnosable event later, because the
+	//     drop ops are already emitted or already absent by then.
+	//   • **The `throws` clause** decides the error-flag ABI at both ends (`E3055`/`E3057`, and which type an
+	//     `otherwise (e)` binding recovers). One member's clause read as another's delivers a throw as a real
+	//     answer.
+	//
+	// Both are absence-is-the-answer registries — the sweep records ONLY a consuming function and ONLY a
+	// throwing one — so "the name has an entry" catches a divergence whichever member contributed it, which
+	// is what makes this test sound without per-member facts the sweep does not publish. It refuses more than
+	// it must (a set whose members consume IDENTICALLY is refused too), and that is the conservative
+	// direction: a refusal is a diagnostic, and the alternative is a silent wrong answer.
+	//
+	// ⚠ **THE CONSUME HALF ALSO ASKS WHETHER ANY MEMBER CAN TRANSFER ANYTHING, and that is not caution — it
+	// is what keeps the rule about ownership rather than about field stores.** The sweep sets a consume bit
+	// for ANY `Self{f: p}` store, a SCALAR parameter included, and a scalar transfer is inert at both ends
+	// (`transferConsumedArg` returns immediately, and no drop is enrolled for it). So a set of scalar-only
+	// constructors — `Counter.create()` beside `Counter.create(value Integer, step Integer)`, which
+	// `specs-shv2/structs.md` pins — carries consume bits that decide nothing, and refusing it would be
+	// refusing a legal program over a bit no call can act on. The transferable test is what distinguishes
+	// the two, and it is asked of EVERY member: a member is recorded with the bit at its own declaration, so
+	// the set is refused the moment the managed one joins it, whichever order they are written in.
+	//
+	// ⚠ **THE FIX IS NOT A BETTER TEST HERE, IT IS PER-MEMBER FACTS IN THE SWEEP** — which needs the sweep to
+	// key its tables by something finer than the bare name, and that is a whole-program-query change with a
+	// parse-memo hash behind it. Until then this is the boundary, stated where a reader meets it.
+	function requireOverloadableName(base ByteArray, nameTok Token, members OverloadMemberArray, newcomerTransfers bool) throws ParseError
+		if (newcomerTransfers or overloadMembersTransferOwnership(members)) and overloadBlockingConsume(self.signatures.consumeOf(base)) 'consumingOverload'
+			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations MOVES a parameter into durable storage and one of them takes a managed parameter, and the whole-program declaration sweep publishes a function's consume facts under the name the source wrote, so a call to this name cannot be told which overload's ownership transfer to apply (it would leak in one direction and free twice in the other). Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
+		end 'consumingOverload'
+
+		if throwsClauseIsThrowing(self.signatures.throwsOf(base)) 'throwingOverload'
+			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations `throws`, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told which overload's error type it recovers. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
+		end 'throwingOverload'
+	end 'requireOverloadableName'
+
+	// Does this signature declare a parameter whose OWNERSHIP a call can transfer — a managed value (String,
+	// struct, union, array, generic instance) or an opaque `T`, which `transferConsumedArg` may move as an
+	// owned value it cannot see the type of? A scalar cannot: it is inert at a consumed position. The receiver
+	// is excluded for the reason every overload key excludes it — it is the same value for every member.
+	function declaresTransferableParam(paramTypes MaxonTypeArray, takesReceiver bool) returns bool
+		for i in firstUserParamIndex(takesReceiver) upto paramTypes.count() 'eachParam'
+			let paramType = try paramTypes.get(i) otherwise panic("declaresTransferableParam: paramTypes.get OOB at {i} inside its own count()")
+			if self.signatures.typeIsManaged(paramType) or maxonTypeTag(paramType) == ValueTypeTag.typeParameter 'transferable'
+				return true
+			end 'transferable'
+		end 'eachParam'
+		return false
+	end 'declaresTransferableParam'
+
+	// Record `name` as claimed by this file, COPY-ON-WRITING off the shared empty set before the first
+	// insert — see `sharedEmptyDeclaredFuncNames`.
+	function claimFuncName(name ByteArray)
+		if self.declaredFuncNames is sharedEmptyDeclaredFuncNames 'firstDeclarationInThisFile'
+			self.declaredFuncNames = DeclaredFuncNameSet.create()
+		end 'firstDeclarationInThisFile'
+
+		self.declaredFuncNames.insert(name)
+	end 'claimFuncName'
+
+	// The overload members recorded for `base` so far, MATERIALIZING the incumbent on the first contest.
+	// The incumbent's suffixes were never computed — a first declaration renders none, which is what keeps a
+	// non-overloading program from building two strings per function — so they are recomputed here from the
+	// signature it recorded, on the contest path alone.
+	function overloadMembersOf(base ByteArray) returns OverloadMemberArray
+		if let existing = try self.overloadMembers.get(base) 'alreadyContested'
+			return existing
+		end 'alreadyContested'
+
+		// COPY-ON-WRITE off the shared empty table before the first overload in this file — see
+		// `sharedEmptyOverloadMembers`.
+		if self.overloadMembers is sharedEmptyOverloadMembers 'firstOverloadInThisFile'
+			self.overloadMembers = OverloadMemberMap.create()
+		end 'firstOverloadInThisFile'
+
+		var members = OverloadMemberArray.create()
+		let incumbent = self.recordedSignatureOf(base)
+		members.push(OverloadMember.create(base, typeSuffix: self.overloadTypeSuffix(incumbent.paramTypes, takesReceiver: incumbent.takesReceiver()), labelSuffix: overloadLabelSuffix(incumbent.paramNames, takesReceiver: incumbent.takesReceiver()), hasTransferableParam: self.declaresTransferableParam(incumbent.paramTypes, takesReceiver: incumbent.takesReceiver())))
+		self.overloadMembers.upsert(base, value: members)
+		return members
+	end 'overloadMembersOf'
+
+	// The signature this file recorded for `name` — a LINEAR scan of the artifact's contributions, which is
+	// affordable because only a contest asks (an overload is rare, and there is one ask per overload member).
+	// A map keyed by name would be a second copy of `funcSignatures` paid for by every function in every
+	// program to serve the few that overload.
+	//
+	// It cannot miss: `overloadRegistrationNameFor` only asks after `declaredFuncNames` says this file has
+	// already registered the name, and every registration is followed by a `recordFuncSignature` under it in
+	// the same `parseFunction`.
+	function recordedSignatureOf(name ByteArray) returns FuncSignature
+		var i = self.artifact.funcSignatures.count()
+		while i > 0 'eachEntry'
+			i = i - 1
+			let entry = try self.artifact.funcSignatures.get(i) otherwise panic("recordedSignatureOf: funcSignatures.get OOB at {i} inside its own count()")
+			if entry.name.equals(name) 'found'
+				return entry.signature
+			end 'found'
+		end 'eachEntry'
+		panic("recordedSignatureOf: this file registered '{String.from(name)}' but recorded no signature for it — every `parseFunction` records one under the name it claimed")
+	end 'recordedSignatureOf'
+
+	// `base#suffix`, counting up an ordinal until this file has not already claimed it. See
+	// `overloadRegistrationNameFor`'s uniqueness note for why the ordinal exists and why it is unreachable
+	// in practice.
+	function unclaimedRegistrationName(base ByteArray, suffix ByteArray) returns ByteArray
+		var candidate = overloadRegistrationName(base, suffix: suffix)
+		var ordinal = FirstOverloadNameOrdinal
+		while self.declaredFuncNames.contains(candidate) 'claimed'
+			candidate = overloadRegistrationName(base, suffix: overloadSuffixPart(String.from(suffix), part: "{ordinal}").toByteArray())
+			ordinal = ordinal + 1
+		end 'claimed'
+		return candidate
+	end 'unclaimedRegistrationName'
+
+	// The TYPE half of an overload key: every parameter's source-level type name, receiver excluded (the
+	// receiver is the same type for every overload of one method, so it distinguishes nothing — both
+	// references exclude it too). A zero-parameter overload renders the EMPTY suffix, which is still a
+	// distinct name (`Counter.create#`) because the separator is unconditional: `create()` and
+	// `create(value Integer)` are a legitimate arity-only overload pair.
+	//
+	// `maxonTypeName` is the renderer, not a mangling of its own — so the suffix reads as the source wrote
+	// it (`process#String`, `lookup#Registry#bool`) and a ranged alias keeps its own name here, PRE-
+	// resolution, where `Integer` and `int` are still two spellings. Two overloads written with two spellings
+	// of one underlying type therefore both register, and the resolver reports the pair as ambiguous at the
+	// call (E3007) rather than at the declaration — the bootstrap flattens the alias and reports E3006
+	// instead. Both refuse the program; only the code and the site differ, and no spec pins either.
+	function overloadTypeSuffix(paramTypes MaxonTypeArray, takesReceiver bool) returns ByteArray
+		var rendered = ""
+		for i in firstUserParamIndex(takesReceiver) upto paramTypes.count() 'eachParam'
+			let paramType = try paramTypes.get(i) otherwise panic("overloadTypeSuffix: paramTypes.get OOB at {i} inside its own count()")
+			rendered = overloadSuffixPart(rendered, part: maxonTypeName(paramType, typeNames: self.artifact.typeNames))
+		end 'eachParam'
+		return rendered.toByteArray()
+	end 'overloadTypeSuffix'
 
 	// Cursor is AT `typealias`. Append the alias the declaration names, if it is well-formed enough
 	// to read one off.
@@ -8851,8 +9187,11 @@ export type Parser
 		try self.requireUnreservedName(nameTok)
 		// `Point.create` inside `type Point`, the bare token at file scope. The SAME derivation the
 		// declaration sweep records the signature under, so the key an `IrFunction` carries and the
-		// key `mintCallResult` types a call from are one name.
-		let name = self.declaredMethodName(nameTok)
+		// key `mintCallResult` types a call from are one name — for the FIRST declaration of it. A later
+		// OVERLOAD of the same name registers under a mangled variant of this one (`overloadRegistrationName`
+		// below), and the sweep — which cannot see parameter types — keeps publishing the BARE name; the
+		// two are reconciled at the call site by `SemanticCheck.resolveOverloadedCalls`.
+		let sourceName = self.declaredMethodName(nameTok)
 
 		// Parameters are parsed into parallel name/type lists BEFORE the scope reset:
 		// binding them needs the fresh per-function scope + value numbering, which is
@@ -8902,6 +9241,11 @@ export type Parser
 		// The `throws E` clause (P1.4b) — stamped onto the function so the body parse (`throw`/propagate)
 		// and the lowering (`ret` → `errorReturn` inside a throwing function) can read it off `func`.
 		let throwsClause = try self.parseOptionalThrowsClause()
+
+		// ⭐ **THE NAME EVERY REGISTRY BELOW IS KEYED BY** — the source name for the first declaration of it,
+		// a mangled variant for a later overload (D7). Decided HERE: the parameter list is complete and
+		// struct-resolved, and nothing has yet been recorded under a name.
+		let name = try self.overloadRegistrationNameFor(sourceName, paramTypes: paramTypes, paramNames: paramNames, takesReceiver: takesReceiver, nameTok: nameTok)
 
 		// Fresh per-function value numbering, seeded at the function's paramCount so
 		// parameter ids occupy 0..paramCount-1 by Std-ABI convention (a body value
@@ -9100,7 +9444,12 @@ export type Parser
 		// (a reassignment is E2013); mutating a parameter needs a local shadow. Runs after the push +
 		// `setCurrentFuncIndex` above so each parameter's `recordParamOrigin` is filed under this
 		// function's real index.
-		try self.bindParameters(name, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		// ⚠ `sourceName`, not `name`: this asks the whole-program DECLARATION SWEEP about the parameters'
+		// consume/feed facts, and the sweep publishes them under the name the SOURCE wrote — it never sees an
+		// overload's mangled registration name. `overloadRegistrationNameFor` refuses an overload set whose
+		// name has consume facts at all, precisely so that this per-name answer cannot be one sibling's read
+		// as another's.
+		try self.bindParameters(sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 
 		self.skipNewlines()
 		// parseStatements threads a "current block" that control-flow statements can
@@ -27246,7 +27595,7 @@ export type Parser
 		// drops the value at ITS scope exit; a `let s = b.value` re-reads a live pointer and is never
 		// double-dropped. `adoptType` re-interns any named argument into this file's interner.
 		if maxonTypeTag(declared) == ValueTypeTag.typeParameter and self.tagOf(box) == ValueTypeTag.genericInstance 'concreteTypeParamRead'
-			self.retypeValue(result, valueType: self.signatures.adoptType(self.signatures.substitutedInstanceArg(self.valueNameId(box), position: typeNameIdOf(declared)), into: self.artifact.typeNames))
+			self.retypeValue(result, valueType: self.instanceSubstitutedType(box, opaque: declared))
 		end 'concreteTypeParamRead'
 
 		// ⭐ **RECORD A BOXED-UNION-CANDIDATE FIELD READ**, so a THROW of it can MOVE it out of the container
@@ -29912,6 +30261,7 @@ export type Parser
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
 		try requireCalleeIsNotReservedName(callee, anchor: anchor)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
+		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
@@ -29921,6 +30271,76 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames)), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitCall'
+
+	// ⭐ **RETYPE-OF-T AT A CONCRETE METHOD'S RETURN (D7) — `emitFieldLoad`'s rule, reached one op further.**
+	// `c.unwrap()` on a `Cell with Wide` returns what the SHARED body declared, the opaque `T`, and an opaque
+	// value AGREES WITH EVERY TYPE: it is not merely imprecise, it is the one tag that cannot discriminate,
+	// so an overloaded callee handed one has no way to choose (`specs-shv2/function-overloads.md`'s
+	// `method-call-argument-generic-element` reported E3007 against a call whose type is fully determined).
+	// The receiver's alias binds `T`, so the answer is the instance's substituted argument — the same
+	// `substitutedInstanceArg` a concrete field read already asks.
+	//
+	// ⚠ **IT IS NARROWER THAN THE FIELD-READ RULE, AND THE OWNERSHIP PREMISE IS WHY.** A field read is a
+	// BORROW whatever the concrete type turns out to be, so that site retypes to a managed argument freely.
+	// A call RESULT's ownership was already decided by `mintCallResult` FROM THE OPAQUE TYPE — the drop
+	// enrollment either happened or did not — and the tag is what `valueIsManagedHeap` later reads to decide
+	// whether the value is dropped at scope exit. Retyping opaque→`String` would move that decision AFTER the
+	// ops that implement it, i.e. leak or double-free. So the substitution is applied only when the concrete
+	// argument owns no heap, which is exactly when no ownership decision depends on the tag.
+	//
+	// The gate is ordered cheapest-first: almost every call in a program has a non-generic first argument, and
+	// that test is one array read. Only past it is the callee's return type looked up.
+	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray)
+		if args.isEmpty() 'noReceiver'
+			return
+		end 'noReceiver'
+
+		let receiver = try args.get(0) otherwise panic("retypeOpaqueMethodResult: args.get(0) failed on a non-empty list")
+		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'concreteReceiverOnly'
+			return
+		end 'concreteReceiverOnly'
+
+		// The callee must be a method OF the receiver's own generic base, or `T` names a different type's
+		// parameter and the substitution would be against the wrong binding.
+		if not isQualifiedUnderTypeName(callee, typeName: self.signatures.genericInstanceBaseName(self.valueNameId(receiver))) 'notItsOwnMethod'
+			return
+		end 'notItsOwnMethod'
+
+		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
+			declared(returnType) then self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType)
+			undeclared then break 'declared'
+		end 'declared'
+	end 'retypeOpaqueMethodResult'
+
+	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType)
+		match returnType 'r'
+			value(inner) then self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner)
+			void then break 'r'
+		end 'r'
+	end 'retypeOpaqueReturn'
+
+	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType)
+		if maxonTypeTag(inner) != ValueTypeTag.typeParameter 'notOpaque'
+			return
+		end 'notOpaque'
+
+		let concrete = self.instanceSubstitutedType(receiver, opaque: inner)
+		// The ownership bound stated in `retypeOpaqueMethodResult`: a managed concrete argument keeps the
+		// opaque tag, because the drop decision that tag governs has already been made.
+		if self.signatures.typeIsManaged(concrete) 'managedConcrete'
+			return
+		end 'managedConcrete'
+
+		self.retypeValue(result, valueType: concrete)
+	end 'retypeOpaqueReturnValue'
+
+	// The CONCRETE type a generic-instance receiver binds an opaque `T` to. The one spelling of that lookup,
+	// shared by the field read (`emitFieldLoad`) and the method return above — `substitutedInstanceArg`
+	// answers in the INDEX's interner and every caller needs it in this file's, so the adoption rides here
+	// rather than at each site.
+	function instanceSubstitutedType(receiver ValueId, opaque MaxonType) returns MaxonType
+		return self.signatures.adoptType(self.signatures.substitutedInstanceArg(self.valueNameId(receiver), position: typeNameIdOf(opaque)), into: self.artifact.typeNames)
+	end 'instanceSubstitutedType'
 
 	// ⭐ **A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE (P1.9), and this is the door that used to
 	// let it through in silence** — `clamp(101)` ran the callee with `p = 101` and the body observed

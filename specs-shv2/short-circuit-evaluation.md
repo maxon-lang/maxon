@@ -278,8 +278,7 @@ end 'main'
 111
 ```
 
-<!-- disabled-test: not-over-bool-or-with-overloaded-callees -->
-<!-- P1.1 structs + method-name overload resolution -->
+<!-- test: not-over-bool-or-with-overloaded-callees -->
 When a bool `or`'s operands are calls whose return type can't be pinned at
 parse time (here `contains` is an overloaded method name shared by two types),
 the `or` lowers as a non-short-circuit bitwise op. The enclosing `not` must

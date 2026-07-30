@@ -1,0 +1,216 @@
+// Test: closure-capture.block-local-overload-arg
+typealias ValId = int(0 to u64.max)
+typealias IntThunk = function() returns ExitCode
+typealias LRArray = Array with LiveRange
+
+type LiveRange
+	export var valueId as ValId
+
+	export static function create(v ValId) returns LiveRange
+		return Self{valueId: v}
+	end 'create'
+end 'LiveRange'
+
+type SlotRange
+	export var off as ValId
+
+	export static function create(o ValId) returns SlotRange
+		return Self{off: o}
+	end 'create'
+end 'SlotRange'
+
+function earliest(r LiveRange) returns ExitCode
+	return r.valueId
+end 'earliest'
+
+function earliest(r SlotRange) returns ExitCode
+	return r.off
+end 'earliest'
+
+function callThunk(t IntThunk) returns ExitCode
+	return t()
+end 'callThunk'
+
+function allocate(ranges LRArray) returns ExitCode
+	var total = 0
+	var oi = 0
+	while oi < ranges.count() 'assign'
+		let range = try ranges.get(oi) otherwise panic("oob")
+		total = total + callThunk(function() gives earliest(range))
+		oi = oi + 1
+	end 'assign'
+	return total
+end 'allocate'
+
+function main() returns ExitCode
+	var arr = LRArray.create()
+	arr.push(LiveRange.create(7))
+	arr.push(LiveRange.create(10))
+	return allocate(arr)
+end 'main'
+---
+ExitCode: 17
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @LiveRange.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @earliest {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @callThunk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @allocate {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.storeSlotReg slot0, r13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_count
+    x64.cmpRegReg r13, r8
+    x64.jcc less, assign
+    x64.jmp whileexit
+  assign:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __arr_get
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.movRegImm32 rdi, 134
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.leaRegFunc r14, [rip + allocate$closure_0]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], r13
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect callThunk
+    x64.leaRegRegReg r12, r12, r8
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 r13, rax, 1
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @allocate$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect earliest
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 7
+    x64.callDirect LiveRange.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __arr_push
+    x64.movRegImm32 rcx, 10
+    x64.callDirect LiveRange.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect allocate
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

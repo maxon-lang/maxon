@@ -1945,6 +1945,54 @@ end 'FuncSignature'
 // validation) and lowerCall (label→positional arg slotting).
 export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 
+// ⭐ **AN OVERLOAD SET — the bare SOURCE name a call is WRITTEN with ⇒ every REGISTRATION name that answers
+// to it, in declaration order** (D7). shv2 registers the FIRST declaration of a name under the name itself
+// and every later one under a mangled variant (`process`, then `process#String`), so the callee a call op
+// carries is the bare name while the key `funcSignatures` holds a later overload under is not. This map is
+// what turns one into the other, and `SemanticCheck.resolveOverloadedCalls` is its only reader.
+//
+// It is EMPTY for every program that overloads nothing, which is what keeps the resolver a single
+// `isEmpty()` test on that overwhelming majority.
+//
+// ⚠ **IT IS DELIBERATELY NOT IN `resetMergeTargets`.** Every other merge target must reset because it is a
+// PUSH target (a warm rebuild would double it) or FIRST-WINS (a warm rebuild would report every declaration
+// as a duplicate of itself). This one is an UPSERT keyed by the bare name whose VALUE is the whole set, so
+// re-merging a file REPLACES its entry. A member left behind by a previous fold — an edit that deleted an
+// overload — is inert rather than wrong: the resolver looks every candidate up in `funcSignatures`, which IS
+// reset, and skips one that is absent, so a stale name can only shrink a candidate list back to what the
+// program actually declares.
+export typealias OverloadSetMap = Map with (ByteArray, ByteArrayArray)
+
+// ⭐ **THE CHARACTER AN OVERLOAD'S REGISTRATION NAME JOINS WITH — and the reason it is not `$`.** The lexer
+// admits only `[A-Za-z0-9_]` inside an identifier, so a `#` cannot appear in any name the source can write:
+// a minted overload name can never collide with a declared one, the same construction `__` gives the
+// reserved generic-instance space and `.` gives the witness label (ARCHITECTURE: "a symbol built by joining
+// two names joins them with a character no name can hold").
+//
+// ⚠ It is NOT `$`, which shv2 already spends on joining a lifted closure to its enclosing function
+// (`<enclosing>$closure_<k>`, and it NESTS). A second meaning for that character would make `f$closure_0`
+// and `f$int` indistinguishable to anything reading a name — and `Parser.overloadRegistrationNameFor`
+// mints a closure's enclosing name, so the two joins genuinely meet.
+//
+// ⚠ Every SUFFIX PART rides the same separator (`lookup#Registry#bool`), not a `_` join, because `_` IS in
+// the identifier alphabet and an `_`-join over names is not injective — the exact trap
+// `IrInterface.witnessTableLabel` documents. Uniqueness is nonetheless established by CONSTRUCTION rather
+// than by that argument: `Parser.overloadRegistrationNameFor` will not hand back a name this file has
+// already registered.
+let OverloadNameSeparator = "#"
+
+// Join a bare name and one already-rendered suffix into a registration name. THE one producer; the
+// separator has no second speller.
+export function overloadRegistrationName(base ByteArray, suffix ByteArray) returns ByteArray
+	return "{String.from(base)}{OverloadNameSeparator}{String.from(suffix)}".toByteArray()
+end 'overloadRegistrationName'
+
+// Append one part to an overload suffix under construction — so a suffix's parts and the suffix's own join
+// to the base name are the same character, stated once above.
+export function overloadSuffixPart(suffix String, part String) returns String
+	return "{suffix}{OverloadNameSeparator}{part}" if not suffix.isEmpty() else part
+end 'overloadSuffixPart'
+
 // ⭐ **THE THREE REGISTRIES A FUNCTION TYPE'S SHAPE IS LOOKED UP IN, PLUS THE INTERNER THAT NAMES IT — ONE
 // CARRIER.** `TypeResolution.declaredFunctionShapeOf` answers "what shape is the function type this
 // governing NAME denotes?" from `funcSignatures`+`funcReturnTypes` (a declared function or lifted closure)
@@ -2250,6 +2298,10 @@ export type Project
 	// Declared function parameter signatures (names + types), keyed by name.
 	// The M5 parse-staging registry the call machinery reads (see FuncSignature).
 	export var funcSignatures as FuncSignatureMap
+	// ⭐ Every OVERLOADED bare name in the program ⇒ its members' registration names (see OverloadSetMap for
+	// what the two names are and why this one registry is not reset with the others). Empty unless the
+	// program declares one name twice with different signatures.
+	export var overloadSets as OverloadSetMap
 	// ⭐ Recorded function-value merges awaiting whole-program signature agreement (P1.5 #81). Filled by
 	// `mergeArtifact` (each file's `pendingFnMergeChecks` appended in order); drained by
 	// `checkValueMergeSignatures` before the pipeline runs. Reset with the other merge targets.
@@ -2376,6 +2428,7 @@ export type Project
 			stdlibFacts: StdlibFacts.empty(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
+			overloadSets: OverloadSetMap.create(),
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			unusedTypeAliasDiagnostics: DeferredNameDiagnosticArray.create(),
 			hiddenTypeNameDiagnostics: DeferredNameDiagnosticArray.create(),

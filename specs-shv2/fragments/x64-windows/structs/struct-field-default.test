@@ -1,0 +1,110 @@
+// Test: struct-field-default
+type Counter
+	export var value = 0
+	export var step = 1
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	static function create(value CounterValue, step CounterStep) returns Self
+		return Self{value: value, step: step}
+	end 'create'
+end 'Counter'
+
+typealias CounterValue = int(0 to u64.max)
+typealias CounterStep = int(0 to u64.max)
+
+function main() returns ExitCode
+	let c1 = Counter.create()
+	let c2 = Counter.create(40, step: 1)
+	let c3 = Counter.create(10, step: 2)
+	return c1.value + c2.value + c3.step
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Counter.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 1
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.create#CounterValue#CounterStep {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect Counter.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 40
+    x64.movRegImm32 rdx, 1
+    x64.callDirect Counter.create#CounterValue#CounterStep
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 10
+    x64.movRegImm32 rdx, 2
+    x64.callDirect Counter.create#CounterValue#CounterStep
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.leaRegRegReg r13, rax, rcx
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

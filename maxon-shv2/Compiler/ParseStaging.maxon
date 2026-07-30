@@ -39,6 +39,10 @@ let sharedEmptyInterfaces = IrInterfaceArray.create()
 let sharedEmptyConformances = ConformanceDeclArray.create()
 let sharedEmptyTypeNameDecls = TypeNameDeclArray.create()
 let sharedEmptyFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
+// Overloading a name is rare, so the overwhelming file contributes NO overload set. It is shared for
+// `typeNameDecls`' stronger reason too: only the real parse can fill it, and the tolerant declaration
+// sweep builds an artifact per file that would otherwise pay for an empty map each.
+let sharedEmptyOverloadSets = OverloadSetMap.create()
 
 // One `funcReturnTypes` registry contribution: a function's name and its
 // declared return type, recorded by the parser. Ordered in an array so the
@@ -110,6 +114,15 @@ export type FileParseArtifact
 	export var funcReturnTypes as FuncReturnTypeEntryArray
 	// This file's `funcSignatures` registry contributions, in declaration order.
 	export var funcSignatures as FuncSignatureEntryArray
+	// ⭐ This file's OVERLOAD SETS (D7) — each overloaded bare name ⇒ its members' registration names, in
+	// declaration order. Folded into `project.overloadSets` by `commitOverloadSets`.
+	//
+	// A MAP where the other contributions are ordered arrays, and for the reason those are arrays: what has
+	// to be deterministic is the ORDER OF THE MEMBERS (the E3007 candidate list prints them, and the
+	// resolver's tie-breaks read them), and that order lives inside each value. The KEY order decides
+	// nothing — the commit is one independent upsert per name. Empty for every file that overloads nothing,
+	// so the shared empty map keeps a non-overloading parse allocation-identical.
+	export var overloadSets as OverloadSetMap
 	// This file's recorded function-value merges awaiting whole-program signature agreement (P1.5 #81).
 	// Appended to `project.pendingFnMergeChecks` by `commitPendingFnMergeChecks`; the check itself is
 	// drained after merge, before resolution (see PendingFnMergeCheck).
@@ -199,6 +212,7 @@ export type FileParseArtifact
 			valueOrigins: ValueOriginTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
+			overloadSets: sharedEmptyOverloadSets,
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			pendingFunctionTypeDoors: sharedEmptyFunctionTypeDoors,
 			rangeChecks: FunctionRangeCheckEntryArray.create(),
@@ -303,6 +317,19 @@ export type FileParseArtifact
 	export function recordFuncSignature(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath)
 		self.funcSignatures.push(FuncSignatureEntry.create(name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath))
 	end 'recordFuncSignature'
+
+	// Record the whole current member list of one overloaded bare name (D7). REPLACES rather than appends:
+	// the parser hands back the complete list every time a member joins, which is what keeps this table a
+	// projection of the parser's own records rather than a second accumulation to keep in step.
+	export function recordOverloadSet(base ByteArray, members ByteArrayArray)
+		// COPY-ON-WRITE off the shared empty table before this file's first overload — see
+		// `sharedEmptyOverloadSets`.
+		if self.overloadSets is sharedEmptyOverloadSets 'firstOverloadInThisFile'
+			self.overloadSets = OverloadSetMap.create()
+		end 'firstOverloadInThisFile'
+
+		self.overloadSets.upsert(base, value: members)
+	end 'recordOverloadSet'
 
 	// Record a function's range-check sites as this file's contribution to `project.rangeChecks`
 	// (P1.9). Called by the parser at function completion, and ONLY when the function actually has
@@ -419,6 +446,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
+	commitOverloadSets(project, artifact: artifact)
 	commitPendingFnMergeChecks(project, artifact: artifact)
 	commitPendingFunctionTypeDoors(project, artifact: artifact)
 	commitRangeChecks(project, artifact: artifact)
@@ -862,6 +890,20 @@ function commitFuncSignatures(project Project, artifact FileParseArtifact)
 		project.funcSignatures.upsert(entry.name, value: entry.signature)
 	end 'each'
 end 'commitFuncSignatures'
+
+// Commit this file's overload sets (D7). One independent upsert per overloaded bare name, so — unlike every
+// other commit here — it needs no reset to survive a warm rebuild and the KEY iteration order decides
+// nothing; see `OverloadSetMap` for both arguments. A file that overloads nothing carries the shared empty
+// table and this loop does not run.
+//
+// ⚠ It does NOT detect a CROSS-FILE contest, and cannot: the members were chosen by a parser that saw one
+// file. Two files declaring one name collide in `commitFuncSignatures` above (E3006) exactly as they did
+// before this rung, which is the boundary `Parser.overloadRegistrationNameFor` states.
+function commitOverloadSets(project Project, artifact FileParseArtifact)
+	for (base, members) in artifact.overloadSets 'each'
+		project.overloadSets.upsert(base, value: members)
+	end 'each'
+end 'commitOverloadSets'
 
 // Append this file's recorded function-value merge checks to the whole-program list (P1.5 #81). Unlike
 // the signature commit above there is NO dedup: each entry is a DISTINCT merge SITE (its own position),

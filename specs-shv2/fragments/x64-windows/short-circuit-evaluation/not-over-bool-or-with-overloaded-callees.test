@@ -1,0 +1,208 @@
+// Test: not-over-bool-or-with-overloaded-callees
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+	export static function make(v Integer) returns Box
+		return Box{v: v}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.v == x
+	end 'contains'
+end 'Box'
+
+type Bag
+	export var w as Integer
+	export static function make(w Integer) returns Bag
+		return Bag{w: w}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.w == x
+	end 'contains'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Box.make(5)
+	let g = Bag.make(9)
+	var code = 0
+	if not (b.contains(5) or g.contains(1)) 'a'
+		code = code + 1
+	end 'a'
+	if not (b.contains(1) or g.contains(1)) 'c'
+		code = code + 10
+	end 'c'
+	if not (b.contains(1) or g.contains(9)) 'd'
+		code = code + 100
+	end 'd'
+	return code as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Box.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.contains {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegReg rax, rdx
+    x64.setccReg equal, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.contains {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegReg rax, rdx
+    x64.setccReg equal, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 5
+    x64.callDirect Box.make
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 9
+    x64.callDirect Bag.make
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect Box.contains
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, critsplit
+    x64.jmp orrhs
+  critsplit:
+    x64.jmp scmerge
+  orrhs:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect Bag.contains
+    x64.movRegReg rax, r8
+    x64.jmp scmerge
+  scmerge:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect Box.contains
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, critsplit
+    x64.jmp orrhs
+  critsplit:
+    x64.jmp scmerge
+  orrhs:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect Bag.contains
+    x64.movRegReg rax, r8
+    x64.jmp scmerge
+  scmerge:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, c
+    x64.jmp critsplit
+  c:
+    x64.leaRegRegImm32 r13, r13, 10
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect Box.contains
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, critsplit
+    x64.jmp orrhs
+  critsplit:
+    x64.jmp scmerge
+  orrhs:
+    x64.movRegImm32 rdx, 9
+    x64.movRegReg rcx, r12
+    x64.callDirect Bag.contains
+    x64.movRegReg rax, r8
+    x64.jmp scmerge
+  scmerge:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, d
+    x64.jmp critsplit
+  d:
+    x64.leaRegRegImm32 r13, r13, 100
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

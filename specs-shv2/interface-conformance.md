@@ -560,11 +560,18 @@ error E3016: <fragment>:5:6: Partial interface implementation: type 'Thing' is m
   - toString() returns String
 ```
 
-<!-- test: error.duplicate-method-conformance -->
-A conforming type with a DUPLICATE-named method is E3006 (shv2's non-mangled `Type.method` naming collides
-the two), reported cleanly. Regression: the conformance check read the method's param types from the module
-but its param names from the signature registry, which resolve the collision independently and disagreed on
-arity — the check indexed one by the other's count and PANICKED instead of letting the E3006 fail the build.
+<!-- test: overloaded-method-on-conforming-type -->
+A conforming type may OVERLOAD the method it conforms with: `label()` satisfies `Named`, and
+`label(extra Integer)` registers beside it as a distinct member (D7). It was `E3006 duplicate definition of
+function 'Widget.label'` until this rung, because shv2 keyed a method by its bare `Type.method` name alone —
+which is also what this case originally existed to pin, and the ORACLE has always accepted the program.
+
+⚠ It keeps guarding the regression it was written for, and the two halves it plays off each other are
+unchanged: the conformance check reads a method's param TYPES from the module and its param NAMES from the
+signature registry. Those were two independent resolutions of one collision and they disagreed on arity, so
+the check indexed one by the other's count and PANICKED rather than letting the diagnostic fail the build.
+With the collision now RESOLVED rather than refused, the same disagreement would be a panic with no
+diagnostic behind it to hide it — so the assertion is that this compiles and runs.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -593,6 +600,6 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3006: <fragment>:16:11: duplicate definition of function 'Widget.label'
+```exitcode
+0
 ```

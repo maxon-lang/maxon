@@ -1,0 +1,155 @@
+// Test: second-param-disambiguation-result-type
+typealias Integer = int(i64.min to i64.max)
+
+type Registry
+	export var seed as Integer
+
+	export static function make(seed Integer) returns Registry
+		return Registry{seed: seed}
+	end 'make'
+end 'Registry'
+
+function lookup(reg Registry, index Integer) returns Integer
+	return reg.seed + index
+end 'lookup'
+
+function lookup(reg Registry, present bool) returns bool
+	if present 'yes'
+		return reg.seed > 0
+	end 'yes'
+	return false
+end 'lookup'
+
+function useInt(value Integer) returns Integer
+	return value
+end 'useInt'
+
+function useBool(flag bool) returns Integer
+	if flag 'on'
+		return 1
+	end 'on'
+	return 0
+end 'useBool'
+
+function main() returns ExitCode
+	let reg = Registry.make(10)
+	let asInt = lookup(reg, index: 5)
+	let asBool = lookup(reg, present: true)
+	return useInt(asInt) + useBool(asBool)
+end 'main'
+---
+ExitCode: 16
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Registry.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @lookup {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg r8, rax, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @lookup#Registry#bool {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, yes
+    x64.jmp ifcont
+  yes:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg greater, r8
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @useInt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @useBool {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, on
+    x64.jmp ifcont
+  on:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 10
+    x64.callDirect Registry.make
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect lookup
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect lookup#Registry#bool
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect useInt
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect useBool
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

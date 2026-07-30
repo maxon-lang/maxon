@@ -233,8 +233,7 @@ end 'main'
 15
 ```
 
-<!-- disabled-test: closure-capture.block-local-overload-arg -->
-<!-- function overloading — shv2 keys a function by its bare NAME, so the two `earliest` declarations collide (E3006 duplicate definition) -->
+<!-- test: closure-capture.block-local-overload-arg -->
 A `let` declared inside a `while`-loop body — a NESTED block scope — captured
 into a closure whose body passes it as an argument to an OVERLOADED function
 (`earliest(LiveRange)` vs `earliest(SlotRange)`). The block frame is popped

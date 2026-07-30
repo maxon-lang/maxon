@@ -51,8 +51,7 @@ If the compiler cannot determine which overload to call based on argument types 
 
 ## Tests
 
-<!-- disabled-test: basic-type-disambiguation -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: basic-type-disambiguation -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -72,8 +71,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: basic-type-disambiguation-string -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: basic-type-disambiguation-string -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -93,8 +91,7 @@ end 'main'
 47
 ```
 
-<!-- disabled-test: name-disambiguation-preserved -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: name-disambiguation-preserved -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -114,8 +111,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: error.ambiguous-same-signature -->
-<!-- FUNCTION OVERLOADING — E3007 is the AMBIGUITY diagnostic an overload RESOLVER raises; shv2 refuses the second declaration outright (E3006), so the case it describes cannot arise here yet. -->
+<!-- test: error.ambiguous-same-signature -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -135,8 +131,7 @@ end 'main'
 error E3007: specs/fragments/function-overloads/error.ambiguous-same-signature.test:13:9: Ambiguous overload for 'create': multiple overloads match. Candidates: (name String), (label String)
 ```
 
-<!-- disabled-test: method-type-disambiguation -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: method-type-disambiguation -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -163,8 +158,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: variable-type-inference -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: variable-type-inference -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -186,7 +180,7 @@ end 'main'
 ```
 
 <!-- disabled-test: string-contains-char -->
-<!-- THE `Character` OVERLOAD OF `String.contains` — shv2 supplies the String form only, so `text.contains('e')` is `E3005: 'contains' requires a String, but its argument is int`. A String-method-set gap, not a member-walk one: `text.contains("e")` compiles and the case below pins it. -->
+<!-- THE `Character` OVERLOAD OF `String.contains` — shv2 supplies the String form only, so `text.contains('e')` is `E3005: 'contains' requires a String, but its argument is int`. A String-method-set gap, NOT an overloading one: D7 resolves overloads of DECLARED functions, and a builtin method's overload set is synthesized rather than declared. The case below pins `text.contains("e")`. -->
 ```maxon
 function main() returns ExitCode
 	let text = "hello"
@@ -216,8 +210,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: bool-type-disambiguation -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: bool-type-disambiguation -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -241,8 +234,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: float-type-disambiguation -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: float-type-disambiguation -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Decimal = float(f64.min to f64.max)
@@ -263,8 +255,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: second-param-disambiguation-result-type -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: second-param-disambiguation-result-type -->
 Two overloads that SHARE their leading parameter type must still be told apart
 by their later parameters — the overload key mangles every parameter, not just
 the first. Here both `lookup` overloads start with `Registry`, so a resolver
@@ -317,8 +308,7 @@ end 'main'
 16
 ```
 
-<!-- disabled-test: method-call-argument -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: method-call-argument -->
 An argument that is itself a METHOD CALL is scored by the METHOD'S RETURN TYPE,
 not by the receiver's type. `a.count()` is an integer however `a` is declared,
 so it selects `over(x Wide)` even though the `String` overload is declared
@@ -346,8 +336,7 @@ end 'main'
 101
 ```
 
-<!-- disabled-test: method-call-argument-via-variable -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: method-call-argument-via-variable -->
 The same call routed through a local binding. Binding the result first has
 always worked; it is the control that says the method-call form must agree
 with it rather than resolving to something else.
@@ -374,8 +363,7 @@ end 'main'
 101
 ```
 
-<!-- disabled-test: method-call-argument-receiver-type-is-wrong -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: method-call-argument-receiver-type-is-wrong -->
 The receiver's type is not merely unhelpful here, it is the WRONG answer:
 `s` is a `String` and `s.count()` is an integer, so scoring the argument as
 the receiver would match the `String` overload — which is declared first —
@@ -401,7 +389,7 @@ end 'main'
 ```
 
 <!-- disabled-test: method-call-argument-chained -->
-<!-- FUNCTION OVERLOADING, and behind it a SECOND blocker this rung uncovered: `Trunk.branch()`'s `return self.leaf` hands back a BORROWED struct field, which P1.4b's borrowed-return rule refuses ("Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b"). The oracle runs it. The `t.branch().size()` chain the case is named for DOES parse now — `specs-shv2/postfix-member-walk.md`'s three-hop case pins it. -->
+<!-- BORROWED-AGGREGATE RETURN, not overloading — the `over` overloads themselves resolve now. `Trunk.branch()`'s `return self.leaf` hands back a BORROWED struct field, which P1.4b's borrowed-return rule refuses ("Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b"); the oracle runs it. The `t.branch().size()` chain is pinned green by `specs-shv2/postfix-member-walk.md`. -->
 A chain resolves left to right: `t.branch()` yields a `Leaf`, and `size()` is
 looked up on THAT type rather than on `t`.
 ```maxon
@@ -448,8 +436,7 @@ end 'main'
 107
 ```
 
-<!-- disabled-test: method-call-argument-on-field -->
-<!-- FUNCTION OVERLOADING — and ONLY that, now. The `t.leaf.size()` shape this case is named for was `E3018 type 'Leaf' has no field named 'size'` before this rung and is pinned green by `specs-shv2/postfix-member-walk.md`'s method-after-a-struct-field case. -->
+<!-- test: method-call-argument-on-field -->
 A method call whose receiver is a FIELD, not a bare variable. The field's
 declared type owns the method, so `t.leaf.size()` must resolve through `Leaf`.
 ```maxon
@@ -492,8 +479,7 @@ end 'main'
 107
 ```
 
-<!-- disabled-test: method-call-argument-string-result -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: method-call-argument-string-result -->
 The mirror of the integer cases, with the overloads written in the opposite
 order: a method call returning `String` must select the `String` overload even
 though the `Wide` one comes first, and even though the receiver is a struct
@@ -530,8 +516,7 @@ end 'main'
 204
 ```
 
-<!-- disabled-test: method-call-argument-generic-element -->
-<!-- FUNCTION OVERLOADING — shv2 has none: a second `function over(...)` of the same name is `E3006 duplicate definition of function 'over'` at the DECLARATION, before any call is resolved. Its own rung; nothing in this case is about the member walk. -->
+<!-- test: method-call-argument-generic-element -->
 The method's declared return type is the type PARAMETER `T`, which carries no
 information on its own. It is resolved through the receiver alias's binding
 (`WideCell` binds `T` to `Wide`) before it is scored; without that
@@ -570,8 +555,7 @@ end 'main'
 107
 ```
 
-<!-- disabled-test: method-call-argument-returns-self -->
-<!-- FUNCTION OVERLOADING — and ONLY that, now. The `w.bump().bump()` chain was `E2010 Expected ')' but got '.'` before this rung; `specs-shv2/postfix-member-walk.md` pins the same shape. -->
+<!-- test: method-call-argument-returns-self -->
 A chainable method declared `returns Self` yields the RECEIVER's type, so it
 must keep selecting the `Widget` overload however long the chain gets. This is
 the one shape the old receiver-typed guess got right by accident — scoring
@@ -610,7 +594,7 @@ end 'main'
 ```
 
 <!-- disabled-test: enum-property-argument -->
-<!-- ENUM PROPERTIES — `k.name` on an enum value is `E2015: a field access on 'k', which is declared 'int' and not a struct type`. shv2 gives an enum no `.name`/`.ordinal`/`.rawValue`; its own rung. -->
+<!-- ENUM PROPERTIES, not overloading — `k.name` on an enum value is `E2015: a field access on 'k', which is declared 'int' and not a struct type`. shv2 gives an enum no `.name`/`.ordinal`/`.rawValue`; its own rung. D7 resolves the `over` pair the moment the argument has a type at all. -->
 An ENUM PROPERTY is a member access that is not a struct field, and it scores by
 what the property yields. `.name` is a `String` for every enum, so it selects the
 `String` overload even though the `Wide` one is declared first. Reaching this
@@ -704,7 +688,7 @@ end 'main'
 ```
 
 <!-- disabled-test: enum-raw-value-argument -->
-<!-- STRING-BACKED ENUM RAW VALUES — `greeting = "hi"` is `E2015: a raw value of kind 'string literal'` at the DECLARATION (only integer and float backings are parsed), plus the `.rawValue` property gap above. -->
+<!-- STRING-BACKED ENUM RAW VALUES — `greeting = "hi"` is `E2015: a raw value of kind 'string literal'` at the DECLARATION (only integer and float backings are parsed), plus the `.rawValue` property gap above. Not overloading. -->
 `.rawValue` scores by the enum's BACKING rather than by one fixed type: a
 string-backed enum yields a `String` here, while the integer-backed default
 yields an integer. Both spellings appear in one program so neither can be
@@ -748,7 +732,7 @@ end 'main'
 ```
 
 <!-- disabled-test: enum-struct-backing-field-argument -->
-<!-- STRUCT-BACKED ENUM RAW VALUES — `small = Spec{...}` is `E2015: a raw value of kind 'identifier'` at the DECLARATION, plus the enum-property gap above. -->
+<!-- STRUCT-BACKED ENUM RAW VALUES — `small = Spec{...}` is `E2015: a raw value of kind 'identifier'` at the DECLARATION, plus the enum-property gap above. Not overloading. -->
 A struct-backed enum exposes its backing struct's fields directly — `e.field` is
 `e.rawValue.field` — so the peek has to take both steps to score one access.
 Stopping after the enum hands back no type and leaves the call ambiguous;

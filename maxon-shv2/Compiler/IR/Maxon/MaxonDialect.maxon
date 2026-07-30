@@ -984,3 +984,50 @@ export let ErrorFlagOrdinalBias = 1 as ParsedInt
 // same ABI register. Every THROWING Std graph's success edge reads THIS one, so a change to the encoding
 // reaches all of them or none.
 export let NoErrorFlag = 0 as ParsedInt
+
+// ⭐ **WHICH NAME, IF ANY, AN OP BINDS A CALLEE BY — the dialect's own answer to the one question overload
+// resolution asks of every op** (D7). It lives here, beside the union, because the answer is a property of
+// the OP SET: a new callee-carrying variant is added to `MaxonOp` and to the two matches below in one edit,
+// where a resolver keeping its own band ranges would silently classify it as callee-free.
+export union MaxonOpCallee
+	// A DIRECT call's callee name — the operand overload resolution may REWRITE (`withRewrittenCallee`).
+	direct(callee ByteArray)
+	// A function VALUE's target name (`functionRef`). A callee name resolution may NOT rewrite: there are no
+	// arguments to pick an overload from. Its OWN arm rather than `none`, so a resolver can refuse an
+	// overloaded name here instead of silently binding whichever member registered first.
+	functionValue(name ByteArray)
+	none
+end 'MaxonOpCallee'
+
+// ⚠ It allocates a union value per op asked, which is why its ONE caller
+// (`SemanticCheck.resolveOverloadedCalls`) is gated on the program actually declaring an overload — the cost
+// that makes a per-op union unaffordable elsewhere (see `ValueEscapeSite`) is not paid by a program without
+// one. An allocation-free `bool` twin would answer the wrong question: the resolver needs the NAME.
+//
+// ⚠ `indirectCall` and the two witness dispatches carry NO name to bind: an indirect call's callee is a
+// VALUE, and a witness dispatch was resolved against the enclosing type's `where` constraints at parse time
+// (there is no callee name anywhere on the op). Neither can be an overload set's member.
+export function maxonOpCallee(op MaxonOp) returns MaxonOpCallee
+	return match op 'op'
+		call(_, callee, _, _, _, _) gives MaxonOpCallee.direct(callee)
+		literal to stringLiteral gives MaxonOpCallee.none
+		tryCall(_, _, callee, _, _, _, _) gives MaxonOpCallee.direct(callee)
+		throwError to panicAbort gives MaxonOpCallee.none
+		functionRef(_, funcName) gives MaxonOpCallee.functionValue(funcName)
+		indirectCall gives MaxonOpCallee.none
+		asyncCall(_, callee, _, _, _, _) gives MaxonOpCallee.direct(callee)
+		await to witnessTryDispatch gives MaxonOpCallee.none
+	end 'op'
+end 'maxonOpCallee'
+
+// The same op with its callee name replaced — every other operand carried through verbatim. Asked only of an
+// op `maxonOpCallee` answered `direct` for, so every other variant panics rather than returning the op
+// unchanged: a silent pass-through would make a resolver's rewrite vanish for one op kind.
+export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonOp
+	return match op 'op'
+		call(result, _, args, argLabels, argRanges, argImmutableNames) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+		default panic("withRewrittenCallee: asked of an op that binds no direct callee — `maxonOpCallee` answers `direct` for exactly three variants and every caller gates on it")
+	end 'op'
+end 'withRewrittenCallee'
