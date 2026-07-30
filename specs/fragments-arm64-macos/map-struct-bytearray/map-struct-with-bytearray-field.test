@@ -43,6 +43,22 @@ module {
   entry:
     arm64.prologue stack_size=64
     arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.mov x0, #255
+    arm64.cmp x1, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne Entry.create.__range_panic_0
+    arm64.b Entry.create.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
     arm64.adrp_add_func x0, __destruct_Entry
     arm64.mov x2, x0
     arm64.str x1, [x29, #-24]
@@ -74,56 +90,54 @@ module {
     arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.str x1, [x29, #-16]
-    arm64.mov x2, #0
-    arm64.str x2, [x29, #-24]
     arm64.bl EntryMap.create
-    arm64.str x0, [x29, #-32]
+    arm64.str x0, [x29, #-24]
     arm64.bl ByteArray.create
-    arm64.str x0, [x29, #-40]
-    arm64.ldr x3, [x29, #-40]
-    arm64.ldr x0, [x29, #-40]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x2, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
     arm64.mov x1, #10
     arm64.bl ByteArray.push
-    arm64.ldr x4, [x29, #-40]
-    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x3, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
     arm64.mov x1, #20
     arm64.bl ByteArray.push
-    arm64.ldr x5, [x29, #-40]
-    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x4, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
     arm64.mov x1, #30
     arm64.bl ByteArray.push
-    arm64.ldr x6, [x29, #-40]
-    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x5, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
     arm64.mov x1, #42
     arm64.bl Entry.create
-    arm64.str x0, [x29, #-48]
-    arm64.adrp_add_global x7, __static_lit_0
-    arm64.mov x8, x7
-    arm64.mov x9, #32
-    arm64.add x10, x8, x9
-    arm64.str x10, [x29, #-56]
-    arm64.ldr x11, [x29, #-56]
-    arm64.ldr x0, [x29, #-56]
+    arm64.str x0, [x29, #-40]
+    arm64.adrp_add_global x6, __static_lit_0
+    arm64.mov x7, x6
+    arm64.mov x8, #32
+    arm64.add x9, x7, x8
+    arm64.str x9, [x29, #-48]
+    arm64.ldr x10, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
     arm64.bl mm_incref
-    arm64.ldr x12, [x29, #-32]
-    arm64.ldr x14, [x29, #-56]
-    arm64.ldr x15, [x29, #-48]
-    arm64.ldr x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-56]
-    arm64.ldr x2, [x29, #-48]
+    arm64.ldr x11, [x29, #-24]
+    arm64.ldr x12, [x29, #-48]
+    arm64.ldr x14, [x29, #-40]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-48]
+    arm64.ldr x2, [x29, #-40]
     arm64.bl EntryMap.insert
-    arm64.adrp_add_global x0, __static_lit_0
-    arm64.mov x2, x0
-    arm64.mov x0, #32
-    arm64.add x3, x2, x0
-    arm64.str x3, [x29, #-64]
-    arm64.ldr x0, [x29, #-64]
+    arm64.adrp_add_global x15, __static_lit_0
+    arm64.mov x0, x15
+    arm64.mov x2, #32
+    arm64.add x3, x0, x2
+    arm64.str x3, [x29, #-56]
+    arm64.ldr x0, [x29, #-56]
     arm64.str x1, [x29, #-336]
     arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-64]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-56]
     arm64.bl EntryMap.get
-    arm64.str x0, [x29, #-72]
+    arm64.str x0, [x29, #-64]
     arm64.mov x0, #0
     arm64.cmp x1, x0
     arm64.cset x2, ne
@@ -137,22 +151,17 @@ module {
     arm64.mov x1, #0
     arm64.bl Entry.create
     arm64.str x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-24]
-    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-72]
+    arm64.ldr x0, [x29, #-72]
     arm64.bl mm_incref
     arm64.b main.otherwise_default_continue_0
   otherwise_default_success_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_59
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_59
-    arm64.ldr x1, [x29, #-72]
-    arm64.str x1, [x29, #-24]
+    arm64.ldr x0, [x29, #-64]
+    arm64.str x0, [x29, #-72]
     arm64.b main.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-72]
     arm64.str x0, [x29, #-80]
     arm64.ldr x1, [x29, #-80]
     arm64.ldr x0, [x29, #-80]
@@ -463,64 +472,64 @@ module {
     arm64.bl stdlib.print
     arm64.ldr x0, [x29, #-272]
     arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_301
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_301
+    arm64.ldr x0, [x29, #-176]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_303
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_303
+    arm64.ldr x0, [x29, #-104]
+    arm64.cmp x0, #0
     arm64.b.eq main.__skip_guarded_305
     arm64.bl mm_decref
     arm64.label main.__skip_guarded_305
-    arm64.ldr x0, [x29, #-176]
+    arm64.ldr x0, [x29, #-72]
     arm64.cmp x0, #0
     arm64.b.eq main.__skip_guarded_307
     arm64.bl mm_decref
     arm64.label main.__skip_guarded_307
-    arm64.ldr x0, [x29, #-104]
+    arm64.ldr x0, [x29, #-16]
     arm64.cmp x0, #0
     arm64.b.eq main.__skip_guarded_309
     arm64.bl mm_decref
     arm64.label main.__skip_guarded_309
-    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-8]
     arm64.cmp x0, #0
     arm64.b.eq main.__skip_guarded_311
     arm64.bl mm_decref
     arm64.label main.__skip_guarded_311
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-56]
     arm64.cmp x0, #0
     arm64.b.eq main.__skip_guarded_313
     arm64.bl mm_decref
     arm64.label main.__skip_guarded_313
-    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-48]
     arm64.cmp x0, #0
     arm64.b.eq main.__skip_guarded_315
     arm64.bl mm_decref
     arm64.label main.__skip_guarded_315
-    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-80]
     arm64.cmp x0, #0
     arm64.b.eq main.__skip_guarded_317
     arm64.bl mm_decref
     arm64.label main.__skip_guarded_317
-    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x0, [x29, #-40]
     arm64.cmp x0, #0
     arm64.b.eq main.__skip_guarded_319
     arm64.bl mm_decref
     arm64.label main.__skip_guarded_319
-    arm64.ldr x0, [x29, #-80]
+    arm64.ldr x0, [x29, #-32]
     arm64.cmp x0, #0
     arm64.b.eq main.__skip_guarded_321
     arm64.bl mm_decref
     arm64.label main.__skip_guarded_321
-    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x0, [x29, #-24]
     arm64.cmp x0, #0
     arm64.b.eq main.__skip_guarded_323
     arm64.bl mm_decref
     arm64.label main.__skip_guarded_323
-    arm64.ldr x0, [x29, #-40]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_325
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_325
-    arm64.ldr x0, [x29, #-32]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_327
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_327
     arm64.mov x0, #0
     arm64.epilogue stack_size=784
     arm64.ret

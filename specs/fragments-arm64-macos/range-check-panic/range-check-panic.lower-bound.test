@@ -1,18 +1,23 @@
 // Test: range-check-panic.lower-bound
+typealias Integer = int(i64.min to i64.max)
 typealias Natural = int(0 to i64.max)
 
 function check(n Natural) returns Natural
   return n
 end 'check'
 
+function neg(n Integer) returns Integer
+  return 0 - n
+end 'neg'
+
 function main() returns ExitCode
-  let result = check(-1)
-  return result
+  let below = neg(1)
+  return check(below)
 end 'main'
 ---
 ExitCode: 1
 Stderr: ```
-panic at range-check-panic.lower-bound.test:5: Range check failed: value outside typealias 'Natural'
+panic at range-check-panic.lower-bound.test:6: Range check failed: value outside typealias 'Natural'
 Stack trace:
   in check
   in main
@@ -39,10 +44,18 @@ module {
     arm64.epilogue stack_size=16
     arm64.ret
   }
+  func @neg(n: i64) -> i64 {
+  entry:
+    arm64.mov x1, #0
+    arm64.sub x2, x1, x0
+    arm64.mov x0, x2
+    arm64.ret
+  }
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=16
-    arm64.mov x0, #-1
+    arm64.mov x0, #1
+    arm64.bl neg
     arm64.bl check
     arm64.mov x1, #0
     arm64.cmp x0, x1

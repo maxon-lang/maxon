@@ -1416,11 +1416,28 @@ public static partial class MaxonToStandardConversion {
                     // Decref old value before overwriting. Guarded by varTypes
                     // so the first store skips the decref (no previous value);
                     // reassignments and loop-header re-stores release the old ref.
-                    // Skip decref when this is a new declaration and the slot previously
-                    // held a non-struct value (e.g., integer for-loop variable reused as
-                    // a string for-loop variable) — the old value is not a heap pointer.
-                    if (varTypes.ContainsKey(dstName)
-                        && !(assignOp.IsDeclaration && !varNameToStructType.ContainsKey(dstName))) {
+                    //
+                    // ⭐ A DECLARATION NEVER RELEASES A PREVIOUS VALUE, and the test may not
+                    // consult `varNameToStructType` to decide that. That map is populated in
+                    // BLOCK-WALK ORDER with no model of control flow, so for two MUTUALLY
+                    // EXCLUSIVE paths that declare the same name it reports "seen already" on
+                    // the second one — which at RUNTIME is still a first store into an
+                    // uninitialized slot. `EmitDecrefValueIfNonnull` guards only NULL, not
+                    // garbage, so the emitted decref released whatever stale pointer the slot
+                    // happened to hold.
+                    //
+                    // MEASURED on `typealias Bad = int(i8.min to i32.max)` compiled by shv2 on
+                    // arm64-macOS: `reportParseError`'s `match` binds a payload to `got` in many
+                    // arms; the FIRST arm was correct and every later arm decref'd a live
+                    // `KeywordInfo.helpText` String belonging to the global keyword map, which
+                    // then died in `__maxon_global_cleanup` with `mm_decref: refcount underflow
+                    // (already zero)`. It presented as an unowned "growing a union is a landmine"
+                    // defect because what the stale slot holds depends on frame layout: on x64 it
+                    // read 0 and the null guard hid it, and `--mm-trace` hid it too.
+                    //
+                    // A declaration's own value is released at SCOPE EXIT (each match arm ends by
+                    // decrefing its bindings), so skipping here drops no release.
+                    if (varTypes.ContainsKey(dstName) && !assignOp.IsDeclaration) {
                       if (!varNameToStructType.ContainsKey(dstName))
                         varNameToStructType[dstName] = structTypeName;
                       var oldHeapPtr = (StdI64)EmitLoad(newBlock, dstName, varTypes);

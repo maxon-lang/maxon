@@ -93,10 +93,8 @@ module {
   }
   func @main() -> u8 {
   entry:
-    %54 = arith.constant {value = 0 : i64}
-    memref.store %54, __call_tmp_0
-    %55 = arith.constant {value = 0 : i64}
-    memref.store %55, __try_result_0
+    %53 = arith.constant {value = 0 : i64}
+    memref.store %53, __call_tmp_0
     %8 = func.call @ItemArray.create
     memref.store %8, arr
     %11 = arith.constant {value = 7 : i64}
@@ -121,80 +119,78 @@ module {
     std.call_runtime @mm_incref %27
     cf.br otherwise_default_continue_0
   otherwise_default_success_0:
-    %28 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %28
-    %29 = memref.load __callret_0 : i64
-    memref.store %29, __try_result_0
+    %28 = memref.load __callret_0 : i64
+    memref.store %28, __try_result_0
     cf.br otherwise_default_continue_0
   otherwise_default_continue_0:
-    %30 = memref.load __try_result_0 : i64
-    memref.store %30, got
+    %29 = memref.load __try_result_0 : i64
+    memref.store %29, got
+    %30 = memref.load got : i64
+    std.call_runtime @mm_incref %30
     %31 = memref.load got : i64
-    std.call_runtime @mm_incref %31
-    %32 = memref.load got : i64
-    %33 = memref.load_indirect %32+0
-    %34 = arith.constant {value = 0 : i64}
-    %35 = arith.cmpi lt %33, %34
-    %36 = arith.constant {value = 255 : i64}
-    %37 = arith.cmpi gt %33, %36
-    %38 = arith.ori1 %35, %37
-    cf.cond_br %38 [then: __range_panic_0, else: __range_ok_0]
+    %32 = memref.load_indirect %31+0
+    %33 = arith.constant {value = 0 : i64}
+    %34 = arith.cmpi lt %32, %33
+    %35 = arith.constant {value = 255 : i64}
+    %36 = arith.cmpi gt %32, %35
+    %37 = arith.ori1 %34, %36
+    cf.cond_br %37 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %39 = memref.lea_symdata __panic_msg_0
-    %40 = std.ptr_to_i64 %39
-    std.call_runtime @mrt_panic %40
+    %38 = memref.lea_symdata __panic_msg_0
+    %39 = std.ptr_to_i64 %38
+    std.call_runtime @mrt_panic %39
   __range_ok_0:
-    %41 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %41
-    %43 = memref.load __call_tmp_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %43
-    %45 = memref.load got : i64
-    std.call_runtime_if_nonnull @mm_decref %45
-    %47 = memref.load item : i64
-    std.call_runtime_if_nonnull @mm_decref %47
-    %49 = memref.load arr : i64
-    std.call_runtime_if_nonnull @mm_decref %49
-    func.return %33
+    %40 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %40
+    %42 = memref.load __call_tmp_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %42
+    %44 = memref.load got : i64
+    std.call_runtime_if_nonnull @mm_decref %44
+    %46 = memref.load item : i64
+    std.call_runtime_if_nonnull @mm_decref %46
+    %48 = memref.load arr : i64
+    std.call_runtime_if_nonnull @mm_decref %48
+    func.return %32
   }
   func @__destruct_Item(ptr: i64) {
   entry:
-    %56 = func.param ptr : StdI64
+    %55 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
   }
   func @__destruct_ItemArray(ptr: i64) {
   entry:
-    %57 = func.param ptr : StdI64
-    memref.store %57, __destr_ptr
-    %60 = memref.load __destr_ptr : i64
-    %61 = memref.load_indirect %60+16
-    %62 = arith.constant {value = -1 : i64}
-    %63 = arith.cmpi eq %61, %62
-    cf.cond_br %63 [then: slice_cleanup_0, else: check_owned_0]
+    %56 = func.param ptr : StdI64
+    memref.store %56, __destr_ptr
+    %59 = memref.load __destr_ptr : i64
+    %60 = memref.load_indirect %59+16
+    %61 = arith.constant {value = -1 : i64}
+    %62 = arith.cmpi eq %60, %61
+    cf.cond_br %62 [then: slice_cleanup_0, else: check_owned_0]
   slice_cleanup_0:
-    %64 = memref.load __destr_ptr : i64
-    %65 = memref.load_indirect %64+32
-    std.call_runtime_if_nonnull @mm_decref %65
+    %63 = memref.load __destr_ptr : i64
+    %64 = memref.load_indirect %63+32
+    std.call_runtime_if_nonnull @mm_decref %64
     cf.br skip_buf_0
   check_owned_0:
-    %66 = memref.load __destr_ptr : i64
-    %67 = memref.load_indirect %66+16
-    %68 = arith.constant {value = -2 : i64}
-    %69 = arith.cmpi ne %67, %68
-    cf.cond_br %69 [then: free_buf_0, else: skip_buf_0]
+    %65 = memref.load __destr_ptr : i64
+    %66 = memref.load_indirect %65+16
+    %67 = arith.constant {value = -2 : i64}
+    %68 = arith.cmpi ne %66, %67
+    cf.cond_br %68 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
+    %69 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %69
     %70 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %70
-    %71 = memref.load __destr_ptr : i64
-    %72 = memref.load_indirect %71+32
-    %73 = arith.constant {value = -3 : i64}
-    %74 = arith.cmpi ne %72, %73
-    cf.cond_br %74 [then: raw_free_0, else: skip_buf_0]
+    %71 = memref.load_indirect %70+32
+    %72 = arith.constant {value = -3 : i64}
+    %73 = arith.cmpi ne %71, %72
+    cf.cond_br %73 [then: raw_free_0, else: skip_buf_0]
   raw_free_0:
-    %75 = memref.load __destr_ptr : i64
-    %76 = memref.load_indirect %75+0
-    std.call_runtime @mm_raw_free %76
+    %74 = memref.load __destr_ptr : i64
+    %75 = memref.load_indirect %74+0
+    std.call_runtime @mm_raw_free %75
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -229,48 +225,41 @@ module {
     arm64.prologue stack_size=128
     arm64.mov x0, #0
     arm64.str x0, [x29, #-8]
-    arm64.mov x1, #0
-    arm64.str x1, [x29, #-16]
     arm64.bl ItemArray.create
-    arm64.str x0, [x29, #-24]
+    arm64.str x0, [x29, #-16]
     arm64.mov x0, #7
     arm64.bl Item.create
-    arm64.str x0, [x29, #-32]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-16]
     arm64.ldr x2, [x29, #-24]
-    arm64.ldr x3, [x29, #-32]
-    arm64.ldr x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-24]
     arm64.bl ItemArray.push
-    arm64.ldr x4, [x29, #-24]
-    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
     arm64.mov x1, #0
     arm64.bl ItemArray.get
-    arm64.str x0, [x29, #-40]
-    arm64.mov x5, #0
-    arm64.cmp x1, x5
-    arm64.cset x6, ne
-    arm64.cmp x6, #0
+    arm64.str x0, [x29, #-32]
+    arm64.mov x4, #0
+    arm64.cmp x1, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
     arm64.b.ne main.otherwise_default_error_0
     arm64.b main.otherwise_default_success_0
   otherwise_default_error_0:
     arm64.mov x0, #0
     arm64.bl Item.create
     arm64.str x0, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
     arm64.bl mm_incref
     arm64.b main.otherwise_default_continue_0
   otherwise_default_success_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_27
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_27
-    arm64.ldr x1, [x29, #-40]
-    arm64.str x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-40]
     arm64.b main.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-40]
     arm64.str x0, [x29, #-48]
     arm64.ldr x1, [x29, #-48]
     arm64.ldr x0, [x29, #-48]
@@ -293,36 +282,36 @@ module {
     arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-40]
     arm64.str x3, [x29, #-56]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_47
+    arm64.b.eq main.__skip_guarded_43
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_47
+    arm64.label main.__skip_guarded_43
     arm64.ldr x1, [x29, #-8]
     arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_49
+    arm64.b.eq main.__skip_guarded_45
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_49
+    arm64.label main.__skip_guarded_45
     arm64.ldr x2, [x29, #-48]
     arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_51
+    arm64.b.eq main.__skip_guarded_47
     arm64.ldr x0, [x29, #-48]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_51
-    arm64.ldr x3, [x29, #-32]
+    arm64.label main.__skip_guarded_47
+    arm64.ldr x3, [x29, #-24]
     arm64.cmp x3, #0
-    arm64.b.eq main.__skip_guarded_53
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_53
-    arm64.ldr x4, [x29, #-24]
-    arm64.cmp x4, #0
-    arm64.b.eq main.__skip_guarded_55
+    arm64.b.eq main.__skip_guarded_49
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_55
+    arm64.label main.__skip_guarded_49
+    arm64.ldr x4, [x29, #-16]
+    arm64.cmp x4, #0
+    arm64.b.eq main.__skip_guarded_51
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_51
     arm64.ldr x0, [x29, #-56]
     arm64.epilogue stack_size=128
     arm64.ret
