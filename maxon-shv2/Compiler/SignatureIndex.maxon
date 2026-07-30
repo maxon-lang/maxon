@@ -2498,9 +2498,21 @@ export type ProgramSignatures
 	// inside the constant evaluator, read by `Parser.reportUnusedTypeAliases`; both doors carry the
 	// argument. Empty for every program with no top-level `let X = … as T`, which is nearly all of them.
 	var constCastTargets as ConstCastTargetSet
+	// ⭐ **THE `Array with Byte` INSTANCE, DERIVED ONCE PER PROGRAM.** `internArrayByteInstance` is asked on
+	// HOT parser paths — every byte-string literal, every `.toByteArray()`, and since R4.2 every array
+	// METHOD dispatch (`dispatchArrayMethod`'s `isManagedMemory`) — and each ask built a one-element
+	// `MaxonTypeArray` to key the registry with, which is a heap ALLOCATION per array method call. The
+	// answer cannot change: `GenericInstanceRegistry` only ever grows and interning is idempotent, so the
+	// id the first ask mints is the id for the life of this index (which is one compile —
+	// `queryProgramSignatures` builds a fresh one per signatures miss).
+	//
+	// A `computed` flag beside the value rather than a sentinel id, following `TokenMemo`/`ParseMemo`:
+	// **0 IS A REAL `GenericInstanceId`**, so there is no spare value to mean "not yet".
+	var arrayByteInstance as GenericInstanceId
+	var arrayByteInstanceComputed as bool
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false}
 	end 'create'
 
 	// Could `name` denote a top-level MANAGED binding — `let` or `var` — anywhere in this program? A
@@ -4730,10 +4742,19 @@ export type ProgramSignatures
 	// Interning is IDEMPOTENT, so the sweep is the WRITE and every parser call a pure READ. The element is
 	// `named("Byte")` — the SAME reference a user `typealias ByteArray = Array with Byte` interns, so a
 	// byte-string and a `ByteArray`-typed value share one gid and are type-identical.
+	// ⚠ MEMOIZED — see `arrayByteInstance` for why the answer is stable and why the flag is a flag rather
+	// than a sentinel. The first ask is still the WRITE that mints the instance, so the registry contents
+	// (and every id derived from them) are exactly what they were before the memo existed.
 	export function internArrayByteInstance() returns GenericInstanceId
+		if self.arrayByteInstanceComputed 'alreadyMinted'
+			return self.arrayByteInstance
+		end 'alreadyMinted'
+
 		var args = MaxonTypeArray.create()
 		args.push(MaxonType.named(self.typeNames.intern(ByteElementTypeName)))
-		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
+		self.arrayByteInstance = self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
+		self.arrayByteInstanceComputed = true
+		return self.arrayByteInstance
 	end 'internArrayByteInstance'
 
 	// ⭐ **THE `Array with String` / `Array with <aggregate>` INSTANCES FOR A MANAGED-ELEMENT LITERAL (P1.7

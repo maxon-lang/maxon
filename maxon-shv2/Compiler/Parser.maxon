@@ -23694,11 +23694,21 @@ export type Parser
 	// Left narrow, that receiver falls past this arm to the struct path and reports E3004 against a method
 	// the language does have. (R4.1 shipped the narrow test because its one enabled case bound the box
 	// DIRECTLY — the only spelling `structRef` alone serves.)
+	//
+	// ⚠ **IT READS THE NAME BEHIND THE ID; IT DOES NOT INTERN ONE.** `internedName(id).equals(name)` is a
+	// dense-column index plus a byte compare — the form `isStringIndexType` and `isCharacterSetType` both
+	// use. The `nameId == self.managedFileNameId()` spelling it replaces asked the same question by HASHING
+	// `__ManagedFile` and probing the interner on EVERY method dispatch in the program, and on a miss it
+	// INSERTED — so a file that merely calls a method on some struct acquired a `__ManagedFile` entry it has
+	// no use for. R4.2 widening the tag gate to `named` put that on the enum/alias receivers too, one arm
+	// above the enum test whose own comment explains that it gates on the tag FIRST precisely so the interner
+	// is not touched for a receiver that is not its business. The mint site (`parseManagedFileOpen`) still
+	// interns, which is where the id genuinely has to exist.
 	function isManagedFileType(tag ValueTypeTag, nameId TypeNameId) returns bool
 		if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notAnAggregateRef'
 			return false
 		end 'notAnAggregateRef'
-		return nameId == self.managedFileNameId()
+		return self.internedName(nameId).equals(ManagedFileTypeName)
 	end 'isManagedFileType'
 
 	// ⭐ **THE FOUR `__ManagedFile` INSTANCE METHODS — `close`, `size`, `read`, `write` (R4.2 completes
