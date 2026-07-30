@@ -423,6 +423,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `ArrayRuntime.emitForwardCopy`, which is a BUILDER it inlines rather than a callee it references.
 	installManagedFileRuntime(pipeline.stdModule, usage: usage)
 
+	// The directory runtime (`__md_open_search`/`__md_next`/…, R4.3) — installed the same already-lowered
+	// way, on its own `usesManagedDirectory` bit. It sits beside the file install because the two share this
+	// family's helpers (the path scratch copy, the errno classification, the raw alloc/free); it needs no
+	// ordering against the ARRAY install below even though `__md_filename` CALLS `__arr_create`, because the
+	// functions are appended to one module and the backend resolves calls by name — and the `usesArray` bit
+	// that makes the array runtime present was settled by `scanRuntimeUsage` before any install ran.
+	installManagedDirectoryRuntime(pipeline.stdModule, usage: usage)
+
 	// The Array runtime (`__arr_create`/`__arr_push`/`__arr_get`/…) — installed the same way and for the
 	// same reason: already-lowered Std, appended after the pipeline so it is never re-optimized. Keyed on
 	// its own `usesArray` bit (any `__arr_*` reference), which also implied `usesHeap` above (the helpers

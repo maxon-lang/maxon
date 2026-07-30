@@ -1128,6 +1128,33 @@ function requireTriedWitnessDispatch(project Project, func IrFunction, opIndex O
 	reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing interface method requires try: wrap the witness dispatch as `try <receiver>.<method>(…)` — a bare call drops the error flag the method returns", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 end 'requireTriedWitnessDispatch'
 
+// ⭐⭐ **WHAT AN E3057 SAYS ABOUT A COMPILER-OWNED THROWING CALLEE — ONE ARM PER FAMILY, AND A FAMILY
+// WITHOUT ONE IS A DEFECT RATHER THAN A DEFAULT.** The user never wrote `__arr_get` or `__md_next`, so the
+// sentence has to name the construct they DID write; a family that falls through to another family's
+// wording gets the right code and the wrong noun.
+//
+// ⚠ **THE SELECTION USED TO BE A BINARY GT-else-ARRAY EXPRESSION**, and its own comment said a third family
+// must add an arm here. Three joined it without one (`__strix_*` at P1.8, `__mf_*` at R4.1/R4.2, and
+// `__ManagedMemory`'s members at R4.2), so a `s.findFirst(n)` or a `f.openRead(p)` written without `try` was
+// told it was a "throwing array accessor". Recast as an explicit chain so a NEW family cannot inherit a
+// wording silently: it falls to the LAST arm, which names the callee rather than pretending to know what it
+// is. ⚠ The two families still without an arm keep the array wording; fixing each needs its own
+// callee → source-name map and its own case, and neither is R4.3's.
+function throwingRuntimeCalleeMessage(callee ByteArray) returns String
+	if isThrowingGtRuntimeCallee(callee) 'subprocessFamily'
+		return "throwing subprocess call requires try: wrap `runProcess(…)` as `try runProcess(…) otherwise …` — a bare call drops the spawn-failure error"
+	end 'subprocessFamily'
+	// ⭐ **THE DIRECTORY FAMILY NAMES THE USER'S OWN METHOD (R4.3)**, which is what
+	// `specs/managed-directory.md`'s `next-without-try` pins: `throwing function requires try: 'next'`. It is
+	// the SAME wording an ordinary user function gets, and that is right — a `dir.next()` is a method call
+	// like any other as far as the author is concerned. `managedDirectorySourceMethodName` is what turns the
+	// runtime callee back into the word they typed.
+	if isThrowingManagedDirectoryRuntimeCallee(callee) 'directoryFamily'
+		return "throwing function requires try: '{String.from(managedDirectorySourceMethodName(callee))}'"
+	end 'directoryFamily'
+	return "throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error"
+end 'throwingRuntimeCalleeMessage'
+
 // A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
 function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
@@ -1138,16 +1165,11 @@ function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, re
 	// spawn-failure/store-overflow flag (a wrong answer). Both are compiler-internal callees, so the blanket skip
 	// below would hide them; the same E3057 "throwing call needs try" rule a user function gets is applied here
 	// first, off the SAME `isThrowingRuntimeCallee` the parser's E3055 accept reads (they cannot drift). The
-	// message is worded per family so it names the construct the user wrote. A correctly `try`ed call is a
-	// `tryCall` and never reaches `validatePlainCall`.
+	// message is worded per family by `throwingRuntimeCalleeMessage`, so it names the construct the user
+	// wrote. A correctly `try`ed call is a `tryCall` and never reaches `validatePlainCall`.
 	if isThrowingRuntimeCallee(callee) 'throwingBuiltin'
 		let callRange = project.opRanges.get(opIndex)
-		// Exactly TWO throwing runtime families exist (the GT/subprocess one and the array accessors), so this
-		// binary GT-else-array selection is exhaustive. A THIRD family added to `isThrowingRuntimeCallee` must
-		// add its own arm here — otherwise it would silently inherit the array wording (correct E3057 code,
-		// wrong construct named).
-		let message = "throwing subprocess call requires try: wrap `runProcess(…)` as `try runProcess(…) otherwise …` — a bare call drops the spawn-failure error" if isThrowingGtRuntimeCallee(callee) else "throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error"
-		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: message, line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingRuntimeCalleeMessage(callee), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 		return
 	end 'throwingBuiltin'
 	if isCompilerInternalCallee(callee) 'internal'
@@ -1339,7 +1361,9 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// R4.1's file-IO entries join the clock and sleep ones: `osFileOpenRead` lowers only on x64-windows
 	// (the ruling of 2026-07-30 scoped file IO host-only), and the three other backends panic rather than
 	// fake it — so the program must be refused HERE, at the call's own span, before it reaches one.
-	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee)
+	// R4.3's directory entries join them on the same terms and by the same PREFIX test, so the whole
+	// eight-method surface is gated by construction rather than by a list somebody has to remember to extend.
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote

@@ -561,9 +561,15 @@ export type RuntimeUsage
 	// `__mf_open_read` allocates a NUL-terminated scratch copy of the path and the handle box through
 	// `__mm_alloc`/`__mm_free`, so it carries `usesHeap` too (set together below).
 	export var usesManagedFile as bool
+	// R4.3: the program searches, creates or asks about a DIRECTORY. Its own bit, so a file-only program
+	// carries none of the directory runtime. Like the file family it declares a transitive dependency on
+	// `usesHeap` (the find block, the box and the path scratch are all `__mm_alloc`'d) — and, unlike it,
+	// ALSO on `usesArray`: `__md_filename`/`__md_current_path` build their `__ManagedMemory` answer through
+	// `__arr_create`/`__arr_reserve`, calls that live in a Std body this Maxon-module scan cannot see.
+	export var usesManagedDirectory as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -700,6 +706,15 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesManagedFile = true
 		usage.usesHeap = true
 	end 'managedFile'
+	// R4.3: a `__md_*` call. It carries `usesHeap` (the find block, the box and the path scratch) AND
+	// `usesArray`, which the file family does not need: `__md_filename`/`__md_current_path` answer with an
+	// `Array` record they build through `__arr_create`/`__arr_reserve` inside their Std bodies, and this
+	// Maxon-module scan cannot see a call one tier down. Left off, those two would link against nothing.
+	if isManagedDirectoryRuntimeCallee(callee) 'managedDirectory'
+		usage.usesManagedDirectory = true
+		usage.usesHeap = true
+		usage.usesArray = true
+	end 'managedDirectory'
 	if callee.equals(PrintStringName) 'print'
 		usage.usesPrint = true
 	end 'print'

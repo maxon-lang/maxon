@@ -624,7 +624,7 @@ end 'isThrowingGtRuntimeCallee'
 // E3057 reject in `validatePlainCall`) both read THIS composed predicate rather than each listing the families,
 // which is what keeps the accept and the reject naming the same set. Grows one disjunct per throwing runtime family.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee)
+	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -650,6 +650,19 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	if isThrowingManagedFileRuntimeCallee(callee) 'fileFamily'
 		return managedFileThrows()
 	end 'fileFamily'
+
+	// ⭐ **THE DIRECTORY FAMILY (R4.3), ADDED WITH THE CASES THAT NEED IT.**
+	// `specs-shv2/managed-directory.md`'s `open-search-not-found-variant` discriminates `notFound` from the
+	// `openSearchFailed` catch-all, so this family's ordinals are a checked claim rather than an untested one.
+	//
+	// ⚠ It asks the THROWING predicate rather than `isManagedDirectoryRuntimeCallee`, unlike the memory arm
+	// below: `__md_close`/`__md_filename`/`__md_exists` are `__md_`-prefixed and do not throw, and typing a
+	// non-throwing callee's clause as `throwing` is exactly what makes `try` required on a call that cannot
+	// fail (E3055). The memory family can use the wide test because ALL of its members throw and its own
+	// comment says so.
+	if isThrowingManagedDirectoryRuntimeCallee(callee) 'directoryFamily'
+		return managedDirectoryThrows()
+	end 'directoryFamily'
 
 	if isManagedMemoryRuntimeCallee(callee) 'memoryFamily'
 		return managedMemoryThrows()

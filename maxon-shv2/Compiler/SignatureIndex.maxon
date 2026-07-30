@@ -1368,6 +1368,17 @@ function managedNameDropCallee(signatures ProgramSignatures, typeNames TypeNameI
 	if name.equals(ManagedFileTypeName) 'managedFile'
 		return ManagedFileDestructName
 	end 'managedFile'
+	// ⭐ **A `__ManagedDirectory` OWNS A SEARCH HANDLE *AND* A SECOND ALLOCATION (R4.3)** — so its drop must
+	// close the search and free the find block, neither of which the generic `__mm_decref` of an 8-byte box
+	// would do. Every argument the file line above makes applies unchanged: `_block` is a scalar `int` field,
+	// so `structFieldIsManaged` is false and `installStructDestructors` synthesizes nothing; and
+	// `emitNullGuardedDrop`'s "load the FIELD, call `callee(field)`" shape is wrong for a close that must
+	// zero the handle to stay idempotent. `__md_destruct(box)` is the refcount-checked teardown that does
+	// all three. Answering `MmDecrefName` here would free eight bytes and leak BOTH the 336-byte block and
+	// the OS search handle — the second of which the exit-101 gate cannot see at all.
+	if name.equals(ManagedDirectoryTypeName) 'managedDirectory'
+		return ManagedDirectoryDestructName
+	end 'managedDirectory'
 	if signatures.containsStruct(name) 'struct'
 		if signatures.structHasManagedField(name) 'managedStruct'
 			return destructorSymbol(name)
@@ -1714,6 +1725,8 @@ export let ManagedFileWriteMethod = b"write"
 // (`2-Parser.cs:1414-1440`), and they are what `builtin-type-checking.error-managed-file-*` pins: the
 // oracle reports `argument type mismatch for 'path'`, so the name is a fact about the SIGNATURE, not a
 // word this compiler picks.
+// ⚠ Shared with `__ManagedDirectory` (R4.3): both references name the path parameter of `openSearch`,
+// `exists` and `create` `path` too, so this is one word for one fact rather than a per-family copy.
 export let ManagedFilePathParamName = b"path"
 export let ManagedFileOldPathParamName = b"oldPath"
 export let ManagedFileNewPathParamName = b"newPath"
@@ -1855,7 +1868,7 @@ export let ManagedMemoryFieldName = b"managed"
 // bare alias) and they are asked at different doors for different reasons; merging them would give one
 // predicate two meanings and make the next `CharacterSet`-shaped misreport inevitable.
 export function isBuiltinManagedTypeName(name ByteArray) returns bool
-	return name.equals(ManagedFileTypeName)
+	return name.equals(ManagedFileTypeName) or name.equals(ManagedDirectoryTypeName)
 end 'isBuiltinManagedTypeName'
 
 // Its one field, per the spec's "Type Structure". Unexported and immutable: the corpus never reads or
@@ -1863,6 +1876,58 @@ end 'isBuiltinManagedTypeName'
 // so the handle cannot be forged — and the runtime reaches it through `ManagedFileHandleOffset`.
 export let ManagedFileHandleFieldName = b"_handle"
 export let ManagedFileHandleFieldIndex = 0 as FieldIndex
+
+// ⭐ **THE COMPILER-OWNED `__ManagedDirectory` TYPE (R4.3)** — an 8-byte box holding one pointer to a
+// separately allocated FIND BLOCK (the search handle, the `WIN32_FIND_DATAA` the OS refills, and the
+// advance-first pending flag), with a runtime-owned destructor that closes the search on drop.
+// `specs/managed-directory.md`'s "Type Structure" states the single `_block` field and the RAII contract;
+// `ManagedDirectoryRuntime`'s header states why the record is two-level and why the two references disagree
+// about it.
+//
+// ⚠ Like `__ManagedFile` and unlike `__StringIndex`/`__CharacterSet`, the registry name and the user-facing
+// name are the SAME bytes — which is what lets the type cross a function boundary, and the corpus requires
+// exactly that: `specs/managed-directory.md`'s `search-and-list` declares `export var dir as
+// __ManagedDirectory` and returns a `TestDir` built from one.
+export let ManagedDirectoryTypeName = b"__ManagedDirectory"
+
+// ⭐ **THE SEVEN `__ManagedDirectory` METHODS — the surface BOTH references declare, line for line**
+// (`maxon-sharp/Compiler/2-Parser.cs:1449-1463`, `maxon-selfhosted/.../LowerMaxonToStd.maxon:1903-1919`).
+// Four statics and three instance methods; a name outside this set is refused by name at its own span rather
+// than mangled into a callee no file declares (`Parser.parseManagedDirectoryStaticCall` /
+// `Parser.dispatchManagedDirectoryMethod`).
+export let ManagedDirectoryOpenSearchMethod = b"openSearch"
+export let ManagedDirectoryExistsMethod = b"exists"
+export let ManagedDirectoryCreateMethod = b"create"
+export let ManagedDirectoryCurrentPathMethod = b"currentPath"
+export let ManagedDirectoryNextMethod = b"next"
+export let ManagedDirectoryFilenameMethod = b"filename"
+export let ManagedDirectoryCloseMethod = b"close"
+
+// ⭐ **THE ERROR EVERY THROWING `__ManagedDirectory` OPERATION THROWS (R4.3)**, and the type a handler's
+// `match e` discriminates. Its eight cases and the reason their ORDER is load-bearing live with the layout,
+// in `Project.builtinManagedDirectoryErrorEnum`.
+export let ManagedDirectoryErrorTypeName = b"__ManagedDirectoryError"
+
+// The eight case names in `stdlib/Builtins.maxon:189-199`'s order — which IS their ordinal order, and
+// therefore the error flag the runtime returns. Not reorderable; see the layout's comment.
+//
+// ⚠ **THE ORDER IS THE ENUM'S, NOT THE BOOTSTRAP COMMENT'S.** `2-Parser.cs:1442-1444` lists SEVEN and omits
+// `iteratorInvalid`, which would shift every later ordinal by one. It is the third reference comment found
+// stale about its own enum.
+export let ManagedDirectoryNotFoundCaseName = b"notFound"
+export let ManagedDirectoryAccessDeniedCaseName = b"accessDenied"
+export let ManagedDirectoryOpenSearchFailedCaseName = b"openSearchFailed"
+export let ManagedDirectoryNextFailedCaseName = b"nextFailed"
+export let ManagedDirectoryIteratorInvalidCaseName = b"iteratorInvalid"
+export let ManagedDirectoryCreateFailedCaseName = b"createFailed"
+export let ManagedDirectoryCurrentPathFailedCaseName = b"currentPathFailed"
+export let ManagedDirectoryClosedCaseName = b"closed"
+
+// Its one field, per the spec's "Type Structure". Unexported and immutable: the corpus never reads or writes
+// it — `__ManagedDirectory{_block: 0}` is E3072 (`managed-directory.error-direct-construction`) precisely so
+// the block pointer cannot be forged — and the runtime reaches it through `ManagedDirectoryBlockOffset`.
+export let ManagedDirectoryBlockFieldName = b"_block"
+export let ManagedDirectoryBlockFieldIndex = 0 as FieldIndex
 
 // The builtin alias for a `CharacterSet`'s member set — the reference's own `typealias CharSet =
 // Set with Character` (`stdlib/CharacterSet.maxon:19`), which `CharacterSet.from` takes and the corpus
@@ -4312,6 +4377,45 @@ export type ProgramSignatures
 		end 'sizeDrift'
 		return layout
 	end 'managedFileLayout'
+
+	// ⭐ **REGISTER THE COMPILER-OWNED `__ManagedDirectory` TYPE (R4.3)** — `registerManagedFileType`'s twin,
+	// called by the declaration SWEEP when a file's tokens name it (`Parser.atManagedDirectoryProducer`).
+	// Idempotent, so the sweep is the WRITE and every parser read is a pure read.
+	//
+	// ⚠⚠ **IT INTERNS `Array with Byte`, AND THAT IS NOT REDUNDANT WITH THE FILE FAMILY'S UPSERT.**
+	// `filename()` and `currentPath()` PRODUCE a `__ManagedMemory` without the program ever naming one:
+	// `let cwd = try __ManagedDirectory.currentPath()` writes no `__ManagedMemory` token, no `b"…"` literal
+	// and (until the next line) no `.toByteArray()`, so none of the sweep's existing byte-instance triggers
+	// fires and the parser — which may only READ the registry — would have no instance to tag the result
+	// with. Over-interned rather than missed, which is this sweep's standing discipline.
+	// ⚠ The `__ManagedMemory` ALIAS itself is `registerManagedFileType`'s to upsert and is not repeated here:
+	// a file that annotates one has written the name, which is what that probe matches on.
+	export function registerManagedDirectoryType()
+		_ = self.internArrayByteInstance()
+
+		if self.structTypes.contains(ManagedDirectoryTypeName) 'alreadyRegistered'
+			return
+		end 'alreadyRegistered'
+		self.structTypes.upsert(ManagedDirectoryTypeName, value: managedDirectoryLayout())
+	end 'registerManagedDirectoryType'
+
+	// The `__ManagedDirectory` layout, held to the runtime's own constants by the same drift check
+	// `managedFileLayout` uses and for the same reason. ⚠ The check earns more here than there: BOTH
+	// references declare an 8-byte one-field struct while v1's runtime block is 40 bytes and the bootstrap's
+	// is 336, with nothing tying any of the three together. This is the pair that keeps shv2's front-end
+	// shape and its `__mm_alloc` from becoming a fourth combination.
+	function managedDirectoryLayout() returns StructLayout
+		var layout = StructLayout.create(ManagedDirectoryTypeName)
+		layout.addField(ManagedDirectoryBlockFieldName, declaredType: MaxonType.integer, mutable: true, exported: false, defaultValue: FieldDefault.none)
+
+		if layout.offsetOfField(ManagedDirectoryBlockFieldIndex) != ManagedDirectoryBlockOffset 'offsetDrift'
+			panic("managedDirectoryLayout: the struct layout puts `_block` at {layout.offsetOfField(ManagedDirectoryBlockFieldIndex)} but the runtime reads it at {ManagedDirectoryBlockOffset} — the front end's shape and the runtime's field access have drifted")
+		end 'offsetDrift'
+		if layout.sizeBytes() as ParsedInt != ManagedDirectoryBoxBytes 'sizeDrift'
+			panic("managedDirectoryLayout: the struct layout is {layout.sizeBytes()} bytes but the runtime allocates {ManagedDirectoryBoxBytes} — the box the runtime builds and the shape the front end states have drifted")
+		end 'sizeDrift'
+		return layout
+	end 'managedDirectoryLayout'
 
 	// ⚠ **THERE IS DELIBERATELY NO `characterSetLayoutOrPanic`**, where `StringIndex` has one. An index is
 	// READ through its layout (`charIndex()`/`bytePos()` are field loads, `stringIndexLayoutOrPanic` serves

@@ -1694,6 +1694,46 @@ export function builtinManagedFileErrorEnum() returns EnumLayout
 	return layout
 end 'builtinManagedFileErrorEnum'
 
+// ⭐ **THE COMPILER-OWNED `__ManagedDirectoryError` (R4.3)** — what every throwing `__ManagedDirectory`
+// operation throws, and the type a handler's `match e` discriminates.
+//
+// ⚠ **THE CASE ORDER IS THE WIRE FORMAT, NOT A STYLE CHOICE**, for the reason
+// `builtinManagedFileErrorEnum`'s header states in full: the ordinal IS the error flag the runtime returns.
+// These eight names in THIS sequence are what makes `managed-directory.open-search-not-found-variant`'s
+// `notFound then …` select the arm the runtime meant.
+//
+// ⚠⚠ **THE ORDER IS `stdlib/Builtins.maxon:189-199`'s, AND THE BOOTSTRAP'S OWN COMMENT ABOUT IT IS STALE.**
+// `2-Parser.cs:1442-1444` lists SEVEN cases — "notFound / accessDenied / openSearchFailed / nextFailed /
+// createFailed / currentPathFailed / closed" — omitting `iteratorInvalid`, which sits between `nextFailed`
+// and `createFailed` in the enum three lines below it. Taking the comment's list would have shifted
+// `createFailed`, `currentPathFailed` and `closed` down by one and routed every one of them to the wrong
+// handler arm, silently. It is the THIRD reference comment this project has found stale about its own enum
+// (after `__ManagedMemoryError`'s ordinals and `osFileOpenRead`'s `CreateFileW`). ⇒ Never take an ordinal
+// from a comment.
+//
+// ⚠ `iteratorInvalid` and `closed` are DECLARED but not thrown by either reference. Both are declared here
+// because the ordinals are positional; `closed` is additionally REACHED by shv2 (see
+// `ManagedDirectoryRuntime.emitOpenSearchOrThrow` for the wrong answer that guard prevents and why shv2
+// diverges), while `iteratorInvalid` stays unreachable — it names "filename() on an exhausted iterator", and
+// `filename()` is non-throwing in both references and in the spec.
+//
+// Seeded UNCONDITIONALLY beside its two siblings for their stated reason: `createEnumRegistry` is the one
+// door that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`. It costs
+// one map entry in a program that touches no directory, and it cannot collide — the name is `__`-prefixed, so
+// `requireUnreservedName` already refuses any source that tries to declare it (E2051).
+export function builtinManagedDirectoryErrorEnum() returns EnumLayout
+	var layout = EnumLayout.create(ManagedDirectoryErrorTypeName, isUnion: false)
+	addBuiltinEnumCase(layout, caseName: ManagedDirectoryNotFoundCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedDirectoryAccessDeniedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedDirectoryOpenSearchFailedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedDirectoryNextFailedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedDirectoryIteratorInvalidCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedDirectoryCreateFailedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedDirectoryCurrentPathFailedCaseName)
+	addBuiltinEnumCase(layout, caseName: ManagedDirectoryClosedCaseName)
+	return layout
+end 'builtinManagedDirectoryErrorEnum'
+
 // ⭐ **THE COMPILER-OWNED `__ManagedMemoryError` (R4.2)** — what the three `__ManagedMemory` members this
 // rung delivers throw, and the type a handler's `match e` discriminates. Its case ORDER is the wire format
 // for the same reason `builtinManagedFileErrorEnum`'s is, and it is the reference's own
@@ -1788,6 +1828,10 @@ export function createEnumRegistry() returns EnumLayoutMap
 	// R4.1: what every `__ManagedFile` operation throws. See `builtinManagedFileErrorEnum` for why it is
 	// seeded here unconditionally rather than by the declaration sweep like the `__ManagedFile` layout.
 	registry.upsert(ManagedFileErrorTypeName, value: builtinManagedFileErrorEnum())
+	// R4.3: what every throwing `__ManagedDirectory` operation throws, seeded the same way and for the same
+	// reason. See `builtinManagedDirectoryErrorEnum` for why its case ORDER came from the enum and not from
+	// the bootstrap's comment about it.
+	registry.upsert(ManagedDirectoryErrorTypeName, value: builtinManagedDirectoryErrorEnum())
 	// R4.2: what the three `__ManagedMemory` members throw, seeded for the same reason and in the same way.
 	registry.upsert(ManagedMemoryErrorTypeName, value: builtinManagedMemoryErrorEnum())
 	// R4.4: what every throwing `Array` accessor throws. See `builtinArrayErrorEnum`.

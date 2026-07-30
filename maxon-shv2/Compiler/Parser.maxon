@@ -2579,13 +2579,14 @@ function comparisonOpSpelling(op MaxonCmpOp) returns String
 end 'comparisonOpSpelling'
 
 // Which compiler-owned layouts a file names — the answer `fileNamesProducerMask` walks the tokens once to
-// build, where three separate walks used to build it three times.
-typealias ProducerMask = int(0 to 7)
+// build, where a walk per probe used to build it one at a time.
+typealias ProducerMask = int(0 to 15)
 
 let StringIndexProducerBit = 1 as ProducerMask
 let CharacterSetProducerBit = 2 as ProducerMask
 let ManagedFileProducerBit = 4 as ProducerMask
-let AllProducerBits = 7 as ProducerMask
+let ManagedDirectoryProducerBit = 8 as ProducerMask
+let AllProducerBits = 15 as ProducerMask
 
 // --- Character literals ---
 //
@@ -4764,6 +4765,7 @@ export type Parser
 		let hasStringIndexProducer = (producers and StringIndexProducerBit) != 0
 		let hasCharacterSetProducer = (producers and CharacterSetProducerBit) != 0
 		let hasManagedFileProducer = (producers and ManagedFileProducerBit) != 0
+		let hasManagedDirectoryProducer = (producers and ManagedDirectoryProducerBit) != 0
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -4921,6 +4923,12 @@ export type Parser
 		if hasManagedFileProducer 'registerManagedFile'
 			index.registerManagedFileType()
 		end 'registerManagedFile'
+
+		// Register the compiler-owned `__ManagedDirectory` type if this file names it (R4.3) — after `foldFile`,
+		// exactly as the three registrations above are and for the same reasons.
+		if hasManagedDirectoryProducer 'registerManagedDirectory'
+			index.registerManagedDirectoryType()
+		end 'registerManagedDirectory'
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -5046,21 +5054,23 @@ export type Parser
 	// anyway, so the second probe is exactly the no-argument case.
 	// ⇒ Asked on the shared walk (`fileNamesProducerMask`), not on one of its own.
 
-	// The `__ManagedFile` probe (R4.1) is `atManagedFileProducer`, asked on the same shared walk.
+	// The `__ManagedFile` probe (R4.1) is `atManagedFileProducer` and the `__ManagedDirectory` one (R4.3) is
+	// `atManagedDirectoryProducer`, both asked on the same shared walk.
 
 	// ⭐ **ONE COMPLETE WALK OF THE TOKEN ARRAY, ASKING ONE PROBE** — the shared body of the two whole-file
 	// questions above. It restores the cursor, so it is invisible to the caller, and stops at the first hit
 	// because the answer is a bool. Written once so a third such question cannot arrive with its own idea of
 	// how to walk a file.
-	// ⭐ **ALL THREE LAYOUT PROBES IN ONE WALK (R4.1).** Each probe needs its own COMPLETE pass over the
-	// tokens — the reason is stated at the call site and it is a measured crash, not caution — but "complete"
-	// constrains WHAT is visited, not HOW MANY TIMES. Three sequential `fileNamesAnyToken` calls walked the
-	// array three times to answer three independent questions about the same tokens; this asks all three per
-	// token and walks once.
+	// ⭐ **ALL FOUR LAYOUT PROBES IN ONE WALK (R4.1, and a fourth joined at R4.3 by adding a BIT, not a
+	// pass).** Each probe needs its own COMPLETE pass over the tokens — the reason is stated at the call site
+	// and it is a measured crash, not caution — but "complete" constrains WHAT is visited, not HOW MANY
+	// TIMES. Sequential `fileNamesAnyToken` calls walked the array once per question about the same tokens;
+	// this asks every question per token and walks once, so the cost of the next probe is a compare rather
+	// than a scan.
 	//
 	// ⚠ It cannot stop at the first hit the way a single-probe walk does, because a later token may be the
-	// only producer for a DIFFERENT probe — so it exits early only once all three are satisfied. That makes
-	// the worst case one full scan where it used to be three, and the best case unchanged.
+	// only producer for a DIFFERENT probe — so it exits early only once every bit is satisfied. That makes
+	// the worst case one full scan where it used to be one per probe, and the best case unchanged.
 	//
 	// Returns a bitmask rather than a struct because a struct literal is constructible only inside its own
 	// type (E3076) and this needs no identity — the same reason `MutatedParamMask`/`ArgFloatMask` are masks.
@@ -5079,6 +5089,9 @@ export type Parser
 			if (mask and ManagedFileProducerBit) == 0 and self.atManagedFileProducer() 'mf'
 				mask = (mask or ManagedFileProducerBit) as ProducerMask
 			end 'mf'
+			if (mask and ManagedDirectoryProducerBit) == 0 and self.atManagedDirectoryProducer() 'md'
+				mask = (mask or ManagedDirectoryProducerBit) as ProducerMask
+			end 'md'
 			if mask == AllProducerBits 'allFound'
 				break
 			end 'allFound'
@@ -5120,6 +5133,21 @@ export type Parser
 		end 'notAnIdentifier'
 		return self.current().value.equals(ManagedFileTypeName) or self.current().value.equals(ManagedMemoryTypeName)
 	end 'atManagedFileProducer'
+
+	// The `__ManagedDirectory` type name (R4.3) — `atManagedFileProducer`'s twin, tolerant for its reason and
+	// covering the same three positions with one bare-identifier test.
+	//
+	// ⚠ It is its OWN probe rather than a third name in the one above, because the two register DIFFERENT
+	// things: a file that names only `__ManagedFile` must not acquire a `__ManagedDirectory` layout, and vice
+	// versa. The `__ManagedMemory` alias every directory signature needs is registered by the file probe,
+	// which already matches that name — so a directory-using file lights BOTH bits and needs no duplicate
+	// upsert (see `ProgramSignatures.registerManagedDirectoryType`).
+	function atManagedDirectoryProducer() returns bool
+		if not self.at(TokenKind.identifier) 'notAnIdentifier'
+			return false
+		end 'notAnIdentifier'
+		return self.current().value.equals(ManagedDirectoryTypeName)
+	end 'atManagedDirectoryProducer'
 
 	// Is the cursor on `. <name>`? The shape every "does this file call builtin method X?" sweep probe
 	// asks, written once so a second probe cannot arrive with its own idea of what a method call looks
@@ -22096,6 +22124,12 @@ export type Parser
 			return try self.parseManagedFileStaticCall(func, typeTok: typeTok)
 		end 'managedFileStatic'
 
+		// `__ManagedDirectory.openSearch(path)` — the search type's statics (R4.3), intercepted here for the
+		// identical reason.
+		if typeTok.value.equals(ManagedDirectoryTypeName) 'managedDirectoryStatic'
+			return try self.parseManagedDirectoryStaticCall(func, typeTok: typeTok)
+		end 'managedDirectoryStatic'
+
 		// `__ManagedMemory.create(count, elementSize)` (R4.2) — intercepted BEFORE the generic-alias arm
 		// below, which would route it to `parseArrayStaticCall` (the alias IS bound to an `Array` instance)
 		// and refuse its two arguments against `Array.create()`'s none. That is the measured red:
@@ -22468,6 +22502,15 @@ export type Parser
 		if self.isManagedFileType(recv.tag, nameId: recv.nameId) 'managedFileMethod'
 			return try self.dispatchManagedFileMethod(func, recv: recv)
 		end 'managedFileMethod'
+
+		// A `__ManagedDirectory` RECEIVER (R4.3) — `dir.next()`, and (the corpus's own spelling)
+		// `wrapper.dir.next()`. Its own dispatcher for the reason the arm above has one, and it accepts the
+		// same two tags for the same measured reason: a struct FIELD read carries `named`, not `structRef`,
+		// and `specs/managed-directory.md`'s documented usage pattern reaches every instance method through a
+		// field.
+		if self.isManagedDirectoryType(recv.tag, nameId: recv.nameId) 'managedDirectoryMethod'
+			return try self.dispatchManagedDirectoryMethod(recv)
+		end 'managedDirectoryMethod'
 
 		// AN ENUM/UNION RECEIVER (D1) — `d.isNorth()`, `s.action()`, `self.isStop()`, and now also
 		// `pick().score()` and `Direction.south.score()`, which the oracle accepts (measured: 10) and which
@@ -23381,6 +23424,102 @@ export type Parser
 		return self.emitOwnedRuntimeResult(callee, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedFileNameId(), range: range)
 	end 'parseManagedFileOpen'
 
+	// ⭐ **THE FOUR `__ManagedDirectory` STATICS — the surface BOTH references declare** (`2-Parser.cs:1459-1463`,
+	// `LowerMaxonToStd.maxon:1913-1919`). A name outside it is REFUSED BY NAME here rather than left to fall
+	// through, exactly as `parseManagedFileStaticCall` argues: falling through would mangle
+	// `__ManagedDirectory.list` into a callee no file declares and surface as E3004 against a name the author
+	// did write.
+	//
+	// ⚠ **OWNERSHIP: only `openSearch` produces an owned box.** It goes through `emitOwnedRuntimeResult`, so
+	// it is tracked as an owned temporary whose drop is `__md_destruct` — the RAII close
+	// (`SignatureIndex.managedNameDropCallee`). `currentPath` returns an owned `__ManagedMemory` (an `Array`
+	// record), which is tracked the same way `__ManagedMemory.create`'s result is.
+	//
+	// ⚠ Throwing-ness is NOT decided here — `isThrowingManagedDirectoryRuntimeCallee` names the callee and
+	// the composed `isThrowingRuntimeCallee` is read by the parser's E3055 accept and SemanticCheck's E3057
+	// reject, so a `try` is required at exactly the places those two agree on.
+	function parseManagedDirectoryStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(typeTok, last: methodTok)
+
+		if methodTok.value.equals(ManagedDirectoryOpenSearchMethod) 'openSearch'
+			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+			return self.emitOwnedRuntimeResult(ManagedDirectoryOpenSearchName, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedDirectoryNameId(), range: range)
+		end 'openSearch'
+		// ⭐ **`exists` IS `bool`, NOT `int`, AND THAT WAS MEASURED FROM THE CORPUS.** The two references
+		// disagree (bootstrap `IrType.I64` at `2-Parser.cs:1458`; v1 `MaxonType.boolean` at
+		// `LowerMaxonToStd.maxon:1915`, whose comment says bool is deliberate so `not` is logical negation
+		// rather than bitwise complement) and `specs/managed-directory.md:205` writes
+		// `if not __ManagedDirectory.exists(…)`, which settles it. The RUNTIME still answers a 0/1 i64 — this
+		// tier has no `setcc` — and it is this TAG that makes the value a bool to everything above, the same
+		// arrangement `__arr_is_empty` has.
+		if methodTok.value.equals(ManagedDirectoryExistsMethod) 'exists'
+			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ManagedDirectoryExistsName, args: singletonArgs(path), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'exists'
+		if methodTok.value.equals(ManagedDirectoryCreateMethod) 'create'
+			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ManagedDirectoryCreateName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'create'
+		// The one static with NO arguments, and the one that hands back memory: an owned `__ManagedMemory`
+		// the caller drops like any other array record.
+		if methodTok.value.equals(ManagedDirectoryCurrentPathMethod) 'currentPath'
+			try self.consumeEmptyArgList()
+			return self.emitOwnedManagedMemoryResult(ManagedDirectoryCurrentPathName, args: ValueIdArray.create(), range: range)
+		end 'currentPath'
+
+		throw ParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly the four both references declare: `openSearch`, `exists`, `create` and `currentPath`", line: methodTok.line, column: methodTok.column)
+	end 'parseManagedDirectoryStaticCall'
+
+	// ⭐ **THE THREE `__ManagedDirectory` INSTANCE METHODS — `next`, `filename`, `close` (R4.3).** The cursor
+	// sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`).
+	//
+	// ⚠ **THE OP RANGE STARTS AT THE METHOD TOKEN, NOT AT THE RECEIVER, AND THAT IS THE ORACLE'S COLUMN.**
+	// `specs/managed-directory.md`'s `next-without-try` pins the E3057 at column 10 of `_ = dir.next()`,
+	// which is `next` — the receiver is column 6. It is also what `dispatchWitnessMethod` already does
+	// ("`methodTok` being this call's own anchor"), so this is the house convention rather than a divergence
+	// from it; the file and array dispatchers anchor at the receiver instead, and no committed case pins
+	// either of those.
+	//
+	// An unknown method is refused by name here rather than mangled into a callee no file declares.
+	function dispatchManagedDirectoryMethod(recv MethodReceiver) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(methodTok, last: methodTok)
+
+		if methodTok.value.equals(ManagedDirectoryNextMethod) 'next'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ManagedDirectoryNextName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'next'
+		// A FRESH owned `__ManagedMemory` copy of the current entry's name — see
+		// `ManagedDirectoryRuntime.emitCStringToManaged` for why it copies where the bootstrap hands back a
+		// pointer into the find block.
+		if methodTok.value.equals(ManagedDirectoryFilenameMethod) 'filename'
+			try self.consumeEmptyArgList()
+			return self.emitOwnedManagedMemoryResult(ManagedDirectoryFilenameName, args: singletonArgs(recv.value), range: range)
+		end 'filename'
+		if methodTok.value.equals(ManagedDirectoryCloseMethod) 'close'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ManagedDirectoryCloseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'close'
+
+		throw ParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly the three both references declare: `next()`, `filename()` and `close()`", line: methodTok.line, column: methodTok.column)
+	end 'dispatchManagedDirectoryMethod'
+
+	// ⭐ **AN OWNED `__ManagedMemory` OUT OF A RUNTIME CALL — the shape `filename()` and `currentPath()` share
+	// (R4.3).** Three facts have to travel together and each of them is a silent wrong answer on its own:
+	// the value is an OWNED heap record (so its scope exit must drop it), it is the `Array with Byte`
+	// instance (so `String.init` accepts it and reads it at stride 1), and it is a BUFFER SURFACE (so
+	// `.length()`/`.byteAt()` reach the `__ManagedMemory` members rather than the `Array` ones —
+	// `valueIsBufferSurface`, the provenance mark that tells the two surfaces of one record apart).
+	// `__ManagedMemory.create` states the same three at its own site; this is the second producer, so they
+	// are stated once.
+	function emitOwnedManagedMemoryResult(callee ByteArray, args ValueIdArray, range SourceRange) returns ValueId
+		let result = self.emitOwnedRuntimeResult(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internArrayByteInstance(), range: range)
+		self.markBufferSurface(result)
+		return result
+	end 'emitOwnedManagedMemoryResult'
+
 	// `(<path>)` — the one-`__ManagedMemory`-argument list six of the nine statics share.
 	function parseOneManagedMemoryArgList(func IrFunction, paramName ByteArray, methodTok Token) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
@@ -23851,6 +23990,12 @@ export type Parser
 		return self.artifact.typeNames.intern(ManagedFileTypeName)
 	end 'managedFileNameId'
 
+	// The `__ManagedDirectory` type's interned name (R4.3) — `managedFileNameId`'s twin, against the
+	// ARTIFACT's interner for its reason.
+	function managedDirectoryNameId() returns TypeNameId
+		return self.artifact.typeNames.intern(ManagedDirectoryTypeName)
+	end 'managedDirectoryNameId'
+
 	// Is this receiver a `__ManagedFile`? A TAG cannot answer it — every struct box is `structRef` — so it
 	// is the interned NAME behind the tag, exactly as `isStringIndexType` asks.
 	//
@@ -23878,6 +24023,18 @@ export type Parser
 		end 'notAnAggregateRef'
 		return self.internedName(nameId).equals(ManagedFileTypeName)
 	end 'isManagedFileType'
+
+	// Is this receiver a `__ManagedDirectory`? `isManagedFileType`'s twin, in every respect including WHY it
+	// accepts `named` beside `structRef`: `specs/managed-directory.md`'s documented usage pattern reaches
+	// every instance method through a struct FIELD (`wrapper.dir.next()`), and a field read carries `named`.
+	// It reads the name behind the id rather than interning one, so a receiver that is not its business
+	// costs a dense-column index and a byte compare.
+	function isManagedDirectoryType(tag ValueTypeTag, nameId TypeNameId) returns bool
+		if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notAnAggregateRef'
+			return false
+		end 'notAnAggregateRef'
+		return self.internedName(nameId).equals(ManagedDirectoryTypeName)
+	end 'isManagedDirectoryType'
 
 	// ⭐ **THE FOUR `__ManagedFile` INSTANCE METHODS — `close`, `size`, `read`, `write` (R4.2 completes
 	// R4.1's one).** The cursor sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`).
