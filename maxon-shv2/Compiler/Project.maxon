@@ -1797,6 +1797,53 @@ export function orderingTagOf(layout EnumLayout, caseName ByteArray) returns Par
 	return layout.tagOfIndex(index)
 end 'orderingTagOf'
 
+// ⭐⭐ **THE ORDINAL DRIFT GUARD FOR THE BUILTIN ERROR ENUMS — ONE MECHANISM, FOUR FAMILIES (7b).**
+//
+// Each `__Managed*Error` / `ArrayError` wire format lived in THREE places with nothing tying them: the case
+// NAMES (constants), the case ORDER (the `addBuiltinEnumCase` calls above, where position IS the ordinal and
+// those functions' own headers call it a wire format), and the ordinals as LITERALS in the runtime throw
+// sites. Drift means **every handler arm names the wrong case, silently** — no crash, no wrong exit code,
+// just a program that reports `accessDenied` where the OS said `openSearchFailed`.
+//
+// ⚠ **MEASURED, NOT ARGUED**: swap two cases in `builtinManagedDirectoryErrorEnum` and leave the runtime
+// alone, and the suite is **2758/0 GREEN**. Today's correspondence is well-checked only by coincidence of
+// coverage — three directory ordinals happen to be pinned by committed `match` arms, and the rest need an
+// OS failure mid-iteration that no test can provoke.
+//
+// ⭐ **WHY A CHECK AND NOT A DERIVATION, WHICH WOULD BE BETTER.** `orderingTagOf` above is the cure this
+// project prefers and its header says why — the bootstrap "spells 0/1/2 as literals at its consumer sites
+// with nothing tying them back to the declaration; shv2 deliberately does not". It is UNAVAILABLE here:
+// these ordinals feed `…Flag = …Ordinal + ErrorFlagOrdinalBias` chains that are themselves global `let`s,
+// and a global initializer may hold no function call (**E2045**). Deriving would mean threading the layout
+// to every throw site — a different rung. So the fact stays written twice and this makes disagreement LOUD.
+//
+// ⚠ **FORWARD ONLY, AND THAT IS A DECISION RATHER THAN HALF THE JOB.** `installManagedFileRuntime`'s drift
+// check is BIDIRECTIONAL because both its sides must be total. Here they must not be: a case may be DECLARED
+// and never thrown — `__ManagedDirectoryError.iteratorInvalid` is exactly that ("filename() on an exhausted
+// iterator", non-throwing in both references), and `__ManagedFileError` and `__ManagedMemoryError` each
+// declare more cases than their runtime throws. A backward "every case is claimed" arm would fire on all of
+// them. The forward arm is COMPLETE for the failure this guards: any insertion, deletion or reorder that
+// moves a case somebody throws moves it away from its claimed ordinal, and is caught here.
+export function assertBuiltinErrorOrdinals(layout EnumLayout, claimedNames ByteArrayArray, claimedOrdinals ParsedIntArray, installer ByteArray)
+	if claimedNames.count() != claimedOrdinals.count() 'lockstep'
+		panic("assertBuiltinErrorOrdinals: {String.from(installer)} passed {claimedNames.count()} names and {claimedOrdinals.count()} ordinals — the two columns are one claim per index and are built together")
+	end 'lockstep'
+
+	for i in 0 upto claimedNames.count() 'eachClaim'
+		let name = try claimedNames.get(i) otherwise panic("assertBuiltinErrorOrdinals: claimedNames.get OOB at {i}")
+		let claimed = try claimedOrdinals.get(i) otherwise panic("assertBuiltinErrorOrdinals: claimedOrdinals.get OOB at {i}")
+		let index = layout.indexOfCase(name)
+		if index >= layout.caseCount() 'noSuchCase'
+			panic("assertBuiltinErrorOrdinals: {String.from(installer)} claims ordinal {claimed} for '{String.from(name)}', but `{layout.kindWord()} {String.from(layout.name)}` declares no such case — the runtime throws a case the enum does not have, so no handler arm could ever match it")
+		end 'noSuchCase'
+
+		let declared = layout.tagOfIndex(index)
+		if declared != claimed 'drifted'
+			panic("assertBuiltinErrorOrdinals: '{String.from(name)}' is ordinal {declared} in `{layout.kindWord()} {String.from(layout.name)}` but {String.from(installer)} throws it as {claimed} — the enum's case ORDER is the wire format and the two have DRIFTED. Every handler arm for this case would name the wrong error, silently. Fix the runtime's ordinal, or move the case back")
+		end 'drifted'
+	end 'eachClaim'
+end 'assertBuiltinErrorOrdinals'
+
 // ⭐ **AN ENUM REGISTRY, SEEDED WITH THE COMPILER-KNOWN ENUMS (P1.7a slice 2b-ii)** — THE one constructor
 // of an `EnumLayoutMap`, used by BOTH registries that hold declared enums (`Project.enumTypes`, the
 // authority, and `ProgramSignatures.enumTypes`, the parser's whole-program index).

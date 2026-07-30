@@ -970,6 +970,32 @@ end 'buildManagedFileStatFree'
 // builder that gains or loses a clause without the predicate following is a `try` that silently stops
 // being required (or an E3057 on a call that cannot fail). Checked in BOTH directions.
 export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
+	// ⭐ **THE ORDINAL DRIFT GUARD (7b)** — the enum's case ORDER is this family's wire format, and the
+	// ordinals below are transcribed literals in this file. Asserted against the declaration on every
+	// install, because drift is otherwise SILENT: every handler arm would name the wrong case, with no
+	// crash and no wrong exit code. Measured — swapping two cases leaves the suite fully green.
+	var claimedNames = ByteArrayArray.create()
+	var claimedOrdinals = ParsedIntArray.create()
+	claimedNames.push(ManagedFileNotFoundCaseName)
+	claimedNames.push(ManagedFileAccessDeniedCaseName)
+	claimedNames.push(ManagedFileOpenFailedCaseName)
+	claimedNames.push(ManagedFileReadFailedCaseName)
+	claimedNames.push(ManagedFileWriteFailedCaseName)
+	claimedNames.push(ManagedFileSizeFailedCaseName)
+	claimedNames.push(ManagedFileDeleteFailedCaseName)
+	claimedNames.push(ManagedFileStatFailedCaseName)
+	claimedNames.push(ManagedFileClosedCaseName)
+	claimedOrdinals.push(ManagedFileNotFoundOrdinal)
+	claimedOrdinals.push(ManagedFileAccessDeniedOrdinal)
+	claimedOrdinals.push(ManagedFileOpenFailedOrdinal)
+	claimedOrdinals.push(ManagedFileReadFailedOrdinal)
+	claimedOrdinals.push(ManagedFileWriteFailedOrdinal)
+	claimedOrdinals.push(ManagedFileSizeFailedOrdinal)
+	claimedOrdinals.push(ManagedFileDeleteFailedOrdinal)
+	claimedOrdinals.push(ManagedFileStatFailedOrdinal)
+	claimedOrdinals.push(ManagedFileClosedOrdinal)
+	assertBuiltinErrorOrdinals(builtinManagedFileErrorEnum(), claimedNames: claimedNames, claimedOrdinals: claimedOrdinals, installer: b"installManagedFileRuntime")
+
 	if not usage.usesManagedFile 'noManagedFile'
 		return
 	end 'noManagedFile'

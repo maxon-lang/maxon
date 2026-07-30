@@ -528,6 +528,33 @@ let BitsPerByte = 8 as ParsedInt
 // derive the closure this install already is. Appended AFTER the pipeline (like `installMmRuntime`), so
 // they are never re-optimized.
 export function installArrayRuntime(module StdModule, usage RuntimeUsage)
+	// ⭐ **THE ORDINAL DRIFT GUARD (7b)** — TWO families are transcribed in this file, and they share their
+	// case-name constants without sharing an enum: `ArrayError` declares only the first two cases while
+	// `__ManagedMemoryError` declares eight, so the same name sits at the same ordinal in both BY DESIGN and
+	// each is asserted against its OWN layout. Drift is otherwise silent — every handler arm would name the
+	// wrong case with no crash and no wrong exit code.
+	var arrayNames = ByteArrayArray.create()
+	var arrayOrdinals = ParsedIntArray.create()
+	arrayNames.push(ManagedMemoryIndexOutOfBoundsCaseName)
+	arrayNames.push(ManagedMemoryEmptySlotCaseName)
+	arrayOrdinals.push(ArrIndexOutOfBoundsOrdinal)
+	arrayOrdinals.push(ArrEmptySlotOrdinal)
+	assertBuiltinErrorOrdinals(builtinArrayErrorEnum(), claimedNames: arrayNames, claimedOrdinals: arrayOrdinals, installer: b"installArrayRuntime/ArrayError")
+
+	var memoryNames = ByteArrayArray.create()
+	var memoryOrdinals = ParsedIntArray.create()
+	memoryNames.push(ManagedMemoryIndexOutOfBoundsCaseName)
+	memoryNames.push(ManagedMemoryInvalidLengthCaseName)
+	memoryNames.push(ManagedMemoryInvalidCapacityCaseName)
+	memoryNames.push(ManagedMemoryInvalidByteRangeCaseName)
+	memoryNames.push(ManagedMemoryInvalidAllocationCaseName)
+	memoryOrdinals.push(MemoryIndexOutOfBoundsOrdinal)
+	memoryOrdinals.push(MemoryInvalidLengthOrdinal)
+	memoryOrdinals.push(MemoryInvalidCapacityOrdinal)
+	memoryOrdinals.push(MemoryInvalidByteRangeOrdinal)
+	memoryOrdinals.push(MemoryInvalidAllocationOrdinal)
+	assertBuiltinErrorOrdinals(builtinManagedMemoryErrorEnum(), claimedNames: memoryNames, claimedOrdinals: memoryOrdinals, installer: b"installArrayRuntime/__ManagedMemoryError")
+
 	if not usage.usesArray 'noArray'
 		return
 	end 'noArray'

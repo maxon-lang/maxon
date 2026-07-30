@@ -1,0 +1,21 @@
+// Test: error.crossfile-generic-instance-managed-field-off-a-temporary
+// --- file: holder.maxon
+export type Holder uses T
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+end 'Holder'
+
+// --- file: main.maxon
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let s = StrHolder.create("hello").item
+	print(s)
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:36: Unsupported: reading the managed field 'item' out of a TEMPORARY `Holder` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
