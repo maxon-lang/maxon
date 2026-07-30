@@ -4371,9 +4371,30 @@ cannot regenerate (it cross-compiles then tries to EXECUTE).
 > **every rung attempted from an arm64-macOS host halts at step 1** until these 62 are minted. The
 > batching rule that produced this ("arm64 is remote, synced periodically") is correct *from Windows* and
 > **inverts on a Mac**, where arm64-macos is native and x64-windows is the lane that cannot execute.
-> ⇒ **Minting these 62 is a deliberate stale-golden sweep (skill step 13), owed BEFORE the next Mac-hosted
-> rung — not something to fold into an unrelated slice.** Deliberately NOT done here: it is 62 goldens
-> across 15 specs whose diffs want reviewing on their own, and this session's row was R4.
+> ⇒ **Minting these is a deliberate stale-golden sweep (skill step 13), owed BEFORE the next Mac-hosted
+> rung — not something to fold into an unrelated slice.**
+>
+> ### ✅ THE SWEEP RAN — 2026-07-30, `01ca36bd0` (user-directed). **62 red → 2**, and the 2 are NOT goldens.
+>
+> Minted from **ONE FULL UNFILTERED run** (a filtered run's fragments are not authoritative — literal-pool
+> indices depend on which tests share the batch, and 20 fragments the oracle probes had touched were
+> reverted for exactly that reason). It touches `specs-shv2/fragments/arm64-macos/` **and nothing else**:
+> no other target's goldens, no source. **60 stale re-minted + 152 absent added**, and the arithmetic
+> closes — 62 failures = **60 golden staleness + 2 not-goldens**.
+>
+> **The 60 diffs were justified, not rubber-stamped** (skill step 9: an `M` on a pre-existing fragment is a
+> codegen change to justify or fix). All 60 lag behind work already reviewed on the x64 lanes: 32 move real
+> arm64 instructions from **P1.9's runtime range checks** (`__rc_chk`/`__rc_panic`/`__rc_ok` blocks, plus
+> `fsub`→`fcmp` and `add`→`cmp` on the float/unsigned bound checks), 8 are **P1.9's E3062** unused-typealias
+> diagnostic text, and `union-managed-payload`'s **source itself** changed per **D1c** (`text(_)` rewritten
+> to a partial discard) — which D1c's own row had already recorded as moving 4 goldens. Nothing arm64-novel.
+>
+> ⛔ **THE RESIDUAL 2 ARE A REACHABLE MEMORY-CORRUPTION BUG, NOT A GOLDEN** — a pre-existing arm64-macOS
+> `mm_decref: refcount underflow` in shv2's `__maxon_global_cleanup`, on the one-line program
+> `typealias Bad = int(i8.min to i32.max)`. `--update-required` cannot touch it: expected and actual
+> diagnostics are byte-identical. **Filed in full, with four hypotheses already ruled out, on the
+> "Bootstrap oracle bugs" list above.** ⇒ **a Mac-hosted `/rung` step 1 now reads `2430 passed, 2 failed`
+> — a documented, attributed, pre-existing defect rather than 62 unexplained reds.**
 >
 > ⚠⚠ **AND THE STALE 62 ARE THE SMALLER HALF. THE SAME RUN MINTED `130` GOLDENS THAT WERE SIMPLY
 > ABSENT, plus `22` whole spec directories, across `42` DISTINCT SPECS** — among them
@@ -4425,6 +4446,49 @@ not ported from v1's `.mxc`.
 | 8 | **A compiler-SYNTHESIZED type that gains a managed field must be named in `managedNameDropCallee`, and the arm is a NAME EQUALITY** (shv2; filed by P1.8 Slice D's review, 2026-07-28). `installStructDestructors` walks `project.structTypes`, so a synthesized type is in no file's declarations and the generic route mints `__destruct___<Name>` — a symbol nothing builds. Today exactly ONE hand-written arm exists (`__CharacterSet`), and `__StringIndex` needs none because it is scalar-only, so this is **not yet duplication** and the abstraction was deliberately not built on speculation | The next synthesized type to acquire a managed field **dies in the BACKEND** — `panic at X64Backend.maxon:1820: resolveCallFixups: call to unknown function '__destruct___<Name>'` — a panic, not a diagnostic. Sabotage-confirmed: removing the existing arm gives **40 red, all that panic**; replacing it with the generic `__mm_decref` gives **40 red, all exit 101** (a leak). ⇒ **When a SECOND such type appears, replace both arms with ONE predicate** ("a reserved `__`-prefixed layout with a managed field must name its compiler-owned drop"), which turns a backend panic into a compile-time assertion |
 
 ### Bootstrap (`maxon-sharp`) oracle bugs — silent wrong answers to fix when the subsystem is next touched
+
+- **🔴🔴 arm64-macOS: A REACHABLE REFCOUNT UNDERFLOW IN shv2's GLOBAL TEARDOWN — 2 SUITE FAILURES, AND
+  IT IS THE LAST THING BETWEEN AN arm64-macOS HOST AND A GREEN `specs-shv2`.** Found 2026-07-30 by the
+  arm64-macos golden sweep (`01ca36bd0`), which took the lane 62 red → **2**; these are the 2, and
+  `--update-required` **cannot** touch them because the expected and actual diagnostics are
+  **byte-identical** — the test fails on the crash text appended after them.
+  **4-line repro, and the whole file is it:**
+  ```maxon
+  typealias Bad = int(i8.min to i32.max)
+  ```
+  ⇒ the correct `error E3005: … Mismatched type bounds: 'i8.min' and 'i32.max' …`, then:
+  ```
+  mm_decref: refcount underflow (already zero)
+    in mm_decref / __destruct_KeywordInfo / mm_decref / mm_decref_managed_elements
+    in __destruct_Array_KeywordInfo / mm_decref / __destruct___Map_ByteArray_KeywordInfo
+    in mm_decref / __maxon_global_cleanup / in mrt_start
+  ```
+  **PRE-EXISTING** — identical 2 occurrences in a baseline run of clean `main` before the sweep — and
+  **arm64-macOS-specific**: the x64 lanes are green over `ranged-typealias` upstream (P1.9 closed at
+  2352/0), and a double-decref would fire on every target, so the divergence is in the **bootstrap's
+  arm64 emission of shv2's own source**. ⇒ **it is a `maxon-sharp` rung, gated by the full C# suite.**
+  **What is already ruled OUT, so the next agent does not re-derive it:**
+  - **It is NOT an over-decref of `helpText` by the diagnostic path. `helpText` is READ NOWHERE in the
+    entire compiler** — grepped: `Lexer.maxon:1310` declares it and `:1313` assigns it, and there is no
+    third mention. ⇒ the teardown of the global `keywordMap` is merely **where corruption SURFACES** (the
+    first decref to meet a zeroed header), not where it is caused. **Treat this as a use-after-free /
+    heap-corruption hunt, not a missing-incref hunt.**
+  - **It is NOT "a union case with two managed payloads".** `unexpectedToken(expected, got)`,
+    `returnTypeMismatch(got, expected)` and `comparisonTypeMismatch(left, right)` all carry two `String`s
+    and all run **clean** (measured individually).
+  - **It is NOT the enclosing report `match` or the alias-declaration path.** The two arms ADJACENT to it
+    in `Queries.maxon`'s match — `bareSizedTypeAlias` (`typealias Real = f64`) and
+    `unrepresentableIntegerRange` (`int(-1 to u64.max)`) — are both clean, as is a sibling throw from the
+    very same function (`int(0 to f64.max)` ⇒ E2015).
+  - **It is NOT the naive shape of the throw site.** `mismatchedRangeBoundTypes` is thrown at
+    `Parser.maxon:7186` as `throw ParseError.mismatchedRangeBoundTypes(low.spelling(), high: high.spelling(), …)`
+    — **two owned `String` temporaries from method calls in ONE argument list** — but a hand-written
+    minimal program of exactly that shape (struct method returning an interpolated `String`, two calls in
+    one arg list, boxed-union payload, matched and printed) **compiles and runs clean under BOTH
+    compilers** on this host. The real trigger needs more of the surrounding context.
+  ⚠ Both variants underflow (`i8.min to i32.max` and `i64.min to u64.max`), and so does the `upto`
+  spelling; the alias alone with no `main` is enough. **Anyone touching the bootstrap's arm64 emitter or
+  shv2's `ParsedRangeBound`/`spelling()` should start here — the repro is one line.**
 
 - **⬜ `E9001` ON LEGAL MAXON: ANY INSTANCE METHOD ON A `__ManagedMemory` OBTAINED FROM THE STATIC
   `__ManagedMemory.create` FACTORY.** Found 2026-07-30 by the R4 survey, probing whether the corpus's
