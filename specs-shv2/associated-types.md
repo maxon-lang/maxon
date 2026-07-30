@@ -750,6 +750,212 @@ end 'main'
 ```
 
 
+### The arity is a WHOLE-PROGRAM fact, so an interface declared BELOW its conformance still supplies it
+
+R5 read the arity off the file's own `artifact.interfaces`, which the linear parse fills as it REACHES each
+declaration — so an interface written below the type that conforms to it was invisible, the arity defaulted
+to 1, and `implements Duo with Score, Weight` truncated after `Score`. MEASURED before R7:
+`E3016 … type 'Both' does not define required associated type 'Q'` plus
+`E3015 … implements unknown interface 'Weight'`, on a program the bootstrap compiles and runs (exit 42).
+The arity now comes from the whole-program declaration sweep, which visits every file's `interface`
+declarations before any file is parsed — the same guarantee `type` and `enum` have had since P1.1.
+
+<!-- test: interface-declared-below-its-conformance -->
+```maxon
+
+typealias Score = int(i64.min to i64.max)
+typealias Weight = float(f64.min to f64.max)
+
+type Both implements Duo with Score, Weight
+	let a as Score
+	let b as Weight
+
+	function getFirst() returns Score
+		return a
+	end 'getFirst'
+
+	function getSecond() returns Weight
+		return b
+	end 'getSecond'
+
+	static function create(a Score, b Weight) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Both'
+
+interface Duo uses P, Q
+	function getFirst() returns P
+	function getSecond() returns Q
+end 'Duo'
+
+function main() returns ExitCode
+	let v = Both.create(42, b: 1.5)
+	return v.getFirst()
+end 'main'
+```
+```exitcode
+42
+```
+
+
+### …and in ANOTHER file, which is the half a same-file rule could never reach
+
+The cross-file case is the one the old per-file lookup could not answer even in principle: a file's parse
+sees only its own declarations. It is the same defect and the same fix, and it is spelled separately
+because "declared lower in this file" and "declared in a file swept later" are two different reasons the
+old lookup missed, and only one of them a re-ordering of declarations could have hidden.
+
+<!-- test: interface-declared-in-a-later-file -->
+```maxon
+// --- file: a.maxon
+typealias Score = int(i64.min to i64.max)
+typealias Weight = float(f64.min to f64.max)
+
+type Both implements Duo with Score, Weight
+	let a as Score
+	let b as Weight
+
+	function getFirst() returns Score
+		return a
+	end 'getFirst'
+
+	function getSecond() returns Weight
+		return b
+	end 'getSecond'
+
+	static function create(a Score, b Weight) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Both'
+
+function main() returns ExitCode
+	let v = Both.create(42, b: 1.5)
+	return v.getFirst()
+end 'main'
+
+// --- file: b.maxon
+export interface Duo uses P, Q
+	function getFirst() returns P
+	function getSecond() returns Q
+end 'Duo'
+```
+```exitcode
+42
+```
+
+
+### ⚠ THE OVER-FIX GUARD: a FORWARD interface's arity must STOP the comma loop, not merely start it
+
+`mixed-bound-and-unbound-interfaces` with every interface moved BELOW the type. `Alpha` takes ONE
+associated type, so the comma after `Integer` opens a SIBLING conformance — and now that the arity is
+resolvable for a forward interface, a reader that consulted it and then over-consumed would eat `Beta` as
+`Alpha`'s second argument. This case was green before R7 for the wrong reason (the unresolvable default
+happened to be 1) and must stay green for the right one.
+
+<!-- test: forward-interface-comma-still-opens-a-sibling-conformance -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+type Multi implements Alpha with Integer, Beta with Float, Plain
+	let n as Integer
+
+	function one() returns Integer
+		return n
+	end 'one'
+
+	function two() returns Float
+		return 1.0
+	end 'two'
+
+	function three() returns Integer
+		return 42
+	end 'three'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Multi'
+
+interface Alpha uses A
+	function one() returns A
+end 'Alpha'
+
+interface Beta uses B
+	function two() returns B
+end 'Beta'
+
+interface Plain
+	function three() returns Integer
+end 'Plain'
+
+function main() returns ExitCode
+	let m = Multi.create(7)
+	return m.one() + m.three()
+end 'main'
+```
+```exitcode
+49
+```
+
+
+### A forward interface with NO `uses` clause has arity ZERO, and zero is an ANSWER
+
+`Plain` declares no associated type, so its surplus `with Score` binds nothing (the rule the case below
+states) and the comma after it opens the SIBLING `Duo` — whose own two `uses` names then take BOTH of the
+remaining arguments. Every interface here is declared below the type, so the arity of each comes from the
+whole-program sweep. It fails before R7 the way the two cases above do — `Duo` truncates at `Score` and
+`Weight` is read as an interface — and it pins the arity-0 half: an interface the sweep recorded with NO
+`uses` clause must not be handed the unresolvable default of 1, which is the number a genuinely undeclared
+name gets.
+
+<!-- test: forward-interface-with-no-uses-clause -->
+```maxon
+
+typealias Score = int(i64.min to i64.max)
+typealias Weight = float(f64.min to f64.max)
+
+type Both implements Plain with Score, Duo with Score, Weight
+	let a as Score
+	let b as Weight
+
+	function getFirst() returns Score
+		return a
+	end 'getFirst'
+
+	function getSecond() returns Weight
+		return b
+	end 'getSecond'
+
+	function plain() returns Score
+		return a
+	end 'plain'
+
+	static function create(a Score, b Weight) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Both'
+
+interface Plain
+	function plain() returns Score
+end 'Plain'
+
+interface Duo uses P, Q
+	function getFirst() returns P
+	function getSecond() returns Q
+end 'Duo'
+
+function main() returns ExitCode
+	let v = Both.create(42, b: 1.5)
+	return v.getFirst()
+end 'main'
+```
+```exitcode
+42
+```
+
+
 ### A `with` argument an interface declares no `uses` name for is IGNORED, not rejected
 
 The two reference compilers disagree here — the bootstrap binds `min(names, args)` and drops the rest, v1

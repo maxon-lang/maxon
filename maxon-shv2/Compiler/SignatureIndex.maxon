@@ -229,6 +229,13 @@ let FeedShapeNone = 39 as ContentHash
 // `Instance.Idx` resolves and type-checks against in ANY file, so a reader's parse memo must move with it.
 let DeclShapeInnerAlias = 40 as ContentHash
 
+// An `interface`'s `uses` ARITY shape discriminator (R7) — `DeclShapeTypeParam`'s twin, and load-bearing for
+// exactly its reason: the arity decides how many arguments an unparenthesized `implements I with A, B` binds
+// (`Parser.interfaceUsesArity`), so adding or removing a `uses` name changes what a conformance in ANY file
+// PARSES — the comma after an argument stops being another argument and becomes another interface. A reader
+// that did not re-parse would go on binding the old count.
+let DeclShapeInterfaceArity = 51 as ContentHash
+
 // The separator between a file's path and a constant's bare name in a FILE-PRIVATE constant's
 // storage key. `|` is legal in neither a Maxon identifier nor a Windows path, so the composite is
 // unambiguous. Ported verbatim from v1's `fileScopedTopLevelKey` (Project.maxon:189-191), which
@@ -2361,6 +2368,42 @@ end 'MethodInnerAliasParamEntry'
 
 export typealias MethodInnerAliasParamEntryArray = Array with MethodInnerAliasParamEntry
 
+// One `interface` declaration's NAME and `uses` ARITY, as the tolerant sweep found it (R7) —
+// `interface Duo uses P, Q` ⇒ `(Duo, 2)`. It carries no type-name ids (an associated type is a bare
+// identifier the interface itself declares), so like every other by-name entry it needs no remap.
+//
+// ⭐ **THE ARITY, AND DELIBERATELY NOTHING ELSE.** An interface's METHODS are not here: the conformance
+// check reads those off `project.interfaces`, whole-program, after every file has parsed. The arity is the
+// one interface fact a PARSE needs, because it is the one that decides what the token after an argument's
+// comma IS — see `Parser.interfaceUsesArity`.
+export type InterfaceArityEntry
+	export var name as ByteArray
+	export var arity as ElementCount
+
+	export static function create(name ByteArray, arity ElementCount) returns InterfaceArityEntry
+		return Self{name: name, arity: arity}
+	end 'create'
+end 'InterfaceArityEntry'
+
+export typealias InterfaceArityEntryArray = Array with InterfaceArityEntry
+
+// Interface name -> its `uses` arity (R7). A MAP and not the entry array, because the reader asks it per
+// CONFORMANCE SITE: a linear scan here would be O(interfaces × sites), which is precisely the shape the
+// per-file `artifact.interfaces` scan this replaces already had.
+typealias InterfaceArityMap = Map with (ByteArray, ElementCount)
+
+// What the index knows about a declared interface's `uses` arity (R7) — `DeclaredStruct`'s twin, and a union
+// for a sharper version of its reason. "No file declares an `interface` of this name" is an ANSWER, and it is
+// a DIFFERENT answer from "declares one taking no associated types": an undeclared name gets a GUESS
+// (`Parser.UnresolvableInterfaceUsesArity`, copied from both reference compilers), while a declared
+// `interface Plain` supplies the FACT 0. Folding the two into one number would write the guess where the
+// fact is known — and the two coincide only because today's single reader stops at the first argument either
+// way.
+export union DeclaredInterfaceArity
+	declared(arity ElementCount)
+	undeclared
+end 'DeclaredInterfaceArity'
+
 // The "." that joins a per-instance / inner alias's parts (P1.6-C). Its own constant so the JOIN and the
 // SPLIT below cannot spell the qualifier two ways; it is also what `Parser.parseTypeReference` reads an
 // `Instance.Member` type reference off, so all three agree by construction.
@@ -2527,6 +2570,14 @@ export type ProgramSignatures
 	// return-type read, so nothing else records them at this phase). Only methods that HAVE such a
 	// parameter get an entry — absence is "no inner-alias parameter", the common case.
 	var methodInnerAliasParams as InnerAliasParamInfoMap
+	// ⭐ Interface name -> its `uses` ARITY (R7) — `interface Duo uses P, Q` ⇒ 2. THE door
+	// `Parser.interfaceUsesArity` asks how many arguments an unparenthesized `implements Duo with A, B`
+	// binds, and here for `structTypes`' reason exactly: the answer is needed at PARSE time and the
+	// `interface` may be declared BELOW its conformance or in another file. Reading the parsing file's own
+	// `artifact.interfaces` instead was that same mistake wearing a different hat — it made a legal program's
+	// acceptance depend on declaration ORDER (measured: `E3015 … implements unknown interface 'Weight'` on a
+	// program the bootstrap runs).
+	var interfaceArities as InterfaceArityMap
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
 	var typeNames as TypeNameInterner
@@ -2639,7 +2690,7 @@ export type ProgramSignatures
 	var arrayByteInstanceComputed as bool
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaceArities: InterfaceArityMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false}
 	end 'create'
 
 	// Could `name` denote a top-level MANAGED binding — `let` or `var` — anywhere in this program? A
@@ -2658,7 +2709,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceArityEntries InterfaceArityEntryArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner)
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
@@ -2696,6 +2747,14 @@ export type ProgramSignatures
 		for entry in throwsEntries 'eachThrows'
 			self.recordThrows(entry.name, clause: entry.clause)
 		end 'eachThrows'
+
+		// Interface arities (R7) travel by NAME and carry no ids either (an associated type is a bare
+		// identifier), so they fold here with the consume facts and the throws clauses, ahead of the interner
+		// reconciliation — and ahead of the identity-remap early return below, which no by-name fold may sit
+		// after.
+		for entry in interfaceArityEntries 'eachInterfaceArity'
+			self.recordInterfaceArity(entry.name, arity: entry.arity)
+		end 'eachInterfaceArity'
 
 		// Bindings — `let` and `var` alike — are RECORDED here and EVALUATED later
 		// (`evaluateInitializers`), and the gap between the two is the whole reason a forward
@@ -2901,6 +2960,29 @@ export type ProgramSignatures
 
 		return try self.funcThrows.get(callee) otherwise ThrowsClause.none
 	end 'throwsOf'
+
+	// Add one declared interface's `uses` arity to the index AND fold it into the hash (R7) — the one write,
+	// for `record`'s reason. Last-wins on a duplicate interface name (a duplicate declaration is reported by
+	// the real parse), exactly as `returnTypes` is.
+	//
+	// ⚠ **AN ARITY OF ZERO IS RECORDED, NOT SKIPPED**, which is the opposite of `recordThrows`/
+	// `recordParamConsume`'s "the default answer costs no entry" rule — and the difference is that those two
+	// have a default that is a FACT about an unrecorded function ("does not throw"), while an unrecorded
+	// interface name is one nobody DECLARED, whose arity is a guess. Skipping the zero would spend that guess
+	// on a declaration the sweep read (see `DeclaredInterfaceArity`).
+	function recordInterfaceArity(name ByteArray, arity ElementCount)
+		self.interfaceArities.upsert(name, value: arity)
+		self.hash = mix(mixBytes(mix(self.hash, value: DeclShapeInterfaceArity), bytes: name), value: arity)
+	end 'recordInterfaceArity'
+
+	// ⭐ **HOW MANY ASSOCIATED TYPES `name`'s `uses` CLAUSE DECLARES, in ANY file** — `structOf`'s twin, and
+	// the door `Parser.interfaceUsesArity` asks how many arguments an unparenthesized `implements … with …`
+	// binds. `undeclared` is a real answer and its own case: the parser spends its unresolvable DEFAULT only
+	// there, never on an interface the sweep actually read.
+	export function interfaceArityOf(name ByteArray) returns DeclaredInterfaceArity
+		let arity = try self.interfaceArities.get(name) otherwise return DeclaredInterfaceArity.undeclared
+		return DeclaredInterfaceArity.declared(arity)
+	end 'interfaceArityOf'
 
 	// Add one declared struct type to the index AND fold it into the hash. The one write, for
 	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree
