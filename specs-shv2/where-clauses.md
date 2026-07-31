@@ -1080,3 +1080,516 @@ end 'main'
 ```maxoncstderr
 error E3019: <fragment>:33:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)
 ```
+
+<!-- test: where-clauses.constraint-interface-declared-below -->
+A `where` constraint's interface is resolved WHOLE-PROGRAM (R8), so writing the `interface` BELOW the
+generic type it constrains is legal — the identical program with the interface written above compiles
+and returns the identical answer. Before R8 this was `E2015 … not declared before its constrained use`:
+the resolution walked THIS FILE's interfaces as the linear parse had recorded them so far.
+```maxon
+typealias Code = int(0 to u32.max)
+typealias Coord = int(0 to 1000)
+
+type Point implements Digest
+	export var x as Coord
+	export var y as Coord
+	export static function create(x Coord, y Coord) returns Self
+		return Self{ x: x, y: y }
+	end 'create'
+	export function digest() returns Code
+		return self.x * 31 + self.y
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function itemDigest() returns Code
+		return self.item.digest()
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+interface Digest
+	function digest() returns Code
+end 'Digest'
+
+function main() returns ExitCode
+	let p = Point.create(3, y: 4)
+	let b = PointBox.create(p)
+	if b.itemDigest() == 97 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: where-clauses.constraint-interface-in-a-later-file -->
+The same fact across FILES, which is the commoner shape: the constrained type is in the
+earlier-sorting file and the `interface` it names is in the later one, so no declaration order within
+a file can rescue it. It resolves because the interface index is built from EVERY file's tokens
+before ANY file is parsed.
+```maxon
+// --- file: a.maxon
+typealias Code = int(0 to u32.max)
+typealias Coord = int(0 to 1000)
+
+type Point implements Digest
+	export var x as Coord
+	export var y as Coord
+	export static function create(x Coord, y Coord) returns Self
+		return Self{ x: x, y: y }
+	end 'create'
+	export function digest() returns Code
+		return self.x * 31 + self.y
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function itemDigest() returns Code
+		return self.item.digest()
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let p = Point.create(3, y: 4)
+	let b = PointBox.create(p)
+	if b.itemDigest() == 97 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+
+// --- file: z.maxon
+export interface Digest
+	function digest() returns Code
+end 'Digest'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: where-clauses.witness-return-generic-instance -->
+<!-- interface-return-generic-instance: THE RETURN-POSITION TWIN of the case below, and it is a
+     PRE-EXISTING false reject that R8 neither introduced nor widens. An interface requirement's types are
+     stored as rendered source strings and `renderDeclaredTypeName` spells a generic instance as its
+     CANONICAL INSTANCE NAME, but `Parser.interfaceReturnMaxonType` — which turns that string back into a
+     type at the dispatch — has no generic-instance arm: its `named` fallback interns `Array_Integer` and
+     the resolver has never heard of it.
+     MEASURED on the UNCHANGED compiler (the three compiler files stashed, rebuilt, re-run) and on this
+     branch, byte-identical both ways: `error E3011: <fragment>:27:17: Unknown type 'Array_Integer'`.
+     The FORMAL position is unaffected and ships green — `constraint-interface-generic-alias-formal` below —
+     because a formal's rendered string is only ever compared (against `Self`, against `float`), never
+     resolved.
+     ⚠ NO ORACLE: the bootstrap refuses this program in every declaration order with `E4006 Primitive type
+     'int' has no method named 'make'`, because it has no parse-time witness dispatch at all (it
+     monomorphizes). Unblocking it needs a canonical-instance-NAME -> `GenericInstanceId` door that
+     `ProgramSignatures` does not have, plus a ruling on how a witness dispatch adopts a MANAGED
+     generic-instance result — its own rung, not a line here. -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Maker
+	function make() returns IntArray
+end 'Maker'
+
+type Builder implements Maker
+	export var seed as Integer
+	export static function create(seed Integer) returns Self
+		return Self{ seed: seed }
+	end 'create'
+	export function make() returns IntArray
+		var xs = IntArray.create()
+		xs.push(self.seed)
+		return xs
+	end 'make'
+end 'Builder'
+
+type Box uses T where T is Maker
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function first() returns Integer
+		let xs = self.item.make()
+		return try xs.get(0) otherwise 0
+	end 'first'
+end 'Box'
+
+typealias BuilderBox = Box with Builder
+
+function main() returns ExitCode
+	return BuilderBox.create(Builder.create(42)).first()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: where-clauses.constraint-interface-generic-alias-formal -->
+⚠ THE RENDERING GUARD (R8). An interface requirement whose parameter type is a GENERIC-ALIAS instance
+(`IntArray = Array with Integer`) is the one shape where the two renderings of a declared type can
+disagree: `renderDeclaredTypeName` spells a `genericInstance` as its CANONICAL instance name, and a
+reader asked before the whole-program alias table is complete would see a plain `named` type and spell
+the raw alias instead. Two spellings of one type are a false ACCEPT on the conformance and a wrong
+`paramTypeNames` at the dispatch, so the recording pass runs only once every file has folded — and
+this case is what pins it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Summer
+	function total(xs IntArray) returns Integer
+end 'Summer'
+
+type Adder implements Summer
+	export var base as Integer
+	export static function create(base Integer) returns Self
+		return Self{ base: base }
+	end 'create'
+	export function total(xs IntArray) returns Integer
+		var sum = self.base
+		for x in xs 'each'
+			sum = sum + x
+		end 'each'
+		return sum
+	end 'total'
+end 'Adder'
+
+type Box uses T where T is Summer
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function run(xs IntArray) returns Integer
+		return self.item.total(xs)
+	end 'run'
+end 'Box'
+
+typealias AdderBox = Box with Adder
+
+function main() returns ExitCode
+	var xs = IntArray.create()
+	xs.push(10)
+	xs.push(30)
+	let b = AdderBox.create(Adder.create(2))
+	return b.run(xs)
+end 'main'
+```
+```exitcode
+42
+```
+
+### Basic where clause with Map
+
+Map requires `Key is Hashable`. String implements Hashable, so this should work:
+
+<!-- disabled-test: where-clauses.map-basic -->
+<!-- P1.x-Map: DICTIONARY LITERALS + `Map`. MEASURED against this branch's binary:
+     `error E2010: <fragment>:3:19: Expected ']' but got ':'` — the parser reads `["hello": 42]` as an
+     ARRAY literal and trips on the `:`. Unblocked by a `Map` type with a dictionary-literal form, not
+     by anything in R8: no `where` constraint is resolved before the parse fails. -->
+
+```maxon
+function main() returns ExitCode
+		let m = ["hello": 42]
+		return try m.get("hello") otherwise 0
+end 'main'
+```
+```exitcode
+42
+```
+
+### Custom Hashable type as Map key
+
+A user-defined type that implements Hashable can be used as a Map key:
+
+<!-- disabled-test: where-clauses.custom-hashable-key -->
+<!-- P1.x-Map: `Map`. MEASURED: `error E2015: <fragment>:25:9: Unsupported: a member access 'insert' on
+     a 'unknown' value` — `MyKeyMap.create()` produces no known type because `Map` is not a type shv2
+     has. R8 makes `Hashable`/`Equatable` resolve no differently: both already hit `builtinInterface`
+     and never reached the scan this rung deletes. -->
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type MyKey implements Hashable, Equatable
+		var value as Integer
+
+		function hash() returns HashValue
+				return self.value * 31
+		end 'hash'
+
+		function equals(other MyKey) returns bool
+				return self.value == other.value
+		end 'equals'
+
+		static function create(value Integer) returns Self
+			return Self{value: value}
+		end 'create'
+end 'MyKey'
+
+typealias MyKeyMap = Map with (MyKey, Integer)
+
+function main() returns ExitCode
+		var m = MyKeyMap.create()
+		try m.insert(MyKey.create(1), value: 42) otherwise ignore
+		return m.count()
+end 'main'
+```
+```exitcode
+1
+```
+
+### Where clause constraint violation
+
+Using a type that doesn't implement Hashable as a Map key should produce a compile error:
+
+<!-- disabled-test: where-clauses.constraint-violation -->
+<!-- P1.x-Map: `Map`'s ASSOCIATED TYPES. MEASURED: `error E2055: <fragment>:9:20: Type 'Map' has no
+     associated types` — shv2 synthesizes no `Map`, so `Map with (NotHashable, Integer)` is refused
+     before any constraint is checked and the expected E3017 never gets the chance to fire. R8 does not
+     touch which types exist. -->
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type NotHashable
+		var x as Integer
+end 'NotHashable'
+
+typealias BadMap = Map with (NotHashable, Integer)
+
+function main() returns ExitCode
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E3017: specs/fragments/where-clauses/where-clauses.constraint-violation.test:9:11: Type 'NotHashable' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+```
+
+### User-defined type with where clause
+
+A user-defined generic type can use where clauses:
+
+<!-- disabled-test: where-clauses.user-defined -->
+<!-- P1.x-typeparam-field-read: READING A TYPE-PARAMETER-TYPED FIELD FROM OUTSIDE THE GENERIC BODY.
+     MEASURED: `error E2015: <fragment>:34:17: Unsupported: a member access 'value' on a 'int' value` —
+     `h.item.value()` in `main`, where `h` is a `Holder with Wrapper`, resolves `h.item` to the
+     instance's substituted field and then dispatches on it CONCRETELY. Inside the generic body the same
+     call is a witness dispatch and works today (`where-clauses.witness-user-dispatch`); what is missing
+     is the per-instance field type at an instantiation site. Nothing to do with interface resolution —
+     `Valuable` is declared ABOVE its constrained use here, so R8's rule never applies. -->
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Valuable
+		function value() returns Integer
+end 'Valuable'
+
+type Wrapper implements Valuable
+		let n as Integer
+
+		function value() returns Integer
+				return self.n
+		end 'value'
+
+		static function create(n Integer) returns Self
+			return Self{n: n}
+		end 'create'
+end 'Wrapper'
+
+type Holder uses T where T is Valuable
+		export var item as T
+
+		static function create(item T) returns Self
+			return Self{item: item}
+		end 'create'
+end 'Holder'
+
+typealias WrapperHolder = Holder with Wrapper
+
+function main() returns ExitCode
+		let w = Wrapper.create(10)
+		let h = WrapperHolder.create(w)
+		return h.item.value()
+end 'main'
+```
+```exitcode
+10
+```
+
+### Where clause with multiple interfaces using and
+
+A type parameter can require multiple interface conformance:
+
+<!-- disabled-test: where-clauses.multiple-interfaces -->
+<!-- P1.x-typeparam-field-read: the same missing mechanism as `where-clauses.user-defined`, one line
+     further out. MEASURED: `error E2015: <fragment>:42:17: Unsupported: a member access 'age' on a
+     'int' value` — `r.item.age()` in `main`. The two-interface `where T is HasName and HasAge` half is
+     already covered green by `where-clauses.two-constraints`. -->
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface HasName
+		function name() returns Integer
+end 'HasName'
+
+interface HasAge
+		function age() returns Integer
+end 'HasAge'
+
+type Person implements HasName, HasAge
+		let age as Integer
+
+		function name() returns Integer
+				return 1
+		end 'name'
+
+		function age() returns Integer
+				return self.age
+		end 'age'
+
+		static function create(age Integer) returns Self
+			return Self{age: age}
+		end 'create'
+end 'Person'
+
+type Registry uses T where T is HasName and HasAge
+		export var item as T
+
+		static function create(item T) returns Self
+			return Self{item: item}
+		end 'create'
+end 'Registry'
+
+typealias PersonRegistry = Registry with Person
+
+function main() returns ExitCode
+		let p = Person.create(30)
+		let r = PersonRegistry.create(p)
+		return r.item.age()
+end 'main'
+```
+```exitcode
+30
+```
+
+### Where clause violation with and - missing one interface
+
+<!-- disabled-test: where-clauses.and-violation -->
+<!-- E3017-message-conformance: the REJECTION is already right — shv2 raises E3017 at exactly
+     `23:11`, the position and the code the canonical spec asks for — and only the SENTENCE differs.
+     MEASURED on this branch:
+       expected: Type 'OnlyFoo' does not satisfy constraint 'Bar' required by type parameter 'T' of 'NeedsBoth'
+       actual:   type 'OnlyFoo' does not implement 'Bar', which the `where` clause on generic type 'NeedsBoth' requires of its type parameter
+     The sentence is `ConformanceCheck.maxon:124`, and shv2's own
+     `where-clauses.error.instantiate-nonconforming` pins the current wording — so aligning it is one
+     edit plus a golden move in a file R8 does not own, i.e. its own rung, not a fix smuggled in here.
+     Nothing about it is interface RESOLUTION: `Foo`/`Bar` are declared above their constrained use. -->
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Foo
+		function foo() returns Integer
+end 'Foo'
+
+interface Bar
+		function bar() returns Integer
+end 'Bar'
+
+type OnlyFoo implements Foo
+		function foo() returns Integer
+				return 1
+		end 'foo'
+end 'OnlyFoo'
+
+type NeedsBoth uses T where T is Foo and Bar
+		var item as T
+end 'NeedsBoth'
+
+typealias Bad = NeedsBoth with OnlyFoo
+
+function main() returns ExitCode
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E3017: specs/fragments/where-clauses/where-clauses.and-violation.test:23:11: Type 'OnlyFoo' does not satisfy constraint 'Bar' required by type parameter 'T' of 'NeedsBoth'
+```
+
+### Equality on unconstrained type parameter requires Equatable
+
+Using `==` or `!=` on a type parameter that isn't constrained with `where T is Equatable` should produce a compile error:
+
+<!-- test: where-clauses.eq-requires-equatable -->
+```maxon
+type Box uses T
+		var item as T
+
+		export function eq(other T) returns bool
+				return item == other
+		end 'eq'
+end 'Box'
+
+function main() returns ExitCode
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/where-clauses/where-clauses.eq-requires-equatable.test:6:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
+```
+
+### Equality on Equatable-constrained type parameter compiles
+
+When the type parameter is properly constrained, `==` should work:
+
+<!-- test: where-clauses.eq-with-equatable -->
+```maxon
+type Box uses T where T is Equatable
+		var item as T
+
+		static function create(item T) returns Self
+			return Self{item: item}
+		end 'create'
+
+		export function eq(other T) returns bool
+				return item == other
+		end 'eq'
+end 'Box'
+
+typealias Int = int(i64.min to i64.max)
+typealias IntBox = Box with Int
+
+function main() returns ExitCode
+		let b = IntBox.create(42)
+		if b.eq(42) 'yes'
+				return 1
+		end 'yes'
+		return 0
+end 'main'
+```
+```exitcode
+1
+```

@@ -230,6 +230,15 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// allocations per doubling on 1024 files. Before `deriveInstanceNames`, which names every instance.
 	signatures.internArrayLiteralAggregateInstances()
 	signatures.evaluateInitializers()
+	// ⭐ And every declared `interface`'s REQUIREMENTS (R8) — for the same "the whole program is known now"
+	// reason, and here it is the reason the pass exists at all rather than merely where it is cheapest. See
+	// `foldInterfaceDeclarations`.
+	//
+	// BEFORE `deriveInstanceNames`, deliberately: reading a requirement's parameter types can INTERN a generic
+	// instance no other declaration named (`interface Summer … function total(xs IntArray)` in a program whose
+	// only `Array with Integer` is that formal), and an instance interned after the warming walk would have its
+	// two name memos derived LAZILY — by the parse, which must only ever read them.
+	try foldInterfaceDeclarations(project, signatures: signatures)
 	// ⭐ And every instantiation's COMPILED and CANONICAL names, for the same "the whole program is known
 	// now" reason — the parse READS both (a generic instance's nominal identity, P1.7) and each memo behind
 	// them is a WRITE, which a per-file fan-out must never make. See `deriveInstanceNames`.
@@ -239,6 +248,78 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: compositeSourceHash(project), computed: true)
 	return signatures
 end 'queryProgramSignatures'
+
+// ⭐⭐ **EVERY DECLARED `interface`'s REQUIREMENTS, READ ONLY ONCE THE WHOLE PROGRAM IS KNOWN (R8).** The
+// second half of the declaration sweep, and it is a SECOND PASS for a reason that is a correctness property
+// rather than a convenience:
+//
+// An interface requirement's types are stored as RENDERED SOURCE STRINGS, and one of those renderings —
+// `IrInterface.renderDeclaredTypeName`'s `genericInstance` arm — answers `ProgramSignatures.canonicalInstanceName`,
+// a question only the COMPLETE index can answer. Inside the per-file loop above, `signatures.isGenericAlias`
+// still says "no" for an alias whose file has not folded, so `function total(xs IntArray)` would render its
+// formal as the raw alias name `IntArray` here and as the canonical `Array_int` at the real parse. A rendered
+// type name is an IDENTITY at both ends of a conformance (`signatureMatches` compares two of these strings),
+// so two spellings of one type is a FALSE ACCEPT — the exact hole the R5 review measured for the
+// `genericInstance` arm — plus a formal a witness dispatch would then check its actuals against wrongly.
+// Reading here, after `allFilesFolded`, makes the two renderings identical BY CONSTRUCTION rather than by luck:
+// this reader sees the same index the parse will. `specs-shv2/where-clauses.md`'s
+// `constraint-interface-generic-alias-formal` is the pin.
+//
+// ⭐ **AND THE TWO RENDERINGS REALLY DO DISAGREE — MEASURED THREE WAYS ON ONE PROGRAM** (an interface
+// requirement `make() returns IntArray`, dispatched through a `where` constraint;
+// `specs-shv2/where-clauses.md`'s disabled `witness-return-generic-instance` carries it):
+//   • the pre-R8 compiler, which read the interface out of `artifact.interfaces` — i.e. the REAL PARSE's
+//     rendering — reports `E3011 … Unknown type 'Array_Integer'`;
+//   • this pass reports the IDENTICAL diagnostic, which is the evidence it renders as the real parse does;
+//   • the same pass moved INTO the per-file sweep COMPILES the program and returns 42, because the
+//     incomplete index renders the formal as the raw alias `IntArray`, a name that happens to resolve.
+// The sabotage looking "better" is exactly the trap: it is two spellings of one type living in one index,
+// the shape the R5 review measured as a false ACCEPT on a conformance. (The E3011 itself is a separate,
+// PRE-EXISTING gap — `Parser.interfaceReturnMaxonType` has no generic-instance arm — and is recorded at
+// that spec case.)
+//
+// ⚠ **IT JUMPS TO SITES RATHER THAN WALKING TOKENS, AND THAT IS WHAT KEEPS IT OFF THE COST CURVE.** The sweep
+// already decided which tokens open a declaration and recorded the position of each `interface`
+// (`InterfaceDeclSite`), so this is O(interfaces in the program) — not a second walk of every token, and not a
+// re-decision of what a declaration is. `queryActiveTokens` is memoized, so a file's tokens are a map hit.
+// MEASURED on the scale ladder, against the same tree without this pass, in this checkout: the WHOLE delta is
+// `phase:signatures` (+1,778/+2,667/+4,444/+7,997/+15,102/+29,311 against a total delta of
+// +1,780/+2,669/+4,446/+7,999/+15,104/+29,313 — the other two allocations are `phase:load`'s checkout-path
+// artefact) and it is **DEAD FLAT PER INTERFACE at every rung** against a corpus declaring 8/12/20/36/68/132
+// of them. Flat-per-declaration is the shape that says there is no per-file or per-site multiplier hiding in
+// it.
+//
+// ⭐ **ONE READER PER FILE, NOT PER SITE, AND `enterTypeScope` IS THE WHOLE SAFETY ARGUMENT.** Reading a
+// declaration can throw part-way, and a `Parser` carries type-param scope state a throw leaves un-popped — but
+// `readInterfaceDeclaration` OPENS with `enterTypeScope`, which assigns all five of those fields
+// unconditionally rather than merging into them, and `foldInterfaceDeclarationInto` seats the cursor itself. So
+// the next site in the same file cannot observe the failed one, and the tolerance stays per-DECLARATION with no
+// isolation to buy. Sharing the artifact is not merely harmless either — it is what the REAL parse does, one
+// local interner per file. A `Parser` per site instead cost **222 allocations per interface** where this costs
+// 130 (measured, same ladder), the difference being pure construction of a `Parser` and a `FileParseArtifact`
+// that the file's first site had already built.
+//
+// The sites arrive grouped by file — the sweep visits files in source-path order and appends within each — so
+// the grouping is a WALK and not a map: an inner loop consumes the run of sites sharing a path.
+function foldInterfaceDeclarations(project Project, signatures ProgramSignatures) throws CompileError
+	let sites = signatures.interfaceDeclSites
+	var i = 0 as ElementCount
+	while i < sites.count() 'eachFile'
+		let path = (try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
+		let tokens = try queryActiveTokens(project, path: path)
+		var reader = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path))
+
+		while i < sites.count() 'eachSiteInFile'
+			let site = try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")
+			if not site.path.equals(path) 'nextFile'
+				break
+			end 'nextFile'
+
+			reader.foldInterfaceDeclarationInto(signatures, tokenPos: site.tokenPos)
+			i = i + 1
+		end 'eachSiteInFile'
+	end 'eachFile'
+end 'foldInterfaceDeclarations'
 
 // --- Per-file query: parse into a FileParseArtifact ---
 export function queryParseOps(project Project, path FilePath) returns FileParseArtifact throws CompileError

@@ -4924,10 +4924,11 @@ export type Parser
 		// ⭐ Per-method inner-alias parameter info (P1.6-C) — one entry per method/factory that declares a bare
 		// inner-alias parameter, read by the per-instance argument check at concrete call sites.
 		var methodInnerAliasParams = MethodInnerAliasParamEntryArray.create()
-		// ⭐ Interface `uses` ARITIES (R7) — one entry per declared `interface`, folded whole-program so
-		// `implements Duo with Score, Weight` binds both arguments whether `Duo` is declared above, below, or
-		// in another file.
-		var interfaceArities = InterfaceArityEntryArray.create()
+		// ⭐ Interface declaration SITES (R7 for the arity, R8 for the requirements) — one entry per declared
+		// `interface`, folded whole-program so a `where` constraint's interface and an `implements Duo with
+		// Score, Weight` conformance both resolve whether `Duo` is declared above, below, or in another file.
+		// A POSITION, not the declaration: see `recordScannedInterface`.
+		var interfaceSites = InterfaceDeclSiteArray.create()
 
 		let resume = self.pos
 		self.pos = 0
@@ -5103,7 +5104,7 @@ export type Parser
 			// here (see `recordScannedInterface`): its bodiless method signatures would otherwise poison the
 			// sweep's `function` arm and its block-depth counter.
 			if depth == 0 and self.at(TokenKind.interface) 'isInterfaceDecl'
-				self.recordScannedInterface(interfaceArities)
+				self.recordScannedInterface(interfaceSites)
 				continue
 			end 'isInterfaceDecl'
 
@@ -5112,7 +5113,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceArityEntries: interfaceArities, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames)
 
 		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
 		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
@@ -7070,14 +7071,20 @@ export type Parser
 	// file. So the whole declaration is consumed here and lands the cursor past the closing `end`. An
 	// interface body opens no blocks, so the first `end` that is not a NAME closes it.
 	//
-	// ⭐ **IT RECORDS THE HEADER'S `uses` ARITY, AND THAT IS ALL IT RECORDS (R7).** The BODY still contributes
-	// nothing — an interface has no layout, no emitted symbol, and its method signatures are read whole-program
-	// off `project.interfaces` after every file has parsed. The arity is different in kind: it is the one
-	// interface fact a PARSE needs, because `implements Duo with Score, Weight` cannot know whether the comma
-	// introduces a second ARGUMENT or a second INTERFACE without it. Recorded here for the same reason
-	// `recordScannedType` records a layout — a `type`'s field offsets and an `interface`'s arity are both read
-	// by files that may be parsed before the declaring one, and the sweep is the only phase that has seen the
-	// whole program.
+	// ⭐⭐ **IT RECORDS WHERE THE DECLARATION IS, AND THAT IS ALL IT RECORDS (R8).** A `type`'s layout and an
+	// `interface`'s requirements are both read by files that may be parsed before the declaring one, so both
+	// have to be whole-program — but they cannot be gathered the same way. A layout is id-free and can be built
+	// the moment the sweep reads it; an interface REQUIREMENT is stored as a rendered SOURCE STRING, and one of
+	// those spellings (`IrInterface.renderDeclaredTypeName`'s `genericInstance` arm) is a question only the
+	// COMPLETE index can answer. Read here, `IntArray` would render as the raw alias name; read by the real
+	// parse, as the canonical instance name — two spellings of one type, which is a false ACCEPT on the
+	// conformance and a wrong formal at every witness dispatch.
+	//
+	// So the sweep contributes the ONE thing it uniquely has — the position, in a walk that already knows what
+	// a top-level declaration is — and `Queries.foldInterfaceDeclarations` reads the declaration itself once
+	// every file has folded. R7's per-header `uses`-arity read is GONE with it: the arity is
+	// `associatedTypeNames.count()` on the declaration that pass records, and two sources of one fact is the
+	// thing R7 itself deleted.
 	//
 	// ⚠⚠ **AND "NOT A NAME" IS THE WHOLE OF IT — asked through `closesBlockAt`, never `TokenKind.end`.** D8
 	// made a REQUIREMENT's name a declared name (`parseInterfaceMethod` reads it with `consumeNameToken`), so
@@ -7092,9 +7099,13 @@ export type Parser
 	// the reason this needed a THIRD requirement to show itself.) A keyword-named PARAMETER inside a
 	// requirement (`function scale(end Integer)`) is covered by the same call, through
 	// `keywordIsAName`'s declaration-name index.
-	function recordScannedInterface(interfaceArities InterfaceArityEntryArray)
+	function recordScannedInterface(sites InterfaceDeclSiteArray)
+		// The site is the cursor BEFORE the keyword is consumed, because that is where the reader has to be
+		// put back down: `readInterfaceDeclaration` opens by consuming `interface`, exactly as the real parse
+		// reaches it.
+		sites.push(InterfaceDeclSite.create(self.filePath, tokenPos: self.pos))
+
 		try self.consume(TokenKind.interface) otherwise return
-		self.recordScannedInterfaceArity(interfaceArities)
 		while not self.isEof() 'body'
 			if self.closesBlockAt(self.pos) 'closes'
 				self.advance()
@@ -7105,29 +7116,24 @@ export type Parser
 		end 'body'
 	end 'recordScannedInterface'
 
-	// The interface NAME and its `uses` arity, off the SAME header reader `parseInterfaceDeclaration` uses
-	// (R7) — so the swept arity and the `associatedTypeNames` the real parse puts on the `IrInterface` cannot
-	// drift, which is `recordScannedType`'s argument about `readTypeHeader` applied to an interface. The
-	// cursor lands at the body, which the caller's walk then consumes.
+	// ⭐⭐ **READ THE `interface` DECLARATION AT `tokenPos` INTO THE WHOLE-PROGRAM INDEX (R8).** The second half
+	// of `recordScannedInterface`, driven by `Queries.foldInterfaceDeclarations` once every file has folded —
+	// which is the whole point of the split (see `recordScannedInterface`, and `InterfaceDeclSite`).
 	//
-	// TOLERANT, exactly as every other `recordScanned*` is: a malformed header records NOTHING and leaves the
-	// diagnostic — with a position — to the real parse. An unrecorded interface simply falls to the
-	// unresolvable default, the same answer this rung's predecessor gave every interface.
+	// It runs the parser's OWN `readInterfaceDeclaration`, the same function `parseInterfaceDeclaration` calls,
+	// so there is exactly ONE builder of an `IrInterface` and the swept declaration cannot drift from the
+	// parsed one — the discipline `recordScannedType` keeps with `readTypeHeader`, applied where the drift
+	// would be silent rather than loud.
 	//
-	// `extends` names are read and DROPPED, and that is not an omission: shv2 does not inherit a parent
-	// interface's associated types (`parseInterfaceHeaderClauses` keeps the two lists apart, and
-	// `checkConformance` projects only the parent's METHODS), so the arity of `interface Sub extends Duo` is
-	// the length of its OWN `uses` clause. They are read because the clause sits between the name and `uses`
-	// in either order, and the cursor has to cross it.
-	function recordScannedInterfaceArity(interfaceArities InterfaceArityEntryArray)
-		let nameTok = try self.consume(TokenKind.identifier) otherwise return
-
-		var extendsInterfaces = ByteArrayArray.create()
-		var associatedTypeNames = ByteArrayArray.create()
-		try self.parseInterfaceHeaderClauses(extendsInterfaces, associatedTypeNames: associatedTypeNames) otherwise return
-
-		interfaceArities.push(InterfaceArityEntry.create(nameTok.value, arity: associatedTypeNames.count()))
-	end 'recordScannedInterfaceArity'
+	// TOLERANT, exactly as every other sweep entry point is: a declaration this cannot read records NOTHING and
+	// leaves the positioned diagnostic to the real parse, which reaches the same tokens moments later and
+	// refuses the program. What such an interface costs meanwhile is one unresolvable `with`-arity default and
+	// one "not declared" reject at a dispatch — both on a build that is already failing.
+	export function foldInterfaceDeclarationInto(index ProgramSignatures, tokenPos TokenIndex)
+		self.pos = tokenPos
+		let iface = try self.readInterfaceDeclaration() otherwise return
+		index.recordInterfaceDeclaration(iface)
+	end 'foldInterfaceDeclarationInto'
 
 	// Cursor is AT `enum`/`union`. Append the enum/union it declares and leave the cursor PAST the
 	// declaration's `end` — `recordScannedType`'s twin.
@@ -8753,16 +8759,31 @@ export type Parser
 		self.closeTypeParamScope()
 	end 'parseTypeDeclaration'
 
-	// ⭐ **`interface Name [extends …] [uses …] … end` (P1.7a slice 1)** — the FRONT-END half of
-	// interfaces. Its whole effect is the `IrInterface` recorded below, which `checkConformance` reads to
-	// verify every `implements`-ing type supplies the required methods. It EMITS NOTHING: an interface
-	// declares a contract, not code — there are no witness tables, no dispatch, no lowering at this slice.
+	// ⭐ **`interface Name [extends …] [uses …] … end` (P1.7a slice 1)** — the FRONT-END half of interfaces,
+	// as the REAL parse reaches it. Its whole effect is the `IrInterface` it puts on this file's artifact, which
+	// `mergeArtifact` folds into `project.interfaces` for `checkConformance` to verify every `implements`-ing
+	// type against. It EMITS NOTHING: an interface declares a contract, not code — there are no witness tables,
+	// no dispatch, no lowering at this slice.
 	//
-	// Method signatures have an implicit `self` (never declared), so `parseFunctionParameters` reads the
-	// USER parameters only — exactly what the conformance check compares against an impl's parameters once
-	// it drops the impl's prepended `__self`. `Self` in a signature resolves against `enclosingType` (set
-	// to the interface name here), so the check can substitute the conforming type for it.
+	// The READING is `readInterfaceDeclaration`'s, shared with the declaration sweep's second pass; what this
+	// arm owns is the artifact, which the sweep has none of. See that function for why the two are split.
 	function parseInterfaceDeclaration() throws ParseError
+		self.artifact.recordInterface(try self.readInterfaceDeclaration())
+	end 'parseInterfaceDeclaration'
+
+	// ⭐ **THE ONE READER OF AN `interface` DECLARATION (R8)** — cursor AT the `interface` keyword, landing past
+	// the closing `end`. TWO parties build an `IrInterface` and they must build the SAME one: the real parse,
+	// which records it on the file's artifact for `checkConformance` to read whole-program after every merge;
+	// and `foldInterfaceDeclarationInto`, which records it in the declaration index for the PARSE-time witness
+	// dispatch and `with`-arity readers. A second builder would be free to render a requirement's types
+	// differently from this one, and a rendered type name is an IDENTITY here, not a caption — the failure mode
+	// is a silent false accept on a conformance (`renderDeclaredTypeName`'s header carries the measurement).
+	//
+	// Method signatures have an implicit `self` (never declared), so `parseFunctionParameters` reads the USER
+	// parameters only — exactly what the conformance check compares against an impl's parameters once it drops
+	// the impl's prepended `__self`. `Self` in a signature resolves against `enclosingType` (set to the
+	// interface name here), so the check can substitute the conforming type for it.
+	function readInterfaceDeclaration() returns IrInterface throws ParseError
 		try self.consume(TokenKind.interface)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
@@ -8839,9 +8860,9 @@ export type Parser
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 
-		self.artifact.recordInterface(IrInterface.create(nameTok.value, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames))
 		self.closeTypeParamScope()
-	end 'parseInterfaceDeclaration'
+		return IrInterface.create(nameTok.value, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames)
+	end 'readInterfaceDeclaration'
 
 	// The optional `extends P1, P2` and `uses A, B` clauses of an interface header, in either order. A
 	// parent interface's methods a conforming type must ALSO supply (`checkConformance` projects them at
@@ -9055,12 +9076,13 @@ export type Parser
 		return renderDeclaredTypeName(try self.parseTypeReference(), declarationName: self.enclosingType, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
 	end 'readConformanceWithArg'
 
-	// ⭐ **HOW MANY ARGUMENTS AN UNPARENTHESIZED `with` CLAUSE AFTER `interfaceName` TAKES (R5)** — the
-	// count of that interface's `uses` names. A synthesized protocol first (matching
-	// `ConformanceCheck.resolveInterface` and `requireInterfaceForParse`; every one of them declares no
-	// associated type), then the WHOLE-PROGRAM declaration index.
+	// ⭐ **HOW MANY ARGUMENTS AN UNPARENTHESIZED `with` CLAUSE AFTER `interfaceName` TAKES (R5)** — the count of
+	// that interface's `uses` names, off the ONE parse-time interface door (`lookupInterfaceForParse`). It is
+	// not a separate lookup and after R8 it is not a separate STORE either: the arity IS
+	// `associatedTypeNames.count()` on the declaration that door hands back, so the number cannot disagree with
+	// the interface a witness dispatch resolves under the same name.
 	//
-	// ⭐ **THE INDEX, AND NOT THIS FILE'S `artifact.interfaces` (R7).** That array is filled by
+	// ⭐ **WHOLE-PROGRAM, AND NOT THIS FILE'S `artifact.interfaces` (R7).** That array is filled by
 	// `recordInterface` as the linear parse REACHES each declaration, so it answered for an interface declared
 	// above the conformance and for no other — an interface written lower in the same file, or in any other
 	// file, silently took the default of 1 and `implements Duo with Score, Weight` truncated after `Score`.
@@ -9070,32 +9092,20 @@ export type Parser
 	// a truncated parse, where the parse itself could not see the cause. `specs-shv2/associated-types.md`
 	// carries all four cases.
 	//
-	// The two sources cannot disagree, which is why only one survives: `IrInterface.associatedTypeNames` is
-	// filled from the literal `uses` clause and nothing else (`parseInterfaceHeaderClauses` puts `extends`
-	// names in a separate array, and shv2 does not inherit a parent's associated types), and the sweep reads
-	// that same clause through that same reader. Keeping both would be one fact written twice.
-	//
 	// ⚠ **AN INTERFACE NO FILE DECLARES DEFAULTS TO ONE, AND THAT DEFAULT IS COPIED DELIBERATELY** —
 	// bootstrap `GetAssociatedTypeCount` (`2-Parser.cs:2939`) and v1 `lookupInterfaceUsesParamCount`
-	// (`Parser.maxon:1959`) both do it, rather than refusing a name they cannot resolve. After R7 that set is
-	// the TYPOS plus the interfaces whose HEADER THE SWEEP COULD NOT READ, and nothing else: the sweep visits
-	// every source path in the program, stdlib included, before any file is parsed, and it is TOLERANT — a
-	// malformed header records no arity (`recordScannedInterfaceArity`), which is the one non-typo way to land
-	// here and is a program the real parse rejects on its own line anyway. Refusing instead would turn a
-	// misspelled interface into a parse error where the whole-program `E3015 … implements unknown interface`
-	// already names it precisely.
+	// (`Parser.maxon:1959`) both do it, rather than refusing a name they cannot resolve. That set is the TYPOS
+	// plus the interfaces `foldInterfaceDeclarations` COULD NOT READ, and nothing else: it visits every
+	// `interface` in every source path of the program, stdlib included, before any file is parsed, and it is
+	// TOLERANT — a malformed declaration records nothing, which is the one non-typo way to land here and is a
+	// program the real parse rejects on its own line anyway. Refusing instead would turn a misspelled interface
+	// into a parse error where the whole-program `E3015 … implements unknown interface` already names it
+	// precisely.
 	function interfaceUsesArity(interfaceName ByteArray) returns ElementCount
-		match builtinInterface(interfaceName) 'builtin'
+		match self.lookupInterfaceForParse(interfaceName) 'lookup'
 			found(iface) then return iface.associatedTypeNames.count()
-			notFound then break 'builtin'
-		end 'builtin'
-
-		match self.signatures.interfaceArityOf(interfaceName) 'declared'
-			declared(arity) then return arity
-			undeclared then break 'declared'
-		end 'declared'
-
-		return UnresolvableInterfaceUsesArity
+			notFound then return UnresolvableInterfaceUsesArity
+		end 'lookup'
 	end 'interfaceUsesArity'
 
 	// Parse an `enum`/`union` declaration (P1.1b wave B):
@@ -25947,24 +25957,45 @@ export type Parser
 		return WitnessDispatchLookup.notFound
 	end 'findWitnessDispatch'
 
-	// Resolve an interface NAME during PARSING (P1.7a slice 2a) — a synthesized builtin FIRST (matching
-	// `ConformanceCheck.resolveInterface`), then a user interface declared in THIS file. A `where` constraint's
-	// interface must be declared before the type it constrains (this slice resolves interfaces same-file, from
-	// the parse artifact rather than the not-yet-merged `project.interfaces`); an unresolved name is a clean
-	// reject at the dispatch site.
-	function requireInterfaceForParse(name ByteArray, methodTok Token) returns IrInterface throws ParseError
+	// ⭐⭐ **WHICH INTERFACE DOES `name` DENOTE, ASKED FROM INSIDE A PARSE (R8)** — a synthesized protocol FIRST
+	// (matching `ConformanceCheck.resolveInterface`, and every one of them declares no associated type), then
+	// the WHOLE-PROGRAM declaration index. THE parse-time door, and the reason it is one function is that it
+	// was two: `requireInterfaceForParse` answered from THIS FILE's `artifact.interfaces` while
+	// `interfaceUsesArity` answered whole-program, so one name had two scopes and a `where` constraint's
+	// interface had to be written above its use — `E2015 … not declared before its constrained use` on a
+	// program that compiles with the two declarations swapped, and on every cross-file spelling of it.
+	//
+	// ⚠ **THE FILE-LOCAL SCAN IS DELETED, NOT KEPT AS A FALLBACK.** `artifact.interfaces` fills as the linear
+	// parse REACHES each declaration, so it is a strict subset of what the index holds and a fallback could
+	// only ever answer where the index already has — two sources of one fact, which is R7's own precedent. It
+	// was also the linear scan whose cost is O(interfaces × witness-dispatch-sites) in the parsing file, and
+	// deleting it is what removes that.
+	//
+	// ⚠ **`ConformanceCheck.resolveInterface` STAYS A SECOND READER, and legitimately.** It runs AFTER every
+	// artifact has merged and reads `project.interfaces`, so it is asking at a different PHASE about a
+	// different store — the post-merge registry, which is also where `isStatic` and `extendsInterfaces` are
+	// read from and which this index deliberately does not hash (see `recordInterfaceDeclaration`). What the
+	// two share is the builtin-wins RULE, and sharing it would mean either handing the parser a `Project` (it
+	// takes none, by invariant) or handing the checker a `ProgramSignatures` it has no other use for. Two
+	// phase-appropriate readers, one rule stated at each end; what may NOT stand is two readers in the SAME
+	// phase, which is exactly what this function collapsed.
+	function lookupInterfaceForParse(name ByteArray) returns InterfaceLookup
 		match builtinInterface(name) 'builtin'
-			found(iface) then return iface
+			found(iface) then return InterfaceLookup.found(iface)
 			notFound then break 'builtin'
 		end 'builtin'
 
-		for iface in self.artifact.interfaces 'each'
-			if iface.name.equals(name) 'hit'
-				return iface
-			end 'hit'
-		end 'each'
+		return self.signatures.interfaceOf(name)
+	end 'lookupInterfaceForParse'
 
-		throw ParseError.unsupported("the `where` constraint interface '{String.from(name)}' is not declared before its constrained use — P1.7a slice 2a resolves a constraint's interface within the same file, declared before the generic type", line: methodTok.line, column: methodTok.column)
+	// The throwing form for the witness-dispatch caller, which cannot proceed without the declaration. The
+	// miss is a clean positioned reject naming the constraint's interface: after R8 the only way to land here
+	// is a name NO file declares, so the message says exactly that.
+	function requireInterfaceForParse(name ByteArray, methodTok Token) returns IrInterface throws ParseError
+		match self.lookupInterfaceForParse(name) 'lookup'
+			found(iface) then return iface
+			notFound then throw ParseError.unsupported("the `where` constraint interface '{String.from(name)}' is not declared anywhere in this program", line: methodTok.line, column: methodTok.column)
+		end 'lookup'
 	end 'requireInterfaceForParse'
 
 	// Mint the SSA value a witness dispatch defines, typed from the interface method's return type (P1.7a slice
