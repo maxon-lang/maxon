@@ -1,0 +1,70 @@
+// Test: range-check-panic.runtime-argument
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function divide(a Integer, by NonZero) returns Integer
+  return a / by
+end 'divide'
+
+function main() returns ExitCode
+  return divide(10, by: opaque(0))
+end 'main'
+---
+ExitCode: 1
+---
+func @opaque {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @divide {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rsi, rdx
+    x64.cmpRegImm32 rsi, 1
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.movRegReg r8, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 10
+    x64.movRegImm32 rcx, 0
+    x64.callDirect opaque
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect divide
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -208,3 +208,38 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-struct-field.test:8:17: Value 101 is outside the range of 'Percent' (int(0 to 100))
 ```
+
+<!-- test: range-check-panic.runtime-argument -->
+<!-- targets: x64-windows, x64-linux -->
+A runtime out-of-range argument is refused AT THE PARAMETER, before the callee's body runs. `by`
+excludes 0, so `a / by` is a bare divide with no `try` spellable -- the proof the elision rests on is
+the parameter's declared range, and this is the check that makes that proof true. The panic names the
+line the premise is DECLARED on (`divide`'s parameter list), not the line that wrote the argument: one
+guard stands in front of every call, including a call through a function value that has no argument
+list to blame.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function divide(a Integer, by NonZero) returns Integer
+  return a / by
+end 'divide'
+
+function main() returns ExitCode
+  return divide(10, by: opaque(0))
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.runtime-argument.test:9: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in divide
+  in main
+  in mrt_start
+```

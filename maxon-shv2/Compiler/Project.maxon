@@ -1026,7 +1026,7 @@ export typealias RangeCheckSiteArray = Array with RangeCheckSite
 // a pure function of its own tokens plus the token-swept `ProgramSignatures` — which carries return
 // types, not parameter types. So the site names the CALLEE and the argument's own position, and the
 // whole-program `InsertRangeChecks` pass — which runs after every file has merged — reads the alias back
-// off that callee's own `FunctionRangeChecks.paramAliasNames`.
+// off that callee's own `FunctionRangeChecks.paramSites`.
 //
 // `label` rides along unslotted because the label→position mapping has ONE home (`argSlotPosition`), and
 // it needs the callee's `paramNames`, which is another whole-program read. Slotting it here would be a
@@ -1090,16 +1090,42 @@ export typealias RangeCheckReturnSiteArray = Array with RangeCheckReturnSite
 // would be the same channel written twice.
 export typealias ValueInstanceAliasNameMap = Map with (ValueId, ByteArray)
 
+// ⭐⭐ **ONE NARROWED-RANGE PARAMETER OF A FUNCTION — AND IT IS A SITE, NOT MERELY A PUBLICATION (A1f).**
+// It began as `paramAliasNames`, a name per parameter that no check in the declaring function read: the
+// pre-erasure alias each PARAMETER was declared with, captured where `returnAliasName` is and for the
+// identical reason (`TypeResolution.resolveNamedType` collapses a plain ranged alias to its primitive and
+// drops the range), purely so a CALLER's `RangeCheckArgSite` could read the bounds back.
+//
+// ⭐ **IT IS NOW ALSO WHERE THE RUNTIME GUARD GOES**, which is what promoted it from a column of names to
+// a site with a source position. A call argument is the one door whose runtime check cannot be emitted
+// where it is written — a check is a BRANCH, and a call argument is evaluated part-way through building
+// an argument list, so the guard would land PAST the call with the callee already run
+// (`RangeCheckGuard`). The premise is therefore enforced at the CALLEE'S ENTRY instead: one guard per
+// narrowed parameter per function, standing in front of every call, including a call through a function
+// value that has no argument list to blame. `line`/`column` anchor its panic message on the parameter's
+// own declaration — the line the premise is DECLARED on, which is the only line one shared guard can
+// honestly name.
+//
+// ⚠ **SPARSE — one entry per RANGED parameter, never one per parameter.** `index` is the parameter's
+// position in the DECLARED (user) list, which is both the ValueId the guard checks (the parser reserves
+// ids `0..paramCount-1` for parameters, user parameters first) and the slot `argSlotPosition` maps an
+// argument onto. A dense column would pad every unranged parameter with an entry carrying a position
+// nothing may read; the sparse form has no padding to describe and no lie to tell.
+export type RangeCheckParamSite
+	export var index as ParamCount
+	export var aliasName as ByteArray
+	export var line as LineNumber
+	export var column as ColumnNumber
+
+	export static function create(index ParamCount, aliasName ByteArray, line LineNumber, column ColumnNumber) returns RangeCheckParamSite
+		return Self{index: index, aliasName: aliasName, line: line, column: column}
+	end 'create'
+end 'RangeCheckParamSite'
+
+export typealias RangeCheckParamSiteArray = Array with RangeCheckParamSite
+
 // Every range-check site in one function. `filePath` is stamped by `mergeArtifact` (the
 // function's file); `returnAliasName` is EMPTY unless the function returns a ranged INT alias.
-//
-// ⭐ **IT IS ALSO WHAT THIS FUNCTION PUBLISHES TO ITS CALLERS.** `paramAliasNames` is not a site — no
-// check in THIS function reads it — but the pre-erasure name each of its PARAMETERS was declared with,
-// captured where `returnAliasName` is and for the identical reason (`TypeResolution.resolveNamedType`
-// collapses a plain ranged alias to its primitive and drops the range). A caller's `RangeCheckArgSite`
-// names this function and an argument position; the pass reads the alias back from here, together with
-// the `filePath` that decides WHICH `Percent` a file's own declaration means. Empty — the shared array —
-// unless at least one parameter is a ranged alias.
 export type FunctionRangeChecks
 	export var filePath as FilePath
 	export var sites as RangeCheckSiteArray
@@ -1114,13 +1140,15 @@ export type FunctionRangeChecks
 	export var argSites as RangeCheckArgSiteArray
 	export var returnAliasName as ByteArray
 	export var returnSites as RangeCheckReturnSiteArray
-	export var paramAliasNames as ByteArrayArray
+	// The function's narrowed-range parameters — see `RangeCheckParamSite`. Empty (the shared array) for a
+	// function no parameter of which is a ranged alias, which is most of them.
+	export var paramSites as RangeCheckParamSiteArray
 	// P1.6-C — see `ValueInstanceAliasNameMap`. Empty for a function that constructs no generic instance,
 	// which is every function outside the generics corpus.
 	export var valueInstanceAliases as ValueInstanceAliasNameMap
 
-	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramAliasNames ByteArrayArray, valueInstanceAliases ValueInstanceAliasNameMap) returns FunctionRangeChecks
-		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramAliasNames: paramAliasNames, valueInstanceAliases: valueInstanceAliases}
+	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, valueInstanceAliases ValueInstanceAliasNameMap) returns FunctionRangeChecks
+		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramSites: paramSites, valueInstanceAliases: valueInstanceAliases}
 	end 'create'
 end 'FunctionRangeChecks'
 

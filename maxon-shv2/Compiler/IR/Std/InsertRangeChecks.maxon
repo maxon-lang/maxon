@@ -6,9 +6,16 @@
 //
 // ⚠ **WHICH HALVES A POSITION OWES IS THE SITE'S TO SAY, NOT THIS PASS'S** — see `RangeCheckGuard`. The
 // compile-time E3005 is owed EVERYWHERE and is raised by the one decision function
-// (`needsRuntimeGuard`); the runtime cascade is skipped at the two positions where the value has already
-// travelled into a call by the time a guard could land (a call argument, and an array element, which is
-// one).
+// (`needsRuntimeGuard`); the runtime cascade is skipped at the positions where the value has already
+// travelled into a call by the time a guard could land (an array element, whose element travels as
+// `__arr_push`'s third argument).
+//
+// ⭐ **A CALL ARGUMENT USED TO BE ON THAT LIST, AND A1f TOOK IT OFF — BY MOVING THE GUARD, NOT BY
+// DEFEATING THE OBSTACLE.** The obstacle is real and unchanged: a check is a BRANCH, so a guard emitted
+// where the argument is WRITTEN lands past the call with the callee already run. The cure is that the
+// argument door's runtime half belongs to the CALLEE'S ENTRY — one guard per narrowed parameter per
+// function, in front of every caller including the indirect ones — so the argument site keeps owing only
+// the compile-time half and the premise is enforced all the same. See `guardRangedParams`.
 //
 // ⭐ WHY STD-TIER, AND NOT THE MAXON-TIER MARKER OP THE PLAN SKETCHED. The narrowing guard needs a
 // primitive the Maxon dialect does not have — "abort with a symbolized backtrace and exit 1" — and the
@@ -283,6 +290,12 @@ type RangeCheckEmitter
 			panic("run: '{String.from(self.func.name)}' has {checks.sites.count()} range-check site(s) whose Std positions `lowerMaxonToStd` never filled — this pass runs over the module that lowering just produced, so every function it walks was walked there first")
 		end 'unlowered'
 
+		// ⚠ **BEFORE EVERY OTHER SITE IN THE FUNCTION, AND THAT IS AN ORDERING REQUIREMENT RATHER THAN A
+		// preference.** An entry guard splits the entry block at the end of its `param` ops, which is a
+		// position at or before every body site's — and `guardSiteAt` refuses a position that has fallen
+		// BEHIND its block's chain base, because sites are consumed in source order.
+		self.guardRangedParams(checks)
+
 		for site in checks.sites 'eachSite'
 			self.processSite(site, filePath: checks.filePath)
 		end 'eachSite'
@@ -351,9 +364,80 @@ type RangeCheckEmitter
 	function processSite(site RangeCheckSite, filePath FilePath)
 		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: site.guard, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
 			noGuard then return
-			guard(alias) then self.emitGuardAt(self.guardSiteAt(site), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
+			guard(alias) then self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
 		end 'verdict'
 	end 'processSite'
+
+	// ---- narrowed PARAMETERS: the runtime half of the call-argument door (A1f) ----
+
+	// ⭐⭐ **THE GUARD GOES AT THE CALLEE'S ENTRY, NOT AT THE CALL.** A call argument is the one door whose
+	// check cannot be emitted where it is written: a check is a BRANCH, and an argument is evaluated
+	// part-way through building an argument list, so the guard would land PAST the call with the callee
+	// already run (`RangeCheckGuard` states the obstacle in full). The callee's entry block splits cleanly,
+	// needs no argument-list restructuring, and costs ONE guard per narrowed parameter per FUNCTION rather
+	// than one per CALL.
+	//
+	// ⭐ **IT IS ALSO THE ONLY PLACE THAT CAN COVER EVERY CALLER.** A call through a function value has no
+	// callee name at the call site to look a parameter's range up by (`callIndirect`/`witnessCall`), so a
+	// call-site rule would leave the indirect door open for ever. One guard behind the entry covers direct
+	// calls, indirect calls and witness dispatch with nothing to enumerate.
+	//
+	// ⚠ **WHY THIS IS NOT COSMETIC.** `specs-shv2/safety.md` promises that `/` and `mod` are THROWING
+	// operations, and that a divisor "proven non-zero — a non-zero literal, or a ranged type whose range
+	// excludes 0 — compiles to a bare divide with no check". A `NonZero` PARAMETER is treated as proven, so
+	// the guard is elided; with the premise unenforced the proof was false, and a catchable `DivisionByZero`
+	// became an uncatchable hardware fault that `recover()` cannot see. Enforcing the premise is what makes
+	// the elision legitimate.
+	//
+	// The panic names the PARAMETER's own declaration line, not the caller's: one guard stands in front of
+	// every call, so the caller's line is not a fact it holds — and the parameter list is where the premise
+	// is declared, which is the honest thing for it to name.
+	function guardRangedParams(checks FunctionRangeChecks)
+		if checks.paramSites.isEmpty() 'noRangedParam'
+			return
+		end 'noRangedParam'
+
+		let entryRef = try self.func.blockRefs.get(0) otherwise panic("guardRangedParams: '{String.from(self.func.name)}' declares a ranged parameter but has no entry block")
+		let entryId = self.module.getBlock(entryRef).id
+		for site in checks.paramSites 'eachRangedParam'
+			self.guardRangedParam(site, entryId: entryId, filePath: checks.filePath)
+		end 'eachRangedParam'
+	end 'guardRangedParams'
+
+	// ⚠ **THE POSITION IS `paramCount`, WHICH IS EXACTLY PAST THE `param` OPS AND NOWHERE ELSE.**
+	// `LowerMaxonToStd.emitParams` appends one `StdOp.param` per parameter to `blockRefs[0]` before a single
+	// body op is lowered, so the first `paramCount` ops of the entry block ARE the incoming-register
+	// captures. Guarding before them would compare a value no `mov` has produced yet; guarding after any
+	// body op would let that op run on the value the range forbids. Both the ALIAS reader and the
+	// DIAGNOSTIC file are the callee's own — a parameter's range is the one visible where the function was
+	// written, and the panic points at the parameter itself.
+	//
+	// ⚠ A parameter is never a folded constant (its ValueId is defined by a `param` op, not a `const`), so
+	// `guardVerdict`'s compile-time half never fires here; what it decides for a parameter is the one thing
+	// that matters, `rangeIsFull` — a full-range parameter promises nothing and gets nothing.
+	function guardRangedParam(site RangeCheckParamSite, entryId BlockId, filePath FilePath)
+		// A user parameter's ValueId IS its declared position — `parseFunction` reserves ids
+		// `0..paramCount-1` for parameters, user parameters first, and `rangedParamSites` walks that same
+		// declared list (see its header).
+		let paramValue = site.index as ValueId
+		match self.guardVerdict(paramValue, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
+			noGuard then return
+			guard(alias) then self.emitParamGuard(alias, site: site, value: paramValue, entryId: entryId, filePath: filePath)
+		end 'verdict'
+	end 'guardRangedParam'
+
+	function emitParamGuard(alias RangedTypeAlias, site RangeCheckParamSite, value ValueId, entryId BlockId, filePath FilePath)
+		// ⛔ **A1f SPIKE SCOPE: INTEGER PARAMETERS ONLY.** A float alias's guard is mechanically identical
+		// — `emitGuardAt` already forks the whole cascade on `aliasIsFloat` for the `as`/`return` doors —
+		// but it widens the blast radius this rung was authorized to measure, so the float half awaits its
+		// own ruling. ⚠ Until it lands, a narrowed FLOAT parameter keeps the unenforced premise this rung
+		// exists to close.
+		if aliasIsFloat(alias) 'floatAwaitsItsOwnRuling'
+			return
+		end 'floatAwaitsItsOwnRuling'
+
+		self.emitGuardAt(self.guardSiteAt(entryId, stdOpPos: self.func.paramCount), value: value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
+	end 'emitParamGuard'
 
 	// ---- call-argument sites ----
 
@@ -385,13 +469,17 @@ type RangeCheckEmitter
 	end 'checkArgAgainstParamRange'
 
 	// The ranged-alias name the argument's PARAMETER was declared with, plus the callee's file. `none`
-	// covers every ordinary call: a callee with no ranged parameter at all files no `paramAliasNames`, an
-	// argument landing on an unranged position carries `EmptySourceText`, and a malformed call (bad arity,
-	// unknown label) slots past the end — which SemanticCheck reports against the real registry, and which
-	// is not this pass's to diagnose.
+	// covers every ordinary call: a callee with no ranged parameter at all files no `paramSites`, an
+	// argument landing on an unranged position matches no site, and a malformed call (bad arity, unknown
+	// label) slots past the end and matches none either — which SemanticCheck reports against the real
+	// registry, and which is not this pass's to diagnose.
+	//
+	// ⚠ The scan is over the callee's RANGED parameters only — usually one, never more than its arity — so
+	// it is bounded by the same `arity` the label lookup it sits beside already walks (`argSlotPosition`
+	// scans `paramNames`), and it adds no growth shape this call did not already have.
 	function paramAliasOf(site RangeCheckArgSite) returns ParamAliasLookup
 		let calleeChecks = try self.project.rangeChecks.get(site.callee) otherwise return ParamAliasLookup.none
-		if calleeChecks.paramAliasNames.isEmpty() 'noRangedParam'
+		if calleeChecks.paramSites.isEmpty() 'noRangedParam'
 			return ParamAliasLookup.none
 		end 'noRangedParam'
 
@@ -402,12 +490,14 @@ type RangeCheckEmitter
 		// `argSlotPosition` is the ONE label->position mapping in the compiler; asking it here is what keeps
 		// a labelled argument checked against the parameter it actually lands on rather than the one it
 		// happens to sit beside.
-		let aliasName = try calleeChecks.paramAliasNames.get(argSlotPosition(signature.paramNames, argIndex: site.argIndex, label: site.label)) otherwise return ParamAliasLookup.none
-		if aliasName.isEmpty() 'positionNotRanged'
-			return ParamAliasLookup.none
-		end 'positionNotRanged'
+		let slot = argSlotPosition(signature.paramNames, argIndex: site.argIndex, label: site.label)
+		for paramSite in calleeChecks.paramSites 'eachRangedParam'
+			if paramSite.index == slot 'thisArgumentsParameter'
+				return ParamAliasLookup.found(paramSite.aliasName, declFilePath: calleeChecks.filePath)
+			end 'thisArgumentsParameter'
+		end 'eachRangedParam'
 
-		return ParamAliasLookup.found(aliasName, declFilePath: calleeChecks.filePath)
+		return ParamAliasLookup.none
 	end 'paramAliasOf'
 
 	// ---- return sites ----
@@ -790,13 +880,13 @@ type RangeCheckEmitter
 	// names was recorded by the parser and therefore predates the pass. Its ROWS are only ever the
 	// parser's block ids — a continuation is written as a VALUE at its site block's row and never gets a
 	// row of its own — so it stays exactly `func.nextBlockId` wide however many blocks the pass appends.
-	function guardSiteAt(site RangeCheckSite) returns GuardSite
+	function guardSiteAt(blockId BlockId, stdOpPos BlockOpPos) returns GuardSite
 		self.ensureChainIndex()
 
-		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: site.block, from: self.func.name)
-		let base = try self.guardChainBase.get(site.block) otherwise panic("guardSiteAt: guardChainBase has no entry for block id {site.block}, which blockById just resolved within the function")
-		if site.stdOpPos < base 'behindTheChain'
-			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {site.stdOpPos} of block {site.block}, but that block's chain end already begins at {base} — sites are consumed in source order, so a position can never fall behind the last split")
+		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: blockId, from: self.func.name)
+		let base = try self.guardChainBase.get(blockId) otherwise panic("guardSiteAt: guardChainBase has no entry for block id {blockId}, which blockById just resolved within the function")
+		if stdOpPos < base 'behindTheChain'
+			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {stdOpPos} of block {blockId}, but that block's chain end already begins at {base} — sites are consumed in source order, so a position can never fall behind the last split")
 		end 'behindTheChain'
 
 		// ⚠ THE BOUND IS CHECKED IN THE SITE'S OWN COORDINATES — against the block's PRE-SPLIT op count,
@@ -805,12 +895,12 @@ type RangeCheckEmitter
 		// filled only by `materializeChainTails` (see `guardChainSource`). Checked against the block as it
 		// stands, every guard after the first in a block would read a count of zero and this would fire on
 		// a program with nothing wrong with it.
-		let sourceOps = self.chainSourceOps(site.block, chainEnd: block)
-		if site.stdOpPos > sourceOps.count() 'pastTheBlock'
-			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {site.stdOpPos} of block {site.block}, which held only {sourceOps.count()} ops before this pass split it — `splitChainEnd` would silently carve the whole block into the head and anchor the guard at the end")
+		let sourceOps = self.chainSourceOps(blockId, chainEnd: block)
+		if stdOpPos > sourceOps.count() 'pastTheBlock'
+			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {stdOpPos} of block {blockId}, which held only {sourceOps.count()} ops before this pass split it — `splitChainEnd` would silently carve the whole block into the head and anchor the guard at the end")
 		end 'pastTheBlock'
 
-		return GuardSite.create(block, position: site.stdOpPos - base)
+		return GuardSite.create(block, position: stdOpPos - base)
 	end 'guardSiteAt'
 
 	// ⭐⭐ **THE BLOCK HOLDING *THIS* SITE'S `ret` — ONE INDEX SERVES BOTH SITE KINDS, AND THE ANSWER IS

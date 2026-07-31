@@ -1123,28 +1123,27 @@ let sharedEmptyTopLevelBorrowSubjects = VarInfoMap.create()
 // instance — read-only and STORED into `FunctionRangeChecks` (increfed, so sharing is safe), never mutated.
 let sharedEmptyInstanceAliasNames = ValueInstanceAliasNameMap.create()
 
-// The `paramAliasNames` column of a function no parameter of which is a ranged alias — which is most of
-// them. Same invariant as the two above: it is never mutated (`rangedParamAliasNames` builds a FRESH
-// array on the first parameter that HAS an alias and returns this one otherwise), so it is safe both
-// across the per-file parse fan-out and stored into `FunctionRangeChecks`.
-let sharedEmptyParamAliasNames = ByteArrayArray.create()
+// The `paramSites` list of a function no parameter of which is a ranged alias — which is most of them.
+// Same invariant as the two above: it is never mutated (`rangedParamSites` builds a FRESH array on the
+// first parameter that HAS an alias and returns this one otherwise), so it is safe both across the
+// per-file parse fan-out and stored into `FunctionRangeChecks`.
+let sharedEmptyParamSites = RangeCheckParamSiteArray.create()
 
-// Materialize `rangedParamAliasNames`' column on the FIRST parameter that turns out to be a ranged
-// alias, padding the `prefixLength` unaliased parameters the lazy walk skipped; a column already
-// materialized is returned untouched. Split out of the walk because the padding is a LOOP, and a loop
-// inside a branch that also reassigns the enclosing binding is exactly the shape that leaves the
-// reassigned value undefined on the merge path (`E9001`).
-function materializedParamAliasNames(names ByteArrayArray, prefixLength ParamCount) returns ByteArrayArray
-	if names is sharedEmptyParamAliasNames 'firstAlias'
-		var out = ByteArrayArray.create()
-		while out.count() < prefixLength 'padUnaliasedPrefix'
-			out.push(EmptySourceText)
-		end 'padUnaliasedPrefix'
-		return out
-	end 'firstAlias'
+// Materialize `rangedParamSites`' list on the FIRST parameter that turns out to be a ranged alias; a
+// list already materialized is returned untouched.
+//
+// ⚠ It is a free function rather than two lines inside the walk because reassigning the walk's own
+// enclosing binding from INSIDE a branch leaves that binding undefined on the merge path — `E9001 …
+// 'firstRangedParam_10' does not dominate 'firstRangedParam_10.merge'`, measured on this exact loop. Its
+// predecessor `materializedParamAliasNames` was split out for the same reason and blamed the padding
+// loop it happened to contain; the loop was incidental, the reassignment-in-a-branch is the shape.
+function materializedParamSites(sites RangeCheckParamSiteArray) returns RangeCheckParamSiteArray
+	if sites is sharedEmptyParamSites 'firstRangedParam'
+		return RangeCheckParamSiteArray.create()
+	end 'firstRangedParam'
 
-	return names
-end 'materializedParamAliasNames'
+	return sites
+end 'materializedParamSites'
 
 // The signals one method's body contributes to the descriptor-need fixpoint (P1.6-B1): whether it directly
 // reads `sizeof(T)`, the siblings it calls on `self`, and the token position just past its `end` (so the
@@ -4963,8 +4962,10 @@ export type Parser
 	//   • `rangeCheckReturnSites` — every `return <expr>` in a ranged-alias-returning function.
 	//   • `rangeCheckReturnAlias` — that alias's name (EMPTY when the return type is not a ranged alias,
 	//     which is what gates the return recording).
-	//   • `rangeCheckParamAliases` — one name per PARAMETER, for this function's CALLERS to read back
-	//     (see `FunctionRangeChecks.paramAliasNames`). EMPTY when no parameter is a ranged alias.
+	//   • `rangeCheckParamSites` — one entry per NARROWED-RANGE PARAMETER: what this function's CALLERS
+	//     read back to check a constant argument, and where `InsertRangeChecks` puts the entry guard that
+	//     enforces the range on every other argument (see `RangeCheckParamSite`). EMPTY when no parameter
+	//     is a ranged alias.
 	//
 	// All five are RESET at the top of `parseFunction` and COMMITTED to the artifact at its end
 	// (`recordFunctionRangeChecks`), keyed by the function's name — the `InsertRangeChecks` Std pass
@@ -4981,7 +4982,7 @@ export type Parser
 	var rangeCheckArgSites as RangeCheckArgSiteArray
 	var rangeCheckReturnSites as RangeCheckReturnSiteArray
 	var rangeCheckReturnAlias as ByteArray
-	var rangeCheckParamAliases as ByteArrayArray
+	var rangeCheckParamSites as RangeCheckParamSiteArray
 	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
 	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
 	// parsed and handed to every Parser.
@@ -5338,7 +5339,7 @@ export type Parser
 			rangeCheckArgSites: RangeCheckArgSiteArray.create(),
 			rangeCheckReturnSites: RangeCheckReturnSiteArray.create(),
 			rangeCheckReturnAlias: EmptySourceText,
-			rangeCheckParamAliases: sharedEmptyParamAliasNames,
+			rangeCheckParamSites: sharedEmptyParamSites,
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			enclosingTypeIsEnum: false,
@@ -10303,7 +10304,7 @@ export type Parser
 		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
 		self.rangeCheckReturnSites = RangeCheckReturnSiteArray.create()
 		self.rangeCheckReturnAlias = self.rangedReturnAliasName(returnType)
-		self.rangeCheckParamAliases = self.rangedParamAliasNames(paramTypes)
+		self.rangeCheckParamSites = self.rangedParamSites(paramTypes, paramRanges: paramRanges)
 		for paramType in paramTypes 'seedParamTypes'
 			// ⭐ A FLOAT-ALIAS parameter is a genuine FLOAT value, so its value TAG must be `float`, not the
 			// `named` a ranged alias otherwise carries — exactly as F2a resolves a float-returning callee's
@@ -10427,13 +10428,13 @@ export type Parser
 		// fresh map, every other filed entry carries the SHARED empty one.
 		let hasInstanceAliases = self.valueInstanceAlias.count() != 0
 		// ⚠ A RANGED PARAMETER IS ENOUGH ON ITS OWN, even for a function with no site of its own: the entry is
-		// how this function's CALLERS learn what its parameters were declared as (`paramAliasNames`), and the
-		// caller's site names it by the name this map is keyed by.
-		if self.rangeCheckSites.isEmpty() and self.rangeCheckArgSites.isEmpty() and self.rangeCheckReturnSites.isEmpty() and self.rangeCheckParamAliases.isEmpty() and not hasInstanceAliases 'noSideData'
+		// how this function's CALLERS learn what its parameters were declared as (`paramSites`) and where its own
+		// entry guard goes, and the caller's site names it by the name this map is keyed by.
+		if self.rangeCheckSites.isEmpty() and self.rangeCheckArgSites.isEmpty() and self.rangeCheckReturnSites.isEmpty() and self.rangeCheckParamSites.isEmpty() and not hasInstanceAliases 'noSideData'
 			return
 		end 'noSideData'
 		let instanceAliases = self.packagedInstanceAliases() if hasInstanceAliases else sharedEmptyInstanceAliasNames
-		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.rangeCheckSites, argSites: self.rangeCheckArgSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites, paramAliasNames: self.rangeCheckParamAliases, valueInstanceAliases: instanceAliases))
+		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.rangeCheckSites, argSites: self.rangeCheckArgSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites, paramSites: self.rangeCheckParamSites, valueInstanceAliases: instanceAliases))
 	end 'commitRangeChecks'
 
 	// Package the parser's per-value instance-alias provenance (ValueId ⇒ interned alias id, file-local) into
@@ -10464,36 +10465,40 @@ export type Parser
 		end 'r'
 	end 'rangedReturnAliasName'
 
-	// ⭐ **THE PARAMETER TWIN OF THE LINE ABOVE — one alias name per DECLARED parameter, EMPTY where the
-	// parameter is not a ranged alias, and the SHARED empty array when none of them is.** Asked once per
-	// function, off the declared parameter types, at the one point they still carry their names.
+	// ⭐ **THE PARAMETER TWIN OF THE LINE ABOVE — one site per RANGED-ALIAS parameter, and the SHARED empty
+	// array when none of them is.** Asked once per function, off the declared parameter types, at the one
+	// point they still carry their names.
 	//
 	// It exists because a CALL ARGUMENT cannot be checked where it is written. Every other position holds
 	// its own declared type; a call argument's type belongs to the callee, which may be declared in a file
 	// this one is parsed independently of — the whole-program `ProgramSignatures` sweep carries return
-	// types, not parameter types — so the name has to be PUBLISHED here and read back by the whole-program
-	// pass. See `RangeCheckArgSite`.
+	// types, not parameter types — so the alias has to be PUBLISHED here and read back by the whole-program
+	// pass. See `RangeCheckArgSite`; and A1f made the same record the anchor of the entry guard that
+	// enforces the range on an argument no constant folds (`RangeCheckParamSite`), which is why the site
+	// carries the parameter NAME TOKEN's line and column.
 	//
 	// ⚠ It walks the DECLARED list, not the reserved one: `paramTypes` holds exactly the user's
 	// parameters, while the ValueId space `parseFunction` reserves also carries closure-env companions, the
 	// layout descriptor and the witness slots. `argSlotPosition` maps an argument to a position in the
-	// USER list, so indexing anything wider would slide every alias by the count of hidden slots.
+	// USER list, and a user parameter's ValueId IS that position, so indexing anything wider would slide
+	// every alias by the count of hidden slots.
 	//
 	// The array is built lazily — most functions take no ranged parameter at all, and one shared empty
 	// array is the difference between that and one allocation per function in the program.
-	function rangedParamAliasNames(paramTypes MaxonTypeArray) returns ByteArrayArray
-		var names = sharedEmptyParamAliasNames
+	function rangedParamSites(paramTypes MaxonTypeArray, paramRanges SourceRangeArray) returns RangeCheckParamSiteArray
+		var sites = sharedEmptyParamSites
 		for i in 0 upto paramTypes.count() 'eachParam'
-			let aliasName = self.rangedAliasNameOfType(try paramTypes.get(i) otherwise panic("rangedParamAliasNames: paramTypes.get OOB at {i}"))
-			if aliasName.isEmpty() and names is sharedEmptyParamAliasNames 'noAliasSeenYet'
+			let aliasName = self.rangedAliasNameOfType(try paramTypes.get(i) otherwise panic("rangedParamSites: paramTypes.get OOB at {i}"))
+			if aliasName.isEmpty() 'notRanged'
 				continue
-			end 'noAliasSeenYet'
+			end 'notRanged'
 
-			names = materializedParamAliasNames(names, prefixLength: i)
-			names.push(aliasName)
+			let nameRange = try paramRanges.get(i) otherwise panic("rangedParamSites: paramRanges.get OOB at {i} — one range is pushed per parameter name token, so the two lists have the same length")
+			sites = materializedParamSites(sites)
+			sites.push(RangeCheckParamSite.create(i, aliasName: aliasName, line: nameRange.line, column: nameRange.column))
 		end 'eachParam'
-		return names
-	end 'rangedParamAliasNames'
+		return sites
+	end 'rangedParamSites'
 
 	// ⭐ **THE ONE PLACE A `MaxonType` IS ASKED WHETHER IT DENOTES A RANGED ALIAS.** Every reader of that
 	// question goes through here — the return path above, and the `as`-cast path's TWO readers (which
@@ -30192,7 +30197,7 @@ export type Parser
 		let savedRangeCheckArgSites = self.rangeCheckArgSites
 		let savedRangeCheckReturnSites = self.rangeCheckReturnSites
 		let savedRangeCheckReturnAlias = self.rangeCheckReturnAlias
-		let savedRangeCheckParamAliases = self.rangeCheckParamAliases
+		let savedRangeCheckParamSites = self.rangeCheckParamSites
 
 		let paramCount = paramNames.count()
 		// ⭐ **RESERVE THE TRAILING `__env` PARAMETER'S ValueId UP FRONT (P1.5-A2b).** A capturing closure
@@ -30246,13 +30251,15 @@ export type Parser
 		// expression, never declared, so there is no declared ranged return for a `return` site to check
 		// against (the body's own cast/store sites carry the checking). The PARAMETER aliases are asked the
 		// same way `parseFunction` asks them, so the shape stays uniform even though a closure — whose lifted
-		// name carries a `$` and so cannot be written in a call — is never a direct callee whose
-		// `paramAliasNames` a caller could read.
+		// name carries a `$` and so cannot be written in a call — is never a direct callee whose `paramSites`
+		// a caller could read. ⭐ They EARN their keep here all the same (A1f): a closure's entry guard is the
+		// only thing that can check an argument passed through a function VALUE, which has no callee name at
+		// the call site to look a parameter's range up by.
 		self.rangeCheckSites = RangeCheckSiteArray.create()
 		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
 		self.rangeCheckReturnSites = RangeCheckReturnSiteArray.create()
 		self.rangeCheckReturnAlias = EmptySourceText
-		self.rangeCheckParamAliases = self.rangedParamAliasNames(paramTypes)
+		self.rangeCheckParamSites = self.rangedParamSites(paramTypes, paramRanges: paramRanges)
 		// The enclosing scope becomes a CAPTURE scope for the duration of the body — a body name resolving
 		// into it (an enclosing local/param/self-field, not the closure's own params) is a capture. Pushed
 		// here, popped just before the restore.
@@ -30377,7 +30384,7 @@ export type Parser
 		self.rangeCheckArgSites = savedRangeCheckArgSites
 		self.rangeCheckReturnSites = savedRangeCheckReturnSites
 		self.rangeCheckReturnAlias = savedRangeCheckReturnAlias
-		self.rangeCheckParamAliases = savedRangeCheckParamAliases
+		self.rangeCheckParamSites = savedRangeCheckParamSites
 
 		// In the ENCLOSING function's value space now: mint the closure VALUE — a `function`-tagged code
 		// pointer governed by the lifted name — and emit the `functionRef` A1 lowers to `funcAddr`.
@@ -32274,7 +32281,7 @@ export type Parser
 	// function that may be declared in a file this one is parsed independently of, and the whole-program
 	// index built before any parse (`ProgramSignatures`) carries return types, not parameter types. So the
 	// site names the callee and the argument position, and `InsertRangeChecks` — which runs once, after
-	// every file has merged — reads the alias back off that callee's `paramAliasNames`.
+	// every file has merged — reads the alias back off that callee's `paramSites`.
 	//
 	// ⚠ **ONLY AN ARGUMENT THAT COULD BE A COMPILE-TIME CONSTANT IS RECORDED.** A call argument owes the
 	// COMPILE-TIME half alone (`RangeCheckGuard`), so an argument no constant folds to has nothing a site
