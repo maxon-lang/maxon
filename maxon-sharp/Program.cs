@@ -29,6 +29,7 @@ class Program {
       "flat-namespace" => FlatNamespaceCheck.Run(args[1..]),
       "batch-rewriter-test" => BatchRewriterTests.RunAll(),
       "mxdbg-selftest" => Debug.MxdbgSelfTest.Run(),
+      "stdlib-target-selftest" => Compiler.StdlibTargetSelfTest.Run(),
       "debug" => RunDebug(args[1..]),
       "coverage" => CoverageCommand.Run(args[1..]),
       "profile" => ProfileCommand.Run(args[1..]),

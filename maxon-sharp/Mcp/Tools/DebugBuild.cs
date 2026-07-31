@@ -49,8 +49,12 @@ internal static class DebugBuild {
   /// parse whose result it never uses — measured at 138 ms turning into 1293 ms, a regression this
   /// warm-up would otherwise have caused rather than cured. Without the gate that call waits only on
   /// the stdlib SOURCE cache, which is separately locked for exactly this reason.
+  ///
+  /// It warms the HOST's stdlib, which is the only one this class can ever ask for — a debug session
+  /// runs the binary it builds, so it builds for the machine it is running on. The stdlib cache is
+  /// keyed by target, so warming any other target's would be work nothing here consumes.
   /// </summary>
-  public static void PrewarmStdlib() => StdlibLoader.GetStdlibModule();
+  public static void PrewarmStdlib() => StdlibLoader.GetStdlibModule(Compiler.CompileTarget.Default);
 
   /// <summary>
   /// Compile <paramref name="sourcePath"/> for the host and return the executable's path.

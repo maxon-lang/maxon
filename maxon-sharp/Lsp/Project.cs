@@ -200,6 +200,10 @@ public class Project(
   }
 
   private void Recompile() {
+    // An editor session has no `--target` to offer, so it reports the diagnostics of the build the
+    // developer gets by typing `maxon build` — the host's. Stated rather than defaulted, because the
+    // stdlib is now parsed per target and "which target" is a decision this call has to make.
+    var target = Compiler.CompileTarget.Default;
     var context = new IrContext();
     using var scope = context.PushScope();
 
@@ -217,7 +221,7 @@ public class Project(
     if (_isStdlibProject) {
       if (_lastSuccessfulCompletionInfo == null) {
         try {
-          var stdlibModule = StdlibLoader.GetStdlibModule();
+          var stdlibModule = StdlibLoader.GetStdlibModule(target);
           _lastSuccessfulCompletionInfo = new CompletionInfo(
             stdlibModule.TypeDefs,
             stdlibModule.Functions,
@@ -230,9 +234,9 @@ public class Project(
       }
     } else {
       try {
-        var module = StdlibLoader.GetStdlibModule();
-        Compiler.Compiler.ResetStaticCompileState(context);
-        var compileErrors = Compiler.Compiler.CompileSources(module, sources, false);
+        var module = StdlibLoader.GetStdlibModule(target);
+        Compiler.Compiler.ResetStaticCompileState(context, target);
+        var compileErrors = Compiler.Compiler.CompileSources(module, sources, false, target);
 
         if (compileErrors.Count == 0) {
           // Parse succeeded: update cached completion info

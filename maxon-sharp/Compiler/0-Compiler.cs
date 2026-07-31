@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
 using MaxonSharp.Compiler.Ir.Passes;
@@ -159,9 +160,15 @@ public class Compiler {
   /// Safe to call before the cached stdlib has been built — seeds with 0 in
   /// that case (the stdlib parse runs in its own context and won't collide).
   /// </summary>
-  public static void ResetStaticCompileState(IrContext context) {
+  /// <param name="target">
+  /// The target this compile is FOR, which decides which cached stdlib's watermarks apply. The
+  /// stdlib is parsed per target (its <c>#if os(...)</c> resolve differently), so the two targets'
+  /// parses reach different ids and seeding from the wrong one would under-seed the counters.
+  /// </param>
+  public static void ResetStaticCompileState(IrContext context, CompileTarget target) {
     context.ResetIds();
-    context.SeedStdlibCounters(StdlibLoader.CachedStdlibMaxValueId, StdlibLoader.CachedStdlibMaxStdValueId);
+    var (maxValueId, maxStdValueId) = StdlibLoader.StdlibIdWatermarks(target);
+    context.SeedStdlibCounters(maxValueId, maxStdValueId);
     MaxonPanicOp.ResetPanicLabels();
     Parser.ResetClosureCounter();
   }
@@ -183,14 +190,14 @@ public class Compiler {
 
       // Stage 1-2: Lex and parse all source files into IR modules
       // Use cached stdlib module, then parse user code into a clone
-      var module = StdlibLoader.GetStdlibModule();
+      var module = StdlibLoader.GetStdlibModule(target);
       module.EntryFunctionName = entryFunction;
       // Where a `--coverage` binary will write its counters. Rooted, so the program writes the same
       // file wherever it is launched from — and so `maxon coverage` finds it beside the binary.
       module.CoverageDataPath = Coverage
         ? Path.GetFullPath(outputPath) + Debug.MxcovFormat.DataExtension : "";
 
-      ResetStaticCompileState(_context);
+      ResetStaticCompileState(_context, target);
 
       Dictionary<string, long>? parseTimings = StageTimer.Enabled ? [] : null;
       var parseErrors = CompileSources(module, sources, false, target, parseTimings);
@@ -331,7 +338,15 @@ public class Compiler {
     }
   }
 
+  /// <summary>
+  /// Diagnostics for one editor buffer, for the HOST target.
+  ///
+  /// The host is stated here rather than inherited from a default, because it is a decision: an
+  /// editor session has no <c>--target</c> to offer, and the diagnostics it shows must describe the
+  /// build the developer gets by typing `maxon build`, which is the host's.
+  /// </summary>
   public static List<CompileError> Check(string filePath, string content) {
+    var target = CompileTarget.Default;
     var context = new IrContext();
     using var _ = context.PushScope();
 
@@ -350,13 +365,13 @@ public class Compiler {
         var module = new IrModule<MaxonOp>();
         var modifiedSources = (SourceFile[])stdlibSources.Clone();
         modifiedSources[stdlibIndex] = new SourceFile(filePath, content, modifiedSources[stdlibIndex].RootPath);
-        return CompileSources(module, modifiedSources, true);
+        return CompileSources(module, modifiedSources, true, target);
       } else {
-        var module = StdlibLoader.GetStdlibModule();
-        ResetStaticCompileState(context);
+        var module = StdlibLoader.GetStdlibModule(target);
+        ResetStaticCompileState(context, target);
         // Single-file Check: anchor at the file's parent dir (decision #3).
         var rootPath = Path.GetDirectoryName(Path.GetFullPath(filePath));
-        return CompileSources(module, [new SourceFile(filePath, content, rootPath)], false);
+        return CompileSources(module, [new SourceFile(filePath, content, rootPath)], false, target);
       }
     } catch (CompileError ex) {
       ex.FilePath ??= filePath;
@@ -394,8 +409,8 @@ public class Compiler {
     using var _ = context.PushScope();
 
     try {
-      var module = StdlibLoader.GetStdlibModule();
-      ResetStaticCompileState(context);
+      var module = StdlibLoader.GetStdlibModule(target);
+      ResetStaticCompileState(context, target);
       var errors = CompileSources(module, sources, false, target);
       if (errors.Count > 0) return errors;
 
@@ -455,8 +470,14 @@ public class Compiler {
       foreignPerspectiveCache: foreignPerspectiveCache,
       compilerOwnedDeclarations: source.CompilerOwnedDeclarations);
 
-  internal static List<CompileError> CompileSources(IrModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget? target = null, Dictionary<string, long>? timings = null) {
-    target ??= CompileTarget.Default;
+  /// <param name="target">
+  /// The target being built for. REQUIRED, with no host default: the parser resolves
+  /// <c>#if os(...)</c> / <c>arch(...)</c> from it, so a call that omitted it silently parsed for the
+  /// BUILD MACHINE. That is exactly how the stdlib came to be compiled for the host inside a
+  /// cross-compile — one unstated argument, two halves of a compile disagreeing about the OS, and
+  /// both halves succeeding. Every caller now has to say which target it means.
+  /// </param>
+  internal static List<CompileError> CompileSources(IrModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget target, Dictionary<string, long>? timings = null) {
     var parserOs = target.ParserOs;
     var parserArch = target.Arch;
     var errors = new List<CompileError>();
@@ -1076,9 +1097,33 @@ public class Compiler {
 
 public static class StdlibLoader {
   private static SourceFile[]? _cachedSources;
-  private static IrModule<MaxonOp>? _cachedStdlibModule;
-  private static int _cachedStdlibMaxValueId;
-  private static int _cachedStdlibMaxStdValueId;
+
+  /// <summary>
+  /// One target's parsed stdlib, together with the two id watermarks that parse minted.
+  ///
+  /// The watermarks travel WITH the module because they describe it: a user compile seeds its
+  /// stdlib-namespace counters past them so lowering-time stdlib MaxonValues don't alias
+  /// parser-time ones. Two targets parse different text, so they reach different watermarks, and
+  /// a watermark stored apart from its module could be read against the other target's.
+  /// </summary>
+  private sealed record ParsedStdlib(IrModule<MaxonOp> Module, int MaxValueId, int MaxStdValueId);
+
+  /// <summary>
+  /// The parsed stdlib, KEYED BY TARGET — because the parse is target-dependent and the cache
+  /// would otherwise decide the answer by whichever target compiled first in the process.
+  ///
+  /// The parser resolves <c>#if os(...)</c> / <c>arch(...)</c> while it reads, so the stdlib's own
+  /// text differs per target: <c>stdlib/Process.maxon</c> declares <c>ExitCode</c> as
+  /// <c>int(0 to u32.max)</c> on Windows and <c>int(0 to 255)</c> elsewhere, and
+  /// <c>stdlib/FilePath.maxon</c> switches every path separator at seven more sites. A single
+  /// shared module would bake the BUILD MACHINE's OS into a cross-compiled binary's stdlib —
+  /// silently, because both halves of the compile still succeed.
+  ///
+  /// Concurrent because the fast path reads it without the lock: the spec runner compiles on
+  /// worker threads, and serializing every compile behind the clone would cost the parallelism
+  /// the double-checked shape exists to keep.
+  /// </summary>
+  private static readonly ConcurrentDictionary<CompileTarget, ParsedStdlib> _parsedByTarget = new();
   private static readonly Lock _stdlibLock = new();
 
   /// <summary>
@@ -1094,36 +1139,50 @@ public static class StdlibLoader {
   /// </summary>
   private static readonly Lock _sourcesLock = new();
 
-  /// Highest stdlib MaxonValue id (low-bits, without StdlibIdBit) minted during the
-  /// cached stdlib parse. User compiles must seed their IrContext past this so
+  /// <summary>
+  /// The highest stdlib MaxonValue ids (low-bits, without StdlibIdBit) minted while parsing
+  /// <paramref name="target"/>'s stdlib. User compiles must seed their IrContext past these so
   /// lowering-time stdlib MaxonValues don't alias parser-time ones in valueMap.
-  public static int CachedStdlibMaxValueId => _cachedStdlibMaxValueId;
-  public static int CachedStdlibMaxStdValueId => _cachedStdlibMaxStdValueId;
+  ///
+  /// Zero when that target's stdlib has not been parsed yet — the seeding is then a no-op, which is
+  /// correct precisely because the parse that would need seeding past has not happened.
+  /// </summary>
+  public static (int MaxValueId, int MaxStdValueId) StdlibIdWatermarks(CompileTarget target) =>
+    _parsedByTarget.TryGetValue(target, out var parsed)
+      ? (parsed.MaxValueId, parsed.MaxStdValueId)
+      : (0, 0);
 
-  /// Returns a cached parsed stdlib module clone ready for user code compilation.
-  /// The clone has all functions marked IsStdlib=true.
-  public static IrModule<MaxonOp> GetStdlibModule() {
-    if (_cachedStdlibModule != null)
-      return _cachedStdlibModule.Clone();
+  /// Returns a cached parsed stdlib module clone, for <paramref name="target"/>, ready for user code
+  /// compilation. The clone has all functions marked IsStdlib=true.
+  public static IrModule<MaxonOp> GetStdlibModule(CompileTarget target) {
+    if (_parsedByTarget.TryGetValue(target, out var cached))
+      return cached.Module.Clone();
 
     lock (_stdlibLock) {
-      if (_cachedStdlibModule != null)
-        return _cachedStdlibModule.Clone();
+      // Re-check: another thread may have parsed this target while this one waited.
+      if (_parsedByTarget.TryGetValue(target, out var raced))
+        return raced.Module.Clone();
 
       var context = new IrContext(isStdlibContext: true);
       using var _ = context.PushScope();
       var module = new IrModule<MaxonOp>();
       var sources = LoadStdlibModules();
-      var stdlibErrors = Compiler.CompileSources(module, sources, true);
+
+      // The stdlib-namespace name counters (Parser's stdlib closure counter, MaxonPanicOp's stdlib
+      // label cache) are deliberately NOT reset here, even though this is now reachable more than
+      // once per process. They are monotonic and message-keyed, so letting a second target's parse
+      // continue from the first's keeps every stdlib name unique ACROSS the cached modules. Resetting
+      // them would restart the numbering while an earlier target's module — holding the low numbers —
+      // is still cached and still compilable, so a later synthesized stdlib panic could be handed a
+      // label that already belongs to a different message in that module.
+      var stdlibErrors = Compiler.CompileSources(module, sources, true, target);
       if (stdlibErrors.Count > 0) throw stdlibErrors[0];
       foreach (var func in module.Functions) {
         func.IsStdlib = true;
       }
       // Snapshot the stdlib counters so user compiles can seed their stdlib-namespace
       // counters past these and avoid id collisions during stdlib function lowering.
-      _cachedStdlibMaxValueId = context.NextStdlibValueId - 1;
-      _cachedStdlibMaxStdValueId = context.NextStdlibStdValueId - 1;
-      _cachedStdlibModule = module;
+      _parsedByTarget[target] = new ParsedStdlib(module, context.NextStdlibValueId - 1, context.NextStdlibStdValueId - 1);
       return module.Clone();
     }
   }
