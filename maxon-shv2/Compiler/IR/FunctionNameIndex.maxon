@@ -1,0 +1,158 @@
+// FunctionNameIndex — the name -> function index, and the ONE statement of the invariant it rests on.
+//
+// ⭐⭐ **THE POLICY, IN ONE PLACE: AN INDEX OVER A MODULE'S FUNCTIONS HAS NO TIE-BREAK, BECAUSE IT REFUSES
+// A TIE.** Four passes need to resolve a function NAME to the function it names, and every one of them
+// rests on the same fact — a merged module holds no two functions of one name. Before A1w each carried its
+// own copy of the index and its own answer to "what if it does": last-wins at three of them, FIRST-wins at
+// the fourth, and a check at exactly one. That is one fact with four readers, and the reader that had
+// learned it (A1t) was the only one that could say so. So the tie-break is gone rather than made uniform:
+// a duplicate is DETECTED where the index is built — the collision was never something to predict, only
+// something to notice (A1t) — and the compile is refused. Nothing downstream needs a policy for a state
+// that cannot exist.
+//
+// ⭐ **WHY DETECTION IS FREE, AND WHY IT IS NOT A `contains` PROBE.** The loop inserts index `i` on
+// iteration `i`, so the map's height IS `i + 1` after every insert unless one insert collapsed two names
+// into one entry. That is one integer compare per function and no second hash probe. A `contains` ahead of
+// each insert would answer the same question AND hand back the incumbent's index for free — but it doubles
+// the hash probes on a per-function loop to save a back-scan that runs at most once, on a path whose next
+// act is to refuse the compile.
+//
+// ⭐ **WHAT EACH CALLER CAN ACTUALLY SEE IS DIFFERENT, AND THAT IS WHY THE CHECK BELONGS HERE RATHER THAN
+// AT ONE CHOKE POINT.** The four sites sit at four points of one compile, and a module GAINS functions
+// between them, so the set of duplicates each can meet grows monotonically. There is no single moment that
+// covers all four (MEASURED, A1w):
+//
+//   * `ConformanceCheck.checkConformance` — Maxon tier, before `installManagedGlobalInit` and before the
+//     pipeline. **It can see NONE.** Its only available cause is two parsed declarations, which is E3006 at
+//     merge, and it refuses to read a malformed module (`projectHasErrors`) four lines before it asks for an
+//     index; no synthesizer has appended to the module yet. It is the one site that is not in this class —
+//     and it builds its index HERE anyway, because a fourth spelling of the same loop costs more than the
+//     one integer compare does.
+//   * `StdlibSource.reachableMaxonFunctionNames` — Maxon tier, AFTER `installManagedGlobalInit`. It can see
+//     a `stdlib/Builtins.maxon` declaration of `__module_init` / `__maxon_global_cleanup` against the
+//     compiler's own.
+//   * `SemanticCheck.buildParamMutationSummary` — Maxon tier, inside the pipeline. Same pair; the pipeline's
+//     error gate after `resolveTypes` is what keeps two PARSED declarations away from it.
+//   * `IR/Std/DeadFunctionElimination` — Std tier, after every `install*Runtime`. The above plus a
+//     declaration of any symbol a runtime installs (`__print_string`, `__str_eq`, `__mm_*`, a `__destruct_<T>`
+//     cascade …), which is the pair A1t was written for and the only one no earlier site can reach.
+//
+// ⚠ **THE INDEX DESCRIBES THE ARRAY AS IT WAS AT `create`.** Both halves go stale together the moment that
+// array changes, which is why they travel as one value: an index resolved against a DIFFERENT function
+// array is the failure `ValueOrigin`'s header describes. Exactly one pass replaces a function array —
+// `DeadFunctionElimination.sweepUnreachedFunctions`, which assigns a freshly built one — and it runs after
+// the last read of the index built over the old one.
+
+// name -> position in the function array. Unique by construction: `FunctionNameIndex.create` refuses a
+// duplicate rather than resolving one.
+export typealias FuncIndexByName = Map with (ByteArray, FuncIndex)
+
+export type FunctionNameIndex
+	// The array the indices index, carried WITH the map for the reason the header's last paragraph gives.
+	export let functions as IrFunctionArray
+	export let byName as FuncIndexByName
+
+	export static function create(functions IrFunctionArray, project Project) returns FunctionNameIndex throws CompileError
+		var byName = FuncIndexByName.create()
+		for i in 0 upto functions.count() 'eachFunc'
+			let func = try functions.get(i) otherwise panic("FunctionNameIndex.create: functions.get OOB at {i}, inside a loop bounded by its own count")
+			byName.upsert(func.name, value: i)
+			if byName.count() != i + 1 'duplicateName'
+				try refuseDuplicateFunctionName(functions, project: project, laterIndex: i)
+			end 'duplicateName'
+		end 'eachFunc'
+		return Self{functions: functions, byName: byName}
+	end 'create'
+
+	// The function a name denotes. Two lookups rather than a name -> function map, so the ONE checked index
+	// above serves a caller that wants the function as well as one that wants its position.
+	export function funcNamed(name ByteArray) returns IrFunction throws MapError
+		let index = try self.byName.get(name)
+		return try self.functions.get(index) otherwise panic("FunctionNameIndex.funcNamed: '{String.from(name)}' maps to position {index}, which is outside the array the index was built over")
+	end 'funcNamed'
+end 'FunctionNameIndex'
+
+// ⭐⭐ **THREE CAUSES SHARE ONE SYMPTOM, AND PROVENANCE IS WHAT TELLS THEM APART (A1t).** Two of them are
+// compiler bugs and must stay a panic; the third is an AUTHOR's mistake and gets a diagnostic:
+//
+//   * **one side parsed, one side synthesized** — a declaration took a name the compiler owns. E4015,
+//     positioned at the declaration. D6 is what opened the door — it let `stdlib/Builtins.maxon` DECLARE
+//     reserved `__` names — and what creates the PAIR is whatever makes the compiler install its own copy,
+//     which differs by runtime. ⚠ **NOT always a call:** a usage-gated symbol needs one (A1r opened that
+//     door, and `__print_string` is installed by `print`/an explicit call), but
+//     `__module_init`/`__maxon_global_cleanup` are installed on `globals.count() != 0` alone (`ModuleInit`),
+//     so declaring one of THOSE collides with no call anywhere in the program. MEASURED both ways. The check
+//     runs before any reachability walk, so an uncalled declaration is diagnosed rather than quietly pruned.
+//   * **both synthesized** — an installer ran twice, or one `Project` was compiled twice over the memoized
+//     module. A compiler bug.
+//   * **both parsed** — two declarations of one name, which `commitFuncSignatures` reports as E3006 at
+//     merge. A compiler bug in that check — **but only if nothing has reported it**, which is the one thing
+//     this classifier must READ rather than assume; see the arm.
+//
+// **The discriminator is `sourceFilePath`, and it is DERIVED rather than guessed**: the parser stamps it on
+// every function it builds (`parseFunction`, plus `parseClosureExpression` for a lifted closure) and the
+// two doors a synthesized function comes through — `IrFunction.createFromStd` and `ModuleInit`'s
+// `IrFunction.create` — leave it empty. Nothing between there and here can lose it: the ONE boundary that
+// COPIES a function is per-file artifact → merged module (`IrModule.merge` → `relocateFunction` →
+// `shallowCopy`, which carries `sourceFilePath`/`nameLine`/`nameColumn` across), and the Maxon→Std transfer
+// copies nothing at all — `lowerMaxonToStd` pushes the SAME `IrFunction` object, rewriting only its type
+// fields. That is the SAME fact `TargetPrinter.isRuntimeFunction` reads, and it is read the same way for the
+// same reason: a NAME test cannot do this job, because the one file that can reach this error is the one
+// file whose declarations wear the compiler's own prefix (the A1r review measured a SIGSEGV on exactly that
+// confusion).
+//
+// ⚠ **REFUSE, NEVER REDIRECT.** The A1r review established that steering the CALL to the surviving
+// definition trades this refusal for a silent miscompile — `print("x")` would bind to the author's
+// declaration instead of the runtime's `__print_string`, which knows the String record's layout. So the
+// compile is refused at the duplicate and no binary is produced.
+function refuseDuplicateFunctionName(functions IrFunctionArray, project Project, laterIndex FuncIndex) throws CompileError
+	let later = try functions.get(laterIndex) otherwise panic("refuseDuplicateFunctionName: functions.get OOB at the index the caller's own loop just read")
+	let earlier = earlierFunctionNamed(functions, name: later.name, before: laterIndex)
+	let name = String.from(later.name)
+
+	if earlier.sourceFilePath.isEmpty() != later.sourceFilePath.isEmpty() 'oneOfEachProvenance'
+		// The parsed side carries the author's position; the synthesized side's is blank by construction,
+		// and an unpositioned diagnostic is barely better than the panic it replaces.
+		let declared = later if earlier.sourceFilePath.isEmpty() else earlier
+		reportPositioned(project, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{name}' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it", line: declared.nameLine, column: declared.nameColumn, filePath: declared.sourceFilePath)
+		throw CompileError.compileError
+	end 'oneOfEachProvenance'
+
+	if later.sourceFilePath.isEmpty() 'bothSynthesized'
+		panic("refuseDuplicateFunctionName: two SYNTHESIZED functions are named '{name}' — every runtime symbol is installed at exactly one site, so this is an installer that ran twice (or a compile driven twice over one memoized module), and the name index can only keep one of them")
+	end 'bothSynthesized'
+
+	// ⭐ **BOTH PARSED, AND WHETHER THAT IS A COMPILER BUG IS NOT A PROPERTY OF THE DUPLICATE — IT IS
+	// WHETHER ANYTHING HAS ALREADY SAID SO.** Two declarations of one name is a USER error, and A1t could
+	// argue the panic below because its one caller ran at the BACK END, downstream of the pipeline's error
+	// gate; three of the four callers now run upstream of that gate, so the argument has to be read off the
+	// project instead of inherited from a call site. A program already carrying a diagnostic is already
+	// refused: stop, and let the caller's own gate print what was accumulated. Resolving the tie would be
+	// the silent half of the very behaviour this file removes.
+	if projectHasErrors(project) 'alreadyRefused'
+		throw CompileError.compileError
+	end 'alreadyRefused'
+
+	// Both positions are printed rather than one cause asserted: two declarations E3006 missed entirely and
+	// ONE declaration merged (or lowered) twice both land here, and only the two positions tell them apart.
+	// A1t exists because a panic named two causes that were both false for the case in front of it.
+	panic("refuseDuplicateFunctionName: two PARSED functions are named '{name}', at {earlier.sourceFilePath.toString()}:{earlier.nameLine} and {later.sourceFilePath.toString()}:{later.nameLine}, and no diagnostic has been reported — two DISTINCT positions mean `commitFuncSignatures`' whole-program E3006 did not see one of them; the SAME position twice means one declaration was merged or lowered into the module twice")
+end 'refuseDuplicateFunctionName'
+
+// The function `name` was already bound to before index `before`. It has to be recovered from the function
+// ARRAY rather than the map: `upsert`'s last-wins has already replaced the incumbent's index with `before`'s,
+// and on the diagnosable cause the incumbent is usually the very side that carries the author's position —
+// installers append AFTER the user's source, so the parsed function is the earlier one.
+//
+// Linear, and that costs nothing: it runs at most once per compile, on a path whose next act is to refuse
+// the compile or panic.
+function earlierFunctionNamed(functions IrFunctionArray, name ByteArray, before FuncIndex) returns IrFunction
+	for i in 0 upto before 'eachEarlier'
+		let candidate = try functions.get(i) otherwise panic("earlierFunctionNamed: functions.get OOB at {i}, below an index the caller already read")
+		if candidate.name == name 'sameName'
+			return candidate
+		end 'sameName'
+	end 'eachEarlier'
+
+	panic("earlierFunctionNamed: the name index collapsed two entries at function {before} ('{String.from(name)}'), but no function before it carries that name — `upsert` overwrote an entry this scan cannot account for")
+end 'earlierFunctionNamed'

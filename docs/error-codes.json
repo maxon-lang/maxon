@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "bec7dc3368311256",
+  "sourceHash": "0e108952b0c92e73",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1266,15 +1266,6 @@
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
-      "code": 3112,
-      "tag": "E3112",
-      "name": "SemanticShadowedStdlibNameIsAlsoAMember",
-      "stage": "semantic",
-      "doc": "A user program declares a type name that a whitelisted stdlib module ALSO declares, and that\nsame spelling is used by stdlib source as a MEMBER name -- a field, a method, or an argument\nlabel. The shadowing rule moves the stdlib TYPE declaration into the reserved `__` space so both\ndeclarations can coexist, and that rename is applied uniformly to the stdlib file's identifier\ntokens, which is what makes it reach every spelling of the type at once. A member is the one\nspelling that is also reachable from USER code, whose tokens are never rewritten, so the two\nsides would disagree about one name and the member would silently stop resolving. Refused\nrather than risked; rename the type in the user program.",
-      "emittedBy": {"shv2": "stdlibShadowedNameIsAlsoAMember"},
-      "notEmittedBy": ["csharp", "selfhosted"]
-    },
-    {
       "code": 4001,
       "tag": "E4001",
       "name": "IrUnsupportedExpression",
@@ -1363,10 +1354,10 @@
     {
       "code": 4015,
       "tag": "E4015",
-      "name": "IrDeclarationCollidesWithEmittedSymbol",
+      "name": "IrDeclarationTakesCompilerOwnedName",
       "stage": "ir",
-      "doc": "a declaration in the source compiles to the same symbol name as a function the\ncompiler EMITS into the program, and a program cannot hold two functions of one\nname. Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations\nmay carry the reserved `__` prefix (E2051's D6 exemption): the name is declarable\nTHERE, so what E2051 refuses is not what this refuses. Detected where the collision\nfirst becomes visible -- the reachability pass's name index, after every runtime\ninstall -- and told apart from an installer that ran twice by PROVENANCE, since a\nsynthesized function carries no `sourceFilePath` and a parsed one always does.",
-      "emittedBy": {"shv2": "declarationCollidesWithEmittedSymbol"},
+      "doc": "a declaration in the source took a function name that belongs to the compiler.\nReachable only from `stdlib/Builtins.maxon`, the one file whose declarations may\ncarry the reserved `__` prefix (E2051's D6 exemption): the name is declarable\nTHERE, so what E2051 refuses is not what this refuses. ONE rule, and the compiler\ncan enforce it at the two places it USES such a name, since the full roster of\nnames it owns is not enumerable (the dynamic families are built from the program's\nown type names).\n(1) The name is also a function the compiler EMITS into this program, and a program\ncannot hold two functions of one name. Detected where the collision first becomes\nvisible -- a name index over the module's functions -- and told apart from an\ninstaller that ran twice by PROVENANCE, since a synthesized function carries no\n`sourceFilePath` and a parsed one always does.\n(2) The name is one the reachability prune ROOTS unconditionally, so the\ndeclaration is resurrected into a program that installs no runtime under that name\n-- with no body, because the pre-elimination passes skipped the one they were told\nwas unreachable. Refused whether or not the compiler emits its own copy HERE, so\nthe rule is about the name and not about which runtime floor a given program\nhappens to carry.",
+      "emittedBy": {"shv2": "declarationTakesCompilerOwnedName"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

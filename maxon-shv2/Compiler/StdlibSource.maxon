@@ -84,12 +84,8 @@ export typealias FunctionNameSet = Set with ByteArray
 // mark column and there is no second set to keep in step with it.
 export typealias StdlibSubstrateEntryMap = Map with (ByteArray, ByteArray)
 
-// Name → merged-module function index, for the reachability walk — the Maxon-tier twin of
-// `DeadFunctionElimination.FuncIndexByName`.
-typealias StdlibFuncIndexByName = Map with (ByteArray, FuncIndex)
-
 // Stdlib function name -> its DENSE node index in the substrate fixpoint's call graph. A distinct alias
-// from `StdlibFuncIndexByName`, whose values are merged-MODULE function indices: these index the far
+// from `FuncIndexByName`, whose values are merged-MODULE function indices: these index the far
 // smaller stdlib-only key space `buildCsr` is handed.
 typealias StdlibNodeByName = Map with (ByteArray, CsrIndex)
 
@@ -129,6 +125,17 @@ end 'StdlibFacts'
 // ⭐ DERIVE BOTH FACTS. Runs once per compile, right after the module is merged and before any pass that
 // reads either of them.
 export function deriveStdlibFacts(project Project, module MaxonModule) returns StdlibFacts throws CompileError
+	// A prior diagnostic leaves the merged module and its registries describing a program that is already
+	// refused, so deriving anything from it can only be noise — the refusal the four siblings around this
+	// call already make (`checkConformance`, `checkWhereConstraints`, `checkTypeSymbolNamespace`,
+	// `checkGenericAliasCycles`), and this was the one pre-pipeline derivation without it. Nothing that runs
+	// before the pipeline's error gate READS these facts to report anything: `scanRuntimeUsage` only sets
+	// usage bits, and the two passes that do report off them (`checkCalls`'s target refusal,
+	// `insertRangeChecks`) are inside the pipeline, downstream of that gate.
+	if projectHasErrors(project) 'malformedModule'
+		return StdlibFacts.empty()
+	end 'malformedModule'
+
 	let stdlibNames = try stdlibFunctionNames(project)
 	if stdlibNames.count() == 0 'noStdlibSource'
 		return StdlibFacts.empty()
@@ -157,7 +164,7 @@ export function deriveStdlibFacts(project Project, module MaxonModule) returns S
 	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
 	// and mark only the untouched ones. This precise walk (and its maps) runs ONLY for a program that
 	// actually uses stdlib.
-	let reachable = reachableMaxonFunctionNames(module)
+	let reachable = try reachableMaxonFunctionNames(module, project: project)
 	var unreachable = FunctionNameSet.create()
 	for name in stdlibNames 'classify'
 		if not reachable.contains(name) 'unreached'
@@ -197,11 +204,15 @@ end 'stdlibFunctionNames'
 // stdlib function is reached by a witness dispatch or an `.rdata` reloc. A Maxon-tier reachability that
 // missed such an edge would be unsound in general, which is why what it decides is scoped to stdlib
 // source rather than applied to every function.
-function reachableMaxonFunctionNames(module MaxonModule) returns FunctionNameSet
-	var byName = StdlibFuncIndexByName.create()
-	for i in 0 upto module.funcCount() 'index'
-		byName.upsert(module.getFunc(i).name, value: i)
-	end 'index'
+//
+// ⭐ The name index is the shared, CHECKED one (`FunctionNameIndex`, A1w). This site sits AFTER
+// `installManagedGlobalInit`, so it is the earliest of the four that can meet a real duplicate — a
+// `stdlib/Builtins.maxon` declaration of `__module_init`/`__maxon_global_cleanup` against the compiler's own
+// — and it used to resolve one last-wins and unchecked, walking ONE of the two bodies and crediting the
+// callees of whichever it picked. What the tie-break chose was never observable, because the refusal came
+// later; a walk that silently under-approximates reachability is not something to leave resting on that.
+function reachableMaxonFunctionNames(module MaxonModule, project Project) returns FunctionNameSet throws CompileError
+	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
 	var reached = BoolArray.create()
 	reached.resize(module.funcCount())
@@ -221,7 +232,7 @@ end 'reachableMaxonFunctionNames'
 // Mark `name` reachable and queue its body. A name no module function carries (a runtime helper,
 // or a root whose runtime this program never installs) is not found and not queued — nothing to
 // walk. Mirrors `DeadFunctionElimination.markLiveFunction`.
-function markReachable(name ByteArray, byName StdlibFuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markReachable(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	let idx = try byName.get(name) otherwise 'notAModuleFunction'
 		return
 	end 'notAModuleFunction'
@@ -241,7 +252,7 @@ end 'markReachable'
 // orphan ops (the concern that forces `liveOpIndices` at the Std tier), which is exactly why
 // `scanRuntimeUsage` walks the same way here. A terminator names no callee, so visiting only the body
 // ops in `opRefs` is complete for reachability.
-function markMaxonCallees(module MaxonModule, func IrFunction, byName StdlibFuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markMaxonCallees(module MaxonModule, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
@@ -256,7 +267,7 @@ end 'markMaxonCallees'
 // past it FAILS TO COMPILE here rather than being silently swallowed — the band-append invariant
 // working in the reviewer's favour (MaxonDialect's header), exactly as `markCalleeOf` relies on it.
 // A new variant that carries a callee name must be added as its own arm.
-function markMaxonCalleeEdge(op MaxonOp, byName StdlibFuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match op 'op'
 		call(_, callee, _, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
 		// `literal` … `stringLiteral`: literals, arithmetic, comparisons, branches, returns, and the

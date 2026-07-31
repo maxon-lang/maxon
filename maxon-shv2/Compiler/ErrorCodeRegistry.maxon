@@ -573,15 +573,25 @@ export enum ErrorCode
 	// rather than risked; rename the type in the user program.
 	stdlibShadowedNameIsAlsoAMember = "E3112"
 
-	// a declaration in the source compiles to the same symbol name as a function the
-	// compiler EMITS into the program, and a program cannot hold two functions of one
-	// name. Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations
-	// may carry the reserved `__` prefix (E2051's D6 exemption): the name is declarable
-	// THERE, so what E2051 refuses is not what this refuses. Detected where the collision
-	// first becomes visible -- the reachability pass's name index, after every runtime
-	// install -- and told apart from an installer that ran twice by PROVENANCE, since a
-	// synthesized function carries no `sourceFilePath` and a parsed one always does.
-	declarationCollidesWithEmittedSymbol = "E4015"
+	// a declaration in the source took a function name that belongs to the compiler.
+	// Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations may
+	// carry the reserved `__` prefix (E2051's D6 exemption): the name is declarable
+	// THERE, so what E2051 refuses is not what this refuses. ONE rule, and the compiler
+	// can enforce it at the two places it USES such a name, since the full roster of
+	// names it owns is not enumerable (the dynamic families are built from the program's
+	// own type names).
+	// (1) The name is also a function the compiler EMITS into this program, and a program
+	// cannot hold two functions of one name. Detected where the collision first becomes
+	// visible -- a name index over the module's functions -- and told apart from an
+	// installer that ran twice by PROVENANCE, since a synthesized function carries no
+	// `sourceFilePath` and a parsed one always does.
+	// (2) The name is one the reachability prune ROOTS unconditionally, so the
+	// declaration is resurrected into a program that installs no runtime under that name
+	// -- with no body, because the pre-elimination passes skipped the one they were told
+	// was unreachable. Refused whether or not the compiler emits its own copy HERE, so
+	// the rule is about the name and not about which runtime floor a given program
+	// happens to carry.
+	declarationTakesCompilerOwnedName = "E4015"
 	// the error enum a builtin runtime family throws is DECLARED in `stdlib/Builtins.maxon`
 	// (`__ManagedMemoryError`, `__ManagedFileError`, `__ManagedDirectoryError`), and this checkout's
 	// declaration disagrees with the ordinals the compiler's runtime transcribes as literals -- either

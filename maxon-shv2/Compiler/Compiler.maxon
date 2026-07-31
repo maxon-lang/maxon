@@ -111,8 +111,7 @@ function discardPreviousOutput(project Project, outputPath FilePath) throws Comp
 
 	if File.exists(outputPath) 'undeletable'
 		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotReplaceable, message: "could not remove the previous build output at {outputPath} — it is locked or read-only, so this build cannot replace it"))
-		printDiagnostics(project)
-		throw CompileError.compileError
+		try refuseCompile(project)
 	end 'undeletable'
 end 'discardPreviousOutput'
 
@@ -130,9 +129,20 @@ function requireOutputWritten(project Project, outputPath FilePath) throws Compi
 	end 'written'
 
 	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotWritten, message: "the backend produced no file at {outputPath} — the write failed (the writer logged the reason above)"))
+	try refuseCompile(project)
+end 'requireOutputWritten'
+
+// ⭐ **WHAT A REFUSED COMPILE DOES, WRITTEN ONCE.** Five sites refuse a build after accumulating
+// diagnostics — the two output-path checks above, the name-index refusal, the pipeline gate and the backend
+// gate — and each carried its own copy of these two lines plus its own retelling of the second one's reason.
+//
+// ⚠ **A FRESH THROW, NEVER A RETHROW OF THE CAUGHT OBJECT.** Re-throwing the error a `try … otherwise`
+// caught miscompiles under the C# runtime's refcount path (a NULL incref on the rethrow), whereas a fresh
+// throw of the same arm propagates cleanly. That is the fact this function exists to hold in one place.
+function refuseCompile(project Project) throws CompileError
 	printDiagnostics(project)
 	throw CompileError.compileError
-end 'requireOutputWritten'
+end 'refuseCompile'
 
 // Write the lowered Target IR (via `printTargetModule`) beside the produced exe
 // as `<output>.ir`, for `build --emit-ir` and the spec runner's fragment capture.
@@ -182,11 +192,9 @@ end 'loadProject'
 // `verifyWarmRebuild` (which byte-compares two independently-produced CodeResults)
 // route through — no duplicated pipeline-driving code.
 //
-// The mid + lowering pipeline owns the error gate: it throws once a pass
-// (semanticCheck) reports a diagnostic. Print the accumulated diagnostics and
-// re-signal with a FRESH throw — re-throwing the caught error object miscompiles
-// under the C# runtime's refcount path (a NULL incref on the rethrow), whereas the
-// pipeline's own fresh throw of the same arm propagates cleanly.
+// The mid + lowering pipeline owns one of the three error gates below: it throws once a pass
+// (semanticCheck) reports a diagnostic. What each gate then DOES is `refuseCompile`'s, in one place
+// (including the reason it must be a fresh throw rather than a rethrow).
 export function compileToCodeResult(project Project) returns CodeResult throws CompileError
 	// ⚠ `var`, not `let`: `installManagedGlobalInit` below APPENDS to this module (P1.7 slice 2a). It is the
 	// memoized `queryAllModule` result and mutating it in place is the established discipline here —
@@ -323,7 +331,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
 	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: signatures.managedGlobals(liveGlobals))
 
-	project.stdlibFacts = try deriveStdlibFacts(project, module: module)
+	// ⚠ **ITS OWN GATE, BECAUSE IT IS THE FIRST SITE THAT CAN REFUSE AND THE PIPELINE'S IS STILL BELOW
+	// (A1w).** `deriveStdlibFacts` builds a `FunctionNameIndex` over this module — the earliest of the four
+	// that sits AFTER `installManagedGlobalInit`, hence the earliest that can meet a declaration colliding with
+	// `__module_init` / `__maxon_global_cleanup` — and refuses it with E4015. Without a gate here that throw
+	// would leave `compileToCodeResult` having passed both gates below, and the diagnostic would never be
+	// printed: exit 1 with nothing said.
+	project.stdlibFacts = try deriveStdlibFacts(project, module: module) otherwise 'stdlibFactsRefused'
+		try refuseCompile(project)
+	end 'stdlibFactsRefused'
 	// ONE walk of the Maxon module answers all three "which runtime does this program carry?" questions
 	// (heap / print / string-`==`). The HEAP answer alone drives `.data` layout — the `.data` slots must
 	// exist before the backend resolves a `globalAddr`, so it is needed here, before lowering — and it
@@ -393,8 +409,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	var pipeline = PassPipeline.create(project, maxonModule: module)
 	pipeline.addPasses(buildDefaultPipeline())
 	try pipeline.run() otherwise 'pipelineFailed'
-		printDiagnostics(project)
-		throw CompileError.compileError
+		try refuseCompile(project)
 	end 'pipelineFailed'
 
 	// AFTER the pipeline: the runtime is already lowered Std, so it must not be re-lowered, and it
@@ -539,16 +554,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// The backend owns its own error gate now, and TWO of its stages use it: the register allocator
 	// reports E5001 (register pressure) onto `project.diagnostics` and throws when a loop genuinely
 	// overflows the register file, and the reachability prune reports E4015 and throws when a
-	// declaration collides with a symbol the compiler emits (A1t — `refuseDuplicateFunctionName`, the
-	// first point in the compile where BOTH are present, hence the first that can tell them apart).
-	// Mirror the pipeline gate above — print the
-	// accumulated diagnostics and re-signal with a FRESH `compileError` (re-throwing
-	// the caught object miscompiles under the C# runtime's refcount path). Passing
+	// declaration takes a name the compiler owns (A1t — `FunctionNameIndex`, whose Std-tier site is the
+	// first point in the compile where BOTH sides of such a pair are present, hence the first that can tell
+	// them apart, plus `seedRoots`' rooted-name half). Passing
 	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it
 	// maps a Target ValueId back to its source span through.
 	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage) otherwise 'backendFailed'
-		printDiagnostics(project)
-		throw CompileError.compileError
+		try refuseCompile(project)
 	end 'backendFailed'
 	return codeResult
 end 'compileToCodeResult'

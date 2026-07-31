@@ -41,7 +41,13 @@ export function semanticCheck(project Project, module MaxonModule)
 	let escapeSummary = buildEscapeSummary(module, funcSignatures: project.funcSignatures)
 	// The interprocedural PARAMETER-MUTATION summary (E3019, the call-site half) — built once, read at every
 	// call site to refuse an immutable binding handed to a parameter the callee writes.
-	let mutationSummary = buildParamMutationSummary(project, module: module)
+	// A duplicate function name is refused by the index this builds (`FunctionNameIndex`, A1w). The E4015 is
+	// already recorded, and the pipeline's error gate refuses the build the moment this pass returns — so
+	// there is nothing left for the checks below to say about a program that cannot be built, which is the
+	// refusal `checkConformance` and `checkWhereConstraints` make for the same reason.
+	let mutationSummary = try buildParamMutationSummary(project, module: module) otherwise 'duplicateFunctionName'
+		return
+	end 'duplicateFunctionName'
 	checkCalls(project, module: module, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary)
 	// The function-type doors the parser recorded (`PendingFunctionTypeDoor`). It runs HERE, and not beside
 	// `checkValueMergeSignatures`, for one reason: the shapes are compared RESOLVED, and resolution has not
@@ -925,11 +931,6 @@ function trackedValueInArray(args ValueIdArray, subject EscapeScanSubject, func 
 	return false
 end 'trackedValueInArray'
 
-// Function NAME → index in `module.functions` — the Maxon-tier twin of
-// `DeadFunctionElimination.FuncIndexByName` and `StdlibSource.StdlibFuncIndexByName`, named apart from both
-// because its values index the MERGED MAXON module, which is the mutation graph's key space.
-typealias ModuleFuncIndexByName = Map with (ByteArray, FuncIndex)
-
 // ⭐⭐ **THE INTERPROCEDURAL PARAMETER-MUTATION SUMMARY (E3019, the call-site half)** — for each function,
 // which of its parameters a call to it WRITES. Read at every call site:
 // an immutable binding handed to a written parameter is refused, which is the diagnostic the runnable
@@ -980,9 +981,9 @@ export type ParamMutationSummary
 	// and not a map: the name resolution is already paid for.
 	export let storageMasks as MutatedParamMaskArray
 	// Function NAME → its index in that column. A call site holds a name; every other consumer holds an index.
-	export let funcIndexByName as ModuleFuncIndexByName
+	export let funcIndexByName as FuncIndexByName
 
-	export static function create(masks MutatedParamMaskArray, storageMasks MutatedParamMaskArray, funcIndexByName ModuleFuncIndexByName) returns ParamMutationSummary
+	export static function create(masks MutatedParamMaskArray, storageMasks MutatedParamMaskArray, funcIndexByName FuncIndexByName) returns ParamMutationSummary
 		return Self{masks: masks, storageMasks: storageMasks, funcIndexByName: funcIndexByName}
 	end 'create'
 
@@ -1055,35 +1056,19 @@ type MutationEdges
 	end 'byCallee'
 end 'MutationEdges'
 
-// ⚠ The FIRST index wins on a duplicate name, and a panic here would turn a refusal into a crash.
-//
-// ⚠ **BUT NOT BECAUSE THE PROGRAM IS ALREADY REFUSED — IT IS NOT, AND THIS COMMENT USED TO SAY IT WAS.**
-// A duplicate here is reachable: `stdlib/Builtins.maxon` may DECLARE a reserved `__` name (E2051's D6
-// exemption), and `installManagedGlobalInit` appends the compiler's own `__module_init` /
-// `__maxon_global_cleanup` into this same MERGED MAXON MODULE (`Compiler.compileToCodeResult`) before this
-// summary is built — so a declaration of either name puts two functions of one name in front of this loop.
-// That program IS refused, as E4015 (`DeadFunctionElimination.refuseDuplicateFunctionName`) — but in the
-// BACKEND, strictly after this pass. The old wording had the order backwards and would tell the next reader
-// that nothing upstream of the backend can see a duplicate, which is exactly the premise A1t proved worth
-// checking.
-//
-// What actually makes first-wins safe is narrower and does not depend on any refusal having happened:
-// nothing between here and that refusal EMITS CODE, so the tie-break can change which body gets summarised
-// but not what any program MEANS. If a pass is ever added between this one and the backend that turns a
-// mutation summary into emitted code rather than a diagnostic, this tie-break stops being free.
-function indexModuleFunctionsByName(module MaxonModule) returns ModuleFuncIndexByName
-	var byName = ModuleFuncIndexByName.create()
-	for i in 0 upto module.functions.count() 'eachFunc'
-		let func = try module.functions.get(i) otherwise panic("indexModuleFunctionsByName: functions.get OOB at {i}")
-		if not byName.contains(func.name) 'firstOfThisName'
-			byName.upsert(func.name, value: i)
-		end 'firstOfThisName'
-	end 'eachFunc'
-	return byName
-end 'indexModuleFunctionsByName'
-
-function buildParamMutationSummary(project Project, module MaxonModule) returns ParamMutationSummary
-	let funcIndexByName = indexModuleFunctionsByName(module)
+// ⭐ **THERE IS NO TIE-BREAK HERE ANY MORE, AND THAT REPLACES AN ARGUMENT THAT HAD ALREADY BEEN WRONG
+// TWICE (A1w).** This index was built FIRST-wins, on a comment asserting that a duplicate belonged to an
+// "already-refused" program. It did not: the refusal is E4015 in the BACKEND, strictly after this pass, and
+// `installManagedGlobalInit` appends the compiler's own `__module_init` / `__maxon_global_cleanup` into this
+// same merged Maxon module (`Compiler.compileToCodeResult`) before the summary is built, so a
+// `stdlib/Builtins.maxon` declaration of either name put two functions of one name in front of the loop
+// (MEASURED: the whole pipeline ran, this pass silently kept the DECLARATION, and the backend refused seven
+// passes later). The A2c review corrected the reason to a narrower true one — nothing between here and the
+// backend emits code, so the tie-break could change which body was summarised but not what any program MEANT
+// — which is a fine argument for the answer being harmless and no argument at all for it being made
+// silently. `FunctionNameIndex` refuses the duplicate instead, so there is nothing left to break a tie over.
+function buildParamMutationSummary(project Project, module MaxonModule) returns ParamMutationSummary throws CompileError
+	let funcIndexByName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
 	// ⭐⭐ **TWO SEEDS, ONE GRAPH, ONE FIXPOINT RUN TWICE.** The parser records both per-function facts at the
 	// same doors (`Parser.noteReceiverWrite`, `Parser.emitCheckedSelfFieldStore`); the CLOSURE is identical
@@ -1108,7 +1093,7 @@ end 'buildParamMutationSummary'
 // Walk every call in the program and record one edge per argument that IS one of the caller's own
 // parameters. A caller with no parameters contributes none (nothing of its own can be passed on), which is
 // the cheap gate that keeps `main` and every top-level driver out of the graph entirely.
-function collectMutationEdges(project Project, module MaxonModule, funcIndexByName ModuleFuncIndexByName) returns MutationEdges
+function collectMutationEdges(project Project, module MaxonModule, funcIndexByName FuncIndexByName) returns MutationEdges
 	var edges = MutationEdges.create()
 	for i in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(i) otherwise panic("collectMutationEdges: functions.get OOB at {i}")
@@ -1131,7 +1116,7 @@ end 'collectMutationEdges'
 // to reach — see `checkImmutableArgToMutatingParam` for what that costs and why it is not refused instead.
 // The non-call bands range to `break`, so a newly appended op fails to compile here rather than silently
 // dropping out of the call graph (the band-append invariant).
-function collectMutationEdgesAt(project Project, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName ModuleFuncIndexByName, edges MutationEdges)
+function collectMutationEdgesAt(project Project, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges MutationEdges)
 	match op 'op'
 		call(_, callee, args, argLabels, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		literal to stringLiteral then break 'op'
@@ -1160,7 +1145,7 @@ end 'collectMutationEdgesAt'
 // receiver writes the parser already recorded directly) or undeclared (E3004, reported by `checkCalls`).
 // A label naming no parameter slots out of range and is skipped for the same reason — `slotCallArgs`
 // reports it.
-function addMutationEdges(project Project, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, func IrFunction, callerIndex FuncIndex, funcIndexByName ModuleFuncIndexByName, edges MutationEdges)
+function addMutationEdges(project Project, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges MutationEdges)
 	let sig = try project.funcSignatures.get(callee) otherwise return
 	let calleeIndex = try funcIndexByName.get(callee) otherwise return
 	for i in 0 upto args.count() 'eachArg'

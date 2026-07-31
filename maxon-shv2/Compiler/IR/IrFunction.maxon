@@ -325,8 +325,9 @@ export type IrFunction
 	// ⭐⭐ **`declaredAt` IS REQUIRED, AND THAT IS WHAT MAKES PROVENANCE A CONSTRUCTED FACT RATHER THAN A
 	// CONVENTION.** Two readers decide behaviour on whether `sourceFilePath` is empty — `TargetPrinter.
 	// isRuntimeFunction` withholds the green-thread stack guard from the runtime's own scaffolding, and
-	// `DeadFunctionElimination.refuseDuplicateFunctionName` tells an author's declaration (E4015) apart from
-	// an installer that ran twice (a panic). Neither can be satisfied by a caller's good intentions: this
+	// `FunctionNameIndex.refuseDuplicateFunctionName` tells an author's declaration (E4015) apart from
+	// an installer that ran twice (a panic), and `DeadFunctionElimination.markCompilerOwnedRoot` tells the
+	// same two apart for a name the compiler ROOTS rather than emits. Neither can be satisfied by a caller's good intentions: this
 	// used to hardcode an empty path and leave every caller to overwrite it a few lines later, so a caller
 	// that forgot would have made a PARSED function read as synthesized at both readers — silently, as a
 	// wrong answer rather than a compile error, and the stack-guard one is the SIGSEGV the A1r review
@@ -370,7 +371,7 @@ export type IrFunction
 	// caller synthesizes a helper and wants it callable from anywhere, so visibility defaults to `global`.
 	//
 	// ⚠ **NO PARSED FUNCTION COMES THROUGH THIS DOOR, and that is load-bearing rather than incidental**:
-	// the position is `SourcePosition.synthesized()`, and A1t's `refuseDuplicateFunctionName` reads exactly
+	// the position is `SourcePosition.synthesized()`, and `FunctionNameIndex.refuseDuplicateFunctionName` reads exactly
 	// that to tell an author's declaration apart from a symbol the compiler emitted (as `TargetPrinter.
 	// isRuntimeFunction` reads it for the GT stack-guard exemption). Unlike `create`, this door takes no
 	// position argument, because there is no caller it could come from: every one of them synthesizes. ⚠ This

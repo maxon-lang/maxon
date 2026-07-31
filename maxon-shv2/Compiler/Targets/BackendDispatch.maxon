@@ -91,10 +91,11 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// re-adding it. `globalData` reaches it because an `.rdata` slot is a reference this module's ops do
 	// not spell (see DeadFunctionElimination's root set).
 	//
-	// It `throws` for one reason, and it is a USER error rather than a pruning failure: building its name
-	// index is the first point at which a declaration that collides with a symbol the compiler emits is
-	// visible at all (every install has happened, and no backend has started), so E4015 is reported there —
-	// see `refuseDuplicateFunctionName`.
+	// It `throws` for one reason, and it is a USER error rather than a pruning failure: this is the LAST of
+	// the four sites that build a `FunctionNameIndex`, and the only one downstream of every install — so a
+	// declaration colliding with a symbol the compiler emits is visible here and nowhere earlier, and E4015 is
+	// reported at the index. Its root set raises the same code for the other half of that rule (a name the
+	// compiler ROOTS, in a program that installs nothing under it) — see `markCompilerOwnedRoot`.
 	let dfeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deadFunctions)
 	try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
 	recordPhase(project, phase: CompilePhase.deadFunctions, probe: dfeProbe)

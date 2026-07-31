@@ -28,13 +28,6 @@
 // `formatInterfaceMethodSignature` do no binding of their own. See that function's header for why this is
 // v1's shape and not the bootstrap's two.
 
-// The impl side of a conforming type's methods, read off the MERGED module. `maxonParamTypes` /
-// `maxonReturnType` are the REMAPPED (project-interner) types — `funcSignatures`' param types are
-// deliberately left file-local until `resolveTypes` overwrites them (ParseStaging.remapArtifact), so they
-// are NOT safe to render across files; the module's function is. Param NAMES come from `funcSignatures`
-// (interner-free ByteArrays, always valid) — the one thing the module's `IrFunction` does not carry.
-typealias FunctionByNameMap = Map with (ByteArray, IrFunction)
-
 // One interface method paired with the interface it was DECLARED on — the source interface, so a method
 // inherited via `extends` can be tagged `(from BaseInterface)` in a missing-method report.
 type CollectedInterfaceMethod
@@ -71,7 +64,17 @@ export function checkConformance(project Project, module MaxonModule, signatures
 		return
 	end 'malformedModule'
 
-	let functionsByName = buildFunctionByNameMap(module)
+	// ⭐ **THE SHARED, CHECKED NAME INDEX (`FunctionNameIndex`, A1w) — THOUGH THIS IS THE ONE OF ITS FOUR
+	// SITES THAT CANNOT MEET A DUPLICATE, AND THAT IS WORTH STATING RATHER THAN INHERITING.** Two bars, either
+	// sufficient: the only cause available at this point is two PARSED declarations, which is E3006 at merge
+	// and which the refusal four lines above has already turned into a `return`; and every synthesizer that
+	// appends to a Maxon module runs LATER (`installManagedGlobalInit` is below this call in
+	// `compileToCodeResult`), so there is no synthesized side for a declaration to collide with yet. It builds
+	// its index here anyway: a fourth spelling of the loop costs more than the one integer compare does, and
+	// if either bar ever moves this site says so instead of silently keeping one of two functions.
+	let functionsByName = try FunctionNameIndex.create(module.functions, project: project) otherwise 'duplicateFunctionName'
+		return
+	end 'duplicateFunctionName'
 	for conformance in project.conformances 'eachDecl'
 		checkOneConformance(project, functionsByName: functionsByName, conformance: conformance, signatures: signatures)
 	end 'eachDecl'
@@ -181,24 +184,12 @@ function typeDeclaresInterface(declared DeclaredConformanceMap, typeName ByteArr
 	return false
 end 'typeDeclaresInterface'
 
-// A name -> merged `IrFunction` index, built once per compile that has conformances. It is keyed by the
-// REGISTRATION name (`func.name`): `qualifiedMethodName(typeName, methodName)` for the first declaration of
-// a method name, and the mangled `Type.method#Suffix` for every later overload of it (D7) — which is exactly
-// why `checkOneMethod` asks `project.overloadSets` for the whole set rather than the bare key alone (R10).
-function buildFunctionByNameMap(module MaxonModule) returns FunctionByNameMap
-	var byName = FunctionByNameMap.create()
-	for func in module.functions 'each'
-		byName.upsert(func.name, value: func)
-	end 'each'
-	return byName
-end 'buildFunctionByNameMap'
-
 // Check one `type X implements I1, I2` declaration against each named interface.
 //
 // The conforming type's `uses` names are read ONCE per declaration rather than per rendered type: they
 // depend only on the conforming type, and `project.structTypes` is a map lookup that would otherwise run
 // per rendered parameter.
-function checkOneConformance(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, signatures ProgramSignatures)
+function checkOneConformance(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, signatures ProgramSignatures)
 	// The conforming type's own `uses` names — the list a `typeParameter(pos)` in one of its methods indexes,
 	// read ONCE per declaration rather than per rendered type (it is a map lookup, and it does not vary).
 	//
@@ -260,7 +251,7 @@ end 'checkOneConformance'
 // binding either. So R6 changes which sentence the parenthesized spelling gets, never accept into reject.
 // The forward-compatibility obligation is recorded where it can be acted on — `Parser.conformanceUsesArity`,
 // which also states why the transitive count cannot simply be walked at parse time today.
-function checkOneInterfaceConformance(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray, signatures ProgramSignatures)
+function checkOneInterfaceConformance(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	if entry.withArgs.count() < iface.associatedTypeNames.count() 'unboundAssociatedType'
 		let unbound = try iface.associatedTypeNames.get(entry.withArgs.count()) otherwise panic("checkOneInterfaceConformance: associatedTypeNames.get OOB at {entry.withArgs.count()} below count {iface.associatedTypeNames.count()}")
 		reportPositioned(project, code: ErrorCode.semanticPartialInterfaceImpl, message: "Type '{String.from(conformance.typeName)}' does not define required associated type '{String.from(unbound)}' from interface '{String.from(entry.interfaceName)}'", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
@@ -295,7 +286,7 @@ end 'checkOneInterfaceConformance'
 // throws rules. The skip's original comment was right about WHY it existed (`checkOneMethod` reads an
 // INSTANCE method) and wrong about how far that reaches: the fix is to make the lookup receiver-aware
 // (`signatureMatches`' staticness test), not to stop asking.
-function checkInterfaceMethods(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray, signatures ProgramSignatures)
+function checkInterfaceMethods(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	var collected = CollectedInterfaceMethodArray.create()
 	var visited = InterfaceNameSet.create()
 	collectInterfaceMethods(project, iface: iface, ifaceName: entry.interfaceName, associatedTypeNames: iface.associatedTypeNames, boundTypeNames: entry.withArgs, out: collected, visited: visited)
@@ -417,7 +408,7 @@ end 'substituteThrowsClause'
 // `validateThrowsConformance`'s header records scale-test reading straight off a 16-byte union box
 // (+16 … +264 allocations across the six rungs). A name that is not in `overloadSets` — every method in the
 // corpus outside this rung's cases — takes the arm below and allocates nothing it did not allocate before.
-function checkOneMethod(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, rootInterfaceName ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures, missing StringArray, wrongSignature StringArray)
+function checkOneMethod(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, rootInterfaceName ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures, missing StringArray, wrongSignature StringArray)
 	let method = collectedMethod.method
 	let qualifiedName = qualifiedMethodName(conformance.typeName, methodName: method.name)
 
@@ -426,7 +417,7 @@ function checkOneMethod(project Project, functionsByName FunctionByNameMap, conf
 		return
 	end 'overloaded'
 
-	if let implFunc = try functionsByName.get(qualifiedName) 'present'
+	if let implFunc = try functionsByName.funcNamed(qualifiedName) 'present'
 		let implSig = conformanceImplSignature(project, name: qualifiedName)
 		if not signatureMatches(project, method: method, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures) 'mismatch'
 			wrongSignature.push("{formatActualSignature(project, methodName: method.name, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures)} (expected {formatInterfaceMethodSignature(method)})")
@@ -452,7 +443,7 @@ end 'checkOneMethod'
 // `overloadSets` — so a member left behind by a previous fold is inert here exactly as it is at a call.
 // An empty list is a requirement the type declares nothing for: the set holds only names this project no
 // longer registers, which is the MISSING case and not a mismatch.
-function checkOverloadedMembers(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, rootInterfaceName ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures, members ByteArrayArray, missing StringArray, wrongSignature StringArray)
+function checkOverloadedMembers(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, rootInterfaceName ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures, members ByteArrayArray, missing StringArray, wrongSignature StringArray)
 	let candidates = overloadCandidates(project, members: members)
 	if candidates.count() == 0 'noMemberSurvives'
 		pushMissingRequirement(missing, collectedMethod: collectedMethod, rootInterfaceName: rootInterfaceName)
@@ -483,7 +474,7 @@ end 'checkOverloadedMembers'
 // The THROWS relation is checked only once the structural signature agrees, mirroring the oracle's
 // `else if (method.ThrowsTypeName != null)` branch: on a shape mismatch the throws question is noise. It is
 // asked of the SELECTED member's function, which under an overload set is not necessarily the bare-named one.
-function acceptConformingMember(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, selected ByteArray, implFunc IrFunction, typeParamNames ByteArrayArray, signatures ProgramSignatures)
+function acceptConformingMember(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, selected ByteArray, implFunc IrFunction, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	recordWitnessSlotImpl(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, selected: selected, typeParamNames: typeParamNames, signatures: signatures)
 	validateThrowsConformance(project, signatures: signatures, conformance: conformance, collectedMethod: collectedMethod, implFunc: implFunc)
 end 'acceptConformingMember'
@@ -509,7 +500,7 @@ end 'acceptConformingMember'
 // against the clause.** One witness table per (conformer, interface) with one address per method slot is the
 // dictionary's shape, so an interface has to be conformed to exactly one way; there is nothing to choose by
 // and nothing the lowering could do with two answers but flip a coin.
-function recordWitnessSlotImpl(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, selected ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures)
+function recordWitnessSlotImpl(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, selected ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	let key = witnessSlotImplKey(conformance.typeName, interfaceName: collectedMethod.sourceInterfaceName, methodName: collectedMethod.method.name)
 	if let existing = try project.witnessSlotImpls.get(key) 'alreadySelected'
 		if not existing.equals(selected) 'disagrees'
@@ -525,7 +516,7 @@ end 'recordWitnessSlotImpl'
 // this file. The two members are rendered through the SAME `renderMemberSignatures` an overload mismatch
 // prints, for its reason: a registration name (`convert#Real`) is a key this compiler mints, and telling an
 // author to go and look at it names something their source does not contain.
-function reportConflictingConformance(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, existing ByteArray, selected ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures)
+function reportConflictingConformance(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, existing ByteArray, selected ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	var conflicting = ByteArrayArray.create()
 	conflicting.push(existing)
 	conflicting.push(selected)
@@ -553,8 +544,15 @@ end 'pushMissingRequirement'
 // function AND a `funcSignatures` entry in the same `parseFunction`, and `overloadCandidates` has already
 // dropped anything absent from the latter — so a member missing from the module is a merge-invariant
 // violation, not a conformance miss.
-function conformanceImplFunction(functionsByName FunctionByNameMap, name ByteArray) returns IrFunction
-	return try functionsByName.get(name) otherwise panic("conformanceImplFunction: overload-set member '{String.from(name)}' is in funcSignatures but the merged module declares no function under that name")
+//
+// ⚠ **WHY THE IMPL SIDE IS READ OFF THE MODULE AND NOT OFF `funcSignatures`, WHICH THIS CHECK ALSO HOLDS.**
+// The module function's `maxonParamTypes` / `maxonReturnType` are the REMAPPED (project-interner) types,
+// while `funcSignatures`' param TYPES are deliberately left file-local until `resolveTypes` overwrites them
+// (`ParseStaging.remapArtifact`) and so are not safe to render across files. Param NAMES go the other way:
+// they are interner-free `ByteArray`s and are the one thing the module's `IrFunction` does not carry, which
+// is why `conformanceImplSignature` below exists beside this and neither one subsumes the other.
+function conformanceImplFunction(functionsByName FunctionNameIndex, name ByteArray) returns IrFunction
+	return try functionsByName.funcNamed(name) otherwise panic("conformanceImplFunction: overload-set member '{String.from(name)}' is in funcSignatures but the merged module declares no function under that name")
 end 'conformanceImplFunction'
 
 // Every method records BOTH a module function and a `funcSignatures` entry (parseFunction), so a function
@@ -569,7 +567,7 @@ end 'conformanceImplSignature'
 // change a method that may be perfectly correct. Both arms therefore say HOW MANY members carry the name and
 // render all of the ones that matter: every candidate when none matches, and only the tied ones when several
 // do (the others are irrelevant to an ambiguity).
-function overloadMismatchLine(project Project, conformance ConformanceDecl, method InterfaceMethodSig, functionsByName FunctionByNameMap, candidates ByteArrayArray, matched ByteArrayArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns String
+function overloadMismatchLine(project Project, conformance ConformanceDecl, method InterfaceMethodSig, functionsByName FunctionNameIndex, candidates ByteArrayArray, matched ByteArrayArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns String
 	let expected = formatInterfaceMethodSignature(method)
 	if matched.count() == 0 'noneMatches'
 		return "no member named '{String.from(method.name)}' matches: {renderMemberSignatures(project, conformance: conformance, method: method, functionsByName: functionsByName, members: candidates, typeParamNames: typeParamNames, signatures: signatures)} (expected {expected})"
@@ -585,7 +583,7 @@ end 'overloadMismatchLine'
 //
 // The join is `Parser.appendCommaSeparated`, the ONE `", "` a diagnostic's list is punctuated with — a
 // second accumulator here is how two messages listing the same kind of thing come to look different.
-function renderMemberSignatures(project Project, conformance ConformanceDecl, method InterfaceMethodSig, functionsByName FunctionByNameMap, members ByteArrayArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns String
+function renderMemberSignatures(project Project, conformance ConformanceDecl, method InterfaceMethodSig, functionsByName FunctionNameIndex, members ByteArrayArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns String
 	var rendered = ""
 	for member in members 'each'
 		rendered = appendCommaSeparated(rendered, item: formatActualSignature(project, methodName: method.name, conformingType: conformance.typeName, implFunc: conformanceImplFunction(functionsByName, name: member), implSig: conformanceImplSignature(project, name: member), typeParamNames: typeParamNames, signatures: signatures))

@@ -56,23 +56,28 @@
 // an O(ops) walk plus two ops-sized arrays to release memory the module drops a few milliseconds
 // later, at the end of the compile that allocated it. Nothing downstream walks the flat arrays.
 
-// `module.functions` index → was it reached? DENSE over `0 .. funcCount-1`, which is the whole
-// divergence from v1's walk: a name is hashed EXACTLY ONCE per call-graph edge — at the lookup that
-// resolves it to an index — and the worklist then carries scalars. v1 pushed name STRINGS and re-hashed
-// one on every pop plus a `seen` insert per edge (`StdDeadFunctionElimination.maxon:88-105`), so its
-// walk paid three byte-sequence hashes per edge where this pays one.
-typealias FuncIndexByName = Map with (ByteArray, FuncIndex)
+// The `reached` column is DENSE over `0 .. funcCount-1`, which is the whole divergence from v1's walk: a
+// name is hashed EXACTLY ONCE per call-graph edge — at the `FunctionNameIndex` lookup that resolves it to an
+// index — and the worklist then carries scalars. v1 pushed name STRINGS and re-hashed one on every pop plus
+// a `seen` insert per edge (`StdDeadFunctionElimination.maxon:88-105`), so its walk paid three byte-sequence
+// hashes per edge where this pays one.
+//
+// That index is also where a DUPLICATE NAME is refused, and this pass is the last of the four sites that
+// build one — the only one downstream of every `install*Runtime`, hence the only one that can see a
+// declaration colliding with an installed runtime symbol (A1t). The policy, and what each of the four can
+// actually see, live in `FunctionNameIndex`.
 
 // Drop every function unreachable from the program's roots, in place. Rebuilds `module.functions`;
 // the dropped functions' blocks and ops stay in the flat arrays as orphans (see the header).
 export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable, project Project) throws CompileError
-	let byName = try indexFunctionsByName(module, project: project)
+	let index = try FunctionNameIndex.create(module.functions, project: project)
+	let byName = index.byName
 
 	var reached = BoolArray.create()
 	reached.resize(module.funcCount())
 	var worklist = FuncIndexArray.create()
 
-	seedRoots(globalData, byName: byName, reached: reached, worklist: worklist)
+	try seedRoots(globalData, project: project, index: index, reached: reached, worklist: worklist)
 
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("eliminateDeadFunctions: pop from a non-empty worklist")
@@ -95,10 +100,14 @@ end 'eliminateDeadFunctions'
 // ⚠ **AND THE FAILURE IT CATCHES IS SILENT, WHICH IS WHY IT IS A PANIC AND NOT A COMMENT.** A function
 // whose body `lowerMaxonToStd` skipped is EMPTY; if this walk kept it, the program would link cleanly and
 // call a function that does nothing — a wrong answer with no diagnostic anywhere, the worst outcome this
-// file's header names. The two ways it could happen are a stdlib function reached through a witness table
-// or a layout-descriptor slot (a DATA edge `StdlibSource`'s Maxon-tier walk does not model — its own header
-// records that this is exact "at this rung" and not in general), and a stdlib declaration colliding with a
-// name `seedRoots` roots unconditionally. Both are compiler bugs, so both panic.
+// file's header names.
+//
+// ⚠⚠ **IT USED TO CATCH TWO CAUSES AND ONLY ONE OF THEM WAS A COMPILER BUG (A1w).** The other — an author's
+// declaration of one of the four names kind 2 of `seedRoots` roots — is now refused at that root, with a
+// POSITIONED E4015, so it can no longer arrive here as an unpositioned panic. What is left is the genuine
+// compiler bug: a stdlib function reached through a witness table or a layout-descriptor slot, a DATA edge
+// `StdlibSource`'s Maxon-tier walk does not model (its own header records that this is exact "at this rung"
+// and not in general).
 //
 // COST: O(unreachable stdlib functions), bounded by the stdlib source LOADED and independent of the user's
 // program — the set is iterated, never `module.functions`, so a growing user program adds nothing. A name
@@ -108,85 +117,19 @@ function requireUnreachableStdlibStayedDead(project Project, byName FuncIndexByN
 		if let idx = try byName.get(name) 'aModuleFunction'
 			let isLive = try reached.get(idx) otherwise panic("requireUnreachableStdlibStayedDead: reached.get OOB at function index {idx}")
 			if isLive 'reachedAnyway'
-				panic("requireUnreachableStdlibStayedDead: '{String.from(name)}' is in StdlibFacts.unreachable — so `lowerMaxonToStd` lowered no body for it and `insertRangeChecks` emitted no guards — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: either a DATA edge (a witness-table or layout-descriptor slot) reaches a stdlib function, which the Maxon-tier walk in StdlibSource does not model, or a stdlib declaration collides with a name seedRoots roots unconditionally. Keeping it would emit an EMPTY function the program calls")
+				panic("requireUnreachableStdlibStayedDead: '{String.from(name)}' is in StdlibFacts.unreachable — so `lowerMaxonToStd` lowered no body for it and `insertRangeChecks` emitted no guards — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: a DATA edge (a witness-table or layout-descriptor slot) reaches a stdlib function, which the Maxon-tier walk in StdlibSource does not model. Keeping it would emit an EMPTY function the program calls")
 			end 'reachedAnyway'
 		end 'aModuleFunction'
 	end 'eachSkipped'
 end 'requireUnreachableStdlibStayedDead'
 
-// Name → `module.functions` index. Built once: without it, resolving a callee would be a linear scan of
-// every function and the whole walk would be O(functions × edges).
-//
-// ⚠ **A DUPLICATE NAME IS DETECTED HERE, AND `upsert` IS SILENT BY CONSTRUCTION** — a second entry takes
-// the first one's index out of this map, the walk marks ONE of the two live, and the other is swept: a
-// call fixup with no target, or a `__maxon_global_cleanup` that never runs, from a compile nothing
-// complained about. So the collision is caught rather than merely written down, and `refuseDuplicate-
-// FunctionName` decides which of its three causes it is.
-//
-// P1.7 slice 2a is what made the premise worth enforcing: `ModuleInit` installs from a NEW site, and it is
-// the only installer that appends into the MEMOIZED `queryAllModule` module rather than into the
-// post-pipeline `stdModule`, so "installed at exactly one site" acquired a second dependency — that
-// `compileToCodeResult` runs at most once per `Project`, which is a property of the DRIVER and not of this
-// pass (see that file's mutate-the-memo header).
-//
-// The check costs one integer compare per function and no hash probe: the loop inserts index `i` on
-// iteration `i`, so the map's height IS `i + 1` after every insert unless one collapsed two names into
-// one entry. A `contains` probe ahead of each insert would answer the same question AND hand back the
-// incumbent's index for free — but it doubles the hash probes on a per-function loop to save a back-scan
-// that runs at most once, on a path that then refuses the compile.
-function indexFunctionsByName(module StdModule, project Project) returns FuncIndexByName throws CompileError
-	var byName = FuncIndexByName.create()
-	for i in 0 upto module.funcCount() 'eachFunc'
-		byName.upsert(module.getFunc(i).name, value: i)
-		if byName.count() != i + 1 'duplicateName'
-			try refuseDuplicateFunctionName(module, project: project, laterIndex: i)
-		end 'duplicateName'
-	end 'eachFunc'
-	return byName
-end 'indexFunctionsByName'
-
-// ⭐⭐ **THREE CAUSES SHARE ONE SYMPTOM, AND PROVENANCE IS WHAT TELLS THEM APART (A1t).** Two of them are
-// compiler bugs and must stay a panic; the third is an AUTHOR's mistake and gets a diagnostic:
-//
-//   * **one side parsed, one side synthesized** — a declaration collides with a symbol the compiler
-//     emits. E4015, positioned at the declaration. D6 is what opened the door — it let
-//     `stdlib/Builtins.maxon` DECLARE reserved `__` names — and what creates the PAIR is whatever makes
-//     the compiler install its own copy, which differs by runtime. ⚠ **NOT always a call:** a
-//     usage-gated symbol needs one (A1r opened that door, and `__print_string` is installed by
-//     `print`/an explicit call), but `__module_init`/`__maxon_global_cleanup` are installed on
-//     `globals.count() != 0` alone (`ModuleInit`), so declaring one of THOSE collides with no call
-//     anywhere in the program. MEASURED both ways. The check runs before the reachability walk, so an
-//     uncalled declaration is diagnosed rather than quietly pruned.
-//   * **both synthesized** — an installer ran twice, or one `Project` was compiled twice over the
-//     memoized module. A compiler bug.
-//   * **both parsed** — two declarations of one name, which `commitFuncSignatures` reports as E3006 at
-//     merge and the pipeline's error gate stops long before here. A compiler bug in that check.
-//
-// **The discriminator is `sourceFilePath`, and it is DERIVED rather than guessed**: the parser stamps it on
-// every function it builds (`parseFunction`, plus `parseClosureExpression` for a lifted closure) and the
-// two doors a synthesized function comes through — `IrFunction.createFromStd` and `ModuleInit`'s
-// `IrFunction.create` — leave it empty. Nothing between there and here can lose it: the ONE boundary that
-// COPIES a function is per-file artifact → merged module (`IrModule.merge` → `relocateFunction` →
-// `shallowCopy`, which carries `sourceFilePath`/`nameLine`/`nameColumn` across), and the Maxon→Std transfer
-// copies nothing at all — `lowerMaxonToStd` pushes the SAME `IrFunction` object, rewriting only its type
-// fields. That is the SAME fact `TargetPrinter.isRuntimeFunction` reads, and it is read the
-// same way for the same reason: a NAME test cannot do this job, because the one file that can reach this
-// error is the one file whose declarations wear the compiler's own prefix (the A1r review measured a
-// SIGSEGV on exactly that confusion).
-//
-// ⚠ **REFUSE, NEVER REDIRECT.** The A1r review established that steering the CALL to the surviving
-// definition trades this refusal for a silent miscompile — `print("x")` would bind to the author's
-// declaration instead of the runtime's `__print_string`, which knows the String record's layout. So the
-// compile is refused at the duplicate, before isel, and no binary is produced either way.
-//
-// ⭐⭐ **THE ASSUMPTION THIS CHECK RESTS ON: NOTHING CAN SUPPRESS ONE SIDE OF THE PAIR BEFORE THE COUNT SEES
-// IT.** A detector that counts two functions is walked around by anything that removes one of them first, and
-// there IS a pass that removes a side — `StdlibSource.reachableMaxonFunctionNames` builds its OWN name→index
-// map, last-wins and UNCHECKED, and what it computes (`StdlibFacts.unreachable`) gates which runtime floor is
-// installed (`scanRuntimeUsage` skips the body of every function whose NAME is in that set). If a
-// `Builtins.maxon` declaration of `__foo` could land in `unreachable`, the runtime's own `__foo` could go
-// uninstalled, exactly ONE `__foo` would reach this loop, and the compile would SUCCEED with every emitted
-// call bound to the author's stub.
+// ⭐⭐ **THE ASSUMPTION THE DUPLICATE-NAME REFUSAL RESTS ON: NOTHING CAN SUPPRESS ONE SIDE OF THE PAIR
+// BEFORE THE COUNT SEES IT.** A detector that counts two functions is walked around by anything that removes
+// one of them first, and there IS a pass that could remove a side — `StdlibSource.reachableMaxonFunctionNames`
+// computes `StdlibFacts.unreachable`, which gates which runtime floor is installed (`scanRuntimeUsage` skips
+// the body of every function whose NAME is in that set). If a `Builtins.maxon` declaration of `__foo` could
+// land in `unreachable`, the runtime's own `__foo` could go uninstalled, exactly ONE `__foo` would reach the
+// name index, and the compile would SUCCEED with every emitted call bound to the author's stub.
 //
 // ⚠⚠ **IT CAN NOW, AND THE TWO BARS THAT USED TO CLOSE IT ARE BOTH GONE.** They were: *(1)* E2051 — no
 // LISTED stdlib module may declare a `__` name, and the exempt file was not listed; *(2)* the exempt file is
@@ -213,46 +156,6 @@ end 'indexFunctionsByName'
 //
 // ⚠ **WHAT WOULD REOPEN IT** is now (1) or (2), not the whitelist: making that skip DROP a function rather
 // than empty it, or letting any pass decide a runtime INSTALL from a body some other pass still lowers.
-function refuseDuplicateFunctionName(module StdModule, project Project, laterIndex FuncIndex) throws CompileError
-	let later = module.getFunc(laterIndex)
-	let earlier = earlierFunctionNamed(module, name: later.name, before: laterIndex)
-	let name = String.from(later.name)
-
-	if earlier.sourceFilePath.isEmpty() != later.sourceFilePath.isEmpty() 'oneOfEachProvenance'
-		// The parsed side carries the author's position; the synthesized side's is blank by construction,
-		// and an unpositioned diagnostic is barely better than the panic it replaces.
-		let declared = later if earlier.sourceFilePath.isEmpty() else earlier
-		reportPositioned(project, code: ErrorCode.declarationCollidesWithEmittedSymbol, message: "declaration of '{name}' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it", line: declared.nameLine, column: declared.nameColumn, filePath: declared.sourceFilePath)
-		throw CompileError.compileError
-	end 'oneOfEachProvenance'
-
-	if later.sourceFilePath.isEmpty() 'bothSynthesized'
-		panic("refuseDuplicateFunctionName: two SYNTHESIZED functions are named '{name}' — every runtime symbol is installed at exactly one site, so this is an installer that ran twice (or a compile driven twice over one memoized module), and the name index can only keep one of them")
-	end 'bothSynthesized'
-
-	// Both positions are printed rather than one cause asserted: two declarations that E3006 missed and ONE
-	// declaration merged (or lowered) twice both land here, and only the two positions tell them apart. This
-	// rung exists because a panic named two causes that were both false for the case in front of it.
-	panic("refuseDuplicateFunctionName: two PARSED functions are named '{name}', at {earlier.sourceFilePath.toString()}:{earlier.nameLine} and {later.sourceFilePath.toString()}:{later.nameLine} — two DISTINCT positions mean `commitFuncSignatures`' whole-program E3006 did not see one of them and the pipeline's error gate let the module through; the SAME position twice means one declaration was merged or lowered into the module twice")
-end 'refuseDuplicateFunctionName'
-
-// The function `name` was already bound to before index `before`. It has to be recovered from the function
-// ARRAY rather than the map: `upsert`'s last-wins has already replaced the incumbent's index with
-// `before`'s, and on the diagnosable cause the incumbent is usually the very side that carries the author's
-// position — installers append AFTER the user's source, so the parsed function is the earlier one.
-//
-// Linear, and that costs nothing: it runs at most once per compile, on a path whose next act is to refuse
-// the compile or panic.
-function earlierFunctionNamed(module StdModule, name ByteArray, before FuncIndex) returns IrFunction
-	for i in 0 upto before 'eachEarlier'
-		let candidate = module.getFunc(i)
-		if candidate.name == name 'sameName'
-			return candidate
-		end 'sameName'
-	end 'eachEarlier'
-
-	panic("earlierFunctionNamed: the name index collapsed two entries at function {before} ('{String.from(name)}'), but no function before it carries that name — `upsert` overwrote an entry this scan cannot account for")
-end 'earlierFunctionNamed'
 
 // ⭐ **THE ROOT SET — the three reference kinds no Std op in this module spells.** Everything else is an
 // ordinary call-graph edge and is found by the walk.
@@ -291,17 +194,52 @@ end 'earlierFunctionNamed'
 //    the precedent `noteDestructorUsage` already set — "referenced from data = live" — and because
 //    this pass never prunes `.rdata` (see the header), rooting ALL of them is not conservatism, it is
 //    the only correct answer: the slot survives, so its target must be there to fill it.
-function seedRoots(globalData GlobalDataTable, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
-	markLiveFunction(UserEntryName.toByteArray(), byName: byName, reached: reached, worklist: worklist)
-	markLiveFunction(ModuleInitName, byName: byName, reached: reached, worklist: worklist)
-	markLiveFunction(GlobalCleanupName, byName: byName, reached: reached, worklist: worklist)
-	markLiveFunction(MmLeakCheckName, byName: byName, reached: reached, worklist: worklist)
-	markLiveFunction(GtEnqueueName, byName: byName, reached: reached, worklist: worklist)
+//
+// ⭐⭐ **KIND 2 CARRIES A PROVENANCE PREMISE OF ITS OWN, AND IT IS THE SECOND DOOR ONTO A1t's DEFECT (A1w).**
+// Those four names are the COMPILER's, and rooting one asserts that whatever answers to it is the compiler's
+// function. `main` asserts the opposite — it must be the author's — so the two kinds cannot go through one
+// door. Neither premise was checked, and the `__` half was reachable and LOUD IN THE WRONG WAY: MEASURED, a
+// `stdlib/Builtins.maxon` declaration of `__mm_leak_check` / `__module_init` / `__gt_enqueue` in a program
+// that installs NO runtime under that name produced `panic at DeadFunctionElimination.maxon:111`
+// (`requireUnreachableStdlibStayedDead`), with no file and no line — the author's mistake wearing a compiler
+// bug's clothes, which is the exact shape A1t was written to remove. The pair case never reached it because
+// the name index refuses first; this case has no pair to count, so nothing saw it.
+//
+// ⚠ **REFUSED WHETHER OR NOT THE COMPILER EMITS ITS OWN COPY HERE.** Not rooting a parsed hit would compile
+// — the declaration is dead code and would simply be pruned — but then `__module_init` would be legal in a
+// program with no managed global and E4015 in one with a managed global, i.e. the legality of a NAME decided
+// by which runtime floor some other program carries. Refusing makes the rule what it says it is: the name is
+// the compiler's. Same code, same rule, second detection — see E4015's registry entry.
+//
+// ⚠ Kind 3's names are NOT checked this way and must not be: an `.rdata` witness slot names `Type.method`, a
+// PARSED method, so parsed-ness there is the ordinary case rather than the error.
+function seedRoots(globalData GlobalDataTable, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError
+	markLiveFunction(UserEntryName.toByteArray(), byName: index.byName, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(ModuleInitName, project: project, index: index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(GlobalCleanupName, project: project, index: index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(MmLeakCheckName, project: project, index: index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(GtEnqueueName, project: project, index: index, reached: reached, worklist: worklist)
 
 	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
-		markLiveFunction(reloc.funcName, byName: byName, reached: reached, worklist: worklist)
+		markLiveFunction(reloc.funcName, byName: index.byName, reached: reached, worklist: worklist)
 	end 'eachRdataSlot'
 end 'seedRoots'
+
+// Root one of the four names the compiler owns, refusing a declaration that took it. The provenance test is
+// the SAME one `refuseDuplicateFunctionName` makes and reads the same field for the same reason: a parsed
+// function carries a `sourceFilePath` and a synthesized one cannot.
+function markCompilerOwnedRoot(name ByteArray, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError
+	let func = try index.funcNamed(name) otherwise 'notAModuleFunction'
+		return
+	end 'notAModuleFunction'
+
+	if not func.sourceFilePath.isEmpty() 'declared'
+		reportPositioned(project, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{String.from(name)}' takes a name the compiler owns: it roots that name into every program's reachability set, for a function it emits itself. This program installs no runtime under it, so the declaration is what the root would keep — with an EMPTY body, since the passes that lower bodies were told the name was unreachable. Rename the declaration", line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
+		throw CompileError.compileError
+	end 'declared'
+
+	markLiveFunction(name, byName: index.byName, reached: reached, worklist: worklist)
+end 'markCompilerOwnedRoot'
 
 // Mark `name` reachable and queue its body for the walk. A name this module does not define is not an
 // error and not a miss: it is a hand-assembled chunk (`__gt_context_switch`, `__gt_trampoline`,
