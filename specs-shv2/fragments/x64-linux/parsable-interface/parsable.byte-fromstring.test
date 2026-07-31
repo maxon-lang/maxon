@@ -1,0 +1,241 @@
+// Test: parsable.byte-fromstring
+function main() returns ExitCode
+	let n = try byte.fromString("41") otherwise 0
+	return n + 1
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __byte_fromString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__int_fromString {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_to_codepoints
+    x64.movRegImm32 rbx, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.movRegReg rcx, r15
+    x64.callDirect __arr_count
+    x64.cmpRegReg rbx, r8
+    x64.jcc less, chars
+    x64.jmp forexit
+  chars:
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.callDirect __arr_get_unchecked
+    x64.cmpRegImm32 r8, 45
+    x64.jcc equal, minus
+    x64.jmp ifelse
+  minus:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, minus_after_digits
+    x64.jmp ifcont
+  minus_after_digits:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r15
+    x64.callDirect __arr_decref
+    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 1
+    x64.movRegReg rcx, rax
+    x64.movRegReg rax, r12
+    x64.movRegReg rdx, r14
+    x64.jmp ifcont
+  ifelse:
+    x64.cmpRegImm32 r8, 48
+    x64.jcc greaterEqual, maybe_digit
+    x64.jmp ifelse
+  maybe_digit:
+    x64.cmpRegImm32 r8, 57
+    x64.jcc lessEqual, is_digit
+    x64.jmp ifelse
+  is_digit:
+    x64.movRegImm32 rax, 1
+    x64.imulRegRegImm32 rcx, r12, 10
+    x64.leaRegRegImm32 rdx, r8, -48
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.jmp ifcont
+  ifcont:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegReg rdx, rax
+    x64.movRegReg rax, rcx
+    x64.movRegReg rcx, r13
+    x64.jmp ifcont
+  ifcont:
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, rcx
+    x64.movRegReg r14, rdx
+    x64.jmp forhdr
+  ifelse:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r15
+    x64.callDirect __arr_decref
+    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r15
+    x64.callDirect __arr_decref
+    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  forexit:
+    x64.movRegReg rcx, r15
+    x64.callDirect __arr_decref
+    x64.xorRegImm32 r14, r14, 1
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, empty
+    x64.jmp ifcont
+  empty:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, negate
+    x64.jmp critsplit
+  negate:
+    x64.movRegImm32 rax, 0
+    x64.subRegReg rax, rax, r12
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, r12
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__byte_fromString {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __int_fromString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, too_low
+    x64.jmp ifcont
+  too_low:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, too_high
+    x64.jmp ifcont
+  too_high:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

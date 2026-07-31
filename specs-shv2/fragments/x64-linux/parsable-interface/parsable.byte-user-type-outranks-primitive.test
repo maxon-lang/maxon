@@ -1,0 +1,35 @@
+// Test: parsable.byte-user-type-outranks-primitive
+type byte
+	export let n as int
+
+	export static function fromString(s String) returns int
+		return 7
+	end 'fromString'
+end 'byte'
+
+function main() returns ExitCode
+	return byte.fromString("41")
+end 'main'
+---
+ExitCode: 7
+---
+func @byte.fromString {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect byte.fromString
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
