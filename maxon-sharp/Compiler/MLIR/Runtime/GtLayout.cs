@@ -5,7 +5,7 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 /// shared by RuntimeEmitter and every CodeEmitter backend. Single source of truth —
 /// do not duplicate these constants in backend files.
 ///
-/// GreenThread struct (216 bytes = 0xD8):
+/// GreenThread struct (224 bytes = 0xE0):
 ///   0x00  saved SP/RSP             (per-arch name; same offset)
 ///   0x08  saved FP/RBP             (per-arch name; same offset)
 ///   0x10  status                   0=ready, 1=running, 2=completed, 3=waiting
@@ -33,8 +33,9 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0xC0  fault_redirect_rip       RIP to resume at (epilog writes into ucontext)
 ///   0xC8  fault_redirect_rsp       SP to resume at
 ///   0xD0  fault_redirect_fp        FP to resume at
+///   0xD8  park_state               async-I/O wakeup ownership (see the GtPark* constants)
 ///
-/// ProcContext struct (352 bytes = 0x160):
+/// ProcContext struct (360 bytes = 0x168):
 ///   0x00  local_queue_head         per-P run queue (no lock needed)
 ///   0x08  local_queue_tail
 ///   0x10  local_queue_len
@@ -57,7 +58,7 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0x80  main_thread              inline GT struct (replaces global __gt_main_thread); NEVER linked
 ///                                  into __gt_all_head, so any enumeration of live green threads must
 ///                                  walk the __sched_procs array as well as that list
-///   0x158 pending_sync_req         deferred sync-I/O request handed off by a parking worker GT
+///   0x160 pending_sync_req         deferred sync-I/O request handed off by a parking worker GT
 /// </summary>
 public static class GtLayout {
 
@@ -94,7 +95,10 @@ public static class GtLayout {
   public const int GtOffFaultRedirectRip = 0xC0;  // resume RIP/PC; epilog writes this back into ucontext
   public const int GtOffFaultRedirectRsp = 0xC8;  // resume SP
   public const int GtOffFaultRedirectFp = 0xD0;   // resume FP/RBP
-  public const int GtStructSize = 0xD8;      // 216 bytes
+  // Ownership of an in-flight async-I/O wakeup — see the Netpoll* constants below. Appended after
+  // the fault block so no existing offset shifts.
+  public const int GtOffParkState = 0xD8;
+  public const int GtStructSize = 0xE0;      // 224 bytes
 
   // ---- Backtrace walk limits (shared by every frame-chain walk: both backends' mrt_panic and
   //      mrt_fault_backtrace, and the debug agent's __dbg_walk_frames) ----
@@ -120,11 +124,55 @@ public static class GtLayout {
   // `fp + FrameLinkBytes <= stackHigh`, and it is one constant because it is one fact.
   public const int FrameLinkBytes = 16;
 
+  // POSIX sleeps in microseconds and Win32 in milliseconds; IEmitterBackend.OsSleepMillis presents
+  // the coarser of the two, so the POSIX side scales by this.
+  public const int MicrosPerMilli = 1000;
+
   // ---- GT status values ----
   public const int GtStatusReady = 0;
   public const int GtStatusRunning = 1;
   public const int GtStatusCompleted = 2;
   public const int GtStatusWaiting = 3;
+
+  // ---- Async-I/O park state (GtOffParkState) — a port of Go's netpoll pd.rg/pd.wg ----
+  //
+  // WHO OWNS THE WAKEUP. `status` says an I/O finished and `ioYielded` says a context has been
+  // saved; NEITHER says whether the completer or the waiter is responsible for resuming it, and a
+  // waiter that armed a readiness registration BEFORE parking can still be talked out of parking by
+  // reading `status` itself. Deciding that from two independent words is a race whatever order they
+  // are written in — the completer reads "still running, it will self-detect" in the same instant
+  // the waiter reads "still waiting, I may park", and the wakeup is lost. This word settles it with
+  // ONE atomic operation per side, so exactly one of them acts.
+  //
+  // ⚠ IT DOES NOT REPLACE `status` OR `ioYielded`, AND MUST NOT. Go keeps `g.atomicstatus` separate
+  // from `pd.rg` because they answer different questions — WHAT IS THIS THREAD DOING versus WHO OWNS
+  // THIS WAKEUP — and so do we: `status` still carries readiness (with `io_result_val` behind its
+  // release fence) and `ioYielded` still says whether the register context has been saved.
+  //
+  // The names and the ORDER are Go's, so `old > NetpollWait` reads the same here as there:
+  //
+  //   Nil     none of the below: this GT is not waiting on an async-I/O completion.
+  //   Ready   a completer has CLAIMED the wakeup. It either enqueued the GT (claimed from Parked)
+  //           or left the GT to self-detect (claimed from Wait).
+  //   Wait    the GT has armed a registration and MAY park; it is still running and can still
+  //           abort. A completer that claims this does NOT enqueue — the waiter's own commit CAS
+  //           will fail and it will self-detect.
+  //   Parked  the GT has COMMITTED to park (the commit CAS Wait -> Parked won) and is executing
+  //           straight-line code into __gt_context_switch. A completer that claims this owns the
+  //           enqueue, and may safely spin for ioYielded==1 because nothing on that path can turn
+  //           the waiter around — the termination argument __io_complete_gt_spin and __gt_ppw_spin
+  //           each already make for their own parker, and the one the I/O park path could not make
+  //           until this word existed, because its parker COULD turn around.
+  //
+  // ⭐ Parked is a CONSTANT where Go stores a `*g`. Go's word lives in a per-fd pollDesc, so it has
+  // to name WHICH goroutine parked; ours lives in the GT itself, so "which" is the word's own
+  // address and the fourth state degenerates to a sentinel. That is the only structural difference
+  // between this state machine and netpoll.go's, and it is why `netpollunblock`'s return value —
+  // Go's `*g` — is here just "the GT you were given, or nothing".
+  public const int NetpollNil = 0;
+  public const int NetpollReady = 1;
+  public const int NetpollWait = 2;
+  public const int NetpollParked = 3;
 
   // ---- Stack growth ----
   //
@@ -234,8 +282,8 @@ public static class GtLayout {
   // only AFTER the GT is fully parked (ioYielded=1), so no completer can ever observe
   // the request while its waiter still runs — the double-schedule is structurally
   // impossible. Appended after the inline mainThread GT so no existing offset shifts.
-  public const int POffPendingSyncReq = POffMainThread + GtStructSize;   // 0x158
-  public const int PStructSize = POffPendingSyncReq + 8;                  // 0x160 = 352 bytes
+  public const int POffPendingSyncReq = POffMainThread + GtStructSize;   // 0x160
+  public const int PStructSize = POffPendingSyncReq + 8;                  // 0x168 = 360 bytes
 
   // ---- macOS wake lock block (Go semasleep/semawakeup primitive) ----
   // On macOS the worker park/wake (and the I/O sync worker's wake) use a Go-style

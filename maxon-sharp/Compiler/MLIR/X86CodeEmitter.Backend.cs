@@ -305,6 +305,8 @@ public partial class X86CodeEmitter {
       _e.EmitMovzxReg8To64(X86Register.Rbx);
     }
 
+    public void SpinHint() => _e.EmitBytes(0xF3, 0x90); // PAUSE
+
     public void FullBarrier() => _e.EmitMfence();
 
     // x86-64 is TSO: every load already has acquire and every store release
@@ -435,6 +437,34 @@ public partial class X86CodeEmitter {
 
     public void OsYield() =>
       _e.EmitCallImportOnSystemStack("kernel32.dll", "SwitchToThread");
+
+    // Sleep takes milliseconds, which IS the portable unit, so no scaling.
+    public void OsSleepMillis(VReg millis) {
+      if (R(millis) != X86Register.Rcx) _e.EmitMovRegReg(X86Register.Rcx, R(millis));
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "Sleep");
+    }
+
+    // GetEnvironmentVariableA copies into caller memory, so unlike POSIX's getenv this needs the
+    // caller's scratch slots. Four consecutive slots = 32 bytes, which is ample for the unsigned
+    // decimals this reads and matches the buffer __gt_init's own env reads use.
+    public void ReadEnvUnsigned(VReg dest, string nameSymdata, int scratchSlot) {
+      const int envBufSlots = 4;
+      var doneLabel = BackendLabel("env_unsigned_done");
+
+      _e.EmitLeaRegSymdataRel(X86Register.Rcx, nameSymdata);   // lpName
+      LeaLocal(VReg.Arg1, scratchSlot);                        // lpBuffer
+      _e.EmitMovRegImm(X86Register.R8, envBufSlots * 8);        // nSize
+      _e.EmitCallImport("kernel32.dll", "GetEnvironmentVariableA");
+      _e.EmitXorRegReg(R(dest), R(dest));
+      _e.EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+      _e.EmitJcc("z", doneLabel);                              // unset or empty -> 0
+
+      LeaLocal(VReg.Arg0, scratchSlot);
+      _e.EmitParseUnsignedCstrIntoRax(X86Register.Rcx);
+      if (R(dest) != X86Register.Rax) _e.EmitMovRegReg(R(dest), X86Register.Rax);
+
+      _e.DefineLabel(doneLabel);
+    }
 
     // ---- Bulk memory ----
 
@@ -678,6 +708,10 @@ public partial class X86CodeEmitter {
 
     public string SchedLockLabel => "__sched_global_queue_cs";
     public string TimerLockLabel => "__gt_timer_cs";
+
+    // The same CRITICAL_SECTION, taken the same way, that __gt_spawn and __gt_trampoline take.
+    public void AllThreadsLockAcquire() => LockAcquire("__sched_all_cs");
+    public void AllThreadsLockRelease() => LockRelease("__sched_all_cs");
 
     // ---- Fault handler (real impls land in Phase 2) ----
 

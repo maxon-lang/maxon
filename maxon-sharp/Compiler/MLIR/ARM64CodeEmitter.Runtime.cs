@@ -395,12 +395,19 @@ public partial class ARM64CodeEmitter {
   /// The deliberate NON-caller is __sched_worker_park, which drives only __io_check_completions;
   /// its comment gives the reason (polling kqueue from an idle worker lets it double-schedule a
   /// spinning waiter). That divergence is a decision and stays spelled out at its site.
+  ///
+  /// __netpoll_recover is LAST and is time-gated to once per 10 ms inside itself (Go's sysmon
+  /// interval): it is a safety net for a condition the park protocol makes unreachable, so it must
+  /// cost nothing on the turns where there is nothing to find. This is the right host for it
+  /// precisely because the wedge it guards against leaves this loop RUNNING — the captured stacks
+  /// of the bug that opened this rung show the parent spinning here while a GT slept forever.
   /// </summary>
   private void EmitDriveSchedulerAndIo() {
     EmitBranchLink("__gt_process_pending_waiter");
     EmitBranchLink("__io_check_completions");
     EmitBranchLink("__io_poll_kqueue");
     EmitBranchLink("__gt_timer_check");
+    EmitBranchLink("__netpoll_recover");
   }
 
   // --- os_unfair_lock helpers ---
@@ -3512,11 +3519,13 @@ public partial class ARM64CodeEmitter {
     // an 8-byte global lets LockAcquire's owner/count writes spill into the next
     // global, which under the multi-OS-thread scheduler corrupts adjacent scheduler
     // state (e.g. the timer lock's count overlapped __gt_run_queue_head — the bug this
-    // sizing fixes). __sched_io_lock is an 8-byte os_unfair_lock (EmitLockAcquire path),
-    // and __sched_all_lock is currently unused (the all-threads list is guarded by
-    // __sched_global_lock); both are sized 24 only for uniformity (harmless slack).
+    // sizing fixes). __sched_io_lock is an 8-byte os_unfair_lock (EmitLockAcquire path)
+    // sized 24 only for uniformity (harmless slack).
     DefineGlobal("__sched_global_lock", 24, 0);      // recursive spinlock for global queue
-    DefineGlobal("__sched_all_lock", 24, 0);         // unused; all-threads list uses __sched_global_lock
+    // Guards __gt_all_head + __gt_live_count. (The two comments here used to say it was UNUSED and
+    // that __sched_global_lock guarded the list — both false since __gt_trampoline and __gt_spawn
+    // took it, and __netpoll_recover walks the list under it.)
+    DefineGlobal("__sched_all_lock", 24, 0);         // recursive spinlock for the all-threads list
     DefineGlobal("__sched_timer_lock", 24, 0);       // recursive spinlock for timer heap
     DefineGlobal("__sched_io_lock", 24, 0);          // os_unfair_lock for I/O request queue (8B suffices)
 
@@ -3551,6 +3560,10 @@ public partial class ARM64CodeEmitter {
     // call, so disjoint buffers guarantee no two Ms process (and double-free) the
     // same KqCtx. __io_poll_kqueue indexes this by the calling P's id.
     DefineGlobal("__io_kevent_bufs_base", 8, 0);
+
+    // The async-I/O park protocol's own globals — see RuntimeEmitter.Netpoll.cs, which owns the
+    // protocol for every target.
+    new Runtime.RuntimeEmitter(CreateBackend()).EmitNetpollGlobals();
 
     // Trace lock always defined to keep data layout stable (only used when AsyncTrace is enabled)
     DefineGlobal("__gt_trace_counter", 8, 0);
@@ -3594,6 +3607,7 @@ public partial class ARM64CodeEmitter {
     schedRt.EmitGtEnqueue();
     schedRt.EmitGtDequeue();
     schedRt.EmitGtStealWork();
+    schedRt.EmitNetpollFunctions();
     EmitSchedWorkerLoop();
     EmitGtSpawn();
     EmitGtTrampoline();
@@ -3659,6 +3673,9 @@ public partial class ARM64CodeEmitter {
 
     // Step 2b: apply an optional MAXON_MAX_PROCS override (clamp down only).
     EmitReadMaxProcsEnvOverride();
+
+    // Step 2c: arm the async-I/O park protocol's fault injection from the environment (0 = off).
+    EmitBranchLink("__netpoll_init");
 
     // Step 3: Allocate P*[] array — mmap(max_procs * 8). OS-backed (see
     // EmitMmapAnon) to match x86's VirtualAlloc and stay off the MM leak ledger.
@@ -3858,53 +3875,66 @@ public partial class ARM64CodeEmitter {
   /// needed. Uses X9..X12 as scratch (freshly reloaded by the following init steps).
   /// </summary>
   private void EmitReadMaxProcsEnvOverride() {
-    const int asciiZero = '0';
-    const int maxDecimalDigit = 9;
-    const int decimalRadix = 10;
-    const string parseLoopLabel = "__gt_init_maxprocs_parse";
-    const string parseDoneLabel = "__gt_init_maxprocs_parsed";
     const string overrideDoneLabel = "__gt_init_maxprocs_done";
 
     DefineSymdata("__maxprocs_env_name", "MAXON_MAX_PROCS\0"u8.ToArray());
-
-    // getenv(name) -> char* value (NULL if unset). __gt_init runs on the main
-    // OS thread, so a direct call needs no system-stack switch.
     EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__maxprocs_env_name");
     EmitCallImport("getenv");
-    _condBranchFixups.Add((_code.Count, overrideDoneLabel));
-    EmitWord(0xB4000000 | Reg(ARM64Register.X0)); // CBZ X0, done — unset, keep the detected count
+    EmitParseUnsignedCstrIntoX9(ARM64Register.X0);
 
-    // Minimal decimal parse of the returned cstring:
-    //   X9 = cursor, X10 = accumulator, X11 = digit, X12 = radix(10).
-    // Stops at the first non-digit byte (the NUL terminator included).
-    EmitMovRegReg(ARM64Register.X9, ARM64Register.X0); // cursor = value
-    EmitMovRegImm(ARM64Register.X10, 0);               // acc = 0
-    EmitMovRegImm(ARM64Register.X12, decimalRadix);
-    DefineLabel(parseLoopLabel);
-    EmitLoadStoreUnsignedImm(0x39400000, ARM64Register.X11, ARM64Register.X9, 0, 1); // LDRB W11, [X9]
-    EmitAddSubImm(ARM64Register.X11, ARM64Register.X11, asciiZero, isAdd: false);      // digit = c - '0'
-    EmitCmpImm(ARM64Register.X11, maxDecimalDigit);
-    EmitBranchCond(ARM64ConditionCode.Hi, parseDoneLabel); // unsigned > 9 -> non-digit -> stop
-    // acc = acc*10 + digit  (MADD X10, X10, X12, X11)
-    EmitWord(0x9B000000 | (Reg(ARM64Register.X12) << 16) | (Reg(ARM64Register.X11) << 10)
-      | (Reg(ARM64Register.X10) << 5) | Reg(ARM64Register.X10));
-    EmitAddSubImm(ARM64Register.X9, ARM64Register.X9, 1, isAdd: true); // ++cursor
-    EmitBranch(parseLoopLabel);
-
-    DefineLabel(parseDoneLabel);
     // Apply only when 1 <= parsed < detected max_procs (clamp down only).
-    EmitCmpImm(ARM64Register.X10, 1);
+    EmitCmpImm(ARM64Register.X9, 1);
     EmitBranchCond(ARM64ConditionCode.Lt, overrideDoneLabel); // parsed < 1 -> ignore
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X29, GtInitMaxProcsSlotOffset, 8); // detected max_procs
-    EmitCmpRegReg(ARM64Register.X10, ARM64Register.X11);
+    EmitCmpRegReg(ARM64Register.X9, ARM64Register.X11);
     EmitBranchCond(ARM64ConditionCode.Ge, overrideDoneLabel); // parsed >= detected -> ignore
 
     // Commit: local slot + both scheduler globals all take the clamped value.
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X10, ARM64Register.X29, GtInitMaxProcsSlotOffset, 8);
-    EmitGlobalStoreReg(ARM64Register.X10, "__sched_max_procs");
-    EmitGlobalStoreReg(ARM64Register.X10, "__sched_num_procs");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X29, GtInitMaxProcsSlotOffset, 8);
+    EmitGlobalStoreReg(ARM64Register.X9, "__sched_max_procs");
+    EmitGlobalStoreReg(ARM64Register.X9, "__sched_num_procs");
 
     DefineLabel(overrideDoneLabel);
+  }
+
+  /// <summary>
+  /// X9 = the unsigned decimal value of the null-terminated string at <paramref name="ptrReg"/>, or
+  /// 0 when the pointer is NULL or the string does not start with a digit. Parsing stops at the
+  /// first non-digit byte (the NUL terminator included), so a trailing suffix is ignored rather than
+  /// rejected — every caller treats 0 as "leave the default alone", which is also what a malformed
+  /// value should get. X10/X11/X12 are scratch.
+  ///
+  /// It takes a POINTER rather than an environment variable name because the two callers get that
+  /// pointer differently — __gt_init calls getenv inline on the main OS thread, while the shared
+  /// IEmitterBackend.ReadEnvUnsigned has to present the same answer as Windows'
+  /// GetEnvironmentVariableA-into-a-buffer — and the decimal parse is the only part they share.
+  /// </summary>
+  private void EmitParseUnsignedCstrIntoX9(ARM64Register ptrReg) {
+    const int asciiZero = '0';
+    const int maxDecimalDigit = 9;
+    const int decimalRadix = 10;
+    var parseLoopLabel = $"__cstr_parse_loop_{_uniqueLabelCounter}";
+    var parseDoneLabel = $"__cstr_parse_done_{_uniqueLabelCounter++}";
+
+    // X10 = cursor, X9 = accumulator, X11 = digit, X12 = radix(10).
+    EmitMovRegReg(ARM64Register.X10, ptrReg);
+    EmitMovRegImm(ARM64Register.X9, 0);
+    _condBranchFixups.Add((_code.Count, parseDoneLabel));
+    EmitWord(0xB4000000 | Reg(ARM64Register.X10)); // CBZ X10, done — NULL pointer
+    EmitMovRegImm(ARM64Register.X12, decimalRadix);
+
+    DefineLabel(parseLoopLabel);
+    EmitLoadStoreUnsignedImm(0x39400000, ARM64Register.X11, ARM64Register.X10, 0, 1); // LDRB W11, [X10]
+    EmitAddSubImm(ARM64Register.X11, ARM64Register.X11, asciiZero, isAdd: false);      // digit = c - '0'
+    EmitCmpImm(ARM64Register.X11, maxDecimalDigit);
+    EmitBranchCond(ARM64ConditionCode.Hi, parseDoneLabel); // unsigned > 9 -> non-digit -> stop
+    // acc = acc*10 + digit  (MADD X9, X9, X12, X11)
+    EmitWord(0x9B000000 | (Reg(ARM64Register.X12) << 16) | (Reg(ARM64Register.X11) << 10)
+      | (Reg(ARM64Register.X9) << 5) | Reg(ARM64Register.X9));
+    EmitAddSubImm(ARM64Register.X10, ARM64Register.X10, 1, isAdd: true); // ++cursor
+    EmitBranch(parseLoopLabel);
+
+    DefineLabel(parseDoneLabel);
   }
 
   // __gt_enqueue, __gt_dequeue, and __gt_steal_work are now emitted by RuntimeEmitter.Scheduler.cs
@@ -6033,7 +6063,7 @@ public partial class ARM64CodeEmitter {
 
     EmitMarkWaitingAndArmKevent(72, "maxon_net_tcp_connect");
 
-    EmitGtParkForIoCompletion("rt_ntc", 104, "rt_ntc_resumed");
+    EmitGtParkForIoCompletion("rt_ntc", 104);
 
     // Resumed: io_result_val set by __io_poll_kqueue
     DefineLabel("rt_ntc_resumed");
@@ -7183,38 +7213,27 @@ public partial class ARM64CodeEmitter {
 
     EmitMovRegImm(ARM64Register.X0, GtStatusReady);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffStatus, 8);
-    // Dekker StoreLoad barrier: publish status=ready BEFORE loading the waiter's ioYielded
-    // below. Pairs with the barrier __gt_context_switch takes before it sets ioYielded=1, so
-    // the waiter and this completer cannot BOTH miss each other (we read "still running" while
-    // it reads "still waiting") and strand the I/O. Mirrors __io_op_done's fence.
-    EmitDmbIsh();
 
-    // Guarded enqueue — the same three-way guard as __io_op_done, whose comment already claims
-    // this function mirrors it. It did not: (a) and (b) were here, (c) was missing, and (c) is
-    // the one that matters across Ms.
-    //   (a) stackBase == 0  — the main OS thread; it polls status in its own await loop.
-    //   (b) waiter == P->currentGt — it is US, driving this poll from our own submit/await
-    //       loop; we self-detect status=ready on the next iteration.
-    //   (c) waiter.ioYielded == 0 — it is still RUNNING, on this M or another one, and will
-    //       self-detect. Enqueueing here is what let a second M context-switch into a GT that
-    //       was still executing on its own stack: __io_submit_read registers its kevent on the
-    //       SHARED kqueue and only parks afterwards (dequeue a successor, then switch), and
-    //       when nothing is runnable it drives the scheduler INLINE on its own stack in
-    //       between. Any other M polling this kqueue could reap the event in that window. Two
-    //       Ms then ran one GT — caught under lldb with P0->currentGt == P4->currentGt, one of
-    //       them on the pre-__gt_morestack stack the other had already relocated and munmapped.
-    // A non-blocking snapshot, NOT a spin: this runs inside the loop that DRIVES I/O, so
-    // blocking here would stall every other pending completion — the livelock __io_op_done
-    // documents. The waiter cannot lose the wakeup, because it re-checks its own status after
-    // its dequeue and before it parks (see EmitIoSubmitReadWrite).
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X10, GtOffStackBase, 8);
-    EmitCbz(ARM64Register.X0, "__io_poll_kqueue_free_ctx");
-    EmitLoadCurrentGt(ARM64Register.X0);
-    EmitCmpRegReg(ARM64Register.X0, ARM64Register.X10);
-    EmitBranchCond(ARM64ConditionCode.Eq, "__io_poll_kqueue_free_ctx");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X10, GtOffIoYielded, 8);
-    EmitCbz(ARM64Register.X0, "__io_poll_kqueue_free_ctx");
+    // ⭐ CLAIM THE WAKEUP (Go's netpollunblock). This one call replaces the three-way guard that
+    // used to stand here — main-thread, self, and the ioYielded snapshot — and it replaces it
+    // because that third guard was UNABLE to do its job: "ioYielded == 0" cannot distinguish a
+    // waiter that will self-detect from one that is about to park, since those are the same
+    // instant. `Wait` versus `Parked` is exactly that distinction, and it is decided atomically.
+    // See RuntimeEmitter.Netpoll.cs, which owns the state machine for every target.
+    //
+    // The status store above needs no StoreLoad fence of its own any more: the claim's CAS is
+    // LDAXR/STLXR, so its release half orders that store before the claim becomes visible, and the
+    // waiter's own commit CAS supplies the acquire half. An acquire/release RMW subsumes the
+    // barrier the old two-word Dekker handshake had to hand-roll.
+    //
+    // Still non-blocking as far as the DECISION goes, which is what this site requires: it runs
+    // inside the loop that DRIVES I/O, and a decision that waited on another thread would stall
+    // every other pending completion — the livelock __io_op_done documents. It waits only AFTER it
+    // has claimed a GT that has already committed to parking, and that wait is bounded by a
+    // scheduling quantum because a committed parker runs straight-line to ioYielded=1.
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X10);
+    EmitBranchLink("__netpoll_unblock");
+    EmitCbz(ARM64Register.X0, "__io_poll_kqueue_free_ctx");
     EmitBranchLink("__gt_enqueue");
 
     DefineLabel("__io_poll_kqueue_free_ctx");
@@ -7238,15 +7257,14 @@ public partial class ARM64CodeEmitter {
   /// and verify the kernel accepted it. Shared by every kqueue submit site; siteName names the
   /// submitting runtime function and keeps this helper's labels and panic text unique.
   ///
-  /// THE ORDER IS LOAD-BEARING: the status store MUST precede the arm. EVFILT_READ/WRITE are
-  /// level-triggered and the kqueue is process-wide, so on a pipe that already holds data the
-  /// event is deliverable the instant kevent() publishes the registration and ANY other M
-  /// polling that kqueue can reap it. The completer stores status=ready, and — finding
-  /// ioYielded==0, i.e. "still running, will self-detect" (__io_poll_kqueue guard (c)) —
-  /// deliberately does NOT enqueue, having also consumed the EV_ONESHOT registration and freed
-  /// the ctx. Marking AFTER the arm therefore overwrites a status=ready that was already
-  /// published: the pre-park re-check below reads `waiting`, the GT parks with no registration,
-  /// no run-queue entry and no future event, and the wakeup is lost forever. x86 has always
+  /// THE ORDER IS LOAD-BEARING: the netpoll arm and the status store MUST both precede the kevent.
+  /// EVFILT_READ/WRITE are level-triggered and the kqueue is process-wide, so on a pipe that
+  /// already holds data the event is deliverable the instant kevent() publishes the registration
+  /// and ANY other M polling that kqueue can reap it. A completer that reaps stores status=ready
+  /// and then claims the park word; if we armed the registration first, that claim could land on a
+  /// `Nil` word — "this GT is not waiting on anything" — and be declined, while our own store then
+  /// overwrote the published status=ready with `waiting`. The GT would park with no registration,
+  /// no run-queue entry and no future event, and the wakeup would be lost forever. x86 has always
   /// marked before it armed (EmitIoSubmitOverlappedCore, OPEN #66) and so does __io_submit_sync
   /// one screen up; the kqueue sites were the outlier.
   ///
@@ -7263,6 +7281,12 @@ public partial class ARM64CodeEmitter {
   /// collapse them into one story.
   /// </summary>
   private void EmitMarkWaitingAndArmKevent(int keventSlot, string siteName) {
+    // netpoll: take ownership of this GT's wakeup BEFORE the registration a completer can see.
+    // From the kevent() below onwards a completer may claim it; finding `Wait` it declines the
+    // enqueue, because we are still running and can still abort. See RuntimeEmitter.Netpoll.cs.
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitBranchLink("__netpoll_arm");
+
     EmitLoadCurrentGt(ARM64Register.X9);
     EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
@@ -7315,48 +7339,61 @@ public partial class ARM64CodeEmitter {
   /// <summary>
   /// Park the current GT until the kqueue registration it just armed completes, running other
   /// runnable GTs meanwhile. nextGtSlot is a caller-owned 8-byte stack slot used to home the
-  /// successor GT across calls. Control leaves via resumedLabel, which the caller MUST define
-  /// immediately after this helper — the woke-while-parking path falls through into it.
+  /// successor GT across calls. Every path out of the park converges on {labelPrefix}_park_done
+  /// and FALLS THROUGH to whatever the caller emits next, which must be its resume path.
   ///
   /// Shared by __io_submit_read/write and maxon_net_tcp_connect. They carried two copies of
   /// this handshake and only one of them had the pre-park re-check, which is precisely the
   /// drift the handshake exists to prevent; one copy is the fix for that.
   /// </summary>
-  private void EmitGtParkForIoCompletion(string labelPrefix, int nextGtSlot, string resumedLabel) {
+  private void EmitGtParkForIoCompletion(string labelPrefix, int nextGtSlot) {
     DefineLabel($"{labelPrefix}_try_dequeue");
     EmitBranchLink("__gt_dequeue");
     EmitCbnz(ARM64Register.X0, $"{labelPrefix}_has_next");
 
     // Nothing runnable: drive the scheduler and the I/O engine inline on our own stack, then
-    // self-detect. A completer that reaped our event while we were still running left the
-    // wakeup for us to find right here (__io_poll_kqueue guard (c)), and the main OS thread —
-    // which is never enqueued at all (guard (a)) — only ever resumes this way.
+    // self-detect. We are still `Wait`, so a completer that reaps our event claims the word,
+    // declines the enqueue and leaves the wakeup for us to find right here — which is safe
+    // precisely because we never leave this loop without re-reading `status`. The main OS
+    // thread, which is never enqueued at all, only ever resumes this way.
     EmitDriveSchedulerAndIo();
-    EmitBranchIfIoCompleted(resumedLabel);
+    EmitBranchIfIoCompleted($"{labelPrefix}_park_done");
     EmitBranch($"{labelPrefix}_try_dequeue");
 
     DefineLabel($"{labelPrefix}_has_next");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, nextGtSlot, 8);
 
-    // Re-check OUR OWN status before committing to park. A completer on another M can have
-    // reaped our kqueue event any time after the kevent registration above; finding us still
-    // running (ioYielded==0) it deliberately does NOT enqueue us and leaves us to self-detect
-    // (see __io_poll_kqueue's guard (c)). Parking without this check would strand us: status
-    // ready, on no run queue, with the event already consumed and nobody left to wake us.
-    //
-    // ⚠ This check covers the reap window that OPENS AT THE ARM and closes here — everything
-    // from kevent() through __gt_dequeue. It is NOT a Dekker pair with the completer's
-    // ioYielded load, and the comment that used to claim it was is wrong: a Dekker pair needs
-    // each side to store ITS flag before loading the other's, and our flag store (ioYielded=1,
-    // inside __gt_context_switch) happens AFTER this load, not before. The interleaving "we
-    // load status=waiting → completer stores ready and loads ioYielded==0 and skips → we set
-    // ioYielded=1 and park" therefore remains admissible even on a sequentially consistent
-    // machine. It spans only the ~25 instructions between this load and that store, versus a
-    // syscall plus a dequeue before the reorder, but closing it needs an atomic claim of the
-    // wakeup (a CAS handoff both sides perform), which is a protocol change, not an ordering
-    // one.
+    // Cheap pre-check: if the I/O is already done there is no point taking an atomic. This is a
+    // fast path ONLY — it is Go's `CAS(pdReady -> pdNil)` self-detect in the shape our split
+    // (readiness in `status`, ownership in the park word) allows, and the commit below is what
+    // actually decides. Keeping it costs one load and buys the common case; it is not asked to
+    // close the window any more, which is what it could never do.
     EmitBranchIfIoCompleted($"{labelPrefix}_woke_while_parking");
 
+    // Fault injection: widen the commit window on demand. Inert unless the environment armed it,
+    // and it must sit exactly HERE — after the last self-detect and before the commit — so a
+    // completer is guaranteed to reap while we are still able to abort.
+    EmitBranchLink("__netpoll_inject_delay");
+
+    // ⭐ COMMIT THE PARK, AND LET IT FAIL (Go's netpollblockcommit). Everything from here to
+    // __gt_context_switch's ioYielded=1 is straight-line code, so a completer that claims `Parked`
+    // knows we cannot turn around and may wait for the context save. If the commit fails, a
+    // completer has already claimed the wakeup — it published status=ready before the claim — so we
+    // must NOT park: abort exactly as if the pre-check above had caught it.
+    //
+    // The MAIN OS THREAD never commits. It has no schedulable stack and nothing ever enqueues it,
+    // so "committed to park" is not a state it can be in: it switches to the successor below and
+    // resumes when something switches back, re-reading `status` each time. Leaving its word at
+    // `Wait` is what makes a completer decline to enqueue it — the old stackBase==0 guard (a),
+    // now a consequence of the protocol rather than a rule spelled separately at every completer.
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X0, $"{labelPrefix}_committed");
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitBranchLink("__netpoll_commit");
+    EmitCbz(ARM64Register.X0, $"{labelPrefix}_woke_while_parking");
+
+    DefineLabel($"{labelPrefix}_committed");
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, nextGtSlot, 8);
     EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
@@ -7366,37 +7403,44 @@ public partial class ARM64CodeEmitter {
     EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
     EmitBranchLink("__gt_context_switch");
 
-    // Switched back in — but "resumed" does not imply "completed", so re-check rather than
-    // assume. A worker GT only ever gets here because a completer enqueued it, i.e. because
-    // its I/O finished; the MAIN OS THREAD does not. It is P0's scheduler GT, so every idle
-    // worker GT switches back to &P.mainThread as a matter of course, and this used to fall
-    // straight through to the read() with the fd not ready. __io_submit_sync's own main-thread
-    // arm sidesteps this by never parking the main thread at all; re-checking here covers the
-    // same ground for every caller and costs four instructions on the resume path.
-    //
-    // ⚠ WHAT THIS CHECK DEPENDS ON, since it is a PROXY and not a completion flag: it can only
-    // see "not completed" for a resumer that does NOT stamp our status. The enqueue-resume path
-    // stamps `running` on the GT it switches into (this helper's own park path above, and every
-    // other __gt_dequeue caller), so on that path the check always falls through — correctly,
-    // because an enqueue only happens once the I/O finished. The one resumer that switches to
-    // &P.mainThread WITHOUT stamping is __gt_trampoline, which is the case that matters. The
-    // one that switches to &P.mainThread AND stamps `running` is __gt_yield_switch_main, which
-    // WOULD falsify the proxy — it is unreachable here only because it is gated on
-    // __gt_live_count == 0, i.e. no spawned GT is running to do the stamping, and because
-    // nothing on arm64 calls __gt_yield_completed at all (the arm64 trampoline switches
-    // directly; only x86's calls it). Both of those are properties of today's code, not
-    // invariants. A third resumer that stamps `running` on a parked mainThread would silently
-    // reopen the fall-through-to-read(); the durable fix is the CAS wakeup claim below.
-    EmitBranchIfIoCompleted(resumedLabel);
-    EmitBranch($"{labelPrefix}_try_dequeue");
+    // Switched back in — "resumed" still does not imply "completed", and the two callers differ.
+    EmitBranchIfIoCompleted($"{labelPrefix}_park_done");
 
-    // Our I/O completed while we were picking a successor, so we must NOT park. Hand the GT we
-    // dequeued back to the run queue — another M can have it — and go straight to the I/O.
-    // Its status is untouched here (the running store above is on the parking path only), so
-    // it goes back exactly as __gt_dequeue produced it.
+    // The MAIN OS THREAD gets here routinely: it is P0's scheduler GT, so every idle worker GT
+    // and every finishing __gt_trampoline switches back to &P.mainThread as a matter of course,
+    // and without this re-check it fell straight through to the read() with the fd not ready.
+    // It never committed, so it simply goes round again.
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X0, $"{labelPrefix}_try_dequeue");
+
+    // A COMMITTED WORKER GT cannot: the only thing that enqueues a `Parked` GT is the completer
+    // that claimed its wakeup, and it publishes status=ready before it claims. Resuming here
+    // therefore means some OTHER resumer picked up a parked I/O waiter — the hazard B1 could only
+    // describe ("properties of today's code, not invariants"), now a checked one. Say so instead
+    // of looping: a second commit attempt would find `Parked` rather than `Wait`, fail, and fall
+    // through to an I/O read on an fd that was never signalled — a silent wrong answer.
+    var resumeMsg = $"__io_panic_msg_{labelPrefix}_resume";
+    DefineSymdata(resumeMsg, System.Text.Encoding.UTF8.GetBytes(
+      $"PANIC: {labelPrefix} resumed a committed I/O park with no completion\n\0"));
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, resumeMsg);
+    EmitBranchLink("mrt_panic"); // never returns
+
+    // Our I/O completed while we were picking a successor, or a completer claimed the wakeup out
+    // from under the commit CAS. Either way we must NOT park: hand the GT we dequeued back to the
+    // run queue — another M can have it — and go straight to the I/O. Its status is untouched here
+    // (the running store is on the parking path only), so it goes back exactly as __gt_dequeue
+    // produced it.
     DefineLabel($"{labelPrefix}_woke_while_parking");
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, nextGtSlot, 8);
     EmitBranchLink("__gt_enqueue");
+
+    // Single exit, so the park word is released on every path out of the park — Go's
+    // `old := gpp.Swap(pdNil)` with its "corrupted polldesc" check. Falls through into
+    // resumedLabel, which the caller defines next.
+    DefineLabel($"{labelPrefix}_park_done");
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitBranchLink("__netpoll_park_done");
   }
 
   /// <summary>
@@ -7475,7 +7519,7 @@ public partial class ARM64CodeEmitter {
 
     EmitMarkWaitingAndArmKevent(56, functionName);
 
-    EmitGtParkForIoCompletion(functionName, 48, $"{functionName}_resumed");
+    EmitGtParkForIoCompletion(functionName, 48);
 
     // Resumed after kqueue notification (via context switch or direct)
     DefineLabel($"{functionName}_resumed");

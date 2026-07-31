@@ -225,6 +225,15 @@ public interface IEmitterBackend {
   void AtomicCAS(VReg destBase, int offset, VReg expected, VReg desired);
 
   /// <summary>
+  /// Emit the architecture's spin-wait hint (PAUSE on x86, YIELD on ARM64): tells the core that
+  /// this loop is waiting on another core rather than doing work, so it can drop the pipeline
+  /// speculation and, on SMT, hand the sibling thread the front end. Every hand-emitted spin in
+  /// this runtime already uses it (__io_complete_gt_spin, __gt_ppw_spin, the trace lock); shared
+  /// code needs the same instruction under a portable name.
+  /// </summary>
+  void SpinHint();
+
+  /// <summary>
   /// Full memory barrier (MFENCE on x86, DMB ISH on ARM64). Orders all prior memory
   /// accesses before all subsequent memory accesses on this core. Used for Dekker-style
   /// protocols where a store must be globally visible before a later unrelated load.
@@ -399,6 +408,29 @@ public interface IEmitterBackend {
   void OsUnmapSharedMemory(VReg base_ptr, VReg size);
 
   /// <summary>
+  /// Sleep the calling OS thread for <paramref name="millis"/> milliseconds.
+  /// Windows: Sleep(dwMilliseconds). macOS / POSIX: usleep(millis * 1000).
+  /// Milliseconds rather than microseconds because that is the coarser of the two platforms'
+  /// granularities and a resolution neither can miss. Clobbers Arg0..Arg5 and Scratch0..Scratch2.
+  /// </summary>
+  void OsSleepMillis(VReg millis);
+
+  /// <summary>
+  /// <paramref name="dest"/> = the unsigned decimal value of the environment variable whose
+  /// null-terminated NAME is at symdata label <paramref name="nameSymdata"/>, or 0 when it is
+  /// unset, empty, or does not begin with a digit. Parsing stops at the first non-digit byte, so a
+  /// trailing suffix is ignored rather than rejected — every caller treats 0 as "leave the default
+  /// alone", which is also what a malformed value should get.
+  ///
+  /// <paramref name="scratchSlot"/> is the first of FOUR consecutive stack slots used as the
+  /// value buffer on Windows (GetEnvironmentVariableA copies into caller memory); POSIX ignores it,
+  /// because getenv returns a pointer into the environment block. Same convention as
+  /// <see cref="GetCurrentTimeMs"/>'s out-parameter slot.
+  /// Clobbers Arg0..Arg5 and Scratch0..Scratch3.
+  /// </summary>
+  void ReadEnvUnsigned(VReg dest, string nameSymdata, int scratchSlot);
+
+  /// <summary>
   /// Yield the current OS thread's remaining time slice (Windows: SwitchToThread; POSIX: sched_yield).
   /// The debug agent's park loop calls this between polls of the control mailbox so a stop-the-world
   /// pause does not busy-spin a core while the driver decides what to do next. Clobbers the call-clobbered
@@ -446,6 +478,24 @@ public interface IEmitterBackend {
   /// <summary>Label name for the global timer lock (protects timer heap).
   /// x86: CRITICAL_SECTION label; ARM64: os_unfair_lock label.</summary>
   string TimerLockLabel { get; }
+
+  /// <summary>
+  /// Take / release the lock protecting the all-live-green-threads list (<c>__gt_all_head</c> and
+  /// <c>__gt_live_count</c>), which __gt_spawn and the completion trampoline mutate.
+  ///
+  /// ⚠ A PAIR OF METHODS RATHER THAN A LABEL FOR <see cref="LockAcquire"/>, and the difference is
+  /// not cosmetic: the two backends guard this list with DIFFERENT PRIMITIVES. x86 uses a
+  /// CRITICAL_SECTION, which is what <see cref="LockAcquire"/> emits anyway; ARM64 uses a plain
+  /// <c>os_unfair_lock</c>, while its <see cref="LockAcquire"/> is a RECURSIVE spinlock over a
+  /// <c>{ lock, owner, count }</c> triple. Handing <c>__sched_all_lock</c> to that would put two
+  /// incompatible protocols on one word and exclude nobody — a lock that silently does not lock.
+  /// Naming the operation instead of the label lets each backend spell what its own mutators
+  /// already spell.
+  /// </summary>
+  void AllThreadsLockAcquire();
+
+  /// <summary>Release the lock taken by <see cref="AllThreadsLockAcquire"/>.</summary>
+  void AllThreadsLockRelease();
 
   // ---- Fault handler (CPU faults: nil deref, divide-by-zero, stack overflow) ----
 

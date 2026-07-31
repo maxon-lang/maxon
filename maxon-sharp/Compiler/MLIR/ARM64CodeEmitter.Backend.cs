@@ -389,6 +389,8 @@ public partial class ARM64CodeEmitter {
       _e.DefineLabel(done);
     }
 
+    public void SpinHint() => _e.EmitWord(0xD503203F); // YIELD
+
     public void FullBarrier() => _e.EmitDmbIsh();
 
     // LDAR/STLR take a bare [Xn] address (no offset form), so fold a non-zero
@@ -580,6 +582,25 @@ public partial class ARM64CodeEmitter {
     }
 
     public void OsYield() => _e.EmitCallImport(ResolveImport("sched_yield"));
+
+    // usleep takes microseconds; the portable unit is milliseconds (see IEmitterBackend), so scale.
+    public void OsSleepMillis(VReg millis) {
+      _e.EmitMovRegReg(ARM64Register.X0, R(millis));
+      _e.EmitMovRegImm(ARM64Register.X1, MicrosPerMilli);
+      // MUL X0, X0, X1 = MADD X0, X0, X1, XZR
+      _e.EmitWord(0x9B007C00 | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X0) << 5)
+        | Reg(ARM64Register.X0));
+      _e.EmitCallImport(ResolveImport("usleep"));
+    }
+
+    // getenv returns a pointer straight into the environment block, so POSIX needs no buffer and
+    // ignores scratchSlot — the parameter exists for Windows, which copies.
+    public void ReadEnvUnsigned(VReg dest, string nameSymdata, int scratchSlot) {
+      _e.EmitAdrpAddFixup(ARM64Register.X0, _e._symdataAdrpFixups, nameSymdata);
+      _e.EmitCallImport(ResolveImport("getenv"));
+      _e.EmitParseUnsignedCstrIntoX9(ARM64Register.X0);
+      _e.EmitMovRegReg(R(dest), ARM64Register.X9);
+    }
 
     // ---- Bulk memory ----
 
@@ -774,6 +795,11 @@ public partial class ARM64CodeEmitter {
 
     public string SchedLockLabel => "__sched_global_lock";
     public string TimerLockLabel => "__sched_timer_lock";
+
+    // os_unfair_lock, NOT the recursive LockAcquire above — this is the primitive __gt_spawn and
+    // __gt_trampoline already use on this same word. See IEmitterBackend.AllThreadsLockAcquire.
+    public void AllThreadsLockAcquire() => _e.EmitLockAcquire("__sched_all_lock");
+    public void AllThreadsLockRelease() => _e.EmitLockRelease("__sched_all_lock");
 
     // ---- Fault handler (real impls land in Phase 3) ----
 

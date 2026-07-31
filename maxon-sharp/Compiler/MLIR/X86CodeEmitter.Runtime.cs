@@ -2826,6 +2826,12 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, GtStatusWaiting);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
 
+    // This site never adopted OPEN #66's clear-before-arm — it still clears ioYielded down in the
+    // yield branch — and under the netpoll protocol it no longer has to: a completer that reaps the
+    // ConnectEx completion claims the park word, finds `Wait` (we have not committed) and declines
+    // the enqueue, so the stale ioYielded==1 a running GT carries can no longer let it through.
+    EmitNetpollArmCurrent();
+
     // --- Call ConnectEx via function pointer ---
     // ConnectEx(socket, &name, namelen, lpSendBuffer, dwSendDataLength, lpdwBytesSent, lpOverlapped)
     // 7 parameters: RCX, RDX, R8, R9, [RSP+0x20], [RSP+0x28], [RSP+0x30]
@@ -2891,6 +2897,8 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
 
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    // Returns without reaching rt_ntc_resume, so it releases the park word itself.
+    EmitNetpollParkDoneCurrent();
     EmitMovRegImm(X86Register.Rax, -2);
     EmitRuntimeFunctionEnd();
 
@@ -2916,7 +2924,12 @@ public partial class X86CodeEmitter {
     EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
     EmitJcc("e", "rt_ntc_mainthread_loop");
 
-    // Non-mainThread: switch to P->mainThread (worker loop handles scheduling)
+    // Non-mainThread: commit the park (Go's netpollblockcommit), then switch to P->mainThread. A
+    // failed commit means a completer claimed the wakeup while we were getting here, so we must NOT
+    // park — rt_ntc_resume reads the published result.
+    EmitNetpollCommitCurrentOrAbort("rt_ntc_resume");
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitLeaMainThreadInline(X86Register.Rdx);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
     EmitMovRegImm(X86Register.Rax, GtStatusRunning);
@@ -2924,9 +2937,15 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__gt_context_switch");
     EmitJmp("rt_ntc_resume");
 
-    // MainThread: spin on completions + wake event until our I/O finishes
+    // MainThread: spin on completions + wake event until our I/O finishes. It never commits, so a
+    // completer finds `Wait`, declines the enqueue and leaves it to self-detect here.
     DefineLabel("rt_ntc_mainthread_loop");
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
+    // The recovery net runs from every idle loop, not only the ones that drive timers: when a
+    // wakeup goes missing the thread that notices is whichever one is still looking for work, and
+    // this main-thread spin is exactly that thread when every worker is parked on its wake event.
+    // It is time-gated to once per 10 ms inside itself, so a loop that spins costs nothing.
+    EmitCallRuntimeLabel("__netpoll_recover");
     EmitCallRuntimeLabel("__io_check_completions");
     EmitLoadCurrentGtInline(X86Register.R10);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
@@ -2956,6 +2975,7 @@ public partial class X86CodeEmitter {
 
     // --- Resume: ConnectEx completed (sync or async) ---
     DefineLabel("rt_ntc_resume");
+    EmitNetpollParkDoneCurrent();
 
     if (Compiler.AsyncTrace) {
       EmitAtTraceLock();
@@ -3092,6 +3112,8 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
 
+    EmitNetpollArmCurrent();
+
     // Build WSABUF at [rbp-0x30]: { ULONG len (4 bytes + 4 padding), CHAR* buf (8 bytes) }
     // WSABUF.len at [rbp-0x30], WSABUF.buf at [rbp-0x28]
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
@@ -3184,6 +3206,8 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
 
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    // Returns without reaching _resume, so it releases the park word itself.
+    EmitNetpollParkDoneCurrent();
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitRuntimeFunctionEnd();
 
@@ -3226,14 +3250,22 @@ public partial class X86CodeEmitter {
     // stderr), forcing its status back to "running" makes mainthread_loop's
     // "exit when not waiting" check spuriously fire and return the stale
     // io_result_val of mainGT's previous op. mainGT manages its own status.
+    //
+    // Commit first (Go's netpollblockcommit): a failed commit means a completer claimed the wakeup
+    // while we were getting here, so we must NOT park — _resume reads the published result.
+    EmitNetpollCommitCurrentOrAbort($"{labelPrefix}_resume");
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitLeaMainThreadInline(X86Register.Rdx);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
     EmitCallRuntimeLabel("__gt_context_switch");
     EmitJmp($"{labelPrefix}_resume");
 
-    // MainThread: spin on completions + wake event until our I/O finishes
+    // MainThread: spin on completions + wake event until our I/O finishes. It never commits, so a
+    // completer finds `Wait`, declines the enqueue and leaves it to self-detect here.
     DefineLabel($"{labelPrefix}_mainthread_loop");
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
+    EmitCallRuntimeLabel("__netpoll_recover");
     EmitCallRuntimeLabel("__io_check_completions");
     EmitLoadCurrentGtInline(X86Register.R10);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
@@ -3264,6 +3296,7 @@ public partial class X86CodeEmitter {
 
     // Resume: clear io_handle, return bytes transferred
     DefineLabel($"{labelPrefix}_resume");
+    EmitNetpollParkDoneCurrent();
 
     if (Compiler.AsyncTrace) {
       // Trace: "io_resume #N [net_send/net_recv] [M=W]\n"
@@ -3464,6 +3497,8 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
 
+    EmitNetpollArmCurrent();
+
     // Call ReadFile/WriteFile(hPipe, buf, nBytes, &bytesOut, lpOverlapped=ctx).
     // For overlapped I/O lpNumberOfBytes can be NULL per the docs, but the
     // sync-completion path (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS) DOES fill
@@ -3533,6 +3568,8 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x20, 8); // free ctx
 
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    // Returns without reaching _resume, so it releases the park word itself.
+    EmitNetpollParkDoneCurrent();
     EmitMovRegImm(X86Register.Rax, -1);
     EmitRuntimeFunctionEnd();
 
@@ -3549,6 +3586,8 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
 
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    // Returns without reaching _resume, so it releases the park word itself.
+    EmitNetpollParkDoneCurrent();
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitRuntimeFunctionEnd();
 
@@ -3589,14 +3628,22 @@ public partial class X86CodeEmitter {
     // field and decides when to transition it.
     // (ioYielded was already cleared to 0 before the arm above — OPEN #66; this keeps the
     // historical "clear before the context switch" invariant explicit and is a harmless no-op.)
+    //
+    // Commit first (Go's netpollblockcommit): a failed commit means a completer claimed the wakeup
+    // while we were getting here, so we must NOT park — _resume reads the published result.
+    EmitNetpollCommitCurrentOrAbort($"{labelPrefix}_resume");
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitLeaMainThreadInline(X86Register.Rdx);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
     EmitCallRuntimeLabel("__gt_context_switch");
     EmitJmp($"{labelPrefix}_resume");
 
-    // MainThread: spin on completions + wake event until our I/O finishes.
+    // MainThread: spin on completions + wake event until our I/O finishes. It never commits, so a
+    // completer finds `Wait`, declines the enqueue and leaves it to self-detect here.
     DefineLabel($"{labelPrefix}_mainthread_loop");
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
+    EmitCallRuntimeLabel("__netpoll_recover");
     EmitLoadCurrentGtInline(X86Register.R10);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
     EmitCmpRegImm(X86Register.Rax, GtStatusWaiting);
@@ -3622,6 +3669,7 @@ public partial class X86CodeEmitter {
 
     // Resume: clear io_handle, return bytes transferred from gt->io_result_val.
     DefineLabel($"{labelPrefix}_resume");
+    EmitNetpollParkDoneCurrent();
 
     if (Compiler.AsyncTrace) {
       EmitAtTraceLock();
@@ -3959,6 +4007,7 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     EmitCallRuntimeLabel("__io_check_completions");
     EmitCallRuntimeLabel("__gt_timer_check");
+    EmitCallRuntimeLabel("__netpoll_recover");
     // Check if our status changed from waiting (timer expired, timer_check set us to ready)
     EmitLoadCurrentGtInline(X86Register.R10);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
@@ -4348,6 +4397,10 @@ public partial class X86CodeEmitter {
     DefineGlobal("__gt_timer_count", 8, 0);   // current number of entries in the heap
     DefineGlobal("__gt_timer_cs", 40, 0);     // CRITICAL_SECTION protecting the timer heap
 
+    // The async-I/O park protocol's own globals — see RuntimeEmitter.Netpoll.cs, which owns the
+    // protocol for every target.
+    new Runtime.RuntimeEmitter(CreateBackend()).EmitNetpollGlobals();
+
     if (Compiler.AsyncTrace) {
       DefineGlobal("__gt_trace_counter", 8, 0);
       DefineGlobal("__at_trace_cs", 40, 0); // CRITICAL_SECTION serializing trace line output
@@ -4408,6 +4461,7 @@ public partial class X86CodeEmitter {
     schedRt.EmitGtEnqueue();
     schedRt.EmitGtDequeue();
     schedRt.EmitGtStealWork();
+    schedRt.EmitNetpollFunctions();
     EmitSchedWorkerLoop();
     EmitGtCleanup();
     EmitGtMorestack();
@@ -4463,6 +4517,9 @@ public partial class X86CodeEmitter {
 
     // Step 2b: apply an optional MAXON_MAX_PROCS override (clamp down only).
     EmitReadMaxProcsEnvOverride();
+
+    // Step 2c: arm the async-I/O park protocol's fault injection from the environment (0 = off).
+    EmitCallRuntimeLabel("__netpoll_init");
 
     // Step 3: Allocate P* array: VirtualAlloc(NULL, max_procs * 8, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);      // lpAddress = NULL
@@ -4642,11 +4699,6 @@ public partial class X86CodeEmitter {
   ///     placed above the call-shadow region and clear of every named slot.
   /// </summary>
   private void EmitReadMaxProcsEnvOverride() {
-    const int asciiZero = '0';
-    const int maxDecimalDigit = 9;
-    const int decimalRadix = 10;
-    const string parseLoopLabel = "__gt_init_maxprocs_parse";
-    const string parseDoneLabel = "__gt_init_maxprocs_parsed";
     const string overrideDoneLabel = "__gt_init_maxprocs_done";
 
     DefineSymdata("__maxprocs_env_name", "MAXON_MAX_PROCS\0"u8.ToArray());
@@ -4660,22 +4712,9 @@ public partial class X86CodeEmitter {
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("z", overrideDoneLabel); // unset -> keep the detected CPU count
 
-    // Minimal decimal parse: RAX = accumulator, RCX = cursor, RDX = digit.
-    // Stops at the first non-digit byte (the NUL terminator included).
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);   // acc = 0
-    EmitLeaRegMem(X86Register.Rcx, -GtInitEnvBufDisp); // cursor = &buf
-    DefineLabel(parseLoopLabel);
-    EmitMovzxRegByteIndirect(X86Register.Rdx, X86Register.Rcx, 0); // RDX = *cursor
-    EmitSubRegImm(X86Register.Rdx, asciiZero);                     // digit = c - '0'
-    EmitCmpRegImm(X86Register.Rdx, maxDecimalDigit);
-    EmitJcc("a", parseDoneLabel);                      // unsigned > 9 -> non-digit -> stop
-    EmitMovRegImm(X86Register.R9, decimalRadix);
-    EmitImulRegReg(X86Register.Rax, X86Register.R9);   // acc *= 10
-    EmitAddRegReg(X86Register.Rax, X86Register.Rdx);   // acc += digit
-    EmitAddRegImm(X86Register.Rcx, 1);                 // ++cursor
-    EmitJmp(parseLoopLabel);
+    EmitLeaRegMem(X86Register.Rcx, -GtInitEnvBufDisp);
+    EmitParseUnsignedCstrIntoRax(X86Register.Rcx);
 
-    DefineLabel(parseDoneLabel);
     // Apply only when 1 <= parsed < detected max_procs (clamp down only).
     EmitCmpRegImm(X86Register.Rax, 1);
     EmitJcc("b", overrideDoneLabel);                   // parsed < 1 -> ignore
@@ -4689,6 +4728,42 @@ public partial class X86CodeEmitter {
     EmitGlobalStoreReg(X86Register.Rax, "__sched_num_procs");
 
     DefineLabel(overrideDoneLabel);
+  }
+
+  /// <summary>
+  /// RAX = the unsigned decimal value of the null-terminated string at <paramref name="ptrReg"/>,
+  /// or 0 when it does not start with a digit. Parsing stops at the first non-digit byte (the NUL
+  /// terminator included), so a trailing suffix is ignored rather than rejected — every caller
+  /// treats 0 as "leave the default alone", which is also what a malformed value should get.
+  /// Clobbers RCX/RDX/R9 and <paramref name="ptrReg"/>.
+  ///
+  /// It takes a POINTER rather than an environment variable name because the two callers get that
+  /// pointer differently — __gt_init reads into its own frame, while the shared
+  /// IEmitterBackend.ReadEnvUnsigned reads into the caller's scratch slots — and the decimal parse
+  /// is the only part they share. Its ARM64 twin (EmitParseUnsignedCstrIntoX9) is split the same
+  /// way for the same reason.
+  /// </summary>
+  private void EmitParseUnsignedCstrIntoRax(X86Register ptrReg) {
+    const int asciiZero = '0';
+    const int maxDecimalDigit = 9;
+    const int decimalRadix = 10;
+    var parseLoopLabel = $"__cstr_parse_loop_{_code.Count}";
+    var parseDoneLabel = $"__cstr_parse_done_{_code.Count}";
+
+    // RAX = accumulator, ptrReg = cursor, RDX = digit.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    DefineLabel(parseLoopLabel);
+    EmitMovzxRegByteIndirect(X86Register.Rdx, ptrReg, 0); // RDX = *cursor
+    EmitSubRegImm(X86Register.Rdx, asciiZero);            // digit = c - '0'
+    EmitCmpRegImm(X86Register.Rdx, maxDecimalDigit);
+    EmitJcc("a", parseDoneLabel);                         // unsigned > 9 -> non-digit -> stop
+    EmitMovRegImm(X86Register.R9, decimalRadix);
+    EmitImulRegReg(X86Register.Rax, X86Register.R9);      // acc *= 10
+    EmitAddRegReg(X86Register.Rax, X86Register.Rdx);      // acc += digit
+    EmitAddRegImm(ptrReg, 1);                             // ++cursor
+    EmitJmp(parseLoopLabel);
+
+    DefineLabel(parseDoneLabel);
   }
 
   /// <summary>
@@ -5259,6 +5334,7 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     EmitCallRuntimeLabel("__io_check_completions");
     EmitCallRuntimeLabel("__gt_timer_check");
+    EmitCallRuntimeLabel("__netpoll_recover");
 
     // Check if promise already completed (could have been completed by another worker)
     EmitMovRegMem(X86Register.R10, -0x08, 8);
@@ -5712,6 +5788,7 @@ public partial class X86CodeEmitter {
     // so the GT's stack is no longer in use when the waiter frees it.
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     EmitCallRuntimeLabel("__gt_timer_check");
+    EmitCallRuntimeLabel("__netpoll_recover");
 
     // Check shutdown flag
     EmitGlobalLoadReg(X86Register.Rax, "__sched_shutdown_flag");
@@ -5958,6 +6035,7 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     EmitCallRuntimeLabel("__io_check_completions");
     EmitCallRuntimeLabel("__gt_timer_check");
+    EmitCallRuntimeLabel("__netpoll_recover");
 
     EmitCallRuntimeLabel("__gt_dequeue");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
@@ -7496,39 +7574,29 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax); // status = ready
 
-    // ⚠ KNOWN GAP — FILED AS maxon-shv2/OPEN.md #66, DELIBERATELY NOT PATCHED HERE.
-    // The x86 analogue of the arm64 `--workers>=5` double-schedule (fixed in
-    // ARM64CodeEmitter.Runtime.cs's
-    // `__io_poll_kqueue` / `__gt_timer_check`). This path has the stackBase guard below but
-    // NOT the `ioYielded` gate: `__io_submit_*` posts its overlapped read to the SHARED IOCP
-    // and only THEN parks, so in that window another M draining the port can reap the
-    // completion and enqueue a GT that is still executing on some M's stack. A third M then
-    // switches in on its stale `gt.sp`. On arm64 that reproduced as two Ms with the same
-    // `P->currentGt`, one running on a stack the other had already relocated and munmapped.
+    // ⭐ CLAIM THE WAKEUP (Go's netpollunblock), which is what OPEN #66 was waiting for.
     //
-    // ⚠⚠ IT IS NOT A MECHANICAL PORT, WHICH IS WHY IT IS WRITTEN DOWN RATHER THAN GUESSED.
-    // The arm64 fix works by DECLINING to consume the wakeup: the kqueue event is skipped
-    // non-blockingly and the timer entry is left in the heap, so a later poll retries it. An
-    // IOCP completion has no such option — dequeuing it from the port CONSUMES it, so a gate
-    // that merely skipped the enqueue would LOSE the wakeup and hang that GT forever. A
-    // correct fix needs somewhere to hold the completion plus a re-drive: a design decision,
-    // not a copied guard.
+    // The gap recorded here used to say a mechanical port of arm64's guard was impossible, and it
+    // was RIGHT about the reason: arm64's fix worked by DECLINING to consume the wakeup (skip the
+    // kqueue event, leave the timer entry in the heap, retry on a later poll), and an IOCP
+    // completion has no such option — dequeuing it from the port CONSUMES it, so a guard that
+    // merely skipped the enqueue would lose the wakeup forever. The shared protocol removes that
+    // dilemma instead of working around it: the completer does not SKIP, it CLAIMS, and what it
+    // claims tells it what to do. `Wait` means the waiter has not committed to parking and will
+    // self-detect the status it can already see; `Parked` means the enqueue is ours and we wait for
+    // the context save. Nothing is ever declined-and-lost.
     //
-    // Compounding it, the two backends implement the `ioYielded` protocol DIFFERENTLY —
-    // arm64's `__gt_context_switch` sets `from.ioYielded = 1` itself; x86's does not, and
-    // relies on the resumer setting it after the switch returns. So x86 publishes "parked"
-    // LATER than arm64 does, and a naive gate here could read 0 for a GT that is genuinely
-    // parked. That asymmetry was undocumented until now, and it is the first thing to verify.
-    //
-    // This host is arm64-macOS and cannot execute the Windows IOCP path at all, so patching
-    // blind would risk trading a rare race for a reproducible hang that could not surface
-    // here. Fix it on a Windows host, with the park-side re-check verified first.
-    //
-    // Only enqueue regular GTs (stackBase != 0). MainThread GTs (stackBase == 0)
-    // are driven by inline scheduling loops and must NOT be in the global run queue.
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, GtOffStackBase);
+    // ⚠ THE ioYielded PROTOCOLS STILL DIFFER BETWEEN THE BACKENDS, and the difference survives this
+    // change: arm64's __gt_context_switch sets from.ioYielded = 1 itself, while x86's relies on the
+    // RESUMER setting it once the switch returns. So x86 publishes "parked" strictly later. The
+    // spin inside __netpoll_unblock is bounded on both — on x86 by the handful of instructions the
+    // switched-to scheduler loop runs before it stamps the flag, which is exactly the bound
+    // __io_complete_gt_spin has always relied on — but it is a LONGER bound here, and anyone
+    // touching either backend's switch must keep that stamp on the immediate resume path.
+    EmitCallRuntimeLabel("__netpoll_unblock");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
     EmitJcc("z", "__io_check_comp_skip_enqueue");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
     EmitCallRuntimeLabel("__gt_enqueue");
     DefineLabel("__io_check_comp_skip_enqueue");
 
@@ -7585,6 +7653,10 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
 
+    // Take ownership of the wakeup BEFORE the request becomes visible to the sync worker — the
+    // same rule as the overlapped arms, for the same reason.
+    EmitNetpollArmCurrent();
+
     // Enqueue the request and signal the sync worker
     EmitMovRegMem(X86Register.Rcx, -0x28, 8);
     EmitCallRuntimeLabel("__io_enqueue_sync_req");
@@ -7612,20 +7684,25 @@ public partial class X86CodeEmitter {
     EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
     EmitJcc("e", "__io_submit_sync_mainthread_loop");
 
-    // Non-mainThread path: switch to P->mainThread (worker loop handles scheduling)
-    // (ioYielded already cleared above before enqueueing)
+    // Non-mainThread path: commit the park, then switch to P->mainThread (worker loop handles
+    // scheduling). (ioYielded already cleared above before enqueueing.) A failed commit means the
+    // sync worker already claimed the wakeup, so we must NOT park.
+    EmitNetpollCommitCurrentOrAbort("__io_submit_sync_resume");
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitLeaMainThreadInline(X86Register.Rdx);
     EmitMovRegImm(X86Register.Rax, GtStatusRunning);
     EmitMovIndirectMemReg(X86Register.Rdx, GtOffStatus, X86Register.Rax);
     EmitCallRuntimeLabel("__gt_context_switch");
     EmitJmp("__io_submit_sync_resume");
 
-    // MainThread path: we ARE the mainThread, can't switch to ourselves.
-    // Spin on completions + wake event until our I/O finishes.
+    // MainThread path: we ARE the mainThread, can't switch to ourselves. It never commits, so a
+    // completer finds `Wait`, declines the enqueue and leaves it to self-detect here.
     DefineLabel("__io_submit_sync_mainthread_loop");
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     // Drain completions (may re-enqueue GTs including us)
     EmitCallRuntimeLabel("__io_check_completions");
     EmitCallRuntimeLabel("__gt_timer_check");
+    EmitCallRuntimeLabel("__netpoll_recover");
     // Check if our status changed from "waiting" (sync worker completed our request)
     EmitLoadCurrentGtInline(X86Register.R10);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
@@ -7656,6 +7733,7 @@ public partial class X86CodeEmitter {
 
     // Resume here after being re-enqueued by __io_check_completions
     DefineLabel("__io_submit_sync_resume");
+    EmitNetpollParkDoneCurrent();
 
     if (Compiler.AsyncTrace) {
       // Trace: "io_resume #N [op_name] [M=W]\n"
@@ -7818,6 +7896,45 @@ public partial class X86CodeEmitter {
     EmitIoSubmitOverlappedCore("WriteFile", "__io_submit_write");
   }
 
+  /// <summary>
+  /// netpoll: take ownership of the CURRENT GT's wakeup. Must precede every publication a completer
+  /// can see — the overlapped ReadFile/WriteFile/WSARecv/WSASend, the ConnectEx, and the sync
+  /// request handed to the I/O worker. See RuntimeEmitter.Netpoll.cs, which owns the protocol for
+  /// every target; these three helpers exist only so the five Win32 submit families spell it
+  /// identically and cannot drift apart the way the two kqueue sites did.
+  /// </summary>
+  private void EmitNetpollArmCurrent() {
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitCallRuntimeLabel("__netpoll_arm");
+  }
+
+  /// <summary>
+  /// netpoll: release the CURRENT GT's park word. Must run on EVERY exit from a submit that armed —
+  /// the parked path, the aborted path, and the paths where the I/O completed synchronously and no
+  /// park ever happened. Missing one leaves the word set and the GT's next submit throws
+  /// "runtime: double wait", which is what that throw is for.
+  /// </summary>
+  private void EmitNetpollParkDoneCurrent() {
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitCallRuntimeLabel("__netpoll_park_done");
+  }
+
+  /// <summary>
+  /// netpoll: the last instruction that can still change its mind. Jumps to
+  /// <paramref name="abortLabel"/> when a completer has already claimed this GT's wakeup, in which
+  /// case the caller must NOT park — the completion is already published in status/io_result_val.
+  /// The fault-injection delay sits immediately before the commit so the window it widens is
+  /// exactly the one the protocol closes.
+  /// Clobbers the call-clobbered set, so the caller must re-establish RCX/RDX afterwards.
+  /// </summary>
+  private void EmitNetpollCommitCurrentOrAbort(string abortLabel) {
+    EmitCallRuntimeLabel("__netpoll_inject_delay");
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitCallRuntimeLabel("__netpoll_commit");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", abortLabel);
+  }
+
   private void EmitIoSubmitOverlappedCore(string ioFuncName, string labelPrefix) {
     // Check cancel flag
     EmitLoadCurrentGtInline(X86Register.R10);
@@ -7852,6 +7969,8 @@ public partial class X86CodeEmitter {
     // IOCP packet, so no completer targets them).
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
+
+    EmitNetpollArmCurrent();
 
     // Call ReadFile/WriteFile:
     //   handle=rcx, buf=rdx, size=r8, lpBytesTransferred=NULL, overlapped=ctx
@@ -7891,6 +8010,8 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
 
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    // This path returns without ever reaching _resume, so it releases the park word itself.
+    EmitNetpollParkDoneCurrent();
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitRuntimeFunctionEnd();
 
@@ -7925,10 +8046,15 @@ public partial class X86CodeEmitter {
     EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
     EmitJcc("e", $"{labelPrefix}_mainthread_loop");
 
-    // Non-mainThread: switch to P->mainThread (worker loop handles scheduling)
-    // Clear ioYielded flag BEFORE context switch so __io_complete_gt knows to spin-wait
-    // until the context switch saves our RSP/RBP (preventing a race where the IOCP thread
-    // enqueues us before our state is saved).
+    // Non-mainThread: commit the park (Go's netpollblockcommit), then switch to P->mainThread.
+    // A failed commit means a completer claimed the wakeup while we were getting here, so we must
+    // NOT park — status and io_result_val are already published and _resume reads them.
+    EmitNetpollCommitCurrentOrAbort($"{labelPrefix}_resume");
+    // Clear ioYielded flag BEFORE context switch so the completer that claimed `Parked` spins
+    // until the switch has saved our RSP/RBP (preventing a race where the IOCP thread enqueues us
+    // before our state is saved).
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitLeaMainThreadInline(X86Register.Rdx);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
     EmitMovRegImm(X86Register.Rax, GtStatusRunning);
@@ -7936,9 +8062,12 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__gt_context_switch");
     EmitJmp($"{labelPrefix}_resume");
 
-    // MainThread: spin on completions + wake event until our I/O finishes
+    // MainThread: spin on completions + wake event until our I/O finishes. It never commits — it
+    // has no schedulable stack — so a completer finds `Wait`, declines the enqueue and leaves it to
+    // self-detect here, which is what the old stackBase==0 guard did by hand.
     DefineLabel($"{labelPrefix}_mainthread_loop");
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
+    EmitCallRuntimeLabel("__netpoll_recover");
     EmitCallRuntimeLabel("__io_check_completions");
     EmitLoadCurrentGtInline(X86Register.R10);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
@@ -7969,6 +8098,7 @@ public partial class X86CodeEmitter {
 
     // Resume: clear io_handle, return bytes transferred
     DefineLabel($"{labelPrefix}_resume");
+    EmitNetpollParkDoneCurrent();
     EmitLoadCurrentGtInline(X86Register.R10);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rax); // clear io_handle
@@ -8079,28 +8209,20 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax);
 
-    // Only enqueue regular GTs (stackBase != 0). MainThread GTs (stackBase == 0)
-    // are driven by inline scheduling loops and must NOT be in the global run queue.
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, GtOffStackBase);
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", "__io_complete_gt_signal"); // mainThread: skip enqueue but still signal
-
-    // Spin-wait until the GT's context switch has completed. The I/O submit path
-    // clears ioYielded before the context switch, and the worker loop sets it to 1
-    // after the switch returns. Without this, the IOCP/sync thread could enqueue
-    // the GT while its RSP/RBP are still being saved, causing another worker to
-    // load stale register state.
-    DefineLabel("__io_complete_gt_spin");
+    // ⭐ CLAIM THE WAKEUP (Go's netpollunblock), which decides — atomically — whether the enqueue is
+    // ours at all, and waits for the context save only once it is. It subsumes both of the tests
+    // that stood here: the mainThread skip (a mainThread never commits, so the claim finds `Wait`
+    // and declines) and the ioYielded spin (which now runs INSIDE the claim, and only after
+    // claiming `Parked`, i.e. only for a waiter that provably cannot turn around).
+    //
+    // The signal below still runs on every path — a completion has been published whether or not
+    // this particular GT needed an enqueue, and a mainThread parked in WaitForSingleObject is woken
+    // by exactly that event.
     EmitMovRegMem(X86Register.Rcx, -0x08, 8); // reload gt
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, GtOffIoYielded);
+    EmitCallRuntimeLabel("__netpoll_unblock");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("nz", "__io_complete_gt_enqueue");
-    // PAUSE hint for spin-wait (reduces power and improves performance on HT cores)
-    EmitBytes(0xF3, 0x90); // PAUSE
-    EmitJmp("__io_complete_gt_spin");
-
-    DefineLabel("__io_complete_gt_enqueue");
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // reload gt for __gt_enqueue
+    EmitJcc("z", "__io_complete_gt_signal");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
     EmitCallRuntimeLabel("__gt_enqueue");
 
     // Signal events so parked threads wake up immediately.
