@@ -25204,9 +25204,10 @@ export type Parser
 		// would refuse `b.wipe()` while `b.items` is borrowed for a `wipe` that only appends to `b.name`.
 		try self.noteReceiverWrite(func, immutableReceiverName: recv.immutableName, receiverOwner: recv.owner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: true)
 
-		if resultUsed 'voidResultUsed'
-			throw ParseError.voidCallResultUsed(String.from(AppendMethod), line: methodTok.line, column: methodTok.column)
-		end 'voidResultUsed'
+		// `append` is void, so a value-position call is refused — through the same one home the `Array` and
+		// `Set` void mutators use. It spelled the rule out here instead, and the name it blamed was the
+		// CONSTANT it had matched (`AppendMethod`), which is the same bytes `methodTok.value` carries.
+		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 
 		let arg = try self.parseStringArg(func, methodName: AppendMethod)
 		_ = self.emitRuntimeCall(StrAppendName, args: pairArgs(recv.value, second: arg), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
@@ -25625,8 +25626,9 @@ export type Parser
 	end 'setInstanceForArrayLiteral'
 
 	// Dispatch a builtin `Set` method — cursor on the method NAME, `set` the (borrowed) receiver record (P1.7b).
-	// `contains`/`remove` return `bool`; `count` returns the member count; `insert` is a VOID mutator (rejected in
-	// value position, E3059) that returns the receiver — what the statement still denotes, like `emitArrayVoidCall`.
+	// `contains`/`remove` return `bool`; `count` returns the member count; `insert` is a VOID mutator (refused in
+	// value position by `requireVoidMethodIsStatement`) that returns the receiver — what the statement still
+	// denotes, like `emitArrayVoidCall`.
 	// `insert`/`contains`/`remove` carry the key's witness tables, appended by `LowerMaxonToStd.appendSetWitnessArgs`;
 	// the parser passes only `[set, elem]`. The set's key type (`giid`, off the receiver's name-id) gates the key
 	// argument's type and decides ownership: `insert` MOVES a managed key in (`consume: true`), while
@@ -25656,9 +25658,11 @@ export type Parser
 			return self.emitRuntimeCall(SetRemoveName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'remove'
 
-		// `insert` is a non-throwing VOID mutator — rejected in value position (E3059, the shared check).
-		try self.requireArrayVoidStatement(resultUsed, methodTok: methodTok)
+		// `insert` is a non-throwing VOID mutator, so a value-position call is refused — from INSIDE the arm
+		// its name matched, which is the shared check's whole scoping (`requireVoidMethodIsStatement`). Ahead
+		// of the arm it caught every unknown `Set` method too, and told it that it exists and is void (D11).
 		if methodTok.value.equals(InsertMethod) 'insert'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let elem = try self.parseSetKeyArg(func, giid: giid, consume: true)
 			_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 			return set
@@ -26356,26 +26360,35 @@ export type Parser
 			return self.emitOwnedRuntimeResult(ArrCloneName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'clone'
 
-		// Non-throwing void mutators — rejected in value position (E3059).
-		try self.requireArrayVoidStatement(resultUsed, methodTok: methodTok)
+		// ⭐ **THE VOID MUTATORS — AND EACH REFUSES VALUE POSITION FROM INSIDE ITS OWN ARM
+		// (`requireVoidMethodIsStatement`, whose header carries the D11 measurement).** The refusal used to
+		// be one call HERE, ahead of them all, which an UNKNOWN name reached too — so a typo was told the
+		// method exists and is void instead of being handed the roster below. It is the first statement of
+		// each arm rather than a shared line, so it still beats every argument diagnostic, and it is
+		// reachable only once a real void method NAME has matched.
 		if methodTok.value.equals(ArrayPushMethod) 'push'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let value = try self.parseArrayElementArg(func, giid: giid, methodTok: methodTok)
 			return self.emitArrayVoidCall(ArrPushName, args: pairArgs(arr, second: value), receiver: arr, range: range)
 		end 'push'
 		if methodTok.value.equals(ArrayReserveMethod) 'reserve'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let n = try self.parseArrayOneArg(func)
 			return self.emitArrayVoidCall(ArrReserveName, args: pairArgs(arr, second: n), receiver: arr, range: range)
 		end 'reserve'
 		if methodTok.value.equals(ArrayResizeMethod) 'resize'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.requireArrayResizeHasZeroElement(giid, methodTok: methodTok)
 			let n = try self.parseArrayOneArg(func)
 			return self.emitArrayVoidCall(ArrResizeName, args: pairArgs(arr, second: n), receiver: arr, range: range)
 		end 'resize'
 		if methodTok.value.equals(ArrayClearMethod) 'clear'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.consumeEmptyArgList()
 			return self.emitArrayVoidCall(ArrClearName, args: singletonArgs(arr), receiver: arr, range: range)
 		end 'clear'
 		if methodTok.value.equals(InsertMethod) 'insert'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			// `insert` is an `Array` method and nothing else — the buffer surface has no member of that name —
 			// so its `value:` label is required whichever surface the receiver wears.
 			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, methodTok: methodTok, throwing: false, secondArgLabelled: true, range: range)
@@ -26393,6 +26406,7 @@ export type Parser
 		// element types. One shape test (`requireArrayAppendArg`), two verdicts — the split
 		// `requireByteArrayValue`/`requireManagedMemoryValue` already draws for a `ByteArray` parameter.
 		if isManagedMemory and methodTok.value.equals(AppendMethod) 'bufferAppend'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.consume(TokenKind.leftParen)
 			let other = try self.parseExpression(func, block: self.currentBlock)
 			try self.requireManagedMemoryAppendArg(other, giid: giid, methodTok: methodTok)
@@ -26400,13 +26414,15 @@ export type Parser
 			return self.emitRuntimeCall(ArrMemAppendName, args: pairArgs(arr, second: other), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'bufferAppend'
 		if methodTok.value.equals(AppendMethod) 'append'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			return try self.parseArrayAppend(func, arr: arr, giid: giid, range: range)
 		end 'append'
 
 		// ⭐⭐ **THE TWO `__ManagedMemory` MUTATORS (R4.2) — `setLength` and `setByte`.** VOID and THROWING,
-		// which is why they sit here (past `requireArrayVoidStatement`, so a value-position use is E3059)
-		// rather than with the throwing ACCESSORS above, which all yield a value.
+		// which is why they sit with the void mutators (each opening with `requireVoidMethodIsStatement`,
+		// so a value-position use is the void-result refusal) rather than with the throwing ACCESSORS
+		// above, which all yield a value.
 		//
 		// ⚠ **NEITHER IS AN ALIAS OF THE `Array` METHOD IT RESEMBLES, and folding either would be a silent
 		// wrong answer.** `resize` GROWS the capacity to fit where `setLength` must REFUSE a length above it —
@@ -26429,10 +26445,12 @@ export type Parser
 		// (`isManagedMemory` above), so `"ab".toByteArray().setLength(0)` is the ordinary unknown-`Array`-method
 		// E2015 and only a real buffer reaches these arms.
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetLengthMethod) 'setLength'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let newLength = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewLengthParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ArrSetLengthName, args: pairArgs(arr, second: newLength), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'setLength'
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.requireBufferBytesAreNotAPointer(giid, methodTok: methodTok)
 			// The RECEIVER is argument 0, so the two-int list's array is prepended to rather than rebuilt —
 			// the arg-list protocol stays in its one home and the receiver is added where it belongs.
@@ -26450,6 +26468,7 @@ export type Parser
 		// complains, `grow` raises the capacity to EXACTLY what it is asked for and THROWS `invalidCapacity`
 		// when asked to lower it. `specs/managed-memory-builtin.md:grow` asserts the exact capacity.
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryGrowMethod) 'grow'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let newCapacity = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewCapacityParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ArrMemGrowName, args: pairArgs(arr, second: newCapacity), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'grow'
@@ -27316,13 +27335,28 @@ export type Parser
 		end 'bareLocal'
 	end 'moveOpaqueFeedArg'
 
-	// A non-throwing void array mutator (`push`/`reserve`/`resize`/`clear`/`insert`) has no value, so a
-	// value-position call is E3059, exactly as a void free call or `String.append` in value position is.
-	function requireArrayVoidStatement(resultUsed bool, methodTok Token) throws ParseError
+	// ⭐⭐ **A VOID CONTAINER METHOD HAS NO VALUE, so a value-position call is refused exactly as a void
+	// free call is (`voidCallResultUsed`) — AND EVERY CALLER IS INSIDE THE ARM ITS OWN NAME MATCHED,
+	// WHICH IS THE WHOLE OF THIS FUNCTION'S SCOPING.** It tests `resultUsed` and nothing about the name,
+	// so it can only ever be as name-scoped as its call sites are.
+	//
+	// ⚠ **IT USED TO BE SCOPED POSITIONALLY — one call between the value-yielding arms and the void ones
+	// — and that is a scope an UNKNOWN name shares (D11).** A name matching no arm falls past every one
+	// of them, so `let x = arr.frobnicate()` reached the check and was told *"Function 'frobnicate' does
+	// not return a value"*: a sentence asserting that the method EXISTS and is VOID, about a name the
+	// type has never heard of, where the identical call in statement position correctly reported the
+	// roster refusal. The old comment here named `push`/`reserve`/`resize`/`clear`/`insert` as the
+	// methods it guarded, which the code did not check and could not — a guarantee only the call sites
+	// can make. `specs-shv2/void-call-result.md`'s four red cases and three controls are that pair of
+	// properties: an unknown name reaches the ROSTER, and a real void mutator still reaches this.
+	//
+	// ⇒ **A NEW VOID ARM MUST CALL THIS AS ITS FIRST STATEMENT**, before it consumes an argument list, so
+	// the refusal keeps beating the argument diagnostics it used to beat.
+	function requireVoidMethodIsStatement(resultUsed bool, methodTok Token) throws ParseError
 		if resultUsed 'valueUsed'
 			throw ParseError.voidCallResultUsed(String.from(methodTok.value), line: methodTok.line, column: methodTok.column)
 		end 'valueUsed'
-	end 'requireArrayVoidStatement'
+	end 'requireVoidMethodIsStatement'
 
 	// The SCOPE name a base token denotes. `self` is a keyword, so it carries no binding name of its
 	// own; it names the receiver parameter, which is bound under `SelfParamName`. Every other base
