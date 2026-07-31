@@ -335,6 +335,7 @@ public static class FlatNamespaceCheck {
     var untabled = new List<string>();
     foreach (var manifest in Directory.GetFiles(root, SourceCollector.BuildManifestFileName, SearchOption.AllDirectories)) {
       if (SourceCollector.IsInCompilerOutputDir(SourceCollector.NormalizePath(manifest))) continue;
+      if (IsInNestedCheckout(root, manifest)) continue;
       if (!DeclaresBuildFunction(manifest)) continue;
 
       var dir = Path.GetFullPath(Path.GetDirectoryName(manifest)!);
@@ -342,6 +343,40 @@ public static class FlatNamespaceCheck {
     }
 
     return untabled;
+  }
+
+  /// <summary>
+  /// Whether this path lies inside a checkout OTHER than <paramref name="root"/> — a git worktree, a
+  /// vendored clone, any tree carrying its own <c>.git</c>.
+  /// </summary>
+  /// <remarks>
+  /// <para>
+  /// ⚠ <b>THIS EXCLUSION IS NOT COSMETIC: WITHOUT IT THE GATE FAILS THE BUILD WHENEVER AN AGENT WORKTREE
+  /// EXISTS</b>, which is the rung workflow's normal state — <c>.claude/worktrees/&lt;slice&gt;/</c> holds a
+  /// full checkout, so its <c>maxon-shv2/build.maxon</c> and siblings read as projects
+  /// <see cref="Units"/> has never heard of. Measured 2026-07-31, integrating A1x: three "untabled
+  /// projects" reported, <c>dotnet build</c> exit 1, and nothing wrong with the tree at all.
+  /// </para>
+  /// <para>
+  /// The test is <b>a nested <c>.git</c></b> rather than the literal path <c>.claude/worktrees</c>,
+  /// because what disqualifies a directory is that it belongs to a DIFFERENT checkout, not where it
+  /// happens to sit. A worktree's <c>.git</c> is a FILE and a clone's is a DIRECTORY, so both are tested.
+  /// Adding rows to <see cref="Units"/> for a worktree would be worse than useless: the rows would name
+  /// paths that vanish when the slice merges.
+  /// </para>
+  /// </remarks>
+  static bool IsInNestedCheckout(string root, string path) {
+    var rootFull = Path.GetFullPath(root);
+    var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+
+    while (dir != null && !string.Equals(dir, rootFull, StringComparison.OrdinalIgnoreCase)) {
+      var marker = Path.Combine(dir, ".git");
+      if (File.Exists(marker) || Directory.Exists(marker)) return true;
+
+      dir = Path.GetDirectoryName(dir);
+    }
+
+    return false;
   }
 
   /// <summary>
