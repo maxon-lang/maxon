@@ -1,13 +1,17 @@
 // X64Runtime — the emitted program's PANIC RUNTIME, hand-assembled into `.text`.
 //
-// When the CPU raises `#DE` on `a / 0`, Windows offers the fault to any vectored
-// exception handler BEFORE it kills the process. This file emits that handler and the
-// diagnostic it prints:
+// When the CPU raises `#DE` — on `a / 0`, or on the one other quotient that does not exist,
+// `i64.min / -1` — Windows offers the fault to any vectored exception handler BEFORE it kills
+// the process. This file emits that handler and the diagnostic it prints:
 //
 //     panic: integer divide by zero at rip=0x… diag_base=0x…
 //     Stack trace:
 //       in main
 //       in mrt_start
+//
+// The two causes are ONE trap and two NTSTATUS codes, so which of the two lines above's first
+// words appear is a classification the handler makes (`IntegerFaultKind`); `i64.min / -1` reads
+// `panic: integer overflow` and is otherwise identical.
 //
 // The mechanism is the CPU's, not the compiler's: no divisor is ever tested. `idiv`
 // traps for free, and a divide guarded by an explicit `cmp/jz` would cost every division
@@ -45,7 +49,8 @@
 //   - No RE-ENTRANCY GUARD. v1 needs `__gt_fault_in_progress` because its diagnostic
 //     resumes on the faulting thread and may fault again. Here, a fault raised inside the
 //     diagnostic could only be an access violation, which this handler declines
-//     (ContinueSearch) — so it cannot recurse into itself.
+//     (ContinueSearch) — so it cannot recurse into itself. The diagnostic divides nothing,
+//     so neither converted code can arise inside it either.
 //   - No GREEN-THREAD COUPLING. There is no scheduler until P1.5 and no `recover()`, so
 //     there is no `gt` to find and nowhere to resume TO. The handler exits the process.
 //
@@ -84,9 +89,45 @@ let VehHandlerFirst = 1
 // apply — which for a fault we did not convert is exactly what should happen.
 let VehContinueSearch = 0
 
-// EXCEPTION_INT_DIVIDE_BY_ZERO — the code Windows delivers for the `#DE` that `idiv`
-// raises on a zero divisor. This is the ONLY code this handler converts.
-let ExcCodeIntDivideByZero = 0xC0000094
+// A Windows NTSTATUS exception code. A DWORD — which is also the width `EXCEPTION_RECORD` stores it
+// at and the width the thunk loads it with, so the comparand and the loaded value are one type.
+typealias ExceptionCode = int(0 to u32.max)
+
+// The two NTSTATUS codes Windows delivers for the `#DE` that `idiv` raises, and the only two this
+// handler converts. `idiv` raises the SAME trap for a zero divisor and for a quotient that does not
+// fit (`i64.min / -1`), and the CPU distinguishes them only by which code the OS then reports.
+let ExcCodeIntDivideByZero = 0xC0000094  // EXCEPTION_INT_DIVIDE_BY_ZERO — a zero divisor.
+let ExcCodeIntOverflow = 0xC0000095  // EXCEPTION_INT_OVERFLOW — an unrepresentable quotient.
+
+// The two integer faults an `idiv` raises. The vocabulary the CLASSIFICATION and the DIAGNOSTIC
+// share: what the OS hands over differs per platform (an NTSTATUS here, a POSIX `si_code` on Linux),
+// but what gets printed must not, so the mapping to words is asked once, of `faultPanicLinePrefix`.
+enum IntegerFaultKind
+	divideByZero
+	overflow
+end 'IntegerFaultKind'
+
+// The tag that closes a fault panic line and opens its addresses. Written once because the RUNTIME
+// emits it and `SpecTestRunner.stripFaultRipSuffix` recognizes exactly it — a second spelling here
+// would silently stop the harness stripping one of the two lines.
+let FaultRipTag = b" at rip=0x"
+
+// The whole fixed prefix of `kind`'s panic line, up to the ASLR-dependent hex. ONE answer to "which
+// fault prints what", asked by the Windows thunk (which picks between the two AT RUNTIME, by loading
+// the chosen string's address) and by the Linux handler (which cannot classify at all, and says so at
+// its own definition). The words are the bootstrap's — `__gt_panic_msg_div_zero` and
+// `__gt_panic_msg_int_overflow` — so a fault reads the same whichever compiler built the program.
+function faultPanicLinePrefix(kind IntegerFaultKind) returns ByteArray
+	let message = match kind 'kind'
+		divideByZero gives b"panic: integer divide by zero"
+		overflow gives b"panic: integer overflow"
+	end 'kind'
+
+	var line = ByteArray.create()
+	line.append(message)
+	line.append(FaultRipTag)
+	return line
+end 'faultPanicLinePrefix'
 
 // EXCEPTION_POINTERS field offsets (the struct RCX points at).
 let ExcPtrsOffExceptionRecord = 0x00
@@ -360,6 +401,29 @@ end 'emitLeaTextBase'
 function emitLeaSymtable(asm X64RuntimeAsm, dest X64Register)
 	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: dest, targetName: SymbolTableName)
 end 'emitLeaSymtable'
+
+// Everything a fault diagnostic prints AFTER its opening words: the two ADDRESSES that recover the
+// ASLR slide (`rip=` is already open when this is called, `diag_base=` is opened here), and the
+// symbolized backtrace under them.
+//
+// Shared by the Windows thunk and the Linux handler because only the CLASSIFICATION and the exit
+// route differ between the two OSes — this middle is identical, and it used to be written out twice,
+// tags and call sequence and all. Two copies of a format is two chances for one of them to move.
+function emitFaultAddressesAndBacktrace(asm X64RuntimeAsm, ripSlot StackSize, rbpSlot StackSize, rspSlot StackSize)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(ripSlot), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
+	emitPrintString(asm, bytes: b" diag_base=0x")
+	emitLeaTextBase(asm, dest: X64Register.rcx)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
+	emitPrintString(asm, bytes: b"\n")
+
+	// mrt_fault_backtrace(rcx = rip, rdx = rbp, r8 = rsp) — prints `Stack trace:`, frame 0 from the
+	// faulting rip, then the saved-rbp chain bounded to the faulted stack.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(ripSlot), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(rbpSlot), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(rspSlot), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: FaultBacktraceName)
+end 'emitFaultAddressesAndBacktrace'
 
 // Emit the two bounds checks that decide whether `addrReg` (already reduced to a `.text`
 // offset) names code this image can symbolize, jumping to `rejectLabel` if not:
@@ -772,37 +836,63 @@ end 'buildFaultBacktraceChunk'
 // mrt_fault_thunk(rcx = EXCEPTION_POINTERS*)  — the vectored exception handler
 // ==========================================================================
 
+// ONE classification arm: "if the OS's code equals `excCode`, this fault is `kind`". A match records
+// that kind's panic prefix in `prefixSlot` and jumps to `classified`; a miss falls through to the
+// next arm. Both arms go through this function so the code→words mapping is decided in exactly one
+// place, and so the sign-extension trap is dodged by one technique rather than by two.
+//
+// ⚠ THE COMPARAND TRAVELS THROUGH A REGISTER. x64's group-1 immediate is SIGN-extended, so
+// `cmp rax, 0xC0000094` would compare against 0xFFFFFFFFC0000094 and never match the zero-extended
+// DWORD the caller just loaded. Both codes have bit 31 set, so this is not a quirk of one of them.
+function emitFaultCodeArm(asm X64RuntimeAsm, codeReg X64Register, scratch X64Register, excCode ExceptionCode, kind IntegerFaultKind, prefixSlot StackSize, classified BlockId)
+	let next = asm.newLabel()
+
+	encodeMovRegImm32(asm.code, dest: scratch, value: excCode)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: codeReg, src: scratch, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: next)
+
+	emitLeaString(asm, dest: scratch, bytes: faultPanicLinePrefix(kind))
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(prefixSlot), srcReg: scratch)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: classified)
+
+	asm.placeLabel(next)
+end 'emitFaultCodeArm'
+
 // The callback `AddVectoredExceptionHandler` invokes on a hardware fault, BEFORE the OS
 // applies its default disposition. Win64 ABI: the EXCEPTION_POINTERS in RCX, a LONG back
 // in EAX.
 //
-// It converts EXCEPTION_INT_DIVIDE_BY_ZERO and NOTHING ELSE. Every other code returns
+// It converts the two integer `#DE` codes and NOTHING ELSE. Every other code returns
 // EXCEPTION_CONTINUE_SEARCH so the OS still handles it: a fault handler that swallowed
 // faults it was not asked about would turn every unrelated crash into this one's
-// diagnostic. (v1 additionally converts access violation / integer overflow / stack
-// overflow; those arrive with their specs, at their milestones — the classification is one
-// `cmp` per code, not a new mechanism.)
+// diagnostic. (v1 additionally converts access violation and stack overflow; those arrive
+// with their specs, at their milestones — the classification is one `cmp` per code, not a
+// new mechanism.)
 //
-// Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp.
+// Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp, 4 = panic prefix.
 function buildFaultThunkChunk() returns FunctionCodeChunk
 	let SlotExcPtrs = 0
 	let SlotFaultRip = 1
 	let SlotFaultRbp = 2
 	let SlotFaultRsp = 3
-	var asm = X64RuntimeAsm.beginFunction(4)
+	let SlotPanicPrefix = 4
+	var asm = X64RuntimeAsm.beginFunction(5)
 
 	let continueSearch = asm.newLabel()
+	let classified = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), srcReg: X64Register.rcx)
 
-	// code = *(u32*)(p->ExceptionRecord). The comparand goes through a register: x64's
-	// group-1 immediate is SIGN-extended, so `cmp rax, 0xC0000094` would compare against
-	// 0xFFFFFFFFC0000094 and never match the zero-extended DWORD just loaded.
+	// code = *(u32*)(p->ExceptionRecord), then one arm per code we convert. An arm that matches
+	// leaves its panic prefix in `SlotPanicPrefix` and jumps to `classified`; falling out of the last
+	// arm means this is not our fault, and the OS keeps it.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffExceptionRecord, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: ExcRecOffExceptionCode, wide: false)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: ExcCodeIntDivideByZero)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: continueSearch)
+	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntDivideByZero, kind: IntegerFaultKind.divideByZero, prefixSlot: SlotPanicPrefix, classified: classified)
+	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntOverflow, kind: IntegerFaultKind.overflow, prefixSlot: SlotPanicPrefix, classified: classified)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: continueSearch)
+
+	asm.placeLabel(classified)
 
 	// Stash the faulting Rip/Rbp/Rsp. The faulted frames are still mapped and untouched —
 	// the handler runs on the same thread, BELOW the faulting RSP — so this chain is walkable
@@ -816,20 +906,11 @@ function buildFaultThunkChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRsp, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.rdx)
 
-	// The panic line. `rip` and `diag_base` together are what recover the ASLR slide; the
-	// harness strips them, an operator reads them.
-	emitPrintString(asm, bytes: b"panic: integer divide by zero at rip=0x")
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), wide: true)
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
-	emitPrintString(asm, bytes: b" diag_base=0x")
-	emitLeaTextBase(asm, dest: X64Register.rcx)
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
-	emitPrintString(asm, bytes: b"\n")
-
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: FaultBacktraceName)
+	// The panic line opens with whichever prefix the classification chose; the rest of the diagnostic
+	// is the OS-neutral one. The harness strips the addresses, an operator reads them.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotPanicPrefix), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotFaultRip, rbpSlot: SlotFaultRbp, rspSlot: SlotFaultRsp)
 
 	// ExitProcess(1) — never returns. There is no `recover()` and no scheduler to resume
 	// onto, so a converted fault is terminal.
@@ -980,8 +1061,20 @@ end 'buildLinuxWriteStderrChunk'
 // ucontext (not a Windows CONTEXT), prints the SAME panic line + backtrace, and terminates with
 // exit_group(1) (not ExitProcess). It NEVER returns, which is why the sigaction needs no restorer.
 //
-// The scalar core's only fault is an idiv-by-zero, so it prints "integer divide by zero" without
-// inspecting siginfo->si_code — no other SIGFPE is raised. Slots: 0=rip, 1=rbp, 2=rsp.
+// ⚠ IT CANNOT MAKE THE WINDOWS THUNK'S DISTINCTION, AND THE LIMITATION IS THE KERNEL'S. The Windows
+// thunk tells a zero divisor from an unrepresentable quotient (`i64.min / -1`) because the two arrive
+// as different NTSTATUS codes. Linux offers only `siginfo->si_code`, and x86's `exc_divide_error`
+// reports `FPE_INTDIV` for EVERY `#DE` — the CPU never told the kernel which of the two causes fired,
+// so there is nothing to branch on. MEASURED, not inferred: this handler was instrumented to print
+// the raw `si_code` and both a zero divisor and `i64.min / -1` read 1 (`FPE_INTDIV`). Recovering the
+// distinction would mean decoding the faulting `idiv`'s ModRM at the ucontext RIP to find which
+// register held the divisor — a disassembler in hand-assembled bytes, welded to one encoding, whose
+// failure mode is a CONFIDENTLY WRONG diagnostic rather than a missing one. So this handler prints
+// the divide-by-zero wording for every SIGFPE it receives, which is also why a stray floating-point
+// trap would read that way; `specs-shv2/safety.md` states both halves and gates the overflow case to
+// `x64-windows`.
+//
+// Slots: 0=rip, 1=rbp, 2=rsp.
 function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 	let SlotRip = 0
 	let SlotRbp = 1
@@ -996,23 +1089,10 @@ function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: UContextRspOffset, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRsp), srcReg: X64Register.rax)
 
-	// The panic line — the SAME text the Windows thunk prints, so the harness's strip-from-` at rip=0x`
-	// leaves the identical `panic: integer divide by zero`.
-	emitPrintString(asm, bytes: b"panic: integer divide by zero at rip=0x")
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRip), wide: true)
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
-	emitPrintString(asm, bytes: b" diag_base=0x")
-	emitLeaTextBase(asm, dest: X64Register.rcx)
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
-	emitPrintString(asm, bytes: b"\n")
-
-	// mrt_fault_backtrace(rcx=rip, rdx=rbp, r8=rsp) — the reused OS-neutral chunk. Prints `Stack trace:`,
-	// frame 0 from the fault rip, then walks the saved-rbp chain (main -> the frameless mrt_start's return
-	// address -> the kernel-zeroed rbp that ends it).
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRip), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotRbp), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotRsp), wide: true)
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: FaultBacktraceName)
+	// The panic line — through the SAME prefix builder the Windows thunk picks from, so the two OSes
+	// cannot drift on the wording and the harness's strip-from-` at rip=0x` leaves an identical line.
+	emitPrintString(asm, bytes: faultPanicLinePrefix(IntegerFaultKind.divideByZero))
+	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotRip, rbpSlot: SlotRbp, rspSlot: SlotRsp)
 
 	// exit_group(1) — never returns. A converted fault is terminal (no recover(), no scheduler).
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: PanicExitCode)

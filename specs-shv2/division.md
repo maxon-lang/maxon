@@ -49,10 +49,12 @@ sequence the goldens pin is the unguarded one.
 together by mistake.** `idiv` faults on that quotient as well as on a zero divisor, and NEITHER
 reference compiler handles it (the bootstrap only declines to *fold* it — `2-Parser.cs:23589-23590`).
 `DivisionByZero` is about the DIVISOR being zero and says nothing about the quotient being
-unrepresentable, so `i64.min / -1` still raises a hardware fault — and, MEASURED, is not diagnosed
-when it does: it arrives as `STATUS_INTEGER_OVERFLOW` (0xC0000095), which shv2's fault thunk does not
-convert, so the process dies silently with that status instead of a panic line. `specs-shv2/safety.md`
-owns that reading and the reason it is a separate slice.
+unrepresentable, so `i64.min / -1` still raises a hardware fault. It IS diagnosed when it does (A1g):
+it arrives as `STATUS_INTEGER_OVERFLOW` (0xC0000095) rather than the zero divisor's 0xC0000094, and
+the Windows fault thunk classifies both — an unrepresentable quotient panics `integer overflow`, with
+the same backtrace and exit 1. x64-linux cannot make that distinction (its kernel reports `FPE_INTDIV`
+for every `#DE`) and prints the divide-by-zero wording for both. `specs-shv2/safety.md` owns that
+reading and its tests.
 
 The guard, where one is needed, costs **three instructions and no branch** — `cmp divisor, 0`, a
 `setcc` materializing the answer, and `or safe, divisor, flag`. The `idiv` then runs on `safe`, which

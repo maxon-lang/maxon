@@ -1,0 +1,65 @@
+// Test: integer-overflow-fault-from-int-min-over-minus-one
+typealias Integer = int(i64.min to i64.max)
+typealias NegativeOne = int(-1 to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+// The divisor's range excludes 0, so this is the unguarded `idiv` again — the `DivisionByZero` a
+// possibly-zero divisor would have raised is about the DIVISOR, and says nothing about a quotient
+// that does not fit. `i64.min / -1` is `i64.max + 1`, so `idiv` raises `#DE` with a divisor of -1.
+function divide(n Integer, d NegativeOne) returns Integer
+	return n / d
+end 'divide'
+
+function main() returns ExitCode
+	let n = ident(i64.min)
+	// Opaque, so the divide cannot be strength-reduced to a negation — which would not trap.
+	let d = ident(-1)
+	return divide(n, d: d)
+end 'main'
+---
+ExitCode: 1
+---
+func @ident {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @divide {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rsi, rdx
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.movRegReg r8, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm rcx, -9223372036854775808
+    x64.callDirect ident
+    x64.movRegReg rbx, r8
+    x64.movRegImm rcx, -1
+    x64.callDirect ident
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect divide
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

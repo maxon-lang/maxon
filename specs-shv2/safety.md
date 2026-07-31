@@ -51,19 +51,29 @@ NEITHER reference compiler handles it (the bootstrap only declines to *fold* it)
 the quotient being unrepresentable. So `i64.min / -1` still raises a hardware fault on
 x64 — a trap in a language that otherwise has none left here.
 
-⚠⚠ **AND THAT FAULT IS NOT DIAGNOSED AT ALL, which is measured and is not what this file
-claimed.** It arrives as `STATUS_INTEGER_OVERFLOW` (**0xC0000095**), a DIFFERENT exception
-code from the zero divisor's `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094), and
-`X64Runtime.buildFaultThunkChunk` converts 0xC0000094 **and nothing else** — its own header
-says so, and lists integer overflow among the codes that "arrive with their specs, at their
-milestones". So the process dies with **no panic line, no backtrace, and exit 0xC0000095**
-rather than the `panic: integer divide by zero` + exit 1 this paragraph used to promise.
-Measured on a bare `i64.min / d` over a `d` of declared type `int(-1 to -1)`, which is the
-only spelling that gets past the divisor proof. The bootstrap DOES classify it (it carries
-both codes — `X86CodeEmitter.Runtime.cs`'s `ExceptionCodeIntOverflow` and its
-`__gt_ftp_intovf` arm), so this is an shv2 gap and one `cmp` wide; it is left to its own
-slice rather than ridden along here, because a diagnostic needs its own asserted panic line
-and this rung's subject is the DIVISOR.
+⭐ **THAT FAULT IS NOW DIAGNOSED, AND IT IS ITS OWN DIAGNOSTIC.** It arrives as
+`STATUS_INTEGER_OVERFLOW` (**0xC0000095**), a DIFFERENT exception code from the zero divisor's
+`STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094), and the Windows fault thunk used to convert
+0xC0000094 **and nothing else** — so the process died with no panic line, no backtrace and a raw
+0xC0000095 nobody could interpret (measured: **exit 127, stderr completely EMPTY**). It now
+classifies both, and an unrepresentable quotient prints **`panic: integer overflow`** plus the
+same symbolized backtrace and exit 1 a zero divisor gets. The wording is the bootstrap's, which
+has carried both codes all along (`X86CodeEmitter.Runtime.cs`'s `ExceptionCodeIntOverflow`, its
+`__gt_ftp_intovf` arm, and `__gt_panic_msg_int_overflow`) — one fault, one spelling, across two
+compilers.
+
+⚠ **ONLY x64-WINDOWS CAN TELL THE TWO APART, and the limitation is the KERNEL's rather than this
+compiler's.** Linux delivers both as `SIGFPE`, and reports **`si_code = FPE_INTDIV` (1) for every
+`#DE`** — the overflow included, because the CPU does not tell the kernel which of the two `#DE`
+causes fired and `exc_divide_error` names `FPE_INTDIV` unconditionally. Measured, not assumed: the
+SIGFPE handler was instrumented to print the raw `si_code` and read `0x…0001` for BOTH programs
+below. There is nothing in the siginfo to branch on, so x64-linux keeps the one wording it can
+justify — `panic: integer divide by zero` and exit 1 — and the overflow case below is `x64-windows`
+only. **arm64 needs nothing**: AArch64 `SDIV` does not trap, `i64.min / -1` simply evaluates to
+`i64.min`, and neither arm64 backend has a fault handler to add an arm to. **`wasm32-wasi` needs
+nothing either, for the opposite reason**: `i64.div_s` DOES trap on an unrepresentable quotient, but
+a wasm trap is not deliverable to guest code, so the module exits **3** under `wasmtime` with that
+runtime's own `wasm trap: integer overflow` and no Maxon fault handler is involved (measured).
 
 ## Tests
 
@@ -438,6 +448,94 @@ end 'main'
 ```
 ```maxoncstderr
 error E3103: <fragment>:4:12: division by zero: the divisor of '/' is always 0
+```
+
+### The CPU fault a divide still reaches, and the two codes the thunk must tell apart
+
+Both cases below reach a bare `idiv` carrying an operand the type system was told could not occur,
+through the ONE position a ranged typealias is checked at compile time but deliberately NOT at
+runtime: a **call argument**. `InsertRangeChecks` skips the runtime cascade there because by the time
+a guard could land the value has already travelled into the call, so a `NonZero` parameter handed a
+runtime 0 — or a `NegativeOne` parameter handed a runtime `-1` beside an `i64.min` dividend — is how
+a hardware trap is still reachable in a language whose `/` otherwise throws.
+
+They are a PAIR: one door, one stack trace, and the two different exception codes
+(`STATUS_INTEGER_DIVIDE_BY_ZERO` 0xC0000094 vs `STATUS_INTEGER_OVERFLOW` 0xC0000095) the Windows
+thunk classifies. The divide-by-zero case is the CONTROL — it is what a classified fault looks like,
+and adding an arm beside it must not move it. It is also the only remaining test of the fault thunk
+at all: once `/` became a language-level throw, no program in this suite reached the handler.
+
+<!-- test: divide-by-zero-fault-through-an-unchecked-call-argument -->
+<!-- targets: x64-windows, x64-linux -->
+#### A runtime zero reaching a bare `idiv` panics `integer divide by zero`
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+// `d` excludes 0, so the divide is proven safe and compiles to the unguarded `idiv` — no throw,
+// no `try`. The proof is the CALLER's to keep, and nothing at runtime holds it to it.
+function divide(n Integer, d NonZero) returns Integer
+	return n / d
+end 'divide'
+
+function main() returns ExitCode
+	let z = ident(0)
+	return divide(10, d: z)
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic: integer divide by zero
+Stack trace:
+  in divide
+  in main
+  in mrt_start
+```
+
+<!-- test: integer-overflow-fault-from-int-min-over-minus-one -->
+<!-- targets: x64-windows -->
+#### `i64.min / -1` panics `integer overflow` — a different code, its own words
+
+`x64-linux` is excluded for a measured reason, not an unexamined one: its kernel reports
+`FPE_INTDIV` for this fault too, so there is nothing to classify on (see the Documentation above).
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NegativeOne = int(-1 to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+// The divisor's range excludes 0, so this is the unguarded `idiv` again — the `DivisionByZero` a
+// possibly-zero divisor would have raised is about the DIVISOR, and says nothing about a quotient
+// that does not fit. `i64.min / -1` is `i64.max + 1`, so `idiv` raises `#DE` with a divisor of -1.
+function divide(n Integer, d NegativeOne) returns Integer
+	return n / d
+end 'divide'
+
+function main() returns ExitCode
+	let n = ident(i64.min)
+	// Opaque, so the divide cannot be strength-reduced to a negation — which would not trap.
+	let d = ident(-1)
+	return divide(n, d: d)
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic: integer overflow
+Stack trace:
+  in divide
+  in main
+  in mrt_start
 ```
 
 <!-- disabled-test: force-segfault -->

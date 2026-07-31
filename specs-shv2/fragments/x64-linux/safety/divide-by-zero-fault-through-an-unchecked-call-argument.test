@@ -1,0 +1,57 @@
+// Test: divide-by-zero-fault-through-an-unchecked-call-argument
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+// `d` excludes 0, so the divide is proven safe and compiles to the unguarded `idiv` — no throw,
+// no `try`. The proof is the CALLER's to keep, and nothing at runtime holds it to it.
+function divide(n Integer, d NonZero) returns Integer
+	return n / d
+end 'divide'
+
+function main() returns ExitCode
+	let z = ident(0)
+	return divide(10, d: z)
+end 'main'
+---
+ExitCode: 1
+---
+func @ident {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @divide {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rsi, rdx
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.movRegReg r8, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect ident
+    x64.movRegImm32 rcx, 10
+    x64.movRegReg rdx, r8
+    x64.callDirect divide
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
