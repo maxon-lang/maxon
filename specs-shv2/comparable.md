@@ -450,7 +450,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3017: <fragment>:19:11: type 'Plain' does not implement 'Comparable', which the `where` clause on generic type 'Pair' requires of its type parameter
+error E3017: <fragment>:19:11: Type 'Plain' does not satisfy constraint 'Comparable' required by type parameter 'T' of 'Pair'
 ```
 
 <!-- test: comparable.error.ordering-requires-comparable -->
