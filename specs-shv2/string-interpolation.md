@@ -736,14 +736,27 @@ end 'main'
 ### Stringable with Format Specifier
 
 ⭐ **THESE TWO CASES WERE ONE DISABLED CASE, AND SPLITTING THEM IS THE POINT (R10d).** It bundled a half
-that works today with a half the parser cannot even read, so the whole thing was disabled and the working
-half went untested — *"in the corpus but never executed"*, which reads as coverage in a listing and
-provides none. The halves have different blockers, so they are different cases.
+that works today with a half the parser cannot even read, so the whole thing was disabled and *this spec*
+carried no live case for the working half — *"in the corpus but never executed"*, which reads as coverage in
+a listing and provides none. The halves have different blockers, so they are different cases.
 
 <!-- test: stringable-and-formatted-interp-selects-the-zero-arg-overload -->
 Plain `{c}` on a type implementing **both** protocols must select `toString()`, not `toString(format)`.
-⚠ **The two-argument overload's fallback deliberately returns a DIFFERENT string** — a mis-selection that
-passed an empty format would otherwise print `42` as well, and the case could not tell the two apart.
+
+⚠ **THE FORMATTED OVERLOAD IS DECLARED FIRST, AND THAT ORDER IS THE ASSERTION (R10d review).** The first
+declaration of a name keeps the BARE registration key (`Parser.overloadRegistrationNameFor`), and a call
+whose overload resolution finds nothing is left holding that bare key — `SemanticCheck.selectOverload`'s
+`noMatch` arm says so in as many words. So with `toString()` written first this program prints `42` whether
+the resolver selected it or never ran at all, and the case could not tell a SELECTION from an ABSENCE of one.
+With `toString(format String)` holding the bare key, only an actual retarget by
+`SemanticCheck.resolveOverloadedCalls` reaches the zero-argument body, and the two-argument fallback returns
+a different string so a mis-selection is visible rather than coincidentally correct.
+
+⚠ **The behaviour itself is pinned a second time, deliberately and NOT redundantly**, by
+`specs-shv2/interface-conformance.md`'s `overloaded-tostring-satisfies-stringable-and-formatted` (R10) —
+that case asks it of the CONFORMANCE checker with a constant-returning fixture, this one asks it of the
+INTERPOLATION materializer with a body that itself interpolates a field. Two cases, one fact: **move one and
+the other must move with it.**
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -751,16 +764,16 @@ typealias Integer = int(i64.min to i64.max)
 type Counter implements Stringable, FormattedStringable
 	var value as Integer
 
-	function toString() returns String
-		return "{value}"
-	end 'toString'
-
 	function toString(format String) returns String
 		if format == "verbose" 'verbose'
 			return "Counter(value={value})"
 		end 'verbose'
 
 		return "two-arg:{value}"
+	end 'toString'
+
+	function toString() returns String
+		return "{value}"
 	end 'toString'
 
 	static function create(value Integer) returns Self
@@ -784,7 +797,7 @@ end 'main'
 ```
 
 <!-- disabled-test: stringable-format-spec -->
-<!-- BLOCKED ON `{x:spec}` FORMAT-SPEC INTERPOLATION PARSING, and on nothing else — MEASURED 2026-07-31 (R10d), not inferred: this exact program gives `error E2010: Expected 'interpolation end' but got ':'`, so it fails in the LEXER/PARSER and never reaches dispatch. The two other halves this comment used to name are BOTH closed: the method-overload half by D7 (`toString()` and `toString(format String)` register as distinct members), and interp dispatch on a dual-conforming type by the live case above, which passes. A Stringable-protocol rung owns what remains: the `{x:spec}` syntax, and then 2-arg dispatch carrying the parsed spec. -->
+<!-- BLOCKED ON TWO THINGS, IN THIS ORDER, and the first is why only the first is measurable (R10d, corrected by its review). (1) `{x:spec}` FORMAT-SPEC INTERPOLATION PARSING — MEASURED 2026-07-31, not inferred: this exact program gives `error E2010: Expected 'interpolation end' but got ':'`, so it fails in the PARSER and never reaches dispatch. (2) INTERPOLATION CARRYING THE PARSED SPEC TO THE 2-ARG MEMBER, which is READ off the code rather than measured, because blocker (1) hides it: `Parser.materializeStructToStringPart` builds a receiver-ONLY argument list, and no part of the compiler names a format spec (`grep formatSpec` over maxon-shv2/Compiler is empty), so the syntax parsing alone would still dispatch to `toString()`. An earlier wording of this comment said "and on nothing else", which a parse error cannot establish about anything behind it. The two halves that ARE closed: the method-overload half by D7 (`toString()` and `toString(format String)` register as distinct members), and interp dispatch to the ZERO-arg member on a dual-conforming type, pinned live by the case above and by `interface-conformance/overloaded-tostring-satisfies-stringable-and-formatted`. One Stringable-protocol rung owns both remaining halves — they cannot land separately, since (1) alone parses a spec nothing consumes. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

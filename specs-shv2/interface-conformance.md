@@ -1243,6 +1243,12 @@ witness — the concrete type is statically known), so this program also asks wh
 the same treatment. It did not, and for a reason rather than by luck: the call carries its arguments, so
 `SemanticCheck.resolveOverloadedCalls` retargets it to the 0-argument member exactly as it retargets any
 other overloaded call. Printing `P` and not `F` is that answer.
+
+⚠ **THE SAME FACT IS PINNED A SECOND TIME**, from the interpolation side, by
+`specs-shv2/string-interpolation.md`'s `stringable-and-formatted-interp-selects-the-zero-arg-overload`
+(R10d). Both write the FORMATTED member first for the same reason — the bare registration key must be held
+by the member the call must NOT reach, or a resolver that picked nothing would pass anyway. **Change the
+dispatch rule and both cases move; change one alone and the corpus is asserting two rules.**
 ```maxon
 typealias Small = int(0 to 100)
 

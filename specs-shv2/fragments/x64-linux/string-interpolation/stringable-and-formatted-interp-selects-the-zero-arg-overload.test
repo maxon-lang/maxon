@@ -5,16 +5,16 @@ typealias Integer = int(i64.min to i64.max)
 type Counter implements Stringable, FormattedStringable
 	var value as Integer
 
-	function toString() returns String
-		return "{value}"
-	end 'toString'
-
 	function toString(format String) returns String
 		if format == "verbose" 'verbose'
 			return "Counter(value={value})"
 		end 'verbose'
 
 		return "two-arg:{value}"
+	end 'toString'
+
+	function toString() returns String
+		return "{value}"
 	end 'toString'
 
 	static function create(value Integer) returns Self
@@ -38,7 +38,7 @@ data {
   __mm_alloc_count@16 = i64 0
 }
 
-func @Counter.toString {
+func @Counter.toString# {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -115,7 +115,7 @@ func @main {
     x64.callDirect Counter.create
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r8
-    x64.callDirect Counter.toString
+    x64.callDirect Counter.toString#
     x64.storeSlotReg slot1, r8
     x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
     x64.loadRegBaseDisp.word64 r12, [r8 + 8]
