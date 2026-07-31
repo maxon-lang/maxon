@@ -395,9 +395,9 @@ export let ArrMemAppendName = b"__arr_mem_append"
 // element — is untouched.
 export let ArrMemSetName = b"__arr_mem_set"
 
-// The `__ManagedMemoryError` ordinals these members throw, as error FLAGS — positional facts about
-// `Project.builtinManagedMemoryErrorEnum`'s case order, exactly as `ArrIndexOutOfBoundsFlag` is about
-// `ArrayError`'s. DERIVED from the one bias rather than spelled 1/4/7/8.
+// The `__ManagedMemoryError` ordinals these members throw, as error FLAGS — positional facts about the case
+// order of the enum DECLARED at `stdlib/Builtins.maxon:152` (A1s), exactly as `ArrIndexOutOfBoundsFlag` is
+// about the still-synthesized `ArrayError`'s. DERIVED from the one bias rather than spelled 1/4/7/8.
 //
 // ⚠ `MemoryIndexOutOfBoundsOrdinal` is 0, the same ordinal `ArrIndexOutOfBoundsOrdinal` names — the two enums
 // share their first two cases BY CONSTRUCTION (`SignatureIndex.ManagedMemoryIndexOutOfBoundsCaseName` is one
@@ -632,23 +632,42 @@ let BitsPerByte = 8 as ParsedInt
 // helpers call each other (`push`→`grow`→`grown_cap`→`__mm_alloc`) so a dependency graph would only re-
 // derive the closure this install already is. Appended AFTER the pipeline (like `installMmRuntime`), so
 // they are never re-optimized.
-export function installArrayRuntime(module StdModule, usage RuntimeUsage)
-	// ⭐ **THE ORDINAL DRIFT GUARD (7b)** — TWO families are transcribed in this file, and they share their
-	// case-name constants without sharing an enum: `ArrayError` declares only the first two cases while
-	// `__ManagedMemoryError` declares eight, so the same name sits at the same ordinal in both BY DESIGN and
-	// each is asserted against its OWN layout. Drift is otherwise silent — every handler arm would name the
-	// wrong case with no crash and no wrong exit code.
-	let arrayErrors = BuiltinErrorOrdinalCheck.create(builtinArrayErrorEnum(), installer: b"installArrayRuntime/ArrayError")
+// The names these two families' ordinals are transcribed under, for `BuiltinErrorOrdinalCheck`'s diagnostic.
+let ArrayErrorOrdinalInstaller = b"the Array runtime (ArrayError)"
+let ManagedMemoryOrdinalInstaller = b"the Array runtime (__ManagedMemoryError)"
+
+// ⭐ **THE ORDINAL DRIFT GUARD FOR THE TWO FAMILIES THIS FILE TRANSCRIBES (7b, split at A1s).** They share
+// their case-name constants without sharing an enum — `ArrayError` declares only the first two cases while
+// `__ManagedMemoryError` declares eight, so the same name sits at the same ordinal in both BY DESIGN and each
+// is asserted against its OWN layout. Drift is otherwise silent: every handler arm would name the wrong case
+// with no crash and no wrong exit code.
+//
+// ⚠⚠ **THE TWO NOW COME FROM DIFFERENT PLACES, AND THAT ASYMMETRY IS THE RUNG'S RULING RATHER THAN AN
+// OVERSIGHT.** `__ManagedMemoryError` is DECLARED in `stdlib/Builtins.maxon:152` and is read from there;
+// `ArrayError` is declared in `stdlib/Array.maxon:6`, which the stdlib loader does not LIST, so the compiler
+// still SYNTHESIZES it and a disagreement there remains a compiler bug that PANICS. See
+// `Project.BuiltinErrorDeclarationSource` for why the severities differ.
+export function verifyArrayRuntimeOrdinals(project Project)
+	var arrayErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinArrayErrorEnum(), installer: ArrayErrorOrdinalInstaller)
 	arrayErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: ArrIndexOutOfBoundsOrdinal)
 	arrayErrors.claim(ManagedMemoryEmptySlotCaseName, ordinal: ArrEmptySlotOrdinal)
 
-	let memoryErrors = BuiltinErrorOrdinalCheck.create(builtinManagedMemoryErrorEnum(), installer: b"installArrayRuntime/__ManagedMemoryError")
+	match declaredBuiltinErrorEnum(project, typeName: ManagedMemoryErrorTypeName, installer: ManagedMemoryOrdinalInstaller) 'declaration'
+		notDeclared then return
+		found(declaration) then claimManagedMemoryOrdinals(project, declaration: declaration)
+	end 'declaration'
+end 'verifyArrayRuntimeOrdinals'
+
+function claimManagedMemoryOrdinals(project Project, declaration EnumLayout)
+	var memoryErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedMemoryOrdinalInstaller)
 	memoryErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: MemoryIndexOutOfBoundsOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidLengthCaseName, ordinal: MemoryInvalidLengthOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidCapacityCaseName, ordinal: MemoryInvalidCapacityOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidByteRangeCaseName, ordinal: MemoryInvalidByteRangeOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidAllocationCaseName, ordinal: MemoryInvalidAllocationOrdinal)
+end 'claimManagedMemoryOrdinals'
 
+export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesArray 'noArray'
 		return
 	end 'noArray'

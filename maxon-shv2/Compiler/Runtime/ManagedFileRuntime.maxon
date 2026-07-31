@@ -57,9 +57,9 @@ let ErrorPathNotFound = 3 as ParsedInt
 let ErrorAccessDenied = 5 as ParsedInt
 
 // ⭐ **THE `__ManagedFileError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`).** DERIVED from
-// the bias rather than spelled 1…11, exactly as `ArrayRuntime.ArrIndexOutOfBoundsFlag` is — and the
-// ordinals themselves are positional facts about `Project.builtinManagedFileErrorEnum`'s case order, which
-// is why that function's comment calls the order a wire format.
+// the bias rather than spelled 1…11, exactly as `ArrayRuntime.ArrIndexOutOfBoundsFlag` is — and the ordinals
+// themselves are positional facts about the case order of the enum DECLARED at `stdlib/Builtins.maxon:175`
+// (A1s). `verifyManagedFileOrdinals` below is what holds these literals to that declaration.
 //
 // ⚠ `renameFailed` is ABSENT because the enum has no such case: both references route a failed rename to
 // `deleteFailed` (`MaxonToStandardConversion.ManagedFile.cs:321-323`), and inventing a case here would put
@@ -1023,16 +1023,34 @@ function buildManagedFileStatFree(module StdModule)
 	module.functions.push(func)
 end 'buildManagedFileStatFree'
 
-// ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installArrayRuntime` for its stated reason:
-// the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places, and a
-// builder that gains or loses a clause without the predicate following is a `try` that silently stops
-// being required (or an E3057 on a call that cannot fail). Checked in BOTH directions.
-export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
-	// ⭐ **THE ORDINAL DRIFT GUARD (7b)** — the enum's case ORDER is this family's wire format, and the
-	// ordinals below are transcribed literals in this file. Asserted against the declaration on every
-	// install, because drift is otherwise SILENT: every handler arm would name the wrong case, with no
-	// crash and no wrong exit code. Measured — swapping two cases leaves the suite fully green.
-	let fileErrors = BuiltinErrorOrdinalCheck.create(builtinManagedFileErrorEnum(), installer: b"installManagedFileRuntime")
+// The name this family's ordinals are transcribed under, for `BuiltinErrorOrdinalCheck`'s diagnostic — one
+// constant so the lookup's message and the claim's message name the same author.
+let ManagedFileOrdinalInstaller = b"the __ManagedFile runtime"
+
+// ⭐ **THE ORDINAL DRIFT GUARD FOR `__ManagedFileError` (7b, re-anchored at A1s)** — the enum's case ORDER is
+// this family's wire format and the ordinals at the top of this file are transcribed literals of it, so the
+// two are asserted to agree on every compile. Drift is otherwise SILENT: every handler arm would name the
+// wrong case, with no crash and no wrong exit code.
+//
+// ⚠ **THE DECLARATION IT VERIFIES AGAINST IS `stdlib/Builtins.maxon`'s, AND THAT IS THE POINT OF A1s.** It
+// used to be a `Project.builtinManagedFileErrorEnum()` the compiler built — a second transcription of the
+// same enum, which the parsed declaration then displaced in both registries anyway, so the guard verified a
+// layout no handler arm was selected from. See `Project.BuiltinErrorOrdinalCheck`'s header for the exit-134
+// measurement that shows.
+//
+// ⚠ It is a FREE function rather than the head of `installManagedFileRuntime` because it now needs the
+// `Project` — both to read the declaration and to report E4016 — and because it must run whether or not the
+// program touches a file. `Compiler.compileToCodeResult` calls it beside its four siblings, ahead of the
+// pipeline's error gate.
+export function verifyManagedFileOrdinals(project Project)
+	match declaredBuiltinErrorEnum(project, typeName: ManagedFileErrorTypeName, installer: ManagedFileOrdinalInstaller) 'declaration'
+		notDeclared then return
+		found(declaration) then claimManagedFileOrdinals(project, declaration: declaration)
+	end 'declaration'
+end 'verifyManagedFileOrdinals'
+
+function claimManagedFileOrdinals(project Project, declaration EnumLayout)
+	var fileErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedFileOrdinalInstaller)
 	fileErrors.claim(ManagedFileNotFoundCaseName, ordinal: ManagedFileNotFoundOrdinal)
 	fileErrors.claim(ManagedFileAccessDeniedCaseName, ordinal: ManagedFileAccessDeniedOrdinal)
 	fileErrors.claim(ManagedFileOpenFailedCaseName, ordinal: ManagedFileOpenFailedOrdinal)
@@ -1042,7 +1060,13 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 	fileErrors.claim(ManagedFileDeleteFailedCaseName, ordinal: ManagedFileDeleteFailedOrdinal)
 	fileErrors.claim(ManagedFileStatFailedCaseName, ordinal: ManagedFileStatFailedOrdinal)
 	fileErrors.claim(ManagedFileClosedCaseName, ordinal: ManagedFileClosedOrdinal)
+end 'claimManagedFileOrdinals'
 
+// ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installArrayRuntime` for its stated reason:
+// the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places, and a
+// builder that gains or loses a clause without the predicate following is a `try` that silently stops
+// being required (or an E3057 on a call that cannot fail). Checked in BOTH directions.
+export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesManagedFile 'noManagedFile'
 		return
 	end 'noManagedFile'

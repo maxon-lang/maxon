@@ -133,7 +133,10 @@ export let DivisorZeroPattern = 0 as ParsedInt
 // make one reintroduces precisely the drift 7b closed. It is a free function rather than the tail of an
 // `install…` because this family installs nothing — the caller is `Compiler.maxon`, beside the four installs
 // whose own claims run there transitively.
-export function verifyDivisionByZeroOrdinals()
-	let divisionErrors = BuiltinErrorOrdinalCheck.create(builtinDivisionByZeroErrorEnum(), installer: b"lowerCheckedDivision")
+export function verifyDivisionByZeroOrdinals(project Project)
+	// `overSynthesized`, and it is the honest word rather than the old neutral `create`: `__DivisionByZeroError`
+	// is declared in no stdlib file at all, so the compiler still builds this layout and only the compiler's
+	// own source can make it disagree — which is what keeps this family's verdict a `panic` (A1s).
+	var divisionErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinDivisionByZeroErrorEnum(), installer: b"lowerCheckedDivision")
 	divisionErrors.claim(DivisionByZeroCaseName, ordinal: DivisionByZeroOrdinal)
 end 'verifyDivisionByZeroOrdinals'

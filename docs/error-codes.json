@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "2e1154554556d2bc",
+  "sourceHash": "4530da96567573c9",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1358,6 +1358,15 @@
       "stage": "ir",
       "doc": "a declaration in the source compiles to the same symbol name as a function the\ncompiler EMITS into the program, and a program cannot hold two functions of one\nname. Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations\nmay carry the reserved `__` prefix (E2051's D6 exemption): the name is declarable\nTHERE, so what E2051 refuses is not what this refuses. Detected where the collision\nfirst becomes visible -- the reachability pass's name index, after every runtime\ninstall -- and told apart from an installer that ran twice by PROVENANCE, since a\nsynthesized function carries no `sourceFilePath` and a parsed one always does.",
       "emittedBy": {"shv2": "declarationCollidesWithEmittedSymbol"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 4016,
+      "tag": "E4016",
+      "name": "IrBuiltinErrorEnumMismatch",
+      "stage": "ir",
+      "doc": "the error enum a builtin runtime family throws is DECLARED in `stdlib/Builtins.maxon`\n(`__ManagedMemoryError`, `__ManagedFileError`, `__ManagedDirectoryError`), and this checkout's\ndeclaration disagrees with the ordinals the compiler's runtime transcribes as literals -- either\nthe enum is not declared at all (the module was not loaded), or a case it declares sits at a\ndifferent position than the runtime throws it at. The case ORDER is the wire format: a throwing\nruntime returns `ordinal + bias` as its error flag and a handler arm is selected from it, so a\ndisagreement routes every handler arm to the wrong case SILENTLY. Reported rather than panicked\nbecause the declaration is now a property of a FILE on disk: `stdlib/Builtins.maxon` may be\nedited, while the two families the compiler still SYNTHESIZES (`__ArrayError`,\n`__DivisionByZeroError`) keep the panic, since only the compiler's own source can make those\ndisagree.",
+      "emittedBy": {"shv2": "builtinErrorEnumMismatch"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

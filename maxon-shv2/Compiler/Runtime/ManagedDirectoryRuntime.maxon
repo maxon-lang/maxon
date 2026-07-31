@@ -126,9 +126,9 @@ let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
 let MaxPathBytes = 260 as ParsedInt
 
 // ⭐ **THE `__ManagedDirectoryError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
-// `ManagedFileRuntime` discipline, and the ordinals are positional facts about
-// `Project.builtinManagedDirectoryErrorEnum`'s case order, which is why that function's comment calls the
-// order a wire format.
+// `ManagedFileRuntime` discipline, and the ordinals are positional facts about the case order of the enum
+// DECLARED at `stdlib/Builtins.maxon:190` (A1s). `verifyManagedDirectoryOrdinals` below is what holds these
+// literals to that declaration.
 //
 // ⚠ **THE SOURCE OF THESE NUMBERS IS `stdlib/Builtins.maxon:189-199`, NOT A COMMENT.** The bootstrap's own
 // comment at `2-Parser.cs:1442-1444` lists SEVEN cases and omits `iteratorInvalid`, which shifts every
@@ -769,12 +769,23 @@ end 'emitCurrentPathVerdict'
 // reason: the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places,
 // and a builder that gains or loses a clause without the predicate following is a `try` that silently stops
 // being required (or an E3055 on a call that cannot fail). Checked in BOTH directions.
-export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUsage)
-	// ⭐ **THE ORDINAL DRIFT GUARD (7b)** — the enum's case ORDER is this family's wire format, and the
-	// ordinals below are transcribed literals in this file. Asserted against the declaration on every
-	// install, because drift is otherwise SILENT: every handler arm would name the wrong case, with no
-	// crash and no wrong exit code. Measured — swapping two cases leaves the suite fully green.
-	let directoryErrors = BuiltinErrorOrdinalCheck.create(builtinManagedDirectoryErrorEnum(), installer: b"installManagedDirectoryRuntime")
+// The name this family's ordinals are transcribed under, for `BuiltinErrorOrdinalCheck`'s diagnostic — one
+// constant so the lookup's message and the claim's message name the same author.
+let ManagedDirectoryOrdinalInstaller = b"the __ManagedDirectory runtime"
+
+// ⭐ **THE ORDINAL DRIFT GUARD FOR `__ManagedDirectoryError` (7b, re-anchored at A1s)** — the twin of
+// `verifyManagedFileOrdinals`, which carries the whole argument: the case ORDER is the wire format, the
+// declaration it is verified against is `stdlib/Builtins.maxon`'s, and it is a free function because it
+// needs the `Project` and must run on every compile.
+export function verifyManagedDirectoryOrdinals(project Project)
+	match declaredBuiltinErrorEnum(project, typeName: ManagedDirectoryErrorTypeName, installer: ManagedDirectoryOrdinalInstaller) 'declaration'
+		notDeclared then return
+		found(declaration) then claimManagedDirectoryOrdinals(project, declaration: declaration)
+	end 'declaration'
+end 'verifyManagedDirectoryOrdinals'
+
+function claimManagedDirectoryOrdinals(project Project, declaration EnumLayout)
+	var directoryErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedDirectoryOrdinalInstaller)
 	directoryErrors.claim(ManagedDirectoryNotFoundCaseName, ordinal: ManagedDirectoryNotFoundOrdinal)
 	directoryErrors.claim(ManagedDirectoryAccessDeniedCaseName, ordinal: ManagedDirectoryAccessDeniedOrdinal)
 	directoryErrors.claim(ManagedDirectoryOpenSearchFailedCaseName, ordinal: ManagedDirectoryOpenSearchFailedOrdinal)
@@ -782,7 +793,9 @@ export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUs
 	directoryErrors.claim(ManagedDirectoryCreateFailedCaseName, ordinal: ManagedDirectoryCreateFailedOrdinal)
 	directoryErrors.claim(ManagedDirectoryCurrentPathFailedCaseName, ordinal: ManagedDirectoryCurrentPathFailedOrdinal)
 	directoryErrors.claim(ManagedDirectoryClosedCaseName, ordinal: ManagedDirectoryClosedOrdinal)
+end 'claimManagedDirectoryOrdinals'
 
+export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesManagedDirectory 'noManagedDirectory'
 		return
 	end 'noManagedDirectory'

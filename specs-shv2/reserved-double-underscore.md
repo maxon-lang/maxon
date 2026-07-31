@@ -220,10 +220,12 @@ on the FILE'S IDENTITY (`<stdlibDir>/Builtins.maxon`, both sides resolved), not 
 the basename, any program could opt out of the reservation for a whole file by naming it `Builtins.maxon`
 — and every guarantee that leans on "no user `__` name can be declared" would leak through it.
 
-⚠ The POSITIVE direction is deliberately not pinned here, because a spec cannot express it: a test
-compiles a throwaway project, so it can never contain the checkout's own `stdlib/Builtins.maxon`. That
-module's load IS the positive case, and it arrives when the stdlib whitelist can list it — see the notes
-on `specs-shv2/parsable-interface.md`, which name the fallible-division rung that still blocks it.
+⚠ The POSITIVE direction used to be unpinnable, and A1s is what changed that. A test compiles a throwaway
+project, so it can never CONTAIN the checkout's own `stdlib/Builtins.maxon` — but it no longer has to:
+that module is now LISTED by the stdlib loader, so it is loaded into every compile, and a fragment can
+simply NAME one of the `__`-prefixed types it declares. `reserved-space-module-declarations-reach-a-user-program`
+below is that pin, and it deliberately names `__ManagedListError` — a type the compiler synthesizes
+nowhere, so nothing but the module's own declaration can be answering.
 
 ⚠⚠ **AND THAT UNPINNABILITY HAS ALREADY COST ONE DEFECT, SO IT IS A STANDING INSTRUCTION, NOT A FOOTNOTE.**
 Every reader that used to read *"`__`-prefixed"* as *"the compiler emitted this"* is wrong for a name this
@@ -372,4 +374,39 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:4:16: call to undefined function '__int_fromString': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```
+
+<!-- test: reserved-space-module-declarations-reach-a-user-program -->
+**THE POSITIVE CONTROL ON THE DECLARATION-SIDE EXEMPTION (A1s), and it is the half every negative case
+above assumes.** The four cases before this one prove the exemption is not WIDER than one file. None of
+them proves it is not EMPTY: a compiler that refused `stdlib/Builtins.maxon`'s own declarations too would
+pass every one of them.
+
+It became pinnable when the stdlib loader listed that module. The fragment cannot contain the checkout's
+`Builtins.maxon` — it never could — but it no longer needs to, because that file is loaded into this
+compile like any other stdlib source, and its `__`-prefixed declarations are therefore in scope here.
+
+⚠ **IT NAMES `__ManagedListError` ON PURPOSE.** Its `__Managed{Memory,File,Directory}Error` siblings would
+prove less: those three USED to be built by the compiler as well as declared in that file, and A1s deleted
+the compiler's copies precisely because two spellings of one wire format is the shape that drifts silently.
+`__ManagedListError` was only ever declared, by `stdlib/Builtins.maxon:144`, and no line of the compiler
+mentions it — so a `match` that names its four cases exhaustively can be answered by nothing else. The
+`nodeNotInList` arm is third, which is also a reading of the declaration's ORDER and not merely its
+membership.
+```maxon
+function rank(e __ManagedListError) returns ExitCode
+	return match e 'which'
+		empty gives 1
+		endOfList gives 2
+		nodeNotInList gives 3
+		nodeAlreadyInList gives 4
+	end 'which'
+end 'rank'
+
+function main() returns ExitCode
+	return rank(__ManagedListError.nodeNotInList)
+end 'main'
+```
+```exitcode
+3
 ```

@@ -1347,6 +1347,20 @@ E4015 IrDeclarationCollidesWithEmittedSymbol
 	doc install -- and told apart from an installer that ran twice by PROVENANCE, since a
 	doc synthesized function carries no `sourceFilePath` and a parsed one always does.
 
+E4016 IrBuiltinErrorEnumMismatch
+	shv2 builtinErrorEnumMismatch
+	doc the error enum a builtin runtime family throws is DECLARED in `stdlib/Builtins.maxon`
+	doc (`__ManagedMemoryError`, `__ManagedFileError`, `__ManagedDirectoryError`), and this checkout's
+	doc declaration disagrees with the ordinals the compiler's runtime transcribes as literals -- either
+	doc the enum is not declared at all (the module was not loaded), or a case it declares sits at a
+	doc different position than the runtime throws it at. The case ORDER is the wire format: a throwing
+	doc runtime returns `ordinal + bias` as its error flag and a handler arm is selected from it, so a
+	doc disagreement routes every handler arm to the wrong case SILENTLY. Reported rather than panicked
+	doc because the declaration is now a property of a FILE on disk: `stdlib/Builtins.maxon` may be
+	doc edited, while the two families the compiler still SYNTHESIZES (`__ArrayError`,
+	doc `__DivisionByZeroError`) keep the panic, since only the compiler's own source can make those
+	doc disagree.
+
 E4099 IrUnresolvedCall
 	selfhosted irUnresolvedCall
 	doc internal compiler-invariant violation -- a `call` / `methodCall`

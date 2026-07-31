@@ -1663,113 +1663,30 @@ export function builtinOrderingEnum() returns EnumLayout
 	return layout
 end 'builtinOrderingEnum'
 
-// ⭐ **THE COMPILER-OWNED `__ManagedFileError` (R4.1)** — what every `__ManagedFile` static and method
-// throws, and the type a handler's `match e` discriminates.
+// ⭐⭐ **THE THREE `__Managed*Error` FAMILIES ARE DECLARED, NOT SYNTHESIZED (A1s).** `__ManagedMemoryError`,
+// `__ManagedFileError` and `__ManagedDirectoryError` were each transcribed into a `builtin…ErrorEnum()`
+// constructor here, a second spelling of declarations that already exist in `stdlib/Builtins.maxon` (`:152`,
+// `:175`, `:190`) — this project's signature bug, one fact written down twice, in the one place where a
+// divergence is SILENT (the case ORDER is a wire format; see `BuiltinErrorOrdinalCheck`).
 //
-// ⚠ **THE CASE ORDER IS THE WIRE FORMAT, NOT A STYLE CHOICE.** A throwing runtime returns its error as
-// `errorReturn(value, flag)` where `flag = ordinal + ErrorFlagOrdinalBias` (see
-// `ArrayRuntime.ArrIndexOutOfBoundsFlag`), and a handler that binds the error matches on the ordinal
-// recovered from it. So these three names in THIS sequence are what makes
-// `managed-file.open-read-not-found-variant`'s `notFound then …` select the arm the runtime meant.
-// The order is `specs/managed-file.md`'s own — "notFound / accessDenied / openFailed".
-// ⇒ Reordering them silently reroutes every handler in the corpus. Add new cases at the END.
+// ⚠ **THE SECOND SPELLING WAS ALREADY LOSING, AND THAT IS WHY IT HAD TO GO RATHER THAN BE KEPT IN STEP.**
+// Once `stdlib/Builtins.maxon` is loaded, its parsed declarations reach BOTH enum registries through
+// `upsertDeclaredEnum`, which is a last-wins upsert — so the PARSED layout displaced the seed and every
+// handler arm was already being selected from it, while `BuiltinErrorOrdinalCheck` went on verifying the
+// synthesized copy. MEASURED before this change: swapping `notFound` and `accessDenied` in
+// `stdlib/Builtins.maxon` made `managed-directory.open-search-not-found-variant` abort (exit 134 for an
+// expected 42) with the drift guard SILENT — the guard was checking a layout the program did not use.
 //
-// Seeded UNCONDITIONALLY, exactly as `Ordering` is, rather than demand-driven like the `__ManagedFile`
-// LAYOUT: `createEnumRegistry` is the door that reaches BOTH registries (`Project.enumTypes`, the
-// authority, and `ProgramSignatures.enumTypes`, the parser's index), and a handler resolves its `match`
-// through the former. A registration wired only into the sweep would populate one and not the other.
-// It costs one map entry in a program that never opens a file, and it cannot collide: the name is
-// `__`-prefixed, so `requireUnreservedName` already refuses any source that tries to declare it (E2051)
-// — the same argument that lets `__ManagedFile` be namable in a parameter without a reserved-name gate.
-export function builtinManagedFileErrorEnum() returns EnumLayout
-	var layout = EnumLayout.create(ManagedFileErrorTypeName, isUnion: false)
-	addBuiltinEnumCase(layout, caseName: ManagedFileNotFoundCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedFileAccessDeniedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedFileOpenFailedCaseName)
-	// ⭐ **R4.2 APPENDS EIGHT, IN v1'S EXACT ORDER** (`LowerMaxonToStd.maxon:1781-1795`) — the header above
-	// says why appending is the only legal move: each tag is DERIVED from declaration position, and the tag
-	// is what a throwing runtime returns as its error flag. `readFailed`/`writeFailed`/`sizeFailed`/
-	// `deleteFailed`/`statFailed` are the per-operation catch-alls (a `notFound`/`accessDenied` errno still
-	// wins over them, through the same `osLastError` mapping the open uses); `invalidStatBuffer`/
-	// `invalidStatIndex` are `statField`/`statFree`'s invariant violations; `closed` is an operation on a
-	// box whose handle has already been reclaimed.
-	//
-	// ⚠ **THERE IS NO `renameFailed`, AND ITS ABSENCE IS DELIBERATE IN BOTH REFERENCES.** The bootstrap
-	// reuses `deleteFailed` for a failed rename (`MaxonToStandardConversion.ManagedFile.cs:321-323`) and v1
-	// declares no such case; inventing one here would shift nothing (it would append) but would put a case
-	// in shv2's enum that no `match` in the corpus can ever name.
-	addBuiltinEnumCase(layout, caseName: ManagedFileReadFailedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedFileWriteFailedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedFileSizeFailedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedFileDeleteFailedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedFileStatFailedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedFileInvalidStatBufferCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedFileInvalidStatIndexCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedFileClosedCaseName)
-	return layout
-end 'builtinManagedFileErrorEnum'
-
-// ⭐ **THE COMPILER-OWNED `__ManagedDirectoryError` (R4.3)** — what every throwing `__ManagedDirectory`
-// operation throws, and the type a handler's `match e` discriminates.
+// ⇒ There is now ONE declaration of each, in `stdlib/Builtins.maxon`, and the compiler READS it
+// (`declaredBuiltinErrorEnum`). The three constructors are gone; the case-NAME constants stay in
+// `SignatureIndex.maxon`, because the runtime still has to name the case it throws.
 //
-// ⚠ **THE CASE ORDER IS THE WIRE FORMAT, NOT A STYLE CHOICE**, for the reason
-// `builtinManagedFileErrorEnum`'s header states in full: the ordinal IS the error flag the runtime returns.
-// These eight names in THIS sequence are what makes `managed-directory.open-search-not-found-variant`'s
-// `notFound then …` select the arm the runtime meant.
-//
-// ⚠⚠ **THE ORDER IS `stdlib/Builtins.maxon:189-199`'s, AND THE BOOTSTRAP'S OWN COMMENT ABOUT IT IS STALE.**
-// `2-Parser.cs:1442-1444` lists SEVEN cases — "notFound / accessDenied / openSearchFailed / nextFailed /
-// createFailed / currentPathFailed / closed" — omitting `iteratorInvalid`, which sits between `nextFailed`
-// and `createFailed` in the enum three lines below it. Taking the comment's list would have shifted
-// `createFailed`, `currentPathFailed` and `closed` down by one and routed every one of them to the wrong
-// handler arm, silently. It is the THIRD reference comment this project has found stale about its own enum
-// (after `__ManagedMemoryError`'s ordinals and `osFileOpenRead`'s `CreateFileW`). ⇒ Never take an ordinal
-// from a comment.
-//
-// ⚠ `iteratorInvalid` and `closed` are DECLARED but not thrown by either reference. Both are declared here
-// because the ordinals are positional; `closed` is additionally REACHED by shv2 (see
-// `ManagedDirectoryRuntime.buildManagedDirectoryNext`'s closed guard for the wrong answer it prevents and why shv2
-// diverges), while `iteratorInvalid` stays unreachable — it names "filename() on an exhausted iterator", and
-// `filename()` is non-throwing in both references and in the spec.
-//
-// Seeded UNCONDITIONALLY beside its two siblings for their stated reason: `createEnumRegistry` is the one
-// door that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`. It costs
-// one map entry in a program that touches no directory, and it cannot collide — the name is `__`-prefixed, so
-// `requireUnreservedName` already refuses any source that tries to declare it (E2051).
-export function builtinManagedDirectoryErrorEnum() returns EnumLayout
-	var layout = EnumLayout.create(ManagedDirectoryErrorTypeName, isUnion: false)
-	addBuiltinEnumCase(layout, caseName: ManagedDirectoryNotFoundCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedDirectoryAccessDeniedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedDirectoryOpenSearchFailedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedDirectoryNextFailedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedDirectoryIteratorInvalidCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedDirectoryCreateFailedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedDirectoryCurrentPathFailedCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedDirectoryClosedCaseName)
-	return layout
-end 'builtinManagedDirectoryErrorEnum'
-
-// ⭐ **THE COMPILER-OWNED `__ManagedMemoryError` (R4.2)** — what the three `__ManagedMemory` members this
-// rung delivers throw, and the type a handler's `match e` discriminates. Its case ORDER is the wire format
-// for the same reason `builtinManagedFileErrorEnum`'s is, and it is the reference's own
-// (`stdlib/Builtins.maxon:151-160`) so a program written against the reference reads the same ordinals here.
-//
-// Seeded UNCONDITIONALLY beside the file error for its stated reason: `createEnumRegistry` is the one door
-// that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`. It costs one
-// map entry in a program that touches no managed memory, and it cannot collide — the name is `__`-prefixed,
-// so `requireUnreservedName` already refuses any source that tries to declare it (E2051).
-export function builtinManagedMemoryErrorEnum() returns EnumLayout
-	var layout = EnumLayout.create(ManagedMemoryErrorTypeName, isUnion: false)
-	addBuiltinEnumCase(layout, caseName: ManagedMemoryIndexOutOfBoundsCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedMemoryEmptySlotCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedMemorySliceOutOfBoundsCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedMemoryInvalidLengthCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedMemoryInvalidCapacityCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedMemoryShiftOutOfBoundsCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedMemoryInvalidByteRangeCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedMemoryInvalidAllocationCaseName)
-	return layout
-end 'builtinManagedMemoryErrorEnum'
+// ⚠ **TWO FAMILIES DO NOT MOVE, AND THE ASYMMETRY IS THEIR PROVENANCE RATHER THAN AN OVERSIGHT.**
+// `ArrayError` is declared in `stdlib/Array.maxon:6`, which the stdlib loader does not LIST, and
+// `__DivisionByZeroError` is declared in NO stdlib file at all — so neither has a loaded declaration to be
+// read from, and both keep their constructor and their unconditional seed below. `ArrayError` moves the day
+// `stdlib/Array.maxon` is listed; `__DivisionByZeroError` moves only if the language grows a declaration for
+// it, which would be a change to the reference `stdlib/` all three compilers share.
 
 // ⭐ **THE COMPILER-OWNED `ArrayError` (R4.4)** — what every throwing `Array` accessor throws, and the type
 // `specs-shv2/array-slots.md`'s four cases discriminate. Registered under the RESERVED name
@@ -1829,19 +1746,22 @@ export function orderingTagOf(layout EnumLayout, caseName ByteArray) returns Par
 	return layout.tagOfIndex(index)
 end 'orderingTagOf'
 
-// ⭐⭐ **THE ORDINAL DRIFT GUARD FOR THE BUILTIN ERROR ENUMS — ONE MECHANISM, FIVE FAMILIES (7b, +A1).**
+// ⭐⭐ **THE ORDINAL DRIFT GUARD FOR THE BUILTIN ERROR ENUMS — ONE MECHANISM, FIVE FAMILIES (7b, +A1, +A1s).**
 //
-// Each `__Managed*Error` / `ArrayError` / `__DivisionByZeroError` wire format lived in THREE places with
-// nothing tying them: the case
-// NAMES (constants), the case ORDER (the `addBuiltinEnumCase` calls above, where position IS the ordinal and
-// those functions' own headers call it a wire format), and the ordinals as LITERALS in the runtime throw
-// sites. Drift means **every handler arm names the wrong case, silently** — no crash, no wrong exit code,
-// just a program that reports `accessDenied` where the OS said `openSearchFailed`.
+// Each `__Managed*Error` / `ArrayError` / `__DivisionByZeroError` wire format lives in TWO places with
+// nothing tying them: the case ORDER (a declaration, where position IS the ordinal), and the ordinals as
+// LITERALS in the runtime throw sites. Drift means **every handler arm names the wrong case, silently** — no
+// crash, no wrong exit code, just a program that reports `accessDenied` where the OS said
+// `openSearchFailed`.
 //
-// ⚠ **MEASURED, NOT ARGUED**: swap two cases in `builtinManagedDirectoryErrorEnum` and leave the runtime
-// alone, and the suite is **2758/0 GREEN**. Today's correspondence is well-checked only by coincidence of
-// coverage — three directory ordinals happen to be pinned by committed `match` arms, and the rest need an
-// OS failure mid-iteration that no test can provoke.
+// ⚠ **MEASURED, NOT ARGUED, TWICE.** Before this guard existed, swapping two cases and leaving the runtime
+// alone left the suite **2758/0 GREEN**. And at A1s — with the guard in place, but anchored to the
+// COMPILER's transcribed copy while the program already resolved its handler arms from the PARSED one —
+// swapping `notFound` and `accessDenied` in `stdlib/Builtins.maxon` made
+// `managed-directory.open-search-not-found-variant` **abort (exit 134 for an expected 42) with this guard
+// SILENT**. A guard anchored to a copy the program does not use is not a guard. Correspondence is
+// well-checked only by coincidence of coverage — three directory ordinals happen to be pinned by committed
+// `match` arms, and the rest need an OS failure mid-iteration that no test can provoke.
 //
 // ⭐ **WHY A CHECK AND NOT A DERIVATION, WHICH WOULD BE BETTER.** `orderingTagOf` above is the cure this
 // project prefers and its header says why — the bootstrap "spells 0/1/2 as literals at its consumer sites
@@ -1869,26 +1789,63 @@ end 'orderingTagOf'
 // halves in ONE argument list and checking them on the spot makes that unrepresentable, and the count check
 // goes away WITH the columns rather than being deleted on an argument.
 //
-// ⚠ **NOTHING A USER PROGRAM CONTAINS CAN STEER THIS.** The declaration is always one of the five
-// `builtin…ErrorEnum()` CONSTRUCTORS above — never an `enumTypes` lookup — and the claims are compiler
-// constants, so the verdict is a property of the compiler BINARY alone: it panics on the first program
-// compiled, or on none. That is what makes `panic` right here rather than a diagnostic; no source can reach
-// it, and a source that tried to declare a colliding type is refused by `requireUnreservedName` (E2051).
+// ⚠⚠ **THE VERDICT'S SEVERITY FOLLOWS THE DECLARATION'S PROVENANCE, AND A1s IS WHY THERE ARE NOW TWO.**
+// Until A1s every declaration was a `builtin…ErrorEnum()` CONSTRUCTOR, so the verdict was a property of the
+// compiler BINARY alone — it panicked on the first program compiled or on none — and that is exactly what
+// made `panic` right rather than a diagnostic: no source could reach it. Three families now read a PARSED
+// declaration out of `stdlib/Builtins.maxon`, and that is a property of a FILE ON DISK. A developer editing
+// that file can make this disagree, and answering a SOURCE problem with a compiler CRASH would report it as
+// an internal one. So `BuiltinErrorDeclarationSource` carries which kind of layout a check holds, and the
+// two failures part company at exactly the point where they stop being the same fact: `synthesized` still
+// PANICS (only this compiler's own source can move `ArrayError` or `__DivisionByZeroError`), while
+// `declared` REPORTS **E4016** against the project, so the pipeline's error gate fails the build with no
+// binary written. It is `IrDeclarationCollidesWithEmittedSymbol`'s provenance discriminator (A1t) applied
+// one registry over.
+//
+// ⚠ A user PROGRAM still cannot steer either verdict: the three declared names are `__`-prefixed, so
+// `requireUnreservedName` (E2051) refuses any source but `stdlib/Builtins.maxon` itself to declare them.
+
+// WHERE THE LAYOUT A CHECK VERIFIES AGAINST CAME FROM — and therefore who is at fault when it disagrees.
+export enum BuiltinErrorDeclarationSource
+	// A `builtin…ErrorEnum()` constructor in this file. Nothing outside the compiler's own source can move
+	// it, so a disagreement is a compiler bug and the check PANICS.
+	synthesized
+	// A declaration parsed from `stdlib/Builtins.maxon`. This checkout's source can move it, so a
+	// disagreement is reported as E4016 against the project rather than crashing the compiler.
+	declared
+end 'BuiltinErrorDeclarationSource'
+
 export type BuiltinErrorOrdinalCheck
 	// The declaration every claim is checked against.
 	var declaration as EnumLayout
+	// Where that declaration came from — see `BuiltinErrorDeclarationSource`.
+	var source as BuiltinErrorDeclarationSource
 	// WHO transcribed the ordinals, for the diagnostic — the installer that owns the literals.
 	var installer as ByteArray
+	// The diagnostic sink a `declared` disagreement is reported against. Carried by every check rather than
+	// by the `declared` arm alone, because a `match` binds a union payload IMMUTABLY (E3019) and reporting
+	// mutates the project — so the arm could hold it but could not use it. The `synthesized` path never
+	// reads it: it panics, which is exactly the difference `source` records.
+	var project as Project
 
-	export static function create(declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
-		return Self{declaration: declaration, installer: installer}
-	end 'create'
+	// A check over a layout the COMPILER built. Its two callers are the two families that have no loadable
+	// stdlib declaration to read (`ArrayError`, `__DivisionByZeroError`).
+	export static function overSynthesized(project Project, declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
+		return Self{declaration: declaration, source: BuiltinErrorDeclarationSource.synthesized, installer: installer, project: project}
+	end 'overSynthesized'
+
+	// A check over a layout parsed from `stdlib/Builtins.maxon`, reached through `declaredBuiltinErrorEnum`
+	// — which is what turns an ABSENT declaration into one E4016 rather than into a silently-empty enum.
+	export static function overDeclared(project Project, declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
+		return Self{declaration: declaration, source: BuiltinErrorDeclarationSource.declared, installer: installer, project: project}
+	end 'overDeclared'
 
 	// One claim — "`installer` throws `caseName` as `ordinal`" — verified against the declaration on the
 	// spot. THE only way to state a claim, so a name can never be recorded without the ordinal it belongs to.
 	export function claim(caseName ByteArray, ordinal ParsedInt)
 		if not self.declaration.hasCase(caseName) 'noSuchCase'
-			panic("BuiltinErrorOrdinalCheck: {String.from(self.installer)} claims ordinal {ordinal} for '{String.from(caseName)}', but `{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares no such case — the runtime throws a case the enum does not have, so no handler arm could ever match it")
+			self.refuse("{String.from(self.installer)} claims ordinal {ordinal} for '{String.from(caseName)}', but `{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares no such case — the runtime throws a case the enum does not have, so no handler arm could ever match it")
+			return
 		end 'noSuchCase'
 
 		// `hasCase` is the ONE reader of `indexOfCase`'s "absent" convention this check needs, so the index
@@ -1896,10 +1853,45 @@ export type BuiltinErrorOrdinalCheck
 		// `index >= caseCount()`; a second copy of it here would be a third place the convention is written.
 		let declared = self.declaration.tagOfIndex(self.declaration.indexOfCase(caseName))
 		if declared != ordinal 'drifted'
-			panic("BuiltinErrorOrdinalCheck: '{String.from(caseName)}' is ordinal {declared} in `{self.declaration.kindWord()} {String.from(self.declaration.name)}` but {String.from(self.installer)} throws it as {ordinal} — the enum's case ORDER is the wire format and the two have DRIFTED. Every handler arm for this case would name the wrong error, silently. Fix the runtime's ordinal, or move the case back")
+			self.refuse("'{String.from(caseName)}' is ordinal {declared} in `{self.declaration.kindWord()} {String.from(self.declaration.name)}` but {String.from(self.installer)} throws it as {ordinal} — the enum's case ORDER is the wire format and the two have DRIFTED. Every handler arm for this case would name the wrong error, silently. Fix the runtime's ordinal, or move the case back")
 		end 'drifted'
 	end 'claim'
+
+	// THE one place a failed claim becomes a verdict, so the two failure shapes above cannot come to
+	// disagree about which severity a source earns. See `BuiltinErrorDeclarationSource` for the split.
+	function refuse(reason String)
+		match self.source 'origin'
+			synthesized then panic("BuiltinErrorOrdinalCheck: {reason}")
+			declared then reportDiagnostic(self.project, diagnostic: Diagnostic.create(ErrorCode.builtinErrorEnumMismatch, message: "stdlib/Builtins.maxon's `{self.declaration.kindWord()} {String.from(self.declaration.name)}` disagrees with this compiler's runtime: {reason}"))
+		end 'origin'
+	end 'refuse'
 end 'BuiltinErrorOrdinalCheck'
+
+// What `declaredBuiltinErrorEnum` found. `notDeclared` is a real answer with its own case rather than an
+// empty layout, because an empty one would make every `claim` behind it report the SAME "declares no such
+// case" — one diagnostic per ordinal, for the single fact that the module was not loaded.
+export union DeclaredBuiltinErrorEnum
+	found(layout EnumLayout)
+	notDeclared
+end 'DeclaredBuiltinErrorEnum'
+
+// ⭐ **THE ONE DOOR TO A BUILTIN ERROR ENUM'S *DECLARED* LAYOUT (A1s)** — `stdlib/Builtins.maxon`'s, out of
+// the authority registry `commitEnumTypes` fills.
+//
+// ⚠ **ITS ABSENCE IS A DIAGNOSTIC, NOT A PANIC AND NOT A SILENTLY-EMPTY ENUM** — the coupling this rung's
+// ruling deliberately buys is that the builtin error families now depend on a stdlib module being LOADED.
+// The file going MISSING is caught earlier and more precisely (`StdlibLoader.listWhitelistedModule` throws
+// `fileNotFound` naming the path), so what actually reaches here is the module present but no longer LISTED,
+// or listed but no longer declaring the enum. Both are edits to this checkout, and both would otherwise
+// produce a compiler that throws ordinals no handler arm can name.
+export function declaredBuiltinErrorEnum(project Project, typeName ByteArray, installer ByteArray) returns DeclaredBuiltinErrorEnum
+	let layout = try project.enumTypes.get(typeName) otherwise 'notDeclared'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.builtinErrorEnumMismatch, message: "'{String.from(typeName)}' is the error enum {String.from(installer)} throws, and this compile declares no enum of that name — it is declared in stdlib/Builtins.maxon, which the stdlib loader must list for the runtime's error ordinals to name anything"))
+		return DeclaredBuiltinErrorEnum.notDeclared
+	end 'notDeclared'
+
+	return DeclaredBuiltinErrorEnum.found(layout)
+end 'declaredBuiltinErrorEnum'
 
 // ⭐ **AN ENUM REGISTRY, SEEDED WITH THE COMPILER-KNOWN ENUMS (P1.7a slice 2b-ii)** — THE one constructor
 // of an `EnumLayoutMap`, used by BOTH registries that hold declared enums (`Project.enumTypes`, the
@@ -1929,15 +1921,11 @@ end 'BuiltinErrorOrdinalCheck'
 export function createEnumRegistry() returns EnumLayoutMap
 	var registry = EnumLayoutMap.create()
 	registry.upsert(OrderingTypeName, value: builtinOrderingEnum())
-	// R4.1: what every `__ManagedFile` operation throws. See `builtinManagedFileErrorEnum` for why it is
-	// seeded here unconditionally rather than by the declaration sweep like the `__ManagedFile` layout.
-	registry.upsert(ManagedFileErrorTypeName, value: builtinManagedFileErrorEnum())
-	// R4.3: what every throwing `__ManagedDirectory` operation throws, seeded the same way and for the same
-	// reason. See `builtinManagedDirectoryErrorEnum` for why its case ORDER came from the enum and not from
-	// the bootstrap's comment about it.
-	registry.upsert(ManagedDirectoryErrorTypeName, value: builtinManagedDirectoryErrorEnum())
-	// R4.2: what the three `__ManagedMemory` members throw, seeded for the same reason and in the same way.
-	registry.upsert(ManagedMemoryErrorTypeName, value: builtinManagedMemoryErrorEnum())
+	// ⚠ **THE THREE `__Managed*Error` FAMILIES ARE NOT SEEDED HERE (A1s)** — they are DECLARED in
+	// `stdlib/Builtins.maxon` and arrive through the ordinary declaration path (`upsertDeclaredEnum`), which
+	// is what makes the declaration the one authority instead of the loser of a last-wins upsert against a
+	// seed. See the header above `builtinArrayErrorEnum` for the whole argument, and
+	// `declaredBuiltinErrorEnum` for what happens when the module is not loaded.
 	// R4.4: what every throwing `Array` accessor throws. See `builtinArrayErrorEnum`.
 	registry.upsert(ArrayErrorTypeName, value: builtinArrayErrorEnum())
 	// A1: what a possibly-zero `/` or `mod` throws. See `builtinDivisionByZeroErrorEnum`.

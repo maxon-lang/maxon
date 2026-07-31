@@ -256,6 +256,19 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// pipeline's error gate, exactly as an E3017 is.
 	checkTypeSymbolNamespace(project, signatures: signatures)
 
+	// ⭐⭐ **THE FIVE BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT IN FIVE OTHER PLACES (A1s).**
+	// Each family's runtime transcribes its enum's ordinals as literals, and each holds them to the
+	// declaration on every compile (`Project.BuiltinErrorOrdinalCheck` — drift silently reroutes every
+	// handler arm). They used to run from four `install*Runtime` heads plus one free function; three of them
+	// now read a PARSED declaration out of `stdlib/Builtins.maxon` and so need the `Project`, and the
+	// installs run AFTER the pipeline where a diagnostic would have no gate left to fail against. Here they
+	// have both: `queryAllModule` has merged every declaration, and the pipeline's error gate below turns an
+	// E4016 into a failed build with no binary written.
+	verifyManagedFileOrdinals(project)
+	verifyManagedDirectoryOrdinals(project)
+	verifyArrayRuntimeOrdinals(project)
+	verifyDivisionByZeroOrdinals(project)
+
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
 	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
 	// committed golden is byte-for-byte what it was before this rung existed. That is not an
@@ -426,14 +439,6 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// classifies a codepoint through `__ucd_cat`; as with every install above, the bit was settled by
 	// `scanRuntimeUsage` before any install ran, so the order is readability rather than a dependency.
 	installCharacterSetRuntime(pipeline.stdModule, usage: usage)
-
-	// ⭐ **THE FIFTH BUILTIN-ERROR ORDINAL CLAIM (A1)**, made HERE rather than inside an `install…` because
-	// fallible division installs no runtime function at all — a checked divide is expanded in place at the Std
-	// tier (`CheckedDivisionRuntime`'s header says why). The claim itself is the same unconditional,
-	// program-independent assertion the other four make from inside their installers' heads: it verifies the
-	// compiler's own transcription of an ordinal against the enum declaration, so it panics on the first program
-	// compiled or on none.
-	verifyDivisionByZeroOrdinals()
 
 	// The file-IO runtime (`__mf_open_read`, R4.1) — installed the same already-lowered way, on its own
 	// `usesManagedFile` bit. It must come AFTER the array install is decided but has no ordering dependency
