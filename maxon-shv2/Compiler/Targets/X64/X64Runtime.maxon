@@ -112,6 +112,11 @@ end 'IntegerFaultKind'
 // would silently stop the harness stripping one of the two lines.
 let FaultRipTag = b" at rip=0x"
 
+// The header that opens a symbolized backtrace. ONE spelling for BOTH producers — the hardware-fault
+// path (`mrt_fault_backtrace`) and the software panic (`mrt_panic`) — because a reader is entitled to
+// one trace format from one runtime, and nothing but this constant would make the two agree.
+let BacktraceHeader = b"Stack trace:\n"
+
 // The whole fixed prefix of `kind`'s panic line, up to the ASLR-dependent hex. ONE answer to "which
 // fault prints what", asked by the Windows thunk (which picks between the two AT RUNTIME, by loading
 // the chosen string's address) and by the Linux handler (which cannot classify at all, and says so at
@@ -395,6 +400,32 @@ function emitLeaTextBase(asm X64RuntimeAsm, dest X64Register)
 	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: dest, targetName: EntryPointName)
 end 'emitLeaTextBase'
 
+// `rax = strlen(cstrReg)`, leaving `cstrReg` holding the string start. A C string does not carry its
+// length and the emitted program links no CRT, so this walk is the only way to it.
+//
+// Shared by the WINDOWS writer (which hands the length to `WriteFile`) and the LINUX one (which hands
+// it to `write(2)`), because how long a string is is not an OS question. It had been open-coded in
+// both, instruction for instruction: nothing made the two agree, and an off-by-one corrected in one
+// of them is a truncated or over-long diagnostic from the other, not a compile error.
+//
+// Clobbers rdx (the byte under test).
+function emitCstrLenIntoRax(asm X64RuntimeAsm, cstrReg X64Register)
+	let lenLoop = asm.newLabel()
+	let lenDone = asm.newLabel()
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: cstrReg, wide: true)
+
+	asm.placeLabel(lenLoop)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: 0)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: lenDone)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: lenLoop)
+
+	asm.placeLabel(lenDone)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: cstrReg, wide: true)
+end 'emitCstrLenIntoRax'
+
 // `dest = <the runtime address of `__symtable`>`. Doubles as the `.text` upper bound:
 // concat lays the table down immediately after the last function, so `__symtable -
 // mrt_start` IS the size of the code.
@@ -461,23 +492,12 @@ function buildWriteStderrChunk() returns FunctionCodeChunk
 	let SlotWritten = 2
 	var asm = X64RuntimeAsm.beginFunction(3, outgoingStackArgBytes: 8)
 
-	let lenLoop = asm.newLabel()
-	let lenDone = asm.newLabel()
 	let done = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCstr), srcReg: X64Register.rcx)
 
-	// strlen: walk a cursor to the NUL, then subtract. RCX holds the string start untouched
-	// across the loop, so the subtraction needs no second slot.
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
-	asm.placeLabel(lenLoop)
-	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: 0)
-	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: lenDone)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: lenLoop)
-	asm.placeLabel(lenDone)
-	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	// RCX holds the string start untouched across the walk, so the length needs no second slot.
+	emitCstrLenIntoRax(asm, cstrReg: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), srcReg: X64Register.rax)
 
 	// An empty string is a no-op — WriteFile with a zero count is legal but pointless, and
@@ -803,7 +823,7 @@ function buildFaultBacktraceChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.r8)
 
-	emitPrintString(asm, bytes: b"Stack trace:\n")
+	emitPrintString(asm, bytes: BacktraceHeader)
 
 	emitLeaTextBase(asm, dest: X64Register.rax)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax)
@@ -976,7 +996,7 @@ function buildPanicChunk() returns FunctionCodeChunk
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 
 	// (2) The `Stack trace:` header.
-	emitPrintString(asm, bytes: b"Stack trace:\n")
+	emitPrintString(asm, bytes: BacktraceHeader)
 
 	// (3) Walk from this frame with the software arm: rcx = current rbp, rdx = stack_low (unused when
 	// stack_high == 0), r8 = stack_high = 0.
@@ -1026,20 +1046,10 @@ end 'buildLinuxSigreturnTrampolineChunk'
 function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
 
-	let lenLoop = asm.newLabel()
-	let lenDone = asm.newLabel()
 	let done = asm.newLabel()
 
-	// strlen: walk rax from the start (rcx, held untouched) to the NUL; len = rax - rcx.
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
-	asm.placeLabel(lenLoop)
-	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: 0)
-	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: lenDone)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: lenLoop)
-	asm.placeLabel(lenDone)
-	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	// rcx (the string start) is held untouched across the walk; len = rax - rcx.
+	emitCstrLenIntoRax(asm, cstrReg: X64Register.rcx)
 
 	// An empty string is a no-op — skip `write(2, buf, 0)`.
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
