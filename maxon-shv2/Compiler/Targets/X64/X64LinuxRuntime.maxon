@@ -43,14 +43,19 @@ end 'x64OsCallKind'
 // The x86-64 table, NOT AArch64's: `write` is 1 here and 64 there, `mmap` 9 and 222. Named because a
 // bare 1 at a call site is unreadable and the number IS the primitive's identity.
 //
+// ⚠⚠ **THE `X64` PREFIX IS LOAD-BEARING** — see the twin block in `Targets/Arm64/Arm64Runtime.maxon`,
+// which carries the full account. Both tables were once exported under the SAME three unprefixed names;
+// Maxon's top-level name space is flat, so the collision was resolved silently by file order and the
+// arm64 backend emitted THESE numbers. The arch belongs in the name because the number is an arch fact.
+//
 // ⚠ `exit_group` (231), NOT `exit` (60) — a DELIBERATE DIVERGENCE from v1, which emits 60, and the same
 // divergence the arm64 side makes (94 not 93). `exit` terminates the calling THREAD; `exit_group`
 // terminates the whole thread group, which is what `main` returning means and what a C `_exit` invokes.
 // The two are indistinguishable in a single-threaded process, so this costs nothing today and stays
 // correct the day shv2 grows OS threads (P1.5) — at which point 60 would leave the others running.
-export let LinuxSyscallWrite = 1
-export let LinuxSyscallMmap = 9
-export let LinuxSyscallExitGroup = 231
+export let X64LinuxSyscallWrite = 1
+export let X64LinuxSyscallMmap = 9
+export let X64LinuxSyscallExitGroup = 231
 
 // --- Linux mmap parameters ---
 //
@@ -71,8 +76,13 @@ export let WriteStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO).
 // prints the panic diagnostic + symbolized backtrace, and `exit_group`s — so a divide-by-zero is a clean
 // `exit 1`, not a process killed by signal. See `X64Runtime.appendX64RuntimeChunks` (the linux arm) and
 // `BackendDispatch.prependLinuxEntryStub` (which calls `mrt_runtime_init` before `main`).
-export let LinuxSyscallRtSigaction = 13  // rt_sigaction(signum, act, oldact, sigsetsize).
-export let LinuxSyscallRtSigreturn = 15  // rt_sigreturn — the sa_restorer trampoline returns through it.
+// These two are ROWS OF THE SAME x86-64 syscall table as `X64LinuxSyscall{Write,Mmap,ExitGroup}` above
+// and carry the arch prefix for the same reason — they are 134 and 139 on AArch64, so an arm64 fault
+// runtime would declare its own, and an unprefixed name here is the collision that already miscompiled
+// this backend once. `LinuxSignalFpe` and `LinuxRtSigsetSize` are NOT prefixed alike on purpose: SIGFPE
+// is 8 and sigset_t is 8 bytes on every Linux arch, so there is only one fact to name.
+export let X64LinuxSyscallRtSigaction = 13  // rt_sigaction(signum, act, oldact, sigsetsize).
+export let X64LinuxSyscallRtSigreturn = 15  // rt_sigreturn — the sa_restorer trampoline returns through it.
 export let LinuxSignalFpe = 8  // SIGFPE — the signal an integer #DE fault is delivered as.
 
 // sa_flags = SA_SIGINFO (0x4 — the handler receives (sig, siginfo*, ucontext*)) | SA_RESTORER (0x04000000).

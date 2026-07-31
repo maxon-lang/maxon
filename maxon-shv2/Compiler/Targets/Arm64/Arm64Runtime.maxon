@@ -49,14 +49,40 @@ end 'arm64OsCallKind'
 // The AArch64 table, NOT x86-64's: `write` is 64 here and 1 there, `mmap` 222 and 9. Named because
 // a bare 64 at a call site is unreadable and the number IS the primitive's identity.
 //
+// ⚠⚠ **THE `Arm64` PREFIX IS LOAD-BEARING, NOT DECORATION — IT WAS THE BUG** (found by A1y's review).
+// These three were spelled `LinuxSyscallWrite`/`LinuxSyscallMmap`/`LinuxSyscallExitGroup`, and
+// `Targets/X64/X64LinuxRuntime` exported THE SAME THREE NAMES over the x86-64 numbers. Maxon's top-level
+// name space is FLAT: a declaration's directory grants it nothing, `export` publishes to the whole
+// program, and two exported globals of one name are resolved SILENTLY BY FILE ORDER with no diagnostic
+// (probed against the bootstrap — the reader's own directory is irrelevant, and the winner follows
+// POSITION, not value). x64's file came last, so every CROSS-FILE read lost, including this backend's.
+//
+// MEASURED on arm64-linux, by disassembling every `svc #0` in a cross-compiled binary:
+// `StdToArm64Conversion.lowerOsExit`/`lowerRangePanic` emitted **231**, `lowerOsWrite` **1** and
+// `lowerOsMmap` **9** — the x86-64 numbers. On AArch64 those are `munlockall`, `io_destroy` and
+// `lgetxattr`: none exits, writes or maps, and none fails loudly, so a violated range guard did not
+// abort at all — it fell through to `mov x0, xzr; ret` and the program carried on with a zero. The ONE
+// use that was right is the entry stub's below, because a file's own declaration shadows the import.
+//
+// ⭐ The committed `specs-shv2/fragments/arm64-linux/**` goldens record `arm64.syscall 94` at all 97
+// sites, so this restores agreement with them rather than moving them — and their disagreement with what
+// this compiler emitted was the tell. ⚠ THOSE GOLDENS WERE PRODUCED ON THE arm64 HOST, AFTER the
+// collision existed, which means the losing declaration was not even the SAME one on both machines: file
+// order is a property of the CHECKOUT, so a name collision makes the emitted code depend on which box
+// compiled the compiler. That is the strongest reason the cure is a name and not a comment, and it is why
+// this must never be "left for the lane that can run it" — nothing about it is arm64-specific but the
+// numbers. The comment two paragraphs up said "NOT x86-64's" the whole time,
+// which is the project's cure ladder (DERIVE > CHECK > COMMENT) failing at its bottom rung: a comment
+// cannot make a name resolve. One name per fact can.
+//
 // ⚠ `exit_group` (94), NOT `exit` (93) — a DELIBERATE DIVERGENCE from v1, which emits 93. `exit`
 // terminates the calling THREAD; `exit_group` terminates the whole thread group, which is what a C
 // `_exit` actually invokes and what `main` returning means. The two are indistinguishable in a
 // single-threaded process, so this costs nothing today and stays correct the day shv2 grows OS
 // threads (P1.5) — at which point 93 would silently leave the other threads running.
-export let LinuxSyscallWrite = 64
-export let LinuxSyscallMmap = 222
-export let LinuxSyscallExitGroup = 94
+export let Arm64LinuxSyscallWrite = 64
+export let Arm64LinuxSyscallMmap = 222
+export let Arm64LinuxSyscallExitGroup = 94
 
 // Build `mrt_start` and return it as a `FunctionCodeChunk`. It bridges Maxon's `main` (AAPCS64,
 // ExitCode in x0) to the platform's process-exit primitive — which takes its code in x0 too, so the
@@ -126,7 +152,7 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, os Os
 	// relocation at all, which is the whole shape of this rung.
 	match arm64OsCallKind(os) 'exitRoute'
 		importCall then arm64EmitImportCall(code, iatRelocs: iatRelocs, slotIndex: osImportSlotIndex(OsImportSlot.exit))
-		syscall then arm64EmitSyscall(code, number: LinuxSyscallExitGroup)
+		syscall then arm64EmitSyscall(code, number: Arm64LinuxSyscallExitGroup)
 	end 'exitRoute'
 
 	// brk #0 — SIGTRAP if the exit primitive ever returns (it does not); stops execution running off

@@ -1053,7 +1053,7 @@ type StdToArm64Lowering
 	// primitive the arm64 entry stub uses). AAPCS64 and the Linux syscall ABI both put the code in x0.
 	function lowerOsExit(codeId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(codeId)))
-		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: LinuxSyscallExitGroup)
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: Arm64LinuxSyscallExitGroup)
 	end 'lowerOsExit'
 
 	// Lower `osRangePanic` (a P1.9 range-check violation) on arm64 to a BARE EXIT. arm64 has
@@ -1070,7 +1070,7 @@ type StdToArm64Lowering
 	// `PanicExitCode` every backend's panic path reads (`Targets/Shared/PanicExitCode`).
 	function lowerRangePanic(dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: PanicExitCode))
-		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: LinuxSyscallExitGroup)
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: Arm64LinuxSyscallExitGroup)
 	end 'lowerRangePanic'
 
 	// Lower `osAllocPages(size)` to the POSIX page source `mmap(NULL, size, PROT_READ|PROT_WRITE,
@@ -1097,7 +1097,7 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x3), value: mmapAnonPrivateFlags(self.target.os)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x4), value: MmapAnonFd))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x5), value: MmapNoOffset))
-		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.mmap, syscallNumber: LinuxSyscallMmap)
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.mmap, syscallNumber: Arm64LinuxSyscallMmap)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsAllocPages'
 
@@ -1111,6 +1111,6 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: WriteStdoutFd))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(bufId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(lenId)))
-		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.write, syscallNumber: LinuxSyscallWrite)
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.write, syscallNumber: Arm64LinuxSyscallWrite)
 	end 'lowerOsWriteStdout'
 end 'StdToArm64Lowering'

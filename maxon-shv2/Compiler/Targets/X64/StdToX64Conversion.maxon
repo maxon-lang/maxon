@@ -1828,7 +1828,7 @@ type StdToX64Lowering
 	// Linux: the code in EDI (syscall arg 0), then `exit_group` via a raw syscall.
 	function lowerOsExitLinux(codeId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(codeId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(LinuxSyscallExitGroup))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallExitGroup))
 	end 'lowerOsExitLinux'
 
 	// Lower `osRangePanic <label>` (a P1.9 range-check violation) to `mrt_panic`, which reads the baked
@@ -1908,7 +1908,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r10), value: MmapAnonPrivateLinux))
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r8), value: MmapAnonFd))
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r9), value: MmapNoOffset))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(LinuxSyscallMmap))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallMmap))
 	end 'lowerOsAllocPagesLinux'
 
 	// Lower `osWriteStdout(buf, len)` to `GetStdHandle(STD_OUTPUT_HANDLE)` + `WriteFile(handle, buf,
@@ -1960,7 +1960,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: WriteStdoutFd))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(bufId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(lenId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(LinuxSyscallWrite))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallWrite))
 	end 'lowerOsWriteStdoutLinux'
 
 	// Lower `osReadClock(ticksPtr, freqPtr)` to the x64-windows MONOTONIC clock reads (P1.5 mid-body-yield):

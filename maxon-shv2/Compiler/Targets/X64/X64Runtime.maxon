@@ -486,10 +486,10 @@ function emitWin64PanicProcessExit(asm X64RuntimeAsm)
 end 'emitWin64PanicProcessExit'
 
 // Linux: `exit_group(PanicExitCode)` via a raw syscall. `exit_group` and not `exit` for the reason
-// `X64LinuxRuntime.LinuxSyscallExitGroup` states — a panic ends the thread GROUP.
+// `X64LinuxRuntime.X64LinuxSyscallExitGroup` states — a panic ends the thread GROUP.
 function emitLinuxPanicProcessExit(asm X64RuntimeAsm)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: PanicExitCode)
-	encodeX64Syscall(asm.code, number: LinuxSyscallExitGroup)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallExitGroup)
 end 'emitLinuxPanicProcessExit'
 
 // Emit the two bounds checks that decide whether `addrReg` (already reduced to a `.text`
@@ -1087,7 +1087,7 @@ end 'buildPanicChunk'
 // handler exits, but the kernel demands the address exists to build the return frame at all.
 function buildLinuxSigreturnTrampolineChunk() returns FunctionCodeChunk
 	var code = ByteArray.create()
-	encodeX64Syscall(code, number: LinuxSyscallRtSigreturn)
+	encodeX64Syscall(code, number: X64LinuxSyscallRtSigreturn)
 	return FunctionCodeChunk.createWith(LinuxSigreturnName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
 end 'buildLinuxSigreturnTrampolineChunk'
 
@@ -1111,7 +1111,7 @@ function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: StderrFd)
-	encodeX64Syscall(asm.code, number: LinuxSyscallWrite)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallWrite)
 
 	asm.placeLabel(done)
 	return asm.finishFunction(WriteStderrName)
@@ -1192,7 +1192,7 @@ function buildLinuxRuntimeInitChunk() returns FunctionCodeChunk
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler))
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxRtSigsetSize)
-	encodeX64Syscall(asm.code, number: LinuxSyscallRtSigaction)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallRtSigaction)
 
 	return asm.finishFunction(RuntimeInitName)
 end 'buildLinuxRuntimeInitChunk'
