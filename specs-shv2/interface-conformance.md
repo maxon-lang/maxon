@@ -1395,3 +1395,94 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:6:11: Unsupported: interface 'Labeled' declares two requirements named 'label' — a witness dispatch resolves an interface method to its table slot by NAME alone, so the second could never be reached. Give the requirements distinct names
 ```
+
+<!-- test: error.one-interface-bound-two-ways -->
+⭐⭐ **ONE INTERFACE, TWO BINDINGS, ONE WITNESS SLOT — AND THIS PANICKED THE COMPILER UNTIL THE R10 REVIEW.**
+`Conv` is named twice with different associated-type arguments, so its one requirement is substituted two
+ways (`convert(v Whole)` and `convert(v Real)`) and the overload set answers each with a DIFFERENT member.
+There is one witness table per (conformer, interface) and one address per method slot, so there is nothing
+to choose by. Before R10 this was refused cleanly as E3016 — the bare key could satisfy only the
+first-declared member, so the other binding reported a wrong signature — and matching a requirement against
+the whole overload set is exactly what let both routes succeed and disagree. It is now E3111, which is the
+same verdict for the true reason; it is NOT a compiler panic, which is what a wrong internal-invariant
+claim had made it.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+interface Conv uses Item
+	function convert(v Item) returns Whole
+end 'Conv'
+
+type Machine implements Conv with Whole, Conv with Real
+	export var tag as Whole
+
+	export static function create(tag Whole) returns Self
+		return Self{tag: tag}
+	end 'create'
+
+	export function convert(v Whole) returns Whole
+		return v
+	end 'convert'
+
+	export function convert(v Real) returns Whole
+		return 7
+	end 'convert'
+end 'Machine'
+
+function main() returns ExitCode
+	let m = Machine.create(1)
+	return m.convert(42)
+end 'main'
+```
+```maxoncstderr
+error E3111: <fragment>:9:6: Type 'Machine' reaches interface 'Conv''s requirement 'convert' by two routes that select different members: convert(v Whole) returns Whole, convert(v Real) returns Whole. A conforming type has ONE witness table per interface and ONE address per method slot, so 'Conv' must be conformed to exactly one way — bind its associated types once, either by removing the duplicate 'Conv' entry or by not also reaching it through an interface that 'Machine' already implements
+```
+
+<!-- test: error.parent-interface-bound-two-ways-through-extends -->
+⭐⭐ **THE SAME CONTRADICTION WITH NO INTERFACE NAMED TWICE — which is why it is caught where the two
+selections MEET and not by a rule about the `implements` clause.** `Child extends Parent` and re-declares
+the same `uses` name, so `implements Child with Whole, Parent with Real` reaches `Parent`'s requirement
+twice: once substituted through `Child`'s binding, once through `Parent`'s own. The clause names `Child`
+and `Parent`, each exactly once, so a duplicate-entry rule would have passed this program straight through
+to the panic. The slot is the unit of the contradiction, so the slot is where it is detected.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+interface Parent uses Item
+	function convert(v Item) returns Whole
+end 'Parent'
+
+interface Child extends Parent uses Item
+	function marker() returns Whole
+end 'Child'
+
+type Machine implements Child with Whole, Parent with Real
+	export var tag as Whole
+
+	export static function create(tag Whole) returns Self
+		return Self{tag: tag}
+	end 'create'
+
+	export function marker() returns Whole
+		return 1
+	end 'marker'
+
+	export function convert(v Whole) returns Whole
+		return v
+	end 'convert'
+
+	export function convert(v Real) returns Whole
+		return 7
+	end 'convert'
+end 'Machine'
+
+function main() returns ExitCode
+	let m = Machine.create(1)
+	return m.convert(42)
+end 'main'
+```
+```maxoncstderr
+error E3111: <fragment>:13:6: Type 'Machine' reaches interface 'Parent''s requirement 'convert' by two routes that select different members: convert(v Whole) returns Whole, convert(v Real) returns Whole. A conforming type has ONE witness table per interface and ONE address per method slot, so 'Parent' must be conformed to exactly one way — bind its associated types once, either by removing the duplicate 'Parent' entry or by not also reaching it through an interface that 'Machine' already implements
+```

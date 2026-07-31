@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "d2d686b2c90b88e7",
+  "sourceHash": "40bbf590c97fe754",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1245,6 +1245,15 @@
       "stage": "semantic",
       "doc": "The BUFFER surface's RAW BYTE access -- `arr.managed.setByte(offset, value:)` or\n`arr.managed.byteAt(offset)` -- is used on an array whose ELEMENT TYPE IS MANAGED: a struct,\na `String`, a nested container, a boxed union.\nA managed element does not live in the buffer as DATA. It lives there as a POINTER to a heap\nallocation, so the bytes those two members address are the bytes of an ADDRESS. Reading one\nhands a fragment of a heap address back to the program as though it were a value -- a silent\nwrong answer, and an information disclosure. Writing one corrupts the pointer in place, and\nthe element it named is then unreachable and unreleasable.\nThis is NOT the reason E3109 refuses `managed.set`, and the two must not be collapsed. That\none is about OWNERSHIP of a staged element and applies only past the published length, so it\nhas a harmless half and an exact replacement. This one is about the element's REPRESENTATION,\nso it holds at EVERY offset, published or staged, and there is no bound that would rescue it\nand no other spelling that does the same thing. Byte access to a managed element is not a\nthing a correct program wants.\n`byteAt` is refused alongside `setByte` rather than after it. It returns a value, so it\ncorrupts nothing and trips no leak gate -- it is precisely the half that stays green forever\nif only the writer is fixed.\nTRIVIAL elements are untouched, which is the whole point of the rule being about the element\ntype: `__ManagedMemory.create` can only ever yield a trivial element, so the byte-level\nstaging the buffer surface exists for -- string building, a NUL terminator written at the\nlength boundary -- is unaffected.",
       "emittedBy": {"shv2": "semanticBufferByteAccessManagedElement"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3111,
+      "tag": "E3111",
+      "name": "SemanticConflictingInterfaceConformance",
+      "stage": "semantic",
+      "doc": "One conforming type reaches ONE interface's requirement by two routes that select DIFFERENT\nmembers for it. A conforming type has exactly one witness table per interface and exactly one\naddress per method slot, so an interface has to be conformed to exactly ONE way; two routes\nthat substitute a requirement differently want two addresses in one slot.\nBoth routes are ordinary source. `implements Conv with Whole, Conv with Real` names one\ninterface twice and binds its associated type differently each time; and\n`implements Child with Whole, Parent with Real`, where `Child extends Parent` re-declares the\nsame `uses` name, reaches `Parent` twice while naming no interface twice at all -- which is\nwhy the condition is detected where the two selections MEET rather than by a rule about the\nshape of the `implements` clause.\nIt takes two overloads of the member's name to be reachable. With one member per name the\nsecond route simply fails to match and the type is refused as a partial implementation\n(E3016) instead; the overload set is what lets both routes succeed and disagree.\nThe message names both selected members' SIGNATURES rather than their registration names --\n`convert#Real` is a key this compiler mints, not something an author wrote.",
+      "emittedBy": {"shv2": "semanticConflictingInterfaceConformance"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

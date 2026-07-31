@@ -1253,6 +1253,24 @@ E3108 SemanticTestingStdlibUnavailable
 	doc module is absent or truncated. Two codes would let a reader fix half the cause and meet the
 	doc other half on the next build.
 
+E3111 SemanticConflictingInterfaceConformance
+	shv2 semanticConflictingInterfaceConformance
+	doc One conforming type reaches ONE interface's requirement by two routes that select DIFFERENT
+	doc members for it. A conforming type has exactly one witness table per interface and exactly one
+	doc address per method slot, so an interface has to be conformed to exactly ONE way; two routes
+	doc that substitute a requirement differently want two addresses in one slot.
+	doc Both routes are ordinary source. `implements Conv with Whole, Conv with Real` names one
+	doc interface twice and binds its associated type differently each time; and
+	doc `implements Child with Whole, Parent with Real`, where `Child extends Parent` re-declares the
+	doc same `uses` name, reaches `Parent` twice while naming no interface twice at all -- which is
+	doc why the condition is detected where the two selections MEET rather than by a rule about the
+	doc shape of the `implements` clause.
+	doc It takes two overloads of the member's name to be reachable. With one member per name the
+	doc second route simply fails to match and the type is refused as a partial implementation
+	doc (E3016) instead; the overload set is what lets both routes succeed and disagree.
+	doc The message names both selected members' SIGNATURES rather than their registration names --
+	doc `convert#Real` is a key this compiler mints, not something an author wrote.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

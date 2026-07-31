@@ -110,7 +110,7 @@ let WitnessLabelSeparator = "."
 // `__witness_<Type>.<Iface>`. The ONE place this label is spelled, shared by the blob emitter (which
 // registers it) and the concrete dispatch site (which takes its `rdataAddr`), so they cannot disagree.
 export function witnessTableLabel(typeName ByteArray, interfaceName ByteArray) returns String
-	requireSeparatorFreeLabelComponent(interfaceName, role: "interface name", join: "__witness_<Type>{WitnessLabelSeparator}<Iface>", identifies: "ONE (conformer, interface) pair")
+	requireSeparatorFreeLabelComponent(interfaceName, component: WitnessLabelComponent.interfaceName)
 
 	return "__witness_{String.from(typeName)}{WitnessLabelSeparator}{String.from(interfaceName)}"
 end 'witnessTableLabel'
@@ -125,12 +125,17 @@ end 'witnessTableLabel'
 //
 // It is BUILT ON the table label rather than beside it, so the pair half of the key cannot drift from the
 // label the slot actually belongs to — and the method half is held to the same separator-freedom the
-// interface half is (below), which is what makes the three-way split exact: the conformer half may itself
-// carry a separator (`mangleTypeArg`'s qualified per-instance spellings do), so it is the LAST TWO
-// separators that are the joins, and both of those halves are single tokens the lexer keeps the separator
-// out of.
+// interface half is (below).
+//
+// ⚠ **WHAT THAT BUYS IS INJECTIVITY, NOT DECODABILITY, and the distinction matters because NOTHING SPLITS
+// THIS KEY** (R10 review — an earlier wording here claimed a "three-way split", which no reader performs
+// and no future reader should be invited to write). The property spent is that two DISTINCT triples never
+// spell one key: the conformer half may itself carry a separator (`mangleTypeArg`'s qualified per-instance
+// spellings do), so it is only the last two components that must be free of it — and each of those is a
+// single token the lexer keeps the separator out of. Both halves free ⇒ the join is a function of the
+// triple, which is the whole of what a map key needs.
 export function witnessSlotImplKey(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns ByteArray
-	requireSeparatorFreeLabelComponent(methodName, role: "method name", join: "__witness_<Type>{WitnessLabelSeparator}<Iface>{WitnessLabelSeparator}<method>", identifies: "ONE (conformer, interface, method) slot")
+	requireSeparatorFreeLabelComponent(methodName, component: WitnessLabelComponent.methodName)
 
 	return "{witnessTableLabel(typeName, interfaceName: interfaceName)}{WitnessLabelSeparator}{String.from(methodName)}".toByteArray()
 end 'witnessSlotImplKey'
@@ -149,17 +154,63 @@ end 'witnessSlotImplKey'
 //
 // The separator byte is read OUT of `WitnessLabelSeparator` rather than restated as a literal: a second
 // spelling would be free to drift from the join it is supposed to be checking, which is the whole failure
-// mode this function exists to prevent. `role`/`join`/`identifies` are the caller's — one scan, and each
-// join still names in its own words what it would stop identifying.
-function requireSeparatorFreeLabelComponent(name ByteArray, role String, join String, identifies String)
+// mode this function exists to prevent.
+//
+// ⚠ **THE CALLER NAMES ITS COMPONENT AND NOTHING ELSE — the sentence is BUILT ON THE FAILURE PATH, and that
+// is measured rather than tidy (R10 review).** Passing the join template and the "identifies" clause as
+// STRING arguments made every call build them: an interpolation over a `let` String is not folded, so
+// `join: "__witness_<Type>{WitnessLabelSeparator}<Iface>"` compiled to an `__mm_alloc` plus three
+// `__str_copy`s (measured in the emitted IR) at every `witnessTableLabel` and every `witnessSlotImplKey` —
+// one heap String per call, to describe a panic the header above documents as unreachable. A discriminator
+// costs nothing and puts each component's three facts (what it is called, which join spends it, what that
+// join would stop identifying) in ONE arm instead of scattering them across the two call sites. Same shape,
+// and for the same reason, as `Parser.nameExpectationOf`.
+function requireSeparatorFreeLabelComponent(name ByteArray, component WitnessLabelComponent)
 	let separator = try WitnessLabelSeparator.toByteArray().get(0) otherwise panic("requireSeparatorFreeLabelComponent: WitnessLabelSeparator is a one-byte literal")
 
 	for i in 0 upto name.count() 'scan'
 		if (try name.get(i) otherwise panic("requireSeparatorFreeLabelComponent: index {i} is below count {name.count()}, but get failed")) == separator 'contains'
-			panic("requireSeparatorFreeLabelComponent: {role} '{String.from(name)}' contains the label separator '{WitnessLabelSeparator}', so `{join}` no longer identifies {identifies} — two would spell one name and the second would silently take the first's dictionary. An interface name and a method name are each a single token today; whatever widened that has to pick a separator no component can hold")
+			panic("requireSeparatorFreeLabelComponent: {separatorFreedomSubjectOf(component)} '{String.from(name)}' contains the label separator '{WitnessLabelSeparator}', so `{separatorFreedomJoinOf(component)}` no longer identifies {separatorFreedomIdentitiesOf(component)} — two would spell one name and the second would silently take the first's dictionary. An interface name and a method name are each a single token today; whatever widened that has to pick a separator no component can hold")
 		end 'contains'
 	end 'scan'
 end 'requireSeparatorFreeLabelComponent'
+
+// Which half of a witness label the separator-freedom argument is being spent on (see
+// `requireSeparatorFreeLabelComponent`). The conformer half is deliberately absent: it MAY carry the
+// separator (`mangleTypeArg`'s qualified per-instance spellings do), which is exactly why it is the LAST TWO
+// components that have to be free of it.
+enum WitnessLabelComponent
+	// The `<Iface>` of `__witness_<Type>.<Iface>`, asked by `witnessTableLabel`.
+	interfaceName
+	// The `<method>` of `__witness_<Type>.<Iface>.<method>`, asked by `witnessSlotImplKey`.
+	methodName
+end 'WitnessLabelComponent'
+
+// What to CALL the offending component in the panic. Rendered on the FAILURE path only (see
+// `requireSeparatorFreeLabelComponent`), as are the two below.
+function separatorFreedomSubjectOf(component WitnessLabelComponent) returns String
+	match component 'which'
+		interfaceName then return "interface name"
+		methodName then return "method name"
+	end 'which'
+end 'separatorFreedomSubjectOf'
+
+// The JOIN whose injectivity this component's separator-freedom is what buys — the one that stops being a
+// function of its parts the moment a component can hold the separator.
+function separatorFreedomJoinOf(component WitnessLabelComponent) returns String
+	match component 'which'
+		interfaceName then return "__witness_<Type>{WitnessLabelSeparator}<Iface>"
+		methodName then return "__witness_<Type>{WitnessLabelSeparator}<Iface>{WitnessLabelSeparator}<method>"
+	end 'which'
+end 'separatorFreedomJoinOf'
+
+// What that join identifies, and would stop identifying.
+function separatorFreedomIdentitiesOf(component WitnessLabelComponent) returns String
+	match component 'which'
+		interfaceName then return "ONE (conformer, interface) pair"
+		methodName then return "ONE (conformer, interface, method) slot"
+	end 'which'
+end 'separatorFreedomIdentitiesOf'
 
 // --- The stdlib protocol-interface names (SYNTHESIZED, not parsed from stdlib/) ---
 let StringableInterfaceName = b"Stringable"

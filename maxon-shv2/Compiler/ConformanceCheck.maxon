@@ -429,7 +429,7 @@ function checkOneMethod(project Project, functionsByName FunctionByNameMap, conf
 		if not signatureMatches(project, method: method, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures) 'mismatch'
 			wrongSignature.push("{formatActualSignature(project, methodName: method.name, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures)} (expected {formatInterfaceMethodSignature(method)})")
 		end 'mismatch' else 'signatureOk'
-			acceptConformingMember(project, conformance: conformance, collectedMethod: collectedMethod, selected: qualifiedName, implFunc: implFunc)
+			acceptConformingMember(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, selected: qualifiedName, implFunc: implFunc, typeParamNames: typeParamNames, signatures: signatures)
 		end 'signatureOk'
 		return
 	end 'present'
@@ -470,7 +470,7 @@ function checkOverloadedMembers(project Project, functionsByName FunctionByNameM
 	end 'notExactlyOne'
 
 	let selected = try matched.get(0) otherwise panic("checkOverloadedMembers: matched.count() is 1 but get(0) failed")
-	acceptConformingMember(project, conformance: conformance, collectedMethod: collectedMethod, selected: selected, implFunc: conformanceImplFunction(functionsByName, name: selected))
+	acceptConformingMember(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, selected: selected, implFunc: conformanceImplFunction(functionsByName, name: selected), typeParamNames: typeParamNames, signatures: signatures)
 end 'checkOverloadedMembers'
 
 // ⭐⭐ **THE ONE PLACE A REQUIREMENT IS DECLARED SATISFIED — and the place the WITNESS TABLE learns by which
@@ -481,28 +481,57 @@ end 'checkOverloadedMembers'
 // The THROWS relation is checked only once the structural signature agrees, mirroring the oracle's
 // `else if (method.ThrowsTypeName != null)` branch: on a shape mismatch the throws question is noise. It is
 // asked of the SELECTED member's function, which under an overload set is not necessarily the bare-named one.
-function acceptConformingMember(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, selected ByteArray, implFunc IrFunction)
-	recordWitnessSlotImpl(project, conformance: conformance, collectedMethod: collectedMethod, selected: selected)
+function acceptConformingMember(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, selected ByteArray, implFunc IrFunction, typeParamNames ByteArrayArray, signatures ProgramSignatures)
+	recordWitnessSlotImpl(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, selected: selected, typeParamNames: typeParamNames, signatures: signatures)
 	validateThrowsConformance(project, conformance: conformance, collectedMethod: collectedMethod, implFunc: implFunc)
 end 'acceptConformingMember'
 
 // File the accepted member under its witness slot's key (R10). An entry already present must AGREE: two
-// conformances of one type can reach the same `(conformer, interface, method)` slot — `implements Sub, Base`
-// where `Sub extends Base` collects Base's requirements twice — and they select identically, because the
-// selection depends only on the conformer and the requirement's substituted signature. A disagreement would
-// mean the two passes read different requirements under one key, which the lowering could only resolve by
-// coin flip, so it is refused loudly rather than left to whichever wrote last.
-function recordWitnessSlotImpl(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, selected ByteArray)
+// conformances of one type routinely reach the same `(conformer, interface, method)` slot — `implements Sub,
+// Base` where `Sub extends Base` collects Base's requirements twice — and they normally select identically,
+// because the selection is a function of the conformer and the requirement's SUBSTITUTED signature alone.
+//
+// ⭐⭐ **A DISAGREEMENT IS THE AUTHOR'S, NOT THE COMPILER'S, AND IT PANICKED UNTIL THE R10 REVIEW.** The
+// substituted signature is exactly what an associated-type binding varies, so two routes to one slot that
+// bind that interface's `uses` names differently compare DIFFERENT requirements under one key and can select
+// different members. Both spellings are ordinary source and both were rejected cleanly as E3016 before R10
+// (the bare key could satisfy only one of the two requirements, so the other reported a wrong signature) —
+// matching a requirement against the whole overload set is what lets both routes SUCCEED and disagree:
+//
+//   • `implements Conv with Whole, Conv with Real` — one interface named twice, bound two ways.
+//   • `implements Child with Whole, Parent with Real`, `interface Child extends Parent uses Item` — reaches
+//     `Parent` twice while naming no interface twice, so no rule about the SHAPE of an `implements` clause
+//     could have caught it. This is why the condition is detected where the two selections MEET.
+//
+// ⚠ **THE SLOT IS THE UNIT OF THE CONTRADICTION, so the diagnostic is filed against the slot rather than
+// against the clause.** One witness table per (conformer, interface) with one address per method slot is the
+// dictionary's shape, so an interface has to be conformed to exactly one way; there is nothing to choose by
+// and nothing the lowering could do with two answers but flip a coin.
+function recordWitnessSlotImpl(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, selected ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	let key = witnessSlotImplKey(conformance.typeName, interfaceName: collectedMethod.sourceInterfaceName, methodName: collectedMethod.method.name)
 	if let existing = try project.witnessSlotImpls.get(key) 'alreadySelected'
 		if not existing.equals(selected) 'disagrees'
-			panic("recordWitnessSlotImpl: witness slot '{String.from(key)}' was already satisfied by '{String.from(existing)}' and is now satisfied by '{String.from(selected)}' — one slot holds one address, and two conformances reaching it must have compared the SAME requirement against the SAME conformer")
+			reportConflictingConformance(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, existing: existing, selected: selected, typeParamNames: typeParamNames, signatures: signatures)
 		end 'disagrees'
 		return
 	end 'alreadySelected'
 
 	project.witnessSlotImpls.upsert(key, value: selected)
 end 'recordWitnessSlotImpl'
+
+// E3111's sentence, anchored on the conforming type's NAME token like every other conformance diagnostic in
+// this file. The two members are rendered through the SAME `renderMemberSignatures` an overload mismatch
+// prints, for its reason: a registration name (`convert#Real`) is a key this compiler mints, and telling an
+// author to go and look at it names something their source does not contain.
+function reportConflictingConformance(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, existing ByteArray, selected ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures)
+	var conflicting = ByteArrayArray.create()
+	conflicting.push(existing)
+	conflicting.push(selected)
+
+	let interfaceName = String.from(collectedMethod.sourceInterfaceName)
+	let rendered = renderMemberSignatures(project, conformance: conformance, method: collectedMethod.method, functionsByName: functionsByName, members: conflicting, typeParamNames: typeParamNames, signatures: signatures)
+	reportPositioned(project, code: ErrorCode.semanticConflictingInterfaceConformance, message: "Type '{String.from(conformance.typeName)}' reaches interface '{interfaceName}''s requirement '{String.from(collectedMethod.method.name)}' by two routes that select different members: {rendered}. A conforming type has ONE witness table per interface and ONE address per method slot, so '{interfaceName}' must be conformed to exactly one way — bind its associated types once, either by removing the duplicate '{interfaceName}' entry or by not also reaching it through an interface that '{String.from(conformance.typeName)}' already implements", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
+end 'reportConflictingConformance'
 
 // The MISSING-method line for a requirement the conforming type declares nothing under, tagged
 // `(from Parent)` when the requirement was inherited rather than the root interface's own. One home because

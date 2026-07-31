@@ -527,6 +527,22 @@ export enum ErrorCode
 	// staging the buffer surface exists for -- string building, a NUL terminator written at the
 	// length boundary -- is unaffected.
 	semanticBufferByteAccessManagedElement = "E3110"
+	// One conforming type reaches ONE interface's requirement by two routes that select DIFFERENT
+	// members for it. A conforming type has exactly one witness table per interface and exactly one
+	// address per method slot, so an interface has to be conformed to exactly ONE way; two routes
+	// that substitute a requirement differently want two addresses in one slot.
+	// Both routes are ordinary source. `implements Conv with Whole, Conv with Real` names one
+	// interface twice and binds its associated type differently each time; and
+	// `implements Child with Whole, Parent with Real`, where `Child extends Parent` re-declares the
+	// same `uses` name, reaches `Parent` twice while naming no interface twice at all -- which is
+	// why the condition is detected where the two selections MEET rather than by a rule about the
+	// shape of the `implements` clause.
+	// It takes two overloads of the member's name to be reachable. With one member per name the
+	// second route simply fails to match and the type is refused as a partial implementation
+	// (E3016) instead; the overload set is what lets both routes succeed and disagree.
+	// The message names both selected members' SIGNATURES rather than their registration names --
+	// `convert#Real` is a key this compiler mints, not something an author wrote.
+	semanticConflictingInterfaceConformance = "E3111"
 
 	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 	registerPressure = "E5001"
