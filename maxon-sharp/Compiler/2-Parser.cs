@@ -1850,7 +1850,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   public void PreScanTopLevelConstantDecls(IrModule<MaxonOp> targetModule) {
     _currentModule = targetModule;
 
-    WalkTopLevelValueDecls(decl => {
+    // Selects the arm this compile's target activates, because that is the only arm this compile HAS.
+    WalkTopLevelValueDecls(everyConditionalArm: false, decl => {
       // Neither kind is a declaration another file may fold: a `var` is not a constant at all, and a
       // complex initializer is a runtime global — leaving both out is what keeps a cross-file read of
       // one an error here exactly as a same-file read of one already is.
@@ -1874,23 +1875,35 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// A nested <c>let</c> is a local and a type's <c>export let</c> is a field; neither is reached,
   /// because every block opener here is skipped whole.
   /// </summary>
-  public void WalkTopLevelValueDecls(Action<TopLevelValueDeclaration> onDecl) {
+  /// <param name="everyConditionalArm">
+  /// Whether to walk EVERY <c>#if</c>/<c>#else</c> arm rather than the one this parser's target
+  /// activates. A compile wants one arm — it only has one. A project-level name check wants all of
+  /// them: a name declared in the <c>#else</c> arm occupies the flat namespace on the targets where
+  /// that arm is live, and a gate that saw only the host's arm would refuse a collision on one
+  /// machine and pass it on another. Walking both needs no list of supported targets — which would be
+  /// a fresh copy of a fact the compiler does not otherwise write down — and a name declared in BOTH
+  /// arms is a same-FILE repeat, which the caller ignores anyway.
+  /// </param>
+  public void WalkTopLevelValueDecls(bool everyConditionalArm, Action<TopLevelValueDeclaration> onDecl) {
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
       SkipNewlines();
       if (IsAtEnd() || Current().Type == TokenType.Eof) break;
 
       var (isExported, isModuleVisible) = ParseVisibilityModifier();
 
-      if (Check(TokenType.HashIf)) {
-        HandleConditionalCompilation();
-        continue;
-      }
-      if (Check(TokenType.HashElse)) {
-        HandleConditionalElse();
-        continue;
-      }
-      if (Check(TokenType.HashEndif)) {
-        HandleConditionalEndif();
+      if (Check(TokenType.HashIf) || Check(TokenType.HashElse) || Check(TokenType.HashEndif)) {
+        if (everyConditionalArm) {
+          // The directive and its condition are the only tokens consumed, so the arm behind it is
+          // walked like any other top-level text — as is the arm behind its `#else`.
+          SkipToEndOfLine();
+        } else if (Check(TokenType.HashIf)) {
+          HandleConditionalCompilation();
+        } else if (Check(TokenType.HashElse)) {
+          HandleConditionalElse();
+        } else {
+          HandleConditionalEndif();
+        }
+
         continue;
       }
 

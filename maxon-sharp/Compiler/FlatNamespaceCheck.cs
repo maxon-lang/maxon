@@ -236,11 +236,15 @@ public static class FlatNamespaceCheck {
         sites.Add(new Site(d.Name, DeclarationNamespace.Type, d.SourceFilePath, d.Line, d.Column, d.IsExported));
       });
 
-      new Parser(tokens, sourceFilePath: source.Path, rootPath: source.RootPath).WalkTopLevelValueDecls(d => {
-        if (!d.IsExported && !d.IsModuleVisible) return;
+      // EVERY conditional arm, so the verdict does not depend on the host: see the parameter's note.
+      // `PreRegisterTypeNames` above needs no such flag — it never selects an arm, so the type
+      // namespace already sees all of them.
+      new Parser(tokens, sourceFilePath: source.Path, rootPath: source.RootPath)
+        .WalkTopLevelValueDecls(everyConditionalArm: true, d => {
+          if (!d.IsExported && !d.IsModuleVisible) return;
 
-        sites.Add(new Site(d.Name, DeclarationNamespace.Value, source.Path, d.Line, d.Column, d.IsExported));
-      });
+          sites.Add(new Site(d.Name, DeclarationNamespace.Value, source.Path, d.Line, d.Column, d.IsExported));
+        });
     }
 
     return sites;
