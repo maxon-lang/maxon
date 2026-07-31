@@ -146,6 +146,31 @@ end 'indexFunctionsByName'
 // definition trades this refusal for a silent miscompile — `print("x")` would bind to the author's
 // declaration instead of the runtime's `__print_string`, which knows the String record's layout. So the
 // compile is refused at the duplicate, before isel, and no binary is produced either way.
+//
+// ⭐⭐ **THE ASSUMPTION THIS CHECK RESTS ON: NOTHING CAN SUPPRESS ONE SIDE OF THE PAIR BEFORE THE COUNT SEES
+// IT.** A detector that counts two functions is walked around by anything that removes one of them first, and
+// there IS a pass that removes a side — `StdlibSource.reachableMaxonFunctionNames` builds its OWN name→index
+// map, last-wins and UNCHECKED, and what it computes (`StdlibFacts.unreachable`) gates which runtime floor is
+// installed (`scanRuntimeUsage` skips the body of every function whose NAME is in that set). If a
+// `Builtins.maxon` declaration of `__foo` could land in `unreachable`, the runtime's own `__foo` could go
+// uninstalled, exactly ONE `__foo` would reach this loop, and the compile would SUCCEED with every emitted
+// call bound to the author's stub. It cannot, and there are TWO independent bars — either alone closes it:
+//
+//   1. **E2051.** `unreachable` is built only from `project.stdlibSourcePaths` (`stdlibFunctionNames`), i.e.
+//      from WHITELISTED stdlib modules (`StdlibLoader.whitelistedStdlibModules` — today `Clock.maxon`,
+//      `Sleep.maxon`, `helpers/string/utf16.maxon`). None of those is the exempt file, so a `__` declaration
+//      in any of them is E2051 before anything else runs. MEASURED: `export function __probe_reserved()`
+//      added to `stdlib/Sleep.maxon` is `E2051 … is reserved`, and no compile follows.
+//   2. **The exempt file is never stdlib SOURCE.** `Builtins.maxon` is not whitelisted, so the only way its
+//      declarations enter a compile at all is `maxon-shv2 build stdlib/Builtins.maxon`, which makes it the
+//      USER'S ROOT — and `registeredPathsWhenTheRootIsInsideStdlib` keeps a user root out of
+//      `stdlibSourcePaths`. `unreachable` "never contains a USER function" (`scanRuntimeUsage`'s header), and
+//      the declaration that can collide is by construction in a user file.
+//
+// ⇒ The suppression path and the collision path are DISJOINT, so the pair either both exist (E4015 here) or
+// the call is never emitted. ⚠ **Bar 1 is the fragile one**: whitelisting `Builtins.maxon` would delete it,
+// leaving only bar 2 — and bar 2 holds only while a `Builtins.maxon` declaration can reach a compile solely
+// as the root. Re-derive both before widening either the whitelist or the E2051 exemption.
 function refuseDuplicateFunctionName(module StdModule, project Project, laterIndex FuncIndex) throws CompileError
 	let later = module.getFunc(laterIndex)
 	let earlier = earlierFunctionNamed(module, name: later.name, before: laterIndex)

@@ -1055,10 +1055,22 @@ type MutationEdges
 	end 'byCallee'
 end 'MutationEdges'
 
-// ⚠ The FIRST index wins on a duplicate name. A duplicate user function is E3006 at merge and every
-// compiler-synthesized function is installed at exactly one site, so the tie-break decides only which of
-// two functions of an ALREADY-REFUSED program gets summarised — never what a valid program means. A panic
-// here would turn that refusal into a crash.
+// ⚠ The FIRST index wins on a duplicate name, and a panic here would turn a refusal into a crash.
+//
+// ⚠ **BUT NOT BECAUSE THE PROGRAM IS ALREADY REFUSED — IT IS NOT, AND THIS COMMENT USED TO SAY IT WAS.**
+// A duplicate here is reachable: `stdlib/Builtins.maxon` may DECLARE a reserved `__` name (E2051's D6
+// exemption), and `installManagedGlobalInit` appends the compiler's own `__module_init` /
+// `__maxon_global_cleanup` into this same MERGED MAXON MODULE (`Compiler.compileToCodeResult`) before this
+// summary is built — so a declaration of either name puts two functions of one name in front of this loop.
+// That program IS refused, as E4015 (`DeadFunctionElimination.refuseDuplicateFunctionName`) — but in the
+// BACKEND, strictly after this pass. The old wording had the order backwards and would tell the next reader
+// that nothing upstream of the backend can see a duplicate, which is exactly the premise A1t proved worth
+// checking.
+//
+// What actually makes first-wins safe is narrower and does not depend on any refusal having happened:
+// nothing between here and that refusal EMITS CODE, so the tie-break can change which body gets summarised
+// but not what any program MEANS. If a pass is ever added between this one and the backend that turns a
+// mutation summary into emitted code rather than a diagnostic, this tie-break stops being free.
 function indexModuleFunctionsByName(module MaxonModule) returns ModuleFuncIndexByName
 	var byName = ModuleFuncIndexByName.create()
 	for i in 0 upto module.functions.count() 'eachFunc'

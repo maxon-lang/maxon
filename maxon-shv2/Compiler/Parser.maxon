@@ -9932,12 +9932,9 @@ export type Parser
 		// own type columns — there is no second array and no copy-back at the end of the body. It is
 		// safe because both are re-created (not cleared) for the next function, so nothing aliases
 		// these afterwards. See IrFunction.valueTags / valueNameIds for what the columns are FOR.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, returnLine: nameTok.line, throwsTypeName: throwsClause)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, returnLine: nameTok.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: nameTok), throwsTypeName: throwsClause)
 		func.namespace = self.namespace
 		func.visibility = visibility
-		func.sourceFilePath = self.filePath
-		func.nameLine = nameTok.line
-		func.nameColumn = nameTok.column
 
 		// ⭐ **THE FUNCTION IS PUSHED UP FRONT, NOT AT THE END, AND THAT IS WHAT MAKES ValueOrigin CORRECT
 		// UNDER NESTED PARSING (P1.5-A2a).** A non-capturing closure literal lifts to a top-level function
@@ -29541,12 +29538,9 @@ export type Parser
 		// user parameters only). If the body captures, `paramCount`/`maxonParamTypes` are patched below to
 		// carry the trailing `__env`. File-private (a closure is never callable across files by name), and it
 		// NEVER throws (the closure grammar has no throws clause).
-		var lifted = IrFunction.create(closureName, maxonReturnType: MaxonReturnType.value(MaxonType.unresolved), paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, returnLine: givesTok.line)
+		var lifted = IrFunction.create(closureName, maxonReturnType: MaxonReturnType.value(MaxonType.unresolved), paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, returnLine: givesTok.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: functionTok))
 		lifted.namespace = self.namespace
 		lifted.visibility = Visibility.file
-		lifted.sourceFilePath = self.filePath
-		lifted.nameLine = functionTok.line
-		lifted.nameColumn = functionTok.column
 
 		// Push up front — reserving the closure's index AFTER the enclosing function's (which was pushed at
 		// its own start) — and re-stamp `currentFuncIndex` so the body's value origins file under the

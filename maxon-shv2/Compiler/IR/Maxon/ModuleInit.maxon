@@ -266,7 +266,11 @@ type SynthesizedFunction
 			valueIsCapturingClosure.push(false)
 		end 'eachParam'
 
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, returnLine: 0)
+		// ⚠ `synthesized()` is a POSITIVE claim, not a default: it is what makes `__module_init` /
+		// `__maxon_global_cleanup` read as the compiler's own at `refuseDuplicateFunctionName` (so a
+		// `Builtins.maxon` declaration of one is E4015 against them, and a doubled install is a panic) and at
+		// `TargetPrinter.isRuntimeFunction`. These are the ONLY two Maxon-tier functions the compiler builds.
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, returnLine: 0, declaredAt: SourcePosition.synthesized())
 		let funcIndex = module.funcCount()
 		module.pushFunc(func)
 

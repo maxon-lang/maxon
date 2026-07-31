@@ -27,6 +27,30 @@
 // identity + signature (Maxon + Std shapes) + the per-function `Scope` + the
 // backend frame-size scalars.
 
+// ⭐ **WHERE A FUNCTION'S NAME WAS WRITTEN — or the explicit statement that nobody wrote it.** The three
+// fields travel together because they are ONE fact, and `IrFunction.create` takes it as one argument so a
+// caller cannot supply a path and forget the line (which would position a diagnostic at `file:0:0`) or,
+// worse, forget the path and have a PARSED function read as compiler-synthesized. See `create`'s header for
+// the two readers that decide behaviour on the empty/non-empty split, and why neither can rest on a
+// convention.
+export type SourcePosition
+	export let filePath as FilePath
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	// A function the PARSER built, positioned at the token the author has to change to move it.
+	export static function declaredAt(filePath FilePath, nameTok Token) returns SourcePosition
+		return Self{filePath: filePath, line: nameTok.line, column: nameTok.column}
+	end 'declaredAt'
+
+	// A function the COMPILER built. The empty path is the discriminator the two readers above turn on, so
+	// this is a positive statement of provenance and not a default that fell through: a caller reaches it by
+	// naming it, and a reader grepping `synthesized` finds every site that claims it.
+	export static function synthesized() returns SourcePosition
+		return Self{filePath: FilePath from "", line: 0, column: 0}
+	end 'synthesized'
+end 'SourcePosition'
+
 // Sum-typed encoding of an optional `throws E` clause. `none` = non-throwing;
 // `throwing(name)` carries the bare error-enum name. Replaces a `""`-sentinel
 // String field so the absent state is structurally distinct.
@@ -297,18 +321,29 @@ export type IrFunction
 	// lockstep — as the body's values are minted. Constructing empty ones here and having the parser
 	// overwrite them at the end of the body would leave dead arrays per function on the heap
 	// (`scale-test` charged that exactly: +48 allocations on the smallest rung, doubling with the corpus).
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+	//
+	// ⭐⭐ **`declaredAt` IS REQUIRED, AND THAT IS WHAT MAKES PROVENANCE A CONSTRUCTED FACT RATHER THAN A
+	// CONVENTION.** Two readers decide behaviour on whether `sourceFilePath` is empty — `TargetPrinter.
+	// isRuntimeFunction` withholds the green-thread stack guard from the runtime's own scaffolding, and
+	// `DeadFunctionElimination.refuseDuplicateFunctionName` tells an author's declaration (E4015) apart from
+	// an installer that ran twice (a panic). Neither can be satisfied by a caller's good intentions: this
+	// used to hardcode an empty path and leave every caller to overwrite it a few lines later, so a caller
+	// that forgot would have made a PARSED function read as synthesized at both readers — silently, as a
+	// wrong answer rather than a compile error, and the stack-guard one is the SIGSEGV the A1r review
+	// measured. Passing the position in means a caller cannot forget it; it can only decide it, and
+	// `SourcePosition.synthesized` is how a synthesizing caller says so out loud.
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",
 			visibility: Visibility.file,
-			sourceFilePath: FilePath from "",
+			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
 			nextBlockId: 0,
 			returnLine: returnLine,
-			nameLine: 0,
-			nameColumn: 0,
+			nameLine: declaredAt.line,
+			nameColumn: declaredAt.column,
 			maxonReturnType: maxonReturnType,
 			maxonParamTypes: maxonParamTypes,
 			valueTags: valueTags,
@@ -335,24 +370,26 @@ export type IrFunction
 	// caller synthesizes a helper and wants it callable from anywhere, so visibility defaults to `global`.
 	//
 	// ⚠ **NO PARSED FUNCTION COMES THROUGH THIS DOOR, and that is load-bearing rather than incidental**:
-	// `sourceFilePath` is left EMPTY here, and A1t's `refuseDuplicateFunctionName` reads exactly that to
-	// tell an author's declaration apart from a symbol the compiler emitted (as `TargetPrinter.
-	// isRuntimeFunction` reads it for the GT stack-guard exemption). ⚠ This header used to name
-	// *"stdlib-cache restore"* as a caller — shv2 has no such restore, and the phantom answered "yes" to
-	// the one question both readers turn on: *can a function parsed from source reach the Std module with
-	// empty provenance?* It cannot.
+	// the position is `SourcePosition.synthesized()`, and A1t's `refuseDuplicateFunctionName` reads exactly
+	// that to tell an author's declaration apart from a symbol the compiler emitted (as `TargetPrinter.
+	// isRuntimeFunction` reads it for the GT stack-guard exemption). Unlike `create`, this door takes no
+	// position argument, because there is no caller it could come from: every one of them synthesizes. ⚠ This
+	// header used to name *"stdlib-cache restore"* as a caller — shv2 has no such restore, and the phantom
+	// answered "yes" to the one question both readers turn on: *can a function parsed from source reach the
+	// Std module with empty provenance?* It cannot.
 	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+		let declaredAt = SourcePosition.synthesized()
 		return Self{
 			name: name,
 			namespace: "",
 			visibility: Visibility.global,
-			sourceFilePath: FilePath from "",
+			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
 			nextBlockId: 0,
 			returnLine: returnLine,
-			nameLine: 0,
-			nameColumn: 0,
+			nameLine: declaredAt.line,
+			nameColumn: declaredAt.column,
 			maxonReturnType: MaxonReturnType.void,
 			maxonParamTypes: MaxonTypeArray.create(),
 			valueTags: ValueTypeTagArray.create(),
