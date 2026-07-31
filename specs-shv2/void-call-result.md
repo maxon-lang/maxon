@@ -320,11 +320,20 @@ error E2004: <fragment>:4:12: Function 'append' does not return a value
 
 ⚠⚠ **THE REFUSAL IS NAME-SCOPED BY BEING WRITTEN IN EACH VOID ARM, so nothing but a test makes the
 twelve arms agree.** That is the cost of the scoping and it is deliberate — the alternative, one shared
-call ahead of them all, IS the defect above — but the failure mode of a MISSING one is not a compile
-error, it is a silently accepted void value: measured, with the guard neutered, `arr = arr.push(1)`
-compiled and linked. Every arm below was verified reachable with the result USED, so every one of these
-pins a distinct wrong answer. The three cases above cover `push`, `Set.insert` and `String.append`;
-these cover the remaining nine.
+call ahead of them all, IS the defect above — and the failure mode of a MISSING one is never a compile
+error. It is one of TWO things, depending on the arm, and both were measured by neutering the guard and
+running this section (12 of 12 controls red, one per arm, and nothing else in the spec):
+
+- the eight arms that hand the RECEIVER back (`push`/`reserve`/`resize`/`clear`/`insert`/`append`,
+  `Set.insert`, `String.append`) **silently accept**: `arr = arr.push(1)` compiled and linked.
+- the four THROWING buffer arms (`setLength`/`setByte`/`grow`/buffer `append`) tag their result `void`,
+  so with the guard gone `let x = mm.setLength(1)` reaches `declareInitializedBinding` and **PANICS the
+  compiler** — *"maxonTypeOfTag: a `void` tag names no value"*. For those four the guard is not a
+  message, it is the only thing standing between the parser and its own precondition.
+
+Every arm below was verified reachable with the result USED, so every one of these pins a distinct wrong
+answer. The three cases above cover `push`, `Set.insert` and `String.append`; these cover the remaining
+nine.
 
 <!-- test: error.array-reserve-in-value-position -->
 ```maxon
@@ -457,4 +466,83 @@ end 'main'
 ```
 ```maxoncstderr
 error E2004: <fragment>:5:13: Function 'append' does not return a value
+```
+
+### THE THIRTEENTH ARM — `set`, whose only reachable value spelling is under a `try`
+
+⚠⚠ **A `resultUsed` GUARD CANNOT SEE A THROWING METHOD'S VALUE POSITION, because a `try` target is
+parsed with `resultUsed: false` BY DESIGN** — the `try` decides value-ness at its OWN position, from the
+TAG of the result the target minted (`parseTry`'s `voidInValue`). That is the derived, single-site half of
+this rule, and it is why the buffer's three throwing void mutators need no more than an honest tag: a
+value-position `try mm.setLength(1)` is refused by it. `set` is throwing and valueless too — its runtime
+entry ok-returns a literal `0` and `dispatchArrayMethod`'s own comment calls it *"a discarded dummy"* —
+but the arm tagged that dummy `integer`, so the tag said "there IS a value here" and the one check able
+to look was answered wrongly.
+
+⇒ MEASURED on the tree this case was written against: `let x = try arr.set(0, value: 7) otherwise return
+1` **compiled, linked and ran, exit 0**, binding `x` to the dummy — while the runnable oracle refuses the
+identical program with `E3059: type mismatch: ''stdlib.Array.set' does not return a value'`. It is the
+D11 defect's dual: not a false claim that a method exists, but a silent fabricated value for a method
+that has none.
+
+⚠⚠ **A THROWING VOID METHOD NEEDS BOTH HALVES, BECAUSE THE TWO SPELLINGS OF ITS VALUE POSITION ARE SEEN
+BY DIFFERENT CHECKS.** Under a `try` the arm's `resultUsed` is false and only the TAG can refuse; written
+BARE the arm's `resultUsed` is true and only the GUARD can refuse — and there the tag is not merely
+insufficient, it is dangerous: an honest `void` with no guard reaches `declareInitializedBinding` and
+**PANICS the compiler** (*"maxonTypeOfTag: a `void` tag names no value"*), because the bare-throwing-call
+E3057 lives a whole pass later, in `SemanticCheck`. That is measured, and it is the same panic the four
+buffer mutators' guards have been quietly preventing. Both spellings are pinned below.
+
+⚠ The STATEMENT position is what these methods are FOR and it is unaffected:
+`arrays.md:index-assignment` and `managed-memory-builtin.md:set-and-get` already run
+`try …set(…) otherwise …` and assert the value it stored, on both surfaces.
+
+<!-- test: error.array-set-in-value-position -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	let x = try arr.set(0, value: 7) otherwise return 1
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:8:10: type mismatch: ''__arr_set' does not return a value'
+```
+
+<!-- test: error.buffer-set-in-value-position -->
+⭐ The buffer's `set` is a SECOND callee (`__arr_mem_set`, capacity-bounded where the `Array`'s is
+length-bounded), reached through the same arm — so it needs its own case for the reason the two `append`
+arms do.
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = try mm.set(0, 7) otherwise return 2
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:4:10: type mismatch: ''__arr_mem_set' does not return a value'
+```
+
+<!-- test: error.bare-array-set-in-value-position -->
+⚠ THE OTHER HALF — the same call WITHOUT the `try`, which is the arm's guard's case and not the tag's. One
+case covers both surfaces here, because one guard in one arm does (the surface only picks the callee), and
+what it pins is that the parser refuses this itself rather than handing a `void` to a binding.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	let x = arr.set(0, value: 7)
+	return x
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:8:14: Function 'set' does not return a value
 ```

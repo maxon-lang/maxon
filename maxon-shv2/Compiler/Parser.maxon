@@ -20166,10 +20166,20 @@ export type Parser
 	//
 	// `resultUsed` is whether this postfix chain's FINAL value is read — `false` only for a bare-call
 	// STATEMENT (`callStmt`), `true` in every expression. It gates ONLY a VOID indirect-call / container-
-	// mutator result, and forwarding it uniformly to every hop is correct because a void result is
-	// TERMINAL: the loop does continue past one — every `.member` is now a hop — but the very next hop
-	// refuses it (`structBaseOfReceiver` reports a member access on a `void` value, positioned at the
-	// member), so no chain can ever reach a SECOND call whose `resultUsed` the outer one would misstate.
+	// mutator result, and forwarding it uniformly to every hop is correct wherever a void result is
+	// TERMINAL: the loop does continue past one — every `.member` is now a hop — but the next hop refuses
+	// a `void`-TAGGED value (`structBaseOfReceiver` reports a member access on it, positioned at the
+	// member).
+	//
+	// ⚠ **THAT ARGUMENT DOES NOT COVER THE CONTAINER VOID MUTATORS, AND THE GAP IS AN OVER-ACCEPTANCE
+	// RATHER THAN A WRONG VALUE** (measured in review of D11). `emitArrayVoidCall`, `parseStringAppend` and
+	// `Set.insert` deliberately hand back the RECEIVER — "what the statement still denotes" — so their
+	// result is NOT void-tagged and the next hop is perfectly happy: `arr.push(2).count()` as a STATEMENT
+	// compiles here, where the oracle refuses it (`E2001 unexpected token: '.'`). Nothing wrong is
+	// computed — the chain pushes, counts and discards — and the VALUE spelling is still refused, because
+	// `let n = arr.push(2).count()` forwards `resultUsed: true` to the `push` hop, which is E2004 at
+	// `push`. The honest statement is that `resultUsed` describes the chain's LAST hop and the
+	// receiver-returning arms make the earlier hops' own use invisible to it.
 	function parsePostfix(func IrFunction, value ValueId, resultUsed bool) returns ValueId throws ParseError
 		var current = value
 		while true 'postfix'
@@ -26291,7 +26301,20 @@ export type Parser
 		// and REFUTED — a conditional `ByteArray` argument lowers fine on its own, twice in one function, in a
 		// labelled position, and under a `try`. Whatever the trigger is, it needs this function. Reverting
 		// these four lines to the one-line expression reproduces it exactly.
+		//
+		// ⚠⚠ **`set` IS A VOID MUTATOR TOO — IT SITS HERE ONLY BECAUSE IT THROWS, AND IT NEEDS BOTH HALVES OF
+		// THE REFUSAL (found in review of D11).** The two halves cover DISJOINT positions and neither can do
+		// the other's job: this guard answers the BARE spelling (`let x = arr.set(…)`, where `resultUsed` is
+		// TRUE at the arm), and the honest `void` result tag `parseArraySetOrInsert` mints answers the `try`
+		// spelling (`let x = try arr.set(…) otherwise …`, where the target is parsed `resultUsed: false` and
+		// only `parseTry`'s `voidInValue` can see it). The three buffer mutators below have carried both since
+		// R4.4; `set` had NEITHER, which is why it compiled and ran.
+		// ⇒ **MEASURED, and it is why the guard cannot be dropped in favour of the tag alone**: with the tag
+		// honest and this line absent, `let x = arr.set(0, value: 7)` reaches `declareInitializedBinding` and
+		// PANICS the compiler — *"maxonTypeOfTag: a `void` tag names no value"* — because SemanticCheck's
+		// bare-throwing-call E3057 runs a whole pass too late to protect the parser from itself.
 		if methodTok.value.equals(ArraySetMethod) 'set'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			var setCallee = ArrSetName
 			if isManagedMemory 'capacityBoundedSetter'
 				try self.requireBufferSetOwnsWhatItStores(giid, methodTok: methodTok)
@@ -27265,8 +27288,21 @@ export type Parser
 		let value = try self.moveElementIntoArray(checked, giid: giid, valueStart: valueStart)
 		try self.consume(TokenKind.rightParen)
 
+		// ⭐⭐ **THE THROWING `set` IS VOID AND ITS TAG MUST SAY SO — the guard the void mutators call cannot
+		// reach here, and the check that CAN reads only this tag.** A `try` target is parsed with
+		// `resultUsed: false` by design (`parseTryCallTarget`), so the arm's `requireVoidMethodIsStatement` is
+		// blind to `let x = try arr.set(…) otherwise …` — the spelling the corpus actually writes, since a
+		// throwing call wants a `try`. There `parseTry`'s `voidInValue` decides, and it reads NOTHING but
+		// `tagOf(result)`. Tagged `integer`, that check was told there is a value, and the
+		// program COMPILED, LINKED AND RAN (exit 0) with `x` bound to the ok-return's literal `0`
+		// (`emitElementStoreAndOkReturn`) — while the runnable oracle refuses it, `E3059 type mismatch:
+		// ''stdlib.Array.set' does not return a value'`. Found in review of D11: the arm is the THIRTEENTH
+		// void one, and the only one whose refusal is DERIVED from the tag rather than written in the arm.
+		// ⚠ The Std entry still ok-returns `(0, flag)` — a throwing `void` runtime function is normal
+		// (`__arr_set_length`, `__arr_set_byte` and `__arr_mem_grow` are all declared `StdReturnType.void`
+		// and all throw); what this tag decides is whether MAXON believes the call yields something.
 		if throwing 'throwing'
-			return self.emitRuntimeCall(callee, args: tripleArgs(arr, second: index, third: value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(callee, args: tripleArgs(arr, second: index, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'throwing'
 		return self.emitArrayVoidCall(callee, args: tripleArgs(arr, second: index, third: value), receiver: arr, range: range)
 	end 'parseArraySetOrInsert'
