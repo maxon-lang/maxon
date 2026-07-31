@@ -88,7 +88,8 @@ end 'witnessMethodSlotOffset'
 // `implements <ident>, …` (`Parser.parseTypeImplementsClause`) — or one of the compiler's own synthesized
 // protocol names below, and the lexer admits only `[A-Za-z0-9_]` inside an identifier. So injectivity is a
 // property of the LEXER rather than of a decoding algorithm a later reader has to get right — but of the lexer
-// acting on ONE half, which is why `requireSeparatorFreeInterfaceName` asks that half and not the other.
+// acting on ONE half, which is why `requireSeparatorFreeLabelComponent` is asked of that half and not the
+// other — and, at `witnessSlotImplKey`, of the method half for the same reason.
 //
 // Escaping by DOUBLING the separator would not even have worked: with a one-byte separator, a run of five
 // underscores between two components admits three valid splits.
@@ -109,15 +110,36 @@ let WitnessLabelSeparator = "."
 // `__witness_<Type>.<Iface>`. The ONE place this label is spelled, shared by the blob emitter (which
 // registers it) and the concrete dispatch site (which takes its `rdataAddr`), so they cannot disagree.
 export function witnessTableLabel(typeName ByteArray, interfaceName ByteArray) returns String
-	requireSeparatorFreeInterfaceName(interfaceName)
+	requireSeparatorFreeLabelComponent(interfaceName, role: "interface name", join: "__witness_<Type>{WitnessLabelSeparator}<Iface>", identifies: "ONE (conformer, interface) pair")
 
 	return "__witness_{String.from(typeName)}{WitnessLabelSeparator}{String.from(interfaceName)}"
 end 'witnessTableLabel'
 
+// ⭐⭐ **THE KEY IDENTIFYING ONE WITNESS-TABLE SLOT — `(conformer, interface, method)` (R10).** It is what
+// `ConformanceCheck` files its SELECTED impl under and what `LowerMaxonToStd.ensureWitnessTable` reads that
+// selection back by, so the member a conformance ACCEPTED and the symbol a slot's relocation NAMES are one
+// value rather than two joins of the same names that happen to agree. Under D7 those two joins genuinely
+// diverge: a requirement satisfied by a later overload is registered `Type.method#Suffix` while an
+// un-suffixed join spells the FIRST declaration, and both sites minting their own was a silent wrong
+// dispatch waiting for conformance to be fixed.
+//
+// It is BUILT ON the table label rather than beside it, so the pair half of the key cannot drift from the
+// label the slot actually belongs to — and the method half is held to the same separator-freedom the
+// interface half is (below), which is what makes the three-way split exact: the conformer half may itself
+// carry a separator (`mangleTypeArg`'s qualified per-instance spellings do), so it is the LAST TWO
+// separators that are the joins, and both of those halves are single tokens the lexer keeps the separator
+// out of.
+export function witnessSlotImplKey(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns ByteArray
+	requireSeparatorFreeLabelComponent(methodName, role: "method name", join: "__witness_<Type>{WitnessLabelSeparator}<Iface>{WitnessLabelSeparator}<method>", identifies: "ONE (conformer, interface, method) slot")
+
+	return "{witnessTableLabel(typeName, interfaceName: interfaceName)}{WitnessLabelSeparator}{String.from(methodName)}".toByteArray()
+end 'witnessSlotImplKey'
+
 // ⭐ **THE INJECTIVITY ARGUMENT, ENFORCED AT THE JOIN THAT RELIES ON IT INSTEAD OF ONLY ARGUED ABOVE IT.**
-// The property lives three files away — an interface name is an `identifier` token, so the lexer keeps the
-// separator out of it — and a join whose correctness rests on a fact stated only in someone else's file is
-// the shape that already bit this label once. This is that fact, asked where it is spent.
+// The property lives three files away — an interface name and a method name are each a single token, so the
+// lexer keeps the separator out of both — and a join whose correctness rests on a fact stated only in
+// someone else's file is the shape that already bit this label once. This is that fact, asked where it is
+// spent: once by `witnessTableLabel` of its interface half, once by `witnessSlotImplKey` of its method half.
 //
 // It is UNREACHABLE today and that is exactly what it is for: what it catches is a LATER widening of what
 // may name an interface — a namespaced `where T is Foo.Bar` is the obvious one — which would otherwise
@@ -127,16 +149,17 @@ end 'witnessTableLabel'
 //
 // The separator byte is read OUT of `WitnessLabelSeparator` rather than restated as a literal: a second
 // spelling would be free to drift from the join it is supposed to be checking, which is the whole failure
-// mode this function exists to prevent.
-function requireSeparatorFreeInterfaceName(interfaceName ByteArray)
-	let separator = try WitnessLabelSeparator.toByteArray().get(0) otherwise panic("requireSeparatorFreeInterfaceName: WitnessLabelSeparator is a one-byte literal")
+// mode this function exists to prevent. `role`/`join`/`identifies` are the caller's — one scan, and each
+// join still names in its own words what it would stop identifying.
+function requireSeparatorFreeLabelComponent(name ByteArray, role String, join String, identifies String)
+	let separator = try WitnessLabelSeparator.toByteArray().get(0) otherwise panic("requireSeparatorFreeLabelComponent: WitnessLabelSeparator is a one-byte literal")
 
-	for i in 0 upto interfaceName.count() 'scan'
-		if (try interfaceName.get(i) otherwise panic("requireSeparatorFreeInterfaceName: index {i} is below count {interfaceName.count()}, but get failed")) == separator 'contains'
-			panic("witnessTableLabel: interface name '{String.from(interfaceName)}' contains the label separator '{WitnessLabelSeparator}', so `__witness_<Type>{WitnessLabelSeparator}<Iface>` no longer identifies ONE (conformer, interface) pair — two pairs would spell one label and the second would silently take the first's dictionary. An interface name is an `identifier` token today; whatever widened that has to pick a separator neither half can hold")
+	for i in 0 upto name.count() 'scan'
+		if (try name.get(i) otherwise panic("requireSeparatorFreeLabelComponent: index {i} is below count {name.count()}, but get failed")) == separator 'contains'
+			panic("requireSeparatorFreeLabelComponent: {role} '{String.from(name)}' contains the label separator '{WitnessLabelSeparator}', so `{join}` no longer identifies {identifies} — two would spell one name and the second would silently take the first's dictionary. An interface name and a method name are each a single token today; whatever widened that has to pick a separator no component can hold")
 		end 'contains'
 	end 'scan'
-end 'requireSeparatorFreeInterfaceName'
+end 'requireSeparatorFreeLabelComponent'
 
 // --- The stdlib protocol-interface names (SYNTHESIZED, not parsed from stdlib/) ---
 let StringableInterfaceName = b"Stringable"

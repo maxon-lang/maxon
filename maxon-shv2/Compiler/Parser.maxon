@@ -1436,9 +1436,9 @@ let ParametersAreMutable = false
 // (`_` means discard), spelled once.
 let DiscardBindingName = b"_"
 
-// Add `item` to a `", "`-separated list — the separator every list a match diagnostic spells out uses
-// (E2026's uncovered-case list, E3081's discard list), spelled ONCE so two messages rendering a list of
-// the same kind cannot come to punctuate it differently.
+// Add `item` to a `", "`-separated list — the separator every list a diagnostic spells out uses (E2026's
+// uncovered-case list, E3081's discard list, E3016's overload-set list), spelled ONCE so two messages
+// rendering a list of the same kind cannot come to punctuate it differently.
 //
 // ⚠ **IT ACCUMULATES A STRING RATHER THAN JOINING AN ARRAY, AND THAT IS A MEASURED CONSTRAINT, not a
 // style choice.** `checkEnumExhaustive` calls this from the loop it walks on EVERY enum match, not only
@@ -1447,10 +1447,11 @@ let DiscardBindingName = b"_"
 // program size, for a list only a refused program ever renders. This way an exhaustive match allocates
 // nothing at all here.
 //
-// An empty `list` means "nothing appended yet" EXACTLY, rather than approximately: every item either
-// site can pass is a non-empty token (an enum case name is an identifier, the discard is `_`), so no
-// parallel `isFirst` flag is needed to tell the first append from a later one.
-function appendCommaSeparated(list String, item String) returns String
+// An empty `list` means "nothing appended yet" EXACTLY, rather than approximately: every item any of the
+// three sites can pass is non-empty (an enum case name is an identifier, the discard is `_`, and a rendered
+// method signature always carries at least `name() returns T`), so no parallel `isFirst` flag is needed to
+// tell the first append from a later one.
+export function appendCommaSeparated(list String, item String) returns String
 	if list.isEmpty() 'firstItem'
 		return item
 	end 'firstItem'
@@ -1638,6 +1639,35 @@ function overloadBlockingConsume(consume CalleeConsume) returns bool
 		borrowsAll gives false
 	end 'c'
 end 'overloadBlockingConsume'
+
+// ⭐⭐ **AN `interface` MAY NOT DECLARE TWO REQUIREMENTS OF ONE NAME (R10) — because a witness dispatch
+// resolves a method to its TABLE SLOT BY NAME.** `IrInterface.interfaceMethodIndex` scans the interface's
+// methods for the first one so named, so a second requirement of that name owns a slot no call site can
+// reach; the call that meant it is slotted against the FIRST one's formals and told
+// `'Iface.m' expects 0 argument(s) but 1 were provided` — a sentence that is FALSE about an interface which
+// declares exactly that member. A declaration nothing can dispatch is refused where it is written.
+//
+// ⚠ **R10 IS WHAT MADE THE SHAPE REACHABLE, WHICH IS WHY THE REFUSAL BELONGS TO IT.** Before R10 conformance
+// resolved a requirement by the bare `Type.method` key, which under D7 only the FIRST-declared member of an
+// overload set holds — so at most ONE of two same-named requirements could ever be satisfied and the program
+// was rejected anyway, as a wrong-signature E3016 about the other. Matching a requirement against the whole
+// overload set makes such a type CONFORM, and the false arity message would then be all an author ever saw.
+// So this changes no program's verdict; it replaces a misleading reason with the true one.
+//
+// ⚠ It is a REFUSAL and not a widening of the dispatch on purpose: picking the right slot by arity and
+// argument types is overload resolution at a witness call, which needs a candidate list the parse-time
+// dispatch does not have (`findWitnessDispatch` runs while the call's arguments are still tokens) — its own
+// rung, not a line here.
+//
+// Only the NAME is compared, never the formals: two requirements that differ in shape are exactly the case
+// that cannot be dispatched, so a signature test would admit the broken half.
+function requireUnclaimedInterfaceRequirementName(nameTok Token, interfaceName ByteArray, declaredSoFar InterfaceMethodSigArray) throws ParseError
+	for declared in declaredSoFar 'eachDeclared'
+		if declared.name.equals(nameTok.value) 'duplicate'
+			throw ParseError.unsupported("interface '{String.from(interfaceName)}' declares two requirements named '{String.from(nameTok.value)}' — a witness dispatch resolves an interface method to its table slot by NAME alone, so the second could never be reached. Give the requirements distinct names", line: nameTok.line, column: nameTok.column)
+		end 'duplicate'
+	end 'eachDeclared'
+end 'requireUnclaimedInterfaceRequirementName'
 
 // The first ordinal the pathological-collision escape hatch tries. `2` because the un-ordinalled name IS
 // the first spelling of that suffix (see `Parser.unclaimedRegistrationName`).
@@ -8886,7 +8916,7 @@ export type Parser
 				continue
 			end 'associatedTypeAlias'
 
-			methods.push(try self.parseInterfaceMethod(nameTok.value))
+			methods.push(try self.parseInterfaceMethod(nameTok.value, declaredSoFar: methods))
 		end 'members'
 
 		try self.consume(TokenKind.end)
@@ -8931,7 +8961,9 @@ export type Parser
 	// One `[static] function name(params) [returns Type] [throws E]` interface method SIGNATURE (no body).
 	// Its param/return types are rendered to SOURCE strings (see IrInterface) via `renderInterfaceTypeName`
 	// — `Self` for the enclosing interface, the alias name for a `named` type, `void` for no return.
-	function parseInterfaceMethod(interfaceName ByteArray) returns InterfaceMethodSig throws ParseError
+	// `declaredSoFar` is what the enclosing interface has already read, for the duplicate-name refusal below:
+	// that check needs the NAME TOKEN's position, which exists only here.
+	function parseInterfaceMethod(interfaceName ByteArray, declaredSoFar InterfaceMethodSigArray) returns InterfaceMethodSig throws ParseError
 		let isStatic = self.at(TokenKind.static)
 		if isStatic 'staticMethod'
 			self.advance()
@@ -8942,6 +8974,7 @@ export type Parser
 		// too (D8) — a conforming type may declare `function to()`, and a requirement it could not spell would
 		// be a requirement no type could satisfy.
 		let nameTok = try self.consumeNameToken(NamePosition.declaration)
+		try requireUnclaimedInterfaceRequirementName(nameTok, interfaceName: interfaceName, declaredSoFar: declaredSoFar)
 
 		var paramNames = ByteArrayArray.create()
 		var paramTypes = MaxonTypeArray.create()

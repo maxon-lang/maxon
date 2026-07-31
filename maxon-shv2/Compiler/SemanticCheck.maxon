@@ -193,7 +193,12 @@ end 'refuseOverloadedFunctionValue'
 // The members of a set that are actually in the signature registry, in declaration order. A member absent
 // from it is one left behind by a previous fold of a project whose sources have since changed (see
 // `OverloadSetMap`, which is deliberately not reset); skipping it is what makes that staleness inert.
-function overloadCandidates(project Project, members ByteArrayArray) returns ByteArrayArray
+//
+// Exported for `ConformanceCheck.checkOverloadedMembers` (R10), which asks the SAME map the same question a
+// call site does — the two differ in what they then match a candidate AGAINST (arguments vs a requirement's
+// signature), never in what the candidate list is, and a second walk of `overloadSets` would be free to
+// treat a stale member as live in one reader and not the other.
+export function overloadCandidates(project Project, members ByteArrayArray) returns ByteArrayArray
 	var candidates = ByteArrayArray.create()
 	for member in members 'each'
 		if project.funcSignatures.contains(member) 'live'

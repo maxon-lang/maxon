@@ -2054,6 +2054,25 @@ export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 // program actually declares.
 export typealias OverloadSetMap = Map with (ByteArray, ByteArrayArray)
 
+// ⭐⭐ **WHICH MEMBER SATISFIES EACH WITNESS-TABLE SLOT — THE CONFORMANCE DECISION, WRITTEN DOWN ONCE (R10).**
+// `witnessSlotImplKey(<conformer>, <interface>, <method>)` ⇒ the REGISTRATION name of the member
+// `ConformanceCheck` accepted for that requirement. `LowerMaxonToStd.ensureWitnessTable` stamps the slot's
+// `funcAbs64InRdata` relocation from this, instead of re-joining `<Type>.<method>` for itself.
+//
+// ⚠ **THE TWO SITES USED TO MINT THAT JOIN INDEPENDENTLY, AND THEY AGREED ONLY BY BOTH BEING WRONG.** Under
+// D7 a later overload registers as `Type.method#Suffix` while the un-suffixed join spells the FIRST
+// declaration, so a conformance satisfied by a later overload and a slot stamped with the bare name name
+// DIFFERENT functions — a wrong `.text` address in the dictionary, no diagnostic, at runtime. Recording the
+// selection is what makes them one value; a slot with no recording PANICS in the lowering rather than
+// falling back to a second derivation (the one exception being a builtin conformer, which declares no
+// `implements` and so has no conformance decision to record — see `ensureWitnessTable`).
+//
+// ⚠ **DELIBERATELY NOT IN `resetMergeTargets`, for `OverloadSetMap`'s reason.** It is an UPSERT keyed by a
+// triple whose value is the whole answer, and `checkConformance` re-derives every key it needs on every
+// compile, so re-running REPLACES. An entry left behind by a previous fold names a conformance the program
+// no longer declares, for which no table is built — inert rather than wrong.
+export typealias WitnessSlotImplMap = Map with (ByteArray, ByteArray)
+
 // ⭐ **THE CHARACTER AN OVERLOAD'S REGISTRATION NAME JOINS WITH — and the reason it is not `$`.** The lexer
 // admits only `[A-Za-z0-9_]` inside an identifier, so a `#` cannot appear in any name the source can write:
 // a minted overload name can never collide with a declared one, the same construction `__` gives the
@@ -2393,6 +2412,10 @@ export type Project
 	// what the two names are and why this one registry is not reset with the others). Empty unless the
 	// program declares one name twice with different signatures.
 	export var overloadSets as OverloadSetMap
+	// ⭐ Which member `checkConformance` accepted for each witness-table slot (R10) — see WitnessSlotImplMap
+	// for why the lowering reads this instead of re-deriving the impl symbol. Empty for every program that
+	// declares no conformance.
+	export var witnessSlotImpls as WitnessSlotImplMap
 	// ⭐ Recorded function-value merges awaiting whole-program signature agreement (P1.5 #81). Filled by
 	// `mergeArtifact` (each file's `pendingFnMergeChecks` appended in order); drained by
 	// `checkValueMergeSignatures` before the pipeline runs. Reset with the other merge targets.
@@ -2520,6 +2543,7 @@ export type Project
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			overloadSets: OverloadSetMap.create(),
+			witnessSlotImpls: WitnessSlotImplMap.create(),
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			unusedTypeAliasDiagnostics: DeferredNameDiagnosticArray.create(),
 			hiddenTypeNameDiagnostics: DeferredNameDiagnosticArray.create(),

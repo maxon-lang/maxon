@@ -510,6 +510,10 @@ type MaxonToStdLowering
 	var interfaces as IrInterfaceMap
 	// The witness tables already emitted (P1.7a slice 2a) — the dedup gate for the blob's relocations + root.
 	var emittedWitnessTables as WitnessTableLabelSet
+	// Which member `checkConformance` accepted for each witness slot (R10), from `project.witnessSlotImpls` —
+	// what `ensureWitnessTable` stamps a slot's relocation FROM, instead of re-deriving the impl symbol by a
+	// second un-suffixed join of the same two names. See `witnessSlotImpl`.
+	var witnessSlotImpls as WitnessSlotImplMap
 	// The backend's `.rdata` table — where `stringLiteral` registers its immortal 48-byte record and
 	// its NUL-terminated byte blob (P1.2 wave A). It is the SAME table the backend later resolves the
 	// emitted `rdataAddr` label against, and the one that carries the buffer fixups to the PE writer.
@@ -588,7 +592,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1117,8 +1121,9 @@ type MaxonToStdLowering
 	// ⭐ **THE `.rdata` WITNESS-TABLE BLOB for `typeName` conforming to `interfaceName` (P1.7a slice 2a).** The
 	// `24 + 8*methodCount`-byte blob (`methodCount@0`, `parentTablePtr@8`=0, `flags@16`=0, `methods[N]@24`) is
 	// registered zero-filled under `__witness_<Type>.<Iface>`; each method slot is stamped by a
-	// `funcAbs64InRdata` relocation whose target is the conforming type's own `<Type>.<method>` impl (the SAME
-	// reloc that bakes a layout descriptor's `destroyFunc@40`). Every writer bakes it now — the PE one, the
+	// `funcAbs64InRdata` relocation whose target is the member `checkConformance` ACCEPTED for that
+	// requirement (`witnessSlotImpl` — NOT a second `<Type>.<method>` join of this pass's own, see R10) with
+	// the SAME reloc that bakes a layout descriptor's `destroyFunc@40`. Every writer bakes it now — the PE one, the
 	// Mach-O/ELF arm64 one (slice 2b-iv-C) and the wasm one as a funcref-table index (slice 2b-iv-B).
 	// Each impl is DCE-ROOTED (`recordCallUsage`) so the reloc never names a `.text` VA that
 	// was pruned — the noteDestructorUsage/noteClonerUsage rooting pattern for a slot named nowhere the module
@@ -1145,12 +1150,40 @@ type MaxonToStdLowering
 
 		for i in 0 upto methodCount 'eachMethod'
 			let method = try iface.methods.get(i) otherwise panic("ensureWitnessTable: methods.get OOB at {i} below count {methodCount}")
-			let impl = qualifiedMethodName(typeName, methodName: method.name)
-			self.globalData.recordFuncAbs64InRdata(impl, rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
+			self.globalData.recordFuncAbs64InRdata(self.witnessSlotImpl(typeName, interfaceName: interfaceName, method: method), rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
 		end 'eachMethod'
 
 		return label
 	end 'ensureWitnessTable'
+
+	// ⭐⭐ **THE SYMBOL A WITNESS SLOT POINTS AT IS THE MEMBER `checkConformance` ACCEPTED — NOT A SECOND JOIN
+	// OF THE SAME TWO NAMES (R10).** This site used to mint `qualifiedMethodName(typeName, method.name)` for
+	// itself, and it agreed with the conformance check only because BOTH were wrong the same way: the check
+	// resolved a requirement by that same bare key, so a type whose matching member was a LATER overload
+	// (registered `Type.method#Suffix` under D7) was rejected before it could get here. Fixing the check alone
+	// would have turned that loud false reject into a wrong `.text` address in the dictionary — no diagnostic,
+	// at runtime. So the decision is made ONCE, by the check, and read here.
+	//
+	// ⚠ **A MISS IS AN INTERNAL DISAGREEMENT AND PANICS — with ONE legitimate exception, and it is not a
+	// fallback.** A BUILTIN conformer (`int`/`float`/`bool`/`String`/`Character`) declares no `implements`, so
+	// `checkConformance` never ran for it and there is no selection to be the same value as: its impls are
+	// SYNTHESIZED one per `(conformer, method)` by `installBuiltinConformanceRuntime`, which mints them by
+	// this very join and cannot overload them. The join IS the registration name there, and the gate is
+	// `isIntrinsicBuiltinConformance` — the SAME predicate that decides the conformance and decides which
+	// impls are installed, so the three cannot come to disagree about which pairs are builtin. Any other miss
+	// means this table is stamping a slot no conformance accepted, which is a pipeline-ordering break rather
+	// than anything an author could be told to write differently.
+	function witnessSlotImpl(typeName ByteArray, interfaceName ByteArray, method InterfaceMethodSig) returns ByteArray
+		if let selected = try self.witnessSlotImpls.get(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: method.name)) 'chosenByConformance'
+			return selected
+		end 'chosenByConformance'
+
+		if not isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName) 'noSelection'
+			panic("witnessSlotImpl: no conformance selected a member for slot '{String.from(typeName)}.{String.from(interfaceName)}.{String.from(method.name)}' — `checkConformance` files one per accepted requirement before the pipeline runs, and lowering is only reached once it accepted every one, so this table is being built for a conformance that was never validated")
+		end 'noSelection'
+
+		return qualifiedMethodName(typeName, methodName: method.name)
+	end 'witnessSlotImpl'
 
 	// Resolve an interface NAME when building a witness table (P1.7a slice 2a) — through `lookupInterface`,
 	// the ONE statement of "builtin first, then the merged registry" that R9 gave this reader and

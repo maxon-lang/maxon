@@ -930,3 +930,468 @@ end 'main'
 error E3016: <fragment>:8:6: Partial interface implementation: type 'Point' has 1 method(s) with wrong signature:
   - static digest() returns Code (expected digest() returns Code)
 ```
+
+### An OVERLOADED member may satisfy a requirement, whatever order it is written in (R10)
+
+Conformance used to resolve a requirement by the BARE `Type.method` key alone, and under D7 only the
+FIRST-declared overload of a name registers under that key — so **a conforming type was accepted or
+rejected according to the order its members happened to be written in.** The requirement is now matched
+against every member of the name's overload set (`project.overloadSets`) through the same
+`signatureMatches` a single member goes through, and the requirement is satisfied when EXACTLY ONE matches.
+
+⚠⚠ **THE SELECTION AND THE WITNESS SLOT ARE ONE VALUE, NOT TWO LOOKUPS THAT AGREE.**
+`LowerMaxonToStd.ensureWitnessTable` stamps each slot's `funcAbs64InRdata` relocation with an impl symbol,
+and it used to mint the same bare join independently. That was harmless only because it was COUPLED to the
+bug — both sites were wrong the same way, so they agreed. Teaching conformance to accept a mangled member
+without moving the slot would have converted a loud false reject into a **silent wrong dispatch**: the
+witness would carry the address of whichever overload was written first. So conformance RECORDS what it
+selected (`project.witnessSlotImpls`) and the table READS that recording; a slot with no recording is a
+compiler-internal disagreement and panics, except for a builtin conformer, whose impls are synthesized one
+per `(conformer, method)` and can never be overloaded.
+
+<!-- test: overloaded-method-satisfies-requirement-declared-second -->
+⭐ **THE RUNG, at its smallest: the same program as `overloaded-method-on-conforming-type` with the two
+members SWAPPED.** `label(extra Integer)` is written first and takes the bare `Widget.label` registration;
+`label()` — the one `Named` requires — registers as `Widget.label#`. Before R10 this was
+`E3016 … has 1 method(s) with wrong signature: - label(extra Integer) returns Integer (expected label()
+returns Integer)` — a rejection of a type that supplies the method, naming the member that is not the
+candidate, decided purely by declaration order.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function label() returns Integer
+end 'Named'
+
+type Widget implements Named
+	var v as Integer
+
+	function label(extra Integer) returns Integer
+		return v + extra
+	end 'label'
+
+	function label() returns Integer
+		return v
+	end 'label'
+
+	static function create() returns Self
+		return Self{v: 0}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: overloaded-method-dispatched-through-witness -->
+⭐⭐ **THE DISPATCH CONTROL, and it is the case that matters most in this rung.** Every case here that does
+not build a witness table would still pass if conformance were fixed and the table left minting the bare
+name — the program would compile, and dispatch to the WRONG overload with no diagnostic. This one calls the
+requirement THROUGH the witness (`self.item.label()` inside `Box uses T where T is Labeled`) and asserts a
+value the two overloads disagree about: the requirement's `label()` answers **42** and the bare-named
+`label(extra Code)` answers 7.
+
+⚠ **MEASURED, and it is the reason this case exists:** reverting `ensureWitnessTable`'s half alone —
+conformance still accepting the mangled member — leaves the whole rest of this suite green while this
+program returns **7**, silently. Two other cases catch that revert as well, one of them differently: the
+two-interface case below answers 7 where 40 is correct, and the overloaded-STATIC case — which has no
+runtime observation at all — moves its golden fragment.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Labeled
+	function label() returns Code
+end 'Labeled'
+
+type Tag implements Labeled
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function label(extra Code) returns Code
+		return 7
+	end 'label'
+
+	export function label() returns Code
+		return 42
+	end 'label'
+end 'Tag'
+
+type Box uses T where T is Labeled
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function run() returns Code
+		return self.item.label()
+	end 'run'
+end 'Box'
+
+typealias TagBox = Box with Tag
+
+function main() returns ExitCode
+	let t = Tag.create(1)
+	let b = TagBox.create(t)
+	return b.run()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: overloaded-method-satisfies-two-interfaces-one-name -->
+⭐ **WHY THE RECORDED SELECTION IS KEYED BY THE INTERFACE AND NOT ONLY BY THE METHOD.** `First` requires
+`label()` and `Second` requires `label(extra Code)`; one type satisfies both, with one overload each. The
+two witness tables must therefore carry DIFFERENT symbols in the same-named slot — `__witness_Tag.First`
+the 0-argument member, `__witness_Tag.Second` the 1-argument one. A selection keyed by the method name
+alone would let the second conformance overwrite the first's and the dispatch below would answer 7.
+This shape is not hypothetical: `stdlib/Interfaces.maxon` declares `Stringable.toString()` beside
+`FormattedStringable.toString(format String)`.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface First
+	function label() returns Code
+end 'First'
+
+interface Second
+	function label(extra Code) returns Code
+end 'Second'
+
+type Tag implements First, Second
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function label(extra Code) returns Code
+		return 7
+	end 'label'
+
+	export function label() returns Code
+		return 40
+	end 'label'
+end 'Tag'
+
+type Box uses T where T is First and Second
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function run() returns Code
+		return self.item.label()
+	end 'run'
+end 'Box'
+
+typealias TagBox = Box with Tag
+
+function main() returns ExitCode
+	let t = Tag.create(1)
+	let b = TagBox.create(t)
+	return b.run()
+end 'main'
+```
+```exitcode
+40
+```
+
+<!-- test: overloaded-static-requirement-declared-second -->
+⭐ **R9 MADE THIS BUG REACHABLE FOR STATICS, and nothing covered it.** Before R9 the conformance check
+skipped a `static` requirement outright, so no bare-key lookup happened for one; R9 removed the skip and
+routed statics through the same key. Here `static tag(extra Code)` takes the bare `Point.tag` and the
+required `static tag()` registers as `Point.tag#` — E3016 before R10, purely from the order.
+
+⚠ **A STATIC SLOT HAS NO *RUNTIME* CONTROL — shv2 has no syntax for calling a static through a constrained
+type parameter, so the slot is stamped and never read, and a wrong symbol in it cannot change an exit code.
+ITS GUARD IS THE GOLDEN FRAGMENT, and that guard is real: MEASURED.** The `tag` slot's relocation is also
+what DCE-roots the member it names (`DeadFunctionElimination` roots every function a `pendingRdataReloc`
+targets), so the committed fragment below emits `func @Point.tag#` — the selected 0-argument member — and
+emits it *because* the slot named it. Reverting `ensureWitnessTable` to the bare join reddens this case as
+a golden mismatch: the reloc names `Point.tag`, that member is rooted instead, and `Point.tag#` is pruned.
+The table IS built here (`PointBox`), so the same relocation additionally has to name a symbol the linker
+can resolve — which is exactly how R9's original defect surfaced, in `bakeFuncAbs64Relocs`.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	static function tag() returns Code
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export static function tag(extra Code) returns Code
+		return extra
+	end 'tag'
+
+	export static function tag() returns Code
+		return 7
+	end 'tag'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Wide
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function run() returns Code
+		return self.item.digest()
+	end 'run'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	let b = PointBox.create(p)
+	return b.run()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: overloaded-static-requirement-declared-first -->
+The lucky order of the same program — the required `static tag()` written FIRST, so it keeps the bare name
+and the selection agrees with what the un-suffixed join would have produced. It is the over-rejection
+guard for the static half: a fix that only ever consulted the overload set's LATER members would break
+this while leaving the case above green.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	static function tag() returns Code
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export static function tag() returns Code
+		return 7
+	end 'tag'
+
+	export static function tag(extra Code) returns Code
+		return extra
+	end 'tag'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Wide
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function run() returns Code
+		return self.item.digest()
+	end 'run'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	let b = PointBox.create(p)
+	return b.run()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: overloaded-tostring-satisfies-stringable-and-formatted -->
+⭐ **THE SHAPE THE STDLIB ITSELF ASKS FOR, and the proof that the witness table is the ONLY site that had to
+move.** `stdlib/Interfaces.maxon` declares `Stringable.toString()` beside
+`FormattedStringable.toString(format String)`, so a type conforming to both MUST overload `toString` — and
+before R10 that was rejected whichever order the two were written in, because only one of them could hold
+the bare `Point.toString` key. Here the FORMATTED member is written first and takes it.
+
+Interpolation dispatches a user struct's `toString` DIRECTLY (`"{p}"` → a plain `Point.toString` call, not a
+witness — the concrete type is statically known), so this program also asks whether that third site needed
+the same treatment. It did not, and for a reason rather than by luck: the call carries its arguments, so
+`SemanticCheck.resolveOverloadedCalls` retargets it to the 0-argument member exactly as it retargets any
+other overloaded call. Printing `P` and not `F` is that answer.
+```maxon
+typealias Small = int(0 to 100)
+
+type Point implements Stringable, FormattedStringable
+	export var x as Small
+
+	export static function create(x Small) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function toString(format String) returns String
+		return "F"
+	end 'toString'
+
+	export function toString() returns String
+		return "P"
+	end 'toString'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(7)
+	print("{p}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+P
+```
+
+<!-- test: error.no-overload-matches-requirement -->
+⭐ **THE FIX IS NOT "ACCEPT ANYTHING WITH THE RIGHT NAME".** Two overloads named `label` and NEITHER has
+the required shape, so the type does not conform — and the message may no longer speak as though one
+candidate existed. It lists every member declared under the name instead of naming whichever one happened
+to hold the bare key.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Labeled
+	function label() returns Code
+end 'Labeled'
+
+type Tag implements Labeled
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function label(extra Code) returns Code
+		return extra
+	end 'label'
+
+	export function label(a Code, b Code) returns Code
+		return a + b
+	end 'label'
+end 'Tag'
+
+function main() returns ExitCode
+	let t = Tag.create(42)
+	return t.x
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:8:6: Partial interface implementation: type 'Tag' has 1 method(s) with wrong signature:
+  - no member named 'label' matches: label(extra Code) returns Code, label(a Code, b Code) returns Code (expected label() returns Code)
+```
+
+<!-- test: error.two-overloads-match-one-requirement -->
+⚠ **TWO MATCHES IS AMBIGUITY, NOT SUCCESS — and taking the first would have been the old bug wearing the
+fix's clothes.** `Code` and `Small` are two ranged aliases over one primitive, and `signatureMatches`
+compares CANONICALIZED type names (that is deliberate — see `canonicalTypeName`), so both members match
+`label(v Code)` equally. There is no fact to choose by, the witness slot admits exactly one address, and
+the call-site resolver already refuses the same pair as E3007. Before R10 the bare key hid the second
+member and this program compiled.
+```maxon
+typealias Code = int(0 to u32.max)
+typealias Small = int(0 to 100)
+
+interface Labeled
+	function label(v Code) returns Code
+end 'Labeled'
+
+type Tag implements Labeled
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function label(v Code) returns Code
+		return v
+	end 'label'
+
+	export function label(v Small) returns Code
+		return 7
+	end 'label'
+end 'Tag'
+
+function main() returns ExitCode
+	let t = Tag.create(42)
+	return t.x
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:9:6: Partial interface implementation: type 'Tag' has 1 method(s) with wrong signature:
+  - 2 members named 'label' match: label(v Code) returns Code, label(v Small) returns Code (expected label(v Code) returns Code)
+```
+
+<!-- test: error.interface-declares-two-requirements-of-one-name -->
+⭐⭐ **AN INTERFACE MAY NOT DECLARE TWO REQUIREMENTS OF ONE NAME, and this refusal is R10's own — it exists
+because R10 would otherwise have made the shape REACHABLE.** A witness dispatch resolves a method to its
+slot by NAME (`IrInterface.interfaceMethodIndex`), so a second requirement of that name owns a slot no
+call can reach: `self.item.label(1)` would be told `'Labeled.label' expects 0 argument(s) but 1 were
+provided` — a false statement about an interface that declares exactly that member. Before R10 the program
+was rejected anyway (the bare key could satisfy only one of the two requirements, so the other reported a
+wrong signature), which is why the refusal changes no accepted program: it replaces a misleading E3016
+with the true reason.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Labeled
+	function label() returns Code
+	function label(extra Code) returns Code
+end 'Labeled'
+
+type Tag implements Labeled
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function label(extra Code) returns Code
+		return extra
+	end 'label'
+
+	export function label() returns Code
+		return 40
+	end 'label'
+end 'Tag'
+
+function main() returns ExitCode
+	let t = Tag.create(42)
+	return t.x
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:11: Unsupported: interface 'Labeled' declares two requirements named 'label' — a witness dispatch resolves an interface method to its table slot by NAME alone, so the second could never be reached. Give the requirements distinct names
+```

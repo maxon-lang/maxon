@@ -1,0 +1,207 @@
+// Test: overloaded-static-requirement-declared-first
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	static function tag() returns Code
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export static function tag() returns Code
+		return 7
+	end 'tag'
+
+	export static function tag(extra Code) returns Code
+		return extra
+	end 'tag'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Wide
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function run() returns Code
+		return self.item.digest()
+	end 'run'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	let b = PointBox.create(p)
+	return b.run()
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Point.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Point.tag {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Point.digest {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.run {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callMem [rbx + 32]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 42
+    x64.callDirect Point.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect Box.create
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __witness_Point.Wide]
+    x64.movRegReg rcx, r12
+    x64.callDirect Box.run
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Box_Point
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
