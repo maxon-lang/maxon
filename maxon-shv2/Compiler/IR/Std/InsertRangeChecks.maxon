@@ -86,9 +86,10 @@ end 'GuardSite'
 // must anchor inside the (k-1)-th's continuation; anchoring them all in the ORIGINAL head instead
 // threads the cascades in REVERSE (see `guardSiteAt`). An alias-named site therefore moves its block's
 // chain end — and its chain BASE, the offset that continuation begins at — to its own continuation. A
-// `return` site records neither: `findRetBlock`
-// re-derives its block from the CURRENT `ret` terminator at every site, which a split moves along with
-// the terminator, so the chain end is already what it finds.
+// `return` site records neither, and the reason is that IT HAS NO CHAIN TO RECORD: a block carries
+// exactly ONE terminator, so no two `return` sites can share the block a guard splits, and the split
+// that moves a `ret` onto its continuation moves it out of the ret index in the same breath
+// (`takeRetBlock` takes each entry off its value's chain as it hands it out).
 union GuardChain
 	blockChain(blockId BlockId)
 	retChain
@@ -103,9 +104,15 @@ union RangeGuardVerdict
 	guard(alias RangedTypeAlias)
 end 'RangeGuardVerdict'
 
-// The block whose terminator is `ret(value)` — the return site to guard. `notFound` covers the value
-// having been folded away or otherwise not surviving as a `ret` (defensive; a recorded ranged return
-// always has one).
+// The block whose terminator is `ret(value)` — the return site to guard.
+//
+// ⚠ `notFound` IS REACHABLE, on a program that compiles today, and it is NOT the "folded away" case
+// the first draft of this comment guessed at: an UNREACHABLE `return` after another one in the same
+// block records its own site while `setTerminator` OVERWRITES the first `ret`, so the block holds ONE
+// `ret` and the function holds TWO sites naming its value. The second site therefore has no `ret` of
+// its own left to guard, and skipping it is right — the first site's guard already stands in front of
+// the only `ret` there is. (MEASURED: two `return n` in one block, the second unreachable, panics at
+// the FIRST one's line under this pass and under the bootstrap alike.)
 union RetBlockLookup
 	notFound
 	found(block IrBlock)
@@ -191,6 +198,16 @@ let sharedEmptyGuardChainBase = BlockOpPosArray.create()
 // exactly as the two columns above are.
 let sharedEmptyGuardChainSource = PreSplitOpsByBlock.create()
 
+// The ret-block index's TWO columns start here — see `RangeCheckEmitter.retBlockByValue`. Shared for
+// the identical reason the three above are (an emitter exists for every function carrying ANY
+// range-check side data, and most never emit a guard), and replaced in one place, `buildRetBlockIndex`.
+//
+// ⚠ ONE global serves BOTH columns because they are the same type and are built together, so one
+// `isEmpty()` decides for both — the reason the trio above needs three is that its three columns have
+// three DIFFERENT types, not that a column needs its own. Neither field is ever mutated while it still
+// points here: the consuming `set` in `takeRetBlock` runs only after the build has replaced both.
+let sharedEmptyRetBlockIndex = ValueIdArray.create()
+
 // Per-function emitter: owns the module + function it rewrites and the fresh-ValueId counter its guard
 // ops draw from (seeded past every id the function already uses).
 type RangeCheckEmitter
@@ -232,9 +249,23 @@ type RangeCheckEmitter
 	// `guardSiteAt` bounds-checks against it and not against a block whose front the splits have carved
 	// away. Built and shared exactly as the two columns above are.
 	var guardChainSource as PreSplitOpsByBlock
+	// ⭐⭐ **WHICH BLOCK STILL RETURNS EACH VALUE — the return sites' half of "resolve a block by an
+	// index, never by a scan".** A `module.blocks` index PLUS ONE (`buildBlockIdIndex`'s sentinel
+	// encoding again) per VALUE ID: the first block whose terminator returns that value and which no
+	// guard has taken yet. `nextRetOfSameValue` carries the rest of that value's chain, so a value
+	// returned from several places hands back a different block each time it is asked. Starts as the
+	// SHARED empty one and is REPLACED by a real index on the first return guard — see
+	// `sharedEmptyRetBlockIndex` and `takeRetBlock`.
+	var retBlockByValue as ValueIdArray
+	// The chain `retBlockByValue` heads: block id => the `module.blocks` index PLUS ONE of the NEXT
+	// block returning the SAME value, 0 for the end of that value's chain. Keyed by block id (the same
+	// dense per-function space `guardChainTail` is keyed by) because a block has exactly ONE terminator
+	// and therefore belongs to exactly one value's chain, which is also the whole reason the index
+	// cannot go stale — see `buildRetBlockIndex`.
+	var nextRetOfSameValue as ValueIdArray
 
 	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
+		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource, retBlockByValue: sharedEmptyRetBlockIndex, nextRetOfSameValue: sharedEmptyRetBlockIndex}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -248,9 +279,9 @@ type RangeCheckEmitter
 
 	// Process one function's sites. The alias-named sites FIRST (they split blocks and move terminators
 	// onto new continuation blocks), then the call-argument sites — which emit nothing, so their order is
-	// free — then returns (re-found from the CURRENT block structure, since a split may have moved a `ret`
-	// terminator). The literal/const map is built ONCE over the original ops — the values a site checks are
-	// original, never the guard consts this pass appends afterward.
+	// free — then returns, whose ret index is therefore built over the block structure those splits have
+	// already reshaped (`buildRetBlockIndex`). The literal/const map is built ONCE over the original ops —
+	// the values a site checks are original, never the guard consts this pass appends afterward.
 	function run(checks FunctionRangeChecks)
 		self.collectConsts()
 		// A site's `stdOpPos` is `lowerMaxonToStd`'s answer rather than the parser's (see `RangeSiteWalk`),
@@ -404,7 +435,7 @@ type RangeCheckEmitter
 			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: aliasName, line: site.line, column: site.column, filePath: filePath) 'noGuard'
 				continue
 			end 'noGuard'
-			match self.findRetBlock(site.value) 'ret'
+			match self.takeRetBlock(site.value) 'ret'
 				notFound then break 'ret'
 				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: aliasName), chain: GuardChain.retChain)
 			end 'ret'
@@ -802,19 +833,127 @@ type RangeCheckEmitter
 		return GuardSite.create(block, position: site.stdOpPos - base)
 	end 'guardSiteAt'
 
-	// The block whose terminator is `ret(value)`.
-	function findRetBlock(value ValueId) returns RetBlockLookup
-		for blockRef in self.func.blockRefs 'eachBlock'
+	// ⚠ **THE BLOCK STILL RETURNING `value`, AND IT IS TAKEN RATHER THAN FOUND — the same growth curve
+	// `guardSiteAt` resolves through an index, at the OTHER site kind.** This walked every
+	// `func.blockRefs` entry and read each terminator, once per return site, and each guard it then
+	// emits APPENDS `__rc_ok` + `__rc_panic` (+ a `__rc_chk` per extra bound) to the very set the next
+	// site's walk covers — so the k-th site scanned a set the previous k-1 had grown. **MEASURED on a
+	// function of N guarded `return` sites** (`Testing/ladders/genretsites.sh`, N = 50/100/200/400):
+	// `phase:insertRangeChecks` CPU at **×2.21 ×2.53 ×3.20 per DOUBLING** — a RISING ratio, i.e. linear
+	// + quadratic summed, with the quadratic taking over. Allocations and bytes read a dead-flat ×1.99
+	// / ×2.03 throughout, because a scan allocates NOTHING: this term was structurally invisible to the
+	// memory columns and is one of the costs `threadCpuTicks` exists to see.
+	//
+	// ⚠ **IT IS NOT `buildBlockIdIndex`, AND THAT IS A DIFFERENT QUESTION RATHER THAN A SECOND COPY.**
+	// An alias-named site RECORDS the block id it wants, so `guardSiteAt` resolves a BLOCK ID; a `return`
+	// site records only its VALUE, and the block is whichever one still returns it. Same encoding (a
+	// dense column of `module.blocks` indices PLUS ONE, so a zero-filled row is its own "none"), same
+	// laziness, different key.
+	//
+	// ⭐ **IT IS "TAKE" AND NOT "GET" BECAUSE A VALUE CAN BE RETURNED FROM SEVERAL PLACES**, and each of
+	// those places is its own site owing its own guard. The scan handled that WITHOUT KNOWING IT DID: a
+	// guarded block's `ret` moves onto the continuation, so the block stopped answering and the next
+	// site's scan walked on to the next `ret` of the same value. An index that answered the same block
+	// twice would guard one `return` twice and leave the other UNGUARDED — a range the language
+	// promises and does not check. So the chain is CONSUMED, which reproduces the scan's answer for
+	// every site and not merely for the one-`return` functions the suite covered before A1h. The four
+	// `Many guarded return sites in ONE function` cases in `ranged-typealias.md` pin it: two of them
+	// return the SAME value from three places and name, between them, which line each `ret` answers for.
+	function takeRetBlock(value ValueId) returns RetBlockLookup
+		if self.retBlockByValue.isEmpty() 'firstReturnGuard'
+			self.buildRetBlockIndex()
+		end 'firstReturnGuard'
+
+		let refPlusOne = try self.retBlockByValue.get(value) otherwise panic("takeRetBlock: '{String.from(self.func.name)}' records a ranged `return` of value {value}, outside the function's value space of {self.nextId} — a `ret` operand can only name an id some def already introduced")
+		if refPlusOne == 0 'noRetReturnsIt'
+			return RetBlockLookup.notFound
+		end 'noRetReturnsIt'
+
+		let block = self.module.getBlock(refPlusOne - 1)
+		let next = try self.nextRetOfSameValue.get(block.id) otherwise panic("takeRetBlock: block id {block.id} of '{String.from(self.func.name)}' is outside the block-id space the ret index was built over, which is the one it was indexed into")
+		try self.retBlockByValue.set(value, value: next) otherwise panic("takeRetBlock: retBlockByValue.set OOB at value {value}, which was just read in range")
+		return RetBlockLookup.found(block)
+	end 'takeRetBlock'
+
+	// Build both columns in ONE pass over the function's blocks: every block whose terminator is a `ret`
+	// joins its returned value's chain, in ascending `blockRefs` order — which is the order the scan
+	// answered in, so a value returned from N places still pairs its k-th site with its k-th `ret`.
+	//
+	// ⚠⚠ **WHY A PRE-BUILT INDEX CANNOT GO STALE HERE, WHICH IS NOT OBVIOUS AND IS THE WHOLE RISK:** a
+	// guard MOVES a `ret` (`splitBlockInPlace` hands the terminator to the `__rc_ok` continuation), so
+	// an index that kept pointing at the block a `ret` has LEFT would attach the next guard to the
+	// wrong block — silently, and to a block on a path the site is not on. It cannot happen because **a
+	// block has exactly ONE terminator**, so a block belongs to at most one value's chain, and the only
+	// guard that can move that terminator is the guard for THAT chain's own site — which has already
+	// taken the entry off the chain by the time it splits. Nothing else in this pass rewrites a
+	// terminator, and the blocks it appends are never in a chain (`__rc_ok` inherits an
+	// already-guarded `ret`; `__rc_panic`'s dead `ret` names a freshly minted id no site can name).
+	// ⇒ What would INVALIDATE it: a guard that split a block other than the one whose `ret` it guards,
+	// a second site pointed at a `ret` already taken, or a `ret` APPENDED after this build that a later
+	// site is expected to find.
+	//
+	// The width of each column is the reason it is built HERE and not in `create`: it must cover the
+	// values and block ids as they stand AFTER the alias-named sites have run, because one of those
+	// guards can have moved a ranged `return`'s `ret` onto an `__rc_ok` block of its own making — a
+	// block the pass minted, whose id and whose dead-return value both postdate the parser.
+	//
+	// It is built back to front so each block PREPENDS onto its value's chain, which leaves every chain
+	// ascending without a per-value tail column to carry.
+	function buildRetBlockIndex()
+		var byValue = ValueIdArray.create()
+		byValue.resize(self.nextId)
+		self.retBlockByValue = byValue
+		var byBlockId = ValueIdArray.create()
+		byBlockId.resize(self.func.nextBlockId)
+		self.nextRetOfSameValue = byBlockId
+
+		let blockCount = self.func.blockRefs.count()
+		for i in 0 upto blockCount 'eachBlock'
+			let blockRef = try self.func.blockRefs.get(blockCount - 1 - i) otherwise panic("buildRetBlockIndex: blockRefs.get OOB at {blockCount - 1 - i} of {blockCount}")
 			let block = self.module.getBlock(blockRef)
-			if block.hasTerminatorOp() 'hasTerm'
-				let term = try self.module.ops.get(block.terminatorIndex()) otherwise panic("findRetBlock: terminatorIndex not in module.ops")
-				if retMatchesValue(term, target: value) 'match'
-					return RetBlockLookup.found(block)
-				end 'match'
-			end 'hasTerm'
+			if not block.hasTerminatorOp() 'noTerminator'
+				continue
+			end 'noTerminator'
+
+			let term = try self.module.ops.get(block.terminatorIndex()) otherwise panic("buildRetBlockIndex: terminatorIndex of block {block.id} not in module.ops")
+			// ⚠ **THE MATCH IS INLINE, AND A `RetTarget` UNION WOULD HAVE BEEN TIDIER AND COST A HEAP BOX
+			// PER RET-BEARING BLOCK.** A payload-carrying union case is a box, and this loop sees one block
+			// per return site PLUS one per `__rc_panic` (whose dead `ret` is a `ret` like any other), so it
+			// MEASURED at +2 allocations per return site on the ladder — +805 at N=400, against a phase this
+			// rung is otherwise leaving allocation-identical. It is still ONE exhaustive `StdOp` match in the
+			// ONE place the question is asked, so a new variant is a compile error here rather than a `ret`
+			// silently missing from the index; `collectConsts` reads the same ops the same way for the same
+			// reason.
+			match term 'term'
+				const to branch then break 'term'
+				ret(returned) then self.linkRetBlock(returned, blockRef: blockRef, blockId: block.id)
+				// `retVoid` is in this range and belongs there: it returns no value, so no site can name it.
+				param to osFreePages then break 'term'
+				// The jump table is a branch terminator, not a `ret` — it returns no value.
+				switch then break 'term'
+				// A witness call is a body op, not a `ret`. Nor is the throwing form: a body op with two
+				// results, neither of them a return terminator.
+				witnessCall then break 'term'
+				witnessTryCall then break 'term'
+				// P1.5 dogfood slice 1a: an IOCP op is a body op, never a `ret`.
+				osPipeCreate to osWriteFile then break 'term'
+				// The wall-clock read is a body op, never a `ret`.
+				osReadWallClock then break 'term'
+				// R4.1 + R4.2: every file op is a body op, never a `ret`.
+				osFileOpenRead to osFileAttributes then break 'term'
+			end 'term'
 		end 'eachBlock'
-		return RetBlockLookup.notFound
-	end 'findRetBlock'
+	end 'buildRetBlockIndex'
+
+	// Push one `ret`-bearing block onto the head of its returned value's chain. Both bounds are
+	// invariants of the columns' own widths rather than anything a program can influence: `self.nextId`
+	// is one past every value the function defines and a `ret` operand can only name a value some def
+	// introduced, and `func.nextBlockId` is one past every block id the function has minted.
+	function linkRetBlock(returned ValueId, blockRef BlockRef, blockId BlockId)
+		let head = try self.retBlockByValue.get(returned) otherwise panic("linkRetBlock: '{String.from(self.func.name)}' returns value {returned}, outside the function's value space of {self.nextId}")
+		try self.nextRetOfSameValue.set(blockId, value: head) otherwise panic("linkRetBlock: block id {blockId} of '{String.from(self.func.name)}' is outside its own function's block-id space of {self.func.nextBlockId}")
+		try self.retBlockByValue.set(returned, value: blockRef + 1) otherwise panic("linkRetBlock: retBlockByValue.set OOB at value {returned}, which was just read in range")
+	end 'linkRetBlock'
 
 	// ---- the panic message ----
 
@@ -929,27 +1068,6 @@ function recordConstNeg(constMap ConstValueMap, resultId ValueId, operand ValueI
 	end 'operandNotConst'
 	constMap.upsert(resultId, value: 0 - constMap.constantOf(operand))
 end 'recordConstNeg'
-
-// Does `term` return exactly `target`?
-function retMatchesValue(term StdOp, target ValueId) returns bool
-	return match term 'term'
-		const to branch gives false
-		ret(retValId) gives retValId == target
-		param to osFreePages gives false
-		// The jump table is a branch terminator, not a `ret` — it returns no value.
-		switch gives false
-		// A witness call is a body op, not a `ret` — it is not the return whose value this checks. Nor is the
-		// throwing form: it is a body op with two results, neither of them a return terminator.
-		witnessCall gives false
-		witnessTryCall gives false
-		// P1.5 dogfood slice 1a: an IOCP op is a body op, never a `ret`.
-		osPipeCreate to osWriteFile gives false
-		// The wall-clock read is a body op, never a `ret`.
-		osReadWallClock gives false
-		// R4.1 + R4.2: every file op is a body op, never a `ret`.
-		osFileOpenRead to osFileAttributes gives false
-	end 'term'
-end 'retMatchesValue'
 
 // The next unused ValueId in the function: one past the highest id any op DEFINES or any block-arg
 // carries. Scanning defs (and phi results) suffices — dense SSA numbers every value once, so the

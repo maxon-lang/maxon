@@ -2056,3 +2056,214 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+### Many guarded `return` sites in ONE function
+
+The `return` twin of *Three guards in ONE block, each at its own site*, and the axis every case above
+holds at ONE: a ranged return type is declared once and a body may `return` through it from as many
+places as it has branches, so N sites in one function each owe a guard in front of THEIR OWN `ret`.
+
+⭐ **The two out-of-range cases below are what an exit code cannot see.** A guard attached to the wrong
+`ret` still exits 1 — it panics on a path the site is not on, or checks a value that block does not
+return, and leaves the site it was for UNGUARDED. What separates those from a correct emission is WHICH
+LINE the panic names and WHICH values the program had already produced, so each pins both.
+
+#### Six guarded `return` sites, every value in range
+
+The control, and the only one of the four that runs on every target: six sites, six distinct unfoldable
+values, each selected in turn. `pick(n)` returns `n + 1` for n = 0, `n + 2` for n = 1, and so on through
+`n + 6` for anything past 4, so the sum is 1 + 3 + 5 + 7 + 9 + 15 = 40. Six admissible values must
+produce six clean returns: an index that paired a site with another site's `ret` would check one of
+these against a range it does not satisfy and panic on a program with nothing wrong with it.
+
+<!-- test: many-guarded-return-sites-in-range -->
+```maxon
+typealias Small = int(0 to 100)
+typealias Wide = int(0 to 100000)
+
+function pick(n Wide) returns Small
+	if n == 0 'a'
+		return n + 1
+	end 'a'
+
+	if n == 1 'b'
+		return n + 2
+	end 'b'
+
+	if n == 2 'c'
+		return n + 3
+	end 'c'
+
+	if n == 3 'd'
+		return n + 4
+	end 'd'
+
+	if n == 4 'e'
+		return n + 5
+	end 'e'
+
+	return n + 6
+end 'pick'
+
+function main() returns ExitCode
+	var acc = 0
+	acc = acc + pick(0)
+	acc = acc + pick(1)
+	acc = acc + pick(2)
+	acc = acc + pick(3)
+	acc = acc + pick(4)
+	acc = acc + pick(9)
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+40
+```
+
+#### The FOURTH site's guard fires, at the fourth site, after three sites have already returned
+
+Every printed line is a value a guard admitted, and the panic must name the line of the site that
+produced the value it refused — the fourth `return`, whose `n * 60` is 540. Pair that site with an
+earlier `ret` and one of the three earlier lines never prints; pair an earlier site with this one and
+540 is returned unchecked, through a `Small`.
+
+<!-- test: fourth-guarded-return-site-fires-at-its-own-site -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE, and `mrt_panic` is appended to the two x64 lanes and to neither of the others, where a range verdict is a bare exit 1 with EMPTY stderr. The in-range control above covers the mechanism on every target. -->
+```maxon
+typealias Small = int(0 to 100)
+typealias Wide = int(0 to 100000)
+
+function pick(n Wide) returns Small
+	if n == 0 'a'
+		return n + 1
+	end 'a'
+
+	if n == 1 'b'
+		return n + 2
+	end 'b'
+
+	if n == 2 'c'
+		return n + 3
+	end 'c'
+
+	return n * 60
+end 'pick'
+
+function main() returns ExitCode
+	print("a={pick(0)}\n")
+	print("b={pick(1)}\n")
+	print("c={pick(2)}\n")
+	print("d={pick(9)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+a=1
+b=3
+c=5
+```
+```stderr
+panic at fourth-guarded-return-site-fires-at-its-own-site.test:18: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in pick
+  in main
+  in mrt_start
+```
+
+#### THE SAME VALUE returned from three places is three sites, and each owes its own guard
+
+⭐⭐ **The case the return-site index exists to get right, and the one a value-keyed lookup gets wrong
+in silence.** All three `return n` name the SAME ValueId — `n` is one parameter — so a lookup that
+answered "the block returning `n`" would answer with the FIRST one three times: the first `ret` would be
+guarded three times over and the other two not at all. Here `n` is 200, the `'mid'` site is the one it
+leaves through, and the panic must name THAT line. Unguarded, 200 is printed back out through a `Small`
+and the program exits 0.
+
+Together with the next case this pins the whole pairing rather than one end of it: with three sites and
+three `ret`s, a permutation that gets both the second and the third right has nothing left to get the
+first wrong with.
+
+<!-- test: repeated-return-value-guards-the-site-it-leaves-through -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for the reason given two cases up: it pins the panic MESSAGE. -->
+```maxon
+typealias Small = int(0 to 100)
+typealias Wide = int(0 to 100000)
+
+function pick(n Wide) returns Small
+	if n > 1000 'high'
+		return n
+	end 'high'
+
+	if n > 100 'mid'
+		return n
+	end 'mid'
+
+	return n
+end 'pick'
+
+function main() returns ExitCode
+	print("low={pick(7)}\n")
+	print("mid={pick(200)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+low=7
+```
+```stderr
+panic at repeated-return-value-guards-the-site-it-leaves-through.test:11: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in pick
+  in main
+  in mrt_start
+```
+
+#### And the LAST of those three sites, which is what pins the chain's ORDER
+
+The same three same-value sites, refused at the third: `Narrow` starts at 10 and 7 is below it, so the
+value leaves through the final `return`. This is the case that fails if the sites' `ret`s are paired in
+REVERSE — the guard would carry the first site's line — which is a live risk, because the index is built
+by walking the blocks BACK TO FRONT so that each one prepends onto its value's chain.
+
+<!-- test: last-repeated-return-site-fires-with-its-own-line -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for the reason given three cases up: it pins the panic MESSAGE. -->
+```maxon
+typealias Narrow = int(10 to 100)
+typealias Wide = int(0 to 100000)
+
+function pick(n Wide) returns Narrow
+	if n > 1000 'high'
+		return n
+	end 'high'
+
+	if n > 100 'mid'
+		return n
+	end 'mid'
+
+	return n
+end 'pick'
+
+function main() returns ExitCode
+	print("first={pick(7)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at last-repeated-return-site-fires-with-its-own-line.test:14: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in pick
+  in main
+  in mrt_start
+```
