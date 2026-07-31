@@ -1315,12 +1315,33 @@ export function foldIntBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) return
 	end 'o'
 end 'foldIntBinOp'
 
-// `div`/`mod`, which are the only binary integer operators that can FAIL. Division by zero traps,
-// and `i64.min / -1` overflows — neither has an answer to fold.
+// `div`/`mod`, which are the only binary integer operators that can FAIL — and they do not fail on the
+// same inputs, which is A1x's whole thesis arriving in the constant folder.
+//
+// A ZERO divisor has no answer for either: `a / 0` and `a mod 0` are E3103, and folding one would be
+// writing down a value the program is about to be refused for.
+//
+// ⭐⭐ **`i64.min / -1` HAS NO ANSWER; `i64.min mod -1` HAS ONE, AND IT IS `0` (A1x).** This function used
+// to refuse the pair for BOTH operators — the same false generalization the specs carried, one tier down.
+// The quotient `i64.max + 1` is unrepresentable, so `div` still declines. The REMAINDER is `0` for every
+// dividend, so declining it here would leave the folder disagreeing with the language it folds for: the
+// runtime answers `0` (the `mod` overflow guard), and a constant domain that called the same expression
+// unknowable would lose diagnostics the runtime's answer earns — see `Parser.recordBinOpFold`.
 function foldIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
-	if rhs == 0 or (lhs == i64.min and rhs == 0 - 1) 'trap'
+	if rhs == 0 'noAnswerForEither'
 		return FoldedInt.notFoldable
-	end 'trap'
+	end 'noAnswerForEither'
+
+	if op == MaxonBinOp.div and lhs == i64.min and rhs == OverflowingDivisorPattern 'unrepresentableQuotient'
+		return FoldedInt.notFoldable
+	end 'unrepresentableQuotient'
+
+	// The host `mod` below would trap on exactly the pair above, so the remainder's own answer at it is
+	// returned here rather than computed: `a mod -1` is `a - (-1)·trunc(a / -1)` = `a - a`, and the
+	// intermediate that does not fit is one the remainder never needed.
+	if lhs == i64.min and rhs == OverflowingDivisorPattern 'remainderAtTheOverflowPair'
+		return FoldedInt.folded(0)
+	end 'remainderAtTheOverflowPair'
 
 	// rhs is guarded non-zero (and not the i64.min/-1 overflow) above, so these never fail. The
 	// divisor is any non-zero ParsedInt — BOTH signs — which no single contiguous ranged type can

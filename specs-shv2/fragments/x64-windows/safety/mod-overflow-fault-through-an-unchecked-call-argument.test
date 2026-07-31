@@ -1,0 +1,59 @@
+// Test: mod-overflow-fault-through-an-unchecked-call-argument
+typealias Integer = int(i64.min to i64.max)
+typealias BelowMinusOne = int(i64.min to -2)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+// `d` excludes BOTH 0 and -1, so the remainder needs neither guard and no `try` is spellable. The
+// proof is the CALLER's to keep, and the call-argument door is the one position nothing at runtime
+// holds it to.
+function remainder(n Integer, d BelowMinusOne) returns Integer
+	return n mod d
+end 'remainder'
+
+function main() returns ExitCode
+	let bad = ident(0 - 1)
+	return remainder(i64.min, d: bad)
+end 'main'
+---
+ExitCode: 1
+---
+func @ident {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @remainder {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rsi, rdx
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.movRegReg r8, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rcx, rax, -1
+    x64.callDirect ident
+    x64.movRegImm rcx, -9223372036854775808
+    x64.movRegReg rdx, r8
+    x64.callDirect remainder
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

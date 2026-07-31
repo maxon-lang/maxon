@@ -4136,9 +4136,11 @@ end 'DivisorZeroVerdict'
 // allocations in `phase:parse` at rung 5, for a fact that fits in three bits.** `CheckedDivisionKind`'s
 // header states the same rule for the same reason one screen away.
 //
-// Three zero answers times two overflow answers is SIX, and there are five members because a provably-zero
-// divisor collapses the pair: `a mod 0` has no answer for a guard to produce, so E3103 is the whole verdict
-// and the second hazard cannot change it. `divisorProofOf` is the ONE place that collapse is written.
+// Three zero answers times two overflow answers is SIX, and there are FIVE members because the sixth is
+// unrepresentable rather than merged away: a divisor proven to be exactly `0` is thereby proven NOT to be
+// `-1`, so `provablyZero` paired with "may be `-1`" describes nothing. `divisorProofOf` is the ONE place
+// that is written down, and it is why the pair enters through a function rather than being spelled at each
+// of the four sites that answer it.
 enum DivisorProof
 	// A folded constant 0 / 0.0 / -0.0 — **E3103**, whatever the other hazard would have said.
 	provablyZero
@@ -4178,8 +4180,8 @@ end 'divisorProofZeroVerdict'
 // The OVERFLOW half — read ONLY for `mod`, because only the remainder has an answer at `-1`.
 function divisorProofMayBeNegativeOne(proof DivisorProof) returns bool
 	return match proof 'p'
-		// A refused divisor never reaches a guard, so `false` here is not a claim about its value — it is the
-		// arm being total rather than the collapse leaking back out as a case nobody can act on.
+		// `provablyZero` answers `false` as a FACT and not as a default: a divisor proven to be `0` is proven not
+		// to be `-1`. (It also never reaches a guard — E3103 refuses it first — so no caller depends on this.)
 		provablyZero to nonZeroAndNotNegativeOne gives false
 		nonZeroButMaybeNegativeOne gives true
 		maybeZeroButNotNegativeOne gives false
@@ -20986,7 +20988,16 @@ export type Parser
 		// the bare route above is the only other thing a `neverZero` divisor can take — so it gets the TOTAL
 		// callee and, downstream, no `throws` clause and no E3057.
 		let callee = divisionExpansionCalleeForOp(op, fallible: zeroVerdict == DivisorZeroVerdict.possiblyZero)
-		return self.emitRuntimeCall(callee, args: args, resultTag: binOpResultTag(op, left: leftTag, right: rightTag), resultNameId: UnnamedTypeId, range: SourceRange.ofToken(opTok))
+		let resultTag = binOpResultTag(op, left: leftTag, right: rightTag)
+		let result = self.emitRuntimeCall(callee, args: args, resultTag: resultTag, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(opTok))
+
+		// ⭐ **AN EXPANSION IS STILL A FOLD SITE — see `recordBinOpFold` for the diagnostic that was lost
+		// when it was not.** Asked on BOTH expansion routes and not only the guarded one: a `possiblyZero`
+		// divisor is by definition not a constant, so the fallible route simply never folds, and gating it
+		// would be a second copy of that reasoning rather than a saving.
+		self.recordBinOpFold(result, lhs: dividend, rhs: divisor, op: op, resultTag: resultTag)
+
+		return result
 	end 'emitDivOrMod'
 
 	// ⭐⭐ **THE WHOLE DIVIDE-BY-ZERO PROOF, IN ONE WALK.** Asked of the divisor's OWN constant domain, never of
@@ -21092,19 +21103,33 @@ export type Parser
 		let result = self.mintValue(resultTag, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: left, rhs: right, op: op), range: SourceRange.ofToken(opTok))
 
-		// Fold, when the parser holds both operands — so `x shl 63 + 1` is a count of 64 and not an
-		// unknown. RECORDED, not rewritten: this compiler emits the `add` either way (see
-		// FoldConstOperands' header on why `foldConstants` is deferred).
-		//
-		// It reads the ORIGINAL ids, not the promoted ones, and it cannot confuse the two: the
-		// gate is `tagIsInteger(resultTag)`, and a promotion happens only when the result is a
-		// float — so on every path that folds, `left`/`right` ARE `lhs`/`rhs`.
-		if tagIsInteger(resultTag) and self.constIsKnown(lhs) and self.constIsKnown(rhs) 'bothKnown'
-			self.recordFold(result, fold: foldIntBinOp(op, lhs: self.constOf(lhs), rhs: self.constOf(rhs)))
-		end 'bothKnown'
+		self.recordBinOpFold(result, lhs: lhs, rhs: rhs, op: op, resultTag: resultTag)
 
 		return result
 	end 'emitBinOpOverCheckedOperands'
+
+	// Fold, when the parser holds both operands — so `x shl 63 + 1` is a count of 64 and not an unknown.
+	// RECORDED, not rewritten: this compiler emits the `add` either way (see FoldConstOperands' header on
+	// why `foldConstants` is deferred).
+	//
+	// It reads the ORIGINAL ids, not the promoted ones, and it cannot confuse the two: the gate is
+	// `tagIsInteger(resultTag)`, and a promotion happens only when the result is a float — so on every path
+	// that folds, the promoted operands ARE the originals.
+	//
+	// ⭐⭐ **IT IS A SHARED METHOD BECAUSE A1x GAVE IT A SECOND CALLER, AND THE ONE THAT LEFT IT BEHIND LOST
+	// A DIAGNOSTIC.** A `mod` by a constant `-1` no longer reaches the bare emitter above — it is expanded
+	// with the overflow guard — and it is the ONLY constant divisor that does, so the guarded route quietly
+	// stopped recording a value the constant domain used to hold. **MEASURED before the fix:**
+	// `let z = 10 mod -1` then `try (100 / z) otherwise 7` COMPILED AND PRINTED 7, where the same program
+	// was **E3103** ("the divisor of '/' is always 0") before this rung — a provable divide-by-zero
+	// downgraded to a catchable runtime throw. One emit site, two routes, one fold.
+	function recordBinOpFold(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, resultTag ValueTypeTag)
+		if not tagIsInteger(resultTag) or not self.constIsKnown(lhs) or not self.constIsKnown(rhs) 'notBothKnown'
+			return
+		end 'notBothKnown'
+
+		self.recordFold(result, fold: foldIntBinOp(op, lhs: self.constOf(lhs), rhs: self.constOf(rhs)))
+	end 'recordBinOpFold'
 
 	// One operand of a binary op or comparison, moved into the float domain if the PAIR meets
 	// there. Takes both tags because promotion is a property of the pair, not of the operand —

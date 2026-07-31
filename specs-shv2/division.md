@@ -80,9 +80,17 @@ is dividend-independent, and it reuses the one `-1` constant for both the compar
 which is why the third instruction is an `add` and not a `sub`.
 
 ⚠ **THE PROOF IS WHAT KEEPS IT OFF THE COMMON PATH, and every divide in this file is evidence: not one
-of their goldens moved when A1x landed.** A divisor that is a literal, or a variable the parser folded,
-or a ranged type whose range excludes `-1` — `int(1 to 1000)` included — emits none of those four
-instructions. `/` never emits them at all.
+of their goldens moved when A1x landed.** A divisor that is a literal OTHER THAN `-1`, or a variable the
+parser folded to one, or a ranged type whose range excludes `-1` — `int(1 to 1000)` included — emits none
+of those four instructions. `/` never emits them at all.
+
+⚠ **A LITERAL `-1` IS THE EXCEPTION, AND IT IS NOT OPTIMIZED AWAY: `a mod -1` EMITS THE GUARD AND AN
+`idiv` FOR AN ANSWER THAT IS STATICALLY `0`.** The guard fires on the value the compiler can see, so the
+emitted code is the same eight instructions any other unprovable divisor gets — visible in
+`safety.md`'s `mod-by-a-minus-one-literal-is-zero` golden. The parser DOES fold the result into its
+constant domain (which is what keeps `100 / (10 mod -1)` an E3103 rather than a runtime throw), but
+`foldConstants` — rewriting a folded expression to a single `mov` — is deliberately deferred for the whole
+language (`FoldConstOperands`' header), and a `mod` by `-1` is not the place to make an exception.
 
 ⚠ **`safe` IS A FRESH SSA VALUE, NOT AN OVERWRITE OF THE DIVISOR** — and the goldens show the allocator
 reusing the divisor's register for it whenever the divisor is dead after the divide, which is the

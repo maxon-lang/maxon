@@ -101,10 +101,13 @@ export function divisionKindOf(callee ByteArray) returns CheckedDivisionKind
 	return CheckedDivisionKind.notCheckedDivision
 end 'divisionKindOf'
 
-// ⭐ **DOES THIS KIND READ A REMAINDER?** — the one place the two remainder kinds are treated as one, so
-// the `-1` guard's trigger is a single predicate rather than a pair of `or`s repeated at each site. The
-// QUOTIENT is excluded for the reason this whole rung turns on: `a / -1` overflows for exactly one
-// dividend and has no answer when it does, while `a mod -1` is `0` for all of them.
+// ⭐ **DOES THIS KIND READ A REMAINDER?** — the one place the two remainder kinds are treated as one. ONE
+// caller today (`lowerDivisionExpansion`'s overflow-guard gate), so it is a named FACT rather than a saving:
+// a union cannot be compared with `or`, so asking it inline would mean a second `match` over
+// `CheckedDivisionKind` whose arms nothing holds to this one's. The QUOTIENT is excluded for the reason this
+// whole rung turns on — `a / -1` overflows for exactly one dividend and has no answer when it does, while
+// `a mod -1` is `0` for all of them — and stating that in a named predicate is what makes a future third
+// remainder kind land on the right side of it by having to choose.
 export function divisionKindReadsRemainder(kind CheckedDivisionKind) returns bool
 	return match kind 'k'
 		quotient gives false

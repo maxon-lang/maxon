@@ -480,41 +480,42 @@ end 'requireRuntimeCallPositional'
 // in this file. Named because a bare `0` at a position argument is exactly the magic value the rule is for.
 let SetKeyTypeParamPosition = 0 as TypeParamId
 
-// ⭐⭐ **WHETHER AN EXPANDED DIVISION HAS AN ERROR CHANNEL — the ONE thing that differs between the
-// fallible divisions (A1) and the total remainder (A1x), which is why `lowerDivisionExpansion` is one
-// function and not two near-copies of a four-op guard.**
+// ⭐⭐ **WHICH DIVISION IS BEING EXPANDED, AND — WHERE THERE IS ONE — THE ERROR-FLAG REGISTER IT WRITES.**
+// The flag is the ONE thing that differs between the fallible divisions (A1) and the total remainder
+// (A1x), which is why `lowerDivisionExpansion` is one function and not two near-copies of a four-op guard.
 //
-// It carries a ValueId the KIND cannot supply — the flag register is minted by `lowerTryCall`, from the
-// `tryCall`'s second result, and a total division has no such register — so the channel is a parameter
-// rather than something derived at the bottom. `requireDivisionChannelMatchesKind` is what holds it to
-// the kind, since the two are otherwise two copies of "does this division throw?".
+// ⭐ **THE FLAG RIDES THE VARIANT SO A MISMATCH IS UNREPRESENTABLE, NOT MERELY CHECKED.** The register is
+// minted by `lowerTryCall` from the `tryCall`'s second result and a total division has no such register,
+// so "which division" and "does it write a flag" would otherwise be two copies of one fact travelling as
+// two parameters — and this file's first draft did exactly that, with a `panic` holding them together.
+// **DERIVE > CHECK:** there is nothing left to check, because `guardedRemainder` cannot be spelled WITH a
+// flag and neither checked arm can be spelled without one. `divisionExpansionKind` reads the kind back
+// out, so everything downstream still asks `CheckedDivisionKind` and no second classification exists.
 //
 // ⚠ It is deliberately NOT a nullable ValueId or a reserved id: an unread flag register spelled `0` is a
 // real ValueId (parameter 0's), so a sentinel here would be a wrong answer waiting for a reader.
-union DivisionErrorChannel
-	// `__checked_div` / `__checked_mod`: the divisor's zero test IS the flag (see `emitDivisorZeroFlag`),
-	// and the divide runs on an OR'd divisor so it never sees the zero it reported.
-	fallible(errorFlag ValueId)
-	// `__guarded_mod` (A1x): the divisor is proven non-zero, so there is no flag to write and no divisor
-	// to repair — only the overflow guard, which answers `0` and raises nothing.
-	total
-end 'DivisionErrorChannel'
+union DivisionExpansion
+	// `__checked_div`: the divisor's zero test IS the flag (see `emitDivisorZeroFlag`), and the divide runs
+	// on an OR'd divisor so it never sees the zero it reported. Integer or float.
+	checkedQuotient(errorFlag ValueId)
+	// `__checked_mod`: the same, plus A1x's overflow guard — a divisor the compiler could not prove
+	// non-zero is one it could not prove is not `-1` either.
+	checkedRemainder(errorFlag ValueId)
+	// `__guarded_mod` (A1x): the divisor is PROVEN non-zero, so there is no flag to write and no divisor to
+	// repair — only the overflow guard, which answers `0` and raises nothing.
+	guardedRemainder
+end 'DivisionExpansion'
 
-// The channel and the kind are two spellings of "does this division throw?", and only ONE list of
-// throwing kinds exists (`divisionKindThrows`) — this is where the other spelling is held to it. Reached
-// by two callers that cannot both be right by construction: `lowerTryCall` has a flag register and
-// `lowerRuntimeCall` has none, so a swap here would mean a total division writing a flag nobody reads,
-// or a fallible one whose caught error is whatever the register happened to hold.
-function requireDivisionChannelMatchesKind(channel DivisionErrorChannel, kind CheckedDivisionKind)
-	let hasErrorChannel = match channel 'c'
-		fallible gives true
-		total gives false
-	end 'c'
-
-	if hasErrorChannel != divisionKindThrows(kind) 'channelDisagreesWithKind'
-		panic("requireDivisionChannelMatchesKind: an expanded division carries an error channel ({hasErrorChannel}) that disagrees with its kind's own answer ({divisionKindThrows(kind)}) — `lowerTryCall` must expand only the throwing kinds and `lowerRuntimeCall` only the total one")
-	end 'channelDisagreesWithKind'
-end 'requireDivisionChannelMatchesKind'
+// The expansion → its KIND, so the operator choice, the remainder test and the float refusal all keep
+// reading the one classification `divisionKindOf` produces from a callee name. A 1:1 rename, and the only
+// reason it exists is that the flag had to ride the variant (see above).
+function divisionExpansionKind(expansion DivisionExpansion) returns CheckedDivisionKind
+	return match expansion 'e'
+		checkedQuotient gives CheckedDivisionKind.quotient
+		checkedRemainder gives CheckedDivisionKind.remainder
+		guardedRemainder gives CheckedDivisionKind.guardedRemainder
+	end 'e'
+end 'divisionExpansionKind'
 
 type MaxonToStdLowering
 	var maxonModule as MaxonModule
@@ -1445,9 +1446,8 @@ type MaxonToStdLowering
 		// arm, and for the identical reason: there is no `__guarded_mod` function to call.** It is the only
 		// division kind that can reach a plain `call`, because it is the only one that does not throw; the two
 		// `__checked_*` names arrive through `lowerTryCall` and are refused below if they somehow do not.
-		let divisionKind = divisionKindOf(callee)
-		match divisionKind 'guardedDivision'
-			guardedRemainder then return self.lowerDivisionExpansion(result, channel: DivisionErrorChannel.total, kind: divisionKind, args: args, dstBlock: dstBlock)
+		match divisionKindOf(callee) 'guardedDivision'
+			guardedRemainder then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.guardedRemainder, args: args, dstBlock: dstBlock)
 			quotient to remainder then panic("lowerRuntimeCall: the THROWING '{String.from(callee)}' reached the plain call path — `isThrowingRuntimeCallee` names it, so `Parser.emitDivOrMod` must have emitted it without the `try` that E3057 requires")
 			notCheckedDivision then break 'guardedDivision'
 		end 'guardedDivision'
@@ -2215,9 +2215,9 @@ type MaxonToStdLowering
 		// expansion's door: it is TOTAL, so it is not a `try` target at all — the parser refuses a `try` over it
 		// (E3055) and reaches the expansion through `lowerRuntimeCall` instead. Answering it here would mean a
 		// `tryCall` whose error flag nothing ever sets.
-		let divisionKind = divisionKindOf(callee)
-		match divisionKind 'checkedDivision'
-			quotient to remainder then return self.lowerDivisionExpansion(result, channel: DivisionErrorChannel.fallible(errorFlag), kind: divisionKind, args: args, dstBlock: dstBlock)
+		match divisionKindOf(callee) 'checkedDivision'
+			quotient then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedQuotient(errorFlag), args: args, dstBlock: dstBlock)
+			remainder then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedRemainder(errorFlag), args: args, dstBlock: dstBlock)
 			guardedRemainder then panic("lowerTryCall: a TOTAL `__guarded_mod` reached the throwing call path — `isThrowingDivisionRuntimeCallee` answers false for it, so `Parser.requireThrowingNamedTryTarget` must have refused the `try` before lowering")
 			notCheckedDivision then break 'checkedDivision'
 		end 'checkedDivision'
@@ -2303,13 +2303,22 @@ type MaxonToStdLowering
 	// keeps every existing division golden byte-identical.
 	//
 	// ⚠⚠ **AND IT COVERS ONLY THE `mod`s A SOURCE PROGRAM WROTE.** Three COMPILER-AUTHORED builders emit
-	// `StdOp.mod` directly, past the parser and past this guard: `StringRuntime`'s digit loop (divisor
-	// `DecimalRadix`), `GraphemeRuntime`'s Hangul decomposition (a syllable-count constant) and `GtRuntime`'s
-	// tick conversion (a `QueryPerformanceFrequency` result). All three are safe TODAY because each divisor is
-	// a positive constant that builder emits itself — verified, not assumed — but a future runtime builder
-	// dividing by something it received is outside every proof in this file. It is written down rather than
-	// checked because there is nothing here to derive the answer from: at that tier the divisor is a bare
-	// ValueId with no range and no constant domain, so the obligation belongs to whoever emits the op.
+	// `StdOp.mod` directly, past the parser and past this guard, and their safety arguments are NOT the same
+	// one:
+	//
+	//   • `StringRuntime`'s digit loop and `GraphemeRuntime`'s Hangul decomposition divide by a `StdOp.const`
+	//     the builder emits two lines above the `mod` (`DecimalRadix`, a syllable count). Those are safe by
+	//     CONSTRUCTION — the divisor cannot be `0` or `-1` because it is written there in the source.
+	//   • `GtRuntime`'s tick conversion (`__gt_now_ns`) divides by `freq`, a **RUNTIME value** — a
+	//     `loadIndirect` of the clock-frequency global that `QueryPerformanceFrequency` filled. It is safe by
+	//     the OS CONTRACT (the counter frequency is positive and fixed at boot) and by nothing this compiler
+	//     can see. The same value feeds two unguarded `StdOp.div`s in the same function, so if that contract
+	//     were ever broken the quotients would fault first.
+	//
+	// ⇒ **a future runtime builder dividing by something it RECEIVED is outside every proof in this file**,
+	// and the third bullet is what that mistake will look like. It is written down rather than checked
+	// because there is nothing here to derive an answer from: at that tier a divisor is a bare ValueId with
+	// no range and no constant domain, so the obligation belongs to whoever emits the op.
 	function emitRemainderOverflowSafeDividend(dividend ValueId, divisor ValueId, operandType StdType, dstBlock IrBlock) returns ValueId
 		let negOne = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(negOne, value: OverflowingDivisorPattern, valueType: operandType))
@@ -2338,8 +2347,8 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(errorFlag, lhs: divisor, rhs: zero, pred: StdCmpPred.eq, operandType: operandType))
 	end 'emitDivisorZeroFlag'
 
-	function lowerDivisionExpansion(result ValueId, channel DivisionErrorChannel, kind CheckedDivisionKind, args ValueIdArray, dstBlock IrBlock)
-		requireDivisionChannelMatchesKind(channel, kind: kind)
+	function lowerDivisionExpansion(result ValueId, expansion DivisionExpansion, args ValueIdArray, dstBlock IrBlock)
+		let kind = divisionExpansionKind(expansion)
 
 		let dividend = try args.get(0) otherwise panic("lowerDivisionExpansion: an expanded divide has two arguments — `emitDivOrMod` pushes the dividend first")
 		let divisor = try args.get(1) otherwise panic("lowerDivisionExpansion: an expanded divide has two arguments — `emitDivOrMod` pushes the divisor second")
@@ -2353,11 +2362,16 @@ type MaxonToStdLowering
 			panic("lowerDivisionExpansion: the dividend and the divisor of an expanded divide are in DIFFERENT domains (one float, one integer) — `emitDivOrMod` must promote both operands before emitting one")
 		end 'mixedDomains'
 
-		match channel 'zeroTest'
-			fallible(errorFlag) then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
+		// ⚠ The two checked arms share one body, spelled twice: Maxon cannot bind a payload in a RANGE arm
+		// (`checkedQuotient(f) to checkedRemainder(f)` is E2010), and the alternative — reading the flag out
+		// through a second union, or a helper that panics for the total arm — would put the pairing back into a
+		// place that can be got wrong. One CALL twice beats one FACT twice.
+		match expansion 'zeroTest'
+			checkedQuotient(errorFlag) then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
+			checkedRemainder(errorFlag) then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
 			// A1x's total remainder has no error channel at all — its divisor is PROVEN non-zero, so a flag
 			// register would be one nobody reads and a compare nobody branches on.
-			total then break 'zeroTest'
+			guardedRemainder then break 'zeroTest'
 		end 'zeroTest'
 
 		// ⭐⭐ **THE DIVIDE ITSELF GOES THROUGH `lowerBinOp`, WHICH IS ALREADY THE ONE PLACE THAT DECIDES WHAT
@@ -2394,9 +2408,10 @@ type MaxonToStdLowering
 		// divide always runs on a safe operand. A total division's divisor needs no repair: nothing proved it
 		// zero, so nothing has to be OR'd out of it.
 		var safeDivisor = divisor
-		match channel 'divisorGuard'
-			fallible(errorFlag) then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)
-			total then break 'divisorGuard'
+		match expansion 'divisorGuard'
+			checkedQuotient(errorFlag) then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)
+			checkedRemainder(errorFlag) then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)
+			guardedRemainder then break 'divisorGuard'
 		end 'divisorGuard'
 
 		self.lowerBinOp(result, lhs: safeDividend, rhs: safeDivisor, op: divisionOperatorForKind(kind), dstBlock: dstBlock)

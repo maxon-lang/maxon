@@ -434,6 +434,25 @@ end 'main'
 error E3103: <fragment>:4:12: division by zero: the divisor of 'mod' is always 0
 ```
 
+<!-- test: error.divide-by-a-folded-mod-of-minus-one -->
+⭐ **THE FOLD MUST SURVIVE THE OVERFLOW GUARD (A1x).** `a mod -1` is `0` for every `a`, so the parser
+holds this `z` as the constant `0` and the divide by it is refused at COMPILE time — exactly as
+`error.divide-by-let-bound-zero` below is. It is pinned because A1x is the reason it could break: `-1` is
+the only constant divisor that leaves the bare route for a guarded expansion, and an expansion that
+forgot to record its fold would silently turn this compile-time refusal into a runtime `DivisionByZero`
+a `try` could swallow. The fold is stronger than the one it replaced — it needs no constant DIVIDEND,
+because the answer does not depend on one.
+```maxon
+function main() returns ExitCode
+	let z = 10 mod -1
+	let q = 100 / z
+	return q as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3103: <fragment>:4:14: division by zero: the divisor of '/' is always 0
+```
+
 <!-- test: error.divide-by-let-bound-zero -->
 ```maxon
 function main() returns ExitCode
@@ -541,8 +560,10 @@ r=0
 #### Door 3 — a ranged divisor that excludes `0` but ADMITS `-1`
 `int(-1 to -1)` is the shape that shows "excludes zero" was never the same proof as "cannot
 overflow": it earns the bare divide by the fallible-division rule and is `-1` every time. The
-dividend arrives through a call argument, the one position a ranged type is not re-checked at
-runtime — the same door `divide-by-zero-fault-through-an-unchecked-call-argument` uses below.
+DIVISOR arrives through a call argument, the one position a ranged type is not re-checked at runtime, so
+nothing holds the caller to the range the proof read — the same door
+`divide-by-zero-fault-through-an-unchecked-call-argument` uses below, and
+`mod-overflow-fault-through-an-unchecked-call-argument` is what happens when it is walked through.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NegativeOne = int(-1 to -1)
@@ -663,6 +684,16 @@ thunk classifies. The divide-by-zero case is the CONTROL — it is what a classi
 and adding an arm beside it must not move it. It is also the only remaining test of the fault thunk
 at all: once `/` became a language-level throw, no program in this suite reached the handler.
 
+⚠⚠ **AND SINCE A1x THAT DOOR REACHES A `mod` TOO, WHICH IS THE ONE PLACE `i64.min mod -1` IS STILL NOT
+`0`.** A1x made the answer `0` wherever the compiler's proof runs — and the proof reads a divisor's
+DECLARED RANGE, which this door does not enforce at runtime. So a `d BelowMinusOne` parameter
+(`int(i64.min to -2)`, a range that rules out both hazards, so the `mod` compiles bare and no `try` is
+even spellable) handed a runtime `-1` faults exactly as its divide-by-zero twin does. **It is the same
+unenforced premise, not a second one** — the cure belongs to the argument door, which owes only the
+compile-time half of a ranged check by design (`InsertRangeChecks.processArgSite`), and it now closes
+TWO hazards rather than one. Pinned here so the hole is a tested boundary rather than a sentence, and so
+the argument-door rung has a red case waiting for it.
+
 <!-- test: divide-by-zero-fault-through-an-unchecked-call-argument -->
 <!-- targets: x64-windows, x64-linux -->
 #### A runtime zero reaching a bare `idiv` panics `integer divide by zero`
@@ -692,6 +723,48 @@ end 'main'
 panic: integer divide by zero
 Stack trace:
   in divide
+  in main
+  in mrt_start
+```
+
+<!-- test: mod-overflow-fault-through-an-unchecked-call-argument -->
+<!-- targets: x64-windows -->
+#### ⭐ A runtime `-1` reaching a bare `mod` still faults — the ONE place `i64.min mod -1` is not `0` (A1x)
+
+The THIRD case through the same door, and the one that says what A1x's guarantee actually rests on: the
+compiler's PROOF, not the hardware. `BelowMinusOne` rules out both of `idiv`'s divisors, so `n mod d`
+compiles to the bare sequence with no guard — correctly, given the declared type — and a caller that
+breaks the type it declared gets the fault the type was standing in front of.
+
+`x64-linux` is excluded for its neighbours' measured reason: its kernel reports `FPE_INTDIV` for this
+`#DE` too, so it prints the divide-by-zero wording.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BelowMinusOne = int(i64.min to -2)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+// `d` excludes BOTH 0 and -1, so the remainder needs neither guard and no `try` is spellable. The
+// proof is the CALLER's to keep, and the call-argument door is the one position nothing at runtime
+// holds it to.
+function remainder(n Integer, d BelowMinusOne) returns Integer
+	return n mod d
+end 'remainder'
+
+function main() returns ExitCode
+	let bad = ident(0 - 1)
+	return remainder(i64.min, d: bad)
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic: integer overflow
+Stack trace:
+  in remainder
   in main
   in mrt_start
 ```
