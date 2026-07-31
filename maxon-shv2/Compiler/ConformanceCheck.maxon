@@ -485,7 +485,7 @@ end 'checkOverloadedMembers'
 // asked of the SELECTED member's function, which under an overload set is not necessarily the bare-named one.
 function acceptConformingMember(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, selected ByteArray, implFunc IrFunction, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	recordWitnessSlotImpl(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, selected: selected, typeParamNames: typeParamNames, signatures: signatures)
-	validateThrowsConformance(project, conformance: conformance, collectedMethod: collectedMethod, implFunc: implFunc)
+	validateThrowsConformance(project, signatures: signatures, conformance: conformance, collectedMethod: collectedMethod, implFunc: implFunc)
 end 'acceptConformingMember'
 
 // File the accepted member under its witness slot's key (R10). An entry already present must AGREE: two
@@ -611,7 +611,8 @@ end 'renderMemberSignatures'
 //     arriving from the other side, and it is not diagnosable anywhere else: at the dispatch the compiler
 //     sees only the interface, and at the impl it sees only the type.
 //
-//   • **the two thrown TYPES differ** — ⚠ **shv2's OWN rule too; NEITHER reference has it** (the bootstrap's
+//   • **the two thrown TYPES differ, UNLESS THE REQUIREMENT IS ABSTRACT** — ⚠ **shv2's OWN rule too;
+//     NEITHER reference has it** (the bootstrap's
 //     `ValidateThrowsConformance` asks only that the impl throws SOMETHING conforming to `Error`), and it is
 //     the same divergence for the third time. Under MONOMORPHIZATION, which is what both oracles do, a `try`
 //     is typed off the CALLEE's own clause, so a differing impl type is harmless — the caught error is
@@ -622,6 +623,24 @@ end 'renderMemberSignatures'
 //     SCALAR-throwing impl under a BOXED-union interface clause made the `try` treat the ordinal as a box
 //     pointer and SEGFAULT. `checkPropagateType`'s E3059 cannot see it — that check compares the INTERFACE's
 //     clause against the enclosing function's, and those two agree in exactly this program.
+//
+// ⭐⭐ **THE THIRD RULE HAS ONE EXEMPTION, AND IT IS THE ONE `Error` EXISTS FOR (A1s).** `stdlib`'s own
+// `interface Parsable` declares `static function fromString(input String) returns Self throws Error`, and
+// every conformer in the corpus throws its own concrete error enum — an impl being MORE SPECIFIC than the
+// requirement. The rule above is stated as "the same NAME", but the fact it protects is "the same DECODE":
+// the `try` at the dispatch types its `(e)` binding off the requirement, so the impl's flag must be exactly
+// what that binding reads back. For a requirement naming a concrete enum, same-decode IS same-name — one
+// enum's ordinals are not another's. For a requirement naming an INTERFACE it is not: a marker interface
+// declares no case, `match e` over it is E2015, and the binding is an opaque scalar with no ordinal to get
+// wrong. `throwsRequirementIsAbstract` is where same-name stops standing in for same-decode.
+//
+// ⚠ **THE FLAG SHAPE STILL HAS TO AGREE, so the exemption reaches only a SCALAR impl error**
+// (`requireImplErrorIsScalar`). An abstract requirement is caught through the `ordinal + ErrorFlagOrdinalBias`
+// ABI — `Parser.throwsTypeIsBoxedUnion` answers `false` for a name in no enum registry — while a
+// payload-carrying union hands its error over as a heap BOX POINTER. MEASURED on the plain direct-call
+// spelling of that pair (`function f() returns Code throws Error` throwing a boxed union): **exit 101, a
+// leaked box, in shv2 AND in the C# oracle.** That hole is unguarded on the direct path and is reported
+// separately; this rung refuses the witness-dispatch route into it rather than opening a second door to it.
 //
 // Split on the INTERFACE's clause first: each side then asks a different question of the impl's, and both
 // answers come out of a `match` on it rather than a boolean pair, so a clause is never re-extracted behind an
@@ -634,10 +653,10 @@ end 'renderMemberSignatures'
 // +264 allocations across the six rungs (exactly 16 bytes each), landing OUTSIDE every per-phase bucket
 // because `checkConformance` runs before the pipeline. Passing `project` down and reporting in the arm that
 // decides costs one extra parameter and allocates only when a diagnostic is actually produced.
-function validateThrowsConformance(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, implFunc IrFunction)
+function validateThrowsConformance(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, implFunc IrFunction)
 	match collectedMethod.method.throwsClause 'iface'
 		none then requireImplDoesNotThrow(project, conformance: conformance, collectedMethod: collectedMethod, implClause: implFunc.throwsTypeName)
-		throwing(required) then requireImplThrowsSameType(project, conformance: conformance, collectedMethod: collectedMethod, required: required, implClause: implFunc.throwsTypeName)
+		throwing(required) then requireImplThrowsSameType(project, signatures: signatures, conformance: conformance, collectedMethod: collectedMethod, required: required, implClause: implFunc.throwsTypeName)
 	end 'iface'
 end 'validateThrowsConformance'
 
@@ -651,28 +670,89 @@ end 'requireImplDoesNotThrow'
 
 // The interface method declares `throws required`: the impl must declare a throws clause, and it must name
 // the SAME error type — the dispatch site types its caught error off `required`, whatever the impl throws.
-function requireImplThrowsSameType(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, implClause ThrowsClause)
+function requireImplThrowsSameType(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, implClause ThrowsClause)
 	match implClause 'impl'
 		// The oracles' wording verbatim.
 		none then reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} must throw '{required}' as required by interface '{String.from(collectedMethod.sourceInterfaceName)}'")
-		throwing(declared) then requireSameErrorType(project, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared)
+		throwing(declared) then requireSameErrorType(project, signatures: signatures, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared)
 	end 'impl'
 end 'requireImplThrowsSameType'
 
-// Both sides throw: they must name the same error type. Split out because the comparison is a labelled `if`,
-// which a `match` arm cannot hold inline (the shape `rejectIfDifferentThrows` is split for).
-function requireSameErrorType(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
+// Both sides throw: they must name the same error type — unless the REQUIREMENT is ABSTRACT, which is the
+// one narrowing the header above exempts (A1s). Split out because the comparison is a labelled `if`, which a
+// `match` arm cannot hold inline (the shape `rejectIfDifferentThrows` is split for).
+//
+// ⚠ **THE EXEMPTION IS ASKED ONLY AFTER THE NAMES DISAGREE, and that placement is the whole of its cost.**
+// An agreeing pair — every conformance in the corpus that does not narrow, and every one in the scale ladder
+// — returns above without asking either question, so this rung adds no allocation to any program that
+// compiled before it. Both questions below box a union (`InterfaceLookup`, `DeclaredEnum`), which the header
+// of `validateThrowsConformance` records scale-test reading straight off a per-conforming-method box; here
+// they are paid only where the old rule was about to produce a diagnostic.
+function requireSameErrorType(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
 	if declared.equals(required) 'sameErrorType'
 		return
 	end 'sameErrorType'
 
+	if throwsRequirementIsAbstract(project, signatures: signatures, required: required) 'abstractRequirement'
+		requireImplErrorIsScalar(project, signatures: signatures, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared)
+		return
+	end 'abstractRequirement'
+
 	reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it 'throws {required}' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as '{required}'")
 end 'requireSameErrorType'
 
-// The ONE report site for all three throws-conformance violations. Not a pass-through: it derives four of
+// ⭐⭐ **DOES THE REQUIREMENT'S `throws` TYPE NAME AN INTERFACE RATHER THAN A CONCRETE ERROR — i.e. is there
+// anything for the dispatch's `(e)` binding to decode WRONG (A1s)?** Two conditions, and each rules out a
+// wrong answer the other cannot:
+//
+//   • **It must name no declared enum/union.** That is the registry the catch DECODE itself consults
+//     (`Parser.throwsTypeIsBoxedUnion` → `enumOf(name)`), so it is the only honest answer to "can this
+//     requirement be discriminated?". Asking it rather than testing the literal name `Error` is what keeps a
+//     user's own `enum Error` — which the language accepts, and which `throws Error` would then decode the
+//     ordinals of — from silently taking the narrowing: for that program the requirement IS concrete and the
+//     strict same-name rule is the correct one. `containsEnum` and not `enumOf`, because this half needs no
+//     layout and `enumOf` would box one to throw it away.
+//   • **It must name an INTERFACE.** "Decodes nothing" alone would have made a TYPO'd requirement
+//     (`throws Bogus`, a name in no registry at all) accept any error type whatsoever, silently — the
+//     author's mistake read as a licence. Abstractness is something a requirement DECLARES, not something it
+//     fails to be. `lookupInterface` answers for the synthesized `Error` and for a user interface alike, off
+//     the one door every other conformance question in this file already asks through.
+function throwsRequirementIsAbstract(project Project, signatures ProgramSignatures, required String) returns bool
+	let requiredName = required.toByteArray()
+	if signatures.containsEnum(requiredName) 'namesAConcreteError'
+		return false
+	end 'namesAConcreteError'
+
+	return match lookupInterface(project.interfaces, name: requiredName) 'iface'
+		found gives true
+		notFound gives false
+	end 'iface'
+end 'throwsRequirementIsAbstract'
+
+// The impl's error must reach the dispatch through the ABI an abstract requirement is CAUGHT with — the
+// scalar `ordinal + ErrorFlagOrdinalBias` flag. A payload-carrying union's flag is the heap box pointer
+// itself (`Parser.emitThrowError` stamps `errorIsBoxed` off the thrown value and `lowerThrowError` writes the
+// pointer verbatim), so under an abstract requirement the handler would subtract the bias from a pointer and
+// never release the box. Read through the SAME `enumOf(name).isBoxed()` the catch decode reads, for that
+// function's own reason: a boxed union must not be encoded as a pointer at one end and decoded as an ordinal
+// at the other, and two spellings of "is it boxed?" is exactly how that comes to be true.
+function requireImplErrorIsScalar(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
+	let implIsBoxed = match signatures.enumOf(declared.toByteArray()) 'implError'
+		declared(layout) gives layout.isBoxed()
+		undeclared gives false
+	end 'implError'
+
+	if not implIsBoxed 'scalarFlag'
+		return
+	end 'scalarFlag'
+
+	reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it 'throws {required}', which declares no case to decode — a witness dispatch catches such a requirement through the SCALAR error-flag ABI, while a payload-carrying union is handed over as a heap box pointer that would be decoded as an ordinal and never released. Throw a payload-free enum, or declare the requirement as '{declared}' itself")
+end 'requireImplErrorIsScalar'
+
+// The ONE report site for every throws-conformance violation. Not a pass-through: it derives four of
 // `reportPositioned`'s six arguments from `conformance` (the code, and the position the `implements` clause
-// anchors on), which three separate arms would otherwise each spell out — and a fourth arm added later would
-// spell out again, differently.
+// anchors on), which each arm would otherwise spell out separately — and it has already earned that once:
+// A1s added a FOURTH violation (a boxed impl error under an abstract requirement) and spelled none of them.
 function reportThrowsViolation(project Project, conformance ConformanceDecl, message String)
 	reportPositioned(project, code: ErrorCode.semanticPartialInterfaceImpl, message: message, line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
 end 'reportThrowsViolation'

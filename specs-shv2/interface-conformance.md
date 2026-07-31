@@ -53,6 +53,25 @@ type BadCounter implements Counter
 end 'BadCounter'
 ```
 
+### Throws Conformance and the Abstract `Error` Requirement
+
+An interface method's `throws` clause fixes the ABI of every witness dispatch of that method, so an
+implementation's own clause must agree with it. Naming the SAME type always agrees. Beyond that, one
+relaxation is sound, and it is the one `Error` exists for:
+
+- **A requirement whose `throws` names an INTERFACE — `throws Error` — is satisfied by an implementation
+  that throws its own concrete error type.** `Error` is a marker interface: it declares no case, so a
+  `try` at the dispatch has nothing to decode and binds an opaque scalar. There is no ordinal to get
+  wrong, and the implementation is free to be more specific.
+- **The relaxation stops at the flag SHAPE.** A payload-carrying (heap-boxed) union hands its error over
+  as a BOX POINTER, while a requirement that decodes opaquely is caught through the scalar
+  `ordinal + bias` ABI — the pointer would be decoded as an ordinal and its box never released. An
+  implementation throwing a boxed union under an abstract requirement is therefore still refused.
+- **It is one-directional.** A requirement naming a CONCRETE error type still demands that exact type: an
+  implementation declaring the abstract `throws Error` under `throws DigestError` is a WIDENING, and the
+  dispatch would decode whatever it threw as a `DigestError`.
+- **An unresolvable requirement type is not abstract, it is a mistake**, and still demands the same name.
+
 ## Tests
 
 <!-- test: conformance-basic -->
@@ -1491,4 +1510,216 @@ end 'main'
 ```
 ```maxoncstderr
 error E3111: <fragment>:13:6: Type 'Machine' reaches interface 'Parent''s requirement 'convert' by two routes that select different members: convert(v Whole) returns Whole, convert(v Real) returns Whole. A conforming type has ONE witness table per interface and ONE address per method slot, so 'Parent' must be conformed to exactly one way — bind its associated types once, either by removing the duplicate 'Parent' entry or by not also reaching it through an interface that 'Machine' already implements
+```
+
+<!-- test: throws-narrower-than-abstract-requirement -->
+⭐⭐ **AN IMPLEMENTATION MAY THROW A NARROWER ERROR TYPE THAN THE REQUIREMENT DECLARES, WHEN THE
+REQUIREMENT IS ABSTRACT (A1s).** `Digest.digest` declares `throws Error` — the marker interface, which
+declares no case — so the `try` at the witness dispatch has nothing to decode and binds an opaque scalar.
+`Point.digest` throwing its own `MyParseError` is a conformer being MORE SPECIFIC, which is exactly what an
+error interface is for; `stdlib/Builtins.maxon`'s `Parsable.fromString … throws Error` is the shape the whole
+corpus writes. Both edges are pinned in one exit code: the success edge carries the real 20 through the
+witness, the error edge takes the handler's 55.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum MyParseError implements Error
+	badInput
+end 'MyParseError'
+
+interface Digest
+	function digest() returns Code throws Error
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws MyParseError
+		if self.x < 10 'small'
+			throw MyParseError.badInput
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function itemDigest() returns Code
+		return try self.item.digest() otherwise 55
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let good = PointBox.create(Point.create(20))
+	let bad = PointBox.create(Point.create(3))
+	return (good.itemDigest() + bad.itemDigest()) as ExitCode
+end 'main'
+```
+```exitcode
+75
+```
+
+<!-- test: error.throws-wider-than-concrete-requirement -->
+⭐⭐ **THE NARROWING IS ONE-DIRECTIONAL, AND THIS IS THE CASE THAT PROVES THE NEW PERMISSION DID NOT SWALLOW
+THE OLD REFUSAL.** The requirement names a CONCRETE error type, so its ordinals are exactly what the `try` at
+the dispatch decodes; an implementation declaring the abstract `throws Error` is a WIDENING — it may throw
+anything at all, and whatever it throws comes back decoded as a `DigestError`. Refused, with the same
+sentence any other disagreeing pair of named types gets.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum DigestError implements Error
+	tooSmall
+end 'DigestError'
+
+interface Digest
+	function digest() returns Code throws DigestError
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws Error
+		if self.x < 10 'small'
+			throw DigestError.tooSmall
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:12:6: Method 'Point.digest' throws 'Error' but interface 'Digest' declares it 'throws DigestError' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as 'DigestError'
+```
+
+<!-- test: error.boxed-throws-under-abstract-requirement -->
+⭐⭐ **THE RELAXATION STOPS AT THE FLAG SHAPE, AND THAT BOUNDARY IS A MEMORY-SAFETY OBLIGATION RATHER THAN A
+WRONG ANSWER.** An abstract requirement declares no case, so a `try` at the dispatch catches it through the
+SCALAR `ordinal + bias` ABI — while a payload-carrying union hands its error over as a heap BOX POINTER. Were
+this accepted, the pointer would be decoded as an ordinal and the box would never be released: the same
+program written as a plain `throws Error` function exits 101 (a leak) in shv2 AND in the reference oracle.
+The narrowing is granted only to error types whose own flag is that same scalar.
+```maxon
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+interface Digest
+	function digest() returns Code throws Error
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws BoxedError
+		if self.x < 10 'small'
+			throw BoxedError.withMessage("nope")
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:12:6: Method 'Point.digest' throws 'BoxedError' but interface 'Digest' declares it 'throws Error', which declares no case to decode — a witness dispatch catches such a requirement through the SCALAR error-flag ABI, while a payload-carrying union is handed over as a heap box pointer that would be decoded as an ordinal and never released. Throw a payload-free enum, or declare the requirement as 'BoxedError' itself
+```
+
+<!-- test: error.throws-unknown-requirement-type-is-not-abstract -->
+⭐⭐ **AN UNRESOLVABLE REQUIREMENT TYPE IS A MISTAKE, NOT AN ABSTRACT ERROR CHANNEL.** `throws Bogus` names
+neither a declared enum nor an interface, so nothing licenses an implementation to name something else — a
+rule keyed only on "the requirement decodes nothing" would have let a typo'd requirement accept any error
+type at all, silently. The requirement must name an INTERFACE for the narrowing to apply.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum DigestError implements Error
+	tooSmall
+end 'DigestError'
+
+interface Digest
+	function digest() returns Code throws Bogus
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws DigestError
+		if self.x < 10 'small'
+			throw DigestError.tooSmall
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:12:6: Method 'Point.digest' throws 'DigestError' but interface 'Digest' declares it 'throws Bogus' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as 'Bogus'
+```
+
+<!-- test: error.throws-requirement-shadowed-by-a-user-enum-is-concrete -->
+⭐⭐ **`Error` IS A NAME, NOT A KEYWORD — AND A USER MAY DECLARE AN `enum Error`, WHICH MAKES THE REQUIREMENT
+CONCRETE AGAIN.** Interface LOOKUP resolves `Error` to the synthesized marker whatever else is declared, so a
+narrowing rule keyed on "the requirement names an interface" ALONE would grant the exemption here — while the
+catch site reads the ENUM registry, finds the user's two cases, and decodes the implementation's ordinals as
+`shadowAlpha`/`shadowBeta`. The rule therefore asks the enum registry FIRST, exactly as the decode does: a
+requirement with cases to decode is concrete, and its implementation must name it.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum Error
+	shadowAlpha
+	shadowBeta
+end 'Error'
+
+enum OtherError
+	oops
+end 'OtherError'
+
+interface Digest
+	function digest() returns Code throws Error
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws OtherError
+		if self.x < 10 'small'
+			throw OtherError.oops
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:17:6: Method 'Point.digest' throws 'OtherError' but interface 'Digest' declares it 'throws Error' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as 'Error'
 ```

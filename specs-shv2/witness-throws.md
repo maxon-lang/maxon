@@ -28,6 +28,12 @@ Conformance validates the throws relation in BOTH directions:
   differing implementation type has its ordinals decoded as the interface's (a scalar under a boxed clause
   is dereferenced as a box pointer).
 
+The last rule has ONE exemption: a requirement whose `throws` names an INTERFACE — `throws Error` — declares
+no case, so the `try` at the dispatch binds an opaque scalar with no ordinal to get wrong, and an
+implementation may NARROW it to its own concrete error type. It is one-directional (a concrete requirement
+still demands its own name), and it reaches only a payload-free error, because a boxed union's flag is a heap
+box pointer the scalar catch would decode as an ordinal. Those cases live in `interface-conformance.md`.
+
 ## Tests
 
 <!-- test: witness-throws.propagate-through-witness -->
