@@ -1139,20 +1139,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       if (Check(TokenType.Extension)) {
         PreScanExtensionBlock(targetModule);
-      } else if (Check(TokenType.Interface)) {
-        // Interface blocks have function signatures without matching `end`s,
-        // so SkipToMatchingEnd overcounts. Use simple end-matching instead.
+      } else if (Check(TokenType.Function) || Check(TokenType.Type) || Check(TokenType.Enum)
+                 || Check(TokenType.Union) || Check(TokenType.Interface) || CheckTestKeyword()) {
+        // `interface` used to be a separate arm here carrying its own hand-written end-counter,
+        // because plain SkipToMatchingEnd overcounted an interface's bodyless requirement
+        // signatures. That was the SAME FACT written twice, and the copy that stayed naive had the
+        // matching hole the other one grew a cure for: an `enum`/`union` whose case is NAMED for a
+        // keyword (shv2's `TokenKind` declares cases `if`, `while`, `for`, `match`, `end`) overcounts
+        // exactly the same way, so this walk could run past that enum's `end` and skip the very
+        // `extension` blocks it was re-scanning the file to find. One skimmer, one derivation of the
+        // body kind, and neither can go stale against the other.
+        var body = SkippedBodyAtDeclarationKeyword();
         Advance();
-        int depth = 1;
-        while (!IsAtEnd() && depth > 0) {
-          if (Current().Type == TokenType.End) depth--;
-          Advance();
-        }
-        if (!IsAtEnd() && Current().Type == TokenType.CharacterLiteral) Advance();
-      } else if (Check(TokenType.Function) || Check(TokenType.Type)
-                 || Check(TokenType.Enum) || Check(TokenType.Union) || CheckTestKeyword()) {
-        Advance();
-        SkipToMatchingEnd();
+        SkipToMatchingEnd(body);
       } else {
         SkipToEndOfLine();
       }
@@ -1213,8 +1212,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
         if (Check(TokenType.Type) || Check(TokenType.Interface)
             || Check(TokenType.Extension) || Check(TokenType.Function) || CheckTestKeyword()) {
+          // The body kind has to travel with the skip here for the same reason it does in
+          // WalkTopLevelValueDecls, and the consequence of it not doing so was measured: an
+          // `interface`'s requirement signatures each incremented the depth with no `end` to match,
+          // so this walk ran past the interface's own `end` and every enum and typealias declared
+          // after it in the file was never pre-scanned. That is precisely what this pass exists to
+          // prevent — a foreign file's global initializer reading one of that enum's cases failed
+          // `E3034 unknown enum case` in one file order and compiled in the other, which is the
+          // filesystem-order class, not a missing feature.
+          var body = SkippedBodyAtDeclarationKeyword();
           Advance();
-          SkipToMatchingEnd();
+          SkipToMatchingEnd(body);
           SkipNewlines();
           continue;
         }
@@ -1909,7 +1917,31 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       if (Check(TokenType.Let) || Check(TokenType.Var)) {
         bool isMutable = Check(TokenType.Var);
-        var decl = ScanTopLevelValueDecl();
+        int declKeyword = _pos;
+        DeferredDecl decl;
+
+        try {
+          decl = ScanTopLevelValueDecl();
+        } catch (CompileError) when (everyConditionalArm) {
+          // ONLY in every-arm mode, and only because in that mode this walk reads text THIS COMPILE
+          // IS NOT COMPILING. `ScanTopLevelValueDecl` enforces the declaration policy a real compile
+          // enforces — a name may not be `self`, may not start with `__`, must be followed by `=` —
+          // and an inactive `#if` arm is never subject to it, because the compiler skips that arm
+          // whole. So `export let self = 1` behind `#if os(Linux)` compiles cleanly on Windows while
+          // this walk threw E2010 straight out of `maxon flat-namespace check`, which `dotnet build`
+          // runs: a .NET stack trace and exit 127 over source that is legal on every target, and on
+          // a Linux host it would be the OTHER arm that blew up. A survey cannot own the compiler's
+          // policy for an arm the compiler declined to read.
+          //
+          // Skipping the declaration cannot hide a collision. If that arm ever becomes the live one,
+          // the compile itself refuses the file by name — it never resolves the declaration by file
+          // order, which is the silence this gate exists to catch.
+          _pos = declKeyword;
+          SkipToEndOfLine();
+          SkipNewlines();
+          continue;
+        }
+
         onDecl(new TopLevelValueDeclaration(decl.Name, decl.TokenStart, decl.TokenEnd,
           decl.Line, decl.Column, isExported, isModuleVisible, isMutable));
       } else if (Check(TokenType.Type) || Check(TokenType.Union) || Check(TokenType.Enum)
@@ -1920,9 +1952,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // an enum's case names and an interface's requirement signatures both use keywords that are
         // not block openers, and miscounting either walks past this declaration's own `end` and
         // swallows every declaration after it. See SkippedBody.
-        var body = Check(TokenType.Enum) || Check(TokenType.Union) ? SkippedBody.DataCases
-          : Check(TokenType.Interface) ? SkippedBody.InterfaceRequirements
-          : SkippedBody.Statements;
+        var body = SkippedBodyAtDeclarationKeyword();
         Advance();
         SkipToMatchingEnd(body);
       } else {
@@ -5403,6 +5433,24 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     /// </summary>
     DataCases,
   }
+
+  /// <summary>
+  /// The body kind the declaration keyword AT THE CURSOR introduces — the one place the mapping from
+  /// <c>enum</c>/<c>union</c>/<c>interface</c>/anything-else to <see cref="SkippedBody"/> is written.
+  /// Every walk that skips a top-level declaration whole asks here rather than restating it, because
+  /// a walk that answered it locally would be free to answer it differently, and the symptom of
+  /// disagreeing is not a compile error: the skip runs past its own <c>end</c> and SILENTLY swallows
+  /// every declaration after it in the file. Three walks had each answered it separately, and each
+  /// wrong answer was a different order-dependent defect — an <c>enum</c> after an <c>interface</c>
+  /// vanished from the whole-program alias/enum pre-pass, so a foreign file folding one of its cases
+  /// failed E3034 in one file order and compiled in the other.
+  ///
+  /// Called BEFORE the keyword is consumed; the caller advances past it and then skips the body.
+  /// </summary>
+  private SkippedBody SkippedBodyAtDeclarationKeyword() =>
+    Check(TokenType.Enum) || Check(TokenType.Union) ? SkippedBody.DataCases
+    : Check(TokenType.Interface) ? SkippedBody.InterfaceRequirements
+    : SkippedBody.Statements;
 
   /// <summary>
   /// Skip to matching 'end' keyword by tracking nesting depth for if/while/function blocks.

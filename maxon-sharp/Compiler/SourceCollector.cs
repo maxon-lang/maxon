@@ -46,6 +46,17 @@ public static class SourceCollector {
   public const string BuildManifestFileName = "build.maxon";
 
   /// <summary>
+  /// The function a <see cref="BuildManifestFileName"/> must EXPORT for its directory to be a
+  /// project. Spelled beside the file name because it is the other half of one fact — "this
+  /// directory is a Maxon project" — and two places now ask it: <c>maxon build</c>, which compiles
+  /// the manifest and looks for the name among the module's exported functions, and
+  /// <c>FlatNamespaceCheck</c>, which lexes the manifest and matches the three tokens. Those two
+  /// tests are NOT the same test and cannot be (see FlatNamespaceCheck.DeclaresBuildFunction), so
+  /// the least that must be shared is the NAME they both look for.
+  /// </summary>
+  public const string BuildFunctionName = "build";
+
+  /// <summary>
   /// The suffix that makes a file a unit-test file for <c>maxon test</c>. Tests are co-located
   /// with the code they cover, so the NAME is the only thing that separates them from production
   /// source — which is why this suffix, and <see cref="IsTestFile"/> that applies it, exist in

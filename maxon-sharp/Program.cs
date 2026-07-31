@@ -669,7 +669,7 @@ class Program {
         return 1;
       }
       var exportedFunctions = ListBuildFunctions(buildContent);
-      if (exportedFunctions.Any(f => f.name == "build")) {
+      if (exportedFunctions.Any(f => f.name == Compiler.SourceCollector.BuildFunctionName)) {
         var ext = GetOutputExtension(target);
 
         var projectSources = Compiler.SourceCollector.FromDirectory(path);

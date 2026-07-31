@@ -307,7 +307,16 @@ public static class FlatNamespaceCheck {
   /// </summary>
   static string SourceLine(Site site) {
     var lines = File.ReadAllLines(site.File);
-    return site.Line >= 1 && site.Line <= lines.Length ? lines[site.Line - 1].Trim() : "<line not found>";
+
+    // Throws rather than printing a placeholder: the line number came from a token of THIS file, so
+    // being outside it means the scan and the file disagree, and a report that quietly says
+    // "<line not found>" where the colliding VALUE belongs is a report that has stopped doing the
+    // one thing it is for.
+    if (site.Line < 1 || site.Line > lines.Length)
+      throw new InvalidOperationException(
+        $"flat-namespace: {site.File} has {lines.Length} lines but '{site.Name}' was scanned at line {site.Line}");
+
+    return lines[site.Line - 1].Trim();
   }
 
   static string Relative(string root, string path) =>
@@ -336,19 +345,28 @@ public static class FlatNamespaceCheck {
   }
 
   /// <summary>
-  /// The name <c>maxon build</c> looks for in a build manifest. Spelled here rather than in the
-  /// project table because it is the same one fact: a directory is a project when its manifest
-  /// exports this.
+  /// Whether this manifest exports the build function, decided at TOKEN level.
+  ///
+  /// This is deliberately NOT the test <c>maxon build</c> applies — that one compiles the manifest
+  /// and looks for <see cref="SourceCollector.BuildFunctionName"/> among the resulting module's
+  /// exported functions (<c>Program.cs</c>), which is stronger and is the right test THERE. It
+  /// cannot be the test here: this check's whole job is to run from <c>dotnet build</c> over a tree
+  /// whose Maxon projects may not compile at that moment, and a completeness proof that first
+  /// requires every candidate project to compile would go dark exactly when someone is mid-edit.
+  /// So the two tests differ on purpose, and what they SHARE — the name they look for — is spelled
+  /// once, beside the manifest's file name.
+  ///
+  /// The consequence of the weaker test is bounded in the safe direction: it can only over-report a
+  /// directory as a project, and over-reporting fails the build asking for a <see cref="Units"/>
+  /// row, which is loud. It cannot silently let a project escape the table.
   /// </summary>
-  const string BuildFunctionName = "build";
-
   static bool DeclaresBuildFunction(string manifestPath) {
     var tokens = new Lexer(File.ReadAllText(manifestPath)).Tokenize();
     for (var i = 0; i + 2 < tokens.Count; i++)
       if (tokens[i].Type == TokenType.Export
           && tokens[i + 1].Type == TokenType.Function
           && tokens[i + 2].Type == TokenType.Identifier
-          && tokens[i + 2].Value == BuildFunctionName)
+          && tokens[i + 2].Value == SourceCollector.BuildFunctionName)
         return true;
 
     return false;
