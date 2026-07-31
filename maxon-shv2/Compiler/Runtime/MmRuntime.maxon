@@ -138,11 +138,17 @@ end 'isRuntimeCallee'
 // REGISTRY's answer, not the name's — see below.
 let CompilerInternalPrefix = b"__"
 
-// ⭐ **IS THIS CALLEE ONE OF THE COMPILER'S OWN?** The GENERAL predicate — a superset of
-// `isRuntimeCallee` — read by the parser's reserved-callee door (`requireCalleeIsNotReservedName`) and,
-// through `isSignaturelessCompilerCallee` below, by the two places that must NOT treat a compiler-emitted
-// callee as a user function: `SemanticCheck.validateCall` (no E3004 — nothing declares it) and
-// `LowerMaxonToStd.lowerCall` (no signature slotting — the compiler wrote its arguments positionally).
+// ⭐ **DOES THIS CALLEE WEAR THE COMPILER'S PREFIX?** The GENERAL predicate — a superset of
+// `isRuntimeCallee`. It answers about the NAME's SHAPE and nothing else, which since D6/A1r is strictly less
+// than "is this callee the compiler's own": for that, ask `isSignaturelessCompilerCallee` below.
+//
+// ⚠ **ITS THREE REMAINING DIRECT READERS ALL WANT THE SHAPE, and two of them because "declared" is already
+// ruled out where they stand.** `Parser.requireCalleeIsNotReservedName` needs the raw shape as its GATE (the
+// declaration exemption is its second clause, so the shape and the exemption cannot be one test);
+// `Parser.requireThrowingNamedTryTarget`'s builtin arm sits BEHIND `declaresCallee`, so a name reaching it is
+// undeclared by construction; and `StdLoweringShared.requireRuntimeChunkCallee` sits behind "no Std function
+// in the merged module", which a declared-and-referenced function cannot be. Every other reader wants the
+// registry's answer, and asks for it by name — see below.
 //
 // It is DISTINCT FROM `isRuntimeCallee` (which stays `__mm_`-only) because the two answer different
 // questions. `isRuntimeCallee` decides whether the program carries the HEAP RUNTIME + leak check — a
@@ -169,10 +175,23 @@ export function isCompilerInternalCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: CompilerInternalPrefix) or isBuiltinConformanceImplName(callee)
 end 'isCompilerInternalCallee'
 
-// ⭐⭐ **DOES THIS CALLEE HAVE NO DECLARED SIGNATURE FOR THE USER-FUNCTION CHECKS TO READ?** The question
-// `SemanticCheck.validateCall` and `LowerMaxonToStd.lowerCall`/`lowerTryCall` are actually asking when they
-// skip arity/label/type validation and signature slotting — and it is ONE fact, asked in one place, rather
-// than the same compound test written at three call sites.
+// ⭐⭐ **DOES THIS CALLEE HAVE NO DECLARED SIGNATURE FOR THE USER-FUNCTION CHECKS TO READ?** Equivalently:
+// **is it a name the COMPILER EMITTED**, since a compiler-emitted symbol is built at the Std tier, long after
+// the merge that fills `funcSignatures`, and so can never be in it. Both readings are one predicate on
+// purpose — they were two spellings of one fact, and a project whose signature bug is ONE FACT WRITTEN TWICE
+// does not get to keep them apart.
+//
+// **The readers, and which reading each takes:**
+//
+//   • *"nothing to check against"* — `SemanticCheck.validateCall` and `validatePlainCall` (no E3004, no
+//     arity/label/type checks), `SemanticCheck.directCallArgEscapes` (the closure-escape slot `validateCall`
+//     returns before), `LowerMaxonToStd.lowerCall` / `lowerTryCall` (no signature slotting — the compiler
+//     wrote its arguments positionally).
+//   • *"the compiler emitted it"* — `LowerMaxonToStd.lowerFunctionRef` and `FnRefThunk.noteFnRefTarget` (a
+//     bare `.text` address for a drop-walk `callIndirect(ptr)`, versus the uniform-ABI `__fnref_` thunk a
+//     USER function value needs), and `StringRuntime.recordFunctionRefUsage` (does this reference install a
+//     runtime floor?). ⚠ **THESE THREE WERE LEFT ON THE PREFIX BY A1r AND ONE OF THEM WAS REACHABLY WRONG** —
+//     see `lowerFunctionRef` for the `wasm trap: indirect call type mismatch` it measured.
 //
 // ⚠ **THEY USED TO ASK IT BY PREFIX, AND D6/A1r BROKE THAT PROXY.** "`__`-prefixed" stood in for "no file
 // declares it" only while NO file could declare such a name. D6 exempted `stdlib/Builtins.maxon` at the

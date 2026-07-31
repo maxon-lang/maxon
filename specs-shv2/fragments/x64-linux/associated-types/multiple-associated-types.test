@@ -1,0 +1,108 @@
+// Test: multiple-associated-types
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+interface Pair uses First, Second
+	function getFirst() returns First
+	function getSecond() returns Second
+end 'Pair'
+
+type IntFloat implements Pair with Integer, Float
+	let a as Integer
+	let b as Float
+
+	function getFirst() returns Integer
+		return a
+	end 'getFirst'
+
+	function getSecond() returns Float
+		return b
+	end 'getSecond'
+
+	static function create(a Integer, b Float) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'IntFloat'
+
+function main() returns ExitCode
+	let p = IntFloat.create(40, b: 2.5)
+	let x = p.getFirst()
+	let y = trunc(p.getSecond())
+	return x + y
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @IntFloat.getFirst {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @IntFloat.getSecond {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 xmm0, [rcx + 8]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @IntFloat.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.storeSlotReg slot0, xmm6
+    x64.movRegReg rbx, rcx
+    x64.movRegReg xmm6, xmm0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], xmm6
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 40
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.callDirect IntFloat.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect IntFloat.getFirst
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect IntFloat.getSecond
+    x64.cvttsd2siRegReg rax, xmm0
+    x64.leaRegRegReg r12, r12, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

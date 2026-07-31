@@ -305,7 +305,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// (heap / print / string-`==`). The HEAP answer alone drives `.data` layout — the `.data` slots must
 	// exist before the backend resolves a `globalAddr`, so it is needed here, before lowering — and it
 	// stays `__mm_`-specific: a print-only program adds no `.data` slots and no leak check.
-	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable)
+	// `funcSignatures` rides along for ONE decision inside the walk — whether a `functionRef`'s `__` target is a
+	// compiler-emitted symbol or a `stdlib/Builtins.maxon` DECLARATION (`recordFunctionRefUsage`). Its KEY SET
+	// is final here: `mergeArtifact` filled it during the module build and `TypeResolution` only `upsert`s keys
+	// it already holds, so no later pass can change the answer this walk reads.
+	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable, funcSignatures: project.funcSignatures)
 	usage.usesManagedGlobals = usesManagedGlobals
 	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
 	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
@@ -324,7 +328,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// not match. Its `__fnref_` env-thunk targets are collected from the Maxon module NOW — before the pipeline
 	// lowers it — and the thunks are installed already-lowered AFTER the pipeline, like the destructor cascades
 	// (P1.5-A2b-2).
-	let fnRefThunkTargets = collectFnRefThunkTargets(module)
+	let fnRefThunkTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures)
 	var declaredGlobals = signatures.declaredGlobals(liveGlobals)
 	if usage.usesHeap 'heapGlobals'
 		for entry in runtimeGlobals() 'each'

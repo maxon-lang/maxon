@@ -579,7 +579,7 @@ end 'RuntimeUsage'
 // contain: a `Clock` nothing calls must not install the green-thread scheduler and the wall-clock
 // `.data` slot. It never contains a USER function — an unreached user body still speaks for the
 // program — so the answer for every stdlib-free program is unchanged.
-export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionNameSet) returns RuntimeUsage
+export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionNameSet, funcSignatures FuncSignatureMap) returns RuntimeUsage
 	var usage = RuntimeUsage.create()
 	for func in module.functions 'eachFunc'
 		if unreachableStdlib.contains(func.name) 'notInTheProgram'
@@ -589,14 +589,14 @@ export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionN
 			let block = try module.blocks.get(blockRef) otherwise panic("scanRuntimeUsage: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("scanRuntimeUsage: opIdx {opIdx} not in module.ops")
-				classifyRuntimeCall(op, usage: usage)
+				classifyRuntimeCall(op, usage: usage, funcSignatures: funcSignatures)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 	return usage
 end 'scanRuntimeUsage'
 
-function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage)
+function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures FuncSignatureMap)
 	match op 'op'
 		call(_, callee, _, _, _, _) then recordCallUsage(callee, usage: usage)
 		literal to stringLiteral then break 'op'
@@ -606,11 +606,11 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage)
 		throwError to panicAbort then break 'op'
 		// P1.5-A1: an `indirectCall` calls through a code POINTER and names no runtime callee, so it records
 		// nothing. A `functionRef` naming a USER function is likewise a bare `lea` of no runtime consequence —
-		// but one naming a COMPILER-INTERNAL callee (`__`-prefixed) is the address of an array element destructor
+		// but one naming a COMPILER-EMITTED callee is the address of an array element destructor
 		// stamped into `element_destroy@40` (P1.7 slice 3), and THAT reference must install its target (a
 		// `__str_decref`/`__destruct_<T>`/`__mm_decref`/`__arr_decref`) exactly as a direct `call` to it would —
 		// its transitive needs then close through `noteDestructorUsage`. Recorded through the same `recordCallUsage`.
-		functionRef(_, funcName) then recordFunctionRefUsage(funcName, usage: usage)
+		functionRef(_, funcName) then recordFunctionRefUsage(funcName, usage: usage, funcSignatures: funcSignatures)
 		indirectCall then break 'op'
 		// P1.5-B1a/B2b: `async`/`await`/`try await` carry the green-thread scheduler. Detected by OP KIND
 		// (their `__gt_*` calls do not exist until lowering), and imply the HEAP too — `__gt_spawn`
@@ -644,13 +644,21 @@ function recordByteStringUsage(usage RuntimeUsage)
 	usage.usesHeap = true
 end 'recordByteStringUsage'
 
-// A `functionRef` whose target is a COMPILER-INTERNAL callee (`__`-prefixed) is an array element destructor's
-// address stamped into `element_destroy@40` (P1.7 slice 3) — its target must be installed exactly as a direct
-// `call` to it would, so it routes through the SAME `recordCallUsage` (turning on the heap/`usesStrDecref`/
-// `usesArray` bit or adding to `neededDestructors`, per the callee). A `functionRef` to a USER function is a
-// plain code-pointer `lea` of no runtime consequence and records nothing (the P1.5-A1 behaviour, unchanged).
-function recordFunctionRefUsage(funcName ByteArray, usage RuntimeUsage)
-	if isCompilerInternalCallee(funcName) 'runtimeAddress'
+// A `functionRef` whose target is a COMPILER-EMITTED callee is an array element destructor's address stamped
+// into `element_destroy@40` (P1.7 slice 3) — its target must be installed exactly as a direct `call` to it
+// would, so it routes through the SAME `recordCallUsage` (turning on the heap/`usesStrDecref`/`usesArray` bit
+// or adding to `neededDestructors`, per the callee). A `functionRef` to a USER function is a plain
+// code-pointer `lea` of no runtime consequence and records nothing (the P1.5-A1 behaviour, unchanged).
+//
+// ⚠ **THE TEST IS `isSignaturelessCompilerCallee` AND NOT THE `__` PREFIX (A1r review)**, because since D6/A1r
+// a `__` name may be DECLARED — in `stdlib/Builtins.maxon` — and a value use of THAT is the USER case: it is
+// a `funcAddr` of the name's `__fnref_` thunk (`lowerFunctionRef`, which parts the same two ways on the same
+// predicate), never an installable runtime entry. Keyed on the prefix, `recordCallUsage` was asked about a
+// user function; today's roster maps no such name to a bit, so nothing moved — but the question was already
+// the wrong one, and a `Builtins.maxon` declaration sharing a runtime prefix (`__mm_`) would have installed a
+// runtime floor for a program that never calls into it.
+function recordFunctionRefUsage(funcName ByteArray, usage RuntimeUsage, funcSignatures FuncSignatureMap)
+	if isSignaturelessCompilerCallee(funcName, funcSignatures: funcSignatures) 'runtimeAddress'
 		recordCallUsage(funcName, usage: usage)
 	end 'runtimeAddress'
 end 'recordFunctionRefUsage'

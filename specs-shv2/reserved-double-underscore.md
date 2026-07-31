@@ -224,6 +224,29 @@ the basename, any program could opt out of the reservation for a whole file by n
 compiles a throwaway project, so it can never contain the checkout's own `stdlib/Builtins.maxon`. That
 module's load IS the positive case, and it arrives when the stdlib whitelist can list it — see the notes
 on `specs-shv2/parsable-interface.md`, which name the fallible-division rung that still blocks it.
+
+⚠⚠ **AND THAT UNPINNABILITY HAS ALREADY COST ONE DEFECT, SO IT IS A STANDING INSTRUCTION, NOT A FOOTNOTE.**
+Every reader that used to read *"`__`-prefixed"* as *"the compiler emitted this"* is wrong for a name this
+module declares, and NO case below can go red for any of them — they are reachable only through the real
+module. A1r converted five such readers and left three; the A1r review found one of the three reachably
+wrong, and only wasm could see it:
+
+```
+# append `export function __probeSub(a int, b int) returns int` + a `main` doing
+# `let f = __probeSub` / `return f(50, 8) as ExitCode` to stdlib/Builtins.maxon, then:
+maxon-shv2 build stdlib/Builtins.maxon -o out --target=wasm32-wasi
+vendor/wasmtime/wasmtime run -S cli-exit-with-code=y out.wasm
+```
+
+`wasm trap: indirect call type mismatch`, exit **3** — against **42** for the identical program with the
+`__` dropped from the name. `lowerFunctionRef` took the target's BARE address instead of its `__fnref_`
+env-thunk, so an `(a, b) -> R` function was called through the uniform `(a, b, env) -> R` signature. **x64
+answered 42 either way**: the extra `env` word lands in an argument register the callee never reads, so the
+wrong-shaped call returned the right number. ⇒ **When you touch this exemption, sweep every reader of
+`isCompilerInternalCallee` and run the sweep's result on `--target=wasm32-wasi`, which is the only local
+target that type-checks an indirect call.** The three fixed readers now share ONE predicate
+(`MmRuntime.isSignaturelessCompilerCallee`) with the five, which is the strongest pin available here: a
+future edit can no longer move one reader's answer without moving all of them.
 ```maxon
 // --- file: Builtins.maxon
 export enum __ParseError implements Error

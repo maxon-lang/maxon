@@ -1737,12 +1737,12 @@ type MaxonToStdLowering
 	// its `__fnref_` thunk instead, which `installFnRefThunks` synthesizes with the env-carrying signature.
 	// The thunk names cannot drift: `fnRefThunkName` is the ONE builder both this site and the synthesis read.
 	//
-	// A COMPILER-INTERNAL callee (`__`-prefixed — an array element destructor stamped into `element_destroy@40`,
-	// P1.7 slice 3) takes the BARE address: it is invoked through a plain `callIndirect(ptr)` in the drop walk,
-	// NOT the uniform closure ABI, so it needs no env thunk (and none is synthesized for it — `collectFnRefThunkTargets`
-	// skips `__`-prefixed names). The `__` prefix is the discriminator both this site and the thunk collector read.
+	// Whether a bridge is needed at all is NOT decided here: it is `FnRefThunk.functionValueNeedsEnvThunk`, the
+	// one place that rule lives, because `collectFnRefThunkTargets` must reach the SAME verdict and a
+	// disagreement between the two is a compile error at neither — see that predicate's header, and the
+	// `wasm trap: indirect call type mismatch` the A1r review measured when the rule was written out twice.
 	function lowerFunctionRef(result ValueId, funcName ByteArray, dstBlock IrBlock)
-		let target = funcName if (isLiftedClosureName(funcName) or isCompilerInternalCallee(funcName)) else fnRefThunkName(funcName)
+		let target = fnRefThunkName(funcName) if functionValueNeedsEnvThunk(funcName, funcSignatures: self.funcSignatures) else funcName
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: target))
 	end 'lowerFunctionRef'
 

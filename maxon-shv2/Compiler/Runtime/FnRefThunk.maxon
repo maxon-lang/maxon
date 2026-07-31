@@ -44,11 +44,36 @@ export function fnRefThunkName(funcName ByteArray) returns ByteArray
 	return "__fnref_{String.from(funcName)}".toByteArray()
 end 'fnRefThunkName'
 
-// Collect every PLAIN function referenced as a value (`functionRef`), in first-seen source order, deduped.
-// A lifted closure is skipped — it carries its own `__env` parameter and needs no thunk. Read post-pipeline
-// by `installFnRefThunks`; the walk mirrors `StringRuntime.scanRuntimeUsage`'s — one linear pass over the
-// Maxon ops.
-export function collectFnRefThunkTargets(module MaxonModule) returns ByteArrayArray
+// ⭐⭐ **DOES A VALUE USE OF `funcName` NEED THE UNIFORM-ABI ENV THUNK?** ONE fact, read by the two sites that
+// must not disagree about it: `LowerMaxonToStd.lowerFunctionRef`, which NAMES the address a `funcAddr`
+// materializes, and `noteFnRefTarget` below, which decides whether anything is there to name.
+//
+// ⚠ **A DISAGREEMENT IS A COMPILE ERROR AT NEITHER SITE**, which is why the test cannot be written out twice
+// (it was, and it is how the A1r review's wasm trap survived a green suite): say-no here and say-yes there
+// and the program holds a `funcAddr` of a thunk nobody synthesized; the other way round it holds the bare
+// address of an `(args) -> R` function that every caller invokes as `(args, env) -> R`. The first is a link
+// failure, the second is a wrong-shaped call that a register target answers CORRECTLY BY ACCIDENT — the
+// extra `env` word lands in a register the callee never reads — and only a wasm `call_indirect`, which
+// type-checks the funcref against the table slot's functype, reports it at all.
+//
+// A LIFTED CLOSURE already carries its own trailing `__env`, so it IS the uniform shape and needs no bridge.
+// A COMPILER-EMITTED symbol is invoked through a bare `callIndirect(ptr)` in the drop walk rather than the
+// closure ABI (an array element destructor stamped into `element_destroy@40`, P1.7 slice 3), so it needs none
+// either — and "compiler-emitted" is the REGISTRY's answer, never the `__` prefix, because since D6/A1r
+// `stdlib/Builtins.maxon` may declare a `__` name and a value use of THAT is an ordinary user function value.
+export function functionValueNeedsEnvThunk(funcName ByteArray, funcSignatures FuncSignatureMap) returns bool
+	if isLiftedClosureName(funcName) 'alreadyEnvShaped'
+		return false
+	end 'alreadyEnvShaped'
+
+	return not isSignaturelessCompilerCallee(funcName, funcSignatures: funcSignatures)
+end 'functionValueNeedsEnvThunk'
+
+// Collect every function referenced as a value (`functionRef`) that needs the env thunk, in first-seen source
+// order, deduped — WHICH ones is `functionValueNeedsEnvThunk`'s answer above and is not restated here. Read
+// post-pipeline by `installFnRefThunks`; the walk mirrors `StringRuntime.scanRuntimeUsage`'s — one linear pass
+// over the Maxon ops. `funcSignatures` rides along for that one predicate.
+export function collectFnRefThunkTargets(module MaxonModule, funcSignatures FuncSignatureMap) returns ByteArrayArray
 	var seen = FnRefThunkSet.create()
 	var targets = ByteArrayArray.create()
 	for func in module.functions 'eachFunc'
@@ -56,7 +81,7 @@ export function collectFnRefThunkTargets(module MaxonModule) returns ByteArrayAr
 			let block = try module.blocks.get(blockRef) otherwise panic("collectFnRefThunkTargets: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("collectFnRefThunkTargets: opIdx {opIdx} not in module.ops")
-				noteIfFunctionRef(op, seen: seen, targets: targets)
+				noteIfFunctionRef(op, seen: seen, targets: targets, funcSignatures: funcSignatures)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -66,10 +91,10 @@ end 'collectFnRefThunkTargets'
 // Record a `functionRef` op's PLAIN target for thunking. It RANGES over the whole `MaxonOp` union so a
 // newly-appended op FAILS TO COMPILE here rather than being silently ignored (the band-append invariant):
 // `call to panicAbort` is every op before `functionRef`, `indirectCall` the one after it.
-function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArray)
+function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArray, funcSignatures FuncSignatureMap)
 	match op 'op'
 		call to panicAbort then break 'op'
-		functionRef(_, funcName) then noteFnRefTarget(funcName, seen: seen, targets: targets)
+		functionRef(_, funcName) then noteFnRefTarget(funcName, seen: seen, targets: targets, funcSignatures: funcSignatures)
 		indirectCall then break 'op'
 		// P1.5-B1a/B2b: an async spawn takes the DIRECT function's address in lowering (not a `functionRef`
 		// through the uniform `(userargs, env)` ABI — the trampoline calls it with user args only), so it
@@ -85,13 +110,11 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 	end 'op'
 end 'noteIfFunctionRef'
 
-// A plain (non-closure) target seen for the first time joins the ordered thunk list. A lifted closure
-// carries its own `__env` and needs no thunk; a COMPILER-INTERNAL callee (`__`-prefixed — an array element
-// destructor addressed for `element_destroy@40`, P1.7 slice 3) is invoked through a bare `callIndirect(ptr)`
-// in the drop walk, not the uniform closure ABI, so it gets no `__fnref_` thunk either (`lowerFunctionRef`
-// takes its bare address). The `__` prefix is the same discriminator that lowering reads.
-function noteFnRefTarget(funcName ByteArray, seen FnRefThunkSet, targets ByteArrayArray)
-	if isLiftedClosureName(funcName) or isCompilerInternalCallee(funcName) 'noThunk'
+// A target that needs the env thunk (`functionValueNeedsEnvThunk` — the one place that rule lives) joins the
+// ordered thunk list the first time it is seen. A `__` name that IS in `funcSignatures` reaches
+// `synthesizeFnRefThunk` from here and finds the signature that routine panics without.
+function noteFnRefTarget(funcName ByteArray, seen FnRefThunkSet, targets ByteArrayArray, funcSignatures FuncSignatureMap)
+	if not functionValueNeedsEnvThunk(funcName, funcSignatures: funcSignatures) 'noThunk'
 		return
 	end 'noThunk'
 	if seen.contains(funcName) 'already'
