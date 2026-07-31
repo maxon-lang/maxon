@@ -237,3 +237,85 @@ end 'main'
 ```maxoncstderr
 error E2051: <fragment>:3:13: identifier '__ParseError' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
+
+<!-- test: user-file-cannot-call-a-reserved-name -->
+**THE CALL SIDE OF THE SAME EXEMPTION (A1r).** D6 opened the DECLARATION door for `stdlib/Builtins.maxon`
+and left the CALL door shut for every file including that one, so the module could declare
+`__int_fromString` and then not call it. A1r opens the call door for exactly the file that declares the
+name — and this is the pin that it opened no wider.
+
+`__int_fromString` is a name the real `stdlib/Builtins.maxon` genuinely DOES declare, which is what makes
+this case distinct from `builtins-clock.unknown-internal-callee`'s `__whatever`: the refusal here is not
+"no such name anywhere" but "not a name YOUR file may write". The reserved-prefix wording is deliberate
+and stays — it tells the author the prefix is the problem, where the bootstrap gives a source-written `__`
+call the same generic *"Undefined function"* any typo gets (`2-Parser.cs:20373`).
+
+⚠ It also narrows the paragraph above: in shv2 a `__` name may be REFERENCED from exactly one file, not
+from user code generally. `String`/`Array`/`Map` are synthesized builtins here rather than stdlib sources,
+so no other file has a reason to reach for one.
+```maxon
+function main() returns ExitCode
+	return __int_fromString("42") as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:9: call to undefined function '__int_fromString': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```
+
+<!-- test: user-file-named-builtins-cannot-call-a-reserved-name -->
+**THE NEGATIVE CONTROL ON THE CALL-SIDE EXEMPTION, and it is the half that matters** — the exact mirror of
+`user-file-named-builtins-is-not-exempt` one door over. The exemption is keyed on the FILE'S IDENTITY
+(`<stdlibDir>/Builtins.maxon`, both sides resolved), and the BASENAME test in front of that compare is a
+prefilter, never the answer. Keyed on the basename, any program could reach every compiler internal —
+`__mm_free`, `__gt_spawn` — by naming one of its own files `Builtins.maxon`.
+
+Both sides of one rule are therefore pinned the same way, because a rule pinned on one side is a rule that
+can lapse on the other: that asymmetry is what D6 shipped.
+```maxon
+// --- file: Builtins.maxon
+function main() returns ExitCode
+	return __int_fromString("42") as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:4:9: call to undefined function '__int_fromString': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```
+
+<!-- test: user-file-named-builtins-cannot-call-a-runtime-entry-point -->
+**THE SHAPE WITH NO DIAGNOSTIC WAITING BEHIND IT.** The two cases above name a stdlib helper, so a widened
+door lands them on `resolveCallFixups`' *"call to unknown function"* — a panic, but a loud one. `__mm_free`
+is worse in the one way that matters: it is a symbol the emitted runtime really HAS, and naming it is
+itself what pulls the heap runtime into the image (`MmRuntime.isRuntimeCallee`). So a widened door does not
+fail to link here — it links, and frees address 0.
+
+Nothing declares a runtime entry point (they are built at the Std tier, after the merge that fills
+`funcSignatures`), which is why the exemption is "a name some file DECLARES" and not merely "this file may
+write `__`": the second reading would hand this module every entry point in the runtime, unvalidated and
+un-arity-checked. See `Parser.requireCalleeIsNotReservedName`.
+```maxon
+// --- file: Builtins.maxon
+function main() returns ExitCode
+	__mm_free(0)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:4:2: call to undefined function '__mm_free': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```
+
+<!-- test: user-file-named-builtins-cannot-async-call-a-reserved-name -->
+**THE SECOND DOOR.** There are exactly two source call doors — `Parser.emitCall` and
+`Parser.emitAsyncCall` — and `async __name(…)` reaches the second one from ordinary user source
+(`builtins-clock.unknown-internal-callee-async` is the plain-user-file half of it). The exemption is
+plumbed into the one decision function both doors call, so the file test must hold at both; pinned at only
+one, a spawn would be the way around it.
+```maxon
+// --- file: Builtins.maxon
+function main() returns ExitCode
+	let p = async __int_fromString("42")
+	return await p as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:4:16: call to undefined function '__int_fromString': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```

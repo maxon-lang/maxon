@@ -109,32 +109,40 @@ end 'isRuntimeCallee'
 // reservation at parse time (`E2051 ParserReservedIdentifier` — "declarations starting with '__' are
 // reserved for compiler internals"), so no user name can collide there.
 //
-// ⭐ **THE RESERVATION IS ENFORCED AT BOTH ENDS, AND THIS PREDICATE NEEDS BOTH** (OPEN.md #35, CLOSED;
-// completed by P1.0b step 2). Two separate rules make "a `__` CALLEE is compiler-owned" TRUE:
+// ⭐ **THE RESERVATION IS ENFORCED AT BOTH ENDS, AND IT TAKES BOTH** (OPEN.md #35, CLOSED; completed by
+// P1.0b step 2). Two separate rules bound what a `__` callee can be:
 //
-//   1. **No `__` name may be DECLARED** — E2051, `Parser.requireUnreservedName`, at all eight binding
-//      sites, pinned by `reserved-double-underscore.md`. This closed a SILENT MISCOMPILE: before it, a
-//      user could declare and call a `__`-prefixed function (measured — `__add(7)` against a
-//      two-parameter `__add` compiled and ran with the second argument uninitialised, exit 65543, where
-//      the bootstrap rejects the declaration outright), because this predicate routed that call past
-//      `validateCall`'s arity/label checks.
-//   2. **No `__` name may be CALLED from source unless it names a recognized intrinsic** — E3004,
+//   1. **No `__` name may be DECLARED, outside the ONE module that declares the reserved space** —
+//      E2051, `Parser.requireUnreservedName`, at all eight binding sites, pinned by
+//      `reserved-double-underscore.md`. This closed a SILENT MISCOMPILE: before it, a user could declare
+//      and call a `__`-prefixed function (measured — `__add(7)` against a two-parameter `__add` compiled
+//      and ran with the second argument uninitialised, exit 65543, where the bootstrap rejects the
+//      declaration outright), because this predicate routed that call past `validateCall`'s arity/label
+//      checks.
+//   2. **No `__` name may be CALLED from source unless it names a recognized intrinsic — or the module
+//      that declares the reserved space is calling a name it declares (D6/A1r)** — E3004,
 //      `Parser.requireCalleeIsNotReservedName`, at the two source call doors (`emitCall`,
-//      `emitAsyncCall`), pinned by `builtins-clock.md`.
+//      `emitAsyncCall`), pinned by `builtins-clock.md` and `reserved-double-underscore.md`.
 //
 // ⚠ **RULE 1 ALONE IS NOT ENOUGH, AND THIS PREDICATE SPENT A LONG TIME BELIEVING IT WAS.** A callee need
 // not be DECLARED anywhere to be WRITTEN — `__whatever()` names nothing, so E2051 never fires, and the
 // early return in `SemanticCheck.validateCall` then waved it past every unknown-callee check. It reached
 // the linker, or lowering, and PANICKED with neither a file nor a line (three measured shapes:
 // `resolveCallFixups: call to unknown function`, `lowerAsyncCall: … has no signature`,
-// `valueTagToStdType: an 'unresolved' tag reached lowering`). Rule 2 is what makes the premise real.
+// `valueTagToStdType: an 'unresolved' tag reached lowering`). Rule 2 is what bounds the family.
+//
+// ⚠⚠ **WHAT THE TWO RULES DO *NOT* GIVE IS "A `__` CALLEE IS COMPILER-OWNED" — rule 1's own exemption is
+// why**, and reading them as if they did is what `isSignaturelessCompilerCallee` exists to stop. Since D6
+// there is a `__` name with a DECLARATION behind it, and since A1r there is a call to one; such a call is
+// an ordinary user function call that happens to wear the prefix. "Compiler-owned" is therefore the
+// REGISTRY's answer, not the name's — see below.
 let CompilerInternalPrefix = b"__"
 
 // ⭐ **IS THIS CALLEE ONE OF THE COMPILER'S OWN?** The GENERAL predicate — a superset of
-// `isRuntimeCallee` — read by the three places that must NOT treat a compiler-emitted callee as a
-// user function: `SemanticCheck.validateCall` (no E3004 — nothing declares it), `LowerMaxonToStd.lowerCall`
-// (no signature slotting — the compiler wrote its arguments positionally), and, in spirit, the parser,
-// which emits such calls through `emitRuntimeCall` rather than `emitCall`.
+// `isRuntimeCallee` — read by the parser's reserved-callee door (`requireCalleeIsNotReservedName`) and,
+// through `isSignaturelessCompilerCallee` below, by the two places that must NOT treat a compiler-emitted
+// callee as a user function: `SemanticCheck.validateCall` (no E3004 — nothing declares it) and
+// `LowerMaxonToStd.lowerCall` (no signature slotting — the compiler wrote its arguments positionally).
 //
 // It is DISTINCT FROM `isRuntimeCallee` (which stays `__mm_`-only) because the two answer different
 // questions. `isRuntimeCallee` decides whether the program carries the HEAP RUNTIME + leak check — a
@@ -160,6 +168,33 @@ let CompilerInternalPrefix = b"__"
 export function isCompilerInternalCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: CompilerInternalPrefix) or isBuiltinConformanceImplName(callee)
 end 'isCompilerInternalCallee'
+
+// ⭐⭐ **DOES THIS CALLEE HAVE NO DECLARED SIGNATURE FOR THE USER-FUNCTION CHECKS TO READ?** The question
+// `SemanticCheck.validateCall` and `LowerMaxonToStd.lowerCall`/`lowerTryCall` are actually asking when they
+// skip arity/label/type validation and signature slotting — and it is ONE fact, asked in one place, rather
+// than the same compound test written at three call sites.
+//
+// ⚠ **THEY USED TO ASK IT BY PREFIX, AND D6/A1r BROKE THAT PROXY.** "`__`-prefixed" stood in for "no file
+// declares it" only while NO file could declare such a name. D6 exempted `stdlib/Builtins.maxon` at the
+// declaration door (`Parser.requireUnreservedName`) and A1r exempted it at the two CALL doors, so a
+// `__int_fromString` written in that module is now a call to a REGISTERED function — with parameter names,
+// declared types and a `throws` clause every ordinary call is checked against.
+//
+// ⚠⚠ Left keyed on the prefix it waves that call past all of them, and **BOTH HALVES ARE MEASURED, on the
+// flag-only door, against `stdlib/Builtins.maxon` itself**: `__int_fromString()` with its one argument
+// OMITTED drew NO DIAGNOSTIC AT ALL (the whole file passed every check, and the only complaint left was
+// `E3001: No 'main' function found`), and neither did a BARE `__int_fromString(input)` — a throwing call
+// with no `try`, whose error flag nothing would then have read. Both now report (E3036, E3057). That
+// silent-acceptance is the same shape the reservation was introduced to close
+// (`CompilerInternalPrefix`'s rule 1, `__add(7)`, exit 65543), which is why the fact this predicate states
+// is the REGISTRY's answer and not the name's.
+//
+// A compiler-EMITTED callee is still in no registry (`__mm_alloc`, `__print_string`, `int.compare` are built
+// at the Std tier, long after the merge that fills `funcSignatures`), so its answer is unchanged. The
+// registry probe runs ONLY for a `__`/builtin-conformance name, behind the allocation-free prefix test.
+export function isSignaturelessCompilerCallee(callee ByteArray, funcSignatures FuncSignatureMap) returns bool
+	return isCompilerInternalCallee(callee) and not funcSignatures.contains(callee)
+end 'isSignaturelessCompilerCallee'
 
 // The runtime's `.data` slots, appended to the user's declared globals before `layOut` orders them.
 // They are ordinary slots in every respect — `layOut` sorts and offsets them exactly as it does a

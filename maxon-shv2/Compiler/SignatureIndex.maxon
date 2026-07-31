@@ -6707,8 +6707,13 @@ export type ProgramSignatures
 	// asker may not even have in hand; a `Map.contains` allocates nothing and needs none.
 	//
 	// ⚠ **IT IS ASKED OF A MANGLED name (`Widget.byteLength`), never a bare one**, because that is the
-	// key the index files a method under (`declaredMethodName`) — see `Parser.staticCallClaimsBase`, the
-	// one asker, for why a static call's existence has to be decidable before the call is parsed.
+	// key the index files a method under (`declaredMethodName`) — see `Parser.staticCallClaimsBase` for why a
+	// static call's existence has to be decidable before the call is parsed.
+	//
+	// Its other two askers are the reserved-callee door and the `try` target's throws check
+	// (`Parser.requireCalleeIsNotReservedName`, `Parser.requireThrowingNamedTryTarget`), both of which need
+	// exactly this — "is there a declaration behind this name?" — on a per-call path, and neither of which
+	// has an interner to adopt into or a use for what would be adopted.
 	export function declaresCallee(callee ByteArray) returns bool
 		return self.returnTypes.contains(callee)
 	end 'declaresCallee'

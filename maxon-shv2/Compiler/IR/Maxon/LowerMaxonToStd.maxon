@@ -1308,12 +1308,14 @@ type MaxonToStdLowering
 	// The `argRanges` on the Maxon op are diagnostics-only (consumed by SemanticCheck),
 	// so lowering ignores them.
 	function lowerCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
-		// ⭐ A COMPILER-INTERNAL CALL HAS NO SIGNATURE TO SLOT AGAINST, and needs none:
+		// ⭐ A COMPILER-EMITTED CALL HAS NO SIGNATURE TO SLOT AGAINST, and needs none:
 		// `Parser.emitRuntimeCall` wrote its arguments itself, positionally, in declaration order — so
 		// the reordering below would be the identity, and the registry lookup it needs first would panic
 		// on a callee no file declares. `SemanticCheck.validateCall` skips it for the same reason, keyed
-		// on the same predicate (`__print_string`/`__str_eq` are compiler-internal too, not just `__mm_`).
-		if isCompilerInternalCallee(callee) 'compilerOwnCall'
+		// on the same predicate (`__print_string`/`__str_eq` are compiler-internal too, not just `__mm_`)
+		// — and that predicate asks the registry rather than the PREFIX, because since A1r a `__` callee
+		// may be a real declared function whose arguments the source labelled (`isSignaturelessCompilerCallee`).
+		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'compilerOwnCall'
 			self.lowerRuntimeCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			return
 		end 'compilerOwnCall'
@@ -2080,12 +2082,17 @@ type MaxonToStdLowering
 	// A throwing free call `try callee(args…)` — the arg slotting is `lowerCall`'s exactly (it IS a call),
 	// plus the `errorFlag` second result. The parser has already rejected a non-throwing USER callee (E3055).
 	//
-	// ⭐ **A COMPILER-INTERNAL THROWING CALLEE (`__arr_get`/`__arr_set`/`__arr_first`/…) HAS NO SIGNATURE TO
+	// ⭐ **A COMPILER-EMITTED THROWING CALLEE (`__arr_get`/`__arr_set`/`__arr_first`/…) HAS NO SIGNATURE TO
 	// SLOT AGAINST** — the parser wrote its arguments positionally (`emitRuntimeCall`), so they pass verbatim,
 	// exactly as `lowerCall` routes a non-throwing runtime call through `lowerRuntimeCall`. The array
 	// accessors are the first throwing builtins (P1.7 slice 1); before them no builtin threw, which is why
 	// this path is new. The label guard is `lowerRuntimeCall`'s: a runtime call is positional by
 	// construction, so a label would silently mis-slot.
+	//
+	// ⚠ A source-written `try __int_fromString(s)` from `stdlib/Builtins.maxon` (A1r) is NOT that: it names a
+	// DECLARED throwing function, so it takes the slotting path below like every other `try f(…)`. The
+	// discriminator is `isSignaturelessCompilerCallee`, `lowerCall`'s exactly — this is the throwing twin of
+	// that site and the two must part company on the same fact.
 	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		// ⭐ **A CHECKED DIVIDE IS EXPANDED, NOT CALLED (A1).** Asked FIRST, and exhaustively, so a checked
 		// division callee can never fall through to the `StdOp.tryCall` below — there is no `__checked_div`
@@ -2097,7 +2104,7 @@ type MaxonToStdLowering
 			notCheckedDivision then break 'checkedDivision'
 		end 'checkedDivision'
 
-		if isCompilerInternalCallee(callee) 'compilerOwnTryCall'
+		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'compilerOwnTryCall'
 			requireRuntimeCallPositional(callee, argLabels: argLabels)
 			// The throwing OPAQUE-`T` `slice` (`__arr_slice_opaque`) takes the enclosing instance's descriptor as
 			// its last argument, appended here exactly as the non-throwing clone/append do in `lowerRuntimeCall`.

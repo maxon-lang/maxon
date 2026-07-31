@@ -687,9 +687,9 @@ export union ParseError implements Error
 	// A user DECLARATION whose name starts with `__` — the prefix Maxon reserves for compiler
 	// internals (`__mm_alloc`, `__print_string`, `__destruct_String`, the `__discard_*` temporaries).
 	// Renders as **E2051**, positioned at the declared name. Raised by `requireUnreservedName` at every
-	// binding site — see there for why one call cannot be traded for eight copies of the check, and
-	// why this reservation is what makes `MmRuntime.isCompilerInternalCallee` sound rather than a
-	// hopeful shortcut. `name` is the offending identifier, for the message.
+	// binding site — see there for why one call cannot be traded for eight copies of the check, and for
+	// what this reservation does and does not buy the readers that ask "is this callee the compiler's own?"
+	// (`MmRuntime.isSignaturelessCompilerCallee`). `name` is the offending identifier, for the message.
 	reservedIdentifier(name String, line LineNumber, column ColumnNumber)
 	// A user declaration giving a NOMINAL type identity to a name the COMPILER owns — `type Ordering`,
 	// `enum HashValue`, a `function`/`Base with Args` typealias over either (`Ordering`, `HashValue`,
@@ -751,12 +751,12 @@ export union ParseError implements Error
 	// mistake and must not answer with two codes.
 	//
 	// It is a PARSE error, and that is the one thing about it that needs a reason, because shv2 deliberately
-	// moved "undefined function" OUT of the parser: a plain callee may be declared in another FILE, which
-	// only the whole-program registry can see. A `__` callee cannot — `E2051` forbids DECLARING one anywhere
-	// — so the parser has complete knowledge for exactly this family, and it is also the only tier that knows
-	// the name came from SOURCE rather than from the compiler's own `emitRuntimeCall`. SemanticCheck cannot
-	// tell those two apart, which is precisely why its `isCompilerInternalCallee` early return let this class
-	// of program through to the backend (see `requireCalleeIsNotReservedName`).
+	// moved "undefined function" OUT of the parser: a plain callee may be declared in another FILE, and only
+	// the whole-program registry can see that. The parser HAS that registry — `ProgramSignatures`, swept from
+	// every file's tokens before any file is parsed — so for this family it decides completely, and it is also
+	// the only tier that knows the name came from SOURCE rather than from the compiler's own
+	// `emitRuntimeCall`. SemanticCheck cannot tell those two apart, which is precisely why its early return
+	// let this class of program through to the backend (see `requireCalleeIsNotReservedName`).
 	unknownCompilerIntrinsic(callee String, line LineNumber, column ColumnNumber)
 	// ⭐ `resize` on an array whose element is MANAGED. Renders as **E3106**, positioned at the method
 	// name. `__arr_resize` grows by publishing a longer length over slots `__arr_grow` left zeroed, and
@@ -2294,12 +2294,44 @@ let NanosPerMillisecond = 1000000
 // time it runs, a `call __mm_decref` the parser emitted and a `call __whatever` the user wrote are the same
 // `MaxonOp.call`, and nothing in the Maxon tier records which is which. The PARSER is the one tier that
 // knows, because it knows which of its own two doors the name came through — so the fix is to close the
-// door, which restores `isCompilerInternalCallee`'s premise for real: after this, every `__` callee in the
-// IR was emitted by the compiler.
-function requireCalleeIsNotReservedName(callee ByteArray, anchor Token) throws ParseError
+// door.
+//
+// ⭐⭐ **THE DOOR IS AJAR FOR EXACTLY ONE FILE, AND FOR EXACTLY THE NAMES THAT FILE DECLARES (A1r).**
+// D6 let `stdlib/Builtins.maxon` — the module that DECLARES the reserved space rather than merely using it —
+// past `requireUnreservedName`, and wrote that exemption on the DECLARATION side only: the module could
+// declare `__int_fromString` at `:214` and then not call it at `:322`, which is where compiling it stopped.
+// A rule stated on one side of a name is a rule that has lapsed on the other, so the CALL side now reads the
+// same one bit the declaration side does (`declaresCompilerInternalNames`, an identity compare against
+// `<stdlibDir>/Builtins.maxon` — never a basename, see `Queries.declaresCompilerInternalNames`).
+//
+// ⚠ **THE `declaresCallee` CLAUSE IS THE OTHER HALF, AND WITHOUT IT THE EXEMPTION IS FAR WIDER THAN D6's.**
+// The declaration exemption admits the names that module WRITES; a bare file test here would admit every
+// name it does not — `__mm_free()`, `__gt_spawn()`, `__nosuch()` — none of which any file declares, all of
+// which would then sail past SemanticCheck (nothing to look up) into the backend. So the exemption is "a
+// name some file declares", which is the call-side dual of what D6 licensed, and a typo in that module gets
+// the positioned E3004 below instead of the linker panic this whole check exists to replace.
+//
+// The two facts arrive as PARAMETERS because this sits outside `type Parser` and has no `self`; both call
+// sites are Parser methods and hand it the same two, so there is still exactly one copy of the rule.
+//
+// ⚠⚠ **THIS DOOR AND THE CHECK BEHIND IT READ TWO DIFFERENT REGISTRIES, AND THEY MUST AGREE.** Here the
+// question is put to `ProgramSignatures` (swept from every file's TOKENS, the only registry a parser may
+// hold — it takes no `Project`, by design); `SemanticCheck.validateCall` puts the same question to
+// `project.funcSignatures` (folded from PARSED declarations by `mergeArtifact`), and skips arity/label/type
+// validation when the answer is no. So a `__` name this door admits and that registry lacks would be
+// admitted AND unvalidated — the very hole A1r closed, reopened by a disagreement rather than by a rule.
+// They agree because both are derived from the same thing, a function DECLARATION: the sweep records one
+// per declaration it sees, and the parse contributes one per declaration it registers. There is no check
+// available for it — SemanticCheck cannot tell a source-written `__` callee from a compiler-emitted one,
+// which is this whole function's reason for existing — so it is stated at both ends instead.
+function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, signatures ProgramSignatures) throws ParseError
 	if not isCompilerInternalCallee(callee) 'ordinaryCallee'
 		return
 	end 'ordinaryCallee'
+
+	if fileDeclaresReservedNames and signatures.declaresCallee(callee) 'theReservedSpacesOwnDeclaration'
+		return
+	end 'theReservedSpacesOwnDeclaration'
 
 	throw ParseError.unknownCompilerIntrinsic(String.from(callee), line: anchor.line, column: anchor.column)
 end 'requireCalleeIsNotReservedName'
@@ -11534,9 +11566,10 @@ export type Parser
 	//
 	// ⭐ It sees only USER SOURCE TOKENS, which is why it does not — and structurally CANNOT — reject
 	// the compiler's own `__` functions: `__mm_alloc`, `__print_string`, `__destruct_*` are built by
-	// `IrFunction.createFromStd` and never pass through the parser. That is what makes the reservation
-	// safe to lean on: once no user `__` name can be declared, `MmRuntime.isCompilerInternalCallee`'s
-	// "skip the user-function checks" shortcut is provably sound rather than a hopeful one.
+	// `IrFunction.createFromStd` and never pass through the parser. That is what keeps the compiler's own
+	// names out of `funcSignatures`, which is the fact `MmRuntime.isSignaturelessCompilerCallee` reads to
+	// license the "skip the user-function checks" shortcut — a registry answer, not a naming convention,
+	// because the exemption below means the prefix alone no longer decides it.
 	function requireUnreservedName(nameTok Token) throws ParseError
 		// ⭐ **THE ONE FILE THAT DECLARES THE RESERVED SPACE IS EXEMPT (D6)** — `stdlib/Builtins.maxon`,
 		// whose whole content is the type-system bridge to compiler intrinsics: the error enums a builtin
@@ -12621,8 +12654,8 @@ export type Parser
 	// **E3055 — the `try` target's terminal call must be one that CAN throw.** Anchored on the `try` token,
 	// which is why it lives here and not in SemanticCheck (see `ParseError.tryOnNonThrowing`).
 	//
-	// ⭐ **THERE ARE TWO CALLEE CLASSES, AND ONLY ONE OF THEM WAS BEING ASKED.** A COMPILER-INTERNAL callee
-	// (`__arr_count`, `__print_string`, `__str_append`) is in no signature registry, so `calleeIsDeclared`
+	// ⭐ **THERE ARE TWO CALLEE CLASSES, AND ONLY ONE OF THEM WAS BEING ASKED.** A COMPILER-EMITTED callee
+	// (`__arr_count`, `__print_string`, `__str_append`) is in no signature registry, so `declaresCallee`
 	// answers `false` for it and the check used to wave every non-throwing builtin through: `try arr.count()`
 	// and `try print("x")` compiled, and the desugar then branched on an error-flag register the callee never
 	// wrote — a `try` that takes its error path on whatever the ABI left in R10. The reference compiler
@@ -12634,8 +12667,25 @@ export type Parser
 	// A callee NO file declares is left to SemanticCheck's E3004: a `try <typo>` is an unknown function, not a
 	// non-throwing one.
 	//
+	// ⭐⭐ **AND THE DECLARED CALLEE IS ASKED FIRST, BECAUSE "COMPILER-INTERNAL" NO LONGER IMPLIES
+	// "UNDECLARED" (A1r).** `stdlib/Builtins.maxon` declares `__int_fromString(…) throws ParseError` and now
+	// CALLS it, and a `__`-first order answered that call's question from the builtin roster — which of course
+	// does not list it — so the module's own `try __int_fromString(input)` was refused as *"this builtin call
+	// cannot fail"* (E3055, MEASURED at `:322` as the very next blocker once the call door opened). A DECLARED
+	// callee's `throws` clause is written in the program; nothing about the shape of its name can outrank it.
+	// The two arms are still disjoint for every callee that existed before A1r, because a `__` name could not
+	// be declared at all — so this order changes no answer it did not have to.
+	//
+	// ⚠ **AND IT ASKS `declaresCallee`, WHICH IS WHERE A PER-CALL PREDICATE BELONGS.** `returnTypeOf` answers
+	// the same question by ADOPTING the return type into this file's interner, so it allocates a `CalleeReturn`
+	// per ask; in front of the builtin arm that lands on every `try` over an array accessor or a checked divide
+	// in the program — MEASURED on the scale ladder as +52 allocations at rung 0 doubling to +1,664 at rung 5,
+	// a per-site constant, which is what a `Map.contains` half of that pair exists to avoid. It is also the one
+	// `requireCalleeIsNotReservedName` asks, so the door that ADMITS a reserved call and the check that reads
+	// its `throws` clause cannot disagree about whether the name has a declaration.
+	//
 	// A WITNESS target answers from its OWN clause, and it has no "undeclared" escape. An interface method is
-	// in NO signature registry, so routing it through `calleeIsDeclared` would answer `false` and wave every
+	// in NO signature registry, so routing it through `declaresCallee` would answer `false` and wave every
 	// non-throwing interface method through — this very hole, arriving from the other side. Its `throws` is a
 	// fact the constraint resolution already established, so the test is unconditional.
 	function requireThrowingTryTarget(target TryTarget, tryTok Token) throws ParseError
@@ -12647,16 +12697,19 @@ export type Parser
 
 	// The NAMED half of the check above — a direct callee or an awaited one, asked of the signature index.
 	function requireThrowingNamedTryTarget(callee ByteArray, tryTok Token) throws ParseError
+		if self.signatures.declaresCallee(callee) 'declared'
+			if not throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'nonThrowing'
+				throw ParseError.tryOnNonThrowing(String.from(callee), line: tryTok.line, column: tryTok.column)
+			end 'nonThrowing'
+			return
+		end 'declared'
+
 		if isCompilerInternalCallee(callee) 'builtin'
 			if isThrowingRuntimeCallee(callee) 'throwingAccessor'
 				return
 			end 'throwingAccessor'
 			throw ParseError.tryOnNonThrowingBuiltin(tryTok.line, column: tryTok.column)
 		end 'builtin'
-
-		if self.calleeIsDeclared(callee) and not throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'nonThrowing'
-			throw ParseError.tryOnNonThrowing(String.from(callee), line: tryTok.line, column: tryTok.column)
-		end 'nonThrowing'
 	end 'requireThrowingNamedTryTarget'
 
 	// The expression after `try` was not a call. Typed `returns TryTarget` so it slots into
@@ -13313,16 +13366,6 @@ export type Parser
 			undeclared gives false
 		end 'e'
 	end 'throwsTypeIsBoxedUnion'
-
-	// Does SOME file declare `callee`? The whole-program signature index answers before any file is
-	// parsed. Used to keep the E3055 (`try` on a non-throwing call) check off an UNDECLARED callee, whose
-	// real defect is E3004 (unknown function), reported by SemanticCheck against the merged registry.
-	function calleeIsDeclared(callee ByteArray) returns bool
-		return match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
-			declared gives true
-			undeclared gives false
-		end 'r'
-	end 'calleeIsDeclared'
 
 	// Emit a `__mm_decref` for every owned binding above `floor`, in REVERSE declaration order.
 	//
@@ -21919,7 +21962,11 @@ export type Parser
 		let structName = self.internedName(self.valueNameId(exprVal))
 		let callee = qualifiedMethodName(structName, methodName: ToStringMethodName)
 
-		if not self.calleeIsDeclared(callee) 'noToString'
+		// Asked of the WHOLE-PROGRAM index, not of this file: a struct's `toString` may be declared anywhere,
+		// including in the file that uses it in an interpolation. `declaresCallee` answers exactly that with a
+		// `Map.contains`; the return type it does not fetch is fetched a few lines down by `emitCall`'s
+		// `mintCallResult`, which is where it is actually needed.
+		if not self.signatures.declaresCallee(callee) 'noToString'
 			self.recordArtifactDiagnostic(ErrorCode.semanticPartialInterfaceImpl, message: "Type '{String.from(structName)}' used in string interpolation must have a toString method", tok: exprTok)
 			// The recorded diagnostic fails the build; materialize an EMPTY placeholder part so the interp
 			// assembly (which needs at least one part) does not panic on a bare `"{s}"`.
@@ -31104,7 +31151,7 @@ export type Parser
 	// minted through `mintCallResult`, which can REFUSE (a void call in value position), so nothing
 	// is emitted for a call the program is not allowed to make.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
-		try requireCalleeIsNotReservedName(callee, anchor: anchor)
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, signatures: self.signatures)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
 		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
@@ -31296,7 +31343,7 @@ export type Parser
 	// So the handle carries `integer`, and `await`/`try await` recover the awaited result type from the
 	// callee (`awaitedResultTag`) — the same defining-`asyncCall` lookup the `try await` desugar already uses.
 	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token) returns ValueId throws ParseError
-		try requireCalleeIsNotReservedName(callee, anchor: anchor)
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, signatures: self.signatures)
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
 			if not tagIsAsyncScalar(self.tagOf(argValue)) 'managedArg'

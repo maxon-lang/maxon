@@ -38,7 +38,7 @@ export function semanticCheck(project Project, module MaxonModule)
 	let throwsMap = buildThrowsMap(module)
 	// The interprocedural closure-escape summary (P1.5-A2b-2) — built once, read at every call site to refuse
 	// a capturing closure passed to a callee that persists the parameter.
-	let escapeSummary = buildEscapeSummary(module)
+	let escapeSummary = buildEscapeSummary(module, funcSignatures: project.funcSignatures)
 	// The interprocedural PARAMETER-MUTATION summary (E3019, the call-site half) — built once, read at every
 	// call site to refuse an immutable binding handed to a parameter the callee writes.
 	let mutationSummary = buildParamMutationSummary(project, module: module)
@@ -611,13 +611,13 @@ end 'buildThrowsMap'
 // first-order function costs no entry.
 typealias ParamEscapeSummary = Map with (ByteArray, BoolArray)
 
-function buildEscapeSummary(module MaxonModule) returns ParamEscapeSummary
+function buildEscapeSummary(module MaxonModule, funcSignatures FuncSignatureMap) returns ParamEscapeSummary
 	var summary = ParamEscapeSummary.create()
 	for func in module.functions 'eachFunc'
 		if not functionHasFunctionParam(func) 'noFunctionParam'
 			continue
 		end 'noFunctionParam'
-		let bits = escapingParamBits(func, module: module)
+		let bits = escapingParamBits(func, module: module, funcSignatures: funcSignatures)
 		if boolArrayAny(bits) 'hasEscape'
 			summary.upsert(func.name, value: bits)
 		end 'hasEscape'
@@ -651,11 +651,11 @@ end 'functionHasFunctionParam'
 // The per-parameter escape bits — true only for a `function`-typed parameter the body persists. A non-function
 // parameter is never `true` (no closure targets it, so its escape is irrelevant), which keeps the map keyed on
 // what a call site can actually refuse.
-function escapingParamBits(func IrFunction, module MaxonModule) returns BoolArray
+function escapingParamBits(func IrFunction, module MaxonModule, funcSignatures FuncSignatureMap) returns BoolArray
 	var bits = BoolArray.create()
 	for i in 0 upto func.paramCount 'eachParam'
 		let param = i as ValueId
-		bits.push(isFunctionTypedParam(func, param: param) and escapeSiteFound(valueEscapeSite(func, module: module, subject: EscapeScanSubject.oneParameter(param))))
+		bits.push(isFunctionTypedParam(func, param: param) and escapeSiteFound(valueEscapeSite(func, module: module, subject: EscapeScanSubject.oneParameter(param), funcSignatures: funcSignatures)))
 	end 'eachParam'
 	return bits
 end 'escapingParamBits'
@@ -767,13 +767,13 @@ end 'escapeSiteFound'
 // block's ops, its terminator and its branch edges — and stops there. For a parameter that is the only escape
 // there is. For the closure sweep it is the EARLIEST OFFENDING USE, whichever closure took it: a deterministic
 // (so worker-invariant) choice, and the one a reader meets first reading the function top to bottom.
-function valueEscapeSite(func IrFunction, module MaxonModule, subject EscapeScanSubject) returns ValueEscapeSite
+function valueEscapeSite(func IrFunction, module MaxonModule, subject EscapeScanSubject, funcSignatures FuncSignatureMap) returns ValueEscapeSite
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("valueEscapeSite: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("valueEscapeSite: opIdx {opIdx} not in module.ops")
-			if opEscapesValue(op, subject: subject, func: func) 'escapes'
-				return ValueEscapeSite.persistedBy(trackedValueAt(op, subject: subject, func: func), opIndex: opIdx)
+			if opEscapesValue(op, subject: subject, func: func, funcSignatures: funcSignatures) 'escapes'
+				return ValueEscapeSite.persistedBy(trackedValueAt(op, subject: subject, func: func, funcSignatures: funcSignatures), opIndex: opIdx)
 			end 'escapes'
 		end 'eachOp'
 
@@ -781,7 +781,7 @@ function valueEscapeSite(func IrFunction, module MaxonModule, subject EscapeScan
 			let termIdx = block.terminatorIndex()
 			let term = try module.ops.get(termIdx) otherwise panic("valueEscapeSite: terminatorIndex not in module.ops")
 			if terminatorEscapesValue(term, subject: subject, func: func) 'termEscapes'
-				return ValueEscapeSite.persistedBy(trackedValueAt(term, subject: subject, func: func), opIndex: termIdx)
+				return ValueEscapeSite.persistedBy(trackedValueAt(term, subject: subject, func: func, funcSignatures: funcSignatures), opIndex: termIdx)
 			end 'termEscapes'
 		end 'hasTerminator'
 
@@ -803,7 +803,7 @@ end 'valueEscapeSite'
 // allocation per op scanned — measured at +11 allocations per closure, on a pass that runs on every compile.
 // A single-value subject already knows its answer; the sweep re-asks its own rule of one closure at a time,
 // over the ONE op that stopped it, which is O(closures) on the refusal path and never on the accepting one.
-function trackedValueAt(op MaxonOp, subject EscapeScanSubject, func IrFunction) returns ValueId
+function trackedValueAt(op MaxonOp, subject EscapeScanSubject, func IrFunction, funcSignatures FuncSignatureMap) returns ValueId
 	match subject 'subject'
 		oneParameter(param) then return param
 		everyCapturingClosure then break 'subject'
@@ -819,7 +819,7 @@ function trackedValueAt(op MaxonOp, subject EscapeScanSubject, func IrFunction) 
 		// Body op or terminator: only one of the two matches can claim any given op, and the sweep does not
 		// record which of them stopped it — so ask both rather than carry a third route through the union.
 		let asOne = EscapeScanSubject.oneCapturingClosure(closure)
-		if opEscapesValue(op, subject: asOne, func: func) or terminatorEscapesValue(op, subject: asOne, func: func) 'thisOne'
+		if opEscapesValue(op, subject: asOne, func: func, funcSignatures: funcSignatures) or terminatorEscapesValue(op, subject: asOne, func: func) 'thisOne'
 			return closure
 		end 'thisOne'
 	end 'eachValue'
@@ -834,18 +834,18 @@ end 'trackedValueAt'
 // silently escaping the scan (the band-append invariant). ⭐ That is the whole guarantee OPEN #73 asked for:
 // this match, not a hand-written call at every sink, is what makes the escape rule cover a sink that does not
 // exist yet.
-function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction) returns bool
+function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, funcSignatures FuncSignatureMap) returns bool
 	match op 'op'
-		call(_, callee, args, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func)
+		call(_, callee, args, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
 		literal to loadIndirect then break 'op'
 		storeIndirect(_, _, stored, _) then return isTrackedValue(stored, subject: subject, func: func)
 		stringLiteral then break 'op'
-		tryCall(_, _, callee, args, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func)
+		tryCall(_, _, callee, args, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
 		throwError to functionRef then break 'op'
 		indirectCall(_, _, args) then return trackedValueInArray(args, subject: subject, func: func)
 		// P1.5-B1a: an async spawn's arguments cross into a green thread (an escape route like a call
 		// argument); an `await`/`try await`'s operand is a runtime promise handle, not a persisted value.
-		asyncCall(_, callee, args, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func)
+		asyncCall(_, callee, args, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
 		await to tryAwait then break 'op'
 		sizeofType then break 'op'
 		byteStringLiteral then break 'op'
@@ -865,16 +865,24 @@ end 'opEscapesValue'
 // For a function-typed PARAMETER, passing it on is an escape outright (`EscapeScanSubject`). For a
 // capturing-closure LITERAL the question belongs to `checkCapturingClosureEscape`, which decides it from the
 // callee's own escape summary — and that is the right answer wherever that check RUNS. It does not run
-// everywhere: `validateCall` returns before it for a COMPILER-INTERNAL `__`-prefixed callee, which is in no
-// signature registry and therefore has no summary to consult. So a capturing closure handed to a runtime
-// entry is refused HERE — `a.push(function(n) gives n + c)` puts a bare code pointer into a heap Array that
-// outlives the frame, exactly the escape E3099 exists to forbid, and it compiled clean before this arm.
+// everywhere: `validateCall` returns before it for a callee with NO DECLARED SIGNATURE, which therefore has
+// no summary to consult. So a capturing closure handed to a runtime entry is refused HERE —
+// `a.push(function(n) gives n + c)` puts a bare code pointer into a heap Array that outlives the frame,
+// exactly the escape E3099 exists to forbid, and it compiled clean before this arm.
 //
 // Delegating a slot the delegate never sees is not "one decider", it is NO decider — which is the shape of
 // the hole this rung closes, and the same reason `witnessDispatch` (whose callee is chosen at runtime by the
 // witness table, so no name keys a summary) escapes unconditionally above.
-function directCallArgEscapes(callee ByteArray, args ValueIdArray, subject EscapeScanSubject, func IrFunction) returns bool
-	if subjectTracksCapturingClosures(subject) and not isCompilerInternalCallee(callee) 'ownedByCallSiteCheck'
+//
+// ⚠ **"NO DECLARED SIGNATURE" IS WHY THIS READS `isSignaturelessCompilerCallee` AND NOT THE `__` PREFIX
+// (A1r).** The two must name the same set as `validateCall`'s early return, because this arm exists precisely
+// to cover the slots that return skips — and since A1r a `__` callee may be a DECLARED function
+// (`stdlib/Builtins.maxon`'s own), for which the delegate does run and holds the better answer. Keyed on the
+// prefix, both would fire and the stricter one would win, refusing a closure the callee's summary permits.
+// `funcSignatures` is threaded down the whole scan for this one slot, which is the same slot `subject` is
+// consulted at: the parameter subject reads neither.
+function directCallArgEscapes(callee ByteArray, args ValueIdArray, subject EscapeScanSubject, func IrFunction, funcSignatures FuncSignatureMap) returns bool
+	if subjectTracksCapturingClosures(subject) and not isSignaturelessCompilerCallee(callee, funcSignatures: funcSignatures) 'ownedByCallSiteCheck'
 		return false
 	end 'ownedByCallSiteCheck'
 
@@ -1756,7 +1764,12 @@ function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, re
 		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingRuntimeCalleeMessage(callee), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 		return
 	end 'throwingBuiltin'
-	if isCompilerInternalCallee(callee) 'internal'
+	// ⚠ **AND THE SKIP IS `isSignaturelessCompilerCallee`, NOT THE PREFIX (A1r).** `stdlib/Builtins.maxon` may
+	// call the `__` functions it declares, and one of them THROWS — so a bare `__int_fromString(input)` there is
+	// an ordinary throwing call written without `try`, which `throwsMap` below knows about and this return was
+	// hiding. MEASURED on the flag-only door: no diagnostic anywhere, the file compiled clean to `E3001`, and
+	// the error flag the callee wrote was dropped on the floor.
+	if isSignaturelessCompilerCallee(callee, funcSignatures: project.funcSignatures) 'internal'
 		return
 	end 'internal'
 	// `throwsMap` holds ONLY throwing functions, so membership IS "the callee throws" — a non-allocating
@@ -1789,16 +1802,26 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, result 
 	// compiler's own: their count is fixed at the emit site and their types are the runtime's, not a
 	// signature's.
 	//
-	// ⚠ The early return is SOUND ONLY BECAUSE THE PARSER NOW REFUSES A SOURCE-WRITTEN `__` CALLEE
+	// ⚠ The early return is SOUND ONLY BECAUSE THE PARSER REFUSES A SOURCE-WRITTEN `__` CALLEE
 	// (`Parser.requireCalleeIsNotReservedName`, E3004). Its stated premise used to be "no user name can be
 	// DECLARED with this prefix, so a `__` CALLEE is provably compiler-owned" — which is about
 	// DECLARATIONS, and a callee need not be declared anywhere. Three panics rode through that gap. What
 	// makes the premise true is the closed door, not the reservation; do not remove one without the other.
 	//
+	// ⚠ **AND THE DOOR IS NOW AJAR FOR ONE FILE, WHICH IS WHY THE TEST IS `isSignaturelessCompilerCallee`
+	// AND NOT THE PREFIX (A1r).** `stdlib/Builtins.maxon` may CALL the `__` names it declares, so a `__`
+	// callee is no longer provably absent from `funcSignatures` — and one that is PRESENT is an ordinary
+	// declared function that owes every check below: the arity that MEASURABLY went unreported for
+	// `__int_fromString()` with its argument omitted, the argument LABELS (which is also what keeps a
+	// labelled argument out of `lowerRuntimeCall`, whose positional guard would panic on one), and the
+	// per-argument types. See `MmRuntime.isSignaturelessCompilerCallee` for the fact and the measurement, and
+	// `Parser.requireCalleeIsNotReservedName` for why the registry asked THERE (`ProgramSignatures`, the only
+	// one a parser may hold) and the registry asked HERE have to give a `__` name the same answer.
+	//
 	// The ONE thing this pass can say about a compiler-owned callee is which TARGET it can be lowered for,
 	// because it is the first pass that holds both the call's source span and `project.target` — and that
 	// is asked of every callee above, before this return.
-	if isCompilerInternalCallee(callee) 'compilerOwnCall'
+	if isSignaturelessCompilerCallee(callee, funcSignatures: project.funcSignatures) 'compilerOwnCall'
 		return
 	end 'compilerOwnCall'
 
@@ -2426,7 +2449,7 @@ function checkCapturingClosureUsesInFunction(project Project, module MaxonModule
 
 	// The route decides the wording: an op names which slot (`closureEscapeReason`), a phi edge is its own
 	// route with no op to read.
-	match valueEscapeSite(func, module: module, subject: EscapeScanSubject.everyCapturingClosure) 'site'
+	match valueEscapeSite(func, module: module, subject: EscapeScanSubject.everyCapturingClosure, funcSignatures: project.funcSignatures) 'site'
 		persistedBy(closure, opIndex) then reportClosureEscapeAtOp(project, module: module, func: func, funcIndex: funcIndex, closure: closure, opIndex: opIndex)
 		mergedIntoPhi(closure) then reportClosureEscape(project, func: func, funcIndex: funcIndex, closure: closure, reason: "cannot carry a closure that captures across a branch merge: {CapturingClosureMergeSuffix}")
 		none then break 'site'
