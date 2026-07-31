@@ -1,0 +1,31 @@
+// PanicExitCode — the process exit code a SOFTWARE PANIC ends the process with, on EVERY target.
+// One declaration, read by all three backends.
+//
+// ⚠ **IT WAS THREE DECLARATIONS OF ONE NUMBER, IN THREE FILES, UNDER TWO NAMES**: x64's
+// `PanicExitCode = 1`, arm64's `RangePanicExitCode = 0x1` and wasm's `RangePanicExitCode = 1 as Imm32`
+// — three spellings that cross-referenced each other BY COMMENT, and nothing checked that the comments
+// were still true. A comment is the bottom rung of this project's cure ladder (DERIVE > CHECK >
+// COMMENT), and the arm64 and wasm comments here had already gone stale about which lanes print a
+// message. Read from here, the three backends cannot disagree about the number at all.
+//
+// ⭐ **THE NAME IS DELIBERATELY NOT `RangePanicExitCode`.** x64 spends this on EVERY terminal
+// diagnostic `mrt_panic` emits — a range violation AND the two integer faults `idiv` raises — so it was
+// never range-specific there. arm64 and wasm reach it only from their range guard, but that is because a
+// range guard is the only software panic they lower, not because the code belongs to ranges. What the
+// number identifies is "the process died in a panic", not which panic, so naming a reason in it would be
+// false the moment a second panic path lands on either backend.
+//
+// ⚠ **WHY THIS IS NOT A `Runtime/RuntimeAbort` CASE**, though that enum is otherwise the one home of
+// the exit codes emitted code dies with. Its cases are REASONS — a distinct number per guard, so a
+// debugger reading an exit code lands in the right runtime function — and they are picked from the free
+// space ABOVE 70 so that an abort is distinguishable from a program that merely returned. This number
+// is the opposite on both counts: every panic shares it *deliberately* (there is no reason to read
+// back), and it is not pickable at all — `specs-shv2/string-views.md` fixes it at a plain 1 so the lanes
+// with no panic runtime can assert on the exit code alone. Filing a spec-mandated, reason-free number in
+// a registry whose stated rule is "take the next free number above 70" would tell the next reader it
+// could be renumbered, which is the one thing it cannot be.
+//
+// UNTYPED, because the operand types differ and the VALUE does not: the two register ISAs load it as a
+// `MachineWord` immediate, wasm pushes it as the `Imm32` of an `i32.const`. Three typed copies is the
+// original defect with the conversions baked in; one untyped literal converted at its use is not.
+export let PanicExitCode = 1

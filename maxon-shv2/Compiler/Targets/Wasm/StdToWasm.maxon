@@ -146,10 +146,6 @@ end 'wasmMemoryMinPages'
 // i32 is unreachable, but the validator requires the `(result i32)` on the stack at the end.
 let RunOkResult = 0 as Imm32
 
-// The status a range-check violation exits with — the wasm twin of x64's `PanicExitCode` (1). No
-// message/backtrace (wasm has no panic runtime); see `emitRangePanic`.
-let RangePanicExitCode = 1 as Imm32
-
 // The entry function the synthesized `$run` calls. `main` returns `ExitCode`; `$run` wraps it
 // to i32 and hands it to `exit-with-code`.
 let WasmMainFunctionName = b"main"
@@ -1871,12 +1867,20 @@ type WasmFuncEmitter
 		self.body.unreachable()
 	end 'emitOsExit'
 
-	// `osRangePanic` (a P1.9 range-check violation) on wasm — a BARE `exit-with-code 1`, no message or
-	// backtrace (wasm has no panic runtime; the two runtime-panic spec cases are restricted to
-	// x64-windows). Every case that RUNS on wasm keeps its guard's value in range, so this is dead code —
-	// it exists only so the guard COMPILES. Same shape as `emitOsExit` with a constant status.
+	// `osRangePanic` (a P1.9 range-check violation) on wasm — a BARE `exit-with-code`, no message or
+	// backtrace, over the one `PanicExitCode` every backend's panic path reads
+	// (`Targets/Shared/PanicExitCode`).
+	//
+	// ⚠ DO NOT RE-DERIVE THE SILENCE FROM WHAT THE SPEC SUITE PINS. The sentence that stood here
+	// justified it by "the two runtime-panic spec cases are restricted to x64-windows" — the same
+	// circular reasoning rung A1j removed from arm64's twin of this comment, and stale twice over: those
+	// cases carried that marker BECAUSE a lane printed nothing, and there are 16 of them, on both x64
+	// lanes since A1j. The real reason wasm exits bare is that nobody has written a wasm `mrt_panic`.
+	//
+	// Every case that RUNS on wasm keeps its guard's value in range, so this is dead code — it exists
+	// only so the guard COMPILES. Same shape as `emitOsExit` with a constant status.
 	function emitRangePanic()
-		self.body.i32Const(RangePanicExitCode)
+		self.body.i32Const(PanicExitCode as Imm32)
 		self.body.call(ExitImportFuncIdx)
 		self.body.unreachable()
 	end 'emitRangePanic'

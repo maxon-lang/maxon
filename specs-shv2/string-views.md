@@ -256,9 +256,10 @@ error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Codepo
 ⚠ **THE FOUR RANGE-GUARD CASES BELOW COME IN PAIRS THAT PARTITION THE TARGETS, AND THE SPLIT IS A
 TARGET FACT RATHER THAN A CONVENIENCE.** A range violation EXITS 1 on every target — that is the guard
 FIRING. The message and the backtrace exist only where there is a panic runtime to print them: wasm's
-`emitRangePanic` is `i32.const 1; call $exit; unreachable`, its constant named `RangePanicExitCode` and
-documented *"No message/backtrace (wasm has no panic runtime)"*, and arm64's `lowerRangePanic` says the
-same. So each guard is pinned TWICE — once on `wasm32-wasi`, where the assertion is the exit code and
+`emitRangePanic` is `i32.const 1; call $exit; unreachable`, its status the shared `PanicExitCode`
+(`Targets/Shared/PanicExitCode.maxon` — the ONE declaration all three backends read since rung A1y, and
+the file that documents why the number is 1 and why it is not a `RuntimeAbort` case), and arm64's
+`lowerRangePanic` is the same shape over the same constant. So each guard is pinned TWICE — once on `wasm32-wasi`, where the assertion is the exit code and
 stderr must be silent, and once on `x64-windows, x64-linux`, where the message is pinned in full.
 
 ⚠ **x64-LINUX MOVED FROM THE SILENT SIDE TO THE MESSAGE SIDE (2026-07-31, rung A1j), AND THE PAIRING IS
