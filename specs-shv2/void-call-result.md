@@ -510,13 +510,18 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: <fragment>:8:10: type mismatch: ''__arr_set' does not return a value'
+error E3059: <fragment>:8:10: type mismatch: ''set' does not return a value'
 ```
 
 <!-- test: error.buffer-set-in-value-position -->
 ⭐ The buffer's `set` is a SECOND callee (`__arr_mem_set`, capacity-bounded where the `Array`'s is
 length-bounded), reached through the same arm — so it needs its own case for the reason the two `append`
 arms do.
+
+⭐⭐ **AND THE TWO CASES QUOTE THE SAME NOUN, WHICH IS THE POINT OF THIS BLOCK (D11c).** Two callees, one
+source spelling: the author wrote `set` on both surfaces, so `set` is what both messages say, and the cases
+are told apart by their PROGRAMS rather than by their text. A message that distinguished them would be
+distinguishing something the author cannot see.
 ```maxon
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -525,7 +530,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: <fragment>:4:10: type mismatch: ''__arr_mem_set' does not return a value'
+error E3059: <fragment>:4:10: type mismatch: ''set' does not return a value'
 ```
 
 <!-- test: error.bare-array-set-in-value-position -->
@@ -545,4 +550,102 @@ end 'main'
 ```
 ```maxoncstderr
 error E2004: <fragment>:8:14: Function 'set' does not return a value
+```
+
+### THE NOUN A VALUELESS `try` QUOTES IS THE AUTHOR'S METHOD, NOT THE EMITTED SYMBOL (D11c)
+
+⚠⚠ **E3059 USED TO NAME A SYMBOL NO AUTHOR CAN TYPE.** The two `set` cases above and the four below all
+reach `parseTry`'s `voidInValue` refusal, and its noun came straight off the `tryCall`'s callee — so a
+program that says `mm.setLength(1)` was told about `'__arr_set_length'`, a name the `__` prefix forbids the
+author from writing at all (E2051). The right code, quoting a construct the program does not contain: the
+same defect D12 removed from E3057's sentence, arriving at the one door D12 did not pass through.
+
+⇒ The cure is D12's own map (`GtRuntime.runtimeCalleeSourceMethod`) asked from a SECOND consumer, not a
+second map. **These cases exist because a map with one caller is a map whose coverage nothing measures**:
+E3057's caller reaches the file, directory, string-search and buffer families, and NOT the array one; only
+E3059 can reach a callee that is both throwing and VALUELESS, which is a different subset again. Six
+callees are reachable here (`__arr_set` plus the buffer's five void mutators) and every one is pinned —
+four of them below, because the two `set` cases alone would have left `setLength`, `setByte`, `grow` and
+`append` leaking after the fix that was written for `set`.
+
+⚠ The BARE spellings of these same four are pinned far above as E2004 (`Function 'setLength' does not
+return a value`), by the arm's own `resultUsed` guard. **Two codes, two checks, one English sentence** —
+and they must both be here, because a guard lost from either arm passes on the other's case.
+
+<!-- test: error.buffer-try-setlength-in-value-position -->
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = try mm.setLength(1) otherwise return 2
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:4:10: type mismatch: ''setLength' does not return a value'
+```
+
+<!-- test: error.buffer-try-setbyte-in-value-position -->
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = try mm.setByte(0, value: 7) otherwise return 2
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:4:10: type mismatch: ''setByte' does not return a value'
+```
+
+<!-- test: error.buffer-try-grow-in-value-position -->
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = try mm.grow(8) otherwise return 2
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:4:10: type mismatch: ''grow' does not return a value'
+```
+
+<!-- test: error.buffer-try-append-in-value-position -->
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let other = try __ManagedMemory.create(4, elementSize: 1) otherwise return 2
+	let x = try mm.append(other) otherwise return 3
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:5:10: type mismatch: ''append' does not return a value'
+```
+
+<!-- test: error.user-void-try-in-value-position -->
+⭐⭐ **THE CONTROL THAT SEPARATES THE MAP FROM THE MESSAGE.** An ordinary user function reaches the very
+same refusal, and its callee IS its source spelling — so it must be quoted UNCHANGED by the map lookup
+above it. `declaresCallee` is what routes it past the map, and it is the SAME door
+`requireThrowingNamedTryTarget` used to admit this `try` one line earlier, so the two cannot come to
+disagree about whether the name has a declaration.
+
+⚠ **The doubled quotes are CORRECT and are not a defect** — `''mayFail' does not return a value'` is the
+runnable oracle's byte-exact output (`maxon-sharp/Compiler/2-Parser.cs:9374` spells both layers in one
+literal) and `specs/error-handling.md:634` is the canonical pin. The outer pair is E3059's own
+`type mismatch: '…'` frame; the inner pair quotes the noun inside it. Do not "fix" one compiler's half.
+```maxon
+enum MyError
+	bad
+end 'MyError'
+
+function mayFail() throws MyError
+	throw MyError.bad
+end 'mayFail'
+
+function main() returns ExitCode
+	let x = try mayFail() otherwise return 1
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:11:10: type mismatch: ''mayFail' does not return a value'
 ```

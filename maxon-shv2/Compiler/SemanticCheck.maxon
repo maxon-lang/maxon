@@ -1684,23 +1684,37 @@ end 'throwingCallRequiresTryMessage'
 // array wording, so it pretended exactly, and a sentence asserting a guard that does not exist is worse than
 // no sentence at all.
 //
-// ⇒ D12 makes that claim true. The four families with a source-method map answer through ONE composed lookup
+// ⇒ D12 makes that claim true. The families with a source-method map answer through ONE composed lookup
 // (`GtRuntime.runtimeCalleeSourceMethod`), so this function holds WORDING and not family knowledge; the array
 // arm became EXPLICIT; and what falls past everything now names the callee, which is honest about being the
 // only name it has. A sixth family that adds no map gets that fallback rather than another family's noun.
 //
-// ⚠ **THE ARRAY ARM MUST STAY BELOW THE LOOKUP.** `isThrowingArrayRuntimeCallee` INCLUDES the seven
-// `__ManagedMemory` members (one record, one runtime, all `__arr_`-prefixed) and may not be narrowed — it is
-// held to the builders by `verifyThrowingAccessorsMatchPredicate` at install time. The ordering is what
-// separates them, exactly as it already does in `runtimeThrowsClause`, and it leaves this arm holding none
-// but genuine `Arr*` accessors — which is what `try-postfix-target.error.two-throwing-calls-in-one-chain`
-// pins this wording for.
+// ⭐⭐ **THE ARRAY ARM MOVED ABOVE THE LOOKUP AT D11c, AND THAT IS A NARROWING OF THIS FUNCTION'S CLAIM, NOT
+// A CHANGE OF ITS ANSWER.** It used to sit BELOW, with a note saying it had to: `isThrowingArrayRuntimeCallee`
+// COMPOSES the seven `__ManagedMemory` members (one record, one runtime, all `__arr_`-prefixed), so a wide
+// array test above the lookup would have swallowed every buffer member and answered it with the array word —
+// the very defect D12 removed. The ordering was the separator, and a required ordering is a test nobody wrote.
+//
+// ⇒ It now asks `isThrowingArrayAccessorCallee`, the NARROW factoring of that same union, which holds none but
+// the nine genuine `Arr*` accessors — so the arm is correct wherever it sits and sits here because the array
+// family is the one family whose SENTENCE is not built from a method name. The map below became total over
+// those nine at the same commit (E3059 needs the noun this sentence cannot supply), and without this move the
+// per-method sentence would have displaced the family one. **`try-postfix-target.error.two-throwing-calls-in-
+// one-chain` pins this wording, on `__arr_slice`, and is the check that the move changed no answer.**
 function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 	// The subprocess family words itself from the CALL rather than from a method name: `runProcess` is a free
 	// function, and what a bare one drops is a spawn failure, not an index.
 	if isThrowingGtRuntimeCallee(callee) 'subprocessFamily'
 		return "throwing subprocess call requires try: wrap `runProcess(…)` as `try runProcess(…) otherwise …` — a bare call drops the spawn-failure error"
 	end 'subprocessFamily'
+
+	// ⚠ The array family's sentence describes a CONSTRUCT and not a method, which is why it is here rather
+	// than in the map: E3057's fix for `arr.get(0)` is identical to its fix for `arr.pop()`, so one sentence
+	// serves all nine and a per-method one would say nine times what it says once. E3059 asks the OPPOSITE
+	// question of the same callee and needs the method — see `GtRuntime.runtimeCalleeSourceMethod`.
+	if isThrowingArrayAccessorCallee(callee) 'arrayAccessor'
+		return "throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error"
+	end 'arrayAccessor'
 
 	// ⭐ A FAMILY THAT KNOWS THE AUTHOR'S OWN METHOD GETS THE ORDINARY USER-FUNCTION SENTENCE, and that is
 	// right rather than merely convenient: a `dir.next()` or an `f.openRead(p)` is a method call like any
@@ -1720,7 +1734,7 @@ function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 	// ⭐ **THE DIVISION FAMILY (A1) NAMES THE OPERATOR AND BOTH WAYS OUT — the second of the two arms here
 	// that do NOT take the shared sentence, and for the opposite reason to the array one.** The map above
 	// cannot answer for division and is not asked to: there is no method the author wrote to quote back,
-	// because they wrote an OPERATOR. (`runtimeCalleeSourceMethod` gates each of its four families behind
+	// because they wrote an OPERATOR. (`runtimeCalleeSourceMethod` gates each of its five families behind
 	// that family's own predicate and falls to `notFound`, so a division callee reaches here rather than
 	// tripping a map that was never given an arm for it.)
 	//
@@ -1738,10 +1752,6 @@ function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 		remainder then return divisionRequiresTryMessage(TokenKind.mod.rawValue)
 		notCheckedDivision then break 'division'
 	end 'division'
-
-	if isThrowingArrayRuntimeCallee(callee) 'arrayAccessor'
-		return "throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error"
-	end 'arrayAccessor'
 
 	return throwingCallRequiresTryMessage(callee)
 end 'throwingRuntimeCalleeMessage'

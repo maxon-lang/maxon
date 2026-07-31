@@ -483,17 +483,36 @@ end 'isArrayRuntimeCallee'
 // function, which its blanket compiler-internal skip would otherwise hide. Without it the plain call reads
 // only the value register and drops the error flag, so an out-of-bounds `get` silently returns 0 (a wrong
 // answer, and a divergence from the reference compiler, which rejects it). THE ONE home of "which array
-// callee throws": `Parser.dispatchArrayMethod` emits exactly these seven through its throwing path, and the
-// two lists name the same seven `Arr*Name` constants so they cannot drift. `slice` (P1.7 slice 4) throws on
+// callee throws": `Parser.dispatchArrayMethod` emits exactly these seven METHODS through its throwing path,
+// and the two lists name the same `Arr*Name` constants so they cannot drift. `slice` (P1.7 slice 4) throws on
 // an out-of-bounds or inverted range.
+// ⚠ Seven METHODS, NINE CALLEES — `slice` has three entries (plain, managed-element, opaque-element), picked
+// by the element's ownership rather than by anything the author writes. The old spelling of this note said
+// "the same seven `Arr*Name` constants" and there have been nine since P1.7 slice 3b-vi-b.
 export function isThrowingArrayRuntimeCallee(callee ByteArray) returns bool
 	// R4.2 appends the three `__ManagedMemory` members, which throw `__ManagedMemoryError` rather than
 	// `ArrayError` — a different enum, but the same "throwing vs not" answer this predicate exists to give
 	// (`funcSignatureResultValTypes` reads `throwsClauseIsThrowing`, never the name's bytes). They arrive as
 	// the ONE list `isManagedMemoryRuntimeCallee` holds, because `GtRuntime.runtimeThrowsClause` needs the same
 	// three names and two hand-written lists of one set is what this file's guard exists to catch.
-	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName) or isManagedMemoryRuntimeCallee(callee)
+	return isThrowingArrayAccessorCallee(callee) or isManagedMemoryRuntimeCallee(callee)
 end 'isThrowingArrayRuntimeCallee'
+
+// ⭐⭐ **THE NINE GENUINE `Arr*` ACCESSORS, WITHOUT THE BUFFER MEMBERS THE PREDICATE ABOVE COMPOSES IN
+// (D11c).** A pure factoring of the union above — it adds no name and removes none — and it exists because
+// **two consumers need the ARRAY half alone and used to get it by ORDERING instead.**
+//
+// ⚠ **THAT ORDERING WAS THE HAZARD, AND THIS IS WHAT RETIRES IT.** `isManagedMemoryRuntimeCallee`'s seven
+// names are `__arr_`-prefixed and reach the union above by composition, so any consumer asking
+// "is this an array accessor?" with the WIDE predicate also caught every buffer member — and the two places
+// that must not (`GtRuntime.runtimeCalleeSourceMethod` and `SemanticCheck.throwingRuntimeCalleeMessage`)
+// were kept correct by a comment demanding the memory test run FIRST. A comment is a test nobody wrote:
+// swap two `if`s and every `buf.byteAt(i)` silently inherits the array family's noun again, which is the
+// exact defect D12 existed to remove. Asking the NARROW predicate is disjointness **by construction**, so
+// the order of those tests stops mattering at all.
+export function isThrowingArrayAccessorCallee(callee ByteArray) returns bool
+	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName)
+end 'isThrowingArrayAccessorCallee'
 
 // The `__ManagedMemory`-specific members, as one list with two readers: `isThrowingArrayRuntimeCallee` (THAT
 // they throw) and `GtRuntime.runtimeThrowsClause` (which pairs this with `managedMemoryThrows`, the WHAT — it
@@ -555,6 +574,53 @@ export function managedMemorySourceMethodName(callee ByteArray) returns ByteArra
 	end 'set'
 	panic("managedMemorySourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a `__ManagedMemory` runtime callee — this map is asked ONLY behind `isManagedMemoryRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every buffer member `installArrayRuntime` installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedMemorySourceMethodName'
+
+// ⭐⭐ **WHAT THE USER CALLED A GENUINE `Arr*` ACCESSOR (D11c) — the sibling above's twin, and the arm that
+// makes `GtRuntime.runtimeCalleeSourceMethod` TOTAL over every throwing runtime callee this compiler emits.**
+//
+// ⚠⚠ **THE ARRAY FAMILY USED TO BE THE ONE FAMILY WITH NO SPELLING, AND THAT PARTIALITY WAS A CONSUMER'S
+// PREFERENCE WEARING A MAP'S CLOTHES.** D12 recorded it as "a design fact rather than a gap": the nine
+// accessors are worded AS A FAMILY by E3057 ("throwing array accessor requires try …"), so its composer never
+// wanted a per-method noun and the map was simply never given the arms. But this map answers *"what did the
+// author write?"* — a question with an answer for all nine, since `arr.get(0)` is spelled `get` whoever is
+// asking — so `notFound` was the map declining to state a fact it holds, and the FAMILY WORDING is a policy
+// belonging to the one diagnostic that wants it.
+//
+// ⇒ **The fact lives here; the policy moved to the consumer.** `SemanticCheck.throwingRuntimeCalleeMessage`
+// now asks `isThrowingArrayAccessorCallee` for its family sentence BEFORE consulting the map, so E3057 says
+// exactly what it said before (`try-postfix-target.error.two-throwing-calls-in-one-chain` pins it, on
+// `__arr_slice`) while E3059 — which needs a NOUN, because *"'array accessor' does not return a value"* is
+// not a sentence — gets `set`. Two diagnostics, one spelling, no second list.
+//
+// ⚠ **THE MAP IS MANY-TO-ONE AND THAT IS NOT THE FILE FAMILY'S PROBLEM.** Three callees answer `slice`
+// (`__arr_slice`, plus the managed and opaque element variants), which is fine: the map's key is the CALLEE
+// and every key has exactly one answer. `RuntimeCalleeSourceMethod.sharedByTwoSpellings` exists for the
+// opposite shape — ONE callee two authors could have written (`__mf_open_write`) — and nothing here needs it,
+// because the three slice entries are picked by the ELEMENT's ownership, which the author never spells.
+export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArray
+	if callee.equals(ArrGetName) 'get'
+		return ArrayGetMethod
+	end 'get'
+	if callee.equals(ArrSetName) 'set'
+		return ArraySetMethod
+	end 'set'
+	if callee.equals(ArrFirstName) 'first'
+		return ArrayFirstMethod
+	end 'first'
+	if callee.equals(ArrLastName) 'last'
+		return ArrayLastMethod
+	end 'last'
+	if callee.equals(ArrPopName) 'pop'
+		return ArrayPopMethod
+	end 'pop'
+	if callee.equals(ArrRemoveName) 'remove'
+		return RemoveMethod
+	end 'remove'
+	if callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName) 'slice'
+		return SliceMethod
+	end 'slice'
+	panic("arrayAccessorSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `Array` accessor — this map is asked ONLY behind `isThrowingArrayAccessorCallee` — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every accessor `installArrayRuntime` installs, so the second case fails at INSTALL and never in front of a user")
+end 'arrayAccessorSourceMethodName'
 
 // A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
 // is the bit offset of element byte `i`; `BitsPerByte` names the 8.
@@ -683,13 +749,20 @@ function verifyThrowingAccessorsMatchPredicate(module StdModule)
 				panic("installArrayRuntime: isThrowingArrayRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-accessor builder set and the predicate have drifted (P1.7 slice 1)")
 			end 'namedNotStamped'
 
-			// ⭐ **THE THIRD LIST (D12 review): a BUFFER member must also have a SOURCE-METHOD arm.** Keyed on
-			// `isManagedMemoryRuntimeCallee` and not on `named`, because this family's forward arm is
-			// deliberately partial: the nine genuine `Arr*` throwing accessors have NO per-method spelling and
-			// must not — they are worded as a family, which is what
-			// `try-postfix-target.error.two-throwing-calls-in-one-chain` pins. The buffer members are the
-			// subset that HAS a map, so they are the subset that is checked. Reasoning lives once, on
-			// `GtRuntime.runtimeCalleeSourceMethod`.
+			// ⭐ **THE THIRD LIST (D12 review): a throwing callee must also have a SOURCE-METHOD arm** — and
+			// as of D11c that is checked for BOTH halves of `named` rather than for the buffer half alone.
+			// It stays keyed on the two NARROW predicates rather than on `named`, because each half has its
+			// own map and each map panics off its own domain; asking through `named` would hand every buffer
+			// member to the array map. Reasoning lives once, on `GtRuntime.runtimeCalleeSourceMethod`.
+			//
+			// ⚠ **THE ARRAY ARM CLOSES D12's ONE DOCUMENTED PARTIALITY, AND THE PARTIALITY IS WHAT D11c PAID
+			// FOR.** While the nine accessors had no map, "which throwing callees have a quotable spelling?"
+			// was answerable only by reading the composer — so E3059, whose noun the family sentence cannot
+			// supply, printed `'__arr_set'` at authors for as long as it existed. Now the chain is builders ≡
+			// predicate ≡ map for every throwing `__arr_` entry, in this ONE traversal.
+			if isThrowingArrayAccessorCallee(func.name) 'accessorHasSourceMethod'
+				requireQuotableSourceSpelling(arrayAccessorSourceMethodName(func.name), callee: func.name)
+			end 'accessorHasSourceMethod'
 			if isManagedMemoryRuntimeCallee(func.name) 'bufferHasSourceMethod'
 				requireQuotableSourceSpelling(managedMemorySourceMethodName(func.name), callee: func.name)
 			end 'bufferHasSourceMethod'

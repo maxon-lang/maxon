@@ -724,7 +724,7 @@ end 'RuntimeCalleeSourceMethod'
 // ⭐⭐ **THE ONE HOME OF "WHAT DID THE AUTHOR CALL THIS RUNTIME CALLEE?"** — the third composer beside
 // `isThrowingRuntimeCallee` (THAT it throws) and `runtimeThrowsClause` (WHAT it throws), pairing each family's
 // predicate with that family's own map. `SemanticCheck.throwingRuntimeCalleeMessage` asks it ONCE and builds
-// ONE sentence from the answer, so the four families that name a method share a single spelling of it rather
+// ONE sentence from the answer, so the five families that name a method share a single spelling of it rather
 // than an inline copy each.
 //
 // ⚠ **A FAMILY WITHOUT A MAP ANSWERS `notFound`, AND THAT IS THE POINT.** Before D12 the wording chain ended
@@ -737,7 +737,8 @@ end 'RuntimeCalleeSourceMethod'
 // ⭐⭐ **AND THE THIRD LIST IS HELD TO THE SECOND AT INSTALL TIME — THE ONE HOME OF WHY (D12 review).**
 // A family now writes its throwing callees down TWICE: once in `isThrowingXRuntimeCallee`, once as the arms
 // of its source-method map. Nothing in the language ties them, and D12 took that pairing from ONE instance
-// (R4.3's directory map) to FOUR. The divergence is the shape this project keeps being bitten by — a name
+// (R4.3's directory map) to FOUR, and D11c to FIVE. The divergence is the shape this project keeps being
+// bitten by — a name
 // added to the predicate and not to the map compiles clean, passes every green suite, and then **panics the
 // compiler in front of a user who merely forgot a `try` on that one callee**. A latent crash shipped in a
 // binary, triggered by source nobody has written yet.
@@ -759,17 +760,24 @@ end 'RuntimeCalleeSourceMethod'
 // rather than forgotten**, for 7b's reason one step over. "Every name the map answers for is throwing"
 // cannot be asked without enumerating the map's DOMAIN, which is exactly the name column above; and it would
 // guard nothing, because a map is only ever reached through its family's throwing predicate, so an arm for a
-// non-throwing callee is unreachable rather than wrong. ⚠ The forward arm is total for the file (8),
-// directory (4), string-search (2) and buffer (7) families. It is NOT total for the array accessors, and
-// that is a design fact rather than a gap: the nine genuine `Arr*` throwing callees have NO per-method
-// spelling ON PURPOSE — they are worded as a family ("throwing array accessor"), which is what
-// `try-postfix-target.error.two-throwing-calls-in-one-chain` pins. So the array loop asks only for the
-// buffer members, the subset that has a map.
+// non-throwing callee is unreachable rather than wrong.
 //
-// ⚠ **THE MEMORY ARM MUST STAY ABOVE ANY ARRAY TEST, FOR `runtimeThrowsClause`'s REASON ONE LINE OF
-// REASONING FURTHER ON**: `isThrowingArrayRuntimeCallee` INCLUDES `isManagedMemoryRuntimeCallee` (one record,
-// one runtime, `__arr_`-prefixed), so answering here first is exactly what leaves the caller's array arm
-// holding none but genuine `Arr*` accessors — the separation costs an ORDERING, not a second predicate.
+// ⭐⭐ **AND AS OF D11c THE FORWARD ARM IS TOTAL — file (8), directory (4), string-search (2), buffer (7) AND
+// the nine genuine `Arr*` accessors.** D12 left the array family out and recorded it as a design fact: those
+// nine are worded AS A FAMILY by E3057, so its composer never wanted a per-method noun. But that is a
+// SENTENCE's policy, and this function answers a different question — *"what did the author write?"*, which
+// has an answer for all nine. **The gap was paid for by the only OTHER consumer**: E3059 needs a NOUN
+// (*"'array accessor' does not return a value"* is not a sentence), found `notFound`, and printed
+// `''__arr_set' does not return a value'` at authors — a symbol E2051 forbids them to type. The family
+// wording now lives where the policy belongs, in `SemanticCheck.throwingRuntimeCalleeMessage`, which asks
+// `isThrowingArrayAccessorCallee` for its own sentence before reaching this map.
+//
+// ⭐ **THE ARMS ARE NOW ORDER-INDEPENDENT, AND THE PREVIOUS NOTE HERE DEMANDED AN ORDER.** It read *"the
+// memory arm must stay above any array test"*, because `isThrowingArrayRuntimeCallee` COMPOSES
+// `isManagedMemoryRuntimeCallee` — so a wide array test swallowed all seven buffer members and answered
+// them with the array family's word. The array arm below asks `isThrowingArrayAccessorCallee`, the narrow
+// factoring, so the two domains are disjoint BY CONSTRUCTION and swapping any two `if`s here changes no
+// answer. A comment demanding an order is a test nobody wrote; disjointness is the test.
 export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalleeSourceMethod
 	if isThrowingManagedDirectoryRuntimeCallee(callee) 'directoryFamily'
 		return RuntimeCalleeSourceMethod.found(managedDirectorySourceMethodName(callee))
@@ -792,18 +800,28 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 		return RuntimeCalleeSourceMethod.found(managedMemorySourceMethodName(callee))
 	end 'memoryFamily'
 
+	if isThrowingArrayAccessorCallee(callee) 'arrayFamily'
+		return RuntimeCalleeSourceMethod.found(arrayAccessorSourceMethodName(callee))
+	end 'arrayFamily'
+
+	// ⚠ **`notFound` IS NOW EXACTLY TWO FAMILIES, AND NEITHER NAMES A METHOD.** The subprocess family's
+	// `runProcess` is a free FUNCTION and the division family is an OPERATOR — there is no method spelling to
+	// quote for either, so this is the honest answer rather than a missing arm, and both callers word those two
+	// from the construct instead (`throwingRuntimeCalleeMessage`'s subprocess and division arms). A SIXTH
+	// family joining without a map lands here too, which is the point: it gets its own callee named by the
+	// caller that can, or refused loudly by the caller that cannot, never another family's noun.
 	return RuntimeCalleeSourceMethod.notFound
 end 'runtimeCalleeSourceMethod'
 
 // ⭐⭐ **THE ONE SPELLING OF "THIS FAMILY'S MAP ANSWERED, AND WITH SOMETHING QUOTABLE" — what the four
-// install-time drift guards call.** The four families ask their own map for every throwing callee they
+// install-time drift guards call.** The five families ask their own map for every throwing callee they
 // installed; the ASKING is the existence check (a missing arm is that map's own panic), and this is what
 // makes the answer USED rather than discarded — **E3064 refuses a discarded pure result**, which is the
 // language declining to let a guard be written as a call whose value nobody reads.
 //
 // ⚠ The emptiness test is not a formality bolted on to satisfy E3064: an empty spelling would put `''` in
 // front of an author in place of the method they wrote, which is the same class of wrong answer D12 exists
-// to remove — just spelled with no characters. One home for the rule, so four families cannot word it four
+// to remove — just spelled with no characters. One home for the rule, so five families cannot word it five
 // ways.
 export function requireQuotableSourceSpelling(spelling ByteArray, callee ByteArray)
 	if spelling.count() == 0 'unquotable'

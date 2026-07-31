@@ -2583,18 +2583,20 @@ end 'quadArgs'
 // **THE BUILTIN `Array` METHODS** (P1.7 slice 1). `create` is a static factory; the rest are instance
 // methods dispatched by name in `dispatchArrayMethod` off an `Array`-instance receiver. `get`/`set`/
 // `first`/`last`/`pop`/`remove` are THROWING (they ride `try … otherwise`); the rest are non-throwing.
+//
+// ⚠ **THE THROWING SEVEN ARE NOT DECLARED HERE — THEY ARE `SignatureIndex`'s, AND THIS IS THE ONE PLACE THAT
+// SAYS SO** (`set`/`append` moved at D12, `get`/`first`/`last`/`pop`/`remove`/`slice` at D11c). Each names a
+// throwing runtime callee whose diagnostics must quote the AUTHOR's method rather than the emitted symbol, and
+// `ArrayRuntime`'s source-method maps do that quoting by answering with the constant THIS dispatch matches on
+// — a map cannot name a constant its file cannot see, and a second `b"set"` beside the first is the drift
+// these blocks exist to prevent. Nothing about the dispatch changed: it still matches the same byte strings.
 let CreateMethod = b"create"
 let ArrayPushMethod = b"push"
-let ArrayGetMethod = b"get"
 let ArrayCapacityMethod = b"capacity"
 let ArrayReserveMethod = b"reserve"
 let ArrayResizeMethod = b"resize"
-let ArrayFirstMethod = b"first"
-let ArrayLastMethod = b"last"
-let ArrayPopMethod = b"pop"
 let ArrayClearMethod = b"clear"
 let InsertMethod = b"insert"
-let RemoveMethod = b"remove"
 
 // The whole-array copy methods (P1.7 slice 4). `slice` is THROWING (bounds/inverted-range → `ArrayError`) and
 // returns a NEW independent array; `clone` returns a NEW independent array (non-throwing); `append` mutates the
@@ -2626,10 +2628,8 @@ let RemoveMethod = b"remove"
 // A rename that reached one copy and not the other was a WRONG ANSWER with no diagnostic: `Array.count`
 // and `Set.count` would answer to different tokens, each dispatcher still compiling.
 //
-// ⚠ `ArraySetMethod`/`AppendMethod` are `SignatureIndex`'s (D12), for that same reason one step further out:
-// `__arr_mem_set`/`__arr_mem_append` are buffer-owned throwing callees, and their E3057 source-method map
-// answers with the constant THIS dispatch matches on rather than a second spelling of it.
-let SliceMethod = b"slice"
+// ⚠ `SliceMethod` and `AppendMethod` are among the throwing seven and so live in `SignatureIndex` — see the
+// roster block above, which is where that reason is stated.
 let CloneMethod = b"clone"
 let CountMethod = b"count"
 let IsEmptyMethod = b"isEmpty"
@@ -3457,12 +3457,20 @@ end 'TryHandler'
 // thread a bare `callee ByteArray`. A WITNESS dispatch cannot: an interface method is in no signature
 // registry, and the only place its `throws` exists is the `where`-constraint resolution the parser just did.
 //
-// So the two shapes are kept as one union with two accessors (`tryTargetName`/`tryTargetThrows`) rather
+// So the two shapes are kept as one union with two accessors (`tryTargetNoun`/`tryTargetThrows`) rather
 // than by widening the thread to a `(name, clause)` pair: `requireThrowingTryTarget` must ALSO distinguish
 // them — a name that no file declares is left to E3004, while a witness method that no file declares is
 // normal and its non-throwing case is a real E3055 — and a pair would have lost exactly that.
+//
+// ⚠ **AND THE `named` ARM CARRIES A DISPATCH KEY, NOT A DISPLAY NAME (D11c) — which is why the two accessors
+// are not symmetric.** `witness` already spells its two jobs apart, holding the source method for diagnostics
+// beside the clause; `named` holds ONE string doing both, and for a compiler-emitted callee the two answers
+// differ (`__arr_set` dispatches, `set` is what the author wrote). It is not widened to a pair, because the
+// display name is DERIVABLE from the key (`tryTargetNamedNoun`) and a second field would be that derivation
+// stored — one fact in two places, filled in at every emission site, wrong at whichever one forgot.
 union TryTarget
-	// A DIRECT call or an `await`ed promise: the callee NAME, which the signature index answers for.
+	// A DIRECT call or an `await`ed promise: the callee NAME, which the signature index answers for. ⚠ The
+	// EMITTED symbol for a builtin — `tryTargetNamedNoun` turns it back into the author's spelling.
 	named(callee ByteArray)
 	// A witness-dispatched interface method (P1.7a slice 2b-v): the method NAME for diagnostics, and the
 	// interface's own declared `throws` clause — the only carrier of that fact.
@@ -3470,14 +3478,52 @@ union TryTarget
 end 'TryTarget'
 
 // The NAME a diagnostic blames for a `try` target — the first of the two questions the desugar asks it. A
-// direct/awaited callee blames its callee name; a witness dispatch blames the interface method the author
-// actually wrote (the witness table is a compiler artifact with no user spelling).
-function tryTargetName(target TryTarget) returns ByteArray
+// witness dispatch blames the interface method the author actually wrote (the witness table is a compiler
+// artifact with no user spelling); a direct/awaited callee needs one more question asked of it, below.
+function tryTargetNoun(target TryTarget, signatures ProgramSignatures) returns ByteArray
 	return match target 'kind'
-		named(callee) gives callee
+		named(callee) gives tryTargetNamedNoun(callee, signatures: signatures)
 		witness(methodName, _) gives methodName
 	end 'kind'
-end 'tryTargetName'
+end 'tryTargetNoun'
+
+// **E3059's NOUN for a `named` target, and the reason it is not just the callee (D11c).** A COMPILER-EMITTED
+// callee is not a name the author can type — `__` is the prefix E2051 bars every declaration from — so
+// quoting it produces the right code describing a construct the program does not contain: a program written
+// `mm.setLength(1)` was told about `'__arr_set_length'`. `GtRuntime.runtimeCalleeSourceMethod` is the ONE home
+// of "what did the author call this runtime callee?", built by D12 for E3057's sentence and asked here as its
+// second consumer rather than threaded down from every builtin emission site.
+//
+// ⚠ **`declaresCallee` IS THE GATE, NOT THE `__` PREFIX, AND IT IS THE SAME DOOR THAT ADMITTED THIS `try`.**
+// `requireThrowingNamedTryTarget` asks `declaresCallee` FIRST for A1r's reason — `stdlib/Builtins.maxon`
+// declares AND calls `__int_fromString(…) throws ParseError`, so a `__` name can be a real declaration whose
+// spelling the author did write. Reading the same predicate here means the check that let the target through
+// and the message that blames it cannot come to disagree about whether the name has a declaration.
+function tryTargetNamedNoun(callee ByteArray, signatures ProgramSignatures) returns ByteArray
+	if signatures.declaresCallee(callee) 'declared'
+		return callee
+	end 'declared'
+
+	// ⚠ `requireThrowingTryTarget` has already run, so an undeclared callee reaching here is either a THROWING
+	// compiler-emitted one (its E3055 accept is `isThrowingRuntimeCallee`) or a name no file declares at all,
+	// which SemanticCheck reports as E3004 — and for that one the callee IS what the author typed.
+	match runtimeCalleeSourceMethod(callee) 'sourceMethod'
+		found(method) then return method
+		// ⚠ **BOTH REFUSALS ARE DRIFT GUARDS, NOT USER-FACING PATHS, AND THAT IS A MEASURED CLAIM.** Exactly six
+		// callees can reach E3059 at all — a callee must be THROWING (to pass E3055) and VALUELESS (to fail the
+		// void check) — and they are `__arr_set` plus the buffer's five void mutators, every one of which the map
+		// answers `found` for. Probed one by one; `specs-shv2/void-call-result.md` pins all six.
+		//
+		// A callee two spellings SHARE cannot arrive: `__mf_open_write` is the only one, and it returns a
+		// `__ManagedFile`, so it fails the void test that is the sole route to this message.
+		sharedByTwoSpellings(spelling, alsoSpelled) then panic("tryTargetNamedNoun: '{String.from(callee)}' reached a VALUELESS-`try` diagnostic while answering two source spellings ('{String.from(spelling)}'/'{String.from(alsoSpelled)}'). A callee reached by two spellings returns a value in both — that is why two spellings exist — so it cannot be void here. If a valueless one now exists, E3059 needs a wording that names both without claiming which was written")
+		// A SIXTH family joining `isThrowingRuntimeCallee` with a void member and no source-method map lands
+		// here. Refused loudly rather than leaking the symbol, because there is no honest noun to substitute:
+		// E3059 quotes a NAME, and "'array accessor' does not return a value" is not a sentence — which is
+		// exactly why the array family gained a map at this commit instead of a family wording.
+		notFound then panic("tryTargetNamedNoun: no source-method spelling for the throwing runtime callee '{String.from(callee)}', which a valueless `try` needs to quote. Its family joined `isThrowingRuntimeCallee` without adding an arm to `GtRuntime.runtimeCalleeSourceMethod`; add one answering the parser's own method constant rather than letting E3059 print a `__` symbol no author can type")
+	end 'sourceMethod'
+end 'tryTargetNamedNoun'
 
 // **E3055 for a WITNESS `try` target** — a `try` on an interface method whose declaration carries no
 // `throws`. Unconditional, unlike its named twin: an interface method is in no signature registry, so there
@@ -12510,8 +12556,14 @@ export type Parser
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
 
 		// A value-position `try` on a VOID callee has no value to yield (E3059).
+		//
+		// ⚠ **THE SAME ENGLISH SENTENCE IS ALSO E2004's** (`Queries.voidCallResultUsed`, *"Function 'x' does not
+		// return a value"*), and the two are deliberately NOT merged: this one is the `try` spelling, refused from
+		// the result TAG at the try's own position, while E2004 is the BARE spelling, refused by each dispatch
+		// arm's `resultUsed` guard a pass earlier. Two codes, two checks, two positions — `void-call-result.md`
+		// pins both halves of every void mutator, because a guard lost from either arm passes on the other's case.
 		if resultUsed and self.tagOf(result) == ValueTypeTag.void 'voidInValue'
-			throw ParseError.errorTypeMismatch("'{String.from(tryTargetName(target))}' does not return a value", line: tryTok.line, column: tryTok.column)
+			throw ParseError.errorTypeMismatch("'{String.from(tryTargetNoun(target, signatures: self.signatures))}' does not return a value", line: tryTok.line, column: tryTok.column)
 		end 'voidInValue'
 
 		return try self.desugarTry(func, tryTok: tryTok, result: result, flag: flag, target: target, resultUsed: resultUsed)

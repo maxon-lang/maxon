@@ -1776,17 +1776,28 @@ export let ManagedMemoryLengthMethod = b"length"
 export let ManagedMemoryGrowMethod = b"grow"
 export let ManagedMemoryByteAtMethod = b"byteAt"
 
-// ⭐ **THE TWO SHARED SPELLINGS THAT ALSO HAVE A BUFFER-OWNED RUNTIME (D12).** `set` and `append` are two of
-// the six members spelled identically to an `Array` method, so their constants were the PARSER's array ones
-// and lived file-private in `Parser.maxon`. They moved here when the buffer family gained its source-method
-// map (`ArrayRuntime.managedMemorySourceMethodName`): that map answers with the parser's own constant, and a
-// map cannot name a constant its file cannot see — the alternative, a second `b"set"` beside the first, is
-// exactly the drift these blocks exist to prevent.
-// ⚠ Neither carries a family prefix, and that is the fact rather than an omission: ONE spelling serves
+// ⭐ **THE `Array` SPELLINGS A SOURCE-METHOD MAP HAS TO NAME (D12, completed by D11c).** Every one of these
+// was a PARSER constant, file-private in `Parser.maxon`, and each moved here the moment a runtime family's
+// source-method map had to answer with it: a map cannot name a constant its file cannot see, and the
+// alternative — a second `b"set"` beside the first — is exactly the drift these blocks exist to prevent.
+//
+// `set` and `append` came over at D12 for `ArrayRuntime.managedMemorySourceMethodName` (the buffer's two
+// shared spellings). **D11c brought the other six**, because `ArrayRuntime.arrayAccessorSourceMethodName`
+// now answers for all nine throwing `Array` accessors rather than for the buffer subset alone — see that
+// map for why the array family stopped being the one family without a spelling.
+//
+// ⚠ None carries a family prefix, and that is the fact rather than an omission: ONE spelling serves
 // `String.append`, `Array.append`/`Array.set` and the buffer's `__arr_mem_append`/`__arr_mem_set` alike, and
-// the parser dispatches all of them on this one byte string.
+// the parser dispatches all of them on this one byte string. `RemoveMethod` and `SliceMethod` are unprefixed
+// for the same reason — the buffer and the `Array` both spell `slice`.
 export let ArraySetMethod = b"set"
 export let AppendMethod = b"append"
+export let ArrayGetMethod = b"get"
+export let ArrayFirstMethod = b"first"
+export let ArrayLastMethod = b"last"
+export let ArrayPopMethod = b"pop"
+export let RemoveMethod = b"remove"
+export let SliceMethod = b"slice"
 
 // Its parameter names, the reference's own (`2-Parser.cs:1470-1511`) for the same reason the file's are.
 // ⚠ **`endIndex` IS v1's SPELLING AND THE BOOTSTRAP'S IS `end`** (`LowerMaxonToStd.maxon:1657` vs
