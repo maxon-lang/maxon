@@ -74,7 +74,7 @@ end 'main'
 ```
 
 <!-- disabled-test: sqrt.rt-basic -->
-<!-- P1.2 String + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` / `float.fromString` are in the P1.2 String/stdlib cone. -->
+<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
 <!-- Args: 16.0 -->
 ```maxon
 function main() returns ExitCode
@@ -88,7 +88,7 @@ end 'main'
 ```
 
 <!-- disabled-test: sqrt.rt-precision -->
-<!-- P1.2 String + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` / `float.fromString` are in the P1.2 String/stdlib cone. -->
+<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
 <!-- Args: 2.0 -->
 ```maxon
 function main() returns ExitCode
@@ -103,7 +103,7 @@ end 'main'
 ```
 
 <!-- disabled-test: sqrt.rt-zero -->
-<!-- P1.2 String + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` / `float.fromString` are in the P1.2 String/stdlib cone. -->
+<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
 <!-- Args: 0.0 -->
 ```maxon
 function main() returns ExitCode
