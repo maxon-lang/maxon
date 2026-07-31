@@ -791,6 +791,29 @@ module {
 }
 ```
 
+### Push increfs a struct element — REGRESSION PIN, read this before regenerating
+
+The `RequiredIR` blocks below are a **regression pin**, not a shape this spec set out
+to document. What they pin is an **absence**: there must be no release-of-old-value on
+the `try ... otherwise` result slot `__try_result_0`. Both arms of an `otherwise` store
+that slot as a **declaration**, and a declaration never releases a previous value —
+emitting the ordinary reassignment sequence there released whatever the uninitialized
+slot happened to hold. Commit `4572c988b` fixed that, and measured why it can have no
+bespoke minimal test: what the stale slot holds depends on frame layout, so a smaller
+program reads 0 there, the null guard inside `mm_decref`'s emission hides it, and the
+small program passes on the *broken* compiler too. This block is the durable guard
+instead.
+
+Before committing a regenerated block, diff it for a `memref.load __try_result_0`
+feeding an `mm_decref` **ahead of** the store in `otherwise_default_success_0`. If that
+pair is back, the fix has regressed — do not commit the regeneration.
+
+The entry-block zero-init of `__try_result_0` travels with that load and is **not** an
+independent signal. `DeadStoreEliminationPass` keeps a zero-init only while some path
+can reach a load of the slot without storing it first, so removing the last such load
+makes the zero-init dead and the two vanish together. Reading the zero-init's departure
+as a second, separate loss is how this diff looks alarming when it is not.
+
 <!-- test: array-push-struct-incref -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
