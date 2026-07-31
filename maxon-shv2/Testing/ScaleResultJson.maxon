@@ -35,15 +35,25 @@
 // CPU reading. Nothing else in this document distinguishes a single undefended sample from a
 // min-of-three, and that is the difference between a CPU number worth acting on and one that is not.
 //
+// AND `mintedAt` IS HERE FOR THE SAME REASON `repeat` IS: it says which numbers may be subtracted from
+// which. The compiler's own absolute path reaches the BYTE volume of every compile (it derives each
+// stdlib source path from it), so a byte delta between two documents minted at different paths is a
+// confident fiction — measured at +98,888 to +435,455 bytes across two checkouts 47 characters apart,
+// against exactly ZERO allocations. `bytesDelta` is therefore ABSENT when the logged row this run was
+// differenced against was minted elsewhere, while `allocsDelta` is always present: the allocation column
+// is path-independent. See ScaleHistory's header.
+//
 // Shape:
 //   {
 //     "repeat": 3,                                    // compiles per rung; ABSENT if not stated
+//     "mintedAt": "<compiler path>",                  // what this run's bytes are comparable WITH
 //     "rungs":  [ { rung, sourceBytes, codeBytes, allocs, frees, bytes, cpuTicks,
 //                   allocsDelta?, bytesDelta?,        // vs the last logged run; ABSENT if there is none
+//                                                     // bytesDelta also ABSENT across minting paths
 //                   phases:   [ {name, allocs, frees, bytes, cpuTicks} ],
 //                   regalloc: [ {name, allocs, frees, bytes, cpuTicks} ] } ],
 //     "corpus": { grew, minGrowthPermille?, floorPermille, reason? },
-//     "previous": { present, date?, note? }
+//     "previous": { present, date?, mintedAt?, note?, bytesComparable?, bytesWithheld? }
 //   }
 
 // HOW MANY COMPILES each rung's numbers were folded from — the value of `--repeat`.
@@ -57,7 +67,7 @@ export union RepeatSampling
 	unstated
 end 'RepeatSampling'
 
-export function writeResultJson(path String, results RungResultArray, trend LoggedMemory, repeat RepeatSampling) throws ScaleError
+export function writeResultJson(path String, results RungResultArray, trend LoggedMemory, repeat RepeatSampling, mintedAt String, bytes ByteDelta) throws ScaleError
 	let target = try FilePath.from(path) otherwise throw ScaleError.reason("'{path}' is not a valid --result-json path")
 
 	var doc = JsonDoc.create()
@@ -66,14 +76,16 @@ export function writeResultJson(path String, results RungResultArray, trend Logg
 
 	addRepeatSampling(doc, keys: keys, children: children, repeat: repeat)
 
+	pushString(doc, keys: keys, children: children, key: "mintedAt", value: mintedAt)
+
 	keys.push("rungs")
-	children.push(rungsNode(doc, results: results, trend: trend))
+	children.push(rungsNode(doc, results: results, trend: trend, bytes: bytes))
 
 	keys.push("corpus")
 	children.push(corpusNode(doc, results: results))
 
 	keys.push("previous")
-	children.push(previousNode(doc, trend: trend))
+	children.push(previousNode(doc, trend: trend, bytes: bytes))
 
 	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
 
@@ -101,7 +113,7 @@ end 'addRepeatSampling'
 // Rungs
 // ===========================================================================================
 
-function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory) returns JsonNodeId
+function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, bytes ByteDelta) returns JsonNodeId
 	var items = JsonNodeIdArray.create()
 	for i in 0 upto results.count() 'eachRung'
 		let result = try results.get(i) otherwise panic("rungsNode: i < count but results.get({i}) failed")
@@ -124,7 +136,7 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory) ret
 		// over two numbers that are not the same quantity, and it would produce a confident one. The
 		// CPU column is compared as a RATIO between rungs of ONE run, which is unit-free and
 		// machine-free; `LoggedMemory` carries allocs and bytes and nothing else for the same reason.
-		addMemoryDeltas(doc, keys: keys, children: children, result: result, rung: i, trend: trend)
+		addMemoryDeltas(doc, keys: keys, children: children, result: result, rung: i, trend: trend, bytes: bytes)
 
 		// The per-phase breakdown, off the ONE phase enumeration the human table also walks
 		// (ScaleTestRunner.scalePhaseSources) — so a phase added to `CompilePhase` appears in the report
@@ -149,14 +161,14 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory) ret
 	return doc.add(JsonNode.arrayNode(items))
 end 'rungsNode'
 
-function addMemoryDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung LadderIndex, trend LoggedMemory)
+function addMemoryDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung LadderIndex, trend LoggedMemory, bytes ByteDelta)
 	match trend 'm'
 		absent then return
-		present(_, _, allocs, bytes) then addLoggedDeltas(doc, keys: keys, children: children, result: result, rung: rung, loggedAllocs: allocs, loggedBytes: bytes)
+		present(_, _, _, allocs, loggedBytes) then addLoggedDeltas(doc, keys: keys, children: children, result: result, rung: rung, loggedAllocs: allocs, loggedBytes: loggedBytes, bytes: bytes)
 	end 'm'
 end 'addMemoryDeltas'
 
-function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung LadderIndex, loggedAllocs AllocCountArray, loggedBytes ByteCountArray)
+function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung LadderIndex, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, bytes ByteDelta)
 	let beforeAllocs = try loggedAllocs.get(rung) otherwise 'notLogged'
 		// This run climbed further than the logged one. The extra rungs have no past, and saying so by
 		// omission is exactly right.
@@ -165,14 +177,20 @@ function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray
 	let beforeBytes = try loggedBytes.get(rung) otherwise panic("addLoggedDeltas: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
 
 	pushNumber(doc, keys: keys, children: children, key: "allocsDelta", value: (result.total.allocs as Delta) - beforeAllocs)
-	pushNumber(doc, keys: keys, children: children, key: "bytesDelta", value: (result.total.bytes as Delta) - beforeBytes)
+
+	// OMITTED, never zero, when the logged row was minted at another path — the same rule `allocsDelta`
+	// follows one line up when a rung has no past. A consumer that finds no `bytesDelta` knows the
+	// subtraction was refused; one handed a number could not have known it was fiction.
+	match bytes 'b'
+		withheld then return
+		comparable then pushNumber(doc, keys: keys, children: children, key: "bytesDelta", value: (result.total.bytes as Delta) - beforeBytes)
+	end 'b'
 end 'addLoggedDeltas'
 
 function metricNode(doc JsonDoc, name String, metric PhaseMetric) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
-	keys.push("name")
-	children.push(doc.add(JsonNode.stringNode(name)))
+	pushString(doc, keys: keys, children: children, key: "name", value: name)
 	addMetricFields(doc, keys: keys, children: children, metric: metric)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'metricNode'
@@ -255,46 +273,67 @@ end 'minRatio'
 // claim from "the corpus folded away", and the runner does not fail the run for it either: `--rungs=1`
 // is a legal thing to ask for, and its counts are as exact as any other run's.
 function addNoGrowthReading(doc JsonDoc, keys StringArray, children JsonNodeIdArray)
-	keys.push("grew")
-	children.push(doc.add(JsonNode.boolNode(false)))
-	keys.push("reason")
-	children.push(doc.add(JsonNode.stringNode("a ladder of one rung has nothing below it to have grown from — a growth reading needs {MinRungsForGrowth} rungs")))
+	pushBool(doc, keys: keys, children: children, key: "grew", value: false)
+	pushString(doc, keys: keys, children: children, key: "reason", value: "a ladder of one rung has nothing below it to have grown from — a growth reading needs {MinRungsForGrowth} rungs")
 end 'addNoGrowthReading'
 
 function addCorpusGrowth(doc JsonDoc, keys StringArray, children JsonNodeIdArray, ratio GrowthRatio)
 	pushNumber(doc, keys: keys, children: children, key: "minGrowthPermille", value: (ratio * PermillePerHundredth) as JsonFloat)
-	keys.push("grew")
-	children.push(doc.add(JsonNode.boolNode(ratio >= MinCodeGrowthRatio)))
+	pushBool(doc, keys: keys, children: children, key: "grew", value: ratio >= MinCodeGrowthRatio)
 end 'addCorpusGrowth'
 
 // Which recorded run every delta above is a delta FROM. Without it the deltas are unattributed, and a
 // consumer comparing two result documents could not tell they had different reference points.
-function previousNode(doc JsonDoc, trend LoggedMemory) returns JsonNodeId
+//
+// It carries that row's OWN minting path beside this run's, because "was this comparison legitimate" is
+// a question about the pair and a consumer holding only one half of it cannot answer.
+function previousNode(doc JsonDoc, trend LoggedMemory, bytes ByteDelta) returns JsonNodeId
 	match trend 'm'
 		absent then return noPreviousNode(doc)
-		present(date, note, _, _) then return previousRunNode(doc, date: date, note: note)
+		present(date, mintedAt, note, _, _) then return previousRunNode(doc, date: date, mintedAt: mintedAt, note: note, bytes: bytes)
 	end 'm'
 end 'previousNode'
 
 function noPreviousNode(doc JsonDoc) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
-	keys.push("present")
-	children.push(doc.add(JsonNode.boolNode(false)))
+	pushBool(doc, keys: keys, children: children, key: "present", value: false)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'noPreviousNode'
 
-function previousRunNode(doc JsonDoc, date String, note String) returns JsonNodeId
+function previousRunNode(doc JsonDoc, date String, mintedAt MintedAt, note String, bytes ByteDelta) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
-	keys.push("present")
-	children.push(doc.add(JsonNode.boolNode(true)))
-	keys.push("date")
-	children.push(doc.add(JsonNode.stringNode(date)))
-	keys.push("note")
-	children.push(doc.add(JsonNode.stringNode(note)))
+	pushBool(doc, keys: keys, children: children, key: "present", value: true)
+	pushString(doc, keys: keys, children: children, key: "date", value: date)
+
+	// ABSENT when the row predates the column, rather than spelled as a string a consumer might compare
+	// against a real path. `bytesComparable: false` is what says so, and `bytesWithheld` says why.
+	match mintedAt 'p'
+		unrecorded then break 'p'
+		path(text) then pushString(doc, keys: keys, children: children, key: "mintedAt", value: text)
+	end 'p'
+
+	addByteComparability(doc, keys: keys, children: children, bytes: bytes)
+
+	pushString(doc, keys: keys, children: children, key: "note", value: note)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'previousRunNode'
+
+// WHETHER THE BYTE DELTAS ABOVE EXIST, stated rather than left to be inferred from their absence. A
+// consumer can infer it — no `bytesDelta` on any rung means it was refused — but an inference from an
+// absence is exactly how "not measured" gets read as "zero", and the reason is not inferable at all.
+function addByteComparability(doc JsonDoc, keys StringArray, children JsonNodeIdArray, bytes ByteDelta)
+	match bytes 'b'
+		comparable then pushBool(doc, keys: keys, children: children, key: "bytesComparable", value: true)
+		withheld(why) then addWithheldBytes(doc, keys: keys, children: children, why: why)
+	end 'b'
+end 'addByteComparability'
+
+function addWithheldBytes(doc JsonDoc, keys StringArray, children JsonNodeIdArray, why String)
+	pushBool(doc, keys: keys, children: children, key: "bytesComparable", value: false)
+	pushString(doc, keys: keys, children: children, key: "bytesWithheld", value: why)
+end 'addWithheldBytes'
 
 // ===========================================================================================
 // The one place a key and its value are appended
@@ -302,8 +341,18 @@ end 'previousRunNode'
 
 // `keys` and `children` are PARALLEL arrays that `JsonNode.objectNode` zips, so a push to one without
 // the other silently shifts every field after it — a document whose values belong to the wrong names.
-// Every number in this document goes through here.
+// Every field in this document goes through one of these three, one per JSON scalar it writes.
 function pushNumber(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value JsonFloat)
 	keys.push(key)
 	children.push(doc.add(JsonNode.numberNode(value)))
 end 'pushNumber'
+
+function pushString(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value String)
+	keys.push(key)
+	children.push(doc.add(JsonNode.stringNode(value)))
+end 'pushString'
+
+function pushBool(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value bool)
+	keys.push(key)
+	children.push(doc.add(JsonNode.boolNode(value)))
+end 'pushBool'
