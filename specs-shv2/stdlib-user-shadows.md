@@ -90,10 +90,17 @@ disagree about one name. Both shapes are token-shaped (an identifier PRECEDED by
   so it is stated here and enforced by that rule.
 - **A collision between two USER declarations stays a collision**, exactly as `type-name-collision.md`
   pins it. Shadowing is about PROVENANCE, not about tolerating duplicates.
-- **A FUNCTION-name collision stays a collision.** A user program declaring its own `function sleep` is
-  `E3006` naming `stdlib/Sleep.maxon`, and a user `Clock.nowMs` likewise. That diagnostic names the real
-  `stdlib/` path, which is machine-dependent, so — like the rest of `stdlib-whitelist.md`'s collision
-  rule — it is documented rather than pinned as a golden.
+- **A FREE-FUNCTION-name collision stays a collision.** A user program declaring its own `function sleep`
+  is `E3006` naming `stdlib/Sleep.maxon` — MEASURED. That diagnostic names the real `stdlib/` path, which
+  is machine-dependent, so — like the rest of `stdlib-whitelist.md`'s collision rule — it is documented
+  rather than pinned as a golden.
+- ⚠ **A METHOD is NOT a free function, and the shadow reaches it — deliberately.** A user `Clock.nowMs`
+  requires a user `type Clock`, which IS a shadow, so the stdlib method has already moved to
+  `__Clock.nowMs` by the time the duplicate-function check runs and there is nothing to collide with.
+  MEASURED: a user `type Clock` declaring `static function nowMs()` compiles, and the call resolves to the
+  USER's. That is the rule working, not an exception to it — the whole point is that the user's
+  declaration answers user code — and it is why this bullet is about FREE functions: they have no type to
+  shadow, so nothing moves.
 
 ### The one kind that already works: a ranged `typealias`
 
@@ -190,6 +197,109 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+<!-- test: stdlib-user-shadows.user-method-shadows-a-listed-modules-method -->
+A METHOD moves with its type. `stdlib/Clock.maxon` declares `Clock.nowMs`, and a user `type Clock` that
+declares its own is NOT `E3006` against it: by the time the duplicate-function check runs the stdlib method
+is `__Clock.nowMs`, and the call resolves to the user's. This is the observation that separates a METHOD
+from a FREE function — a user `function sleep` is still `E3006` against `stdlib/Sleep.maxon`, because a
+free function has no type to shadow.
+```maxon
+type Clock
+	export var x as int
+
+	export static function nowMs() returns ExitCode
+		return 11
+	end 'nowMs'
+end 'Clock'
+
+function main() returns ExitCode
+	return Clock.nowMs()
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: stdlib-user-shadows.error.the-mint-is-not-reachable-from-user-code -->
+⭐ **THE MINTED NAME IS NOT A NAME USER CODE MAY CALL, AND THAT IS THE WHOLE SAFETY ARGUMENT FOR MOVING THE
+STDLIB DECLARATION INTO THE RESERVED SPACE.** `stdlib/Clock.maxon`'s `Clock.nowMs()` becomes
+`__Clock.nowMs()` under this shadow, and the reserved-CALL door has to admit that callee inside stdlib
+source — so the exemption is scoped to stdlib source rather than to the name. MEASURED before it was: this
+program COMPILED AND RAN, returning the stdlib monotonic clock, while the identical call in a program with
+no shadow was correctly refused. The diagnostic below is, position aside, the very one a program with no
+shadow gets, which is the point: whether `__Clock.nowMs` is callable must not depend on an unrelated declaration
+elsewhere in the program.
+```maxon
+type Clock
+	export var y as int
+end 'Clock'
+
+function main() returns ExitCode
+	return __Clock.nowMs() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:9: call to undefined function '__Clock.nowMs': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```
+
+<!-- test: stdlib-user-shadows.error.a-user-reserved-declaration-beside-a-shadow -->
+⚠ **A USER `__` DECLARATION IS E2051 WHETHER OR NOT IT COLLIDES WITH A MINT, AND THE DIAGNOSTIC POINTS AT
+THE USER'S OWN LINE.** This case is the TYPE half, and what guards it is that the mint re-probes past every
+name a user declaration already holds — even an ILLEGAL one — so `Clock` moves past this declaration
+instead of landing on it. MEASURED without that: the E2051 was suppressed and the program was refused with
+`E3006: stdlib/Clock.maxon:10:13: duplicate definition of '__Clock'` — the mint's own collision, reported
+inside a file the author never opened. The case below is the other half.
+```maxon
+type __Clock
+	export var x as int
+end '__Clock'
+
+type Clock
+	export var y as int
+
+	static function make() returns Clock
+		return Clock{y: 6}
+	end 'make'
+end 'Clock'
+
+function main() returns ExitCode
+	return Clock.make().y as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2051: <fragment>:2:6: identifier '__Clock' is reserved: declarations starting with '__' are reserved for compiler internals
+```
+
+<!-- test: stdlib-user-shadows.error.a-user-reserved-function-beside-a-shadow -->
+⚠⚠ **AND THE OTHER HALF, WHICH THE RE-PROBE STRUCTURALLY CANNOT COVER: `requireUnreservedName` GUARDS EIGHT
+DECLARATION KINDS AND THE CONTEST KNOWS ONLY TYPE NAMES.** A `function`/`let`/`var`/field/parameter/enum-case
+named `__Clock` is invisible to `userDeclaredTypeNames`, so the mint for a shadowed `Clock` IS `__Clock` and
+the reservation door has to be the one that says no — which it can, because a mint is only ever WRITTEN into
+stdlib tokens, so a `__` name reaching that door from a user file was typed by the author. MEASURED with the
+door unscoped and the re-probe in place: this program COMPILED and ran, exit 9 — a user declaration in the
+reserved space accepted silently, which is the exact hole `requireUnreservedName`'s own header calls the
+class of defect its rung exists to close.
+```maxon
+type Clock
+	export var y as int
+
+	static function make() returns Clock
+		return Clock{y: 6}
+	end 'make'
+end 'Clock'
+
+function __Clock() returns ExitCode
+	return 3
+end '__Clock'
+
+function main() returns ExitCode
+	return (Clock.make().y + __Clock()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2051: <fragment>:10:10: identifier '__Clock' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: stdlib-user-shadows.two-user-declarations-still-collide -->

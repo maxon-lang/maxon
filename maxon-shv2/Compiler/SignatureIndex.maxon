@@ -2217,8 +2217,11 @@ typealias ManagedTopLevelNameSet = Set with ByteArray
 // file?" — is a file's. See `ProgramSignatures.constCastTargets`.
 typealias ConstCastTargetSet = Set with ByteArray
 
-// The type names a USER file declares (A1s wave 2) — see `ProgramSignatures.userDeclaredTypeNames`.
-typealias UserDeclaredTypeNameSet = Set with ByteArray
+// The type names one PROVENANCE declares (A1s wave 2) — ONE alias for both halves of the shadow contest,
+// `ProgramSignatures.userDeclaredTypeNames` and `stdlibDeclaredTypeNames`. They hold the same KIND of fact
+// about two different sets of files, and a second alias over `Set with ByteArray` would only invite the two
+// to be described as different things.
+typealias DeclaredTypeNameSet = Set with ByteArray
 
 // ⭐⭐ **THE SHADOW RENAME TABLE — bare name ⇒ the reserved name a LISTED STDLIB module's declaration of
 // that name is moved to (A1s wave 2).**
@@ -2853,31 +2856,91 @@ export type ProgramSignatures
 	// ⭐⭐ **WHICH TYPE NAMES A *USER* FILE DECLARES (A1s wave 2)** — one half of the shadow contest. Filled
 	// by `foldFile` for every non-stdlib file, and read only while deciding which of a LISTED STDLIB
 	// module's declarations a user program has taken the name of. See `StdlibShadowRenameMap`.
-	var userDeclaredTypeNames as UserDeclaredTypeNameSet
+	//
+	// ⚠ **IT HOLDS EVERY NAME A USER DECLARATION WRITES, INCLUDING THE ILLEGAL ONES, AND THE LEGALITY
+	// FILTER LIVES AT THE DECISION INSTEAD (A1s wave 2 review).** The set answers two questions and they want
+	// opposite treatments of a `__` name: "may a user declaration TAKE this name from the stdlib?" (no — the
+	// declaration is E2051) and "is this candidate reserved name already SPOKEN FOR?" (yes — the user wrote
+	// it, legally or not). Filtering on the way IN answered the first and silently got the second wrong; the
+	// filter is now `contestStdlibTypeName`'s, which is the only reader that wants it.
+	var userDeclaredTypeNames as DeclaredTypeNameSet
+	// The other half: every type name a LISTED STDLIB module declares, collected by the contest's own token
+	// walk (`Queries.contestStdlibDeclarationsAgainstUserNames`) before any name is contested. Read only by
+	// `shadowRenameIsTaken` — a mint must not land on a name the stdlib ALREADY declares, which is the third
+	// claimant on the reserved space and the one no re-probe of the other two would ever notice.
+	var stdlibDeclaredTypeNames as DeclaredTypeNameSet
 	// The contest's ANSWER: bare name ⇒ the reserved name the stdlib declaration is moved to. EMPTY for
 	// every program that shadows nothing, which is the whole existing corpus — and that emptiness is what
 	// makes this mechanism byte-neutral rather than merely cheap (see `Parser.shadowRenamedTokens`).
 	var stdlibShadowRenames as StdlibShadowRenameMap
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: UserDeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create()}
 	end 'create'
 
 	// --- The stdlib/user SHADOW CONTEST (A1s wave 2). See `StdlibShadowRenameMap`. ---
 
-	// Note that a USER file declares this type name. Called from `foldFile` for every non-stdlib file, over
-	// the same declaration arrays the registries are built from — so "what the user declared" and "what the
-	// index holds" are one walk and cannot come to disagree.
+	// Every type name ONE user file declares, over the arrays `foldFile` was handed — the SAME declaration
+	// arrays the registries are built from, so "what the user declared" and "what the index holds" are one
+	// walk and cannot come to disagree. An `interface` comes through its SITE rather than through an
+	// `IrInterface`, because the declaration itself is not read until `foldInterfaceDeclarations` — which
+	// runs AFTER the contest is settled. See `InterfaceDeclSite.name`.
+	//
+	// Unfiltered on purpose; the field's own header says which reader owns the legality question and why.
+	function noteUserDeclaredTypeNames(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, interfaceSites InterfaceDeclSiteArray)
+		for alias in aliases 'eachAlias'
+			self.userDeclaredTypeNames.insert(alias.name)
+		end 'eachAlias'
+		for functionAlias in functionAliases 'eachFunctionAlias'
+			self.userDeclaredTypeNames.insert(functionAlias.name)
+		end 'eachFunctionAlias'
+		for layout in structs 'eachStruct'
+			self.userDeclaredTypeNames.insert(layout.name)
+		end 'eachStruct'
+		for enumLayout in enums 'eachEnum'
+			self.userDeclaredTypeNames.insert(enumLayout.name)
+		end 'eachEnum'
+		for genericAlias in genericAliasEntries 'eachGenericAlias'
+			self.userDeclaredTypeNames.insert(genericAlias.aliasName)
+		end 'eachGenericAlias'
+		for site in interfaceSites 'eachInterface'
+			self.userDeclaredTypeNames.insert(site.name)
+		end 'eachInterface'
+	end 'noteUserDeclaredTypeNames'
+
+	// Every type name a LISTED STDLIB module declares, in the order the contest's token walk found them.
+	// Recorded BEFORE any of them is contested, because `shadowRenameIsTaken` has to be able to ask about a
+	// module the walk has not reached yet — see `stdlibDeclaredTypeNames`.
+	export function noteStdlibDeclaredTypeNames(names ByteArrayArray)
+		for name in names 'each'
+			self.stdlibDeclaredTypeNames.insert(name)
+		end 'each'
+	end 'noteStdlibDeclaredTypeNames'
+
+	// ⭐ **DECIDE THE CONTEST FOR ONE NAME A LISTED STDLIB MODULE DECLARES.** A no-op unless a USER file
+	// declares it too; otherwise it mints the reserved name the stdlib declaration will be keyed under and
+	// files it. Called once per stdlib-declared name, between the two sweep phases — see
+	// `Queries.contestStdlibDeclarationsAgainstUserNames`.
+	//
 	// ⚠⚠ **A NAME NO USER DECLARATION MAY LEGALLY HOLD IS NOT A CONTEST, AND THE SWEEP CANNOT TELL —
 	// SO THIS DOOR DOES.** The declaration sweep is deliberately TOLERANT (`Parser.recordScannedType`): it
-	// folds a declaration in before the real parse gets to refuse it, so this set would otherwise hold
-	// names the program is about to be rejected for writing. MEASURED: a user
-	// `enum __ManagedDirectoryError` — which `requireUnreservedName` refuses with E2051 — contested
-	// `stdlib/Builtins.maxon`'s own declaration of that name, renamed it out from under the runtime, and
-	// added a second, bogus **E4016** beside the E2051 that `managed-directory.error-enum-name-is-reserved`
-	// pins. Both refusals are re-stated here rather than deferred to the parse, because the contest is
-	// decided BEFORE any file is parsed.
-	function noteUserDeclaredTypeName(name ByteArray)
+	// folds a declaration in before the real parse gets to refuse it, so `userDeclaredTypeNames` holds names
+	// the program is about to be rejected for writing. MEASURED: a user `enum __ManagedDirectoryError` —
+	// which `requireUnreservedName` refuses with E2051 — contested `stdlib/Builtins.maxon`'s own declaration
+	// of that name, renamed it out from under the runtime, and added a second, bogus **E4016** beside the
+	// E2051 that `managed-directory.error-enum-name-is-reserved` pins. Both refusals are re-stated here
+	// rather than deferred to the parse, because the contest is decided BEFORE any file is parsed.
+	//
+	// ⚠ **RE-PROBED, NOT PREFIXED ONCE, and against ALL THREE CLAIMANTS on the reserved space** — a user
+	// declaration (E2051 forbids it, so only ever in a program already being refused), an earlier contest's
+	// mint, and a stdlib declaration that spells the candidate itself. The loop terminates because each pass
+	// makes the candidate strictly longer while all three sets are finite and already complete. It is
+	// `reservedIfDeclared`'s loop, one namespace over.
+	export function contestStdlibTypeName(name ByteArray)
+		if not self.userDeclaredTypeNames.contains(name) 'uncontested'
+			return
+		end 'uncontested'
+
 		if bytesStartWith(name, prefix: ReservedTypeNamePrefix) 'reservedSpace'
 			return
 		end 'reservedSpace'
@@ -2885,47 +2948,6 @@ export type ProgramSignatures
 		if isCompilerOwnedTypeName(name) 'compilerOwned'
 			return
 		end 'compilerOwned'
-
-		self.userDeclaredTypeNames.insert(name)
-	end 'noteUserDeclaredTypeName'
-
-	// Every type name ONE user file declares, over the arrays `foldFile` was handed. An `interface` comes
-	// through its SITE rather than through an `IrInterface`, because the declaration itself is not read
-	// until `foldInterfaceDeclarations` — which runs AFTER the contest is settled. See `InterfaceDeclSite.name`.
-	function noteUserDeclaredTypeNames(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, interfaceSites InterfaceDeclSiteArray)
-		for alias in aliases 'eachAlias'
-			self.noteUserDeclaredTypeName(alias.name)
-		end 'eachAlias'
-		for functionAlias in functionAliases 'eachFunctionAlias'
-			self.noteUserDeclaredTypeName(functionAlias.name)
-		end 'eachFunctionAlias'
-		for layout in structs 'eachStruct'
-			self.noteUserDeclaredTypeName(layout.name)
-		end 'eachStruct'
-		for enumLayout in enums 'eachEnum'
-			self.noteUserDeclaredTypeName(enumLayout.name)
-		end 'eachEnum'
-		for genericAlias in genericAliasEntries 'eachGenericAlias'
-			self.noteUserDeclaredTypeName(genericAlias.aliasName)
-		end 'eachGenericAlias'
-		for site in interfaceSites 'eachInterface'
-			self.noteUserDeclaredTypeName(site.name)
-		end 'eachInterface'
-	end 'noteUserDeclaredTypeNames'
-
-	// ⭐ **DECIDE THE CONTEST FOR ONE NAME A LISTED STDLIB MODULE DECLARES.** A no-op unless a USER file
-	// declares it too; otherwise it mints the reserved name the stdlib declaration will be keyed under and
-	// files it. Called once per stdlib-declared name, between the two sweep phases — see
-	// `Queries.contestStdlibDeclarationsAgainstUserNames`.
-	//
-	// ⚠ **RE-PROBED, NOT PREFIXED ONCE, and against BOTH sides** — `__ParseError` could itself be declared
-	// by a user program (E2051 forbids it, so in practice never) or be a second stdlib declaration's minted
-	// name. The loop terminates because each pass makes the candidate strictly longer while both sets are
-	// finite and already complete. It is `reservedIfDeclared`'s loop, one namespace over.
-	export function contestStdlibTypeName(name ByteArray)
-		if not self.userDeclaredTypeNames.contains(name) 'uncontested'
-			return
-		end 'uncontested'
 
 		if self.stdlibShadowRenames.contains(name) 'alreadyContested'
 			return
@@ -2938,13 +2960,25 @@ export type ProgramSignatures
 		self.stdlibShadowRenames.upsert(name, value: renamed)
 	end 'contestStdlibTypeName'
 
-	// Is this candidate reserved name already spoken for — by a user declaration, or by an earlier
-	// contest's mint? Both halves matter: two contested names must not land on ONE reserved name, which is
-	// the collision `reservedIfDeclared`'s own header warns a non-reserved prefix would make silent.
+	// Is this candidate reserved name already spoken for? THREE claimants, and all three matter — two names
+	// must not land on ONE reserved name, which is the collision `reservedIfDeclared`'s own header warns a
+	// non-reserved prefix would make silent.
+	//
+	// ⚠ **THE STDLIB HALF IS THE ONE NOTHING ELSE WOULD CATCH (A1s wave 2 review).** `stdlib/Builtins.maxon`
+	// already declares `__`-prefixed types of its own, so a listed module declaring `X` while any listed
+	// module declares `__X` would have had the mint for a shadowed `X` land ON that declaration — an E3006
+	// raised inside `stdlib/`, or worse a last-wins upsert of two layouts under one key. It is unreachable
+	// with today's four listed modules and is checked rather than argued, because the thing that would make
+	// it reachable is ADDING A WHITELIST ENTRY, which is a one-line change made by someone reading
+	// `StdlibLoader`'s collision rule and not this function.
 	function shadowRenameIsTaken(candidate ByteArray) returns bool
 		if self.userDeclaredTypeNames.contains(candidate) 'aUserDeclarationHoldsIt'
 			return true
 		end 'aUserDeclarationHoldsIt'
+
+		if self.stdlibDeclaredTypeNames.contains(candidate) 'aStdlibDeclarationHoldsIt'
+			return true
+		end 'aStdlibDeclarationHoldsIt'
 
 		return self.isMintedStdlibShadowName(candidate)
 	end 'shadowRenameIsTaken'

@@ -1,0 +1,34 @@
+// Test: stdlib-user-shadows.user-method-shadows-a-listed-modules-method
+type Clock
+	export var x as int
+
+	export static function nowMs() returns ExitCode
+		return 11
+	end 'nowMs'
+end 'Clock'
+
+function main() returns ExitCode
+	return Clock.nowMs()
+end 'main'
+---
+ExitCode: 11
+---
+func @Clock.nowMs {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 11
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Clock.nowMs
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

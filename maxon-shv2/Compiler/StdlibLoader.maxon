@@ -90,19 +90,25 @@
 //
 // ⭐ THE COLLISION RULE FOR ADDING AN ENTRY. A listed module must declare no name a user program
 // declares and no builtin type/name.
-//   • FUNCTION-name collisions — a user `Clock.nowMs` against the stdlib one, or two stdlib modules —
-//     are caught LOUDLY by the whole-program duplicate-function check (E3006, `commitFuncSignatures` in
-//     ParseStaging), because a stdlib file merges through the identical path a user file does. Nothing
-//     to add here; `stdlib-whitelist.md` pins it.
-//   • TYPE-name collisions against a USER program, or between two listed modules, are caught LOUDLY
-//     too, by the same merge and for the same reason: every `type`/`enum`/`union`/`interface`/`typealias`
-//     files its name through `commitTypeNameDecls` (E3006, or E3061 when both are typealiases), and a
-//     listed module's declarations go through it exactly as a user file's do. ⚠ So LISTING A MODULE
-//     RESERVES ITS TYPE NAMES PROGRAM-WIDE for every kind but its own alias form — a user `type
-//     DurationMs` is now E3006 against `Clock.maxon`, while a user's own ranged `typealias DurationMs`
-//     stays legal, a typealias being file-local per alias FORM (`specs-shv2/type-name-collision.md`).
-//     Weigh that when adding an entry: a module whose type names are ordinary English words takes them
-//     away from every program that compiles.
+//   • FREE-FUNCTION-name collisions — a user `function sleep` against `Sleep.maxon`'s, or two stdlib
+//     modules — are caught LOUDLY by the whole-program duplicate-function check (E3006,
+//     `commitFuncSignatures` in ParseStaging), because a stdlib file merges through the identical path a
+//     user file does. Nothing to add here; `stdlib-whitelist.md` pins it.
+//   • ⚠⚠ **TYPE-name collisions against a USER program ARE NO LONGER COLLISIONS — THE USER WINS AND THE
+//     STDLIB DECLARATION MOVES (A1s wave 2).** A user `type`/`enum`/`union`/`interface`/ranged-`typealias`
+//     spelled like a listed module's NOMINAL declaration shadows it: the stdlib one is renamed into the
+//     reserved `__` space and the user keeps the bare name, so both live at once and each side's own code
+//     sees its own. `specs-shv2/stdlib-user-shadows.md` is the rule, the measurement and the pins. ⇒ The
+//     old warning here — "listing a module RESERVES its type names program-wide, so weigh an entry whose
+//     names are ordinary English words" — IS RETIRED, and that is the point of the wave: `Clock`,
+//     `ParseError` and `Promise` cost a user program nothing. A METHOD of a shadowed type moves with it
+//     (`Clock.nowMs` becomes `__Clock.nowMs`), which is why the bullet above is about FREE functions.
+//     ⚠ What DOES still refuse the program is a listed module using a contested spelling as a MEMBER
+//     name — a field, a method or an argument label — because user code can reach a member and its tokens
+//     are never rewritten. That is E3112, and it is checked, not assumed.
+//   • TYPE-name collisions BETWEEN TWO LISTED MODULES are still caught LOUDLY by the merge, and shadowing
+//     does not touch them: it is about PROVENANCE, and two stdlib declarations have the same one. Two
+//     listed modules declaring one type name is a maintainer's bug in this list.
 //   • TYPE-name-vs-BUILTIN collisions are the one shape still SILENT, and they remain the maintainer's
 //     responsibility. shv2 has no builtin-type-redeclaration diagnostic — a user `type String` compiles
 //     today as a distinct nominal, and the builtin names are not in the type-name registry at all — so
@@ -270,10 +276,11 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// **317 committed goldens** — `__fconst` (156), `__str_blob` (132), `__jumptable` (29) — for
 	// declarations no user program reaches. Paying that debt is part of this rung, not a follow-on.
 	//
-	// ⚠⚠ **AND IT IS THE FIRST LISTED MODULE A USER PROGRAM LEGITIMATELY REDECLARES OVER — WHICH THIS
-	// RUNG MEASURED AND DID NOT FIX. THE COLLISION RULE ABOVE IS STILL IN FORCE.** A user's own
-	// `enum ParseError` is `E3006` against this file's, and `specs-shv2/parsable-interface.md`'s cases
-	// therefore stay disabled.
+	// ⚠⚠ **AND IT IS THE FIRST LISTED MODULE A USER PROGRAM LEGITIMATELY REDECLARES OVER — WHICH WAVE 1
+	// MEASURED AND WAVE 2 FIXED.** A user's own `enum ParseError` used to be `E3006` against this file's,
+	// which is why `specs-shv2/parsable-interface.md`'s cases were disabled. It now SHADOWS: this file's
+	// declaration moves to `__ParseError` and the user keeps the bare name. The paragraphs below are kept
+	// verbatim because they are the MEASUREMENT that chose the mechanism, not a description of a gap.
 	//
 	// ⭐ **THE REASON IS WORTH MORE THAN THE SYMPTOM, because it kills the obvious fix.** The oracle
 	// permits both at once — MEASURED: one program declaring `enum ParseError` AND calling
@@ -287,10 +294,11 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// (`structRef`, `aggregateNameFor`, `__destruct_<name>`), so two live declarations of one name are
 	// not representable in the merged IR at all.
 	//
-	// ⇒ the cure is to RENAME the shadowed stdlib declaration behind the reserved prefix and redirect
-	// this module's own references to it — a mechanism that already exists as
-	// `ProgramSignatures.mangleGenericInstance`'s `reservedIfDeclared`. That is a rung, not a clause.
-	// `specs-shv2/stdlib-user-shadows.md` carries the full measurement and the design fork.
+	// ⇒ the cure was to RENAME the shadowed stdlib declaration behind the reserved prefix and redirect this
+	// module's own references to it — the same trade `ProgramSignatures.reservedIfDeclared` makes one
+	// namespace over. SHIPPED as A1s wave 2, applied to the stdlib file's identifier TOKENS at
+	// `Parser.create` so every derived spelling follows by construction.
+	// `specs-shv2/stdlib-user-shadows.md` carries the full measurement and the rule.
 	//
 	// ⚠ The module is named by `Queries.CompilerInternalDeclaringModule` and NOT by a literal here, because
 	// that constant is what grants this same file the E2051 exemption its `__` declarations need — two

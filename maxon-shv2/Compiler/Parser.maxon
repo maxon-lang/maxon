@@ -991,12 +991,6 @@ end 'immutableMutatingCallMessage'
 // Every type NAME one file writes in a type position (P1.9). See `Parser.usedTypeNames`.
 export typealias UsedTypeNameSet = Set with ByteArray
 
-// The conformance list of an enum/union that declares no `implements` clause — ONE shared empty for the
-// whole compile, following `sharedEmptyInnerAliases` and its family: nearly every enum in the corpus
-// declares nothing, and a fresh empty array per declaration would be an allocation for a fact that is the
-// absence of one. Read-only; `readOptionalImplementsClause` builds a real list only for a real clause.
-let sharedEmptyEnumConformances = ByteArrayArray.create()
-
 // The set every file that names no type at all shares — most files name several, but the sweep's and
 // the const evaluator's `Parser`s reach no type position whatever, and neither should allocate one.
 // Copy-on-write, exactly as `sharedEmptyInnerAliases` is (`Parser.recordTypeNameUse`).
@@ -2376,8 +2370,8 @@ let NanosPerMillisecond = 1000000
 // name some file declares", which is the call-side dual of what D6 licensed, and a typo in that module gets
 // the positioned E3004 below instead of the linker panic this whole check exists to replace.
 //
-// The two facts arrive as PARAMETERS because this sits outside `type Parser` and has no `self`; both call
-// sites are Parser methods and hand it the same two, so there is still exactly one copy of the rule.
+// The file facts arrive as PARAMETERS because this sits outside `type Parser` and has no `self`; both call
+// sites are Parser methods and hand it the same ones, so there is still exactly one copy of the rule.
 //
 // ⚠⚠ **THIS DOOR AND THE CHECK BEHIND IT READ TWO DIFFERENT REGISTRIES, AND THEY MUST AGREE.** Here the
 // question is put to `ProgramSignatures` (swept from every file's TOKENS, the only registry a parser may
@@ -2389,7 +2383,7 @@ let NanosPerMillisecond = 1000000
 // per declaration it sees, and the parse contributes one per declaration it registers. There is no check
 // available for it — SemanticCheck cannot tell a source-written `__` callee from a compiler-emitted one,
 // which is this whole function's reason for existing — so it is stated at both ends instead.
-function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, signatures ProgramSignatures) throws ParseError
+function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, signatures ProgramSignatures) throws ParseError
 	if not isCompilerInternalCallee(callee) 'ordinaryCallee'
 		return
 	end 'ordinaryCallee'
@@ -2404,7 +2398,15 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 	// can now be a name the compiler itself minted for a declaration that genuinely exists. Both clauses are
 	// load-bearing for A1r's stated reason: the mint says the compiler owns the head, and `declaresCallee`
 	// says the program actually has that function — a mint-only door would admit `__Clock.whatever`.
-	if signatures.isMintedStdlibShadowCallee(callee) and signatures.declaresCallee(callee) 'theCompilersOwnMint'
+	//
+	// ⚠⚠ **AND STDLIB SOURCE IS THE THIRD CLAUSE, FOR `requireUnreservedName`'s REASON (A1s wave 2 review).**
+	// The mint is written into STDLIB tokens only, so a `__Clock.nowMs()` reaching this door from a USER file
+	// was typed by the author — and the rule this whole mechanism states is that the moved name is one "no
+	// user program can reach". MEASURED without this clause: a user program declaring `type Clock` and calling
+	// `__Clock.nowMs()` COMPILED AND RAN, returning the stdlib clock, while the identical call in a program
+	// with no shadow was correctly refused. A reserved call whose legality turns on an unrelated declaration
+	// elsewhere in the program is exactly the reachability this rung is supposed to close.
+	if isStdlibSource and signatures.isMintedStdlibShadowCallee(callee) and signatures.declaresCallee(callee) 'theCompilersOwnMint'
 		return
 	end 'theCompilersOwnMint'
 
@@ -12052,7 +12054,17 @@ export type Parser
 		// is not "a stdlib file may declare `__` names" — it is "this exact name is one THIS COMPILE minted",
 		// asked of the rename table itself. A stdlib file writing its own `__Foo` is still E2051 unless it is
 		// `stdlib/Builtins.maxon`, because nothing minted `__Foo`.
-		if self.signatures.isMintedStdlibShadowName(nameTok.value) 'theCompilersOwnMint'
+		//
+		// ⚠⚠ **AND IT IS SCOPED TO STDLIB SOURCE, BECAUSE A MINT IS ONLY EVER *WRITTEN* INTO STDLIB TOKENS
+		// (A1s wave 2 review).** `shadowRenamedTokens` rewrites the stdlib half and only the stdlib half, so a
+		// minted name reaching this check from a USER file is not the compiler's own mint — it is the author
+		// literally having typed `__Clock`, which E2051 exists to refuse. MEASURED without this conjunct: a
+		// user file declaring BOTH `type __Clock` and `type Clock` had its E2051 SUPPRESSED and got
+		// `E3006 … stdlib/Clock.maxon:10:13: duplicate definition of '__Clock'` instead — the mint's own
+		// collision, reported inside a file the author never opened. The mint is now disjoint from a user's
+		// `__` declarations too (`ProgramSignatures.shadowRenameIsTaken`), so with both halves in place that
+		// program gets exactly the one diagnostic it is owed.
+		if self.isStdlibSource and self.signatures.isMintedStdlibShadowName(nameTok.value) 'theCompilersOwnMint'
 			return
 		end 'theCompilersOwnMint'
 
@@ -31837,7 +31849,7 @@ export type Parser
 	// minted through `mintCallResult`, which can REFUSE (a void call in value position), so nothing
 	// is emitted for a call the program is not allowed to make.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, signatures: self.signatures)
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, signatures: self.signatures)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
 		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
@@ -32029,7 +32041,7 @@ export type Parser
 	// So the handle carries `integer`, and `await`/`try await` recover the awaited result type from the
 	// callee (`awaitedResultTag`) — the same defining-`asyncCall` lookup the `try await` desugar already uses.
 	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token) returns ValueId throws ParseError
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, signatures: self.signatures)
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, signatures: self.signatures)
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
 			if not tagIsAsyncScalar(self.tagOf(argValue)) 'managedArg'

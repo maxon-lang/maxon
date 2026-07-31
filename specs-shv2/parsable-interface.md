@@ -300,6 +300,43 @@ end 'main'
 error E3016: specs/fragments/parsable-interface/error.throws-non-error-type.test:10:6: Method 'Value.fromString' throws 'NotAnError' which does not conform to Error
 ```
 
+<!-- test: parsable.throws-a-compiler-synthesized-error-enum -->
+The POSITIVE control for the case above, and it is not a formality: an impl may narrow an abstract
+`throws Error` to `ArrayError` — the error every throwing `Array` accessor throws, which four committed
+cases already propagate. shv2 SYNTHESIZES that enum rather than reading it, because `stdlib/Array.maxon` is
+not a listed module, and **a synthesized seed owes every clause the declaration it stands in for writes**:
+`stdlib/Array.maxon:6` is `export enum ArrayError implements Error`, and the bootstrap seeds the same fact
+explicitly for the family it synthesizes (`2-Parser.cs:1371`, `conformingInterfaces: ["Error"]`).
+
+MEASURED against the oracle, which compiles this and exits 5. shv2 refused it with
+`E3016: … throws 'ArrayError' which does not conform to Error` for as long as the conformance check read a
+list the seed left empty — a legal program rejected by the very rule that was added to reject an illegal
+one. `__DivisionByZeroError` is the same shape and is seeded the same way.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntegerArray = Array with Integer
+
+type Value implements Parsable
+	export var n as Integer
+
+	static function fromString(input String) returns Self throws ArrayError
+		var digits = IntegerArray.create()
+		digits.push(input.byteLength() + 4)
+		let first = try digits.get(0)
+		return Value{n: first}
+	end 'fromString'
+end 'Value'
+
+function main() returns ExitCode
+	let v = try Value.fromString("x") otherwise panic("fromString cannot fail on a one-element array")
+	return v.n as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
 <!-- disabled-test: parsable.int-fromstring -->
 <!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
 ```maxon

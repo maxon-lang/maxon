@@ -307,8 +307,16 @@ end 'foldOneFileInto'
 // already answers for the user's file — MEASURED, including for its RANGE. Contesting an alias would move a
 // name that already works, for nothing.
 //
-// The token walk is skipped entirely when the user program declares no type name at all.
+// ⚠ **COLLECTED WHOLE, THEN CONTESTED — the two phases are not a style choice (A1s wave 2 review).** Minting
+// a reserved name has to avoid every name the stdlib itself declares (`shadowRenameIsTaken`), and a walk that
+// contested as it went could only ask about the modules it had already passed. So the first phase names the
+// whole stdlib side and the second decides against a complete picture — which also makes the mint independent
+// of the order the loader happened to enumerate `stdlib/` in, the property `StdlibLoader`'s header requires of
+// everything downstream of it.
+//
+// The array is the walk's own order rather than the set's, so the contest is decided in source order.
 function contestStdlibDeclarationsAgainstUserNames(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
+	var declaredNames = ByteArrayArray.create()
 	for path in stdlibPaths 'eachStdlibFile'
 		// A memo HIT in every case: the fold below asks for the same file's tokens moments later, and the
 		// user half has already primed nothing of this file — so this is the miss and the fold is the hit.
@@ -324,9 +332,14 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 				continue
 			end 'malformedDeclaration'
 
-			signatures.contestStdlibTypeName(nameTok.value)
+			declaredNames.push(nameTok.value)
 		end 'eachToken'
 	end 'eachStdlibFile'
+
+	signatures.noteStdlibDeclaredTypeNames(declaredNames)
+	for name in declaredNames 'eachDeclaredName'
+		signatures.contestStdlibTypeName(name)
+	end 'eachDeclaredName'
 
 	if not signatures.hasStdlibShadowRenames() 'nothingContested'
 		return
@@ -656,8 +669,16 @@ export function probeRebuildCacheHits(project Project) throws CompileError
 	end 'each'
 end 'probeRebuildCacheHits'
 
-// ⭐ **IS THIS SOURCE FILE `stdlib/`'s (P1.9)?** Asked ONCE PER FILE, by the two queries that build a
-// `Parser`, and read only by a `typealias` declaration (`Parser.typeAliasVisibility`).
+// ⭐ **IS THIS SOURCE FILE `stdlib/`'s (P1.9)?** Asked ONCE PER FILE, by the three places that need a file's
+// provenance: the two queries that build a `Parser` for a real parse, and `queryProgramSignatures`'s
+// PARTITION of the declaration sweep, which asks it once and then hands the answer down rather than letting
+// `foldOneFileInto` re-derive it.
+//
+// ⚠ **IT IS NO LONGER ONLY A VISIBILITY QUESTION (A1s wave 2).** It was read by a `typealias` declaration
+// alone (`Parser.typeAliasVisibility`); it now also decides whether a file's tokens are rewritten by the
+// stdlib/user shadow rename (`Parser.shadowRenamedTokens`) and whether the `__`-reservation doors admit this
+// compile's own mints (`Parser.requireUnreservedName`, `requireCalleeIsNotReservedName`). Everything below
+// about resolving both sides before comparing therefore governs more than one rule now.
 //
 // ⚠ **THE PER-FILE FORM IS THE AFFORDABLE ONE, AND `StdlibSource`'s HEADER IS ABOUT THE OTHER TWO.**
 // `FilePath.isInside` costs about four String allocations (Windows `canonicalForCompare` clones and
