@@ -270,12 +270,27 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// **317 committed goldens** — `__fconst` (156), `__str_blob` (132), `__jumptable` (29) — for
 	// declarations no user program reaches. Paying that debt is part of this rung, not a follow-on.
 	//
-	// ⚠ **AND IT IS THE FIRST LISTED MODULE A USER PROGRAM LEGITIMATELY REDECLARES OVER.** The collision
-	// rule above ("caught loudly by E3006") is the WRONG answer for a name like `ParseError`: the oracle
-	// compiles a user's own `enum ParseError` against this file's, and `specs-shv2/parsable-interface.md`'s
-	// cases depend on it doing so. Hence this rung's shadowing rule — a user declaration WINS over a
-	// listed module's, for every listed module and not only this one. The collision rule above survives
-	// only where the two sides are both stdlib.
+	// ⚠⚠ **AND IT IS THE FIRST LISTED MODULE A USER PROGRAM LEGITIMATELY REDECLARES OVER — WHICH THIS
+	// RUNG MEASURED AND DID NOT FIX. THE COLLISION RULE ABOVE IS STILL IN FORCE.** A user's own
+	// `enum ParseError` is `E3006` against this file's, and `specs-shv2/parsable-interface.md`'s cases
+	// therefore stay disabled.
+	//
+	// ⭐ **THE REASON IS WORTH MORE THAN THE SYMPTOM, because it kills the obvious fix.** The oracle
+	// permits both at once — MEASURED: one program declaring `enum ParseError` AND calling
+	// `int.fromString("41")` compiles and exits 42, so the user's declaration and the `ParseError` this
+	// file's own `__int_fromString` throws are BOTH live. That is SCOPING, not a tie-break, and the
+	// bootstrap gets it free from parse ORDER. **shv2 cannot: `queryProgramSignatures` folds every file
+	// before any file is parsed, so there is no "already bound" state for a later file to shadow.**
+	// Making the user's declaration simply WIN program-wide was built and measured, and it breaks THIS
+	// FILE — `E3034: unknown enum case: 'invalidFormat'` raised inside `stdlib/Builtins.maxon`, whose
+	// body names the case a dozen times. And shv2 identifies aggregates by NAME all the way down
+	// (`structRef`, `aggregateNameFor`, `__destruct_<name>`), so two live declarations of one name are
+	// not representable in the merged IR at all.
+	//
+	// ⇒ the cure is to RENAME the shadowed stdlib declaration behind the reserved prefix and redirect
+	// this module's own references to it — a mechanism that already exists as
+	// `ProgramSignatures.mangleGenericInstance`'s `reservedIfDeclared`. That is a rung, not a clause.
+	// `specs-shv2/stdlib-user-shadows.md` carries the full measurement and the design fork.
 	try listWhitelistedModule(stdlibDir, relative: "Builtins.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
