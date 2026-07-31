@@ -1,10 +1,17 @@
-// Runtime/CheckedDivisionRuntime.maxon — the FALLIBLE DIVISION family (A1): the two callee names a
-// possibly-zero `/` or `mod` desugars to, the error enum they throw, and the one ordinal they throw it as.
+// Runtime/CheckedDivisionRuntime.maxon — the EXPANDED DIVISION family (A1, A1x): the three callee names a
+// `/` or `mod` desugars to when the compiler owes it a guard, the error enum the fallible two throw, and the
+// one ordinal they throw it as.
+//
+// ⚠ **"CHECKED" IS ABOUT THE GUARD, NOT ABOUT THROWING, and since A1x the family has a member that raises
+// nothing.** `idiv` faults for TWO reasons: a zero divisor (catchable — A1) and an unrepresentable quotient
+// (`i64.min / -1`). The second is fatal for `/` by design and IMPOSSIBLE for `mod`, whose remainder at that
+// divisor is simply `0` — so A1x's `__guarded_mod` is expanded exactly as its siblings are and is TOTAL.
+// `divisionKindThrows` is the one place that difference is decided.
 //
 // ⭐ **WHY A "RUNTIME" FILE THAT INSTALLS NO RUNTIME FUNCTION.** Every other throwing builtin family here
 // is a set of BUILT Std functions (`__arr_get`, `__mf_open_read`, `__md_next`, `__gt_process_run`), and its
 // file holds the builders. This one holds none, because a checked divide is EXPANDED IN PLACE at the point
-// of use (`LowerMaxonToStd.lowerCheckedDivision`) rather than called: the whole body is a compare, the
+// of use (`LowerMaxonToStd.lowerDivisionExpansion`) rather than called: the whole body is a compare, the
 // `setcc` that materializes it, an `or`, and the divide the program asked for — so a `call`/`ret` around it
 // would be a function whose prologue costs more than its work, the same argument `emitMonotonicMs` makes for
 // inlining its divide instead of building a `__clock_now_ms`. The bootstrap reaches the identical conclusion
@@ -14,7 +21,7 @@
 // What the file DOES own is everything a family needs BESIDES a body — and every one of those is a fact
 // some other file has to agree with, which is exactly why they live together in one:
 //
-//   • the two CALLEE NAMES, and the classifier that maps a name back to WHICH division it is;
+//   • the three CALLEE NAMES, and the classifier that maps a name back to WHICH division it is;
 //   • the THROWING predicate `isThrowingRuntimeCallee` composes (so `try` is accepted, and a bare divide
 //     is refused with E3057);
 //   • the `throws` CLAUSE `runtimeThrowsClause` answers with (so an `otherwise (e)` binding is typed
@@ -26,10 +33,10 @@
 // four families need a bidirectional install-time guard (`ArrayRuntime.verifyThrowingAccessorsMatchPredicate`)
 // because a name-listing predicate and a set of builders that stamp a `throws` clause are genuinely two
 // copies of one fact, and only a check can hold them together. Here there is nothing to check: the two name
-// CONSTANTS below are the only place either name is WRITTEN, `divisionKindOf` is the only classifier over
-// them, `isThrowingDivisionRuntimeCallee` is DERIVED from its answer, and `lowerCheckedDivision` matches that
-// same answer EXHAUSTIVELY — so a third kind cannot be named as throwing without the lowering refusing to
-// compile, and cannot be expanded without being named. A guard over one list would be a check with nothing on
+// CONSTANTS below are the only place any name is WRITTEN, `divisionKindOf` is the only classifier over
+// them, `isThrowingDivisionRuntimeCallee` is DERIVED from `divisionKindThrows`, and `lowerDivisionExpansion`
+// matches that same kind EXHAUSTIVELY — so a fourth kind cannot be named as throwing without the lowering
+// refusing to compile, and cannot be expanded without being named. A guard over one list would be a check with nothing on
 // the other side of it. (Ordinal drift is a different fact with a different pair of copies, and it DOES get
 // its claim below.)
 let CheckedDivideName = b"__checked_div"
@@ -64,7 +71,7 @@ export union CheckedDivisionKind
 	quotient
 	// `a mod b` — the REMAINDER, over a divisor that might be ZERO. Integer only; float `mod` does not
 	// exist in the language. Its expansion carries the `-1` guard as well, unconditionally — see
-	// `lowerCheckedDivision`.
+	// `lowerDivisionExpansion`.
 	remainder
 	// `a mod b` — the REMAINDER over a divisor PROVEN non-zero but possibly `-1` (A1x). TOTAL: guarded
 	// against `idiv`'s overflow `#DE` and nothing else, so it has no error flag and no `throws` clause.
@@ -138,7 +145,7 @@ export function divisionExpansionCalleeForOp(op MaxonBinOp, fallible bool) retur
 end 'divisionExpansionCalleeForOp'
 
 // The kind → OPERATOR direction, which closes the cycle the two functions above open (operator → name →
-// kind) and is what lets `lowerCheckedDivision` hand the divide back to `lowerBinOp` — the ONE place that
+// kind) and is what lets `lowerDivisionExpansion` hand the divide back to `lowerBinOp` — the ONE place that
 // decides what a `/` or a `mod` becomes — instead of spelling `StdOp.div` / `StdOp.mod` a second time.
 //
 // ⚠ It is an EXHAUSTIVE match, deliberately: a third member of `CheckedDivisionKind` stops this function
@@ -206,7 +213,7 @@ end 'divisionByZeroThrows'
 // ordinal is 0 and its error flag is `0 + ErrorFlagOrdinalBias` — which is 1, which is exactly what an
 // `x == 0` compare already produces. That coincidence is what makes the expansion branchless: the divisor
 // test IS the error flag, with no `select` and no second constant. It is also FRAGILE in the one way a
-// derived value can be, so `lowerCheckedDivision` asserts it rather than assuming it (see there).
+// derived value can be, so `emitDivisorZeroFlag` asserts it rather than assuming it (see there).
 export let DivisionByZeroOrdinal = 0 as ParsedInt
 export let DivisionByZeroFlag = DivisionByZeroOrdinal + ErrorFlagOrdinalBias
 
@@ -241,6 +248,10 @@ export function verifyDivisionByZeroOrdinals(project Project)
 	// `overSynthesized`, and it is the honest word rather than the old neutral `create`: `__DivisionByZeroError`
 	// is declared in no stdlib file at all, so the compiler still builds this layout and only the compiler's
 	// own source can make it disagree — which is what keeps this family's verdict a `panic` (A1s).
-	var divisionErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinDivisionByZeroErrorEnum(), installer: b"lowerCheckedDivision")
+	// ⚠ **THE INSTALLER IS `lowerDivisionExpansion`, AND THIS STRING IS A CLAIM NOTHING CHECKS.** A1x
+	// renamed it from `lowerCheckedDivision` when the TOTAL remainder expansion joined the fallible ones,
+	// so the name A1s's rebase carried named a function that no longer exists — a dead claim in a string,
+	// which is exactly the shape `error-codes check` exists to refuse for codes. Integrated by hand.
+	var divisionErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinDivisionByZeroErrorEnum(), installer: b"lowerDivisionExpansion")
 	divisionErrors.claim(DivisionByZeroCaseName, ordinal: DivisionByZeroOrdinal)
 end 'verifyDivisionByZeroOrdinals'
