@@ -379,6 +379,30 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, dest, ARM64Register.X28, POffCurrentGt, 8);
   }
 
+  /// <summary>
+  /// Drive one turn of the scheduler and the I/O engine inline on the CALLER'S OWN STACK.
+  /// Every cooperative idle-spin in this runtime — __gt_await, __gt_try_await, __gt_yield,
+  /// __gt_cleanup, __io_submit_sync's main-thread arm, maxon_sleep's main-thread park, and the
+  /// kqueue park handshake — must drive exactly these four, in this order, or the GTs parked on
+  /// whichever engine it omits never wake.
+  ///
+  /// ⚠ IT IS ONE SEQUENCE BECAUSE THE SEVEN SITES MUST AGREE AND NOTHING ELSE MAKES THEM.
+  /// It was seven verbatim copies; the agreement was carried only by a comment on one of them
+  /// ("Every other scheduler idle-spin (await, sleep, io_submit) polls kqueue here too"), which
+  /// is the failure mode this project keeps paying for: adding a fifth engine to one copy and
+  /// not the others is not a compile error, it is a subset of GTs that hang.
+  ///
+  /// The deliberate NON-caller is __sched_worker_park, which drives only __io_check_completions;
+  /// its comment gives the reason (polling kqueue from an idle worker lets it double-schedule a
+  /// spinning waiter). That divergence is a decision and stays spelled out at its site.
+  /// </summary>
+  private void EmitDriveSchedulerAndIo() {
+    EmitBranchLink("__gt_process_pending_waiter");
+    EmitBranchLink("__io_check_completions");
+    EmitBranchLink("__io_poll_kqueue");
+    EmitBranchLink("__gt_timer_check");
+  }
+
   // --- os_unfair_lock helpers ---
 
   /// Emit os_unfair_lock_lock(&lock_global). Clobbers X0.
@@ -428,8 +452,16 @@ public partial class ARM64CodeEmitter {
   // --- Libc error checking ---
 
   /// Branch to errorLabel if libc call returned negative (X0 < 0).
-  /// Callers must sign-extend W0→X0 after libc calls that return int,
-  /// since Apple ARM64 zero-extends 32-bit return values.
+  ///
+  /// A 64-bit compare on the raw X0 is CORRECT for Darwin's int-returning libc entry points,
+  /// MEASURED on macOS 15 / arm64 rather than inferred: the error return goes through _cerror,
+  /// which leaves X0 = 0xFFFFFFFFFFFFFFFF, and the success return carries the kernel's own
+  /// 64-bit value with clean high bits (kevent EV_ADD ok → 0x0, one ready event → 0x1, socket
+  /// and open failures → 0xFFFFFFFFFFFFFFFF). This comment previously claimed the opposite —
+  /// "Apple ARM64 zero-extends 32-bit return values, callers must sign-extend W0→X0" — which
+  /// would make every `CMP X0, #0` error check in this file dead code, including
+  /// EmitMarkWaitingAndArmKevent's. It does not; the checks work. Stated with the measurement
+  /// because a reader who believes the old claim "fixes" a check that was never broken.
   private void EmitBranchOnLibcError(string errorLabel) {
     // CMP X0, #0 (SUBS XZR, X0, #0)
     EmitWord(0xF100001F);
@@ -4577,10 +4609,7 @@ public partial class ARM64CodeEmitter {
     // thread (stackBase==0) is NEVER enqueued and instead drives its own progress by polling
     // promise.status here. Mirrors the self-hosted emitArm64GtAwait recheck loop.
     DefineLabel("__gt_await_loop");
-    EmitBranchLink("__gt_process_pending_waiter");
-    EmitBranchLink("__io_check_completions");
-    EmitBranchLink("__io_poll_kqueue");
-    EmitBranchLink("__gt_timer_check");
+    EmitDriveSchedulerAndIo();
     EmitBranchLink("__gt_dequeue");
     EmitCbz(ARM64Register.X0, "__gt_await_idle");
 
@@ -4762,10 +4791,7 @@ public partial class ARM64CodeEmitter {
     // Recheck loop: run other GTs and recheck promise.status. A worker-GT awaiter yields its
     // M to the scheduler; the main OS thread (stackBase==0) polls. See EmitGtAwait.
     DefineLabel("__gt_try_await_loop");
-    EmitBranchLink("__gt_process_pending_waiter");
-    EmitBranchLink("__io_check_completions");
-    EmitBranchLink("__io_poll_kqueue");
-    EmitBranchLink("__gt_timer_check");
+    EmitDriveSchedulerAndIo();
     EmitBranchLink("__gt_dequeue");
     EmitCbz(ARM64Register.X0, "__gt_try_await_idle");
     // Run the dequeued GT.
@@ -4906,10 +4932,7 @@ public partial class ARM64CodeEmitter {
     // left to drain kqueue, and sibling GTs parked in __io_submit_read (e.g. streaming
     // subprocess line reads) only wake once their EVFILT_READ event is polled. Every other
     // scheduler idle-spin (await, sleep, io_submit) polls kqueue here too.
-    EmitBranchLink("__gt_process_pending_waiter");
-    EmitBranchLink("__io_check_completions");
-    EmitBranchLink("__io_poll_kqueue");
-    EmitBranchLink("__gt_timer_check");
+    EmitDriveSchedulerAndIo();
     // Brief nanosleep(1ms) to avoid burning CPU
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // tv_sec = 0
@@ -5072,10 +5095,7 @@ public partial class ARM64CodeEmitter {
     EmitGlobalLoadReg(ARM64Register.X0, "__gt_live_count");
     EmitCbz(ARM64Register.X0, "__gt_cleanup_done");
     // Threads still alive but nothing runnable — process pending I/O and timers
-    EmitBranchLink("__gt_process_pending_waiter");
-    EmitBranchLink("__io_check_completions");
-    EmitBranchLink("__io_poll_kqueue");
-    EmitBranchLink("__gt_timer_check");
+    EmitDriveSchedulerAndIo();
     // Brief nanosleep to avoid burning CPU
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // tv_sec = 0
@@ -5805,12 +5825,13 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__io_submit_sync_main_spin");
     EmitLoadCurrentGt(ARM64Register.X9);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    // Acquire half of __io_op_done's release fence — __io_submit_sync_resume below returns
+    // gt.io_result_val, and arm64 does not order that load behind this one just because a
+    // branch on this one sits between them. See EmitBranchIfIoCompleted.
+    EmitDmbIsh();
     EmitCmpImm(ARM64Register.X0, GtStatusReady);
     EmitBranchCond(ARM64ConditionCode.Eq, "__io_submit_sync_resume");
-    EmitBranchLink("__gt_process_pending_waiter");
-    EmitBranchLink("__io_check_completions");
-    EmitBranchLink("__io_poll_kqueue");
-    EmitBranchLink("__gt_timer_check");
+    EmitDriveSchedulerAndIo();
     EmitBranch("__io_submit_sync_main_spin");
 
     // Resume here — worker GT via __io_op_done re-enqueue, main thread via its self-check.
@@ -6010,7 +6031,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 64, 8);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 96, 8);
 
-    EmitArmKeventAndWait(72, "maxon_net_tcp_connect");
+    EmitMarkWaitingAndArmKevent(72, "maxon_net_tcp_connect");
 
     EmitGtParkForIoCompletion("rt_ntc", 104, "rt_ntc_resumed");
 
@@ -6550,10 +6571,7 @@ public partial class ARM64CodeEmitter {
 
     // MainThread park loop: inline scheduling until our status changes from waiting
     DefineLabel("__sleep_mainthread_loop");
-    EmitBranchLink("__gt_process_pending_waiter");
-    EmitBranchLink("__io_check_completions");
-    EmitBranchLink("__io_poll_kqueue");
-    EmitBranchLink("__gt_timer_check");
+    EmitDriveSchedulerAndIo();
     // Check if our status changed
     EmitLoadCurrentGt(ARM64Register.X9);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
@@ -7150,9 +7168,20 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // result
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffIoResultVal, 8);
 
-    // Set error = 0 and status = ready
+    // Set error = 0
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffIoErrorCode, 8);
+
+    // StoreStore RELEASE: publish io_result_val / io_error_code BEFORE the status that
+    // advertises them. arm64 lets stores to different addresses retire out of order, so without
+    // this a waiter that SELF-DETECTS status=ready (maxon_net_tcp_connect's rt_ntc_resumed reads
+    // io_result_val the instant it sees the status change) can read the PREVIOUS value of
+    // io_result_val — 0 on a first connect, which rt_ntc_check_result accepts as a valid fd and
+    // wraps in a __ManagedSocket. A silent wrong answer, not a hang. __io_op_done, the sync-side
+    // twin of this completion, has always taken this fence and says why; the kqueue side did not.
+    EmitDmbIsh();
+
+    EmitMovRegImm(ARM64Register.X0, GtStatusReady);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffStatus, 8);
     // Dekker StoreLoad barrier: publish status=ready BEFORE loading the waiter's ioYielded
     // below. Pairs with the barrier __gt_context_switch takes before it sets ioYielded=1, so
@@ -7221,12 +7250,19 @@ public partial class ARM64CodeEmitter {
   /// marked before it armed (EmitIoSubmitOverlappedCore, OPEN #66) and so does __io_submit_sync
   /// one screen up; the kqueue sites were the outlier.
   ///
-  /// The DMB is the release half of that publication. arm64 is weakly ordered, so without it
-  /// the status store may reach other Ms only after they have observed the registration — the
-  /// same lost wakeup, with the instructions already in the right order. It pairs with the
-  /// StoreLoad fence __io_poll_kqueue takes between its status store and its ioYielded load.
+  /// The DMB is what makes the reorder mean anything. Program order alone does not settle a
+  /// write-write race: our status store and the completer's are to the SAME word, so what
+  /// decides the winner is which reaches the coherence point last, and arm64 is free to hold
+  /// ours in a store buffer across the syscall — the same lost wakeup with the instructions
+  /// already in the right order. The fence forces it out before the SVC publishes the knote.
+  ///
+  /// It is NOT an acquire/release pair with anything: the completer never READS status, it
+  /// overwrites it. The fences in __io_poll_kqueue are a different mechanism for a different
+  /// hazard (its StoreLoad orders its own status store before its ioYielded load; its
+  /// StoreStore orders io_result_val before status). Three fences, three reasons — do not
+  /// collapse them into one story.
   /// </summary>
-  private void EmitArmKeventAndWait(int keventSlot, string siteName) {
+  private void EmitMarkWaitingAndArmKevent(int keventSlot, string siteName) {
     EmitLoadCurrentGt(ARM64Register.X9);
     EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
@@ -7261,10 +7297,17 @@ public partial class ARM64CodeEmitter {
   /// Branch to target when the current GT's I/O has completed, i.e. when a completer has moved
   /// its status off `waiting`. Every point in the park handshake that must not commit to the
   /// next step without re-asking asks with this. X0 and X9 are clobbered.
+  ///
+  /// The DMB is the ACQUIRE half of the completer's release fence (__io_poll_kqueue /
+  /// __io_op_done publish io_result_val before status). A control dependency does NOT order a
+  /// later LOAD on arm64 — only a later store — so branching on status is not enough to keep
+  /// the target's `io_result_val` load from being satisfied out of an older line. Without it
+  /// the release fence protects nothing on this side of the handshake.
   /// </summary>
   private void EmitBranchIfIoCompleted(string target) {
     EmitLoadCurrentGt(ARM64Register.X9);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    EmitDmbIsh();
     EmitCmpImm(ARM64Register.X0, GtStatusWaiting);
     EmitBranchCond(ARM64ConditionCode.Ne, target);
   }
@@ -7288,10 +7331,7 @@ public partial class ARM64CodeEmitter {
     // self-detect. A completer that reaped our event while we were still running left the
     // wakeup for us to find right here (__io_poll_kqueue guard (c)), and the main OS thread —
     // which is never enqueued at all (guard (a)) — only ever resumes this way.
-    EmitBranchLink("__gt_process_pending_waiter");
-    EmitBranchLink("__io_check_completions");
-    EmitBranchLink("__io_poll_kqueue");
-    EmitBranchLink("__gt_timer_check");
+    EmitDriveSchedulerAndIo();
     EmitBranchIfIoCompleted(resumedLabel);
     EmitBranch($"{labelPrefix}_try_dequeue");
 
@@ -7333,6 +7373,20 @@ public partial class ARM64CodeEmitter {
     // straight through to the read() with the fd not ready. __io_submit_sync's own main-thread
     // arm sidesteps this by never parking the main thread at all; re-checking here covers the
     // same ground for every caller and costs four instructions on the resume path.
+    //
+    // ⚠ WHAT THIS CHECK DEPENDS ON, since it is a PROXY and not a completion flag: it can only
+    // see "not completed" for a resumer that does NOT stamp our status. The enqueue-resume path
+    // stamps `running` on the GT it switches into (this helper's own park path above, and every
+    // other __gt_dequeue caller), so on that path the check always falls through — correctly,
+    // because an enqueue only happens once the I/O finished. The one resumer that switches to
+    // &P.mainThread WITHOUT stamping is __gt_trampoline, which is the case that matters. The
+    // one that switches to &P.mainThread AND stamps `running` is __gt_yield_switch_main, which
+    // WOULD falsify the proxy — it is unreachable here only because it is gated on
+    // __gt_live_count == 0, i.e. no spawned GT is running to do the stamping, and because
+    // nothing on arm64 calls __gt_yield_completed at all (the arm64 trampoline switches
+    // directly; only x86's calls it). Both of those are properties of today's code, not
+    // invariants. A third resumer that stamps `running` on a parked mainThread would silently
+    // reopen the fall-through-to-read(); the durable fix is the CAS wakeup claim below.
     EmitBranchIfIoCompleted(resumedLabel);
     EmitBranch($"{labelPrefix}_try_dequeue");
 
@@ -7419,7 +7473,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // ctx
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 80, 8); // kevent+24 = udata
 
-    EmitArmKeventAndWait(56, functionName);
+    EmitMarkWaitingAndArmKevent(56, functionName);
 
     EmitGtParkForIoCompletion(functionName, 48, $"{functionName}_resumed");
 
