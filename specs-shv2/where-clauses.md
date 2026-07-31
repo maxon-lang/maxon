@@ -1181,18 +1181,43 @@ end 'Digest'
 42
 ```
 
-<!-- disabled-test: where-clauses.witness-return-generic-instance -->
-<!-- interface-return-generic-instance: THE RETURN-POSITION TWIN of the case below, and it is a
-     PRE-EXISTING false reject that R8 neither introduced nor widens. An interface requirement's types are
-     stored as rendered source strings and `renderDeclaredTypeName` spells a generic instance as its
-     CANONICAL INSTANCE NAME, but `Parser.interfaceReturnMaxonType` — which turns that string back into a
-     type at the dispatch — has no generic-instance arm: its `named` fallback interns `Array_Integer` and
-     the resolver has never heard of it.
-     MEASURED on the UNCHANGED compiler (the three compiler files stashed, rebuilt, re-run) and on this
-     branch, byte-identical both ways: `error E3011: <fragment>:27:17: Unknown type 'Array_Integer'`.
-     The FORMAL position is unaffected and ships green — `constraint-interface-generic-alias-formal` below —
-     because a formal's rendered string is only ever compared (against `Self`, against `float`), never
-     resolved.
+⚠⚠ **THE PLACEMENT GUARD (R8 review), AND IT PINS A LIMITATION ON PURPOSE.** This program SHOULD compile and
+return 42; it does not, and the E3011 below is a PRE-EXISTING false reject that R8 neither introduced nor
+widens (`Parser.interfaceReturnMaxonType` has no generic-instance arm — see the note under the code). It is
+pinned as an ENABLED error case anyway, because **the diagnostic is the only thing in the whole suite that
+can see WHERE `Queries.foldInterfaceDeclarations` runs**, and that placement is this rung's entire
+correctness thesis.
+
+MEASURED THREE WAYS on this one program, each leg a separate build of `maxon-shv2` in this worktree:
+
+| compiler | result |
+|---|---|
+| pre-R8 (`04b7330c5^`), reading the interface out of the REAL PARSE's `artifact.interfaces` | `E3011 … Unknown type 'Array_Integer'` |
+| R8 as shipped — the read after `allFilesFolded`, before `deriveInstanceNames` | `E3011 … Unknown type 'Array_Integer'`, byte-identical |
+| R8 with the read moved INTO the per-file sweep | **COMPILES, exit 42** |
+
+The third row is the trap, and it is why this case exists: the sabotage looks like an improvement and is
+not. An incomplete index makes `signatures.isGenericAlias` answer "no", so the requirement's return type
+renders as the RAW ALIAS `IntArray` — which happens to resolve — while the real parse renders the same type
+as the canonical `Array_Integer`. Two spellings of one type inside one index is the false-ACCEPT shape the
+R5 review measured, and the accept it buys here is an accident, not a fix.
+
+⚠ **AND THE REST OF THE SUITE CANNOT SEE THAT — MEASURED.** With the recording moved into the per-file
+sweep the full suite ran **2837 passed / 0 failed, exit 0, no leak**, `constraint-interface-generic-alias-formal`
+included: a FORMAL's rendered string is only ever COMPARED (against `Self`, against `float`), never
+RESOLVED, so no formal-position case can go red. Only the RETURN position resolves the string, so this is
+the one shape where the two renderings are observable at all. Without this case the placement is guarded by
+nothing.
+
+⇒ **THE DAY `interfaceReturnMaxonType` GROWS ITS GENERIC-INSTANCE ARM, THIS CASE FLIPS TO `exitcode 42` —
+IT DOES NOT GET DELETED.** It has two jobs and only the first one retires.
+
+<!-- test: where-clauses.error.witness-return-generic-instance -->
+<!-- interface-return-generic-instance: WHAT THE E3011 ACTUALLY IS, and what unblocks it. An interface
+     requirement's types are stored as rendered source strings and `renderDeclaredTypeName` spells a generic
+     instance as its CANONICAL INSTANCE NAME, but `Parser.interfaceReturnMaxonType` — which turns that string
+     back into a type at the dispatch — has no generic-instance arm: its `named` fallback interns
+     `Array_Integer` and the resolver has never heard of it.
      ⚠ NO ORACLE: the bootstrap refuses this program in every declaration order with `E4006 Primitive type
      'int' has no method named 'make'`, because it has no parse-time witness dispatch at all (it
      monomorphizes). Unblocking it needs a canonical-instance-NAME -> `GenericInstanceId` door that
@@ -1235,8 +1260,8 @@ function main() returns ExitCode
 	return BuilderBox.create(Builder.create(42)).first()
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3011: specs/fragments/where-clauses/where-clauses.error.witness-return-generic-instance.test:28:17: Unknown type 'Array_Integer'
 ```
 
 <!-- test: where-clauses.constraint-interface-generic-alias-formal -->
@@ -1291,6 +1316,61 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+⚠ **WHAT R8 PAID FOR DELETING R7's SEPARATE ARITY STORE, PINNED (R8 review).** R7 read an interface's
+HEADER during the token sweep, so a broken BODY still recorded the name and its `uses` arity. R8 reads the
+WHOLE declaration through `Parser.readInterfaceDeclaration` — the one builder, which is the point — and that
+read is TOLERANT: an `interface` whose body will not parse records NOTHING, so its name resolves to nothing
+at every parse-time door.
+
+The consequence is a DIAGNOSTIC one and only that. Every program that lands here is a program the real
+parse refuses on its own line, so no wrong program is ever accepted — but the reject below is raised at the
+DISPATCH, in a file that parses before the broken `interface` is reached, and the file's parse stops there.
+MEASURED: it is the ONLY diagnostic this program produces, which is why the sentence may not claim the
+interface is undeclared (it is declared, eight lines down). It names both causes instead.
+
+The same shape with the broken `interface` in a LATER FILE reports both errors — the dispatch's reject from
+`a.maxon` and the real `E2010` from the later file — because each file's parse is independent. It is the
+same-file ordering that hides the cause, so that is the one pinned.
+
+<!-- test: where-clauses.error.constraint-interface-unreadable -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Code
+		return self.item.digest()
+	end 'go'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+interface Digest
+	function digest() returns Code
+	function bogus(,) returns Code
+end 'Digest'
+
+function main() returns ExitCode
+	return PointBox.create(Point.create(42)).go()
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/where-clauses/where-clauses.error.constraint-interface-unreadable.test:20:20: Unsupported: the `where` constraint interface 'Digest' does not resolve — no file in this program declares a readable `interface` of that name, so it is either misspelled or an `interface` whose own declaration fails to parse
 ```
 
 ### Basic where clause with Map

@@ -25989,12 +25989,25 @@ export type Parser
 	end 'lookupInterfaceForParse'
 
 	// The throwing form for the witness-dispatch caller, which cannot proceed without the declaration. The
-	// miss is a clean positioned reject naming the constraint's interface: after R8 the only way to land here
-	// is a name NO file declares, so the message says exactly that.
+	// miss is a clean positioned reject naming the constraint's interface.
+	//
+	// ⚠⚠ **THE MESSAGE MAY NOT SAY "NO FILE DECLARES IT", BECAUSE THAT IS SOMETIMES FALSE AND THE COMPILER
+	// CANNOT TELL WHICH (R8 review).** The index holds every interface `foldInterfaceDeclarations` could
+	// READ, and that pass is TOLERANT: an `interface` whose own body has a syntax error records nothing, so a
+	// declaration that is RIGHT THERE in the source lands here indistinguishably from a typo. It is not
+	// enough that the real parse reports that syntax error too — MEASURED, with the broken `interface`
+	// written BELOW its constrained use in the same file, THIS reject is raised at the dispatch first and the
+	// file's parse stops, so the sentence below is the ONLY diagnostic the program produces
+	// (`where-clauses.error.constraint-interface-unreadable` pins exactly that).
+	//
+	// So it states what is actually known — the name resolved to nothing READABLE — and names BOTH causes,
+	// rather than asserting the one it cannot distinguish. Recording "a site claimed this name but failed to
+	// read" instead would buy a sharper sentence for a SECOND store of the interface name, which is the one
+	// thing this rung deleted (see `InterfaceDeclSite`); a diagnostic is not worth re-minting the duplication.
 	function requireInterfaceForParse(name ByteArray, methodTok Token) returns IrInterface throws ParseError
 		match self.lookupInterfaceForParse(name) 'lookup'
 			found(iface) then return iface
-			notFound then throw ParseError.unsupported("the `where` constraint interface '{String.from(name)}' is not declared anywhere in this program", line: methodTok.line, column: methodTok.column)
+			notFound then throw ParseError.unsupported("the `where` constraint interface '{String.from(name)}' does not resolve — no file in this program declares a readable `interface` of that name, so it is either misspelled or an `interface` whose own declaration fails to parse", line: methodTok.line, column: methodTok.column)
 		end 'lookup'
 	end 'requireInterfaceForParse'
 
