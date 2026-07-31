@@ -45,8 +45,16 @@ proves non-zero — a non-zero literal, or a ranged type whose range excludes 0 
 its tests; every divide in THIS file is deliberately over a provably non-zero divisor, so the
 sequence the goldens pin is the unguarded one.
 
-⚠ **`INT_MIN / -1` IS STILL UNGUARDED, and the two halves of the sentence above must not be reversed
-together by mistake.** `idiv` faults on that quotient as well as on a zero divisor, and NEITHER
+⚠ **`INT_MIN / -1` IS STILL UNGUARDED — BUT THAT IS ABOUT `/` ALONE, AND READING IT AS COVERING `mod`
+IS THE DEFECT A1x FIXED. `i64.min mod -1` IS `0`.** The rationale is *"the quotient is
+unrepresentable"*, which is false of the REMAINDER: `a mod -1` is `0` for every `a`. `mod` faulted only
+because x86 fuses both results into one `idiv`, so it inherited a `#DE` raised on account of a quotient
+it does not read. ⇒ **`mod` guards its divisor against `-1` as well as `0`; `/` guards only `0`, and
+`i64.min / -1` remains the documented fault.** `specs-shv2/safety.md` owns that rule and its cases;
+the guard's COST is below, and it is nothing at all wherever the divisor's type or value rules `-1`
+out. The rest of this paragraph is about `/`:
+
+`idiv` faults on that quotient as well as on a zero divisor, and NEITHER
 reference compiler handles it (the bootstrap only declines to *fold* it — `2-Parser.cs:23589-23590`).
 `DivisionByZero` is about the DIVISOR being zero and says nothing about the quotient being
 unrepresentable, so `i64.min / -1` still raises a hardware fault. It IS diagnosed when it does (A1g):
@@ -62,6 +70,19 @@ is the divisor itself whenever it is non-zero (the flag is 0) and 1 when it is z
 `try` fork discards. So a checked divide is still an `idiv` under exactly the `RAX`/`RDX` constraint
 described above; it is not a call, and the fixed-register cases below would still be testing that
 instruction if they were written with a `try`.
+
+⭐ **`mod`'s SECOND GUARD (A1x) COSTS FOUR MORE INSTRUCTIONS, ALSO WITHOUT A BRANCH, AND ONLY WHERE THE
+DIVISOR MIGHT BE `-1`.** `cmp divisor, -1` · a `setcc` · `add mask, isNegOne, -1` (so `mask` is 0 when
+the divisor is `-1` and all-ones otherwise) · `and safeDividend, dividend, mask`. The `idiv` then
+divides **0** whenever the divisor is `-1`, whose remainder is the `0` the language promises and whose
+quotient cannot overflow. It masks the DIVIDEND rather than fixing up the divisor because the answer
+is dividend-independent, and it reuses the one `-1` constant for both the compare and the decrement —
+which is why the third instruction is an `add` and not a `sub`.
+
+⚠ **THE PROOF IS WHAT KEEPS IT OFF THE COMMON PATH, and every divide in this file is evidence: not one
+of their goldens moved when A1x landed.** A divisor that is a literal, or a variable the parser folded,
+or a ranged type whose range excludes `-1` — `int(1 to 1000)` included — emits none of those four
+instructions. `/` never emits them at all.
 
 ⚠ **`safe` IS A FRESH SSA VALUE, NOT AN OVERWRITE OF THE DIVISOR** — and the goldens show the allocator
 reusing the divisor's register for it whenever the divisor is dead after the divide, which is the
@@ -319,6 +340,29 @@ caught divisionByZero
 ```
 ```exitcode
 0
+```
+
+<!-- test: ranged-divisor-excluding-minus-one-is-still-a-bare-idiv -->
+⭐ **THE `mod` OVERFLOW GUARD IS ABSENT WHEN THE RANGE RULES `-1` OUT (A1x)**, and only a golden can
+say so — an exit code cannot tell four elided instructions from four emitted ones.
+`ranged-divisor-is-a-bare-idiv` above already covers a POSITIVE range; this one is wholly NEGATIVE
+(`int(i64.min to -2)`), which is the case that would fall to the guard if the proof had been written
+as "the range is positive" instead of "the range excludes `-1`". The golden holds the same
+`mov rax`/`cqo`/`idivReg` sequence with no `cmp` and no `and` anywhere near it. `-13 mod -5` is `-3`
+(the remainder takes the DIVIDEND's sign), and `-3 + 45 = 42`.
+```maxon
+typealias BelowMinusOne = int(i64.min to -2)
+
+function remainder(n int, d BelowMinusOne) returns int
+	return n mod d
+end 'remainder'
+
+function main() returns ExitCode
+	return (remainder(0 - 13, d: -5) + 45) as ExitCode
+end 'main'
+```
+```exitcode
+42
 ```
 
 <!-- test: divisor-is-read-after-a-checked-divide -->

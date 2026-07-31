@@ -51,6 +51,29 @@ NEITHER reference compiler handles it (the bootstrap only declines to *fold* it)
 the quotient being unrepresentable. So `i64.min / -1` still raises a hardware fault on
 x64 — a trap in a language that otherwise has none left here.
 
+⭐⭐ **THAT SENTENCE IS ABOUT `/` ONLY, AND IT USED TO BE READ AS COVERING `mod` — WHICH IS
+WHERE THE `mod` HALF WENT WRONG (A1x). `i64.min mod -1` IS `0`, ON EVERY TARGET.** The
+rationale above is *"the quotient is unrepresentable"*, and that is simply FALSE of the
+remainder: **`a mod -1` is `0` for EVERY `a`**, because truncated division gives
+`a - (-1)·trunc(a / -1) = a - a`. `mod` faulted only because x86 computes quotient and
+remainder in ONE `idiv`, so it inherited a `#DE` raised on account of a quotient it does not
+even read. Measured before the fix, all three doors into a `mod` and the same program: x64
+died `panic: integer overflow`, x64-linux died `panic: integer divide by zero`, and
+**wasm32-wasi already answered `0`** — a valid program's OBSERVABLE ANSWER differing by
+target, not merely its diagnostic. Maxon now answers `0` everywhere, with Go and Java.
+
+⭐ **SO `mod` TESTS ONLY ITS DIVISOR, AND `/` NEEDS BOTH OPERANDS — WHICH IS WHY THE TWO
+DIVERGE HERE AT ALL.** `a / -1` overflows for exactly one dividend (`i64.min`); `a mod -1`
+is `0` for all of them. A divisor the compiler proves is neither `0` nor `-1` — a literal, or
+a ranged type excluding both — still compiles to the bare `idiv` with no guard at all, so the
+cost is paid only where the proof runs out. **`/` is UNCHANGED: its quotient does not exist,
+so there is no value to return and the documented fault stands.**
+
+⚠ **AND `try (a mod b) otherwise …` IS NOW DEAD WEIGHT AT THIS BOUNDARY, NOT NEWLY WORKING.**
+A hardware fault was never catchable; the cure is that there is nothing to catch. The `try` is
+still REQUIRED when the divisor could be `0` (that error is real), but at `-1` the fallback
+never runs — a case written as though it fires is asserting the opposite of the rule.
+
 ⭐ **THAT FAULT IS NOW DIAGNOSED, AND IT IS ITS OWN DIAGNOSTIC.** It arrives as
 `STATUS_INTEGER_OVERFLOW` (**0xC0000095**), a DIFFERENT exception code from the zero divisor's
 `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094), and the Windows fault thunk used to convert
@@ -450,6 +473,157 @@ end 'main'
 error E3103: <fragment>:4:12: division by zero: the divisor of '/' is always 0
 ```
 
+### `i64.min mod -1` is `0`, through every door a `mod` has (A1x)
+
+Three doors reach a `mod`, they are decided by what the compiler can prove about the DIVISOR, and
+before A1x **all three died** — so all three are pinned. `-1` is not a special divisor to the
+language; it is only special to `idiv`, and the point of these cases is that nothing about the
+answer depends on which door the program came through.
+
+They run on **every** target, which is the other half of the claim: `wasm32-wasi` passed the first
+of them all along (`i64.rem_s` is defined to answer 0) and arm64's `sdiv`+`msub` computes it too, so
+a green x64 lane beside them is what makes the answer the LANGUAGE's rather than one backend's.
+
+<!-- test: mod-at-int-min-by-minus-one-is-zero -->
+#### Door 1 — a divisor the compiler cannot prove non-zero (the throwing `mod`)
+⚠ The `otherwise` is DEAD WEIGHT here and `77` must never be seen. It is spelled only because a
+possibly-zero divisor makes `mod` fallible (E3057 without it); the divide-by-`-1` it is wrapped
+around does not throw, because its answer exists.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let n = ident(i64.min)
+	let d = ident(0 - 1)
+	let r = try (n mod d) otherwise 77
+	print("r={r}\n")
+	return 0
+end 'main'
+```
+```stdout
+r=0
+```
+```exitcode
+0
+```
+
+<!-- test: mod-by-a-minus-one-literal-is-zero -->
+#### Door 2 — a literal `-1` divisor, so no `try` at all
+The compiler proves the divisor non-zero, so this `mod` is TOTAL and a `try` around it would be
+refused. It nonetheless has to answer `0` rather than fault — the door the fallible-division rule
+never touches.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let n = ident(i64.min)
+	let r = n mod -1
+	print("r={r}\n")
+	return 0
+end 'main'
+```
+```stdout
+r=0
+```
+```exitcode
+0
+```
+
+<!-- test: mod-by-a-ranged-divisor-that-admits-minus-one-is-zero -->
+#### Door 3 — a ranged divisor that excludes `0` but ADMITS `-1`
+`int(-1 to -1)` is the shape that shows "excludes zero" was never the same proof as "cannot
+overflow": it earns the bare divide by the fallible-division rule and is `-1` every time. The
+dividend arrives through a call argument, the one position a ranged type is not re-checked at
+runtime — the same door `divide-by-zero-fault-through-an-unchecked-call-argument` uses below.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NegativeOne = int(-1 to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function remainder(n Integer, d NegativeOne) returns Integer
+	return n mod d
+end 'remainder'
+
+function main() returns ExitCode
+	let n = ident(i64.min)
+	let d = ident(-1)
+	let r = remainder(n, d: d)
+	print("r={r}\n")
+	return 0
+end 'main'
+```
+```stdout
+r=0
+```
+```exitcode
+0
+```
+
+<!-- test: mod-by-minus-one-is-zero-for-every-dividend -->
+#### The guard reads the DIVISOR and never the dividend
+`i64.min` is the only dividend that made `idiv` fault, so a guard could pass Door 1 while still
+being keyed on the dividend. These three are `0` for the same reason `i64.min` is — `a mod -1`
+does not depend on `a` — and a positive, a negative and a zero dividend together say so.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let d = ident(0 - 1)
+	let a = try (ident(100) mod d) otherwise 77
+	let b = try (ident(0 - 7) mod d) otherwise 77
+	let c = try (ident(0) mod d) otherwise 77
+	print("a={a} b={b} c={c}\n")
+	return 0
+end 'main'
+```
+```stdout
+a=0 b=0 c=0
+```
+```exitcode
+0
+```
+
+<!-- test: mod-by-a-ranged-divisor-below-minus-one-is-a-bare-idiv -->
+#### A range that excludes BOTH `0` and `-1` still buys the unguarded divide
+The proof is what keeps the guard off the common path, so its precision is worth a case: `int(i64.min
+to -2)` is wholly negative — it admits neither hazard — and `specs-shv2/division.md`'s
+`ranged-divisor-excluding-minus-one-is-still-a-bare-idiv` holds the golden that shows no `cmp` was
+emitted. Here the point is only that a NEGATIVE divisor is not treated as suspicious merely for
+being negative: `-13 mod -5` is `-3`, the remainder taking the DIVIDEND's sign.
+```maxon
+typealias BelowMinusOne = int(i64.min to -2)
+
+function remainder(n int, d BelowMinusOne) returns int
+	return n mod d
+end 'remainder'
+
+function main() returns ExitCode
+	print("r={remainder(0 - 13, d: -5)}\n")
+	return 0
+end 'main'
+```
+```stdout
+r=-3
+```
+```exitcode
+0
+```
+
 ### The CPU fault a divide still reaches, and the two codes the thunk must tell apart
 
 Both cases below reach a bare `idiv` carrying an operand the type system was told could not occur,
@@ -534,6 +708,49 @@ end 'main'
 panic: integer overflow
 Stack trace:
   in divide
+  in main
+  in mrt_start
+```
+
+<!-- test: a-checked-divide-still-faults-at-int-min-over-minus-one -->
+<!-- targets: x64-windows -->
+#### ⭐ THE BOUNDARY OF THE `mod` RULE: a CHECKED `/` is still fatal here, deliberately (A1x)
+
+The case above reaches the fault through a bare `idiv`. This one reaches it through the **fallible**
+divide — the spelling that has a `try`, a divisor the compiler cannot prove non-zero, and a fallback
+sitting right there — and the fallback **still never runs**, because a `#DE` is not a throw. That is
+not an oversight left over from `mod`: **`i64.min / -1` has no representable quotient, so there is no
+value for a total `/` to return**, and A1x fixed `mod` precisely because its answer DOES exist. Pinned
+so the asymmetry is tested rather than inferred from prose — if a later rung makes `/` total too, this
+case is what it has to come and change.
+
+`x64-linux` is excluded for the same measured reason as its neighbour: its kernel reports `FPE_INTDIV`
+for this fault too, so the wording it prints is the divide-by-zero one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let n = ident(i64.min)
+	let d = ident(0 - 1)
+	print("before\n")
+	let q = try (n / d) otherwise 77
+	print("q={q}\n")
+	return 0
+end 'main'
+```
+```stdout
+before
+```
+```exitcode
+1
+```
+```stderr
+panic: integer overflow
+Stack trace:
   in main
   in mrt_start
 ```
