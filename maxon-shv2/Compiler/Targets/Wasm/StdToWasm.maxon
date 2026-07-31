@@ -1877,8 +1877,12 @@ type WasmFuncEmitter
 	// cases carried that marker BECAUSE a lane printed nothing, and there are 16 of them, on both x64
 	// lanes since A1j. The real reason wasm exits bare is that nobody has written a wasm `mrt_panic`.
 	//
-	// Every case that RUNS on wasm keeps its guard's value in range, so this is dead code — it exists
-	// only so the guard COMPILES. Same shape as `emitOsExit` with a constant status.
+	// ⚠ AND IT IS NOT DEAD CODE, WHICH THE SENTENCE HERE ALSO CLAIMED. It said every case that runs on
+	// wasm keeps its guard's value in range, so this existed "only so the guard COMPILES" — true when it
+	// was written and false since `string-views.md` grew the pair that fires a guard on the SILENT lanes:
+	// `whitelisted-stdlib-keeps-its-range-check` is `targets: wasm32-wasi`, reaches this exit under
+	// wasmtime, and asserts the code is 1 (an unguarded build returns 7). So `PanicExitCode` is pinned by
+	// EXECUTION here, not merely by compiling. Same shape as `emitOsExit` with a constant status.
 	function emitRangePanic()
 		self.body.i32Const(PanicExitCode as Imm32)
 		self.body.call(ExitImportFuncIdx)
