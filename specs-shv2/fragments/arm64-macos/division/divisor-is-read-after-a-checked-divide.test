@@ -1,0 +1,68 @@
+// Test: divisor-is-read-after-a-checked-divide
+function opaque(x int) returns int
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let d = opaque(7)
+	let z = opaque(0)
+	let q = try (100 / d) otherwise 99
+	let r = try (100 / z) otherwise 0
+	return (q + d + r + z) as ExitCode
+end 'main'
+---
+ExitCode: 21
+---
+func @opaque {
+  entry:
+    arm64.prologue 16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.bl opaque
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 0
+    arm64.bl opaque
+    arm64.movImm x1, 100
+    arm64.cmp x19, 0
+    arm64.cset x2, eq
+    arm64.orr x6, x19, x2
+    arm64.sdiv x1, x1, x6
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x1, 99
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.movImm x2, 100
+    arm64.cmp x0, 0
+    arm64.cset x6, eq
+    arm64.orr x7, x0, x6
+    arm64.sdiv x2, x2, x7
+    arm64.cmp x6, 0
+    arm64.cset x6, ne
+    arm64.cbnz x6, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x2, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.add x1, x1, x19
+    arm64.add x1, x1, x2
+    arm64.add x0, x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

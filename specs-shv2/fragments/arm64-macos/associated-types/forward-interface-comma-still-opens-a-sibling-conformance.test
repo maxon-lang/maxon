@@ -1,0 +1,102 @@
+// Test: forward-interface-comma-still-opens-a-sibling-conformance
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+type Multi implements Alpha with Integer, Beta with Float, Plain
+	let n as Integer
+
+	function one() returns Integer
+		return n
+	end 'one'
+
+	function two() returns Float
+		return 1.0
+	end 'two'
+
+	function three() returns Integer
+		return 42
+	end 'three'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Multi'
+
+interface Alpha uses A
+	function one() returns A
+end 'Alpha'
+
+interface Beta uses B
+	function two() returns B
+end 'Beta'
+
+interface Plain
+	function three() returns Integer
+end 'Plain'
+
+function main() returns ExitCode
+	let m = Multi.create(7)
+	return m.one() + m.three()
+end 'main'
+---
+ExitCode: 49
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Multi.one {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Multi.three {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Multi.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.bl Multi.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Multi.one
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Multi.three
+    arm64.add x20, x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

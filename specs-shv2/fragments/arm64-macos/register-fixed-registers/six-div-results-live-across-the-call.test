@@ -1,4 +1,6 @@
 // Test: six-div-results-live-across-the-call
+typealias Positive = int(1 to i64.max)
+
 function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
@@ -7,9 +9,9 @@ function divsAcross(p int) returns int
 	let n1 = p + 100
 	let n2 = p + 45
 	let n3 = p + 23
-	let d1 = p + 12
-	let d2 = p + 7
-	let d3 = p + 9
+	let d1 = (p + 12) as Positive
+	let d2 = (p + 7) as Positive
+	let d3 = (p + 9) as Positive
 	let q1 = n1 / d1
 	let q2 = n1 mod d1
 	let q3 = n2 / d2
@@ -68,8 +70,62 @@ func @divsAcross {
     arm64.add x2, x0, 45
     arm64.add x6, x0, 23
     arm64.add x7, x0, 12
+    arm64.cmp x7, 1
+    arm64.cset x8, lt
+    arm64.cbnz x8, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok:
+    arm64.add x7, x7, 0
     arm64.add x8, x0, 7
+    arm64.cmp x8, 1
+    arm64.cset x9, lt
+    arm64.cbnz x9, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok:
+    arm64.add x8, x8, 0
     arm64.add x0, x0, 9
+    arm64.cmp x0, 1
+    arm64.cset x9, lt
+    arm64.cbnz x9, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok:
+    arm64.add x0, x0, 0
     arm64.sdiv x19, x1, x7
     arm64.sdiv x16, x1, x7
     arm64.msub x20, x16, x7, x1

@@ -1,4 +1,6 @@
 // Test: idiv-under-loop-pressure
+typealias Positive = int(1 to i64.max)
+
 function press(p int) returns int
 	let k1 = p + 11
 	let k2 = p + 12
@@ -13,7 +15,7 @@ function press(p int) returns int
 	var i = 1
 	while i <= 5 'loop'
 		var t = k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9
-		sum = sum + t / i
+		sum = sum + t / (i as Positive)
 		i = i + 1
 	end 'loop'
 	return sum
@@ -61,7 +63,22 @@ func @press {
     arm64.add x21, x21, x10
     arm64.add x21, x21, x11
     arm64.add x21, x21, x0
-    arm64.sdiv x21, x21, x20
+    arm64.cmp x20, 1
+    arm64.cset x3, lt
+    arm64.cbnz x3, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.add x3, x20, 0
+    arm64.sdiv x21, x21, x3
     arm64.add x19, x19, x21
     arm64.add x20, x20, 1
     arm64.b whilehdr
