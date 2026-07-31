@@ -1,0 +1,19 @@
+// Test: stdlib-user-shadows.error.a-user-reserved-function-beside-a-shadow
+type Clock
+	export var y as int
+
+	static function make() returns Clock
+		return Clock{y: 6}
+	end 'make'
+end 'Clock'
+
+function __Clock() returns ExitCode
+	return 3
+end '__Clock'
+
+function main() returns ExitCode
+	return (Clock.make().y + __Clock()) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2051: <fragment>:10:10: identifier '__Clock' is reserved: declarations starting with '__' are reserved for compiler internals

@@ -1,0 +1,170 @@
+// Test: parsable.otherwise-fallthrough
+
+typealias Integer = int(i64.min to i64.max)
+
+// otherwise blocks execute code when error occurs, then continue execution
+enum ParseError implements Error
+	Invalid = 1
+end 'ParseError'
+
+type Value implements Parsable
+	export var n as Integer
+
+	static function fromString(input String) returns Self throws ParseError
+		if input.startsWith("x") 'check'
+			throw ParseError.Invalid
+		end 'check'
+		return Value{n: input.byteLength()}
+	end 'fromString'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	var result = 0
+
+	// First call succeeds - handler not executed
+	let v = try Value.fromString("hello") otherwise Value.create(0)
+	result = result + v.n  // adds 5
+
+	// Second call fails - use default value
+	let v2 = try Value.fromString("xbad") otherwise Value.create(0)
+	result = result + v2.n  // adds 0
+
+	// Third call succeeds
+	let v3 = try Value.fromString("world") otherwise Value.create(0)
+	result = result + v3.n  // adds 5
+
+	return result
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Value.fromString {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_1]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_starts_with
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Value.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect Value.fromString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Value.create
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  trycont:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 r12, rax, 0
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect Value.fromString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Value.create
+    x64.movRegReg r13, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r13, r8
+    x64.jmp trycont
+  trycont:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.leaRegRegReg r12, r12, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_7]
+    x64.callDirect Value.fromString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Value.create
+    x64.movRegReg rcx, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, r8
+    x64.jmp trycont
+  trycont:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg r12, r12, rax
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
