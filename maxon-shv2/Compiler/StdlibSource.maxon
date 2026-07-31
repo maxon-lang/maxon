@@ -269,11 +269,11 @@ end 'markMaxonCallees'
 // A new variant that carries a callee name must be added as its own arm.
 function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match op 'op'
-		call(_, callee, _, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+		call(_, callee, _, _, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
 		// `literal` … `stringLiteral`: literals, arithmetic, comparisons, branches, returns, and the
 		// three `var`-access ops — none names a Maxon function.
 		literal to stringLiteral then break 'op'
-		tryCall(_, _, callee, _, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+		tryCall(_, _, callee, _, _, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
 		// `throwError` … `panicAbort`: the error terminators name no callee.
 		throwError to panicAbort then break 'op'
 		functionRef(_, funcName) then markReachable(funcName, byName: byName, reached: reached, worklist: worklist, names: names)
@@ -327,9 +327,9 @@ end 'userCodeCallsStdlib'
 // being silently swallowed).
 function opNamesStdlibCallee(op MaxonOp, stdlib FunctionNameSet) returns bool
 	return match op 'op'
-		call(_, callee, _, _, _, _) gives stdlib.contains(callee)
+		call(_, callee, _, _, _, _, _) gives stdlib.contains(callee)
 		literal to stringLiteral gives false
-		tryCall(_, _, callee, _, _, _, _) gives stdlib.contains(callee)
+		tryCall(_, _, callee, _, _, _, _, _) gives stdlib.contains(callee)
 		throwError to panicAbort gives false
 		functionRef(_, funcName) gives stdlib.contains(funcName)
 		indirectCall gives false
@@ -495,9 +495,9 @@ end 'SubstrateFixpoint'
 // than being silently swallowed by any of them.
 function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
 	match op 'op'
-		call(_, callee, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		call(_, callee, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		literal to stringLiteral then break 'op'
-		tryCall(_, _, callee, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		tryCall(_, _, callee, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		throwError to panicAbort then break 'op'
 		functionRef(_, funcName) then noteSubstrateCallee(funcName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		indirectCall then break 'op'

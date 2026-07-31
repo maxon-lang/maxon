@@ -528,8 +528,8 @@ end 'OverloadResultValue'
 
 function overloadResultValue(op MaxonOp) returns OverloadResultValue
 	return match op 'op'
-		call(result, _, _, _, _, _) gives OverloadResultValue.defines(result)
-		tryCall(result, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
+		call(result, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
+		tryCall(result, _, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
 		asyncCall(result, _, _, _, _, _) gives OverloadResultValue.defines(result)
 		default panic("overloadResultValue: asked of an op that binds no direct callee — `maxonOpCallee` answers `direct` for exactly these three")
 	end 'op'
@@ -577,8 +577,8 @@ end 'OverloadCallArgs'
 
 function overloadCallArgs(op MaxonOp) returns OverloadCallArgs
 	return match op 'op'
-		call(_, _, args, argLabels, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
-		tryCall(_, _, _, args, argLabels, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
+		call(_, _, args, argLabels, _, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
+		tryCall(_, _, _, args, argLabels, _, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
 		asyncCall(_, _, args, argLabels, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
 		default panic("overloadCallArgs: asked of an op that supplies no argument list — `maxonOpCallee` answers `direct` for exactly these three")
 	end 'op'
@@ -847,11 +847,11 @@ end 'trackedValueAt'
 // exist yet.
 function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, funcSignatures FuncSignatureMap) returns bool
 	match op 'op'
-		call(_, callee, args, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
+		call(_, callee, args, _, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
 		literal to loadIndirect then break 'op'
 		storeIndirect(_, _, stored, _) then return isTrackedValue(stored, subject: subject, func: func)
 		stringLiteral then break 'op'
-		tryCall(_, _, callee, args, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
+		tryCall(_, _, callee, args, _, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
 		throwError to functionRef then break 'op'
 		indirectCall(_, _, args) then return trackedValueInArray(args, subject: subject, func: func)
 		// P1.5-B1a: an async spawn's arguments cross into a green thread (an escape route like a call
@@ -1118,9 +1118,9 @@ end 'collectMutationEdges'
 // dropping out of the call graph (the band-append invariant).
 function collectMutationEdgesAt(project Project, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges MutationEdges)
 	match op 'op'
-		call(_, callee, args, argLabels, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
+		call(_, callee, args, argLabels, _, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		literal to stringLiteral then break 'op'
-		tryCall(_, _, callee, args, argLabels, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
+		tryCall(_, _, callee, args, argLabels, _, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		throwError to indirectCall then break 'op'
 		// An `async` spawn runs CONCURRENTLY with its caller, so a write it makes is not ordered against the
 		// caller's own use of the value. shv2 refuses a managed `async` argument outright
@@ -1548,7 +1548,7 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					// A PLAIN call — its args are validated, and a call to a THROWING callee that is not
 					// under a `try` is E3057 (it is a `call`, not a `tryCall`, precisely because no `try`
 					// covered it).
-					call(result, callee, args, argLabels, argRanges, argImmutableNames) then validatePlainCall(project, func: func, opIndex: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
+					call(result, callee, args, argLabels, argRanges, argImmutableNames, mint) then validatePlainCall(project, func: func, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 					// Extended past `branch` to take in the varAccess band and the `stringLiteral` op: a
 					// global's address/load/store and a string literal are not calls and have nothing for
 					// this check to say. Their CALLEE-shaped question — "does this name resolve?" — was
@@ -1557,7 +1557,7 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					literal to stringLiteral then break 'op'
 					// A `tryCall`'s args are validated exactly like a `call`'s (it IS a call plus a flag);
 					// its throws-compatibility (E3055) was checked by the parser at the `try` token.
-					tryCall(result, _, callee, args, argLabels, argRanges, argImmutableNames) then validateCall(project, func: func, opIndex: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
+					tryCall(result, _, callee, args, argLabels, argRanges, argImmutableNames, mint) then validateCall(project, func: func, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 					// The error terminators and the panic op read no callee signature.
 					throwError to panicAbort then break 'op'
 					// P1.5-A1: a `functionRef`'s "does this function name resolve?" was answered by the parser
@@ -1566,7 +1566,7 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					// as a call does (it is one of the four edges `markMaxonCalleeEdge` counts), so the
 					// crossing is refused at the span where the address is taken. An `indirectCall`'s callee
 					// is a VALUE, whose `functionRef` was already gated here.
-					functionRef(_, funcName) then requireTargetSupportsCallee(project, func: func, opIndex: opIdx, callee: funcName, blameTargetErrorsHere: blameTargetErrorsHere)
+					functionRef(_, funcName) then requireTargetSupportsCallee(project, func: func, opIndex: opIdx, callee: funcName, noun: funcName, blameTargetErrorsHere: blameTargetErrorsHere)
 					// An INDIRECT call is validated against the function type its callee VALUE was declared
 					// with — the arity and the argument types a direct call gets from `funcSignatures`. It is
 					// this pass's to make for the same reason a direct call's is: the declared type is a
@@ -1613,7 +1613,9 @@ end 'checkCalls'
 // pre-resolution types and must type the promise safely); this is the one check the parser cannot make — a
 // callee declared in another file, whose param types only the whole-program `funcSignatures` registry has.
 function validateAsyncCall(project Project, func IrFunction, opIndex OpIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
-	validateCall(project, func: func, opIndex: opIndex, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
+	// `notMinted`: `parseAsyncCall` consumes a bare `identifier` callee, so an `async` spawn's name is always
+	// the author's own bytes (`async int.fromString(s)` does not parse at all).
+	validateCall(project, func: func, opIndex: opIndex, result: result, callee: callee, mint: CalleeMint.notMinted, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 	requireAsyncScalarParams(project, func: func, opIndex: opIndex, callee: callee)
 end 'validateAsyncCall'
 
@@ -1655,6 +1657,33 @@ function requireTriedWitnessDispatch(project Project, func IrFunction, opIndex O
 	let callRange = project.opRanges.get(opIndex)
 	reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing interface method requires try: wrap the witness dispatch as `try <receiver>.<method>(…)` — a bare call drops the error flag the method returns", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 end 'requireTriedWitnessDispatch'
+
+// ⭐⭐ **THE NOUN A DIAGNOSTIC ABOUT THIS CALL MUST USE — THE ONE DOOR (A1s-prim).** Every message below
+// that quotes a callee asks HERE rather than rendering `callee` for itself, because for one call family the
+// two are different strings: `int.fromString(s)` links to `__int_fromString`, a symbol the author never
+// typed. Quoting it gives the right error code about a program the reader does not have — the class shv2
+// ruled on at D11c and fixed in its own compiler; a fresh instance of it would be this pass committing the
+// sin it already refused.
+//
+// ⚠⚠ **THE ANSWER IS THE SITE'S, NEVER THE NAME'S, AND THAT IS D12's LESSON PAID FORWARD.**
+// `stdlib/Builtins.maxon` DECLARES `__int_fromString` and CALLS it (`__byte_fromString`'s first line),
+// having written those bytes; keyed on the name, this would rewrite the author's own diagnostic in their
+// own file. A callee two spellings share is a LOSSY KEY used as an identity. `CalleeMint` is the site's
+// answer, carried on the op by the parser — the only tier that knows which of its doors the name came
+// through.
+//
+// ⚠ It is NOT `GtRuntime.runtimeCalleeSourceMethod`, and must not be folded into it: that map answers the
+// same-sounding question for RUNTIME callees, and may be keyed by NAME precisely because none of them is
+// writable. Two questions that read alike, two different keys.
+//
+// The decode itself is `Parser.primitiveStaticSourceSpelling`, which lives beside the mint and re-mints what
+// it split — so this pass owns no copy of the joining rule and cannot drift from it.
+function callDiagnosticNoun(callee ByteArray, mint CalleeMint) returns ByteArray
+	match mint 'm'
+		notMinted then return callee
+		primitiveStatic then return primitiveStaticSourceSpelling(callee)
+	end 'm'
+end 'callDiagnosticNoun'
 
 // ⭐⭐ **THE ONE SPELLING OF "A THROWING CALL NEEDS `try`", NAMING WHAT THE AUTHOR WROTE.** FIVE producers
 // reach it — an ordinary user function, plus the four compiler-owned families that can hand back a source
@@ -1766,8 +1795,8 @@ end 'divisionRequiresTryMessage'
 
 // A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
-function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
-	validateCall(project, func: func, opIndex: opIndex, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
+function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
+	validateCall(project, func: func, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 	// A THROWING BUILTIN reaching here as a plain `call` — not a `tryCall` — was written WITHOUT a `try`, so its
 	// error flag would be silently dropped: a throwing array accessor (`__arr_get`/…) would return a dummy 0 on an
 	// out-of-bounds read, and a bare `runProcess` (P1.5 #93) would return its sentinel exit code while dropping the
@@ -1794,7 +1823,9 @@ function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, re
 	// of the program's calls that is not to a throwing callee, i.e. almost all of them).
 	if throwsMap.contains(callee) 'throwing'
 		let callRange = project.opRanges.get(opIndex)
-		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallRequiresTryMessage(callee), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+		// ⚠ The NOUN, not the callee: a bare `int.fromString(s)` is the shape an author most often writes by
+		// mistake, and it used to be told about `'__int_fromString'` — see `callDiagnosticNoun`.
+		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallRequiresTryMessage(callDiagnosticNoun(callee, mint: mint)), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 	end 'throwing'
 end 'validatePlainCall'
 
@@ -1803,14 +1834,17 @@ end 'validatePlainCall'
 // cleanly slotted call, the per-argument TYPES). The call site's own span
 // (`project.opRanges[opIndex]`) anchors the callee/arity/type errors; an argument's own span
 // (`argRanges[argIndex]`) anchors a per-argument label error.
-function validateCall(project Project, func IrFunction, opIndex OpIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
+function validateCall(project Project, func IrFunction, opIndex OpIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = func.sourceFilePath
+	// Resolved ONCE, at the top, so every message below quotes one string — and so the decode runs once per
+	// call rather than once per message. For all but the primitive-static mint it IS `callee`, at no cost.
+	let noun = callDiagnosticNoun(callee, mint: mint)
 
 	// ⭐ THE TARGET GATE IS ASKED OF EVERY CALLEE, compiler-owned or not: a `__gt_now_ns` the parser
 	// emitted and a `Clock.nowMs` stdlib declared are the same refusal, and asking it here — once,
 	// before the two kinds part company below — is what keeps them one rule.
-	requireTargetSupportsCallee(project, func: func, opIndex: opIndex, callee: callee, blameTargetErrorsHere: blameTargetErrorsHere)
+	requireTargetSupportsCallee(project, func: func, opIndex: opIndex, callee: callee, noun: noun, blameTargetErrorsHere: blameTargetErrorsHere)
 
 	// ⭐ A COMPILER-INTERNAL CALL HAS NOTHING FOR THIS CHECK TO SAY. A `__`-prefixed callee
 	// (`__mm_alloc`, `__print_string`, `__str_eq`) is emitted by the PARSER (`Parser.emitRuntimeCall`)
@@ -1843,16 +1877,16 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, result 
 	end 'compilerOwnCall'
 
 	if not project.funcSignatures.contains(callee) 'unknownFn'
-		reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{String.from(callee)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+		reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{String.from(noun)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'unknownFn'
 
 	let sig = try project.funcSignatures.get(callee) otherwise panic("validateCall: contains('{String.from(callee)}') true but get failed")
 	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
 		ordered(argIds) then checkSlottedCall(project, func: func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, escapeSummary: escapeSummary, mutationSummary: mutationSummary, callRange: callRange, filePath: filePath)
-		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(String.from(callee), expected: expected, got: got), line: callRange.line, column: callRange.column, filePath: filePath)
-		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(String.from(callee), label: label), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
-		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(String.from(callee), paramName: paramName), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
+		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(String.from(noun), expected: expected, got: got), line: callRange.line, column: callRange.column, filePath: filePath)
+		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(String.from(noun), label: label), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
+		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(String.from(noun), paramName: paramName), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 	end 'slot'
 end 'validateCall'
 
@@ -2038,7 +2072,10 @@ let TargetUnsupportedUnnamedSubject = "it"
 // `builtins-sleep.rejected-on-wasm-when-unreached`, which keeps the property at the intrinsic spelling that
 // still has it). That is the correct direction: the entry genuinely is stdlib's, and a program with no path
 // to it does not contain it. Every builtin retired this way moves the same way.
-function requireTargetSupportsCallee(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, blameTargetErrorsHere bool)
+// `callee` is the KEY (the registry is keyed by the EMITTED name) and `noun` is what the message QUOTES —
+// the two part company for a primitive-static mint, and the caller has already resolved which is which
+// (`callDiagnosticNoun`). They are the same bytes for every other callee, at no cost.
+function requireTargetSupportsCallee(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, noun ByteArray, blameTargetErrorsHere bool)
 	// ⚠ `blameTargetErrorsHere` already carries BOTH preconditions — the target can refuse something, and
 	// this function is where such a refusal belongs — because both are constant per function and this runs
 	// at every call op of the program. Do not re-ask the target here: that would be one fact tested in two
@@ -2053,7 +2090,7 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex O
 	end 'compilerOwnedEntry'
 
 	if let entry = try project.stdlibFacts.substrateEntries.get(callee) 'stdlibCrossing'
-		reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: "'{String.from(callee)}'", entry: entry)
+		reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: "'{String.from(noun)}'", entry: entry)
 	end 'stdlibCrossing'
 end 'requireTargetSupportsCallee'
 

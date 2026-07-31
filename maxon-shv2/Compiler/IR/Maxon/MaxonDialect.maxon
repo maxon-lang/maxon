@@ -626,6 +626,39 @@ end 'MaxonCmpOp'
 // unhandled cases" guarantee has no compiler backstop — reviewers enforce it by
 // hand. Appending at a band's end is always safe (the range's endpoint moves with
 // it, deliberately).
+// ⭐⭐ **WAS THIS CALL SITE'S CALLEE MINTED BY THE `<primitive>.<method>` REWRITE (A1s-prim)?** — the ONE
+// fact about a call that its CALLEE BYTES cannot carry, and the reason it rides the op rather than being
+// re-derived downstream.
+//
+// `int.fromString(s)` links to `__int_fromString`, a name that shares not one byte with what the author
+// wrote. Every diagnostic naming that callee — E3036's arity, E3037's label, E3057's missing `try` — would
+// otherwise quote a symbol the program does not contain, which is the defect class shv2 already ruled on at
+// D11c and fixed in its own compiler.
+//
+// ⚠⚠ **AND IT CANNOT BE ANSWERED FROM THE NAME, WHICH IS D12's WHOLE LESSON.** `stdlib/Builtins.maxon`
+// declares `__int_fromString` and CALLS it (`__byte_fromString`'s first line), having genuinely written
+// those bytes — so a name-keyed answer would rename the author's own call in their own file. A callee two
+// spellings share is a LOSSY KEY used as an identity, and D12 is on the board because that shape shipped
+// once already. The site knows; the name does not; so the site says.
+//
+// ⭐ **IT IS DELIBERATELY NOT FOLDED INTO `GtRuntime.runtimeCalleeSourceMethod`**, which is the ONE home of
+// *"what did the author call this RUNTIME callee?"*. That map is keyed by NAME and may be, because a
+// `__arr_get` is emitted and never written; this is per-SITE precisely because its callee IS writable. Two
+// questions that read alike and have different keys — keep them apart.
+//
+// ⚡ An ENUM, not a union: a payload-free union CASE still heap-allocates, and this rides every parsed
+// call (the same measurement that reverted the math-intrinsic resolver, `Parser.parseCallNamed`).
+export enum CalleeMint
+	// The callee names itself. A free call's identifier, a `Type.method` mangle, a compiler-emitted runtime
+	// entry — for all three, a diagnostic's noun is a question about the NAME, answered by the name-keyed
+	// map above where the name is not the author's.
+	notMinted
+	// `int.fromString` → `__int_fromString`, minted by `Parser.primitiveStaticCallee`.
+	// `Parser.primitiveStaticSourceSpelling` is the inverse, and it lives beside the mint so the two cannot
+	// drift; every consumer asks THAT rather than decoding the name for itself.
+	primitiveStatic
+end 'CalleeMint'
+
 export union MaxonOp
 	// --- band: callFree ---
 	// A free-function call `callee(args…)` whose result is a freshly-minted ValueId.
@@ -660,7 +693,10 @@ export union MaxonOp
 	// `__`-prefixed and in no signature registry — and of most user calls, so a shared empty array
 	// serves them all and the op costs nothing. `immutableArgNameAt` is the one reader and decodes both
 	// shapes.
-	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) = MaxonOpMeta{category: OpCategory.callFree}
+	// `mint` says whether `callee` is bytes the author wrote or a name the compiler minted from a spelling
+	// that shares none of them — see `CalleeMint`. It is the LAST field for the reason a new op is appended at
+	// its band's end: every existing destructuring reads its operands positionally.
+	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
 	// --- band: plain ---
 	// Integer literal materialization. `value` is the already-parsed i64 (the
 	// parser converts the raw token text via NumberParsing.parseInt at emit
@@ -770,7 +806,7 @@ export union MaxonOp
 	// PARSER emits (`compare(errorFlag != 0)` + `condBranch`) is what reads the flag; the value is used
 	// on the success edge. Category `callFree`, the same band as `call` — it IS `call` plus the flag def.
 	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
-	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) = MaxonOpMeta{category: OpCategory.callFree}
+	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
 	// THROW an error — a `throw E.case` / `throw U.case(x)` or `otherwise (e) throw e`. TERMINATOR (control
 	// leaves the function via the error edge). `errorValue` is either the enum ORDINAL (a SCALAR error) or a
 	// heap-box POINTER (a payload-bearing/boxed union), and `errorIsBoxed` is which — the ONE bit the
@@ -1026,8 +1062,8 @@ end 'MaxonOpCallee'
 // classifies it — the same argument `TypeRules.tagIsIntegral` records for `ValueTypeTag`.
 export function maxonOpCallee(op MaxonOp) returns MaxonOpCallee
 	return match op 'op'
-		call(_, callee, _, _, _, _) gives MaxonOpCallee.direct(callee)
-		tryCall(_, _, callee, _, _, _, _) gives MaxonOpCallee.direct(callee)
+		call(_, callee, _, _, _, _, _) gives MaxonOpCallee.direct(callee)
+		tryCall(_, _, callee, _, _, _, _, _) gives MaxonOpCallee.direct(callee)
 		asyncCall(_, callee, _, _, _, _) gives MaxonOpCallee.direct(callee)
 		functionRef(_, funcName) gives MaxonOpCallee.functionValue(funcName)
 		literal gives MaxonOpCallee.none
@@ -1061,8 +1097,13 @@ end 'maxonOpCallee'
 // unchanged: a silent pass-through would make a resolver's rewrite vanish for one op kind.
 export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonOp
 	return match op 'op'
-		call(result, _, args, argLabels, argRanges, argImmutableNames) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
-		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+		// ⚠ `mint` rides through UNCHANGED, and that is the loud choice rather than the safe-looking one. Only
+		// overload resolution rewrites a callee, and it rewrites a BARE source name to an overload member — a
+		// name E2051 bars from the reserved space, so a minted callee can never be its subject. Resetting the
+		// mint here would hide that if it ever changed; carrying it makes `primitiveStaticSourceSpelling`'s
+		// re-mint check panic on the spot.
+		call(result, _, args, argLabels, argRanges, argImmutableNames, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, mint: mint)
+		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, mint: mint)
 		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
 		default panic("withRewrittenCallee: asked of an op that binds no direct callee — `maxonOpCallee` answers `direct` for exactly three variants and every caller gates on it")
 	end 'op'

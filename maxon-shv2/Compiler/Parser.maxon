@@ -1283,32 +1283,6 @@ union ConstructorInstance
 	none
 end 'ConstructorInstance'
 
-// ⭐⭐ **WHERE A CALLEE'S NAME CAME FROM — the ONE fact `requireCalleeIsNotReservedName` cannot read off
-// the name, and the fact its own header says the parser is the only tier that holds.**
-//
-// That gate refuses every `__`-prefixed callee arriving at a source call door, because a `__` name the
-// AUTHOR typed is either a compiler internal they may not reach or a link error nothing else would catch.
-// `int.fromString(s)` breaks that reading: the callee `__int_fromString` is reserved, is genuinely
-// declared, and the author wrote no `__` at all — so the name alone can no longer say which of the two
-// happened, and the door has to be told. Threaded as a PARAMETER rather than recorded on the parser,
-// because a call's arguments may themselves contain calls (`int.fromString(prompt(x))`) and a field would
-// be clobbered by the inner one before the outer one reached the door.
-//
-// ⚠ **IT IS AN ENUM, NOT A UNION.** A payload-free union CASE still heap-allocates, and this rides every
-// parsed call — the identical measurement that reverted the math-intrinsic resolver (see the intrinsic
-// table in `parseCallNamed`). An enum is a bare tag.
-enum CalleeSpelling
-	// The author's own bytes: a free call's identifier, a member name after a `.`, or the `Type.method`
-	// mangle built out of two tokens they wrote. A `__` here was TYPED, and is refused.
-	written
-	// Built by the compiler out of a name the author wrote in a DIFFERENT namespace —
-	// `int.fromString` → `__int_fromString`. Reserved BY CONSTRUCTION: `primitiveStaticCallee` is the only
-	// producer, and no source spelling reaches it (`__int_fromString(…)` written literally arrives here
-	// `written`, and stays refused — `specs-shv2/reserved-double-underscore.md`'s
-	// `user-file-cannot-call-a-reserved-name` is the pin on that).
-	minted
-end 'CalleeSpelling'
-
 // ⭐ **THE TWO SHAPES A NESTED (inner) TYPEALIAS TAKES (P1.6-C / P1.7 slice 3b-i).** A `typealias Idx =
 // int(0 to N)` is a RANGED per-instance alias; a `typealias ElementArray = Array with T` is a
 // GENERIC-INSTANCE alias whose instance (`Array with typeParameter(pos)`) is partially opaque. Both record
@@ -1611,12 +1585,59 @@ let ByteTypeName = b"byte"
 // `namesAPrimitiveType` states, so no two `(primitive, method)` pairs can spell one name.
 let PrimitiveStaticNameSeparator = "_"
 
+// The same separator as BYTES, for the join's INVERSE (`primitiveStaticSourceSpelling`), which scans a
+// callee for it. Written twice for `MethodNameSeparatorBytes`' reason and with a stronger protection than
+// that one has: the two copies have a TEST between them at every use — the inverse re-mints the halves it
+// split through the FORWARD join and panics unless they spell the name back.
+let PrimitiveStaticSeparatorBytes = b"_"
+
 // The reserved-space free function a `<primitive>.<method>(…)` call links to. ONE speller, for
 // `MethodNameSeparator`'s reason: the mint and the "is it declared?" probe that gates it must ask about the
 // same bytes, or the parser would rewrite to a name it never checked for.
-function primitiveStaticCallee(typeName ByteArray, methodName ByteArray) returns ByteArray
+export function primitiveStaticCallee(typeName ByteArray, methodName ByteArray) returns ByteArray
 	return "{String.from(ReservedNamePrefix)}{String.from(typeName)}{PrimitiveStaticNameSeparator}{String.from(methodName)}".toByteArray()
 end 'primitiveStaticCallee'
+
+// ⭐⭐ **THE INVERSE OF THE MINT — `__int_fromString` → `int.fromString`, which is the NOUN every diagnostic
+// about such a call must use.** It lives HERE, one line under the forward join, because the two are one
+// fact read in two directions: a decoder written where it is CONSUMED (`SemanticCheck`) could drift from
+// the join and nothing would fail to compile — the message would just start naming a function nobody wrote,
+// which is the very defect this exists to remove.
+//
+// ⚠ **IT IS ASKED ONLY OF A CALL SITE THE OP MARKS `CalleeMint.primitiveStatic`** — never keyed on the name.
+// `stdlib/Builtins.maxon` calls `__int_fromString` having written those bytes, and renaming ITS diagnostics
+// would be D12's lossy key with the arrow reversed. The op carries the site's answer; this only spells it.
+//
+// ⭐ **AND IT CHECKS ITSELF AGAINST THE FORWARD JOIN RATHER THAN TRUSTING ITS OWN SPLIT.** The decode is a
+// split at the first `_` past the reserved prefix, which is exact only while every primitive's name is
+// `_`-free — true of the closed four, and a premise a future primitive could break silently. Re-minting the
+// halves and comparing turns that premise into a check the forward join owns: if the two ever disagree the
+// compiler panics here, naming both, instead of quoting a plausible wrong name at an author.
+export function primitiveStaticSourceSpelling(callee ByteArray) returns ByteArray
+	let separator = try PrimitiveStaticSeparatorBytes.get(0) otherwise panic("primitiveStaticSourceSpelling: PrimitiveStaticSeparatorBytes is a one-byte literal")
+	let head = try callee.slice(ReservedNamePrefix.count(), endIndex: callee.count()) otherwise panic("primitiveStaticSourceSpelling: '{String.from(callee)}' is shorter than the reserved prefix, so `primitiveStaticCallee` cannot have minted it")
+
+	var split = head.count()
+	for i in 0 upto head.count() 'scan'
+		if (try head.get(i) otherwise panic("primitiveStaticSourceSpelling: head.get OOB at {i} inside its own count()")) == separator 'separatorHere'
+			split = i
+			break
+		end 'separatorHere'
+	end 'scan'
+
+	if split == head.count() 'noSeparator'
+		panic("primitiveStaticSourceSpelling: '{String.from(callee)}' holds no '{PrimitiveStaticNameSeparator}' past the reserved prefix, so `primitiveStaticCallee` cannot have minted it — only a call site the op marks `CalleeMint.primitiveStatic` may be asked")
+	end 'noSeparator'
+
+	let typeName = try head.slice(0, endIndex: split) otherwise panic("primitiveStaticSourceSpelling: slice [0, {split}) of a {head.count()}-byte name is in range by the index just found")
+	let methodName = try head.slice(split + 1, endIndex: head.count()) otherwise panic("primitiveStaticSourceSpelling: slice [{split + 1}, {head.count()}) is in range by the index just found")
+
+	if not primitiveStaticCallee(typeName, methodName: methodName).equals(callee) 'decodeDisagreesWithTheMint'
+		panic("primitiveStaticSourceSpelling: '{String.from(callee)}' splits as ('{String.from(typeName)}', '{String.from(methodName)}'), which `primitiveStaticCallee` re-mints as '{String.from(primitiveStaticCallee(typeName, methodName: methodName))}' — the join and its inverse have come apart, which is what happens the moment a primitive's own name holds the separator")
+	end 'decodeDisagreesWithTheMint'
+
+	return qualifiedMethodName(typeName, methodName: methodName)
+end 'primitiveStaticSourceSpelling'
 
 // ⭐ **DOES THIS BASE NAME ONE OF THE FOUR PRIMITIVE TYPES?** Allocation-free, because it is asked of EVERY
 // qualified call's base — the same `equals`-chain discipline the math-intrinsic table documents, and for
@@ -2511,7 +2532,7 @@ let NanosPerMillisecond = 1000000
 // per declaration it sees, and the parse contributes one per declaration it registers. There is no check
 // available for it — SemanticCheck cannot tell a source-written `__` callee from a compiler-emitted one,
 // which is this whole function's reason for existing — so it is stated at both ends instead.
-function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, spelling CalleeSpelling, signatures ProgramSignatures) throws ParseError
+function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, mint CalleeMint, signatures ProgramSignatures) throws ParseError
 	if not isCompilerInternalCallee(callee) 'ordinaryCallee'
 		return
 	end 'ordinaryCallee'
@@ -2520,7 +2541,7 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 	// The two clauses below both key on a FILE — "which file is calling?" — because until now every `__`
 	// callee reaching this door was bytes the author typed, so the file was the only variable. A
 	// `<primitive>.<method>(…)` call is the first whose callee the COMPILER spelled, out of a source name
-	// with no `__` in it, so no file fact can tell it from a typed one: `CalleeSpelling` is that fact, and
+	// with no `__` in it, so no file fact can tell it from a typed one: `CalleeMint` is that fact, and
 	// it is stated by the one routine that mints such a name (`parseQualifiedCall`'s primitive arm).
 	//
 	// ⚠ **`declaresCallee` IS CONJOINED FOR THE OTHER TWO CLAUSES' REASON**, not as belt-and-braces: the
@@ -2528,7 +2549,7 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 	// site already refuses an undeclared primitive static in the AUTHOR'S OWN SPELLING (it must — this
 	// message would name `__int_frobnicate`, a symbol nobody wrote), so a `minted` callee that is not
 	// declared is a drift between that check and this one, and lands here rather than in the backend.
-	if spelling == CalleeSpelling.minted and signatures.declaresCallee(callee) 'theCompilersOwnPrimitiveStaticMint'
+	if mint == CalleeMint.primitiveStatic and signatures.declaresCallee(callee) 'theCompilersOwnPrimitiveStaticMint'
 		return
 	end 'theCompilersOwnPrimitiveStaticMint'
 
@@ -13194,7 +13215,7 @@ export type Parser
 
 		let op = try self.artifact.module.ops.get(opIdx) otherwise panic("rewriteLastCallToTryCall: last opRef {opIdx} not in module.ops")
 		return match op 'rewrite'
-			call(result, callee, args, argLabels, argRanges, argImmutableNames) gives TryTarget.named(self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames))
+			call(result, callee, args, argLabels, argRanges, argImmutableNames, mint) gives TryTarget.named(self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, mint: mint))
 			// P1.5-B2b: `try await p` — rewrite the `await` op into a `tryAwait` defining the error flag,
 			// exactly as `call` → `tryCall`. The awaited callee (recovered from the promise) is returned for
 			// the desugar's E3055/E3059 checks and its `otherwise` error-type binding.
@@ -13245,8 +13266,10 @@ export type Parser
 
 	// Replace the `call` op at `opIdx` with a `tryCall` defining the second `errorFlag` result, preserving
 	// every call field, and return the callee name.
-	function commitTryCallRewrite(opIdx OpIndex, result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) returns ByteArray
-		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)) otherwise panic("commitTryCallRewrite: module.ops.set OOB at {opIdx}")
+	// `mint` crosses the rewrite with every other operand: a `try int.fromString(s)` is the SAME call, and
+	// the noun its E3036 would name does not change because the error flag became a second result.
+	function commitTryCallRewrite(opIdx OpIndex, result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, mint CalleeMint) returns ByteArray
+		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, mint: mint)) otherwise panic("commitTryCallRewrite: module.ops.set OOB at {opIdx}")
 		return callee
 	end 'commitTryCallRewrite'
 
@@ -14309,7 +14332,10 @@ export type Parser
 	// future labelled runtime call fail loudly rather than mis-slot.
 	function emitRuntimeCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
 		let result = self.mintValue(resultTag, nameId: resultNameId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames), range: range)
+		// `notMinted`: a runtime entry's callee is not the author's bytes either, but its noun is a question
+		// about the NAME — `GtRuntime.runtimeCalleeSourceMethod` answers it, keyed by name, and may be. Only the
+		// primitive-static mint needs the per-SITE bit. See `CalleeMint`.
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, mint: CalleeMint.notMinted), range: range)
 		return result
 	end 'emitRuntimeCall'
 
@@ -22764,8 +22790,8 @@ export type Parser
 		var argRanges = SourceRangeArray.create()
 		argRanges.push(range)
 		// `written`: the callee is `<the author's own type name>.toString`, so the reserved-space door must
-		// judge it exactly as it judges the same call spelled out (`p.toString()`) — see `CalleeSpelling`.
-		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, spelling: CalleeSpelling.written)
+		// judge it exactly as it judges the same call spelled out (`p.toString()`) — see `CalleeMint`.
+		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
 	end 'materializeStructToStringPart'
 
@@ -24035,13 +24061,13 @@ export type Parser
 		if namesAPrimitiveType(typeTok.value) and not self.signatures.declaresCallee(declaredCallee) 'primitiveStatic'
 			let minted = primitiveStaticCallee(typeTok.value, methodName: memberTok.value)
 			if self.signatures.declaresCallee(minted) 'declaredPrimitiveStatic'
-				return try self.parseCallNamed(func, callee: minted, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, spelling: CalleeSpelling.minted)
+				return try self.parseCallNamed(func, callee: minted, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
 			end 'declaredPrimitiveStatic'
 
 			try requirePrimitiveStaticIsResolvable(typeTok, memberTok: memberTok, declaredCallee: declaredCallee)
 		end 'primitiveStatic'
 
-		let result = try self.parseCallNamed(func, callee: declaredCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(typeTok.value), spelling: CalleeSpelling.written)
+		let result = try self.parseCallNamed(func, callee: declaredCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.notMinted)
 		self.retypeGenericAliasConstructorResult(result, aliasName: typeTok.value)
 		return result
 	end 'parseQualifiedCall'
@@ -24454,7 +24480,7 @@ export type Parser
 		// The enum's name comes from the receiver's TYPE, never from the anchor token: the anchor is a
 		// variable's name (`d`), a `.` for a temporary, and `self` is not even an identifier.
 		let memberTok = self.current()
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: recv.anchor, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, spelling: CalleeSpelling.written)
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: recv.anchor, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 	end 'dispatchEnumMethod'
 
 	// ⭐⭐ **THE BINDING A METHOD DISPATCH ACTS ON — and a SELF-FIELD ALIAS is the one that has to be
@@ -24684,7 +24710,7 @@ export type Parser
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
 
-		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), spelling: CalleeSpelling.written)
+		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.notMinted)
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 		return result
 	end 'dispatchMethodOnBase'
@@ -31386,12 +31412,12 @@ export type Parser
 		// names nothing declared).
 		if self.isImplicitSelfMethod(calleeTok.value) 'implicitSelfMethod'
 			let receiver = try self.implicitSelfReceiver(calleeTok.value, anchor: calleeTok)
-			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingType, methodName: calleeTok.value), anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, spelling: CalleeSpelling.written)
+			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingType, methodName: calleeTok.value), anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 		end 'implicitSelfMethod'
 
 		// A free call has no receiver and constructs no generic instance: there is no value to its left, and
 		// a generic type is instantiated only through a `Type.method` qualified call.
-		return try self.parseCallNamed(func, callee: calleeTok.value, anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, spelling: CalleeSpelling.written)
+		return try self.parseCallNamed(func, callee: calleeTok.value, anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 	end 'parseCall'
 
 	// The call parser proper, taking the callee's NAME rather than reading it — because two call
@@ -31407,8 +31433,8 @@ export type Parser
 	//
 	// `spelling` is threaded straight through to `emitCall`'s reserved-space door and read nowhere else:
 	// every caller but ONE hands it the author's own bytes, and the exception is the primitive-static mint
-	// (`parseQualifiedCall`). See `CalleeSpelling`.
-	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, spelling CalleeSpelling) returns ValueId throws ParseError
+	// (`parseQualifiedCall`). See `CalleeMint`.
+	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
 		// The callee's final name token may be a KEYWORD (D8) — `FilePath.from(path)`, `c.to()`, `from(41)`.
 		// The `callee` bytes the caller passed were read off this very token, so refusing it here would have
 		// refused every call to a name the declaration now accepts.
@@ -31577,7 +31603,7 @@ export type Parser
 			end 'sleep'
 		end 'builtinsIntrinsic'
 
-		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, spelling: spelling)
+		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint)
 	end 'parseCallNamed'
 
 	// ⭐ **`__Builtins.currentTimeMs()` — THE NANOSECOND READING, SCALED. NOT the coarse tick.**
@@ -32119,9 +32145,9 @@ export type Parser
 	// is emitted for a call the program is not allowed to make.
 	//
 	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
-	// question the reserved-space door cannot answer from the name — see `CalleeSpelling`.
-	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, spelling CalleeSpelling) returns ValueId throws ParseError
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, spelling: spelling, signatures: self.signatures)
+	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
+	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
 		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
@@ -32130,7 +32156,7 @@ export type Parser
 		// emitted so a refused call emits nothing.
 		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
 		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames)), range: SourceRange.between(anchor, last: rparenTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), mint: mint), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitCall'
 
@@ -32316,7 +32342,7 @@ export type Parser
 		// `written` is not a default here, it is the shape of the door: `parseAsyncCall` is the sole caller and
 		// it consumes a bare `identifier` callee, so an `async` spawn's name is always the author's own bytes.
 		// `async int.fromString(s)` does not parse at all — the `async` target grammar admits a free call only.
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, spelling: CalleeSpelling.written, signatures: self.signatures)
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, mint: CalleeMint.notMinted, signatures: self.signatures)
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
 			if not tagIsAsyncScalar(self.tagOf(argValue)) 'managedArg'

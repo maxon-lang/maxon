@@ -383,3 +383,36 @@ end 'main'
 ```
 
 Note: Tests for many float parameters (>4) and float parameter preservation across calls are currently disabled due to known codegen bugs with float register allocation. See test fragments for the disabled tests.
+
+<!-- test: float.panic-in-a-float-returning-function -->
+**THE CONSTRUCT `float.fromString` IS BUILT ON, PINNED IN USER CODE — and the pre-existing compiler PANIC
+that stood between this rung and its two float cases.** `stdlib/Builtins.maxon`'s `__float_fromString`
+divides under `try (digit / fracDiv) otherwise panic(…)`, so enabling `parsable.float-fromstring` made a
+`panic()` inside a FLOAT-returning function reachable for the first time — and it did not compile:
+`panic at X64Backend.maxon:751: a register-to-register move from rax to xmm0 crosses register files`.
+
+The cause is in `Parser.emitDeadReturn`. A diverging `panic()` still owes its block a terminator, and the
+parser emitted `ret <integer 0>` on the grounds that the value is dead. Its BITS are dead; its REGISTER FILE
+is not — `ret` moves the value into the return register, which is XMM0 here. `LowerMaxonToStd`'s
+`emitZeroConstOfReturnType` already states exactly this rule for the THROW edge, quoting the same panic; the
+parser's dead return is the same defect one door over, and now reads the same fact (through
+`floatResolvedTag`, so a `returns ParsedFloat` ranged alias is XMM-classed too).
+
+⚠ **IT NEEDS NO `try` AND NO `Parsable` — THE REPRODUCER IS BELOW, AND THAT IS WHY IT LIVES HERE.** It
+reached shv2 through `float.fromString` (A1s-prim) only because `stdlib/Builtins.maxon` happens to write
+that shape; the property is a float function's DEAD RETURN, which every `panic()` in one emits.
+```maxon
+function scaled(x float) returns float
+	if x < 0.0 'negative'
+		panic("scaled: negative input")
+	end 'negative'
+	return x * 2.0
+end 'scaled'
+
+function main() returns ExitCode
+	return trunc(scaled(21.0))
+end 'main'
+```
+```exitcode
+42
+```

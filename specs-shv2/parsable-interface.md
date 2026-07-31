@@ -515,36 +515,45 @@ end 'main'
 error E3004: <fragment>:3:14: call to undefined function 'byte.frobnicate'
 ```
 
-<!-- test: parsable.float-otherwise-panic -->
-**THE CONSTRUCT `float.fromString` IS BUILT ON, PINNED IN USER CODE — and the pre-existing compiler PANIC
-that stood between this rung and its two float cases.** `stdlib/Builtins.maxon`'s `__float_fromString`
-divides under `try (digit / fracDiv) otherwise panic(…)`, so enabling `parsable.float-fromstring` made a
-`panic()` inside a FLOAT-returning function reachable for the first time — and it did not compile:
-`panic at X64Backend.maxon:751: a register-to-register move from rax to xmm0 crosses register files`.
+<!-- test: error.minted-callee-arity-names-the-source-spelling -->
+**THE MINT MUST NOT REACH THE AUTHOR'S DIAGNOSTICS (A1s-prim, coordinator ruling).** `int.fromString` links
+to `__int_fromString`, so every message that quotes a callee had to be taught the difference or it would
+report the right error code about a program the reader does not have — the D11c class, which shv2 ruled on
+and fixed in its own compiler. MEASURED before the fix: `'__int_fromString' expects 1 argument(s) but 0 were
+provided`.
 
-The cause is in `Parser.emitDeadReturn`. A diverging `panic()` still owes its block a terminator, and the
-parser emitted `ret <integer 0>` on the grounds that the value is dead. Its BITS are dead; its REGISTER FILE
-is not — `ret` moves the value into the return register, which is XMM0 here. `LowerMaxonToStd`'s
-`emitZeroConstOfReturnType` already states exactly this rule for the THROW edge, quoting the same panic; the
-parser's dead return is the same defect one door over, and now reads the same fact (through
-`floatResolvedTag`, so a `returns ParsedFloat` ranged alias is XMM-classed too).
-
-⚠ **THIS CASE'S PERMANENT HOME IS `specs-shv2/float-type.md`** — it is a float-codegen property with no
-`Parsable` content, and it needs no `try` at all to fire (the minimum reproducer is a float function whose
-body is `if x < 0.0 … panic(…) end / return x`). It is pinned here because A1s-prim's file list does not
-reach that spec, and an unpinned compiler panic is worse than a case in the wrong file.
+⚠⚠ **AND THE ANSWER IS THE CALL SITE'S, NEVER THE NAME'S.** `stdlib/Builtins.maxon` declares
+`__int_fromString` AND CALLS it (`__byte_fromString`'s first line) having genuinely written those bytes, so
+a name-keyed rewrite would rename the author's own diagnostic in their own file — D12's lossy key with the
+arrow reversed. `MaxonOp.call`/`tryCall` therefore carry a `CalleeMint`, and `SemanticCheck`'s
+`callDiagnosticNoun` reads it. MEASURED in the other direction, by breaking that stdlib call: it reports
+`stdlib/Builtins.maxon:322:19: '__int_fromString' expects 1 argument(s) but 0 were provided` — the mangled
+name, in the file whose author wrote it. That half CANNOT be pinned by a fragment (the exemption is an
+identity compare against the real `<stdlibDir>/Builtins.maxon`, which no spec file can be), so it is
+recorded here rather than tested.
 ```maxon
-function scaled(x float) returns float
-	if x < 0.0 'negative'
-		panic("scaled: negative input")
-	end 'negative'
-	return x * 2.0
-end 'scaled'
-
 function main() returns ExitCode
-	return trunc(scaled(21.0))
+	let n = try int.fromString() otherwise 0
+	return n
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3036: <fragment>:3:14: 'int.fromString' expects 1 argument(s) but 0 were provided
+```
+
+<!-- test: error.minted-callee-missing-try-names-the-source-spelling -->
+**E3057 IS THE SAME LEAK AT THE MISTAKE PEOPLE ACTUALLY MAKE** — forgetting the `try` on a throwing call —
+so it is pinned beside the arity one rather than trusted to share its fix. Both nouns come from the single
+`callDiagnosticNoun` door; before it, this said `throwing function requires try: '__int_fromString'`.
+
+⚠ `byte.fromString` gets the identical treatment through the identical door — it is minted by the same
+routine at the same site — so the two doors of this rung cannot diverge on the noun either.
+```maxon
+function main() returns ExitCode
+	let n = int.fromString("42")
+	return n
+end 'main'
+```
+```maxoncstderr
+error E3057: <fragment>:3:10: throwing function requires try: 'int.fromString'
 ```
