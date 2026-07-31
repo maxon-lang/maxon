@@ -145,6 +145,23 @@ end 'divisionExpansionCalleeForOp'
 // compiling, which is the only thing that can stop a new checked division from being lowered as a quotient
 // by omission. `notCheckedDivision` is not a division and has no operator, so it panics rather than
 // defaulting to one — `lowerTryCall`'s own match is what keeps it unreachable.
+// ⭐ **HOW A DIAGNOSTIC SPELLS THE OPERATOR AN EXPANDED DIVISION CAME FROM** — one mapping, because three
+// messages now quote it and a divide reported as `mod` (or the reverse) would send the reader to the wrong
+// line: E3057's "throwing division requires try" (`SemanticCheck`), E3055's "cannot fail" for the total
+// remainder (`Parser.requireThrowingNamedTryTarget`), and E3103's provable-zero refusal — which reads it
+// straight off the operator token (`opTok.kind.rawValue`).
+//
+// The spelling is `TokenKind`'s for exactly that reason: E3103 has a token in hand and the other two have
+// only a callee, so `TokenKind` is the one source that keeps all three saying the same word. A `%` synonym
+// for `mod` would move every one of them at once.
+export function divisionOperatorSpellingForKind(kind CheckedDivisionKind) returns String
+	match kind 'k'
+		quotient then return TokenKind.slash.rawValue
+		remainder to guardedRemainder then return TokenKind.mod.rawValue
+		notCheckedDivision then panic("divisionOperatorSpellingForKind: `notCheckedDivision` came from no operator — every caller has already established that the callee IS an expanded division")
+	end 'k'
+end 'divisionOperatorSpellingForKind'
+
 export function divisionOperatorForKind(kind CheckedDivisionKind) returns MaxonBinOp
 	match kind 'k'
 		quotient then return MaxonBinOp.div

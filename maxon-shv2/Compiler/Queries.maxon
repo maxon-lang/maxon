@@ -868,6 +868,9 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// (`'stdlib.Array.count' does not throw'`); shv2 holds only the emitted runtime symbol
 		// (`__arr_count`), which is reserved namespace the user never wrote, so it names the class instead.
 		tryOnNonThrowingBuiltin(line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this builtin call cannot fail", line: line, column: column, filePath: path)
+		// A1x — it names the OPERATOR and the reason the divide is total, because the divisor's range is the
+		// thing the author would have to change to make it fallible, and there is nothing here to catch.
+		tryOnTotalDivision(operator, line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this `{operator}` cannot fail — its divisor is already proven non-zero, so there is no divide-by-zero error to catch", line: line, column: column, filePath: path)
 		// P1.5-B2b: a plain `await` of a throwing promise (E3057), and a `try …` propagate whose error type
 		// differs from the enclosing function's (E3059). E3057 shares SemanticCheck's throwing-call-needs-try
 		// code; E3059 shares the `errorTypeMismatch` code with its own full-sentence message.

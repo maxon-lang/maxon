@@ -2301,6 +2301,15 @@ type MaxonToStdLowering
 	// bare `StdOp.mod` and never reaches any expansion, so a literal divisor, a folded variable, or a ranged
 	// type excluding `-1` (`int(1 to 1000)`, `int(i64.min to -2)`) pays none of these four ops. That is what
 	// keeps every existing division golden byte-identical.
+	//
+	// ⚠⚠ **AND IT COVERS ONLY THE `mod`s A SOURCE PROGRAM WROTE.** Three COMPILER-AUTHORED builders emit
+	// `StdOp.mod` directly, past the parser and past this guard: `StringRuntime`'s digit loop (divisor
+	// `DecimalRadix`), `GraphemeRuntime`'s Hangul decomposition (a syllable-count constant) and `GtRuntime`'s
+	// tick conversion (a `QueryPerformanceFrequency` result). All three are safe TODAY because each divisor is
+	// a positive constant that builder emits itself — verified, not assumed — but a future runtime builder
+	// dividing by something it received is outside every proof in this file. It is written down rather than
+	// checked because there is nothing here to derive the answer from: at that tier the divisor is a bare
+	// ValueId with no range and no constant domain, so the obligation belongs to whoever emits the op.
 	function emitRemainderOverflowSafeDividend(dividend ValueId, divisor ValueId, operandType StdType, dstBlock IrBlock) returns ValueId
 		let negOne = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(negOne, value: OverflowingDivisorPattern, valueType: operandType))

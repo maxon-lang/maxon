@@ -598,6 +598,30 @@ a=0 b=0 c=0
 0
 ```
 
+<!-- test: error.try-over-a-total-mod-names-the-operator -->
+#### A `try` over a guarded `mod` is refused — and answers as a `mod`, not as a "builtin call"
+The overflow guard makes this `mod` a compiler-expanded CALL where it used to be a bare `binOp`, so the
+`try` now reaches the throwing-target check instead of the not-a-call one. That change of shape must not
+change what the author is told: they wrote an operator, and the emitted symbol behind it (`__guarded_mod`)
+is exactly the kind of name the `__` reservation exists to keep out of a diagnostic. So E3055 names the
+OPERATOR and the reason — the divisor's range, which is the thing they would have to change.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let n = ident(i64.min)
+	let r = try (n mod -1) otherwise 5
+	return r as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3055: <fragment>:10:10: try requires a throwing function: this `mod` cannot fail — its divisor is already proven non-zero, so there is no divide-by-zero error to catch
+```
+
 <!-- test: mod-by-a-ranged-divisor-below-minus-one-is-a-bare-idiv -->
 #### A range that excludes BOTH `0` and `-1` still buys the unguarded divide
 The proof is what keeps the guard off the common path, so its precision is worth a case: `int(i64.min

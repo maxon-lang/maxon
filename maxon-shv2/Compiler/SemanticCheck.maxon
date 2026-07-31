@@ -1756,17 +1756,16 @@ function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 	// and a reader who is only told "add try" would never find it.
 	//
 	// The operator is recovered from the CALLEE, so `mod` is not reported as `/`: `divisionKindOf` is the one
-	// place that mapping lives. Its SPELLING comes from `TokenKind`, which is where the E3103 message gets it
-	// too (`opTok.kind.rawValue`) — so the two diagnostics for the same operator cannot come to spell it
-	// differently, and a `%` synonym would move both.
+	// place that mapping lives, and `divisionOperatorSpellingForKind` the one place its WORD does — shared with
+	// the E3055 sentence A1x's total remainder gets, so no two division diagnostics can spell it differently.
 	//
-	// ⚠ **A1x's TOTAL REMAINDER HAS NO SENTENCE HERE AND MUST NOT GAIN ONE.** `__guarded_mod` guards `idiv`'s
-	// OVERFLOW divisor, answers `0`, and throws nothing — so E3057 is never raised for it and neither of the
-	// two fixes this message offers would apply (there is no error to wrap, and its divisor's range already
-	// excludes 0). Reaching here would mean `divisionKindThrows` and `isThrowingRuntimeCallee` had come apart.
-	match divisionKindOf(callee) 'division'
-		quotient then return divisionRequiresTryMessage(TokenKind.slash.rawValue)
-		remainder then return divisionRequiresTryMessage(TokenKind.mod.rawValue)
+	// ⚠ **A1x's TOTAL REMAINDER NEVER REACHES HERE.** `__guarded_mod` guards `idiv`'s OVERFLOW divisor, answers
+	// `0`, and throws nothing — so E3057 is never raised for it, and neither of the two fixes this message
+	// offers would apply (there is no error to wrap, and its divisor's range already excludes 0). Reaching here
+	// would mean `divisionKindThrows` and `isThrowingRuntimeCallee` had come apart.
+	let divisionKind = divisionKindOf(callee)
+	match divisionKind 'division'
+		quotient to remainder then return divisionRequiresTryMessage(divisionOperatorSpellingForKind(divisionKind))
 		guardedRemainder then panic("throwingRuntimeCalleeMessage: the TOTAL `mod` overflow guard is not a throwing callee, so E3057 is never raised for it — this builder is reached only through `isThrowingRuntimeCallee`, whose answer comes from the same `divisionKindThrows` list")
 		notCheckedDivision then break 'division'
 	end 'division'

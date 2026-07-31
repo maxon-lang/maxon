@@ -732,6 +732,17 @@ export union ParseError implements Error
 	// space — the same reason `SemanticCheck`'s mirror E3057 for a bare throwing accessor describes the CLASS
 	// instead of naming the symbol.
 	tryOnNonThrowingBuiltin(line LineNumber, column ColumnNumber)
+	// A `try` applied to a division the compiler made TOTAL — today only A1x's `mod` over a divisor proven
+	// non-zero but possibly `-1`, which is expanded into an overflow guard that answers `0` and raises nothing.
+	// Renders as **E3055** at the `try` token, a THIRD message on that code beside the two above.
+	//
+	// ⚠ **IT EXISTS BECAUSE A1x TURNED THAT `mod` INTO A CALL, AND THE BUILTIN SENTENCE WOULD HAVE BEEN A
+	// DOWNGRADE.** `try (a mod -1)` used to be E2015 ("the expression after `try` is not a call") — the `mod`
+	// was a bare `binOp` and nothing had been emitted for a `try` to claim. It is now a `__guarded_mod` call,
+	// so it reaches the check above and would have been told *"this builtin call cannot fail"* about an
+	// operator the author wrote themselves. Naming the DIVISION rather than the symbol keeps the emitted name
+	// out (`tryOnNonThrowingBuiltin`'s whole reason) while still answering the question actually asked.
+	tryOnTotalDivision(operator String, line LineNumber, column ColumnNumber)
 	// A plain `await p` of a promise whose thunk THROWS — `await` lowers to `__gt_await`, which drops the
 	// error flag (P1.5-B2b). Renders as **E3057** (the throwing-call-needs-`try` code SemanticCheck reports
 	// for an ordinary throwing call), positioned at the `await` token. It is a PARSE error because only the
@@ -12952,6 +12963,20 @@ export type Parser
 			if isThrowingRuntimeCallee(callee) 'throwingAccessor'
 				return
 			end 'throwingAccessor'
+
+			// ⚠ **A DIVISION ANSWERS AS A DIVISION (A1x).** A1x's total remainder is the one non-throwing callee
+			// the author did not write the NAME of — they wrote an operator — so the builtin sentence below would
+			// describe their `mod` as "this builtin call". Asked before it, and only for a division the compiler
+			// expanded: every other `__` callee here is a method or a `print` the author DID spell.
+			let divisionKind = divisionKindOf(callee)
+			match divisionKind 'totalDivision'
+				guardedRemainder then throw ParseError.tryOnTotalDivision(divisionOperatorSpellingForKind(divisionKind), line: tryTok.line, column: tryTok.column)
+				// The two `__checked_*` names are throwing and returned above; `notCheckedDivision` is every other
+				// builtin, which the sentence below is for.
+				quotient to remainder then panic("requireThrowingNamedTryTarget: '{String.from(callee)}' is a THROWING division, so `isThrowingRuntimeCallee` must have accepted the `try` already — reaching here means `divisionKindThrows` and that predicate disagree")
+				notCheckedDivision then break 'totalDivision'
+			end 'totalDivision'
+
 			throw ParseError.tryOnNonThrowingBuiltin(tryTok.line, column: tryTok.column)
 		end 'builtin'
 	end 'requireThrowingNamedTryTarget'
