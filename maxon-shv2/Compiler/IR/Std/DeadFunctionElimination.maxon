@@ -186,23 +186,33 @@ end 'indexFunctionsByName'
 // installed (`scanRuntimeUsage` skips the body of every function whose NAME is in that set). If a
 // `Builtins.maxon` declaration of `__foo` could land in `unreachable`, the runtime's own `__foo` could go
 // uninstalled, exactly ONE `__foo` would reach this loop, and the compile would SUCCEED with every emitted
-// call bound to the author's stub. It cannot, and there are TWO independent bars — either alone closes it:
+// call bound to the author's stub.
 //
-//   1. **E2051.** `unreachable` is built only from `project.stdlibSourcePaths` (`stdlibFunctionNames`), i.e.
-//      from WHITELISTED stdlib modules (`StdlibLoader.whitelistedStdlibModules` — today `Clock.maxon`,
-//      `Sleep.maxon`, `helpers/string/utf16.maxon`). None of those is the exempt file, so a `__` declaration
-//      in any of them is E2051 before anything else runs. MEASURED: `export function __probe_reserved()`
-//      added to `stdlib/Sleep.maxon` is `E2051 … is reserved`, and no compile follows.
-//   2. **The exempt file is never stdlib SOURCE.** `Builtins.maxon` is not whitelisted, so the only way its
-//      declarations enter a compile at all is `maxon-shv2 build stdlib/Builtins.maxon`, which makes it the
-//      USER'S ROOT — and `registeredPathsWhenTheRootIsInsideStdlib` keeps a user root out of
-//      `stdlibSourcePaths`. `unreachable` "never contains a USER function" (`scanRuntimeUsage`'s header), and
-//      the declaration that can collide is by construction in a user file.
+// ⚠⚠ **IT CAN NOW, AND THE TWO BARS THAT USED TO CLOSE IT ARE BOTH GONE.** They were: *(1)* E2051 — no
+// LISTED stdlib module may declare a `__` name, and the exempt file was not listed; *(2)* the exempt file is
+// never stdlib SOURCE, since `Builtins.maxon` could only enter a compile as the user's own ROOT, which
+// `registeredPathsWhenTheRootIsInsideStdlib` keeps out of `stdlibSourcePaths`. **A1s listed
+// `stdlib/Builtins.maxon`**, which deletes both at once: it is the E2051-exempt file AND stdlib source, so
+// its four `__*_fromString` declarations are ordinary members of the space `unreachable` is drawn from. The
+// re-derivation that widening owed is below, and what stands in the bars' place is STRUCTURAL rather than a
+// property of which files happen to be listed:
 //
-// ⇒ The suppression path and the collision path are DISJOINT, so the pair either both exist (E4015 here) or
-// the call is never emitted. ⚠ **Bar 1 is the fragile one**: whitelisting `Builtins.maxon` would delete it,
-// leaving only bar 2 — and bar 2 holds only while a `Builtins.maxon` declaration can reach a compile solely
-// as the root. Re-derive both before widening either the whitelist or the E2051 exemption.
+//   1. **SUPPRESSION AND EMISSION ARE DECIDED FROM THE SAME BODIES (A1s).** The bad outcome needs an EMITTED
+//      call to `__foo` whose installer was gated off, and a lowered runtime call is emitted only while
+//      lowering a body. `lowerMaxonToStd` now skips exactly the set `scanRuntimeUsage` skips, so no body can
+//      emit a call whose installer was never offered that body's usage. ⚠ The two DISAGREED before this
+//      rung — lowering emitted `__mm_alloc`/`__str_eq` calls out of bodies the usage scan had skipped, and
+//      it was only this pass dropping the function that kept the dangling call harmless.
+//   2. **THE DECLARATION IS NEVER TAKEN OUT OF THE MODULE.** That skip empties a body; it does not drop the
+//      function, and `lowerMaxonToStd` says so and says this is why. So both sides of a real pair still
+//      reach the count below, which is the assumption this whole paragraph is about.
+//   3. MEASURED: no name `Builtins.maxon` declares is a name the compiler INSTALLS.
+//      `__int_fromString`/`__float_fromString`/`__bool_fromString`/`__byte_fromString` are declarations the
+//      compiler CALLS (A1r), never emits — so there is no pair today, and the whole suite is green with the
+//      module listed. If that ever ceases to be true the pair exists and E4015 fires, by (2).
+//
+// ⚠ **WHAT WOULD REOPEN IT** is now (1) or (2), not the whitelist: making that skip DROP a function rather
+// than empty it, or letting any pass decide a runtime INSTALL from a body some other pass still lowers.
 function refuseDuplicateFunctionName(module StdModule, project Project, laterIndex FuncIndex) throws CompileError
 	let later = module.getFunc(laterIndex)
 	let earlier = earlierFunctionNamed(module, name: later.name, before: laterIndex)
