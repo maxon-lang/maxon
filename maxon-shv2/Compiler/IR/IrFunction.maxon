@@ -331,9 +331,16 @@ export type IrFunction
 	end 'create'
 
 	// Create an IrFunction at the Std phase or later. Std-phase type fields are
-	// populated; Maxon-phase fields default. Used by stdlib-cache restore and by
-	// passes that synthesize helpers; both want the function callable from
-	// anywhere, so visibility defaults to `global`.
+	// populated; Maxon-phase fields default. Used by the runtime installers and the entry stubs — every
+	// caller synthesizes a helper and wants it callable from anywhere, so visibility defaults to `global`.
+	//
+	// ⚠ **NO PARSED FUNCTION COMES THROUGH THIS DOOR, and that is load-bearing rather than incidental**:
+	// `sourceFilePath` is left EMPTY here, and A1t's `refuseDuplicateFunctionName` reads exactly that to
+	// tell an author's declaration apart from a symbol the compiler emitted (as `TargetPrinter.
+	// isRuntimeFunction` reads it for the GT stack-guard exemption). ⚠ This header used to name
+	// *"stdlib-cache restore"* as a caller — shv2 has no such restore, and the phantom answered "yes" to
+	// the one question both readers turn on: *can a function parsed from source reach the Std module with
+	// empty provenance?* It cannot.
 	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,

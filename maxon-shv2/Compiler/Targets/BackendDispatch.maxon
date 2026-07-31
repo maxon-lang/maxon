@@ -43,11 +43,13 @@ let EntryStubFrameBytes = 0x20
 // Run the full backend: Std → Target → register allocation → prologue/epilogue →
 // runtime augmentation → machine-code emission → CodeResult.
 //
-// `throws CompileError` because register allocation can now FAIL for a real reason the
-// user must fix: a loop that needs more registers than exist (E5001, reported onto
-// `project.diagnostics`). `project` also carries the `opRanges`/`valueOrigins` tables the
-// allocator maps a Target ValueId back to its source span through. Every other backend
-// stage is infallible — a failure there is a compiler bug and still panics.
+// `throws CompileError` because TWO backend stages can FAIL for a real reason the user must fix, both
+// reported onto `project.diagnostics`: register allocation raises E5001 when a loop needs more registers
+// than exist, and the reachability prune raises E4015 when a declaration collides with a symbol the
+// compiler emits (A1t — the first stage that can see BOTH, so the first that can tell them apart).
+// `project` also carries the `opRanges`/`valueOrigins` tables the allocator maps a Target ValueId back to
+// its source span through. Every other backend stage is infallible — a failure there is a compiler bug and
+// still panics.
 // Each stage below is bracketed by one `PhaseProbe`, which measures its wall time AND its
 // allocations at the same two instants (see PhaseProbe's header for why that is one type
 // and not two). The stages are strictly sequential and none calls another, so the phases
@@ -88,8 +90,13 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// is: reachability is a property of the Std tier, so x64/arm64/wasm inherit it instead of each
 	// re-adding it. `globalData` reaches it because an `.rdata` slot is a reference this module's ops do
 	// not spell (see DeadFunctionElimination's root set).
+	//
+	// It `throws` for one reason, and it is a USER error rather than a pruning failure: building its name
+	// index is the first point at which a declaration that collides with a symbol the compiler emits is
+	// visible at all (every install has happened, and no backend has started), so E4015 is reported there —
+	// see `refuseDuplicateFunctionName`.
 	let dfeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deadFunctions)
-	eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
+	try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
 	recordPhase(project, phase: CompilePhase.deadFunctions, probe: dfeProbe)
 
 	match target.cpu 'cpu'

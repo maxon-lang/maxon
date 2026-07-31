@@ -521,9 +521,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).
 	installFnRefThunks(pipeline.stdModule, project: project, targets: fnRefThunkTargets)
 
-	// The backend owns its own error gate now: the register allocator reports E5001
-	// (register pressure) onto `project.diagnostics` and throws when a loop genuinely
-	// overflows the register file. Mirror the pipeline gate above — print the
+	// The backend owns its own error gate now, and TWO of its stages use it: the register allocator
+	// reports E5001 (register pressure) onto `project.diagnostics` and throws when a loop genuinely
+	// overflows the register file, and the reachability prune reports E4015 and throws when a
+	// declaration collides with a symbol the compiler emits (A1t — `refuseDuplicateFunctionName`, the
+	// first point in the compile where BOTH are present, hence the first that can tell them apart).
+	// Mirror the pipeline gate above — print the
 	// accumulated diagnostics and re-signal with a FRESH `compileError` (re-throwing
 	// the caught object miscompiles under the C# runtime's refcount path). Passing
 	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it

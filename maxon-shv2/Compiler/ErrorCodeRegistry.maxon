@@ -564,6 +564,16 @@ export enum ErrorCode
 	// `convert#Real` is a key this compiler mints, not something an author wrote.
 	semanticConflictingInterfaceConformance = "E3111"
 
+	// a declaration in the source compiles to the same symbol name as a function the
+	// compiler EMITS into the program, and a program cannot hold two functions of one
+	// name. Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations
+	// may carry the reserved `__` prefix (E2051's D6 exemption): the name is declarable
+	// THERE, so what E2051 refuses is not what this refuses. Detected where the collision
+	// first becomes visible -- the reachability pass's name index, after every runtime
+	// install -- and told apart from an installer that ran twice by PROVENANCE, since a
+	// synthesized function carries no `sourceFilePath` and a parsed one always does.
+	declarationCollidesWithEmittedSymbol = "E4015"
+
 	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 	registerPressure = "E5001"
 

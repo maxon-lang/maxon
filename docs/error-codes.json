@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "f5fe5ad3e8084309",
+  "sourceHash": "2e1154554556d2bc",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1350,6 +1350,15 @@
       "doc": "a type definition contains a reference cycle -- it transitively\ncontains itself through struct fields, union associated values, or\ncontainer element types. Maxon's ownership model requires acyclic type\ngraphs for deterministic destruction, so recursive type references are\nrejected. Emitted by the type-cycle check after type resolution. Mirrors\nthe C# bootstrap's `IrTypeCycle` (same code, same message format).",
       "emittedBy": {"csharp": "IrTypeCycle", "selfhosted": "irTypeCycle"},
       "notEmittedBy": ["shv2"]
+    },
+    {
+      "code": 4015,
+      "tag": "E4015",
+      "name": "IrDeclarationCollidesWithEmittedSymbol",
+      "stage": "ir",
+      "doc": "a declaration in the source compiles to the same symbol name as a function the\ncompiler EMITS into the program, and a program cannot hold two functions of one\nname. Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations\nmay carry the reserved `__` prefix (E2051's D6 exemption): the name is declarable\nTHERE, so what E2051 refuses is not what this refuses. Detected where the collision\nfirst becomes visible -- the reachability pass's name index, after every runtime\ninstall -- and told apart from an installer that ran twice by PROVENANCE, since a\nsynthesized function carries no `sourceFilePath` and a parsed one always does.",
+      "emittedBy": {"shv2": "declarationCollidesWithEmittedSymbol"},
+      "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
       "code": 4099,

@@ -247,6 +247,37 @@ wrong-shaped call returned the right number. ⇒ **When you touch this exemption
 target that type-checks an indirect call.** The three fixed readers now share ONE predicate
 (`MmRuntime.isSignaturelessCompilerCallee`) with the five, which is the strongest pin available here: a
 future edit can no longer move one reader's answer without moving all of them.
+
+**A1t IS THE THIRD SUCH FINDING, AND IT IS THE ONE THE PREFIX EXEMPTION MAKES POSSIBLE RATHER THAN MERELY
+MISREADS.** A name this module declares may be a name the compiler *itself emits* — and then the program
+holds two functions of one name, which no linker and no name index can resolve. Reachable only through the
+real module, so unspec-able exactly as above:
+
+```
+# append `export function __print_string(value String)` (empty body) + a `main` that CALLS it
+# to stdlib/Builtins.maxon, then:
+maxon-shv2 build stdlib/Builtins.maxon -o out
+```
+
+Before A1t: `panic at DeadFunctionElimination.maxon:110: indexFunctionsByName: two functions are named
+'__print_string'` — no file, no line, and **both of the causes the message named were false here** (it is
+not E3006 at merge, which only ever compares two *parsed* declarations, and no installer ran twice). After:
+`error E4015: stdlib\Builtins.maxon:337:17: declaration of '__print_string' collides with a symbol the
+compiler EMITS into this program …`.
+
+⚠ **WHAT CREATES THE PAIR DEPENDS ON THE RUNTIME, so "just don't call it" is not the rule it looks like.**
+For a USAGE-GATED symbol the CALL is what installs the compiler's own copy, so the declaration alone is
+clean (`__print_string`, above — the door A1r opened). But `__module_init` / `__maxon_global_cleanup` are
+installed on `globals.count() != 0` alone, so declaring one of THOSE collides with **no call anywhere** —
+measured, same E4015, from a `Builtins.maxon` carrying one managed global and an uncalled
+`export function __module_init()`. ⇒ **Do NOT cure this by gating the call or steering it to the surviving definition** — that trades
+a loud refusal for a silent miscompile, since `print("x")` would then bind to the author's declaration
+instead of the runtime's, which is the one that knows the String record's layout. The refusal is at the
+DUPLICATE, and it is total (no binary is written either way). ⇒ **And the panic did not go away, it got a
+DISCRIMINATOR**: only a pair with MIXED provenance (one parsed, one synthesized) is a user error; a pair
+that is both-synthesized or both-parsed is a compiler bug and still panics, naming its own cause. Keep that
+split if you touch `refuseDuplicateFunctionName` — a fix that made every duplicate a user diagnostic would
+hide an installer that ran twice, and would pass any test written only against the collision.
 ```maxon
 // --- file: Builtins.maxon
 export enum __ParseError implements Error
