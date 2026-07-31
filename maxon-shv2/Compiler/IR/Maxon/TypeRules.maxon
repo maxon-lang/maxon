@@ -823,6 +823,34 @@ export function rangeExcludesZero(low ParsedInt, high ParsedInt, isFloat bool) r
 	return low > 0 or (low < 0 and high < 0)
 end 'rangeExcludesZero'
 
+// ⭐⭐ **CAN A VALUE OF THIS RANGE BE `-1`?** — `idiv`'s SECOND hazard, and the type-level half of the
+// `mod` overflow rule (A1x), sitting beside the zero test because a division's divisor is asked BOTH.
+// `x64`'s `idiv` raises `#DE` for two unrelated reasons, and the fallible-division rule only ever
+// covered one of them: `int(i64.min to -1)` excludes 0 — so it earns a BARE divide — and is `-1` on
+// every value it admits, which is exactly the pair that faulted. Wholly above `-1` or wholly below it
+// is the same shape of answer `rangeExcludesZero` gives, one bound over.
+//
+// ⚠ **INTEGER ONLY, and that is the LANGUAGE's restriction rather than an omission**: float `mod` does
+// not exist (`requireBinOpOperands` refuses it), and float `/` cannot fault at all — `divsd` answers
+// `±inf`, which is why the zero test needs a float arm and this one has nothing to say. Its callers ask
+// it only on the integer path.
+//
+// ⚠⚠ **THE UNSIGNED-MAX-UPPER SHAPE MUST ANSWER `false`, AND A NAIVE `low > -1` WOULD SAY `true`.**
+// `int(0 to u64.max)` rides with `high == UnsignedFullUpperPattern` — the `-1` PATTERN — so it admits
+// the bit pattern `-1` as the huge unsigned `u64.max`, and a signed `idiv` reads that pattern as `-1`
+// and faults on it. `low == 0` would otherwise place the range "wholly above -1" and elide the guard on
+// the one range that most plainly contains the hazard. It is the exact dual of the `low < 0` guard in
+// `rangeExcludesZero`, and it is load-bearing for the same reason: the representation, not the range,
+// is what makes the naive test wrong. `rangeIsUnsignedMaxUpper` is the ONE place that shape is
+// recognized, so this asks it rather than restating it.
+export function rangeExcludesNegativeOne(low ParsedInt, high ParsedInt) returns bool
+	if rangeIsUnsignedMaxUpper(low, high: high) 'admitsTheMinusOnePattern'
+		return false
+	end 'admitsTheMinusOnePattern'
+
+	return low > OverflowingDivisorPattern or high < OverflowingDivisorPattern
+end 'rangeExcludesNegativeOne'
+
 // ⭐ THE SHIFT RULE — THE CANONICAL STATEMENT OF WHAT `shl`/`shr` MEAN IN THIS COMPILER, and the
 // only one. Four readers, and none of them restates it:
 //

@@ -480,6 +480,42 @@ end 'requireRuntimeCallPositional'
 // in this file. Named because a bare `0` at a position argument is exactly the magic value the rule is for.
 let SetKeyTypeParamPosition = 0 as TypeParamId
 
+// ⭐⭐ **WHETHER AN EXPANDED DIVISION HAS AN ERROR CHANNEL — the ONE thing that differs between the
+// fallible divisions (A1) and the total remainder (A1x), which is why `lowerDivisionExpansion` is one
+// function and not two near-copies of a four-op guard.**
+//
+// It carries a ValueId the KIND cannot supply — the flag register is minted by `lowerTryCall`, from the
+// `tryCall`'s second result, and a total division has no such register — so the channel is a parameter
+// rather than something derived at the bottom. `requireDivisionChannelMatchesKind` is what holds it to
+// the kind, since the two are otherwise two copies of "does this division throw?".
+//
+// ⚠ It is deliberately NOT a nullable ValueId or a reserved id: an unread flag register spelled `0` is a
+// real ValueId (parameter 0's), so a sentinel here would be a wrong answer waiting for a reader.
+union DivisionErrorChannel
+	// `__checked_div` / `__checked_mod`: the divisor's zero test IS the flag (see `emitDivisorZeroFlag`),
+	// and the divide runs on an OR'd divisor so it never sees the zero it reported.
+	fallible(errorFlag ValueId)
+	// `__guarded_mod` (A1x): the divisor is proven non-zero, so there is no flag to write and no divisor
+	// to repair — only the overflow guard, which answers `0` and raises nothing.
+	total
+end 'DivisionErrorChannel'
+
+// The channel and the kind are two spellings of "does this division throw?", and only ONE list of
+// throwing kinds exists (`divisionKindThrows`) — this is where the other spelling is held to it. Reached
+// by two callers that cannot both be right by construction: `lowerTryCall` has a flag register and
+// `lowerRuntimeCall` has none, so a swap here would mean a total division writing a flag nobody reads,
+// or a fallible one whose caught error is whatever the register happened to hold.
+function requireDivisionChannelMatchesKind(channel DivisionErrorChannel, kind CheckedDivisionKind)
+	let hasErrorChannel = match channel 'c'
+		fallible gives true
+		total gives false
+	end 'c'
+
+	if hasErrorChannel != divisionKindThrows(kind) 'channelDisagreesWithKind'
+		panic("requireDivisionChannelMatchesKind: an expanded division carries an error channel ({hasErrorChannel}) that disagrees with its kind's own answer ({divisionKindThrows(kind)}) — `lowerTryCall` must expand only the throwing kinds and `lowerRuntimeCall` only the total one")
+	end 'channelDisagreesWithKind'
+end 'requireDivisionChannelMatchesKind'
+
 type MaxonToStdLowering
 	var maxonModule as MaxonModule
 	var stdModule as StdModule
@@ -1405,6 +1441,16 @@ type MaxonToStdLowering
 	// one place that could still see it.
 	function lowerRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		requireRuntimeCallPositional(callee, argLabels: argLabels)
+		// ⭐ **A1x's TOTAL REMAINDER IS EXPANDED HERE — the non-throwing twin of `lowerTryCall`'s checked-division
+		// arm, and for the identical reason: there is no `__guarded_mod` function to call.** It is the only
+		// division kind that can reach a plain `call`, because it is the only one that does not throw; the two
+		// `__checked_*` names arrive through `lowerTryCall` and are refused below if they somehow do not.
+		let divisionKind = divisionKindOf(callee)
+		match divisionKind 'guardedDivision'
+			guardedRemainder then return self.lowerDivisionExpansion(result, channel: DivisionErrorChannel.total, kind: divisionKind, args: args, dstBlock: dstBlock)
+			quotient to remainder then panic("lowerRuntimeCall: the THROWING '{String.from(callee)}' reached the plain call path — `isThrowingRuntimeCallee` names it, so `Parser.emitDivOrMod` must have emitted it without the `try` that E3057 requires")
+			notCheckedDivision then break 'guardedDivision'
+		end 'guardedDivision'
 		// An OPAQUE-`T` `__arr_create` (P1.7 slice 3b-i) arrives with ONE argument (element_size); its
 		// `element_destroy@40` is not known statically, so it is READ from the enclosing instance's threaded
 		// layout descriptor (`destroyFunc@40`) HERE — the tier that owns the descriptor's ValueId — and appended
@@ -2164,9 +2210,15 @@ type MaxonToStdLowering
 		// division callee can never fall through to the `StdOp.tryCall` below — there is no `__checked_div`
 		// function for such a call to reach, and the linker's "call to unknown function" would be the failure.
 		// `CheckedDivisionRuntime`'s header explains why this family has no body to call.
+		//
+		// ⚠ **A1x's `guardedRemainder` MUST NOT ARRIVE HERE**, and the arm says so rather than sharing the
+		// expansion's door: it is TOTAL, so it is not a `try` target at all — the parser refuses a `try` over it
+		// (E3055) and reaches the expansion through `lowerRuntimeCall` instead. Answering it here would mean a
+		// `tryCall` whose error flag nothing ever sets.
 		let divisionKind = divisionKindOf(callee)
 		match divisionKind 'checkedDivision'
-			quotient to remainder then return self.lowerCheckedDivision(result, errorFlag: errorFlag, kind: divisionKind, args: args, dstBlock: dstBlock)
+			quotient to remainder then return self.lowerDivisionExpansion(result, channel: DivisionErrorChannel.fallible(errorFlag), kind: divisionKind, args: args, dstBlock: dstBlock)
+			guardedRemainder then panic("lowerTryCall: a TOTAL `__guarded_mod` reached the throwing call path — `isThrowingDivisionRuntimeCallee` answers false for it, so `Parser.requireThrowingNamedTryTarget` must have refused the `try` before lowering")
 			notCheckedDivision then break 'checkedDivision'
 		end 'checkedDivision'
 
@@ -2187,11 +2239,12 @@ type MaxonToStdLowering
 		end 'slot'
 	end 'lowerTryCall'
 
-	// ⭐⭐ **EXPAND `__checked_div` / `__checked_mod` IN PLACE — AND BRANCHLESSLY (A1).** The whole body is a
-	// divisor test, and the test IS the error flag:
+	// ⭐⭐ **EXPAND `__checked_div` / `__checked_mod` / `__guarded_mod` IN PLACE — AND BRANCHLESSLY (A1, A1x).**
+	// The whole body is a divisor test, and for the zero hazard the test IS the error flag:
 	//
-	//   INTEGER: `flag = (divisor == 0)` · `safe = divisor or flag` · `result = dividend / safe`
-	//   FLOAT:   `flag = (divisor == 0.0)` · `result = dividend / divisor`
+	//   INTEGER `/`:   `flag = (divisor == 0)` · `safe = divisor or flag` · `result = dividend / safe`
+	//   FLOAT   `/`:   `flag = (divisor == 0.0)` · `result = dividend / divisor`
+	//   INTEGER `mod`: the same, over a dividend the overflow guard has already masked (A1x, below)
 	//
 	// ⭐ **THE COMPARE'S OWN 0/1 IS THE ERROR FLAG, WITH NO `select` AND NO SECOND CONSTANT.**
 	// `__DivisionByZeroError` has one case at ordinal 0, so its flag encoding is `0 + ErrorFlagOrdinalBias` = 1
@@ -2221,13 +2274,66 @@ type MaxonToStdLowering
 	// bootstrap's store/reload pair has no counterpart, and the branchless form has no phi to merge either.
 	// The behaviour is identical: same flag, same quotient, and on the zero path a discarded result the
 	// bootstrap seeds to 0 and this leaves as `dividend / 1`.
-	function lowerCheckedDivision(result ValueId, errorFlag ValueId, kind CheckedDivisionKind, args ValueIdArray, dstBlock IrBlock)
+	// ⭐⭐ **THE `mod` OVERFLOW GUARD (A1x), AND WHY IT MASKS THE DIVIDEND RATHER THAN FIXING THE DIVISOR.**
+	// `idiv` raises `#DE` on `i64.min / -1` as well as on a zero divisor, and a `mod` inherits that fault from
+	// a quotient it does not even read. The remainder's own answer at that divisor is not merely
+	// representable, it is CONSTANT: **`a mod -1` is `0` for every `a`** (truncated division gives
+	// `a - (-1)·trunc(a / -1) = a - a`). So the expansion divides **0** instead, whose remainder is that same
+	// `0` and whose quotient cannot overflow:
+	//
+	//   `negOne = -1` · `isNegOne = (divisor == negOne)` · `mask = isNegOne + negOne` · `safe = dividend and mask`
+	//
+	// `isNegOne` is 0 or 1, so `mask` is `-1` (all ones — `dividend` passes through untouched) for every other
+	// divisor and `0` exactly at `-1`. **Four instructions, no branch**, composing with A1's zero guard rather
+	// than forking around it.
+	//
+	// ⭐ **THE ONE `-1` CONSTANT IS BOTH THE COMPARAND AND THE DECREMENT**, which is why the third op is an
+	// `add` and not a `sub 1`: `isNegOne - 1` and `isNegOne + (-1)` are the same value, and reusing the
+	// constant costs one fewer `const` op and one fewer live value across the divide.
+	//
+	// ⭐ **IT TESTS ONLY THE DIVISOR — never the dividend — and that is the asymmetry with `/`.** `a / -1`
+	// overflows for exactly ONE dividend (`i64.min`) and has no answer when it does, so `/` would need both
+	// operands tested and would still have nothing to return; `specs-shv2/division.md` documents its fault as
+	// deliberate. A guard keyed on the dividend would also pass every `i64.min` case while quietly answering
+	// wrongly for none — which is precisely why the corpus pins an ORDINARY dividend beside the extreme one.
+	//
+	// ⚠ **UNREACHED WHERE THE PARSER PROVED THE DIVISOR IS NOT `-1`.** `emitDivOrMod` routes such a `mod` to a
+	// bare `StdOp.mod` and never reaches any expansion, so a literal divisor, a folded variable, or a ranged
+	// type excluding `-1` (`int(1 to 1000)`, `int(i64.min to -2)`) pays none of these four ops. That is what
+	// keeps every existing division golden byte-identical.
+	function emitRemainderOverflowSafeDividend(dividend ValueId, divisor ValueId, operandType StdType, dstBlock IrBlock) returns ValueId
+		let negOne = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(negOne, value: OverflowingDivisorPattern, valueType: operandType))
+
+		let isNegOne = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(isNegOne, lhs: divisor, rhs: negOne, pred: StdCmpPred.eq, operandType: operandType))
+
+		let mask = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(mask, lhs: isNegOne, rhs: negOne, opcode: StdBinOpcode.add, operandType: operandType))
+
+		let safeDividend = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(safeDividend, lhs: dividend, rhs: mask, opcode: StdBinOpcode.bitAnd, operandType: operandType))
+
+		return safeDividend
+	end 'emitRemainderOverflowSafeDividend'
+
+	// A1's zero test and the error flag it materializes, in one place because they are one derivation — see
+	// this expansion's header for why the compare's own `0`/`1` IS the encoded error and needs no `select`.
+	function emitDivisorZeroFlag(errorFlag ValueId, divisor ValueId, operandType StdType, dstBlock IrBlock)
 		if DivisionByZeroFlag != BoolTrueValue 'flagIsNotTheCompare'
-			panic("lowerCheckedDivision: `divisionByZero` encodes error flag {DivisionByZeroFlag}, but this expansion uses the divisor compare's own true payload ({BoolTrueValue}) as the flag — a case inserted before `divisionByZero`, or a changed `ErrorFlagOrdinalBias`, has broken that derivation")
+			panic("emitDivisorZeroFlag: `divisionByZero` encodes error flag {DivisionByZeroFlag}, but this expansion uses the divisor compare's own true payload ({BoolTrueValue}) as the flag — a case inserted before `divisionByZero`, or a changed `ErrorFlagOrdinalBias`, has broken that derivation")
 		end 'flagIsNotTheCompare'
 
-		let dividend = try args.get(0) otherwise panic("lowerCheckedDivision: a checked divide has two arguments — `emitDivOrMod` pushes the dividend first")
-		let divisor = try args.get(1) otherwise panic("lowerCheckedDivision: a checked divide has two arguments — `emitDivOrMod` pushes the divisor second")
+		let zero = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: DivisorZeroPattern, valueType: operandType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(errorFlag, lhs: divisor, rhs: zero, pred: StdCmpPred.eq, operandType: operandType))
+	end 'emitDivisorZeroFlag'
+
+	function lowerDivisionExpansion(result ValueId, channel DivisionErrorChannel, kind CheckedDivisionKind, args ValueIdArray, dstBlock IrBlock)
+		requireDivisionChannelMatchesKind(channel, kind: kind)
+
+		let dividend = try args.get(0) otherwise panic("lowerDivisionExpansion: an expanded divide has two arguments — `emitDivOrMod` pushes the dividend first")
+		let divisor = try args.get(1) otherwise panic("lowerDivisionExpansion: an expanded divide has two arguments — `emitDivOrMod` pushes the divisor second")
 
 		// The operand type is the LEFT operand's, `appendStdBinOp`'s convention — and here the two sides are
 		// checked to AGREE rather than assumed to. `emitDivOrMod` promotes both through `promotedOperand`, so a
@@ -2235,40 +2341,65 @@ type MaxonToStdLowering
 		// (or the reverse), which is the same silent wrong answer `appendStdBinOp`'s own guard refuses.
 		let operandType = self.stdTypeOf(dividend)
 		if self.stdTypeOf(divisor) != operandType 'mixedDomains'
-			panic("lowerCheckedDivision: the dividend and the divisor of a checked divide are in DIFFERENT domains (one float, one integer) — `emitDivOrMod` must promote both operands before emitting one")
+			panic("lowerDivisionExpansion: the dividend and the divisor of an expanded divide are in DIFFERENT domains (one float, one integer) — `emitDivOrMod` must promote both operands before emitting one")
 		end 'mixedDomains'
 
-		let zero = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: DivisorZeroPattern, valueType: operandType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(errorFlag, lhs: divisor, rhs: zero, pred: StdCmpPred.eq, operandType: operandType))
+		match channel 'zeroTest'
+			fallible(errorFlag) then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
+			// A1x's total remainder has no error channel at all — its divisor is PROVEN non-zero, so a flag
+			// register would be one nobody reads and a compare nobody branches on.
+			total then break 'zeroTest'
+		end 'zeroTest'
 
 		// ⭐⭐ **THE DIVIDE ITSELF GOES THROUGH `lowerBinOp`, WHICH IS ALREADY THE ONE PLACE THAT DECIDES WHAT
-		// A `/` OR A `mod` BECOMES.** This expansion's job is the GUARD — which operand the divide reads —
+		// A `/` OR A `mod` BECOMES.** This expansion's job is the GUARD — which operands the divide reads —
 		// and not the OPCODE. Written out here instead, it was a second copy of `lowerDivision`'s float/int
 		// choice and of `lowerBinOp`'s `mod` arm, with nothing making the two agree: add an UNSIGNED
 		// `StdOp.udiv` for an unsigned operand type in `lowerDivision` and a checked unsigned divide would go
 		// on emitting the signed `idiv`, silently, for every divisor the compiler cannot prove non-zero. It
 		// also re-derives `appendStdBinOp`'s purity guard for free rather than sitting beside it.
 		//
-		// ⚠ The FLOAT arm hands it the RAW divisor and the integer arm the OR'd one, and that asymmetry is
+		// ⚠ The FLOAT arm hands it the RAW operands and the integer arm the guarded ones, and that asymmetry is
 		// the ISA's, stated once in this function's header: `divsd` cannot fault, so a float divide needs the
 		// FLAG computed and nothing else guarded.
 		if stdTypeIsFloat(operandType) 'floatDivide'
 			match kind 'floatKind'
 				quotient then break 'floatKind'
-				remainder then panic("lowerCheckedDivision: float `mod` does not exist — `requireBinOpOperands` refuses it, so a float-typed `__checked_mod` is a parser bug")
-				notCheckedDivision then panic("lowerCheckedDivision: reached with `notCheckedDivision` — `lowerTryCall`'s match routes only the two division kinds here")
+				remainder to guardedRemainder then panic("lowerDivisionExpansion: float `mod` does not exist — `requireBinOpOperands` refuses it, so a float-typed remainder expansion is a parser bug")
+				notCheckedDivision then panic("lowerDivisionExpansion: reached with `notCheckedDivision` — `lowerTryCall` and `lowerRuntimeCall` route only the three division kinds here")
 			end 'floatKind'
 
 			self.lowerBinOp(result, lhs: dividend, rhs: divisor, op: MaxonBinOp.div, dstBlock: dstBlock)
 			return
 		end 'floatDivide'
 
+		// A1x — asked of the KIND rather than of the channel, because both remainders need it: a possibly-zero
+		// divisor is a possibly-`-1` divisor too (`emitDivOrMod`'s proof rules out neither), and the quotient
+		// needs it never.
+		var safeDividend = dividend
+		if divisionKindReadsRemainder(kind) 'remainderOverflow'
+			safeDividend = self.emitRemainderOverflowSafeDividend(dividend, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
+		end 'remainderOverflow'
+
+		// A1 — `divisor or flag` is `divisor` whenever the divisor is non-zero and `1` when it is zero, so the
+		// divide always runs on a safe operand. A total division's divisor needs no repair: nothing proved it
+		// zero, so nothing has to be OR'd out of it.
+		var safeDivisor = divisor
+		match channel 'divisorGuard'
+			fallible(errorFlag) then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)
+			total then break 'divisorGuard'
+		end 'divisorGuard'
+
+		self.lowerBinOp(result, lhs: safeDividend, rhs: safeDivisor, op: divisionOperatorForKind(kind), dstBlock: dstBlock)
+	end 'lowerDivisionExpansion'
+
+	// A1's zero guard: the divisor the `idiv` actually reads. See `lowerDivisionExpansion`'s header for why
+	// an `or` with the error flag is the whole of it.
+	function emitOrredSafeDivisor(divisor ValueId, errorFlag ValueId, operandType StdType, dstBlock IrBlock) returns ValueId
 		let safeDivisor = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(safeDivisor, lhs: divisor, rhs: errorFlag, opcode: StdBinOpcode.bitOr, operandType: operandType))
-
-		self.lowerBinOp(result, lhs: dividend, rhs: safeDivisor, op: divisionOperatorForKind(kind), dstBlock: dstBlock)
-	end 'lowerCheckedDivision'
+		return safeDivisor
+	end 'emitOrredSafeDivisor'
 
 	// `panic("message")` — exit the process with a non-zero code. The parser emitted a dead return
 	// terminator after this op, so the block stays well-formed though control never reaches it.

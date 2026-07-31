@@ -35,16 +35,46 @@
 let CheckedDivideName = b"__checked_div"
 let CheckedModuloName = b"__checked_mod"
 
+// ⭐⭐ **THE THIRD EXPANSION, AND THE ONLY ONE THAT THROWS NOTHING (A1x).** `idiv` raises `#DE` for TWO
+// unrelated reasons and A1 desugared only the first, so a `mod` whose divisor the compiler PROVED
+// non-zero — a literal, or a ranged type excluding 0 — still went out as a bare `idiv` and still died on
+// `i64.min mod -1`. **That case is TOTAL, not fallible**: `a mod -1` is `0` for every `a`, so there is
+// nothing for a `try` to catch and requiring one would be a lie about the operation. Hence a callee of
+// its own rather than a flag on `__checked_mod`: the throwing-ness of a division rides its NAME
+// (`isThrowingRuntimeCallee`), and this one must answer `false` there while still being EXPANDED rather
+// than called.
+//
+// ⚠ **`/` HAS NO COUNTERPART AND MUST NOT GROW ONE.** `i64.min / -1` has no representable quotient, so
+// there is no value a total `/` could return; `specs-shv2/division.md` documents that fault as
+// deliberate. The asymmetry is the whole reason the two operators part company here: `mod` tests only
+// its DIVISOR, `/` would have to test both operands and would still have nothing to answer.
+let GuardedModuloName = b"__guarded_mod"
+
 // ⭐ **WHICH DIVISION A CHECKED-DIVISION CALLEE NAMES** — the one list, read three ways (the throwing
 // predicate below, the E3057 message's wording, and the Std expansion's opcode choice). `notCheckedDivision`
 // is the ordinary answer for every other callee in the program, so this is asked on the general call path
 // and must not allocate: both arms return a payload-free variant.
+// ⚠ **"CHECKED" HERE MEANS "THE COMPILER INSERTED A CHECK", NOT "IT CAN THROW"** — which is why A1x's
+// total remainder is a member rather than a fourth thing beside this union. All three are expanded in
+// place with a guard the source did not write; whether that guard has an ERROR CHANNEL is a separate
+// fact, answered once by `isThrowingDivisionRuntimeCallee` below and by nothing else.
 export union CheckedDivisionKind
 	// `a / b` — the QUOTIENT. Integer (`StdOp.div`) or float (`binOp(div)`), decided by the operand type at
 	// lowering, which is why one name serves both: the desugar is about FALLIBILITY, not about width.
 	quotient
-	// `a mod b` — the REMAINDER. Integer only; float `mod` does not exist in the language.
+	// `a mod b` — the REMAINDER, over a divisor that might be ZERO. Integer only; float `mod` does not
+	// exist in the language. Its expansion carries the `-1` guard as well, unconditionally — see
+	// `lowerCheckedDivision`.
 	remainder
+	// `a mod b` — the REMAINDER over a divisor PROVEN non-zero but possibly `-1` (A1x). TOTAL: guarded
+	// against `idiv`'s overflow `#DE` and nothing else, so it has no error flag and no `throws` clause.
+	//
+	// ⚠ **APPENDED AFTER `remainder` DELIBERATELY.** `isThrowingDivisionRuntimeCallee`'s range arm reads
+	// `quotient to remainder`, so a member inserted INSIDE that range would silently join the throwing
+	// set — a total operation the parser would then demand a `try` on. At the end of the two throwing
+	// kinds it falls outside every existing range arm instead, which makes each one a compile error until
+	// it is answered on purpose.
+	guardedRemainder
 	notCheckedDivision
 end 'CheckedDivisionKind'
 
@@ -57,25 +87,55 @@ export function divisionKindOf(callee ByteArray) returns CheckedDivisionKind
 		return CheckedDivisionKind.remainder
 	end 'modulo'
 
+	if callee.equals(GuardedModuloName) 'guardedModulo'
+		return CheckedDivisionKind.guardedRemainder
+	end 'guardedModulo'
+
 	return CheckedDivisionKind.notCheckedDivision
 end 'divisionKindOf'
 
+// ⭐ **DOES THIS KIND READ A REMAINDER?** — the one place the two remainder kinds are treated as one, so
+// the `-1` guard's trigger is a single predicate rather than a pair of `or`s repeated at each site. The
+// QUOTIENT is excluded for the reason this whole rung turns on: `a / -1` overflows for exactly one
+// dividend and has no answer when it does, while `a mod -1` is `0` for all of them.
+export function divisionKindReadsRemainder(kind CheckedDivisionKind) returns bool
+	return match kind 'k'
+		quotient gives false
+		remainder to guardedRemainder gives true
+		notCheckedDivision gives false
+	end 'k'
+end 'divisionKindReadsRemainder'
+
 // The callee name a source-level `/` or `mod` desugars to — the operator → name direction, beside the
-// name → kind direction above so the two constants are the ONE place either is written. Its gate is
+// name → kind direction above so the three constants are the ONE place any of them is written. Its gate is
 // `TypeRules.divisionOperator`, and `Parser.emitDivOrMod` is its only caller: any other operator here is a
 // routing bug in the expression climber, so it panics rather than defaulting to the quotient (which would
 // silently turn `a + b` into a division).
-export function checkedDivisionCalleeForOp(op MaxonBinOp) returns ByteArray
+//
+// ⭐ **`fallible` IS THE ZERO VERDICT, AND IT IS THE ONLY THING THAT DECIDES BETWEEN THE TWO REMAINDERS**
+// (A1x). A `mod` reaches this door for one of two unrelated reasons — its divisor might be 0, or its
+// divisor might be `-1` — and the name has to say which, because the name is where `isThrowingRuntimeCallee`
+// reads a division's error channel from. Both are expanded; only the first can throw.
+//
+// ⚠ A TOTAL `/` never reaches here at all: its only hazard IS the zero divisor, so a `/` the parser
+// proved non-zero is emitted as a bare `idiv` and needs no expansion. That is a panic rather than a
+// comment because the alternative — returning `CheckedDivideName` for it — would silently make an
+// unguarded quotient look guarded.
+export function divisionExpansionCalleeForOp(op MaxonBinOp, fallible bool) returns ByteArray
 	if op == MaxonBinOp.div 'divide'
+		if not fallible 'totalQuotient'
+			panic("divisionExpansionCalleeForOp: a TOTAL `/` has no expansion — the quotient's only hazard is a zero divisor, and `i64.min / -1` has no answer to guard toward (specs-shv2/division.md). Only `mod` has a second, answerable hazard.")
+		end 'totalQuotient'
+
 		return CheckedDivideName
 	end 'divide'
 
 	if op == MaxonBinOp.mod 'modulo'
-		return CheckedModuloName
+		return CheckedModuloName if fallible else GuardedModuloName
 	end 'modulo'
 
-	panic("checkedDivisionCalleeForOp: '{op.rawValue}' is not a division operator — `divisionOperator` is the gate and `emitDivOrMod` its only caller")
-end 'checkedDivisionCalleeForOp'
+	panic("divisionExpansionCalleeForOp: '{op.rawValue}' is not a division operator — `divisionOperator` is the gate and `emitDivOrMod` its only caller")
+end 'divisionExpansionCalleeForOp'
 
 // The kind → OPERATOR direction, which closes the cycle the two functions above open (operator → name →
 // kind) and is what lets `lowerCheckedDivision` hand the divide back to `lowerBinOp` — the ONE place that
@@ -88,21 +148,36 @@ end 'checkedDivisionCalleeForOp'
 export function divisionOperatorForKind(kind CheckedDivisionKind) returns MaxonBinOp
 	match kind 'k'
 		quotient then return MaxonBinOp.div
-		remainder then return MaxonBinOp.mod
-		notCheckedDivision then panic("divisionOperatorForKind: `notCheckedDivision` names no operator — `lowerTryCall` routes only the two division kinds into the expansion")
+		remainder to guardedRemainder then return MaxonBinOp.mod
+		notCheckedDivision then panic("divisionOperatorForKind: `notCheckedDivision` names no operator — `lowerTryCall` and `lowerRuntimeCall` route only the three division kinds into the expansion")
 	end 'k'
 end 'divisionOperatorForKind'
 
-// The THROWING checked-division callees (A1) — the SIXTH composer behind `GtRuntime.isThrowingRuntimeCallee`,
-// and the only one whose whole family throws by definition: a checked divide exists ONLY because its divisor
-// could be zero. A divisor the compiler proves non-zero never reaches a call at all (`Parser.emitDivOrMod`
-// leaves it a bare `binOp`), so there is no non-throwing member for this predicate to exclude.
+// The THROWING checked-division callees (A1) — the SIXTH composer behind `GtRuntime.isThrowingRuntimeCallee`.
+// A checked divide exists because its divisor could be zero, and that is the whole error channel: the flag,
+// the `throws` clause, the E3057 demand for a `try` all follow from an arm here answering `true`.
+//
+// ⚠⚠ **AND SINCE A1x THE FAMILY HAS A NON-THROWING MEMBER, WHICH IS WHY THIS PREDICATE IS THE HINGE OF THE
+// WHOLE RUNG.** `__guarded_mod` is expanded exactly as its two siblings are, but its guard answers `0`
+// rather than raising anything — `a mod -1` is total. Answer `true` for it and every `a mod -1` in the
+// language becomes E3057 ("throwing division requires try") over an operation that cannot fail; answer
+// `false` for a `__checked_mod` and a real divide-by-zero becomes an uncatchable `#DE`. Each arm is written
+// out for that reason, and the `remainder` range STOPS at `remainder`.
 export function isThrowingDivisionRuntimeCallee(callee ByteArray) returns bool
-	return match divisionKindOf(callee) 'k'
+	return divisionKindThrows(divisionKindOf(callee))
+end 'isThrowingDivisionRuntimeCallee'
+
+// **THE ONE LIST OF THROWING DIVISION KINDS**, read by the predicate above (which is asked by NAME, on the
+// general call path) and by `LowerMaxonToStd.requireDivisionChannelMatchesKind` (which is asked by KIND, to
+// hold an expansion's error-flag register to the same answer). Two questions, one list — a second copy is
+// how a total division would come to demand a `try`, or a fallible one to lose its flag.
+export function divisionKindThrows(kind CheckedDivisionKind) returns bool
+	return match kind 'k'
 		quotient to remainder gives true
+		guardedRemainder gives false
 		notCheckedDivision gives false
 	end 'k'
-end 'isThrowingDivisionRuntimeCallee'
+end 'divisionKindThrows'
 
 // What a checked divide throws — this family's speller, beside the four in `ManagedFileRuntime`,
 // `ManagedDirectoryRuntime` and `ArrayRuntime`, and read through the one `GtRuntime.runtimeThrowsClause`.
@@ -123,6 +198,18 @@ export let DivisionByZeroFlag = DivisionByZeroOrdinal + ErrorFlagOrdinalBias
 // neither has to spell a bare literal. (`-0.0` is a DIFFERENT pattern and is caught anyway — the float arm
 // compares as f64, and IEEE-754 makes the two zeros equal.)
 export let DivisorZeroPattern = 0 as ParsedInt
+
+// ⭐ **THE OTHER DIVISOR `idiv` CANNOT SURVIVE (A1x)** — the divisor at which the quotient overflows, which
+// is `-1` and only `-1`: `i64.min / -1` is `i64.max + 1`. It is ONE constant read by two tiers, which is the
+// point of it living here rather than at either — the parser's PROOF (`TypeRules.rangeExcludesNegativeOne`,
+// asking whether a divisor's declared range can hold this value) and the lowering's EMISSION (the `const`
+// the remainder guard compares against, and reuses as its decrement) must be the same number or the guard
+// tests one thing and elides on another.
+//
+// ⚠ It is the same 64 bits as `TypeRules.UnsignedFullUpperPattern` and is NOT that constant. That one means
+// "the `u64.max` bound as it rides in a signed field"; this one means "the divisor that overflows". Two
+// facts, one bit pattern — and `rangeExcludesNegativeOne` has to tell them apart to be correct at all.
+export let OverflowingDivisorPattern = -1 as ParsedInt
 
 // ⭐ **THE ORDINAL DRIFT GUARD (7b), FOR THE FIFTH FAMILY.** The enum's case ORDER is this family's wire
 // format and `DivisionByZeroOrdinal` above is a transcription of it, so the two are asserted to agree on

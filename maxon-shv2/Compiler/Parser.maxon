@@ -4098,6 +4098,39 @@ enum DivisorZeroVerdict
 	possiblyZero
 end 'DivisorZeroVerdict'
 
+// ⭐⭐ **WHAT THE COMPILER CAN PROVE ABOUT A DIVISOR — BOTH HAZARDS, FROM ONE WALK (A1x).** `idiv` raises
+// `#DE` for two unrelated reasons, and A1 answered only the first, which is precisely how `i64.min mod -1`
+// stayed fatal on a path the fallible-division rule had already visited and cleared. So the question the
+// parser asks about a divisor is no longer *"can it be zero?"* but *"which of `idiv`'s two divisors can it
+// be?"*, and this is the answer.
+//
+// ⚠⚠ **THE TWO FACTS ARE INDEPENDENT AND MUST NOT BE MERGED INTO ONE VERDICT.** They do not even decide the
+// same KIND of thing:
+//
+//   • **zero decides FALLIBILITY** — E3103, a bare divide, or a throwing one. It is part of the operation's
+//     TYPE, visible in the source as a required `try`.
+//   • **`-1` decides only whether `mod` needs a GUARD.** `a mod -1` is `0`, so it is TOTAL: folding this
+//     fact into `possiblyZero` would demand a `try` on an operation that cannot fail, and folding it into
+//     `neverZero` is exactly the bug. It changes what is EMITTED and nothing about what is allowed.
+//
+// A divisor can be any combination of the two: `int(-1 to -1)` excludes zero and is always `-1`;
+// `int(0 to 100)` admits zero and never `-1`; an opaque `int` is both. Three answers times two is why this
+// is a pair rather than a wider enum.
+type DivisorProof
+	// Can it be 0? The fallible-division rule's own three-way answer (A1), unchanged.
+	export var zero as DivisorZeroVerdict
+	// Can it be `-1`, the divisor whose quotient does not fit? Read ONLY for `mod` — `/` has no answer to
+	// guard toward at that divisor, so it must keep faulting (`specs-shv2/division.md`).
+	//
+	// ⚠ Named for what it ADMITS, so that the safe answer is the one a gap in the proof falls to: every
+	// route that cannot see the divisor's value or its declared range answers `true` here.
+	export var mayBeNegativeOne as bool
+
+	static function create(zero DivisorZeroVerdict, mayBeNegativeOne bool) returns DivisorProof
+		return Self{zero: zero, mayBeNegativeOne: mayBeNegativeOne}
+	end 'create'
+end 'DivisorProof'
+
 // ⭐ **THE ONE CONSTRUCT→DIAGNOSTIC MAPPING for a value-merge type mismatch (P1.5 #80).** A ternary and a
 // match share the merge but not the diagnostic noun: a ternary names its TRUE and FALSE branches by
 // position (E2028), a match names the offending arm against the first (E3005). BOTH sides of the
@@ -20687,6 +20720,15 @@ export type Parser
 
 	// The half of the question above that is about the ALIAS, split out exactly as
 	// `aliasChangesTheShiftFill` is and for the same reason: the arms read as the sentences they are.
+	//
+	// ⚠⚠ **IT ASKS ONLY THE ZERO HALF OF THE PROOF, AND THAT IS DELIBERATE AFTER A1x.** A cast target can now
+	// move the OTHER hazard too — `z as SmallCount` for an `int(0 to 100)` would tell a `mod` its divisor is
+	// never `-1` and save it the overflow guard — and this predicate answers `false` for it, because the
+	// target admits zero. The consequence is a needless 4-op guard on that one shape and NOTHING else: no
+	// wrong answer, no lost diagnostic, and the divide there is already paying a full checked expansion.
+	// Widening it would cost far more than it saves — every zero-admitting narrowing cast in the language
+	// (`x as Byte`, `x as Percent`, `x as AsciiCode`) would start MINTING a value where it is a byte-for-byte
+	// no-op today, which is the property the header above exists to protect.
 	function aliasChangesTheDivisionProof(value ValueId, alias RangedTypeAlias) returns bool
 		if aliasIsFloat(alias) 'floatAlias'
 			return false
@@ -20696,7 +20738,7 @@ export type Parser
 			return false
 		end 'admitsZero'
 
-		return self.divisorZeroVerdict(value) != DivisorZeroVerdict.neverZero
+		return self.divisorProof(value).zero != DivisorZeroVerdict.neverZero
 	end 'aliasChangesTheDivisionProof'
 
 	// ⭐ **EMIT A REPRESENTATIONALLY-NO-OP CAST AS A DISTINCT VALUE.** The conversion moves no bits
@@ -20821,15 +20863,37 @@ export type Parser
 		let rightTag = self.tagOf(divisor)
 		try requireBinOpOperands(op, left: leftTag, right: rightTag, opTok: opTok)
 
+		// ⭐⭐ **ONE PROOF, TWO HAZARDS, THREE ROUTES (A1x).** The verdict is asked ONCE and both of its facts
+		// are read here, because this is the only place that knows which OPERATOR is being emitted — and the
+		// two operators want different halves of it. Reading the zero half alone is precisely how
+		// `i64.min mod -1` came to die on the `neverZero` route: a divisor proven non-zero is not a divisor
+		// proven not `-1`, and `mod`'s answer at `-1` exists while `/`'s does not.
+		let proof = self.divisorProof(divisor)
+
+		// A REMAINDER whose divisor is proven non-zero but might still be `-1` is TOTAL and needs a guard, so
+		// it is neither refused, nor thrown from, nor emitted bare — it takes the expansion route below with a
+		// callee of its own. Asked before the zero verdict's `neverZero` arm can send it to the bare emitter.
+		let needsOverflowGuard = op == MaxonBinOp.mod and proof.mayBeNegativeOne
+
+		// ⚠ A provably-zero divisor is refused whatever the other hazard says: `a mod 0` has no answer at all,
+		// so there is nothing for the overflow guard to guard and E3103 is still the whole verdict. Kept an
+		// EXHAUSTIVE match over the verdict rather than an `== alwaysZero` test, so a fourth answer to "can it
+		// be zero?" cannot reach the routing below by omission.
+		match proof.zero 'verdict'
+			alwaysZero then throw ParseError.divisionByProvableZero(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
+			neverZero to possiblyZero then break 'verdict'
+		end 'verdict'
+
 		// The BARE divide goes to `emitBinOpOverCheckedOperands`, not to `emitBinOp` — which now REFUSES a
 		// division outright, so that a division reaching the general emitter is a loud parser bug rather
 		// than an unguarded `idiv`. The operand rule this verdict sits behind is the one that door would
 		// have asked, so nothing is skipped by entering past it.
-		match self.divisorZeroVerdict(divisor) 'verdict'
-			alwaysZero then throw ParseError.divisionByProvableZero(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
-			neverZero then return self.emitBinOpOverCheckedOperands(dividend, rhs: divisor, op: op, leftTag: leftTag, rightTag: rightTag, opTok: opTok)
-			possiblyZero then break 'verdict'
-		end 'verdict'
+		//
+		// ⭐ **NEITHER HAZARD OPEN IS THE ONLY ROUTE TO A BARE `idiv`**, and that conjunction is the rung: the
+		// left half alone was A1's rule, and it waved `i64.min mod -1` through.
+		if proof.zero == DivisorZeroVerdict.neverZero and not needsOverflowGuard 'noHazardLeftOpen'
+			return self.emitBinOpOverCheckedOperands(dividend, rhs: divisor, op: op, leftTag: leftTag, rightTag: rightTag, opTok: opTok)
+		end 'noHazardLeftOpen'
 
 		// ⭐ **THE PROMOTION IS THE SAME ONE `emitBinOp` OWES, PAID HERE FOR THE SAME REASON.** The Std
 		// expansion divides the two argument values directly, so a mixed `1.0 / n` must hand it an f64 on both
@@ -20845,7 +20909,13 @@ export type Parser
 		var args = ValueIdArray.create()
 		args.push(promotedDividend)
 		args.push(promotedDivisor)
-		return self.emitRuntimeCall(checkedDivisionCalleeForOp(op), args: args, resultTag: binOpResultTag(op, left: leftTag, right: rightTag), resultNameId: UnnamedTypeId, range: SourceRange.ofToken(opTok))
+
+		// ⭐ **THE ZERO VERDICT ALONE PICKS THE NAME, and that is what keeps the error channel a property of
+		// the divisor's ZERO hazard only.** A guarded remainder reaching here is `neverZero` by construction —
+		// the bare route above is the only other thing a `neverZero` divisor can take — so it gets the TOTAL
+		// callee and, downstream, no `throws` clause and no E3057.
+		let callee = divisionExpansionCalleeForOp(op, fallible: proof.zero == DivisorZeroVerdict.possiblyZero)
+		return self.emitRuntimeCall(callee, args: args, resultTag: binOpResultTag(op, left: leftTag, right: rightTag), resultNameId: UnnamedTypeId, range: SourceRange.ofToken(opTok))
 	end 'emitDivOrMod'
 
 	// ⭐⭐ **THE WHOLE DIVIDE-BY-ZERO PROOF, IN ONE WALK.** Asked of the divisor's OWN constant domain, never of
@@ -20880,20 +20950,28 @@ export type Parser
 	// cure belongs to the argument door (every call site with a ranged parameter gains a guard) and not to
 	// the division rule. Filed for its own rung; recorded here because a premise nothing enforces is worth
 	// more written down than inferred.
-	function divisorZeroVerdict(divisor ValueId) returns DivisorZeroVerdict
+	function divisorProof(divisor ValueId) returns DivisorProof
 		if self.floatConstIsKnown(divisor) 'floatConstant'
-			return DivisorZeroVerdict.alwaysZero if floatOrderKey(self.floatConstBitsOf(divisor)) == 0 else DivisorZeroVerdict.neverZero
+			// A FLOAT divisor cannot reach a `mod` at all (`requireBinOpOperands` refuses it), and `divsd`
+			// cannot fault, so the overflow hazard has no float form to admit.
+			let isZero = floatOrderKey(self.floatConstBitsOf(divisor)) == 0
+			return DivisorProof.create(DivisorZeroVerdict.alwaysZero if isZero else DivisorZeroVerdict.neverZero, mayBeNegativeOne: false)
 		end 'floatConstant'
 
 		if self.constIsKnown(divisor) 'intConstant'
-			return DivisorZeroVerdict.alwaysZero if self.constOf(divisor) == 0 else DivisorZeroVerdict.neverZero
+			let value = self.constOf(divisor)
+			return DivisorProof.create(DivisorZeroVerdict.alwaysZero if value == 0 else DivisorZeroVerdict.neverZero, mayBeNegativeOne: value == OverflowingDivisorPattern)
 		end 'intConstant'
 
 		return match self.declaredAliasOfValue(divisor) 'a'
-			declared(alias) gives DivisorZeroVerdict.neverZero if rangeExcludesZero(alias.low, high: alias.high, isFloat: aliasIsFloat(alias)) else DivisorZeroVerdict.possiblyZero
-			undeclared gives DivisorZeroVerdict.possiblyZero
+			// One alias, both bounds tests — and the float arm answers `mayBeNegativeOne: false` for the same
+			// reason the float CONSTANT arm does, not because a float range was examined and cleared.
+			declared(alias) gives DivisorProof.create(DivisorZeroVerdict.neverZero if rangeExcludesZero(alias.low, high: alias.high, isFloat: aliasIsFloat(alias)) else DivisorZeroVerdict.possiblyZero, mayBeNegativeOne: not aliasIsFloat(alias) and not rangeExcludesNegativeOne(alias.low, high: alias.high))
+			// Nothing known: BOTH hazards admitted. This is the answer every gap in the proof falls to, and
+			// the second field is exactly as conservative as the first for the same stated reason.
+			undeclared gives DivisorProof.create(DivisorZeroVerdict.possiblyZero, mayBeNegativeOne: true)
 		end 'a'
-	end 'divisorZeroVerdict'
+	end 'divisorProof'
 
 	// Append a `binOp` op combining two SSA values; return the ValueId it defines. The
 	// result's TYPE is the operator's: arithmetic and shifts are integer; `and`/`or`/`xor`
