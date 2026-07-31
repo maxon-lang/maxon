@@ -5377,10 +5377,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// Skip to matching 'end' keyword by tracking nesting depth for if/while/function blocks.
-  /// Also skips any trailing end label.
-  /// </summary>
-  /// <summary>
   /// The kind of body <see cref="SkipToMatchingEnd"/> is walking out of. It matters because a
   /// block-opening KEYWORD does not mean the same thing in all three, and counting one where it is a
   /// NAME makes the walk skip past its own `end` — silently, taking every declaration after it.
@@ -5408,6 +5404,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     DataCases,
   }
 
+  /// <summary>
+  /// Skip to matching 'end' keyword by tracking nesting depth for if/while/function blocks.
+  /// Also skips any trailing end label. What counts as an opener depends on
+  /// <paramref name="body"/> — see <see cref="SkippedBody"/>.
+  /// </summary>
   private void SkipToMatchingEnd(SkippedBody body = SkippedBody.Statements) {
     SkipNewlines();
     int depth = 1;
