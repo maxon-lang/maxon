@@ -323,16 +323,21 @@ export type IrFunction
 	// (`scale-test` charged that exactly: +48 allocations on the smallest rung, doubling with the corpus).
 	//
 	// ⭐⭐ **`declaredAt` IS REQUIRED, AND THAT IS WHAT MAKES PROVENANCE A CONSTRUCTED FACT RATHER THAN A
-	// CONVENTION.** Two readers decide behaviour on whether `sourceFilePath` is empty — `TargetPrinter.
-	// isRuntimeFunction` withholds the green-thread stack guard from the runtime's own scaffolding, and
-	// `FunctionNameIndex.refuseDuplicateFunctionName` tells an author's declaration (E4015) apart from
-	// an installer that ran twice (a panic), and `DeadFunctionElimination.markCompilerOwnedRoot` tells the
-	// same two apart for a name the compiler ROOTS rather than emits. Neither can be satisfied by a caller's good intentions: this
-	// used to hardcode an empty path and leave every caller to overwrite it a few lines later, so a caller
-	// that forgot would have made a PARSED function read as synthesized at both readers — silently, as a
-	// wrong answer rather than a compile error, and the stack-guard one is the SIGSEGV the A1r review
-	// measured. Passing the position in means a caller cannot forget it; it can only decide it, and
-	// `SourcePosition.synthesized` is how a synthesizing caller says so out loud.
+	// CONVENTION.** THREE readers decide behaviour on whether `sourceFilePath` is empty:
+	//
+	//   * `TargetPrinter.isRuntimeFunction` withholds the green-thread stack guard from the runtime's own
+	//     scaffolding.
+	//   * `FunctionNameIndex.refuseDuplicateFunctionName` tells an author's declaration (E4015) apart from
+	//     an installer that ran twice (a panic).
+	//   * `DeadFunctionElimination.markCompilerOwnedRoot` tells those same two apart (A1w) for a name the
+	//     compiler ROOTS rather than emits — the half of that rule with no pair to count.
+	//
+	// None of the three can be satisfied by a caller's good intentions: this used to hardcode an empty path
+	// and leave every caller to overwrite it a few lines later, so a caller that forgot would have made a
+	// PARSED function read as synthesized at ALL THREE — silently, as a wrong answer rather than a compile
+	// error, and the stack-guard one is the SIGSEGV the A1r review measured. Passing the position in means a
+	// caller cannot forget it; it can only decide it, and `SourcePosition.synthesized` is how a synthesizing
+	// caller says so out loud.
 	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,
