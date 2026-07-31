@@ -857,7 +857,20 @@ public class Compiler {
     }
   }
 
-  private static void PreRegisterTypeNames(IrModule<MaxonOp> module, SourceFile source, List<Token> tokens, bool isStdlib = false) {
+  /// <summary>
+  /// Token-level registration of the type names ONE file declares — struct, enum/union, interface and
+  /// typealias — with the visibility each was declared under. Runs first in <see cref="CompileSources"/>
+  /// so a cross-file type reference resolves whichever order the filesystem hands over the files.
+  ///
+  /// Also THE definition of "which type names does this file publish", which is why it is not private:
+  /// <c>FlatNamespaceCheck</c> calls it per file into a throwaway module and reads
+  /// <see cref="IrModule{TOp}.TypeDefSourceFiles"/> back. A second scanner asking the same question
+  /// would be free to answer it differently — and this one already carries the answers that are not
+  /// obvious (a `type` pair inside a signature is not a declaration; a typealias inside an
+  /// `export extension` block inherits the block's cross-file visibility).
+  /// </summary>
+  internal static void PreRegisterTypeNames(IrModule<MaxonOp> module, SourceFile source, List<Token> tokens,
+      bool isStdlib = false, Action<TopLevelTypeDeclaration>? onDeclaration = null) {
     int parenDepth = 0;
     // Visibility of the `extension` block currently being scanned (if any), so
     // that a typealias declared directly inside `module extension X` / `export
@@ -977,6 +990,7 @@ public class Compiler {
           module.NonExportedTypeNames.Add(name);
         if (isModuleVisible) module.ModuleVisibleTypeNames.Add(name);
         if (source.Path != null) module.TypeDefSourceFiles[name] = source.Path;
+        onDeclaration?.Invoke(new TopLevelTypeDeclaration(name, isExported, isModuleVisible, source.Path, nameToken.Line, nameToken.Column));
         i += 1;
       } else if ((t.Type == TokenType.Enum || t.Type == TokenType.Union) && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         var nameToken = tokens[i + 1];
@@ -987,6 +1001,7 @@ public class Compiler {
         if (!isExported && !isModuleVisible && !isStdlib) module.NonExportedTypeNames.Add(typeName);
         if (isModuleVisible) module.ModuleVisibleTypeNames.Add(typeName);
         if (source.Path != null) module.TypeDefSourceFiles[typeName] = source.Path;
+        onDeclaration?.Invoke(new TopLevelTypeDeclaration(typeName, isExported, isModuleVisible, source.Path, nameToken.Line, nameToken.Column));
         i += 1;
       } else if (t.Type == TokenType.Interface && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         var nameToken = tokens[i + 1];
@@ -997,6 +1012,11 @@ public class Compiler {
         var assocNames = ParseUsesClauseTokens(tokens, i + 2);
         if (assocNames.Count > 0)
           module.InterfaceAssociatedTypes.TryAdd(ifaceName, assocNames);
+        // Reported with the visibility as WRITTEN, unlike the branches above and below: an interface is
+        // never entered into NonExportedTypeNames, so the compiler resolves one across files whatever
+        // its modifier says, and a check reading those sets would call every interface exported. What
+        // the modifier means for an interface is A2d's question; this callback only reports what is there.
+        onDeclaration?.Invoke(new TopLevelTypeDeclaration(ifaceName, isExported, isModuleVisible, source.Path, nameToken.Line, nameToken.Column));
         i += 1;
       } else if (t.Type == TokenType.TypeAlias && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         // Pre-register typealias names as placeholders so cross-file references
@@ -1012,6 +1032,7 @@ public class Compiler {
           module.NonExportedTypeNames.Add(aliasName);
         if (isModuleVisible) module.ModuleVisibleTypeNames.Add(aliasName);
         if (source.Path != null) module.TypeDefSourceFiles[aliasName] = source.Path;
+        onDeclaration?.Invoke(new TopLevelTypeDeclaration(aliasName, isExported, isModuleVisible, source.Path, nameToken.Line, nameToken.Column));
         i += 1;
       }
     }

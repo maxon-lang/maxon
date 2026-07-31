@@ -26,6 +26,7 @@ class Program {
       "test" => TestCommand.Run(args[1..]),
       "spec-test" => RunSpecTests(args[1..]),
       "error-codes" => ErrorCodeRegistry.Run(args[1..]),
+      "flat-namespace" => FlatNamespaceCheck.Run(args[1..]),
       "batch-rewriter-test" => BatchRewriterTests.RunAll(),
       "mxdbg-selftest" => Debug.MxdbgSelfTest.Run(),
       "debug" => RunDebug(args[1..]),
@@ -54,6 +55,8 @@ class Program {
     Console.WriteLine("  spec-test [options]      Run spec tests (the COMPILER's own suite, not a project's)");
     Console.WriteLine("  error-codes <check|generate>");
     Console.WriteLine("                           Verify or regenerate the error-code registry");
+    Console.WriteLine("  flat-namespace check     Verify no two files of one of this repository's Maxon");
+    Console.WriteLine("                           projects declare the same top-level name");
     Console.WriteLine("  lsp-server               Start language server (LSP)");
     Console.WriteLine("  mcp [options]            Start the MCP server (HTTP, loopback only); see 'MCP options'");
     Console.WriteLine();

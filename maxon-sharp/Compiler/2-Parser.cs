@@ -204,8 +204,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   // True if `accessorPath` is in the same directory as `declarerPath` or in any
-  // subdirectory of it. This is the heart of `module`-keyword visibility.
-  private static bool IsFileInModuleScope(string declarerPath, string accessorPath) {
+  // subdirectory of it. This is the heart of `module`-keyword visibility, and the reason
+  // FlatNamespaceCheck calls it rather than restating it: two `module` declarations of one
+  // name collide only where their subtrees overlap, and a second copy of that rule could
+  // say otherwise.
+  internal static bool IsFileInModuleScope(string declarerPath, string accessorPath) {
     var dDir = NormalizeDir(declarerPath);
     var aDir = NormalizeDir(accessorPath);
     if (dDir == null || aDir == null) return false;
@@ -1847,6 +1850,31 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   public void PreScanTopLevelConstantDecls(IrModule<MaxonOp> targetModule) {
     _currentModule = targetModule;
 
+    WalkTopLevelValueDecls(decl => {
+      // Neither kind is a declaration another file may fold: a `var` is not a constant at all, and a
+      // complex initializer is a runtime global — leaving both out is what keeps a cross-file read of
+      // one an error here exactly as a same-file read of one already is.
+      if (decl.IsMutable || IsComplexInitializer(decl.TokenStart)) return;
+
+      targetModule.TopLevelConstantDecls.Add(new TopLevelConstantDecl(decl.Name, _tokens,
+        decl.TokenStart, decl.TokenEnd, decl.Line, decl.Column, decl.IsExported, decl.IsModuleVisible,
+        _sourceFilePath));
+    });
+  }
+
+  /// <summary>
+  /// THE walk over a file's top-level <c>let</c>/<c>var</c> declarations — every one of them,
+  /// whatever its mutability or initializer — yielding each with the visibility it was declared
+  /// under. Two callers share it so they cannot drift on WHICH declarations are top-level:
+  /// <see cref="PreScanTopLevelConstantDecls"/>, which keeps the narrower foldable-constant subset,
+  /// and <c>FlatNamespaceCheck</c>, which needs the whole set — a project-level gate blind to
+  /// exactly the declarations whose initializer is a runtime expression would miss the shared
+  /// constant tables most likely to be duplicated across two files.
+  ///
+  /// A nested <c>let</c> is a local and a type's <c>export let</c> is a field; neither is reached,
+  /// because every block opener here is skipped whole.
+  /// </summary>
+  public void WalkTopLevelValueDecls(Action<TopLevelValueDeclaration> onDecl) {
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
       SkipNewlines();
       if (IsAtEnd() || Current().Type == TokenType.Eof) break;
@@ -1866,22 +1894,24 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         continue;
       }
 
-      if (Check(TokenType.Let)) {
+      if (Check(TokenType.Let) || Check(TokenType.Var)) {
+        bool isMutable = Check(TokenType.Var);
         var decl = ScanTopLevelValueDecl();
-        // A complex initializer is a runtime global, not a constant, so it is not a declaration any
-        // other file may fold — leaving it out is what keeps a cross-file read of one an error here
-        // exactly as a same-file read of one already is.
-        if (!IsComplexInitializer(decl.TokenStart)) {
-          targetModule.TopLevelConstantDecls.Add(new TopLevelConstantDecl(decl.Name, _tokens,
-            decl.TokenStart, decl.TokenEnd, decl.Line, decl.Column, isExported, isModuleVisible, _sourceFilePath));
-        }
+        onDecl(new TopLevelValueDeclaration(decl.Name, decl.TokenStart, decl.TokenEnd,
+          decl.Line, decl.Column, isExported, isModuleVisible, isMutable));
       } else if (Check(TokenType.Type) || Check(TokenType.Union) || Check(TokenType.Enum)
           || Check(TokenType.Interface) || Check(TokenType.Extension) || Check(TokenType.Function)
           || CheckTestKeyword()) {
         // A `test` body's `let`s are locals, not top-level constants — skipping the whole block
-        // is what keeps this walk from collecting them.
+        // is what keeps this walk from collecting them. The body KIND has to travel with the skip:
+        // an enum's case names and an interface's requirement signatures both use keywords that are
+        // not block openers, and miscounting either walks past this declaration's own `end` and
+        // swallows every declaration after it. See SkippedBody.
+        var body = Check(TokenType.Enum) || Check(TokenType.Union) ? SkippedBody.DataCases
+          : Check(TokenType.Interface) ? SkippedBody.InterfaceRequirements
+          : SkippedBody.Statements;
         Advance();
-        SkipToMatchingEnd();
+        SkipToMatchingEnd(body);
       } else {
         SkipToEndOfLine();
       }
@@ -5337,7 +5367,35 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Skip to matching 'end' keyword by tracking nesting depth for if/while/function blocks.
   /// Also skips any trailing end label.
   /// </summary>
-  private void SkipToMatchingEnd() {
+  /// <summary>
+  /// The kind of body <see cref="SkipToMatchingEnd"/> is walking out of. It matters because a
+  /// block-opening KEYWORD does not mean the same thing in all three, and counting one where it is a
+  /// NAME makes the walk skip past its own `end` — silently, taking every declaration after it.
+  /// </summary>
+  private enum SkippedBody {
+    /// <summary>Statements. Every block-opening keyword opens a block.</summary>
+    Statements,
+
+    /// <summary>
+    /// An <c>interface</c>'s requirement list. Each requirement is a function SIGNATURE with no body
+    /// and no <c>end</c>, so counting <c>function</c> as an opener never finds a matching <c>end</c>.
+    /// </summary>
+    InterfaceRequirements,
+
+    /// <summary>
+    /// An <c>enum</c>/<c>union</c>'s case list, where a case may be NAMED for a keyword — shv2's own
+    /// <c>TokenKind</c> declares <c>if</c>, <c>while</c>, <c>for</c>, <c>match</c> and
+    /// <c>function</c>, and a union case may carry a payload (<c>if(v Small)</c> compiles). Measured
+    /// consequence of counting those: every top-level constant declared after such an enum in the
+    /// same file was missing from the whole-program declaration pre-pass, so a FOREIGN file folding
+    /// one resolved through the older already-folded path — which is order-dependent. A two-file
+    /// probe compiled forwards and failed <c>E2004 Undefined constant</c> under
+    /// <c>MAXON_SOURCE_ORDER=reverse</c>; with plain case names it compiled both ways.
+    /// </summary>
+    DataCases,
+  }
+
+  private void SkipToMatchingEnd(SkippedBody body = SkippedBody.Statements) {
     SkipNewlines();
     int depth = 1;
     bool prevWasDot = false;
@@ -5346,6 +5404,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     while (!IsAtEnd() && depth > 0) {
       if (prevWasDot) {
         // Keywords after '.' are member names, not block openers/closers
+      } else if (body == SkippedBody.InterfaceRequirements) {
+        // Nothing but `end` can close, and nothing inside opens: see SkippedBody.
+        if (Check(TokenType.End)) depth--;
+      } else if (body == SkippedBody.DataCases && depth == 1 && prevWasNewline) {
+        // The case-list level of an enum/union. EVERY keyword here is a case NAME — `TokenKind`
+        // declares `if`, `end`, `let`, `match`, `function` and more — with exactly two exceptions,
+        // and both are told apart by the token after them rather than by the keyword:
+        //   `function <identifier>` declares a METHOD, whose body needs its own `end`;
+        //   `end <label>` is this declaration's own terminator, and a label is mandatory after `end`.
+        // `end = "end"` is a case; `end 'TokenKind'` closes. Counting the first is what made this
+        // walk stop inside the body and read a case as a top-level `let`.
+        var nextAfterCase = _pos + 1 < _tokens.Count ? _tokens[_pos + 1].Type : TokenType.Eof;
+        if (Check(TokenType.Function) && nextAfterCase == TokenType.Identifier)
+          depth++;
+        else if (Check(TokenType.End) && nextAfterCase == TokenType.CharacterLiteral)
+          depth--;
       } else if (prevWasNewline && IsTestDeclarationAt(_tokens, _pos)) {
         // A `test 'name'` block needs its own `end`, so it must be counted or this walk stops at
         // the test's end and leaves the caller inside the enclosing construct. The statement-start

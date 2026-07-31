@@ -112,4 +112,15 @@
     <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; error-codes check &quot;$(ProjectDir)..&quot;" />
   </Target>
 
+  <!-- THE SECOND GUARD, and it exists for the same reason as the first: a fact spread across
+       files that nothing reconciled. Maxon's top-level namespace is FLAT, so two files of one
+       project that export the same name resolve by the order the filesystem lists them — with
+       no diagnostic. arm64-linux shipped x86-64's syscall numbers that way, and which numbers
+       you got depended on which machine compiled the compiler. This refuses the class in THIS
+       repository's own Maxon projects; whether a Maxon PROGRAM may do it is a /specs question
+       (A2d) that a compiler diagnostic would decide by accident. -->
+  <Target Name="CheckFlatNamespace" AfterTargets="CheckErrorCodeRegistry">
+    <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; flat-namespace check &quot;$(ProjectDir)..&quot;" />
+  </Target>
+
 </Project>

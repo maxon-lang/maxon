@@ -115,7 +115,7 @@ public static class SourceCollector {
   /// that CONTAINS projects (the repo itself) reaches every nested project's output too, and each of
   /// those is the same kind of not-source as the walked project's own.
   /// </summary>
-  private static bool IsInCompilerOutputDir(string normalizedPath) {
+  internal static bool IsInCompilerOutputDir(string normalizedPath) {
     foreach (var segment in normalizedPath.Split('/')) {
       if (segment.Equals(BuildCache.CompilerOwnedDirName, StringComparison.OrdinalIgnoreCase))
         return true;

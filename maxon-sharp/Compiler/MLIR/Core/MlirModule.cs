@@ -57,6 +57,23 @@ public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart
 public record TopLevelConstantDecl(string Name, List<Token> Tokens, int TokenStart, int TokenEnd,
     int Line, int Column, bool IsExported, bool IsModuleVisible, string? SourceFilePath);
 
+// One type name a file declares, as Compiler.PreRegisterTypeNames sees it — struct, enum/union,
+// interface or typealias — reported through that pass's optional callback rather than stored.
+//
+// It is NOT derivable from IrModule.TypeDefSourceFiles, which is what FlatNamespaceCheck would
+// otherwise have read: that map is keyed by NAME, so a second file declaring an existing name
+// overwrites the first and the map keeps only the winner — precisely the declaration a
+// duplicate-name report has to be able to name. (It is also not written for interfaces at all.)
+public record TopLevelTypeDeclaration(string Name, bool IsExported, bool IsModuleVisible,
+    string? SourceFilePath, int Line, int Column);
+
+// One top-level `let`/`var` declaration as Parser.WalkTopLevelValueDecls sees it, before anything has
+// decided what to do with it. Deliberately WIDER than TopLevelConstantDecl above, which is the subset
+// another file may fold: a `var` and a runtime initializer are still names this file publishes into the
+// program's one flat top-level namespace, which is the question FlatNamespaceCheck asks.
+public record TopLevelValueDeclaration(string Name, int TokenStart, int TokenEnd, int Line, int Column,
+    bool IsExported, bool IsModuleVisible, bool IsMutable);
+
 public class IrModule<TOp> where TOp : IPrintableOp {
   public string EntryFunctionName { get; set; } = "main";
   public List<IrFunction<TOp>> Functions { get; } = [];
