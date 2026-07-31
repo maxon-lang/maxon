@@ -1248,6 +1248,151 @@ end 'main'
 error E3005: specs/fragments/ranged-typealias/error.unsigned-max-upper-literal-out-of-range.test:5:12: Value 3 is outside the range of 'Big' (int(5 to 18446744073709551615))
 ```
 
+### ⭐⭐ A NEGATIVE UPPER BOUND IS A REAL BOUND — only the UNSIGNED-MAX shape has an unbounded one
+
+⚠⚠ **A `-1` STORED UPPER MEANS `u64.max` IN EXACTLY ONE SHAPE, AND THE RUNTIME CHECK USED TO READ
+IT THAT WAY IN ALL OF THEM.** `int(N>=0 to u64.max)` above rides its upper as the signed `-1` and is
+genuinely unbounded upwards, so its upper compare is elided on purpose. A **wholly NEGATIVE** range —
+`int(-100 to -1)`, `int(i64.min to -2)` — also stores a negative upper, and there the bound is
+ordinary: `-1` is the largest value it admits and `0` is out of range. `rangeIsUnsignedMaxUpper` (low
+`>= 0` **and** high `== -1`) is what tells the two apart, and the COMPILE-TIME literal check has always
+asked it while the RUNTIME check tested only the bound's sign — so the two halves of one rule disagreed
+about the same alias: a literal `0 as int(-100 to -1)` was **E3005** while a runtime `0` cast into it
+was admitted, and `-1` reached an `int(i64.min to -2)` binding through a plain `as`.
+
+⚠ It matters beyond the binding, because `specs-shv2/safety.md`'s division proof reads a divisor's
+DECLARED range: `int(-100 to -1)` excludes `0` (so `/` earns a bare `idiv`) and `int(i64.min to -2)`
+excludes `-1` as well (so `mod` earns one too). Both consequences are pinned there.
+
+<!-- test: negative-upper-bound-cast-is-checked -->
+<!-- targets: x64-windows, x64-linux -->
+#### A runtime cast into a wholly-negative range tests its upper bound
+`0` is above `-1`, so the cast is the violation and the guard must fire at the cast's own line — as it
+does for the positive `int(0 to 150)` in `runtime-check-fail` above. Before the fix `a` simply became
+`0`, a value its declared type does not admit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NegativeOnly = int(-100 to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	print("start\n")
+	let a = ident(0) as NegativeOnly
+	print("a={a}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+start
+```
+```stderr
+panic at negative-upper-bound-cast-is-checked.test:11: Range check failed: value outside typealias 'NegativeOnly'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: negative-upper-bound-return-is-checked -->
+<!-- targets: x64-windows, x64-linux -->
+#### The ranged-RETURN door tests it too, and `low == i64.min` is what left it with no check at all
+`int(i64.min to -2)` needs NO lower compare (`i64.min` cannot be violated), so eliding the upper as well
+left the range with an EMPTY check list — the one shape where the bug was total rather than partial.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BelowMinusOne = int(i64.min to -2)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function narrow() returns BelowMinusOne
+	return ident(0 - 1)
+end 'narrow'
+
+function main() returns ExitCode
+	print("v={narrow()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at negative-upper-bound-return-is-checked.test:10: Range check failed: value outside typealias 'BelowMinusOne'
+Stack trace:
+  in narrow
+  in main
+  in mrt_start
+```
+
+<!-- test: negative-upper-bound-in-range-control -->
+#### The in-range control — the new check must not fire on a value the range admits
+Both bounds of a wholly-negative range, exercised through the cast and the return door with admissible
+values. A guard added to the shape must cost nothing where the value is legal.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NegativeOnly = int(-100 to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function pick() returns NegativeOnly
+	return ident(0 - 100)
+end 'pick'
+
+function main() returns ExitCode
+	let a = ident(0 - 1) as NegativeOnly
+	let b = ident(0 - 50) as NegativeOnly
+	print("a={a} b={b} c={pick()}\n")
+	return 0
+end 'main'
+```
+```stdout
+a=-1 b=-50 c=-100
+```
+```exitcode
+0
+```
+
+<!-- test: error.negative-bound-renders-signed -->
+#### The message names the bound the author WROTE, on both bounds and on the value
+The `-1`-means-`u64.max` reinterpretation is the same one-shape fact, and E3005's renderer applied it to
+any `-1` it was handed. `int(-1 to -1)` therefore reported itself as
+`int(18446744073709551615 to 18446744073709551615)` — a sentence about a declaration nobody wrote — and a
+`-1` VALUE out of range reported `Value 18446744073709551615`, contradicting the signed bounds printed
+in the same line.
+```maxon
+typealias NegativeOne = int(-1 to -1)
+
+function main() returns ExitCode
+	let a = 3 as NegativeOne
+	return a as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:5:12: Value 3 is outside the range of 'NegativeOne' (int(-1 to -1))
+```
+
+<!-- test: error.negative-value-renders-signed -->
+```maxon
+typealias BelowMinusOne = int(i64.min to -2)
+
+function main() returns ExitCode
+	let a = -1 as BelowMinusOne
+	return a as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:5:13: Value -1 is outside the range of 'BelowMinusOne' (int(-9223372036854775808 to -2))
+```
+
 ### Error: top-level let cast out of range
 
 A top-level `let` is a compile-time constant, so an out-of-range cast in its

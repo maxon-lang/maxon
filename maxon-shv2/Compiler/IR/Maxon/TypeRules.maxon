@@ -1115,22 +1115,50 @@ end 'rangeNeedsLowerCheck'
 
 // Does the UPPER bound need a runtime compare?
 //
-// INTEGER: only for a NON-NEGATIVE bound below i64.max. A negative stored upper is the wrapped
-// `u64.max`-family (unbounded in signed space); eliding the upper compare keeps it from firing on a
-// value the range actually admits. (Bootstrap: `IntUpper >= 0 && IntUpper < long.MaxValue`.) For the
-// `int(N>0 to u64.max)` shape this elision is deliberate — the unsigned upper is genuinely
-// unbounded — and `boundChecks` supplies the matching lower half (`value >= 0 → in range`) so the
-// elided upper does not leave a naive signed lower check that would reject bit-63-set values (see
-// `rangeIsUnsignedMaxUpper`).
+// INTEGER: only below i64.max — an upper of i64.max can never be violated — and only when the bound
+// is a REAL one rather than the wrapped `u64.max`, which is unbounded in signed space and whose
+// compare `boundChecks` replaces with the sign-plus-lower cascade (see `rangeIsUnsignedMaxUpper`).
 //
-// FLOAT: only below the largest finite double. The sign test the integer rule makes is meaningless
+// ⚠⚠ **A NEGATIVE STORED UPPER IS THE `u64.max` SENTINEL IN EXACTLY ONE SHAPE, AND THIS ASKED ONLY THE
+// BOUND'S SIGN — so a WHOLLY NEGATIVE range got no upper compare at all.** The old rule was
+// `high >= 0 and high < i64.max` (the bootstrap's `IntUpper >= 0 && IntUpper < long.MaxValue`, copied
+// with it), which elided the compare for `int(-100 to -1)` and `int(i64.min to -2)` — ranges whose
+// upper is ordinary: `-1` is the largest value `int(-100 to -1)` admits and `0` is outside it.
+// `int(i64.min to -2)` was the total case, because its `low == i64.min` needs no compare either, so the
+// range carried an EMPTY check list and a plain `as` cast admitted anything. **MEASURED: `0 as
+// int(-100 to -1)` was admitted at runtime while the LITERAL `0 as int(-100 to -1)` was E3005** — the two
+// halves of one rule disagreeing about one alias, because `literalInRange` asks
+// `rangeIsUnsignedMaxUpper` and this asked the sign. The consequences reached past the binding into
+// `Parser.divisorProof`, which trusts a declared range: `int(-100 to -1)` excludes 0 so `100 / d` is a
+// bare `idiv` (an uncatchable `integer divide by zero`), and `int(i64.min to -2)` excludes -1 so
+// `i64.min mod d` is one too (`integer overflow` — the very fault A1x removes). Pinned by
+// `ranged-typealias.md`'s `negative-upper-bound-cast-is-checked` and `safety.md`'s two
+// `negative-range-cast-guard-fires-before-the-*` cases.
+//
+// ⇒ the sentinel question is DELEGATED, not restated: `rangeIsUnsignedMaxUpper` is the one place the
+// shape is recognized, and it is `high == -1 AND low >= 0`. The pairing cannot be ambiguous, because a
+// negative low beside a `u64.max` upper is refused at DECLARATION (`int(-1 to u64.max)` is
+// "not representable in 64 bits"), so a stored `high == -1` under a negative low is always a real `-1`.
+//
+// ⚠ It takes `low` for that reason, unlike `rangeNeedsLowerCheck`, whose rule genuinely reads one bound.
+// Asking the shape here rather than leaning on `boundChecks`'s earlier `rangeIsUnsignedMaxUpper` arm is
+// deliberate: this predicate is EXPORTED and states a rule, and a second caller reading it without that
+// arm in front would elide `int(5 to u64.max)`'s cascade or emit a compare that rejects what the range
+// admits.
+//
+// FLOAT: only below the largest finite double. The sign test the integer rule made is meaningless
 // on a bit pattern — `float(-1.0 to -0.5)`'s upper is a NEGATIVE i64 and is a perfectly real bound
-// that must be checked.
-export function rangeNeedsUpperCheck(high ParsedInt, isFloat bool) returns bool
+// that must be checked — which is the same mistake one domain over, and the float arm never made it.
+export function rangeNeedsUpperCheck(low ParsedInt, high ParsedInt, isFloat bool) returns bool
 	if isFloat 'float'
 		return high != F64MaxBound
 	end 'float'
-	return high >= 0 and high < i64.max
+
+	if rangeIsUnsignedMaxUpper(low, high: high) 'unsignedUpperIsUnbounded'
+		return false
+	end 'unsignedUpperIsUnbounded'
+
+	return high < i64.max
 end 'rangeNeedsUpperCheck'
 
 // Is a literal `value` within `[low, high]` (inclusive)? The compile-time E3005 test, and the
@@ -1166,34 +1194,44 @@ export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low 
 	return "Value {formatBound(value, isFloat: isFloat)} is outside the range of '{aliasName}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
 end 'literalOutOfRangeMessage'
 
-// A single range bound (or the offending value) as source text.
-//
-// INTEGER: the `u64.max` sentinel (stored as the signed -1) renders as its unsigned decimal, every
-// other bound as its signed value. Applied to BOTH bounds defensively, though only `high` reaches
-// the sentinel in practice.
+// A single range bound (or the offending value) as source text — the SIGNED spelling.
 //
 // FLOAT: the bound is an f64 BIT PATTERN, so it renders through `formatFloatBits` — the shortest
 // decimal that reads back as the same double, which is what the bootstrap prints. Printing the
 // pattern itself would name a number nobody wrote.
+//
+// ⚠⚠ **THE `u64.max` SENTINEL IS DELIBERATELY NOT SPELLED HERE, AND MOVING IT OUT IS A FIX.** This used
+// to render ANY `-1` as `18446744073709551615`, which is the same one-shape fact
+// `rangeNeedsUpperCheck` got wrong: a stored `-1` means `u64.max` only in the
+// `rangeIsUnsignedMaxUpper` shape. A renderer holding ONE number cannot tell which it has, so it
+// produced sentences that contradicted themselves — `int(-1 to -1)` reported as
+// `int(18446744073709551615 to 18446744073709551615)` (a declaration nobody wrote), and a `-1` VALUE
+// reported as `Value 18446744073709551615` beside signed bounds on the same line. `formatRangeDisplay`
+// holds BOTH bounds and is the only party that can ask, so the reinterpretation lives there and the
+// offending VALUE — which is a signed i64 the author wrote — never receives it.
 function formatBound(bound ParsedInt, isFloat bool) returns String
 	if isFloat 'float'
 		return formatFloatBits(bound)
 	end 'float'
-	if bound == UnsignedFullUpperPattern 'unsigned'
-		return UnsignedFullUpperDecimal
-	end 'unsigned'
+
 	return "{bound}"
 end 'formatBound'
 
 // The `int(<lo> to <hi>)` / `float(<lo> to <hi>)` spelling for an E3005 message (`Value N is outside
-// the range of 'Alias' (int(lo to hi))`). Each bound renders through `formatBound`, so a `u64.max`
-// upper shows as its unsigned decimal and a float bound as its decimal value — matching the
-// bootstrap's `FormatRange` — rather than the raw pattern. An exclusive `upto` alias is normalized to
-// `high - 1` at parse and no enabled case surfaces one here, so the `to` spelling is the only one
-// reached.
+// the range of 'Alias' (int(lo to hi))`). Each bound renders through `formatBound`, so a float bound
+// shows as its decimal value — matching the bootstrap's `FormatRange` — rather than the raw pattern. An
+// exclusive `upto` alias is normalized to `high - 1` at parse and no enabled case surfaces one here, so
+// the `to` spelling is the only one reached.
+//
+// ⭐ **THE ONE PLACE THE `-1`-MEANS-`u64.max` REINTERPRETATION IS SPELLED FOR A READER**, gated on the
+// one place that shape is RECOGNIZED, because only a party holding both bounds can tell the sentinel
+// from a real `-1` (see `formatBound`). It applies to the UPPER alone: a negative low paired with a
+// `u64.max` upper is refused at declaration, so a low bound never carries the sentinel.
 export function formatRangeDisplay(low ParsedInt, high ParsedInt, isFloat bool) returns String
 	let keyword = "float" if isFloat else "int"
-	return "{keyword}({formatBound(low, isFloat: isFloat)} to {formatBound(high, isFloat: isFloat)})"
+	let upper = UnsignedFullUpperDecimal if not isFloat and rangeIsUnsignedMaxUpper(low, high: high) else formatBound(high, isFloat: isFloat)
+
+	return "{keyword}({formatBound(low, isFloat: isFloat)} to {upper})"
 end 'formatRangeDisplay'
 
 // **DOES THIS SHIFT FILL WITH THE SIGN, OR WITH ZEROS?** THE one place THAT is answered — the

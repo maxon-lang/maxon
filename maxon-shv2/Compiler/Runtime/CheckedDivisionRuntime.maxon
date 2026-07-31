@@ -151,27 +151,13 @@ end 'divisionExpansionCalleeForOp'
 // kind) and is what lets `lowerDivisionExpansion` hand the divide back to `lowerBinOp` — the ONE place that
 // decides what a `/` or a `mod` becomes — instead of spelling `StdOp.div` / `StdOp.mod` a second time.
 //
-// ⚠ It is an EXHAUSTIVE match, deliberately: a third member of `CheckedDivisionKind` stops this function
+// ⚠ It is an EXHAUSTIVE match, deliberately: a fourth member of `CheckedDivisionKind` stops this function
 // compiling, which is the only thing that can stop a new checked division from being lowered as a quotient
 // by omission. `notCheckedDivision` is not a division and has no operator, so it panics rather than
 // defaulting to one — `lowerTryCall`'s own match is what keeps it unreachable.
-// ⭐ **HOW A DIAGNOSTIC SPELLS THE OPERATOR AN EXPANDED DIVISION CAME FROM** — one mapping, because three
-// messages now quote it and a divide reported as `mod` (or the reverse) would send the reader to the wrong
-// line: E3057's "throwing division requires try" (`SemanticCheck`), E3055's "cannot fail" for the total
-// remainder (`Parser.requireThrowingNamedTryTarget`), and E3103's provable-zero refusal — which reads it
-// straight off the operator token (`opTok.kind.rawValue`).
 //
-// The spelling is `TokenKind`'s for exactly that reason: E3103 has a token in hand and the other two have
-// only a callee, so `TokenKind` is the one source that keeps all three saying the same word. A `%` synonym
-// for `mod` would move every one of them at once.
-export function divisionOperatorSpellingForKind(kind CheckedDivisionKind) returns String
-	match kind 'k'
-		quotient then return TokenKind.slash.rawValue
-		remainder to guardedRemainder then return TokenKind.mod.rawValue
-		notCheckedDivision then panic("divisionOperatorSpellingForKind: `notCheckedDivision` came from no operator — every caller has already established that the callee IS an expanded division")
-	end 'k'
-end 'divisionOperatorSpellingForKind'
-
+// ⭐⭐ **AND IT IS THE ONLY PLACE A KIND IS CLASSIFIED AS A QUOTIENT OR A REMAINDER**, which is why the
+// DIAGNOSTIC spelling below is derived from its answer rather than matching on the kind a second time.
 export function divisionOperatorForKind(kind CheckedDivisionKind) returns MaxonBinOp
 	match kind 'k'
 		quotient then return MaxonBinOp.div
@@ -179,6 +165,38 @@ export function divisionOperatorForKind(kind CheckedDivisionKind) returns MaxonB
 		notCheckedDivision then panic("divisionOperatorForKind: `notCheckedDivision` names no operator — `lowerTryCall` and `lowerRuntimeCall` route only the three division kinds into the expansion")
 	end 'k'
 end 'divisionOperatorForKind'
+
+// ⭐ **HOW A DIAGNOSTIC SPELLS A DIVISION OPERATOR** — one mapping, because three messages quote it and a
+// divide reported as `mod` (or the reverse) would send the reader to the wrong line: E3057's "throwing
+// division requires try" (`SemanticCheck`), E3055's "cannot fail" for the total remainder
+// (`Parser.requireThrowingNamedTryTarget`), and E3103's provable-zero refusal — which reads it straight off
+// the operator token (`opTok.kind.rawValue`).
+//
+// The spelling is `TokenKind`'s for exactly that reason: E3103 has a token in hand and the other two have
+// only a callee, so `TokenKind` is the one source that keeps all three saying the same word. A `%` synonym
+// for `mod` would move every one of them at once.
+//
+// It takes the OPERATOR and not the KIND, and that is the fix for a second copy of the classification: the
+// kind → spelling form matched `quotient` / `remainder to guardedRemainder` a second time, so the grouping
+// this file's own header calls load-bearing was written twice with nothing holding the two together. A
+// fourth kind would have broken both matches and could have been answered DIFFERENTLY in each — a
+// diagnostic naming the wrong operator, which is the exact failure this mapping exists to prevent.
+function divisionOperatorSpelling(op MaxonBinOp) returns String
+	if op == MaxonBinOp.div 'quotient'
+		return TokenKind.slash.rawValue
+	end 'quotient'
+
+	if op == MaxonBinOp.mod 'remainder'
+		return TokenKind.mod.rawValue
+	end 'remainder'
+
+	panic("divisionOperatorSpelling: '{op.rawValue}' is not a division operator — its only caller feeds it `divisionOperatorForKind`'s answer, which is `div` or `mod` and panics on anything else")
+end 'divisionOperatorSpelling'
+
+// The kind a diagnostic holds → the word the author wrote, through the one classification above.
+export function divisionOperatorSpellingForKind(kind CheckedDivisionKind) returns String
+	return divisionOperatorSpelling(divisionOperatorForKind(kind))
+end 'divisionOperatorSpellingForKind'
 
 // The THROWING checked-division callees (A1) — the SIXTH composer behind `GtRuntime.isThrowingRuntimeCallee`.
 // A checked divide exists because its divisor could be zero, and that is the whole error channel: the flag,
@@ -194,10 +212,17 @@ export function isThrowingDivisionRuntimeCallee(callee ByteArray) returns bool
 	return divisionKindThrows(divisionKindOf(callee))
 end 'isThrowingDivisionRuntimeCallee'
 
-// **THE ONE LIST OF THROWING DIVISION KINDS**, read by the predicate above (which is asked by NAME, on the
-// general call path) and by `LowerMaxonToStd.requireDivisionChannelMatchesKind` (which is asked by KIND, to
-// hold an expansion's error-flag register to the same answer). Two questions, one list — a second copy is
-// how a total division would come to demand a `try`, or a fallible one to lose its flag.
+// **THE ONE LIST OF THROWING DIVISION KINDS.** Its single CALLER is the predicate above, which is asked by
+// NAME on the general call path; the list is spelled by KIND because that is the form the two exhaustive
+// matches over `CheckedDivisionKind` are held to — `Parser.requireThrowingNamedTryTarget` and
+// `SemanticCheck.throwingRuntimeCalleeMessage` each panic on the arm this one answers `false` for, and each
+// names this function as the authority it would have come apart from. A second copy of the list is how a
+// total division would come to demand a `try`, or a fallible one to lose its flag.
+//
+// ⚠ It had a SECOND caller — `LowerMaxonToStd.requireDivisionChannelMatchesKind`, a runtime check that the
+// error-flag register a `DivisionExpansion` carried matched its kind — and that check is GONE because the
+// flag now rides the variant, which makes the mismatch unrepresentable rather than caught. Nothing replaced
+// it and nothing should: this comment naming a deleted function was the whole of what was left of it.
 export function divisionKindThrows(kind CheckedDivisionKind) returns bool
 	return match kind 'k'
 		quotient to remainder gives true

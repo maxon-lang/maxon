@@ -948,10 +948,15 @@ end 'RangeCheckEmitter'
 // boundary is not a bare `0` sitting beside the range's own bounds.
 let SignBoundary = 0 as ParsedInt
 
-// The bound checks a `[low, high]` range needs, in cascade order. Empty when the range is unbounded
-// on both sides in signed space — which only the full-range case reaches before this (elided
-// earlier), or a signed range with a negative upper (matched to the bootstrap's both-elided path).
-// See TypeRules' `rangeNeedsLowerCheck` / `rangeNeedsUpperCheck`.
+// The bound checks a `[low, high]` range needs, in cascade order. See TypeRules'
+// `rangeNeedsLowerCheck` / `rangeNeedsUpperCheck`.
+//
+// ⚠ **IT IS EMPTY ONLY FOR A RANGE UNBOUNDED ON BOTH SIDES, WHICH IS `rangeIsFull`'s CASE AND IS ELIDED
+// BEFORE THIS.** It used to be empty for `int(i64.min to -2)` as well, and this comment said so —
+// *"or a signed range with a negative upper (matched to the bootstrap's both-elided path)"* — which was
+// a bug wearing the oracle's name: the bootstrap's `IntUpper >= 0` rule reads a negative upper as the
+// wrapped `u64.max` in every shape, and a WHOLLY NEGATIVE range's upper is a real bound. See
+// `rangeNeedsUpperCheck`'s header for the measurement and for the two uncatchable `#DE`s it reached.
 function boundChecks(low ParsedInt, high ParsedInt, isFloat bool) returns RangeBoundCheckArray
 	var checks = RangeBoundCheckArray.create()
 
@@ -983,7 +988,7 @@ function boundChecks(low ParsedInt, high ParsedInt, isFloat bool) returns RangeB
 	if rangeNeedsLowerCheck(low, isFloat: isFloat) 'lower'
 		checks.push(RangeBoundCheck.create(StdCmpPred.lt, bound: low))
 	end 'lower'
-	if rangeNeedsUpperCheck(high, isFloat: isFloat) 'upper'
+	if rangeNeedsUpperCheck(low, high: high, isFloat: isFloat) 'upper'
 		checks.push(RangeBoundCheck.create(StdCmpPred.gt, bound: high))
 	end 'upper'
 	return checks

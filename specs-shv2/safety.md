@@ -769,6 +769,81 @@ Stack trace:
   in mrt_start
 ```
 
+⭐⭐ **AND THE CALL ARGUMENT IS THE ONLY DOOR THAT LEAKS — WHICH WAS NOT TRUE UNTIL THE TWO CASES BELOW
+WERE PINNED.** The claim above rests on the OTHER doors into a ranged binding enforcing their range at
+runtime, and for a **wholly NEGATIVE** divisor range they did not: a `-1` stored upper bound was read as
+the unbounded `u64.max` whatever the low bound said, so `int(-100 to -1)` and `int(i64.min to -2)`
+carried no upper compare and the plain `as` cast admitted anything
+(`specs-shv2/ranged-typealias.md`'s `negative-upper-bound-cast-is-checked` owns the rule). Both of
+`idiv`'s hazards were reachable through it, so both are pinned here — and they are the SAME defect as
+the divide-by-zero control three cases up, arriving through a door that is supposed to be shut.
+
+<!-- test: negative-range-cast-guard-fires-before-the-divide -->
+<!-- targets: x64-windows, x64-linux -->
+#### A zero cast into a wholly-negative divisor range is refused at the CAST, not at the `idiv`
+`int(-100 to -1)` excludes `0`, so `100 / d` is a bare `idiv` with no `try` spellable — correct, given
+the declared type. The guard the language promises therefore has to be the thing that stops a runtime
+`0` getting there. This is `cast-guard-fires-before-the-division`'s negative-range twin, and it died
+`integer divide by zero` before the bound was checked.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NegativeOnly = int(-100 to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let z = ident(0)
+	let d = z as NegativeOnly
+	let q = 100 / d
+	print("q={q}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at negative-range-cast-guard-fires-before-the-divide.test:11: Range check failed: value outside typealias 'NegativeOnly'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: negative-range-cast-guard-fires-before-the-remainder -->
+<!-- targets: x64-windows, x64-linux -->
+#### ⭐ The A1x hazard through the same door — `int(i64.min to -2)` admitting a `-1`
+The remainder's own twin, and the reason this pair belongs beside A1x rather than only in
+`ranged-typealias.md`: `BelowMinusOne` rules out BOTH of `idiv`'s divisors, so `n mod d` is bare and
+`i64.min mod -1` came back as `panic: integer overflow` — the exact fault A1x exists to remove — through
+a cast the division proof was entitled to trust.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BelowMinusOne = int(i64.min to -2)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let bad = ident(0 - 1)
+	let d = bad as BelowMinusOne
+	let r = i64.min mod d
+	print("r={r}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at negative-range-cast-guard-fires-before-the-remainder.test:11: Range check failed: value outside typealias 'BelowMinusOne'
+Stack trace:
+  in main
+  in mrt_start
+```
+
 <!-- test: integer-overflow-fault-from-int-min-over-minus-one -->
 <!-- targets: x64-windows -->
 #### `i64.min / -1` panics `integer overflow` — a different code, its own words
