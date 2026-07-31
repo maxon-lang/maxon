@@ -1318,3 +1318,193 @@ end 'main'
 ```exitcode
 42
 ```
+
+
+### ⚠ THE NESTING LEVEL BELOW: the refusal must not touch a GENERIC conformer's own type parameter
+
+`conformance-argument-is-the-conformers-own-type-parameter`, written with parentheses. It is spelled
+separately because the two arms read their arguments through the same `readConformanceWithArg` but only
+one of them now COUNTS them, and a rejection rule's false rejects hide one nesting level below where it
+was tested — a bare `Integer` inside the parentheses exercises the count against a concrete type, and a
+`T` exercises it against a name that only exists inside this declaration's own `uses` list.
+
+<!-- test: conformance-argument-in-parentheses-is-the-conformers-own-type-parameter -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Holder uses Element
+	function held() returns Element
+end 'Holder'
+
+type Box uses T implements Holder with (T)
+	let value as T
+
+	function held() returns T
+		return value
+	end 'held'
+
+	static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let b = IntBox.create(42)
+	return b.held()
+end 'main'
+```
+```exitcode
+42
+```
+
+
+### ⭐ A TUPLE is still bindable at arity ONE, and this case is what keeps the refusal a TYPO CHECK
+
+The outer parentheses open the LIST; a `(…)` INSIDE one of its items is an ordinary tuple TYPE
+reference, so `with ((Integer, Float))` binds ONE argument and is accepted where `with (Integer, Float)`
+is refused. That distinction is the entire reason E2066 removes no capability: an author who genuinely
+means "bind this one associated type to a pair" has a spelling, and the refused program is the one that
+meant two bindings and had one to give.
+
+⚠ It is pinned because nothing else in the suite would notice it going away. The count comes off
+`args.count()`, so a reader that flattened the parenthesized arm — or that counted commas instead of
+items — would turn this legal program into an arity complaint while every other case stayed green.
+It is also the spelling `stdlib/helpers/itertools/withIterator.maxon` needs the day it is loadable:
+that file writes `implements Iterator with (Source, Element)` against a one-`uses` `Iterator`, which
+under shv2's settled LIST reading is exactly the surplus this rule refuses.
+
+<!-- test: conformance-argument-in-parentheses-is-a-tuple-type -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+interface One uses A
+	function get() returns A
+end 'One'
+
+type Holder implements One with ((Integer, Float))
+	let v as Integer
+	let f as Float
+
+	function get() returns (Integer, Float)
+		return (v, f)
+	end 'get'
+
+	static function create(v Integer, f Float) returns Self
+		return Self{v: v, f: f}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(42, f: 1.5)
+	let t = h.get()
+	return t.0
+end 'main'
+```
+```exitcode
+42
+```
+
+
+### ⚖ An `extends`-INHERITED `uses` name does NOT count toward the arity, and the sentence changes here
+
+`conformanceUsesArity` counts the interface's OWN `uses` names and not its `extends`-inherited ones,
+which is an incrementality constraint rather than a preference: `associatedTypeNames.count()` rides the
+signature index's hash and `extendsInterfaces` deliberately does not, so walking the chain would make a
+parse's answer depend on an unhashed fact (its header carries the argument in full).
+
+⚠ **This case is here to record that R6 changed the SENTENCE and not the VERDICT, so that the day
+inherited bindings land it turns red and forces the decision rather than quietly widening.** shv2 does
+not inherit the binding either, so `interface Sub extends Base` — where `Base uses Element` — rejects
+`implements Sub with (Integer)` both before and after R6, and the control below is the same program
+without the parentheses, still reported by `ConformanceCheck` as a wrong SIGNATURE. Measured: the
+bootstrap refuses the parenthesized spelling too (`E2003 Single-element parenthesised type is not
+allowed`, its TUPLE reading of `(…)`), and agrees with the control character for character.
+
+<!-- test: error.surplus-parenthesized-argument-against-an-inherited-uses-name -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Base uses Element
+	function get() returns Element
+end 'Base'
+
+interface Sub extends Base
+	function extra() returns Integer
+end 'Sub'
+
+type Impl implements Sub with (Integer)
+	let v as Integer
+
+	function get() returns Integer
+		return v
+	end 'get'
+
+	function extra() returns Integer
+		return 1
+	end 'extra'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Impl'
+
+function main() returns ExitCode
+	let i = Impl.create(42)
+	return i.get()
+end 'main'
+```
+```maxoncstderr
+error E2066: specs/fragments/associated-types/error.surplus-parenthesized-argument-against-an-inherited-uses-name.test:13:31: interface 'Sub' declares 0 associated type(s), but this parenthesized 'with' clause binds 1
+```
+
+
+### …and the control: unparenthesized, the same program is still the SIGNATURE error it always was
+
+The case above with two characters removed. It is what proves R6 turned an existing rejection into a
+different rejection rather than an acceptance into a rejection — this sentence is what shv2 said for
+BOTH spellings before the rung, and it is what the bootstrap still says for this one.
+
+<!-- test: error.inherited-uses-name-unparenthesized-is-still-a-signature-error -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Base uses Element
+	function get() returns Element
+end 'Base'
+
+interface Sub extends Base
+	function extra() returns Integer
+end 'Sub'
+
+type Impl implements Sub with Integer
+	let v as Integer
+
+	function get() returns Integer
+		return v
+	end 'get'
+
+	function extra() returns Integer
+		return 1
+	end 'extra'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Impl'
+
+function main() returns ExitCode
+	let i = Impl.create(42)
+	return i.get()
+end 'main'
+```
+```maxoncstderr
+error E3016: specs/fragments/associated-types/error.inherited-uses-name-unparenthesized-is-still-a-signature-error.test:13:6: Partial interface implementation: type 'Impl' has 1 method(s) with wrong signature:
+  - get() returns Integer (expected get() returns Element)
+```

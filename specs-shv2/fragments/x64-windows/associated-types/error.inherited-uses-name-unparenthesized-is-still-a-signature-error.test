@@ -1,0 +1,36 @@
+// Test: error.inherited-uses-name-unparenthesized-is-still-a-signature-error
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Base uses Element
+	function get() returns Element
+end 'Base'
+
+interface Sub extends Base
+	function extra() returns Integer
+end 'Sub'
+
+type Impl implements Sub with Integer
+	let v as Integer
+
+	function get() returns Integer
+		return v
+	end 'get'
+
+	function extra() returns Integer
+		return 1
+	end 'extra'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Impl'
+
+function main() returns ExitCode
+	let i = Impl.create(42)
+	return i.get()
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:13:6: Partial interface implementation: type 'Impl' has 1 method(s) with wrong signature:
+  - get() returns Integer (expected get() returns Element)
