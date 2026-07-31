@@ -1508,6 +1508,9 @@ end 'discardBindingList'
 typealias FieldHopCount = int(0 to 255)
 
 let ChainMethodMinHops = 2 as FieldHopCount
+// A field STORE needs one hop and no more (`p.x = 1`, `o.inner.x = 1`) — the zero-hop `x = 1` is a
+// BINDING assignment, which `assignsAt` owns and `fieldAssignsAt` must not claim.
+let FieldStoreMinHops = 1 as FieldHopCount
 let AnyFieldHops = 0 as FieldHopCount
 
 // The label of the placeholder block a Parser holds before it has parsed a function. It
@@ -6430,11 +6433,12 @@ export type Parser
 	end 'scanOneMethodDescriptorSignals'
 
 	// Is the token at `selfPos` the start of a `self.<method>(` call — the self-call the descriptor-need
-	// fixpoint threads through? `self` `.` `<name>` `(`, four contiguous tokens — the NAME asked through the
-	// shared `namesMemberAt`, so a KEYWORD-named method (D8: `self.to(item)`) is a self-call here too. Missed,
+	// fixpoint threads through? `self` `.` `<name>` `(`, four contiguous tokens — the tail asked through the
+	// shared `memberCallFollows`, so a KEYWORD-named method (D8: `self.to(item)`) is a self-call here too, and
+	// so this scan cannot come to disagree with the statement dispatchers about what a call looks like. Missed,
 	// the forward edge is never collected and the fixpoint leaves the forwarder's own argument borrowed.
 	function isSelfMethodCallAt(selfPos TokenIndex) returns bool
-		return self.kindAt(selfPos + 1) == TokenKind.dot and self.namesMemberAt(selfPos + 2) and self.kindAt(selfPos + 3) == TokenKind.leftParen
+		return self.memberCallFollows(selfPos + 1)
 	end 'isSelfMethodCallAt'
 
 	// Is the identifier at `q` a BARE call `<identifier>(` — followed by `(` and NOT preceded by a `.` (which
@@ -28399,8 +28403,9 @@ export type Parser
 
 	// **The token kinds that may NAME a member after a `.`** — anything `tokenCanBeAName` admits (an identifier,
 	// or a KEYWORD, which after a `.` is a name — D8), or the int literal of a tuple's positional access.
-	// Spelled once, so the dispatch predicates that decide a statement is a field store or a chained call
-	// (`fieldAssignsAt`, `fieldChainEndAfter`) and the consumer above cannot come to disagree about where a
+	// Spelled once, so the two shapes built on it — the chain HOP (`fieldChainEndAfter`, which every field-store
+	// and chained-call dispatcher now walks through) and the call TAIL (`memberCallFollows`, which every
+	// `<base> . <member> (` dispatcher now asks) — and the consumer above cannot come to disagree about where a
 	// chain's hop ends. They already MUST agree: `fieldChainEndAfter`'s header states that a divergence
 	// between its two askers is a use-after-free rather than a compile error.
 	function namesMemberAt(index TokenIndex) returns bool
@@ -28423,7 +28428,7 @@ export type Parser
 	// by the identifier arms and joins the primitive reading further down, at `parseQualifiedCall`. See
 	// `namesAPrimitiveType` for why one door is not enough and neither reference compiler has both.
 	function primitiveStaticCallAt(index TokenIndex) returns bool
-		return keywordNamesAPrimitiveType(self.tokenAt(index)) and self.kindAt(index + 1) == TokenKind.dot and self.namesMemberAt(index + 2) and self.kindAt(index + 3) == TokenKind.leftParen
+		return keywordNamesAPrimitiveType(self.tokenAt(index)) and self.memberCallFollows(index + 1)
 	end 'primitiveStaticCallAt'
 
 	// **Is the `.member` at `index` a CALL — `. <member> (`?** The one question that tells a field-chain HOP
@@ -28439,6 +28444,18 @@ export type Parser
 	// spell the member half through `namesMemberAt`, which is the piece that genuinely has one home — teach
 	// a new member-naming token to that and both walks learn it at once, which is the divergence
 	// `fieldChainEndAfter`'s own header is about.
+	//
+	// ⭐⭐ **AND IT IS ALSO THE ONE SPELLING OF THE THREE-TOKEN TAIL `. <member> (` THAT EVERY `<base> . <member> (`
+	// DISPATCH PREDICATE ASKS (A1s-prim review).** `isSelfMethodCallAt`, `methodCallsAt`, `voidStaticCallsAt`
+	// and `primitiveStaticCallAt` each claim a four-token shape whose last three tokens are exactly this
+	// question; all four used to write `kindAt(i+1) == dot and namesMemberAt(i+2) and kindAt(i+3) == leftParen`
+	// out by hand, so the tail was FIVE copies of one syntactic fact with nothing making them agree. That is
+	// the shape this project keeps paying for: teach the language a new call tail (a generic method call
+	// `.m<T>(…)`, say) and a copy left behind does not fail to compile — it silently stops claiming a shape,
+	// and the token walk and the statement dispatcher part company. The distinction the paragraph above draws
+	// is between two DERIVATIONS of where a chain ends; it was never about the tail's spelling, which is one
+	// fact and now has one home. What each predicate still owns is its BASE half — a keyword `self`, a bound
+	// name, a plain identifier, a primitive-type keyword — which is where they genuinely differ.
 	function memberCallFollows(index TokenIndex) returns bool
 		return self.kindAt(index) == TokenKind.dot and self.namesMemberAt(index + 1) and self.kindAt(index + 2) == TokenKind.leftParen
 	end 'memberCallFollows'
@@ -33033,21 +33050,20 @@ export type Parser
 	// MORE `.identifier` hops and then a single `=`. `resolveFieldChain` reads exactly this shape, so the
 	// dispatch predicate and the parser agree on where a chained store begins and ends. A `.method()` chain
 	// ends in `(` (not `=`) and a comparison in `==`, so neither is mistaken for a store.
+	//
+	// ⚠ **THE WALK IS `fieldChainEndAfter`'S, NOT A SECOND ONE (A1s-prim review).** This used to re-implement
+	// the hop loop inline — a third copy of a walk whose OWN header says a divergence between its askers is a
+	// USE-AFTER-FREE rather than a compile error, because `fieldChainMethodCallAt` decides a write goes through
+	// a chain and `sourceNamesABase` decides a `for … in` LOCKS that chain's base against exactly that write.
+	// A store dispatcher that disagreed with the walk about where a chain ends is inside that blast radius, so
+	// it asks the walk — and it is asked EXACTLY as `fieldChainMethodCallAt` asks it, `chainEnd == index` first
+	// and the trailing token second. That guard is load-bearing rather than defensive: the walk answers `index`
+	// unchanged BOTH for a base it refuses and for a zero-hop chain, so without it a statement standing on a
+	// bare `=` — a base `tokenCanBeAName` refuses, leaving `kindAt(index)` the `=` itself — would read as a
+	// field store instead of reaching the dispatcher's `unsupported` arm.
 	function fieldAssignsAt(index TokenIndex) returns bool
-		// The base is anything `tokenCanBeAName` admits, `fieldChainEndAfter`'s rule — so a store through a
-		// KEYWORD-named binding (D8) is a field store and not an `unsupported` statement. `self` reaches
-		// `selfFieldAssignsAt` first, which is asked ahead of this one by the statement dispatcher, so
-		// admitting it here changes nothing.
-		if not tokenCanBeAName(self.tokenAt(index)) 'notBase'
-			return false
-		end 'notBase'
-		var q = index + 1
-		var hops = 0
-		while self.kindAt(q) == TokenKind.dot and self.namesMemberAt(q + 1) 'hop'
-			hops = hops + 1
-			q = q + 2
-		end 'hop'
-		return hops > 0 and self.kindAt(q) == TokenKind.equals
+		let chainEnd = self.fieldChainEndAfter(index, minHops: FieldStoreMinHops)
+		return chainEnd != index and self.kindAt(chainEnd) == TokenKind.equals
 	end 'fieldAssignsAt'
 
 	// **The token shape of an EXPLICIT self-field store** — `self . <field> =`.
@@ -33134,10 +33150,11 @@ export type Parser
 		if not tokenCanBeAName(self.tokenAt(index)) 'notABase'
 			return false
 		end 'notABase'
-		// The METHOD half asks the shared `namesMemberAt`, which admits a keyword-named member (D8) — so
-		// `c.to()` routes here rather than falling through to the type-bound reading, exactly as `c.next()`
-		// does. It is the same predicate `fieldAssignsAt` and the chain walk read, for their stated reason.
-		if self.kindAt(index + 1) != TokenKind.dot or not self.namesMemberAt(index + 2) or self.kindAt(index + 3) != TokenKind.leftParen 'notADottedCall'
+		// The `. <member> (` TAIL asks the shared `memberCallFollows`, which spells the member half through
+		// `namesMemberAt` and so admits a keyword-named member (D8) — `c.to()` routes here rather than falling
+		// through to the type-bound reading, exactly as `c.next()` does. It is the same predicate the chain
+		// walk and every other `<base> . <member> (` dispatcher read, for their stated reason.
+		if not self.memberCallFollows(index + 1) 'notADottedCall'
 			return false
 		end 'notADottedCall'
 		// A LOCAL receiver, a CAPTURED enclosing one (`b.doubled()` inside a closure — P1.5-A2b-2), or a
@@ -33214,9 +33231,10 @@ export type Parser
 	// DECLARED under a keyword — `export static function to()` — and expression position already calls it
 	// (`let x = Helper.to()` compiles and runs, measured). A raw kind test here refused the identical name in
 	// STATEMENT position as `E2015: Unsupported: identifier statement` while the oracle compiled and ran it,
-	// which is the very asymmetry this door was widened to remove, one level down. It is the same predicate
-	// `methodCallsAt`, `memberCallFollows` and `fieldAssignsAt` spell the member half with, so a new
-	// member-naming token is taught to all four at once rather than to three of them.
+	// which is the very asymmetry this door was widened to remove, one level down. Since the A1s-prim review it
+	// is asked through `memberCallFollows` — the ONE spelling of the `. <member> (` tail that `methodCallsAt`,
+	// `isSelfMethodCallAt` and `primitiveStaticCallAt` also read — so a new member-naming token is taught to
+	// every dispatcher at once rather than to three of four.
 	//
 	// The BASE half stays a plain identifier because a keyword cannot NAME a *declared* type: `type to` is
 	// refused at its declaration (`E2010: Expected 'identifier' but got 'to'`). `parseQualifiedCall` reads
@@ -33226,7 +33244,7 @@ export type Parser
 	// `Point.create()` is, a static call discarding its result. Every primitive static returns a value, so
 	// none of them needs this door; widen it when one that does not appears.
 	function voidStaticCallsAt(index TokenIndex) returns bool
-		if self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.dot or not self.namesMemberAt(index + 2) or self.kindAt(index + 3) != TokenKind.leftParen 'notAQualifiedCall'
+		if self.kindAt(index) != TokenKind.identifier or not self.memberCallFollows(index + 1) 'notAQualifiedCall'
 			return false
 		end 'notAQualifiedCall'
 

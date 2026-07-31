@@ -470,6 +470,46 @@ end 'main'
 7
 ```
 
+<!-- test: parsable.bound-keyword-outranks-primitive-static -->
+**AND THE KEYWORD QUALIFIERS HAVE THE SAME CONTEST AFTER ALL — NOT THROUGH A `type`, THROUGH A BINDING
+(A1s-prim review).** The case above turns on `byte` being an identifier, and the reason `int`/`float`/`bool`
+were argued to be uncontestable is that no user TYPE may be declared under a keyword. That argument covers
+declarations and not bindings: D8 admits a keyword-named PARAMETER, so `function f(float Box)` puts a VALUE
+in scope under the name `float`, and `float.fromString(…)` is then a method call on that value — the
+identical token shape `primitiveStaticCallAt` claims.
+
+⚠ **THE ARM ORDER IS WHAT DECIDES IT, AND NOTHING ELSE DOES.** Both readings route to `parseDottedPrimary`,
+which asks the scope BEFORE the type reading — so the binding wins, and the new arm changed no answer here.
+That is a property of an ORDERING inside one routine, which is exactly the kind a green suite cannot see:
+hoist the primitive test above the scope test and this call silently stops calling the user's method and
+starts calling `stdlib/Builtins.maxon`'s parser, with no diagnostic anywhere. Pinned as an exit code so the
+re-point is loud. (Either way of getting it wrong fails: the primitive reading of `float.fromString` is
+THROWING, so it cannot even be written without `try`.)
+```maxon
+type Box
+	export let n as int
+
+	export static function create(n int) returns Box
+		return Self{n: n}
+	end 'create'
+
+	export function fromString(s String) returns int
+		return self.n
+	end 'fromString'
+end 'Box'
+
+function f(float Box) returns ExitCode
+	return float.fromString("9")
+end 'f'
+
+function main() returns ExitCode
+	return f(Box.create(7))
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: error.unknown-primitive-static -->
 **AN UNKNOWN STATIC ON A PRIMITIVE NAMES WHAT THE AUTHOR WROTE — NEVER THE MANGLED SYMBOL.** Both
 references fail this in the two available ways: the bootstrap rewrites unconditionally and reports
