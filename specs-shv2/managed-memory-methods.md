@@ -1478,3 +1478,333 @@ end 'main'
 ```maxoncstderr
 error E3057: specs/fragments/managed-memory-methods/error.byte-at-without-try.test:8:18: throwing function requires try: 'byteAt'
 ```
+
+### D11b — the buffer surface IS the roster its refusal names, in both directions
+
+⚖ **USER RULING, 2026-07-31: the legitimate surface is EXACTLY what the roster names.** Before D11b the
+roster was a description that guarded nothing: eleven of the `Array` arms were reachable on a buffer because
+nothing gated them, so `mm.push(7)` and `try mm.remove(0)` **compiled, linked and ran** while the very
+message a reader is handed for a typo denied `remove` outright. The message is now the SPECIFICATION — one
+list (`bufferSurfaceMemberNames`) which the refusal renders and the dispatch consults — so it cannot deny a
+member the compiler accepts, and the fall-through past the arms is a compiler PANIC rather than a second
+opinion about what exists.
+
+⚠ **THE MEASUREMENT THE RULING TURNED ON, and it is why the roster gained nothing.** Every buffer-surface
+call the corpus makes was enumerated from the four producers of a buffer (`__ManagedMemory.create`, a
+`slice` through the surface, `__ManagedDirectory.filename`/`currentPath`, and the `.managed` field) rather
+than probed: `length`, `capacity`, `get`, `set`, `setLength`, `setByte`, `byteAt`, `grow`, `append`,
+`slice`, `clear` — the roster exactly. The one off-roster member any `/specs` case reaches is
+`elementSize` (`ranged-int-bit-packing.md`, which needs ranged-int bit packing shv2 does not have), and
+`stdlib/Array.maxon` additionally calls `remove`/`swap`/`shiftRight`/`elementSize`/`toCString`/
+`makeCharFromBytes` — a file no whitelisted module imports and which shv2 cannot yet compile at all. Those
+arrive with the rung that gives the buffer those members for real, and the roster is what will say so.
+
+<!-- test: buffer-surface-serves-every-member-its-roster-names -->
+
+⭐⭐ **THE FALSE-REJECT GUARD — every one of the eleven roster members, in one program, returning a
+computed value.** A new refusal hides its false rejects one nesting level below where it is tested, so the
+acceptance criterion for D11b is not "the refusal fires" but "nothing legitimate stopped compiling": if the
+gate ever loses a name, or the roster and the arms drift apart, this case is the first thing that reddens.
+Two receivers because two of the members are element-width-bound: the word buffer takes `grow`'s exact
+capacity (a byte buffer's slab slack can exceed the requested count, which would make `grow` a shrink and
+throw), and the byte buffer is where a `setByte`/`byteAt` pair addresses a whole element.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	let words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	try words.setLength(2) otherwise return 2
+	try words.set(0, value: 11) otherwise return 3
+	try words.set(1, value: 22) otherwise return 4
+	try words.grow(8) otherwise return 5
+	if words.capacity() != 8 'grownExactly'
+		return 6
+	end 'grownExactly'
+	total = total + (try words.get(0) otherwise return 7)
+	let part = try words.slice(1, 2) otherwise return 8
+	total = total + (try part.get(0) otherwise return 9)
+	total = total + part.length()
+	let more = try __ManagedMemory.create(1, elementSize: 8) otherwise return 10
+	try more.setLength(1) otherwise return 11
+	try more.set(0, value: 33) otherwise return 12
+	try words.append(more) otherwise return 13
+	total = total + words.length()
+	words.clear()
+	total = total + words.length()
+	let bytes = try __ManagedMemory.create(4, elementSize: 1) otherwise return 14
+	try bytes.setLength(2) otherwise return 15
+	try bytes.setByte(1, value: 5) otherwise return 16
+	total = total + (try bytes.byteAt(1) otherwise return 17)
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.buffer-has-no-push -->
+
+⭐ **THE PROGRAM THE D11 REVIEW RAN: it compiled, linked and exited 0.** `push` is an `Array` method and
+the buffer has no member of that name — the two grow differently (`__arr_push` raises the capacity by the
+doubling policy and publishes a length; the buffer stages into capacity and publishes with `setLength`), so
+accepting it was not a convenience, it was a second length policy on a surface whose whole contract is that
+the author publishes the length.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	mm.push(7)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-push-in-value-position -->
+
+⭐⭐ **THE VALUE POSITION IS THE D11 SHAPE ONE SURFACE OVER, AND IT IS WHY THIS GATE MUST PRECEDE THE
+ARMS.** `let x = mm.push(7)` used to reach `push`'s own `requireVoidMethodIsStatement` and answer
+`E2004: Function 'push' does not return a value` — a claim that the buffer HAS a void `push`, which is
+exactly the false assertion D11 removed from the unknown-`Array`-method path. A refusal about existence has
+to be asked before any refusal about how the result is used.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = mm.push(7)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-remove -->
+
+⭐ **THE SECOND PROGRAM THE D11 REVIEW RAN, and the one the message named outright.** The roster has always
+said `remove` "is not built"; the arm accepted it and emitted the `Array`'s length-bounded `__arr_remove`.
+Both halves of that are now true at once.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.remove(0) otherwise return 2
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'remove' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-count -->
+
+⭐⭐ **THE FOLDED NAME IS THE SHARPEST CASE IN THIS BLOCK: `length` IS the buffer's spelling and `count` is
+the `Array`'s, and one arm serves both.** `__ManagedMemory.length()` is folded onto `Array.count()` because
+the two read the same slot — but folding the EMISSION must not fold the SURFACE, or the buffer answers to a
+name the reference never gave it and the roster's own first entry becomes decorative.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = mm.count()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-managed-field -->
+
+⭐ **`.managed` IS THE `Array`'s FIELD, SO A BUFFER DOES NOT HAVE IT — AND THE CHAIN IS WHAT MADE THAT
+REACHABLE.** The field is an identity that re-enters this dispatch with the buffer surface already set, so
+`mm.managed.setLength(1)` was a second door onto the buffer's own mutators through a member the buffer does
+not have. It is refused at `managed`, where the untruth is.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.managed.setLength(1) otherwise return 2
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'managed' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-element-size -->
+
+⚠ **THE CONTROL FOR THE OTHER HALF OF THE SENTENCE.** `elementSize` is a real `__ManagedMemory` member in
+both references and it is genuinely NOT BUILT here, so it was already refused — by falling all the way
+past the arms. It must keep the same message now that the gate answers first, or the roster's "are not
+built" clause would be reachable only for names nothing has ever declared.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = mm.elementSize()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'elementSize' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-pop -->
+
+The move-out accessors are the `Array`'s alone: `pop` and `remove` shorten a LENGTH the array owns, where a
+buffer's length is the author's to publish. One case per name, because each is one arm and a gate that lost
+a single name would otherwise be caught by nothing.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = try mm.pop() otherwise return 2
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'pop' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-first -->
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = try mm.first() otherwise return 2
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'first' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-last -->
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = try mm.last() otherwise return 2
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'last' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-insert -->
+
+⭐⭐ **THE SECOND DIAGNOSTIC THAT ASSERTED A BUFFER MEMBER INTO EXISTENCE, and it is why the `try` here is
+deliberate.** `insert` is a NON-throwing `Array` method, so `try mm.insert(…)` used to answer
+`E3055: try requires a throwing function: this builtin call cannot fail` — true of `Array.insert` and a
+claim about a member the buffer has never had. Two refusals, two different invented properties (D11's was
+"it is void", this one's is "it cannot fail"), one cause: a rule about HOW a member may be used, asked
+before anything established that it exists.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.insert(0, value: 1) otherwise return 2
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'insert' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-reserve -->
+
+⚠ `reserve` and `grow` are the pair most easily mistaken for one another, and refusing `reserve` is what
+keeps them distinguishable: `grow` sets the capacity to EXACTLY what it is asked for and throws when asked
+to lower it, `reserve` raises it by the doubling policy and never complains. A buffer that answered to both
+would have two capacity policies and no way for an author to say which one they meant.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	mm.reserve(8)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'reserve' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-resize -->
+
+⚠ And `resize`/`setLength` are the other such pair, already stated one block up: `resize` GROWS the
+capacity to fit, `setLength` must REFUSE a length above it. `stdlib/Array.maxon` builds `resize` out of
+`reserve` THEN `setLength` for exactly that reason, which is only expressible while the buffer has the
+second and not the first.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	mm.resize(2)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'resize' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-is-empty -->
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = mm.isEmpty()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'isEmpty' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-has-no-clone -->
+
+⚠ `slice` is the buffer's copy, and it is on the roster — so refusing `clone` takes nothing away. What it
+prevents is a SECOND owned-copy door whose bound is the whole receiver, on a surface where the interesting
+copy is always a range.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let x = mm.clone()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'clone' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.buffer-of-a-slice-has-no-array-members-either -->
+
+⭐⭐ **ONE NESTING LEVEL DOWN — a buffer the SOURCE never named, reached as the result of a `slice` through
+the surface.** The mark rides the VALUE, so the slice of a buffer is a buffer, and its surface has to be
+the same one its parent has: a gate that read the receiver's SPELLING rather than its provenance would let
+every `Array` member back in through one hop.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(4) otherwise return 2
+	let part = try mm.slice(0, 2) otherwise return 3
+	let x = part.count()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: array-members-still-work-through-a-managed-field-hop -->
+
+⭐ **THE OTHER HALF OF THE NESTING GUARD: the surface must not leak the OTHER way.** `.managed` sets the
+buffer surface for the ONE hop the source wrote it on, so the `Array` around it keeps every `Array` member
+— including on the same binding, in the same statement sequence, before and after a buffer call. If the
+mark ever outlived its hop, this program's `push`/`count`/`pop` would be refused with the buffer's roster.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(10)
+	arr.push(20)
+	try arr.managed.set(0, value: 12) otherwise return 1
+	arr.push(30)
+	let popped = try arr.pop() otherwise return 2
+	let head = try arr.first() otherwise return 3
+	return (arr.count() + popped + head) as ExitCode
+end 'main'
+```
+```exitcode
+44
+```

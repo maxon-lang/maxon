@@ -2689,6 +2689,78 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
 end 'arrayMethodMutatesReceiver'
 
+// ⭐⭐ **WHICH MEMBERS THE `__ManagedMemory` BUFFER SURFACE HAS — THE ONE LIST ITS DISPATCH CONSULTS AND
+// ITS REFUSAL RENDERS (D11b).** ⚖ **USER RULING, 2026-07-31: the buffer's legitimate surface is EXACTLY
+// what its roster diagnostic names.** Before this list the roster was prose beside a dispatch nobody had
+// asked about it, and MEASURED it was false in both directions at once: twelve `Array` member names were
+// reachable on a buffer because their arms were never gated — `push`, `reserve`, `resize`, `insert`, `pop`,
+// `first`, `last`, `remove`, `count`, `isEmpty`, `clone`, and the `.managed` field itself — while the same
+// sentence denied `remove` in writing. Eleven of the twelve COMPILED, LINKED AND RAN
+// (`managed-memory-methods.md`'s `error.buffer-has-no-*` cases are the programs); the two that did not run
+// were told something equally untrue instead, which is the next block's subject.
+//
+// ⚠ A refusal is easier to get right than the noun in it, so the noun becomes the authority — the shape
+// D11, D12, R10 and D11c all landed on.
+//
+// ⚠ **THE ORDER IS THE MESSAGE'S ORDER, BECAUSE THE MESSAGE IS JOINED FROM THIS LIST**
+// (`bufferSurfaceRosterList`). And the entries are the very constants the arms match on, so the sentence
+// cannot spell a member differently from the dispatch that serves it — the residual a hand-written list of
+// `b"…"` literals beside these would have left.
+//
+// ⚠ **THE OTHER DIRECTION — a name listed here whose arm does not exist — IS D11's DEFECT ONE LEVEL UP,
+// and it is CHECKED rather than commented**: `dispatchArrayMethod`'s buffer fall-through is a PANIC naming
+// this list, because a roster member that reaches it would otherwise be handed the very message that says
+// it is provided. The pairing cannot be verified at install time (an arm is a control-flow position, not an
+// entry in a table something can enumerate), so the check sits at the one moment it is observable.
+//
+// ⚠ **`elementSize`, `remove`, `swap`, `shiftLeft`/`shiftRight` and the cstring/cursor members are ABSENT
+// ON PURPOSE, and the refusal says so.** Every one is a real `__ManagedMemory` member in both references
+// (bootstrap `2-Parser.cs:1481-1516`, v1 `LowerMaxonToStd.maxon:1618-1660`) and none is BUILT here — the
+// only caller of `remove`/`swap`/`shiftRight`/`elementSize` anywhere is `stdlib/Array.maxon`, which is not
+// a whitelisted module and which shv2 cannot compile at all, and the cstring family takes a type shv2 has
+// no producer for. Each arrives with the rung that builds it, and that rung adds its line HERE.
+function bufferSurfaceMemberNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(ManagedMemoryLengthMethod)
+	names.push(ArrayCapacityMethod)
+	names.push(ArrayGetMethod)
+	names.push(ArraySetMethod)
+	names.push(ManagedMemorySetLengthMethod)
+	names.push(ManagedMemorySetByteMethod)
+	names.push(ManagedMemoryByteAtMethod)
+	names.push(ManagedMemoryGrowMethod)
+	names.push(AppendMethod)
+	names.push(SliceMethod)
+	names.push(ArrayClearMethod)
+	return names
+end 'bufferSurfaceMemberNames'
+
+// The read side of the roster — asked ONCE per buffer-surface method call, ahead of every arm, and never
+// for an `Array` receiver (`Set.contains`'s "a program that never names `__ManagedMemory` does not pay to
+// ask" applies here too: the question is behind `isManagedMemory`).
+function bufferSurfaceHasMember(name ByteArray) returns bool
+	for member in bufferSurfaceMemberNames() 'eachMember'
+		if name.equals(member) 'isMember'
+			return true
+		end 'isMember'
+	end 'eachMember'
+	return false
+end 'bufferSurfaceHasMember'
+
+// The roster as the refusal prints it — `length/capacity/get/…`, joined from the list above rather than
+// transcribed beside it. `IrInterface.builtinConformerMethodNames` renders a diagnostic's method list off
+// its own dispatch walk for the identical reason.
+function bufferSurfaceRosterList() returns String
+	var rendered = ""
+	for member in bufferSurfaceMemberNames() 'eachMember'
+		if not rendered.isEmpty() 'separator'
+			rendered = "{rendered}/"
+		end 'separator'
+		rendered = "{rendered}{String.from(member)}"
+	end 'eachMember'
+	return rendered
+end 'bufferSurfaceRosterList'
+
 // ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the same immutable-receiver rule,
 // beside the `Array` half above rather than in `SetRuntime.maxon`, where it used to sit holding the five
 // method-name spellings hostage with it (see the shared-spelling block). The two halves answer the same
@@ -26602,6 +26674,24 @@ export type Parser
 		// (`valueIsBufferSurface`: a `__ManagedMemory.create`, or a `slice` of one).
 		let isManagedMemory = viaManagedField or self.valueIsBufferSurface(arr)
 
+		// ⭐⭐ **THE ROSTER IS THE SURFACE, AND IT IS ASKED BEFORE ANYTHING ELSE (D11b).** ⚖ USER RULING,
+		// 2026-07-31. A member the buffer does not have is refused HERE, ahead of every arm and ahead of both
+		// receiver rules below, because "does this member exist?" is the question every other refusal about
+		// the call presupposes. Two measured spellings say why the position matters as much as the test:
+		//
+		//   • `let x = mm.push(7)` used to reach `push`'s own `requireVoidMethodIsStatement` and answer
+		//     *"Function 'push' does not return a value"* — D11's exact false claim (the method EXISTS and is
+		//     VOID) one surface over, about a name the buffer has never had.
+		//   • `try mm.insert(0, value: 1)` used to answer E3055 *"try requires a throwing function"* — a
+		//     second assertion that the member is real, differing only in which property it invents.
+		//
+		// ⇒ The same reason R4.2's review moved the buffer-only mutators out of `arrayMethodMutatesReceiver`
+		// (the next line): a rule about HOW a member may be used must not speak for a member the receiver
+		// does not have. That fix covered the buffer's four; this covers the `Array`'s twelve.
+		if isManagedMemory and not bufferSurfaceHasMember(methodTok.value) 'notABufferMember'
+			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` member '{String.from(methodTok.value)}' — R4.4 provides {bufferSurfaceRosterList()}; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for", line: methodTok.line, column: methodTok.column)
+		end 'notABufferMember'
+
 		// ⚠ **THE BUFFER-ONLY MEMBERS ARE GATED ON THAT ANSWER HERE TOO, or the E3019 rule names methods the
 		// receiver does not have** (found in review, R4.2). Ungated, `let a = IntArray.create()` followed by
 		// `a.setLength(2)` reported `E3019 cannot pass 'a' to function that mutates parameter 'self'` — a
@@ -26642,6 +26732,12 @@ export type Parser
 		//
 		// ⚠ It is a FIELD read, not a call: the corpus writes no parentheses. So this arm never consumes an
 		// argument list; routing it through the call arms below would demand a `(` the source does not write.
+		//
+		// ⚠ **THE ARM IS THE `Array`'s ALONE (D11b): a buffer has no `managed` member and the roster gate above
+		// refuses one**, so `mm.managed.setByte(0, 65)` — a second door onto the buffer's own mutators through
+		// a member the buffer does not have — is `error.buffer-has-no-managed-field` rather than an identity
+		// on an identity. What re-enters here still arrives with `viaManagedField: true`, which is the ONE hop
+		// the source wrote it on.
 		//
 		// ⚠⚠ **A `.member(` AFTER IT RE-ENTERS THIS DISPATCH WITH THE BUFFER SURFACE, RATHER THAN RETURNING
 		// AND LETTING `parsePostfix` DISPATCH THE HOP.** The two are not interchangeable: `.managed` is an
@@ -26744,6 +26840,10 @@ export type Parser
 		// name is folded onto this arm rather than given a second, byte-identical emission of its own (R4.2).
 		// `setLength`/`setByte` below are deliberately NOT folded onto `resize`/`set`: those two pairs differ
 		// (see the `__ManagedMemory` mutators).
+		// ⚠ **WHAT IS FOLDED IS THE EMISSION, NEVER THE SURFACE (D11b).** `count` is the `Array`'s spelling and
+		// `length` is the buffer's, so `mm.count()` is refused by the roster gate above and only the second
+		// disjunct here is reachable on a buffer — sharing an arm must not hand a receiver a name the
+		// references never gave it, or the roster's own first entry becomes decorative.
 		if methodTok.value.equals(CountMethod) or (isManagedMemory and methodTok.value.equals(ManagedMemoryLengthMethod)) 'count'
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
@@ -26881,12 +26981,21 @@ export type Parser
 			return self.emitRuntimeCall(ArrMemGrowName, args: pairArgs(arr, second: newCapacity), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'grow'
 
-		// ⚠ **THE REFUSAL NAMES WHICHEVER SURFACE THE RECEIVER WEARS, because the two rosters differ and a
-		// message listing the other one sends the reader to the wrong question** — `setLength` is not missing
-		// from `Array`, it is not an `Array` method at all, and `push` is not missing from a buffer.
-		if isManagedMemory 'bufferSurfaceRoster'
-			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` member '{String.from(methodTok.value)}' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for", line: methodTok.line, column: methodTok.column)
-		end 'bufferSurfaceRoster'
+		// ⚠⚠ **A BUFFER RECEIVER CANNOT REACH HERE, AND THIS IS THE CHECK THAT SAYS SO (D11b).** The roster
+		// gate above admitted only the names `bufferSurfaceMemberNames` lists, and every one of those has an
+		// arm unconditional on anything but its own spelling — so a buffer arriving at this line means the
+		// roster gained a member and the dispatch did not. That is D11's defect one level up, and the wrong
+		// answer it would otherwise give is unusually convincing: the reader would be handed the roster
+		// refusal for a member the roster PROVIDES. It cannot be caught earlier than the call that reveals it
+		// (an arm is a control-flow position, not an entry a table can enumerate at install time), so it is
+		// caught here, loudly, rather than described in a comment nobody re-reads.
+		//
+		// ⚠ **THE REFUSAL BELOW THEREFORE NAMES THE `Array` SURFACE, AND ONLY IT** — the two rosters differ
+		// and a message listing the other one sends the reader to the wrong question: `setLength` is not
+		// missing from `Array`, it is not an `Array` method at all.
+		if isManagedMemory 'rosterNamesAMemberNoArmServes'
+			panic("dispatchArrayMethod: '{String.from(methodTok.value)}' is on the `{String.from(ManagedMemoryTypeName)}` roster (`bufferSurfaceMemberNames`) and no arm served it. EITHER add the arm, or take the name back out of the roster — the gate at the top of this function admits nothing else, so this line is unreachable while the two agree")
+		end 'rosterNamesAMemberNoArmServes'
 
 		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
 	end 'dispatchArrayMethod'
