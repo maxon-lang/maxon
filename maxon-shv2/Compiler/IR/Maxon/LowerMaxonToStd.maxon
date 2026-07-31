@@ -1152,21 +1152,21 @@ type MaxonToStdLowering
 		return label
 	end 'ensureWitnessTable'
 
-	// Resolve an interface NAME when building a witness table (P1.7a slice 2a) — a synthesized builtin FIRST
-	// (matching `ConformanceCheck.resolveInterface`), then a user interface from the merged `project.interfaces`.
-	// A witness table is only built for a constraint whose interface the parser already resolved, so an
-	// unresolved name here is an internal invariant break, not a user error. ⚠ **"same-file" WAS the rule and R8
-	// DELETED IT**: the parser now resolves a constraint's interface against the whole-program declaration index
-	// (`lookupInterfaceForParse` → `signatures.interfaceOf`), so it resolves an interface declared below its use
-	// or in any other file. That widens what reaches here and does NOT weaken the invariant — this store
-	// (`project.interfaces`, merged after every file parses) is a superset of what the parse-time index could
-	// answer, so a name the parser resolved is necessarily present here.
+	// Resolve an interface NAME when building a witness table (P1.7a slice 2a) — through `lookupInterface`,
+	// the ONE statement of "builtin first, then the merged registry" that R9 gave this reader and
+	// `ConformanceCheck` to share (the two used to spell that rule twice over the same store). What stays
+	// local is the MISS: a witness table is only built for a constraint whose interface the parser already
+	// resolved, so an unresolved name here is an internal invariant break, not a user error.
+	// ⚠ **"same-file" WAS the rule and R8 DELETED IT**: the parser now resolves a constraint's interface
+	// against the whole-program declaration index (`lookupInterfaceForParse` → `signatures.interfaceOf`), so it
+	// resolves an interface declared below its use or in any other file. That widens what reaches here and does
+	// NOT weaken the invariant — this store (`project.interfaces`, merged after every file parses) is a superset
+	// of what the parse-time index could answer, so a name the parser resolved is necessarily present here.
 	function resolveWitnessInterface(interfaceName ByteArray) returns IrInterface
-		match builtinInterface(interfaceName) 'builtin'
+		match lookupInterface(self.interfaces, name: interfaceName) 'resolved'
 			found(iface) then return iface
-			notFound then break 'builtin'
-		end 'builtin'
-		return try self.interfaces.get(interfaceName) otherwise panic("resolveWitnessInterface: witness constraint interface '{String.from(interfaceName)}' is neither a builtin nor a declared interface — the parser resolved it at the dispatch site, so it must resolve here")
+			notFound then panic("resolveWitnessInterface: witness constraint interface '{String.from(interfaceName)}' is neither a builtin nor a declared interface — the parser resolved it at the dispatch site, so it must resolve here")
+		end 'resolved'
 	end 'resolveWitnessInterface'
 
 	// The layout-descriptor argument a layout-needing call must pass, from the RIGHT source (P1.6-B1 / P1.7

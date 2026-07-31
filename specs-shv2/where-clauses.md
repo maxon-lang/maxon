@@ -657,7 +657,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3017: <fragment>:22:11: type 'Plain' does not implement 'Digest', which the `where` clause on generic type 'Box' requires of its type parameter
+error E3017: <fragment>:22:11: Type 'Plain' does not satisfy constraint 'Digest' required by type parameter 'T' of 'Box'
 ```
 
 <!-- test: where-clauses.error.witness-arg-missing-label -->
@@ -1576,16 +1576,7 @@ end 'main'
 
 ### Where clause violation with and - missing one interface
 
-<!-- disabled-test: where-clauses.and-violation -->
-<!-- E3017-message-conformance: the REJECTION is already right — shv2 raises E3017 at exactly
-     `23:11`, the position and the code the canonical spec asks for — and only the SENTENCE differs.
-     MEASURED on this branch:
-       expected: Type 'OnlyFoo' does not satisfy constraint 'Bar' required by type parameter 'T' of 'NeedsBoth'
-       actual:   type 'OnlyFoo' does not implement 'Bar', which the `where` clause on generic type 'NeedsBoth' requires of its type parameter
-     The sentence is `ConformanceCheck.maxon:124`, and shv2's own
-     `where-clauses.error.instantiate-nonconforming` pins the current wording — so aligning it is one
-     edit plus a golden move in a file R8 does not own, i.e. its own rung, not a fix smuggled in here.
-     Nothing about it is interface RESOLUTION: `Foo`/`Bar` are declared above their constrained use. -->
+<!-- test: where-clauses.and-violation -->
 
 ```maxon
 

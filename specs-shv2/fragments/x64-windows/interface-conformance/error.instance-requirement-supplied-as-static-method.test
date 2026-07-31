@@ -1,0 +1,27 @@
+// Test: error.instance-requirement-supplied-as-static-method
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export static function digest() returns Code
+		return 7
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	return p.x
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:8:6: Partial interface implementation: type 'Point' has 1 method(s) with wrong signature:
+  - static digest() returns Code (expected digest() returns Code)

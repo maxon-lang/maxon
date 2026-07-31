@@ -664,3 +664,269 @@ end 'main'
 ```maxoncstderr
 error E3006: <fragment>:16:11: duplicate definition of function 'Widget.label'
 ```
+
+### `static` interface requirements (R9)
+
+An `interface` may declare a `static function` requirement. Until R9 the conformance check SKIPPED every
+such requirement, so a type could declare `implements` and supply nothing for it. That was not a lenience,
+it was a disagreement: shv2 dispatches an interface through a WITNESS TABLE with one slot per interface
+method — statics included — and the slot is stamped with a relocation naming `<Type>.<method>`. A conformer
+that supplied nothing left the linker resolving an address for a function nobody emitted, and the build
+died in `bakeFuncAbs64Relocs`, not in a diagnostic.
+
+⚠ **THE RULE IS THE ONE E3016 ALREADY STATES, AND IT DOES NOT CONSULT THE WITNESS TABLE.** A type that does
+not define all of an interface's members does not conform to it — whether or not any generic in the program
+happens to instantiate against that interface. Making the table's existence decide conformance would leave
+the same program accepted or rejected depending on a `typealias` written elsewhere, which is exactly the
+two-components-disagreeing shape this rule closes.
+
+⚠ **DIVERGENCE FROM THE C# BOOTSTRAP, DELIBERATE AND MEASURED.** The bootstrap ACCEPTS a conformer that
+omits a static requirement (measured: exit 42) — it monomorphizes and has no witness tables at all, so the
+question cannot arise there. v1 already reports a MISSING static (`SemanticCheck.maxon:412-430` pushes the
+missing entry before its static skip); it skips only a PRESENT static's signature, which shv2 cannot afford
+because shv2's slot carries an address whose ABI the interface picked.
+
+<!-- test: error.static-requirement-not-supplied -->
+A `static` requirement the conformer does not supply is E3016 — the program that used to panic the
+compiler in `bakeFuncAbs64Relocs`.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	static function tag() returns Code
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Wide
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function run() returns Code
+		return self.item.digest()
+	end 'run'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	let b = PointBox.create(p)
+	return b.run()
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:9:6: Partial interface implementation: type 'Point' is missing 1 method(s):
+  - static tag() returns Code
+```
+
+<!-- test: error.static-requirement-not-supplied-without-witness -->
+⭐ **WHETHER A WITNESS TABLE IS BUILT MUST NOT DECIDE WHETHER A TYPE CONFORMS.** The identical conformance
+with no generic instantiation anywhere in the program — so no witness table, no relocation, nothing that
+could fail at link time — is the SAME E3016. Before R9 this program compiled and returned 42.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	static function tag() returns Code
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	return p.digest()
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:9:6: Partial interface implementation: type 'Point' is missing 1 method(s):
+  - static tag() returns Code
+```
+
+<!-- test: static-requirement-supplied -->
+⭐⭐ **THE OVER-REJECTION GUARD.** A conformer that DOES supply the static compiles and runs — and it is the
+case a careless fix breaks, because checking a static requirement against the type's INSTANCE members
+rejects this program while still rejecting the two above. The witness table is built here, so its `tag`
+slot relocates against a `Point.tag` that exists.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	static function tag() returns Code
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export static function tag() returns Code
+		return 7
+	end 'tag'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Wide
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function run() returns Code
+		return self.item.digest()
+	end 'run'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	let b = PointBox.create(p)
+	return b.run()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.static-requirement-wrong-signature -->
+A supplied static whose signature disagrees with the requirement reaches E3016's WRONG-SIGNATURE arm, the
+same arm an instance method reaches. v1 skips this comparison because *"no runtime witness is dispatched
+against them"*; under shv2's dictionary-passing one is, so the shapes must agree.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	static function tag() returns Code
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export static function tag(extra Code) returns Code
+		return extra
+	end 'tag'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	return p.digest()
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:9:6: Partial interface implementation: type 'Point' has 1 method(s) with wrong signature:
+  - static tag(extra Code) returns Code (expected static tag() returns Code)
+```
+
+<!-- test: error.static-requirement-supplied-as-instance-method -->
+⭐ **A RECEIVER-KIND DISAGREEMENT IS A SIGNATURE DISAGREEMENT (R9's own rule — neither reference has it).**
+An instance method carries `__self` at position 0 and a static does not, so an instance impl installed in a
+slot the interface declared static would be dispatched with no receiver in the register it reads `self`
+from. The `static ` prefix is in the rendered signature precisely so this rejection's two halves do not
+print as the same string.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	static function tag() returns Code
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function tag() returns Code
+		return self.x
+	end 'tag'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	return p.digest()
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:9:6: Partial interface implementation: type 'Point' has 1 method(s) with wrong signature:
+  - tag() returns Code (expected static tag() returns Code)
+```
+
+<!-- test: error.instance-requirement-supplied-as-static-method -->
+The other direction, which was a SILENT WRONG ANSWER before R9: an INSTANCE requirement met by a static was
+accepted, and the dispatch then passed a receiver into a callee with no `self` parameter.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export static function digest() returns Code
+		return 7
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	return p.x
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:8:6: Partial interface implementation: type 'Point' has 1 method(s) with wrong signature:
+  - static digest() returns Code (expected digest() returns Code)
+```

@@ -528,6 +528,35 @@ export function builtinInterface(name ByteArray) returns InterfaceLookup
 	return InterfaceLookup.notFound
 end 'builtinInterface'
 
+// ⭐ **WHICH INTERFACE DOES THIS NAME DENOTE, ASKED OF THE MERGED REGISTRY — ONE RULE, ONE HOME (R9).**
+// A synthesized builtin FIRST, then the user-declared registry, else `notFound`. Builtins win so a user
+// cannot shadow `Stringable` with a broken redeclaration, and the common protocol interfaces resolve
+// without shv2 reading the stdlib.
+//
+// ⚠ **IT TAKES THE MAP, NOT THE `Project`, AND THAT IS WHAT LETS BOTH POST-MERGE READERS SHARE IT.**
+// `ConformanceCheck` asks through `project.interfaces` and `LowerMaxonToStd` through the field it was
+// constructed with — the SAME object, aliased — so a `Project`-shaped parameter would have forced the
+// lowering to keep a second spelling of a rule stated here. The two callers still differ in what a MISS
+// MEANS (a user's typo'd interface name is `E3015`; a witness table naming an unresolvable interface is an
+// internal invariant break), so the miss stays theirs and only the lookup is shared.
+//
+// ⚠ This is deliberately NOT merged with `Parser.lookupInterfaceForParse`, which R8 put over the
+// declaration INDEX: that one answers mid-parse, before any file has merged, and the split is the same
+// parse-time/check-time one R8's header defends. What was genuine duplication is these two, which read one
+// store in one phase.
+export function lookupInterface(interfaces IrInterfaceMap, name ByteArray) returns InterfaceLookup
+	match builtinInterface(name) 'builtin'
+		found(iface) then return InterfaceLookup.found(iface)
+		notFound then break 'builtin'
+	end 'builtin'
+
+	if let userIface = try interfaces.get(name) 'userDeclared'
+		return InterfaceLookup.found(userIface)
+	end 'userDeclared'
+
+	return InterfaceLookup.notFound
+end 'lookupInterface'
+
 // ⭐ **THE SYNTHESIZED PROTOCOL UNDER `name`, FOR A CALLER THAT NEEDS ITS *DECLARATION* AND NOT MERELY ITS
 // NAME.** A consumer that must agree with a protocol about more than one fact — the comparison-operator
 // lowering needs `Comparable`'s METHOD NAME to search the `where` constraints for, AND that method's RESULT

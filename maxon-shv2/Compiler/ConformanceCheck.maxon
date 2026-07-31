@@ -121,10 +121,25 @@ function checkOneInstantiation(project Project, signatures ProgramSignatures, de
 		let conformerType = signatures.conformerTypeArgName(site.gid, position: constraint.typeParamIndex).toByteArray()
 		if not typeConformsTo(declared, typeName: conformerType, interfaceName: constraint.interfaceName) 'violates'
 			let sourceType = signatures.instanceArgTypeName(site.gid, position: constraint.typeParamIndex)
-			reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "type '{String.from(sourceType)}' does not implement '{String.from(constraint.interfaceName)}', which the `where` clause on generic type '{String.from(baseName)}' requires of its type parameter", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+			reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "Type '{String.from(sourceType)}' does not satisfy constraint '{String.from(constraint.interfaceName)}' required by type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex))}' of '{String.from(baseName)}'", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 		end 'violates'
 	end 'eachConstraint'
 end 'checkOneInstantiation'
+
+// The NAME of the constrained type parameter — the `T` of `where T is Bar` — for the E3017 sentence, which
+// the canonical corpus spells naming it (`specs/where-clauses.md`'s `and-violation`). It lives on the SAME
+// layout `structWhereConstraints` read the constraint off, so the position is an index into that
+// declaration's own `uses` list by construction.
+//
+// Read only on the VIOLATION path, and that is deliberate: `structOf` boxes a `DeclaredStruct` per call
+// (a Maxon union value is a heap object in every case), and a conforming instantiation — every one in a
+// program that compiles — must not pay for a diagnostic it does not produce.
+function constrainedTypeParamName(signatures ProgramSignatures, baseName ByteArray, position FieldIndex) returns ByteArray
+	match signatures.structOf(baseName) 'base'
+		declared(layout) then return try layout.typeParamNames.get(position) otherwise panic("constrainedTypeParamName: '{String.from(baseName)}' constrains type-parameter position {position}, outside its own `uses` list of {layout.typeParamNames.count()} — a `where` constraint is recorded against that list")
+		undeclared then panic("constrainedTypeParamName: '{String.from(baseName)}' carries a `where` constraint but is in no struct registry — `structWhereConstraints` read that constraint off the very layout this lookup misses")
+	end 'base'
+end 'constrainedTypeParamName'
 
 // ⭐ **DOES `typeName` CONFORM TO `interfaceName`? THE ONE predicate every conformance site consults (P1.7a
 // slice 2b + P1.7b).** An intrinsic builtin-type conformance (`int`/`String` implements `Hashable`/`Equatable`,
@@ -193,7 +208,7 @@ function checkOneConformance(project Project, functionsByName FunctionByNameMap,
 
 	for i in 0 upto conformance.interfaces.count() 'eachIface'
 		let entry = try conformance.interfaces.get(i) otherwise panic("checkOneConformance: interfaces.get OOB at {i}")
-		match resolveInterface(project, name: entry.interfaceName) 'resolve'
+		match lookupInterface(project.interfaces, name: entry.interfaceName) 'resolve'
 			notFound then reportPositioned(project, code: ErrorCode.semanticUnknownInterface, message: "type '{String.from(conformance.typeName)}' implements unknown interface '{String.from(entry.interfaceName)}'", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
 			found(iface) then checkOneInterfaceConformance(project, functionsByName: functionsByName, conformance: conformance, entry: entry, iface: iface, typeParamNames: typeParamNames, signatures: signatures)
 		end 'resolve'
@@ -251,25 +266,31 @@ function checkOneInterfaceConformance(project Project, functionsByName FunctionB
 	checkInterfaceMethods(project, functionsByName: functionsByName, conformance: conformance, entry: entry, iface: iface, typeParamNames: typeParamNames, signatures: signatures)
 end 'checkOneInterfaceConformance'
 
-// Resolve an interface NAME to its definition — a synthesized builtin (Stringable, Hashable, …) FIRST,
-// then a user-declared one, else `notFound`. Builtins win so a user cannot shadow `Stringable` with a
-// broken redeclaration, and the common protocol interfaces resolve without shv2 reading the stdlib.
-function resolveInterface(project Project, name ByteArray) returns InterfaceLookup
-	match builtinInterface(name) 'builtin'
-		found(iface) then return InterfaceLookup.found(iface)
-		notFound then break 'builtin'
-	end 'builtin'
-
-	if let userIface = try project.interfaces.get(name) 'userDeclared'
-		return InterfaceLookup.found(userIface)
-	end 'userDeclared'
-
-	return InterfaceLookup.notFound
-end 'resolveInterface'
-
 // Validate that a conforming type supplies every method the interface requires (its own AND its
 // `extends`-inherited), each with a matching signature. Reports E3016 with the MISSING methods, else with
 // the WRONG-SIGNATURE ones — missing first and mutually exclusive, mirroring the oracle's throw-on-first.
+//
+// ⭐⭐ **A `static` REQUIREMENT IS A REQUIREMENT (R9), AND SKIPPING IT WAS A REACHABLE COMPILER PANIC.**
+// This loop used to `continue` on `method.isStatic`, so a conformer that supplied nothing for
+// `static function tag()` was accepted — while `ensureWitnessTable` still reserved that method's slot and
+// stamped a `funcAbs64InRdata` relocation naming `Point.tag`, a symbol no function installs. Two components
+// disagreeing about whether the requirement exists, and the disagreement surfaced as
+// `bakeFuncAbs64Relocs: … references .text function 'Point.tag', which is in no debug symbol`. The witness
+// slot is the reason the skip cannot simply be narrowed to "only when a table is built": whether a table
+// HAPPENS to be built must not decide whether a type conforms, so the check is unconditional and a program
+// with no generic instantiation is now rejected too.
+//
+// ⚠ **THE TWO REFERENCES DISAGREE HERE, AND v1 IS THE ONE shv2 FOLLOWS — HALFWAY.** The bootstrap
+// `continue`s before its `func == null` test (`2-Parser.cs:3428-3432`), so a MISSING static is silently
+// accepted; v1 pushes the missing entry first and only then skips (`SemanticCheck.maxon:412-430`), so a
+// missing static IS reported. shv2 takes v1's answer for the missing case and diverges from BOTH for the
+// present one: v1 skips a present static's SIGNATURE because *"no runtime witness is dispatched against
+// them"*, which is exactly the sentence shv2's dictionary-passing falsifies — the table carries one slot per
+// interface method, statics included, so a static whose shape disagrees with the requirement is an ABI
+// disagreement in a slot, the same argument `validateThrowsConformance` already makes for shv2's own
+// throws rules. The skip's original comment was right about WHY it existed (`checkOneMethod` reads an
+// INSTANCE method) and wrong about how far that reaches: the fix is to make the lookup receiver-aware
+// (`signatureMatches`' staticness test), not to stop asking.
 function checkInterfaceMethods(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	var collected = CollectedInterfaceMethodArray.create()
 	var visited = InterfaceNameSet.create()
@@ -279,12 +300,6 @@ function checkInterfaceMethods(project Project, functionsByName FunctionByNameMa
 	var wrongSignature = StringArray.create()
 	for i in 0 upto collected.count() 'eachMethod'
 		let collectedMethod = try collected.get(i) otherwise panic("checkInterfaceMethods: collected.get OOB at {i}")
-		// A `static` interface method carries no receiver, so a conforming type need not supply it as an
-		// instance method — the oracle skips it, and so does this check.
-		if collectedMethod.method.isStatic 'staticMethod'
-			continue
-		end 'staticMethod'
-
 		checkOneMethod(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, rootInterfaceName: entry.interfaceName, typeParamNames: typeParamNames, signatures: signatures, missing: missing, wrongSignature: wrongSignature)
 	end 'eachMethod'
 
@@ -331,7 +346,7 @@ function collectInterfaceMethods(project Project, iface IrInterface, ifaceName B
 
 	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'
 		let parentName = try iface.extendsInterfaces.get(j) otherwise panic("collectInterfaceMethods: extendsInterfaces.get OOB at {j}")
-		match resolveInterface(project, name: parentName) 'parent'
+		match lookupInterface(project.interfaces, name: parentName) 'parent'
 			found(parentIface) then collectInterfaceMethods(project, iface: parentIface, ifaceName: parentName, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames, out: out, visited: visited)
 			// A parent named by `extends` that does not resolve is not diagnosed here (slice 1 does not
 			// report a bad `extends` target); its methods simply cannot be projected.
@@ -513,7 +528,19 @@ end 'throwsConformanceSubject'
 // associated-type dict. `Self` reads better in a diagnostic than the reader's own type name repeated back;
 // an associated type does not, because its name is meaningless outside the interface that declared it.
 function signatureMatches(project Project, method InterfaceMethodSig, conformingType ByteArray, implFunc IrFunction, implSig FuncSignature, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns bool
-	let selfOffset = 1 if implSig.takesReceiver() else 0
+	// ⭐ **A `static` REQUIREMENT IS MET BY A STATIC MEMBER, AND AN INSTANCE ONE BY AN INSTANCE MEMBER (R9).**
+	// The two have different ABIs — an instance method takes `__self` at position 0 — and the witness slot is
+	// stamped with whichever the type declared, so an instance impl under a static requirement would be
+	// dispatched with no receiver in the register it reads `self` from. Neither reference has this rule: both
+	// skip a present static outright, so neither can see the disagreement. `takesReceiver()` (does the
+	// signature declare `__self`?) is exactly "is an instance method", so it is also what the parameter
+	// comparison below indexes by — one fact, asked once.
+	let implIsStatic = not implSig.takesReceiver()
+	if method.isStatic != implIsStatic 'receiverKindDiffers'
+		return false
+	end 'receiverKindDiffers'
+
+	let selfOffset = 0 if implIsStatic else 1
 	if method.paramNames.count() != implFunc.maxonParamTypes.count() - selfOffset 'arityDiffers'
 		return false
 	end 'arityDiffers'
@@ -556,14 +583,15 @@ end 'canonicalTypeName'
 // Both are rendered to the same source-string columns the interface stores, then handed to the ONE
 // signature assembler — so an actual and an expected signature cannot drift in format.
 function formatActualSignature(project Project, methodName ByteArray, conformingType ByteArray, implFunc IrFunction, implSig FuncSignature, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns String
-	let selfOffset = 1 if implSig.takesReceiver() else 0
+	let implIsStatic = not implSig.takesReceiver()
+	let selfOffset = 0 if implIsStatic else 1
 	var paramNames = ByteArrayArray.create()
 	var paramTypes = ByteArrayArray.create()
 	for i in selfOffset upto implFunc.maxonParamTypes.count() 'eachParam'
 		paramNames.push(try implSig.paramNames.get(i) otherwise panic("formatActualSignature: paramNames.get OOB at {i}"))
 		paramTypes.push(renderDeclaredTypeName(try implFunc.maxonParamTypes.get(i) otherwise panic("formatActualSignature: maxonParamTypes.get OOB at {i}"), declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures))
 	end 'eachParam'
-	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures))
+	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures), isStatic: implIsStatic)
 end 'formatActualSignature'
 
 // An interface method's signature as a source string — `process(value Integer) returns Integer` — from
@@ -571,14 +599,20 @@ end 'formatActualSignature'
 // assembler the impl side uses. It performs NO substitution of its own, which is the whole point: the
 // sentence and the verdict read one string (`collectInterfaceMethods`).
 function formatInterfaceMethodSignature(method InterfaceMethodSig) returns String
-	return assembleMethodSignature(method.name, paramNames: method.paramNames, paramTypes: method.paramTypeNames, returnType: method.returnTypeName)
+	return assembleMethodSignature(method.name, paramNames: method.paramNames, paramTypes: method.paramTypeNames, returnType: method.returnTypeName, isStatic: method.isStatic)
 end 'formatInterfaceMethodSignature'
 
-// ⭐ **THE ONE `name(p0 t0, p1 t1) returns ret` SPELLING**, shared by the interface (expected) and impl
-// (actual) renderers so the two halves of a wrong-signature message cannot drift in format. `paramNames`
-// and `paramTypes` are parallel source-string columns.
-function assembleMethodSignature(name ByteArray, paramNames ByteArrayArray, paramTypes ByteArrayArray, returnType ByteArray) returns String
-	var rendered = "{String.from(name)}("
+// ⭐ **THE ONE `[static ]name(p0 t0, p1 t1) returns ret` SPELLING**, shared by the interface (expected) and
+// impl (actual) renderers so the two halves of a wrong-signature message cannot drift in format.
+// `paramNames` and `paramTypes` are parallel source-string columns.
+//
+// The `static ` prefix is what makes a RECEIVER-KIND disagreement readable (R9): without it a static
+// requirement met by an instance method of the same shape renders `tag() returns Code (expected tag()
+// returns Code)` — a rejection whose two halves are the identical string, telling the author to change
+// something that already looks right. It costs nothing on every other message, because until R9 no static
+// requirement could reach a diagnostic at all.
+function assembleMethodSignature(name ByteArray, paramNames ByteArrayArray, paramTypes ByteArrayArray, returnType ByteArray, isStatic bool) returns String
+	var rendered = "static {String.from(name)}(" if isStatic else "{String.from(name)}("
 	for i in 0 upto paramNames.count() 'eachParam'
 		if i > 0 'separator'
 			rendered = "{rendered}, "
