@@ -37,11 +37,12 @@
 //     declaration of any symbol a runtime installs (`__print_string`, `__str_eq`, `__mm_*`, a `__destruct_<T>`
 //     cascade …), which is the pair A1t was written for and the only one no earlier site can reach.
 //
-// ⚠ **THE INDEX DESCRIBES THE ARRAY AS IT WAS AT `create`.** Both halves go stale together the moment that
-// array changes, which is why they travel as one value: an index resolved against a DIFFERENT function
-// array is the failure `ValueOrigin`'s header describes. Exactly one pass replaces a function array —
-// `DeadFunctionElimination.sweepUnreachedFunctions`, which assigns a freshly built one — and it runs after
-// the last read of the index built over the old one.
+// ⚠ **THE INDEX DESCRIBES THE ARRAY AS IT WAS AT `create`, AND GOES STALE WITH IT.** Exactly one pass
+// replaces a function array — `DeadFunctionElimination.sweepUnreachedFunctions`, which assigns a freshly
+// built one — and it runs after the last read of the index built over the old one; an index resolved against
+// a DIFFERENT array is the failure `ValueOrigin`'s header describes. The array travels INSIDE the record
+// because `funcNamed` needs both halves and they must be the same two halves; the three callers that only
+// want a position read `byName` and index the module they already hold, which is that same array.
 
 // name -> position in the function array. Unique by construction: `FunctionNameIndex.create` refuses a
 // duplicate rather than resolving one.
@@ -49,7 +50,8 @@ export typealias FuncIndexByName = Map with (ByteArray, FuncIndex)
 
 export type FunctionNameIndex
 	// The array the indices index, carried WITH the map for the reason the header's last paragraph gives.
-	export let functions as IrFunctionArray
+	// Read only through `funcNamed` and `create`, so it stays inside.
+	let functions as IrFunctionArray
 	export let byName as FuncIndexByName
 
 	export static function create(functions IrFunctionArray, project Project) returns FunctionNameIndex throws CompileError

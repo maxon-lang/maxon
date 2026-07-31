@@ -278,8 +278,36 @@ instead of the runtime's, which is the one that knows the String record's layout
 DUPLICATE, and it is total (no binary is written either way). ⇒ **And the panic did not go away, it got a
 DISCRIMINATOR**: only a pair with MIXED provenance (one parsed, one synthesized) is a user error; a pair
 that is both-synthesized or both-parsed is a compiler bug and still panics, naming its own cause. Keep that
-split if you touch `refuseDuplicateFunctionName` — a fix that made every duplicate a user diagnostic would
-hide an installer that ran twice, and would pass any test written only against the collision.
+split if you touch `FunctionNameIndex.refuseDuplicateFunctionName` — a fix that made every duplicate a user
+diagnostic would hide an installer that ran twice, and would pass any test written only against the collision.
+
+**A1w IS THE FOURTH, AND IT IS THE SAME RULE THROUGH A DOOR WITH NO PAIR TO COUNT.** A1t's refusal notices
+TWO functions of one name, so it is blind to a declaration of a name the compiler owns but does not EMIT
+into this particular program — and `DeadFunctionElimination.seedRoots` roots four such names
+(`__module_init`, `__maxon_global_cleanup`, `__mm_leak_check`, `__gt_enqueue`) into *every* program's
+reachability set. Unspec-able for the same reason as the three above:
+
+```
+# append `export function __mm_leak_check()` (empty body) to stdlib/Builtins.maxon, then compile
+# ANY program that carries no heap, e.g. `function main() returns ExitCode / return 0 / end 'main'`:
+maxon-shv2 build main.maxon -o out
+```
+
+Before A1w: `panic at DeadFunctionElimination.maxon:111: requireUnreachableStdlibStayedDead:
+'__mm_leak_check' is in StdlibFacts.unreachable …` — no file, no line, and the message offered two causes of
+which only one was the compiler's fault. MEASURED identically for `__module_init` and `__gt_enqueue`. After:
+`error E4015: stdlib\Builtins.maxon:337:17: declaration of '__mm_leak_check' takes a name the compiler
+owns …`, positioned at the declaration.
+
+⚠ **REFUSED WHETHER OR NOT THE COMPILER EMITS ITS OWN COPY HERE, AND THAT IS THE RULING RATHER THAN AN
+IMPLEMENTATION ACCIDENT.** Simply not rooting a parsed hit would COMPILE — the declaration is dead code and
+would be pruned — but then `__module_init` would be legal in a program with no managed global and E4015 in
+one with a managed global: the legality of a NAME decided by which runtime floor some other program happens
+to carry. ⇒ **The rule is about the name.** Both detections raise the one code (E4015,
+`IrDeclarationTakesCompilerOwnedName`), because a second number for one rule is the same disease one level
+up. ⇒ **And `main` carries the OPPOSITE premise at the same root set** — it must be the author's — so the two
+kinds of root deliberately do not share a door; kind 3 (`.rdata` slots) checks neither, because a witness
+slot legitimately names a PARSED `Type.method`.
 ```maxon
 // --- file: Builtins.maxon
 export enum __ParseError implements Error

@@ -45,8 +45,13 @@ typealias InterfaceNameSet = Set with ByteArray
 
 // Validate every `type X implements …` conformance whole-program (P1.7a slice 1). Records E3015 (unknown
 // interface) / E3016 (partial or wrong-signature implementation); the pipeline's error gate stops the
-// build. A conformance-free program (the whole scale corpus) short-circuits before building the function
-// index — the same allocation-free gate `checkLinearAwait`/`buildEscapeSummary` use.
+// build. A conformance-free program short-circuits before building the function index — the same
+// allocation-free gate `checkLinearAwait`/`buildEscapeSummary` use.
+//
+// ⚠ This used to say *"a conformance-free program (the whole scale corpus)"*, and the parenthesis was
+// STALE: the generated corpus carries `y_iface_0.maxon` and `y_ifdisp.maxon`, four `implements` clauses each,
+// so this check runs on every rung of the ladder (measured while attributing A1w's +3 allocations, one of
+// which lands here). Do not use it as an example of the gate being taken.
 export function checkConformance(project Project, module MaxonModule, signatures ProgramSignatures)
 	if project.conformances.count() == 0 'noConformances'
 		return
@@ -64,6 +69,11 @@ export function checkConformance(project Project, module MaxonModule, signatures
 		return
 	end 'malformedModule'
 
+	// The index is keyed by the REGISTRATION name (`func.name`): `qualifiedMethodName(typeName, methodName)`
+	// for the first declaration of a method name, and the mangled `Type.method#Suffix` for every later overload
+	// of it (D7) — which is exactly why `checkOneMethod` asks `project.overloadSets` for the whole set rather
+	// than the bare key alone (R10).
+	//
 	// ⭐ **THE SHARED, CHECKED NAME INDEX (`FunctionNameIndex`, A1w) — THOUGH THIS IS THE ONE OF ITS FOUR
 	// SITES THAT CANNOT MEET A DUPLICATE, AND THAT IS WORTH STATING RATHER THAN INHERITING.** Two bars, either
 	// sufficient: the only cause available at this point is two PARSED declarations, which is E3006 at merge
