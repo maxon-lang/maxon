@@ -2697,7 +2697,7 @@ end 'arrayMethodMutatesReceiver'
 // `first`, `last`, `remove`, `count`, `isEmpty`, `clone`, and the `.managed` field itself — while the same
 // sentence denied `remove` in writing. Eleven of the twelve COMPILED, LINKED AND RAN
 // (`managed-memory-methods.md`'s `error.buffer-has-no-*` cases are the programs); the two that did not run
-// were told something equally untrue instead, which is the next block's subject.
+// were told something equally untrue instead — see the gate in `dispatchArrayMethod`, which records both.
 //
 // ⚠ A refusal is easier to get right than the noun in it, so the noun becomes the authority — the shape
 // D11, D12, R10 and D11c all landed on.
@@ -26687,7 +26687,8 @@ export type Parser
 		//
 		// ⇒ The same reason R4.2's review moved the buffer-only mutators out of `arrayMethodMutatesReceiver`
 		// (the next line): a rule about HOW a member may be used must not speak for a member the receiver
-		// does not have. That fix covered the buffer's four; this covers the `Array`'s twelve.
+		// does not have. That fix covered the buffer's own four; this covers the twelve the shared `Array`
+		// dispatch brought with it.
 		if isManagedMemory and not bufferSurfaceHasMember(methodTok.value) 'notABufferMember'
 			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` member '{String.from(methodTok.value)}' — R4.4 provides {bufferSurfaceRosterList()}; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for", line: methodTok.line, column: methodTok.column)
 		end 'notABufferMember'
@@ -26982,9 +26983,10 @@ export type Parser
 		end 'grow'
 
 		// ⚠⚠ **A BUFFER RECEIVER CANNOT REACH HERE, AND THIS IS THE CHECK THAT SAYS SO (D11b).** The roster
-		// gate above admitted only the names `bufferSurfaceMemberNames` lists, and every one of those has an
-		// arm unconditional on anything but its own spelling — so a buffer arriving at this line means the
-		// roster gained a member and the dispatch did not. That is D11's defect one level up, and the wrong
+		// gate above admitted only the names `bufferSurfaceMemberNames` lists, and each of those matches an arm
+		// on its own spelling and at most on the surface this line has already established — so a buffer
+		// arriving here means the roster gained a member and the dispatch did not. That is D11's defect one
+		// level up, and the wrong
 		// answer it would otherwise give is unusually convincing: the reader would be handed the roster
 		// refusal for a member the roster PROVIDES. It cannot be caught earlier than the call that reveals it
 		// (an arm is a control-flow position, not an entry a table can enumerate at install time), so it is
