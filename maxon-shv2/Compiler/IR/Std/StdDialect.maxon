@@ -783,7 +783,9 @@ export union StdOp
 	// `label`, printing it plus a symbolized backtrace and exiting 1. A `system`-band op — the same
 	// shape and rationale as `osExit`/`osWriteStdout`: it says WHAT is wanted (panic with this message)
 	// and each backend says HOW (x64 loads the address into the ABI's first-arg register and calls the
-	// `mrt_panic` runtime chunk; arm64/wasm have no panic runtime yet and reject it). It is spelled as a
+	// `mrt_panic` runtime chunk, on BOTH its lanes since rung A1j; arm64 and wasm have no panic runtime,
+	// so they DISCARD the label and exit 1 bare — they do not reject it, and a program that reaches a
+	// range violation on those targets dies with an exit code and no message). It is spelled as a
 	// dedicated op rather than an `StdOp.call` because `mrt_panic` is a hand-assembled runtime chunk with
 	// NO Std function, so the callee-argument-class lookup a normal `call` performs has nothing to resolve
 	// against — exactly why `osExit`/`osAllocPages` are their own ops too. `isCall: true` so

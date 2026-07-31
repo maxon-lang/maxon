@@ -1061,10 +1061,16 @@ type StdToArm64Lowering
 	end 'lowerOsExit'
 
 	// Lower `osRangePanic` (a P1.9 range-check violation) on arm64 to a BARE EXIT with code 1. arm64 has
-	// no panic runtime / backtrace (`X64Runtime.mrt_panic` is x64-only, and the two runtime-panic spec
-	// cases are restricted to `x64-windows`), so a violated guard aborts WITHOUT the message + backtrace
-	// the x64 path prints. Every case that RUNS on arm64 keeps its guard's value in range, so this exit
-	// is dead code — it exists only so the guard COMPILES. Same primitive as `lowerOsExit`, code hardcoded.
+	// no panic runtime / backtrace of its own — `mrt_panic` and its walker are hand-assembled x64 chunks
+	// in `X64Runtime`, appended to BOTH x64 lanes since rung A1j — so a violated guard aborts WITHOUT the
+	// message + backtrace the x64 path prints.
+	//
+	// ⚠ DO NOT RE-DERIVE THIS GAP FROM WHAT THE SPEC SUITE HAPPENS TO PIN. The sentence that stood here
+	// justified it by "the two runtime-panic spec cases are restricted to `x64-windows`" — which was the
+	// A1j bug's own reasoning wearing arm64's name: those cases carried that marker BECAUSE a lane
+	// printed nothing, so citing the marker as the reason is circular, and the count was stale the moment
+	// x64-linux gained the runtime (there are 16, on both x64 lanes). The real reason arm64 exits bare is
+	// that nobody has written an arm64 `mrt_panic`. Same primitive as `lowerOsExit`, code hardcoded.
 	function lowerRangePanic(dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: RangePanicExitCode))
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: LinuxSyscallExitGroup)

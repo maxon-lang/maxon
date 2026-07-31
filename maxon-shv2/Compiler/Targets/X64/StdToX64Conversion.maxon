@@ -1844,9 +1844,9 @@ type StdToX64Lowering
 	// two arms are byte-identical, because RCX is not a Win64-ABI fact here: it is THIS FILE'S private
 	// convention for "the cstr argument", and `X64Runtime.emitPrintString` — which both lanes' stderr
 	// writers are called through — already spells it that way. The one genuine OS difference is the
-	// process exit, and it lives inside the chunk, where `emitPanicProcessExit` asks `x64OsCallKind`
-	// exactly as `lowerOsExit` does. A third spelling of "which OS am I" bought nothing but a lane that
-	// silently said less.
+	// process exit, and it lives inside the chunk, reached by a route `appendX64RuntimeChunks` derives
+	// from `x64OsCallKind(target.os)` — the same door `lowerOsExit` consults here. A third spelling of
+	// "which OS am I" bought nothing but a lane that silently said less.
 	function lowerRangePanic(label ByteArray, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(x64PhysReg(X64Register.rcx), label: label))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(PanicName))

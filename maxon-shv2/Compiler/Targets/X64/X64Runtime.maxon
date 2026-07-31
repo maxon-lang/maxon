@@ -77,9 +77,16 @@
 // needs one here (its 5th parameter, `lpOverlapped`).
 let FirstStackArgDisp = ShadowSpaceBytes as Imm32
 
+// The exit code EVERY terminal diagnostic in this file ends the process with, on BOTH x64 lanes — the
+// Windows `ExitProcess` argument and the Linux `exit_group` argument alike (`emitPanicProcessExit`). It
+// is deliberately OUTSIDE `Runtime/RuntimeAbort`'s numbering: that enum owns the band above 70, where an
+// abort is distinguishable from a program that simply returned, whereas a range violation is specified to
+// exit plain 1 on EVERY target (see `specs-shv2/string-views.md`) so the silent lanes can assert on the
+// exit code alone. arm64 and wasm spell that same 1 as their own `RangePanicExitCode`.
+let PanicExitCode = 1
+
 // --- kernel32 ---
 let StdErrorHandle = 0xFFFFFFF4  // (DWORD)-12 — GetStdHandle's STD_ERROR_HANDLE
-let PanicExitCode = 1
 
 // AddVectoredExceptionHandler(First = 1, handler): 1 = call this handler BEFORE any
 // previously registered one.
@@ -458,8 +465,11 @@ end 'emitFaultAddressesAndBacktrace'
 
 // Terminate the process with `PanicExitCode` — the LAST instruction of every terminal diagnostic in
 // this file, and the ONE thing about a panic that is still an OS question once the message and the
-// backtrace are printed. Reached through `route`, the same door `StdToX64Conversion.lowerOsExit`
-// consults, so this file cannot grow a third opinion about which OSes the x64 backend serves.
+// backtrace are printed. `route` is `x64OsCallKind`'s own answer, derived once in
+// `appendX64RuntimeChunks` and threaded down, so this file cannot grow a third opinion about which OSes
+// the x64 backend serves. The two fault chunks name their own route as a literal instead, and that is
+// not a second opinion: `buildFaultThunkChunk` is a VEH callback and `buildLinuxFaultHandlerChunk`
+// answers a `rt_sigaction` signal — each is one OS by its own content, not by a decision made elsewhere.
 //
 // Shared by all THREE terminal paths — the Windows fault thunk, the Linux fault handler, and the
 // OS-parametric `mrt_panic` — for `emitFaultAddressesAndBacktrace`'s reason: the first two had each
@@ -730,9 +740,12 @@ end 'buildPrintFrameChunk'
 // rather than a second fault inside the diagnostic. The C# emitter ships two near-copies
 // of this walk; the difference between them is these two guards.
 //
-// (shv2 has no software `mrt_panic` yet — the `stack_high == 0` arm is unreached until
-// P1.2's `panic()`. It is here because the validated arm is the SAME walk with two extra
-// tests, and splitting them would mean writing the walk twice to save nothing.)
+// ⭐ BOTH ARMS ARE LIVE, on BOTH x64 lanes. This note used to say the `stack_high == 0` arm was
+// unreached "until P1.2's `panic()`"; P1.9's range guard reached it first, through `mrt_panic`, and
+// rung A1j put `mrt_panic` on x64-linux as well. The arm is therefore the one that prints EVERY
+// range-check backtrace the compiler emits, and it does NO bounds validation — measured safe because
+// every frame it walks is a compiled prologue this backend built (including a green thread's, whose
+// chain terminates on the zeroed saved-rbp `__gt_trampoline` inherits from a fresh GT stack).
 //
 // Slots: 0 = frame, 1 = stack_low, 2 = stack_high, 3 = counter, 4 = text_base,
 //        5 = symtable, 6 = next frame.
@@ -1199,53 +1212,62 @@ end 'buildLinuxRuntimeInitChunk'
 // Append the x64 fault runtime for `target`'s OS. Called after the module's own functions are encoded, so
 // the runtime lays out above user code; `__symtable` closes `.text` after all of it. `macos`/`wasi` never
 // reach here — `buildX64Backend` appends this only for windows/linux.
+//
+// ⭐ THE EXIT ROUTE IS DERIVED HERE, ONCE, FROM THE SAME DOOR EVERY OTHER x64 OS DECISION ASKS
+// (`x64OsCallKind`) — it is not re-stated as a literal inside each lane appender. This is the only place
+// in the x64 backend that holds a `Target` at the moment the chunk set is chosen, so it is the only place
+// that can answer without repeating itself; the lane appenders receive the answer and pass it on.
 export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target)
+	let exitRoute = x64OsCallKind(target.os)
+
 	match target.os 'os'
-		windows then appendX64WindowsRuntimeChunks(chunks)
-		linux then appendX64LinuxRuntimeChunks(chunks)
+		windows then appendX64WindowsRuntimeChunks(chunks, exitRoute: exitRoute)
+		linux then appendX64LinuxRuntimeChunks(chunks, exitRoute: exitRoute)
 		macos to wasi then panic("appendX64RuntimeChunks: no x64 fault runtime for {targetToString(target)} — this is appended only for windows/linux")
 	end 'os'
 end 'appendX64RuntimeChunks'
 
-// The Windows fault runtime: the VEH `runtime_init`/`fault_thunk`, the software `mrt_panic`, and the
-// shared backtrace/hex chunks over a GetStdHandle+WriteFile stderr writer.
+// ⭐ THE CHUNKS BOTH LANES NEED, WRITTEN ONCE — AND THE REASON THIS FUNCTION EXISTS IS THE BUG RUNG A1j
+// FIXED. The two lane appenders each used to carry their own copy of this list, and `mrt_panic` was on
+// one copy and not the other: a range-check violation printed a message and a full backtrace on
+// x64-windows and NOTHING on x64-linux, for months, with a green suite over it. Nothing made the two
+// lists agree, so the omission was not a compile error and read as ordinary at both sites. Written once,
+// a shared chunk cannot be present on one lane and absent from the other — which is the failure mode, not
+// merely an instance of it.
 //
-// The route `mrt_panic` exits through is named here rather than derived from a `Target` this function
-// does not take: it is this OS's chunk set by name and by content — `buildFaultThunkChunk` is a VEH
-// callback and `buildRuntimeInitChunk` calls `AddVectoredExceptionHandler` — so "Windows reaches the
-// OS through an import" is this function's existing identity, not a second copy of `x64OsCallKind`'s
-// answer. The Linux appender states its own the same way, as `buildLinuxFaultHandlerChunk` already
-// does for `exit_group`.
-function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray)
-	chunks.push(buildRuntimeInitChunk())
-	chunks.push(buildPanicChunk(X64OsCallKind.importCall))
-	chunks.push(buildFaultThunkChunk())
+// `exitRoute` is the ONE OS fact any of these five contains (`mrt_panic`'s step (4)); every other byte
+// they assemble is identical on both lanes, either because the chunk is OS-neutral outright or because it
+// reaches the OS BY NAME through `mrt_write_cstr_stderr`, which each lane appends its own writer under.
+//
+// ⚠ ORDER AMONG RUNTIME CHUNKS IS INERT and this function relies on it: they all lay out inside
+// `[mrt_start, __symtable)`, which is the only range `emitTextBoundsGuard` tests, and every reference
+// between them is a name resolved by the intra-`.text` call fixup rather than a distance. Verified by
+// running both suites and the panic probes across the reordering this function introduced.
+function appendX64SharedRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind)
+	chunks.push(buildPanicChunk(exitRoute))
 	chunks.push(buildFaultBacktraceChunk())
 	chunks.push(buildWalkFramesChunk())
 	chunks.push(buildPrintFrameChunk())
 	chunks.push(buildWriteHexChunk())
+end 'appendX64SharedRuntimeChunks'
+
+// The Windows-ONLY half of the fault runtime: the VEH `runtime_init` + `fault_thunk`, over a
+// GetStdHandle+WriteFile stderr writer. Everything else it needs comes from the shared appender above.
+function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind)
+	chunks.push(buildRuntimeInitChunk())
+	chunks.push(buildFaultThunkChunk())
 	chunks.push(buildWriteStderrChunk())
+	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute)
 end 'appendX64WindowsRuntimeChunks'
 
-// The Linux fault runtime: the rt_sigaction `runtime_init` + the SIGFPE `fault_handler`, the SAME shared
-// backtrace/hex/print chunks the Windows path uses, over a `write`-syscall stderr writer — and the SAME
-// software `mrt_panic`, differing from the Windows one only in the route it exits through.
-//
-// ⭐ `mrt_panic` HAD BEEN OMITTED HERE, AND THAT OMISSION WAS THE WHOLE OF THE BUG THIS LANE SHIPPED
-// (rung A1j): a range-check violation exited 1 with EMPTY stderr on x64-linux while x64-windows printed
-// the message and a full backtrace. Nothing else was missing — every primitive `mrt_panic` assembles was
-// already on this list — so the diagnostic was one `push` away, and the comment that used to stand here
-// justified the gap by observing that no x64-linux test called `mrt_panic`. It was circular: the reason
-// no test called it was that 16 spec cases had been narrowed to `targets: x64-windows` BECAUSE the
-// message did not appear. A green suite measured the narrowing, not the runtime.
-function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray)
+// The Linux-ONLY half: the rt_sigaction `runtime_init`, the sigreturn trampoline and the SIGFPE
+// `fault_handler`, over a `write`-syscall stderr writer published under the same
+// `mrt_write_cstr_stderr` label the Windows writer uses — which is what lets the shared chunks call it
+// without knowing which lane they are on.
+function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind)
 	chunks.push(buildLinuxRuntimeInitChunk())
-	chunks.push(buildPanicChunk(X64OsCallKind.syscall))
 	chunks.push(buildLinuxSigreturnTrampolineChunk())
 	chunks.push(buildLinuxFaultHandlerChunk())
-	chunks.push(buildFaultBacktraceChunk())
-	chunks.push(buildWalkFramesChunk())
-	chunks.push(buildPrintFrameChunk())
-	chunks.push(buildWriteHexChunk())
 	chunks.push(buildLinuxWriteStderrChunk())
+	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute)
 end 'appendX64LinuxRuntimeChunks'
