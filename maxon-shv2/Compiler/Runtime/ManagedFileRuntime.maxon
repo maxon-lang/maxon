@@ -221,6 +221,16 @@ end 'isThrowingManagedFileRuntimeCallee'
 // nothing here can disagree with what the source was matched against. Asked only on the COLD path, and only
 // behind `isThrowingManagedFileRuntimeCallee`, which is what the panic states rather than answers.
 //
+// ⚠⚠ **AS OF D11c IT HAS A SECOND READER, AND THE `delete`/`rename` ARMS ARE ITS ALONE (D11c review).**
+// `Parser`'s E3059 asks this same map for a VALUELESS `try`, and `__mf_delete`/`__mf_rename` are the family's
+// two void throwing members — so those arms have no E3057 case and E3059 is the only thing that can observe
+// them. `specs-shv2/void-call-result.md` pins both there rather than here, beside the other seven callees
+// E3059 can reach, because the roster is "throwing AND void" and that crosses every family. **MEASURED: with
+// the `delete` arm answering `stat`, the whole suite read 2897/0 while an author who wrote `delete` was told
+// about `'stat'`.** ⚠ It follows that this map is asked BEFORE `installManagedFileRuntime`'s drift guard can
+// run on an E3059 path — the parse refuses the program first — so the guard covers a missing arm and the
+// spec cases cover a WRONG one.
+//
 // ⚠⚠ **`__mf_open_write` IS A LOSSY KEY, SO IT ANSWERS WITH BOTH SPELLINGS RATHER THAN GUESSING ONE.**
 // `openWrite` and `openWriteExecutable` are ONE call at this rung — the executable form adds only a Unix
 // 0755 bit, shv2's file IO is host-only Windows by the R4.1 ruling, and the parser's `openWriteExecutable`

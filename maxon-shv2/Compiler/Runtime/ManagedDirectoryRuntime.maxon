@@ -186,7 +186,7 @@ export function isThrowingManagedDirectoryRuntimeCallee(callee ByteArray) return
 	return callee.equals(ManagedDirectoryOpenSearchName) or callee.equals(ManagedDirectoryNextName) or callee.equals(ManagedDirectoryCreateName) or callee.equals(ManagedDirectoryCurrentPathName)
 end 'isThrowingManagedDirectoryRuntimeCallee'
 
-// ⭐⭐ **WHAT THE USER ACTUALLY WROTE, FOR THE ONE DIAGNOSTIC THAT QUOTES A CALLEE BACK AT THEM.**
+// ⭐⭐ **WHAT THE USER ACTUALLY WROTE, FOR THE DIAGNOSTICS THAT QUOTE A CALLEE BACK AT THEM.**
 // `SemanticCheck.validatePlainCall`'s E3057 names the call that needed a `try`, and `specs/managed-directory.md`
 // pins that sentence: `throwing function requires try: 'next'`. The user never wrote `__md_next`, so the
 // runtime name would be a symbol they have never heard of — the same objection `TargetUnsupportedUnnamedSubject`
@@ -195,8 +195,15 @@ end 'isThrowingManagedDirectoryRuntimeCallee'
 // ⚠ **IT IS A MAP ONTO THE PARSER'S OWN CONSTANTS, NOT A SECOND SPELLING.** Each arm answers with the very
 // `ManagedDirectory*Method` byte string `parseManagedDirectoryStaticCall`/`dispatchManagedDirectoryMethod`
 // dispatched on, so there is nothing here that can disagree with what the source is matched against.
-// It is asked only on the COLD path, and only for the four THROWING callees — the other four cannot reach an
-// E3057 at all, which is what the panic states rather than answers.
+// It is asked only on the COLD path, and only for the four THROWING callees — the other four cannot reach
+// either diagnostic at all, which is what the panic states rather than answers.
+//
+// ⚠⚠ **AS OF D11c IT HAS A SECOND READER, AND THE `create` ARM IS ITS ALONE (D11c review).** `Parser`'s E3059
+// asks this same map for a VALUELESS `try`, and `__md_create` is the family's one void throwing member — so
+// that arm has no E3057 case and E3059 is the only thing that can observe it. `specs-shv2/void-call-result.md`
+// pins it there rather than here, beside the other eight callees E3059 can reach, because the roster is
+// "throwing AND void" and that crosses every family. **MEASURED: with this arm answering `next`, the whole
+// suite read 2897/0 while an author who wrote `create` was told about `'next'`.**
 export function managedDirectorySourceMethodName(callee ByteArray) returns ByteArray
 	if callee.equals(ManagedDirectoryOpenSearchName) 'openSearch'
 		return ManagedDirectoryOpenSearchMethod

@@ -554,7 +554,7 @@ error E2004: <fragment>:8:14: Function 'set' does not return a value
 
 ### THE NOUN A VALUELESS `try` QUOTES IS THE AUTHOR'S METHOD, NOT THE EMITTED SYMBOL (D11c)
 
-⚠⚠ **E3059 USED TO NAME A SYMBOL NO AUTHOR CAN TYPE.** The two `set` cases above and the four below all
+⚠⚠ **E3059 USED TO NAME A SYMBOL NO AUTHOR CAN TYPE.** The two `set` cases above and the seven below all
 reach `parseTry`'s `voidInValue` refusal, and its noun came straight off the `tryCall`'s callee — so a
 program that says `mm.setLength(1)` was told about `'__arr_set_length'`, a name the `__` prefix forbids the
 author from writing at all (E2051). The right code, quoting a construct the program does not contain: the
@@ -563,12 +563,23 @@ same defect D12 removed from E3057's sentence, arriving at the one door D12 did 
 ⇒ The cure is D12's own map (`GtRuntime.runtimeCalleeSourceMethod`) asked from a SECOND consumer, not a
 second map. **These cases exist because a map with one caller is a map whose coverage nothing measures**:
 E3057's caller reaches the file, directory, string-search and buffer families, and NOT the array one; only
-E3059 can reach a callee that is both throwing and VALUELESS, which is a different subset again. Six
-callees are reachable here (`__arr_set` plus the buffer's five void mutators) and every one is pinned —
-four of them below, because the two `set` cases alone would have left `setLength`, `setByte`, `grow` and
-`append` leaking after the fix that was written for `set`.
+E3059 can reach a callee that is both throwing and VALUELESS, which is a different subset again.
 
-⚠ The BARE spellings of these same four are pinned far above as E2004 (`Function 'setLength' does not
+⭐⭐ **THAT SUBSET IS NINE, AND IT IS DERIVED — `isThrowingRuntimeCallee` INTERSECTED WITH THE EMISSION
+SITES THAT TAG THEIR RESULT `void`.** `__arr_set`, the buffer's five void mutators (`set`, `setLength`,
+`setByte`, `grow`, `append`), and — from two families this rung was not looking at — `__mf_delete`,
+`__mf_rename` and `__md_create`. All nine are pinned here.
+
+⚠⚠ **D11c FIRST CLAIMED SIX, BY PROBING THE TWO FAMILIES IT HAD IN HAND, AND THE THREE IT MISSED WERE
+EXACTLY THE THREE NOTHING ELSE PINNED EITHER.** The file and directory maps' `delete`/`rename`/`create`
+arms have no E3057 case of their own, so E3059 was their only reader and it was unpinned: with
+`managedFileSourceMethod`'s `delete` arm answering `stat` and `managedDirectorySourceMethodName`'s `create`
+arm answering `next`, the suite read **2897 passed, 0 failed** while the compiler told an author who wrote
+`delete` about `'stat'` — the rung's own defect, surviving the rung. **An enumeration is a claim about a
+SET: derive it from the predicates that define the set, because probing family-by-family can only find the
+families you already suspected.**
+
+⚠ The BARE spellings of the buffer four are pinned far above as E2004 (`Function 'setLength' does not
 return a value`), by the arm's own `resultUsed` guard. **Two codes, two checks, one English sentence** —
 and they must both be here, because a guard lost from either arm passes on the other's case.
 
@@ -621,6 +632,52 @@ end 'main'
 error E3059: <fragment>:5:10: type mismatch: ''append' does not return a value'
 ```
 
+<!-- test: error.file-try-delete-in-value-position -->
+⭐⭐ **THE THREE CASES BELOW ARE THE ONES THE "SIX" MISSED, AND THEY ARE HERE RATHER THAN IN
+`managed-file.md`/`managed-directory.md` FOR THE REASON THIS WHOLE BLOCK EXISTS: the roster E3059 can reach
+is not any one family's roster, so it has to be enumerated in ONE place.** `delete`, `rename` and `create`
+are the file and directory families' void throwing members. Each has an E3057 sentence in principle and no
+E3057 CASE, so before these three the only reader of those map arms was E3059 and nothing checked it.
+
+⚠ Compile-time on purpose — E3059 is raised in `parseTry`, ahead of every target gate, so unlike its
+siblings in `managed-file.md` this case needs no `<!-- targets: -->` marker and no file to exist.
+**VERIFIED, not assumed**: byte-identical output under `--target=x64-linux` and `--target=wasm32-wasi`,
+neither of which can so much as emit `__mf_delete`.
+```maxon
+function main() returns ExitCode
+	let x = try __ManagedFile.delete("no_such_file_void_try_xyz.txt".toByteArray().managed) otherwise return 1
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:3:10: type mismatch: ''delete' does not return a value'
+```
+
+<!-- test: error.file-try-rename-in-value-position -->
+```maxon
+function main() returns ExitCode
+	let x = try __ManagedFile.rename("no_such_a_xyz.txt".toByteArray().managed, "no_such_b_xyz.txt".toByteArray().managed) otherwise return 1
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:3:10: type mismatch: ''rename' does not return a value'
+```
+
+<!-- test: error.dir-try-create-in-value-position -->
+⚠ `create` is spelled by THREE unrelated constants (`Parser.CreateMethod` for `Array`/`Set`,
+`ManagedMemoryCreateMethod`, `ManagedDirectoryCreateMethod`) because three unrelated surfaces happen to use
+the word. This case pins the DIRECTORY one, which is the only one of the three that is void and throwing.
+```maxon
+function main() returns ExitCode
+	let x = try __ManagedDirectory.create("no_such_dir_void_try_xyz".toByteArray().managed) otherwise return 1
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:3:10: type mismatch: ''create' does not return a value'
+```
+
 <!-- test: error.user-void-try-in-value-position -->
 ⭐⭐ **THE CONTROL THAT SEPARATES THE MAP FROM THE MESSAGE.** An ordinary user function reaches the very
 same refusal, and its callee IS its source spelling — so it must be quoted UNCHANGED by the map lookup
@@ -648,4 +705,41 @@ end 'main'
 ```
 ```maxoncstderr
 error E3059: <fragment>:11:10: type mismatch: ''mayFail' does not return a value'
+```
+
+<!-- test: error.user-method-void-try-in-value-position -->
+⭐ **THE SECOND HALF OF THE `declaresCallee` CONTROL: a QUALIFIED callee.** A user METHOD is registered under
+`Gate.bump`, so the arm that returns the callee unchanged returns something the author did not literally
+type — they wrote `g.bump(1)`. That is NOT this rung's defect and must not be "fixed" into `bump`: the
+runnable oracle answers `'Gate.bump'` for this identical program (verified against `bin/maxon.exe`), so the
+qualified spelling IS the specified noun and shv2 agreeing with it is the point of the case.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum E implements Error
+	bad
+end 'E'
+
+type Gate
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump(v Integer) throws E
+		if v < 0 'neg'
+			throw E.bad
+		end 'neg'
+	end 'bump'
+end 'Gate'
+
+function main() returns ExitCode
+	var g = Gate.create()
+	let x = try g.bump(1) otherwise return 8
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:24:10: type mismatch: ''Gate.bump' does not return a value'
 ```

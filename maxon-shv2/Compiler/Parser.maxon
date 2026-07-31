@@ -3504,20 +3504,32 @@ function tryTargetNamedNoun(callee ByteArray, signatures ProgramSignatures) retu
 		return callee
 	end 'declared'
 
-	// ⚠ `requireThrowingTryTarget` has already run, so an undeclared callee reaching here is either a THROWING
-	// compiler-emitted one (its E3055 accept is `isThrowingRuntimeCallee`) or a name no file declares at all,
-	// which SemanticCheck reports as E3004 — and for that one the callee IS what the author typed.
+	// ⚠ **AN UNDECLARED CALLEE REACHING HERE IS ALWAYS A THROWING COMPILER-EMITTED ONE, AND A TYPO CANNOT
+	// ARRIVE — the VOID TAG is what excludes it, not `requireThrowingTryTarget`.** A name no file declares gets
+	// `mintCallResult`'s `ValueTypeTag.unresolved` result, never `void`, so the `voidInValue` test that is the
+	// sole route to this function is false for it and SemanticCheck reports its E3004 undisturbed. That is the
+	// same `returnTypes` table `declaresCallee` reads one line above, so the two cannot come to disagree.
 	match runtimeCalleeSourceMethod(callee) 'sourceMethod'
 		found(method) then return method
-		// ⚠ **BOTH REFUSALS ARE DRIFT GUARDS, NOT USER-FACING PATHS, AND THAT IS A MEASURED CLAIM.** Exactly six
-		// callees can reach E3059 at all — a callee must be THROWING (to pass E3055) and VALUELESS (to fail the
-		// void check) — and they are `__arr_set` plus the buffer's five void mutators, every one of which the map
-		// answers `found` for. Probed one by one; `specs-shv2/void-call-result.md` pins all six.
+		// ⚠ **BOTH REFUSALS ARE DRIFT GUARDS, NOT USER-FACING PATHS — AND THE REACHABLE SET IS NINE, DERIVED
+		// RATHER THAN PROBED (D11c review).** A callee reaches E3059 iff it is THROWING (to pass E3055) and its
+		// emission site tags the result VOID (to fail the void check), so the set is `isThrowingRuntimeCallee`
+		// intersected with the `resultTag: ValueTypeTag.void` emission sites: `__arr_set` and the buffer's five
+		// void mutators, PLUS `__mf_delete`, `__mf_rename` and `__md_create`. Every one is answered `found`.
+		//
+		// ⚠⚠ **THE FIRST WRITING OF THIS NOTE SAID "EXACTLY SIX", AND THE THREE IT MISSED WERE THE THREE
+		// NOTHING PINNED.** It was arrived at by probing the two families this rung was looking at; the file and
+		// directory families have void throwing members too, and E3059 is a live SECOND consumer of their maps.
+		// MEASURED: with `__mf_delete`'s arm answering `stat` and `__md_create`'s answering `next`, the suite
+		// read **2897 passed, 0 failed** while the compiler told an author who wrote `delete` about `'stat'`.
+		// The three cases below the buffer four in `specs-shv2/void-call-result.md` are what closes that, and
+		// **an enumeration is a claim about a set, so it is derived from the two predicates that define it —
+		// probing one family at a time can only ever find the families you were already looking at.**
 		//
 		// A callee two spellings SHARE cannot arrive: `__mf_open_write` is the only one, and it returns a
 		// `__ManagedFile`, so it fails the void test that is the sole route to this message.
 		sharedByTwoSpellings(spelling, alsoSpelled) then panic("tryTargetNamedNoun: '{String.from(callee)}' reached a VALUELESS-`try` diagnostic while answering two source spellings ('{String.from(spelling)}'/'{String.from(alsoSpelled)}'). A callee reached by two spellings returns a value in both — that is why two spellings exist — so it cannot be void here. If a valueless one now exists, E3059 needs a wording that names both without claiming which was written")
-		// A SIXTH family joining `isThrowingRuntimeCallee` with a void member and no source-method map lands
+		// A FURTHER family joining `isThrowingRuntimeCallee` with a void member and no source-method map lands
 		// here. Refused loudly rather than leaking the symbol, because there is no honest noun to substitute:
 		// E3059 quotes a NAME, and "'array accessor' does not return a value" is not a sentence — which is
 		// exactly why the array family gained a map at this commit instead of a family wording.
