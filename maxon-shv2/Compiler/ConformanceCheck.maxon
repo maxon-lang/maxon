@@ -736,18 +736,42 @@ end 'throwsRequirementIsAbstract'
 // never release the box. Read through the SAME `enumOf(name).isBoxed()` the catch decode reads, for that
 // function's own reason: a boxed union must not be encoded as a pointer at one end and decoded as an ordinal
 // at the other, and two spellings of "is it boxed?" is exactly how that comes to be true.
+//
+// ⚠⚠ **"NOT FOUND IN THE ENUM REGISTRY" IS NOT EVIDENCE THE FLAG IS SCALAR — IT IS THE COMPILER HAVING NO
+// ANSWER, AND IT GETS ITS OWN REFUSAL (A1s review).** As first written this asked `enumOf(declared)` and
+// read the `undeclared` arm as `false`, i.e. as "not boxed, therefore fine" — the PERMISSIVE reading of a
+// memory-safety question, taken for a name the compiler could not resolve. MEASURED on the shipped rung:
+// an impl declaring `throws Bogus`, a name in no registry at all, was ACCEPTED under `throws Error` and
+// linked and ran, where the strict same-name rule this exemption relaxes had refused it.
+//
+// It is the same hazard `throwsRequirementIsAbstract`'s SECOND conjunct exists for, one side over: there
+// the argument is that abstractness is something a requirement DECLARES rather than something it fails to
+// be, so a typo must not read as a licence. The impl side owes the identical argument — a resolvable error
+// type is something an implementation DECLARES — and did not make it. Both arms below therefore report;
+// neither is silent, which is what CLAUDE.md's "no silent unhandled cases" asks of a `match` like this one.
+//
+// ⚠ It refuses only pairs the OLD rule already refused: a same-named pair returns from `requireSameErrorType`
+// before either question is asked, so nothing that compiled before A1s can reach here. (`throws Bogus` on a
+// PLAIN function stays accepted — that is a separate, pre-existing front-end gap, and closing it belongs to
+// whichever rung owns `throws`-clause resolution, not to this door.)
 function requireImplErrorIsScalar(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
-	let implIsBoxed = match signatures.enumOf(declared.toByteArray()) 'implError'
-		declared(layout) gives layout.isBoxed()
-		undeclared gives false
+	match signatures.enumOf(declared.toByteArray()) 'implError'
+		declared(layout) then refuseBoxedImplError(project, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared, implIsBoxed: layout.isBoxed())
+		undeclared then reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it 'throws {required}', and '{declared}' names no declared enum or union — the narrowing an abstract requirement permits is granted only to an error type whose flag SHAPE the compiler can see, and an unresolvable name is a mistake rather than a licence. Declare '{declared}', or name '{required}' itself")
 	end 'implError'
+end 'requireImplErrorIsScalar'
 
+// The boxed half of the question above, split out because the verdict is a labelled `if` — the shape a
+// `match` arm cannot hold inline, and the same reason `requireSameErrorType` is split out of
+// `requireImplThrowsSameType`. Takes the ANSWER rather than the layout so the payload binding stays in the
+// one arm that produced it.
+function refuseBoxedImplError(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String, implIsBoxed bool)
 	if not implIsBoxed 'scalarFlag'
 		return
 	end 'scalarFlag'
 
 	reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it 'throws {required}', which declares no case to decode — a witness dispatch catches such a requirement through the SCALAR error-flag ABI, while a payload-carrying union is handed over as a heap box pointer that would be decoded as an ordinal and never released. Throw a payload-free enum, or declare the requirement as '{declared}' itself")
-end 'requireImplErrorIsScalar'
+end 'refuseBoxedImplError'
 
 // The ONE report site for every throws-conformance violation. Not a pass-through: it derives four of
 // `reportPositioned`'s six arguments from `conformance` (the code, and the position the `implements` clause

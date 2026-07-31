@@ -71,6 +71,10 @@ relaxation is sound, and it is the one `Error` exists for:
   implementation declaring the abstract `throws Error` under `throws DigestError` is a WIDENING, and the
   dispatch would decode whatever it threw as a `DigestError`.
 - **An unresolvable requirement type is not abstract, it is a mistake**, and still demands the same name.
+- **And the same holds of the IMPLEMENTATION's type.** The relaxation is granted only to an error type
+  whose flag shape the compiler can actually see, so an implementation whose `throws` names no declared
+  enum or union — a typo, or a struct — is refused rather than waved through: "the compiler found no
+  entry for it" is not evidence that its flag is a scalar.
 
 ## Tests
 
@@ -1722,4 +1726,41 @@ end 'main'
 ```
 ```maxoncstderr
 error E3016: <fragment>:17:6: Method 'Point.digest' throws 'OtherError' but interface 'Digest' declares it 'throws Error' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as 'Error'
+```
+
+<!-- test: error.throws-unresolvable-impl-type-under-abstract-requirement -->
+⭐⭐ **THE MIRROR OF THE CASE ABOVE, ON THE SIDE THE RUNG DID NOT ASK ABOUT (found by review probing, A1s).**
+`error.throws-unknown-requirement-type-is-not-abstract` establishes that a REQUIREMENT naming nothing is a
+mistake and not a licence. The IMPLEMENTATION owes the identical argument and was not made to: the guard
+that keeps the narrowing to scalar-flagged errors asked the enum registry and read "no entry" as "not
+boxed, therefore fine" — the PERMISSIVE answer to a memory-safety question, for a name it could not
+resolve. MEASURED on the shipped rung: this exact program compiled, linked and ran, where the strict
+same-name rule the exemption relaxes had refused it.
+
+⚠ The refusal reaches only pairs the strict rule ALREADY refused — a same-named pair never asks either
+question — so nothing that compiled before the exemption existed is touched by it. `throws Bogus` on a
+plain function remains accepted; that is a separate front-end gap and this door is not where it is closed.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Digest
+	function digest() returns Code throws Error
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws Bogus
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:8:6: Method 'Point.digest' throws 'Bogus' but interface 'Digest' declares it 'throws Error', and 'Bogus' names no declared enum or union — the narrowing an abstract requirement permits is granted only to an error type whose flag SHAPE the compiler can see, and an unresolvable name is a mistake rather than a licence. Declare 'Bogus', or name 'Error' itself
 ```

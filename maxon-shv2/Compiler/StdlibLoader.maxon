@@ -291,7 +291,11 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// this module's own references to it — a mechanism that already exists as
 	// `ProgramSignatures.mangleGenericInstance`'s `reservedIfDeclared`. That is a rung, not a clause.
 	// `specs-shv2/stdlib-user-shadows.md` carries the full measurement and the design fork.
-	try listWhitelistedModule(stdlibDir, relative: "Builtins.maxon", into: listed)
+	//
+	// ⚠ The module is named by `Queries.CompilerInternalDeclaringModule` and NOT by a literal here, because
+	// that constant is what grants this same file the E2051 exemption its `__` declarations need — two
+	// literals would be the listing and the exemption free to name different files. See its header.
+	try listWhitelistedModule(stdlibDir, relative: CompilerInternalDeclaringModule, into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 
