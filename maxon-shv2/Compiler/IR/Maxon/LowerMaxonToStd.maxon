@@ -572,6 +572,12 @@ type MaxonToStdLowering
 	// for a float return, else a GPR zero) — the identical field `emitReturnValueMove` keys the return
 	// register off, so the throw-edge default and the return register cannot come to disagree.
 	var currentReturnType as StdReturnType
+	// The stdlib functions no path from `main` reaches (`StdlibFacts.unreachable`) — the ONE fact `lower`
+	// skips a body on, and the SAME derivation `insertRangeChecks`, `checkCalls` and `scanRuntimeUsage`
+	// read. Copied out of `Project` at `create` like every other registry here (this pass holds no
+	// `Project`), and named for the FACT rather than for its use, exactly as `scanRuntimeUsage`'s
+	// `unreachableStdlib` parameter is.
+	var unreachableStdlib as FunctionNameSet
 	// The whole-program range-check plan (P1.9), from `project.rangeChecks` — the SAME table
 	// `InsertRangeChecks` reads its sites from one pass later, held here so this pass can answer the one
 	// question that table cannot ask for itself: which STD op position each site's Maxon ordinal became.
@@ -592,7 +598,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -663,6 +669,33 @@ type MaxonToStdLowering
 		// ids need no per-function reset — the parser already numbered them densely
 		// per function, and this pass passes them through untouched.
 		for srcFunc in self.stdModule.functions 'eachFunc'
+			// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES HAS NO BODY LOWERED, AND THE REASON IS THE
+			// WHITELIST'S BYTE-NEUTRALITY INVARIANT** (`StdlibLoader`: "adding a module changes NOTHING for a
+			// program that does not use it"). This pass is PRE-ELIMINATION, and lowering a body REGISTERS
+			// `.rdata`: `lowerStringLiteral` mints a blob + a record, `lowerByteStringLiteral` mints a blob,
+			// and `ensureWitnessTable`/`ensureLayoutDescriptor` mint a labelled payload. Dead-function
+			// elimination prunes FUNCTIONS, never `.rdata`, so every one of those SURVIVES its own function —
+			// and `GlobalDataTable.nextStringId` is ONE counter shared by every rdata prefix, so a surviving
+			// blob renumbers every later `__str_blob_`/`__fconst_`/`__jumptable_` label in the whole program
+			// and moves its `.rdata` offset besides.
+			//
+			// ⚠ MEASURED, and it is the debt `InsertRangeChecks` filed against this exact site (A1s): listing
+			// `stdlib/Builtins.maxon` — the first listed module that contains LITERALS — moved **317 committed
+			// goldens** (`__fconst` 156, `__str_blob` 132, `__jumptable` 29) for declarations no user program
+			// reaches. `insertRangeChecks` had already shut its own door onto the same counter; this is the
+			// other one, and the two are stated identically because they rest on one fact.
+			//
+			// ⚠ **THE FUNCTION IS STILL PUSHED — only its BODY is skipped**, and that is not a detail. DFE's
+			// `refuseDuplicateFunctionName` counts the functions in this module to raise E4015, and its header
+			// records the assumption that check rests on: nothing may take one side of a colliding pair OUT of
+			// the module before the count sees it. Dropping the function here would do exactly that. The
+			// empty body is instead PROVED harmless where the two reachability derivations meet —
+			// `requireUnreachableStdlibStayedDead` refuses the compile if DFE ever keeps a function this
+			// skipped, so a Maxon-tier walk that missed an edge is a loud panic and never an empty callee.
+			if self.unreachableStdlib.contains(srcFunc.name) 'notInTheProgram'
+				continue
+			end 'notInTheProgram'
+
 			// Point the type oracle at THIS function before any of its ops are lowered — the
 			// column is dense per function, so every `stdTypeOf` below reads the right one.
 			self.valueTags = srcFunc.valueTags

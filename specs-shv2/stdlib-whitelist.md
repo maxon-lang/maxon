@@ -13,7 +13,9 @@ shv2's stdlib loader enumerates every `.maxon` file under the checkout's `stdlib
 subdirectories alike, exactly as v1 and the C# bootstrap do — and then a TEMPORARY WHITELIST filters
 which of them are actually loaded, so stdlib support can grow one module at a time, each module gated
 on the language features it needs. The filter is stated in exactly one place,
-`Compiler/StdlibLoader.maxon`; at this rung it lists `stdlib/Clock.maxon` and `stdlib/Sleep.maxon`.
+`Compiler/StdlibLoader.maxon`, and this spec deliberately does not restate WHICH modules it names:
+nothing would keep a prose copy of that list agreeing with the list, and the same argument is made
+below about the bare-builtin roster, where both prose copies had already drifted.
 
 The whitelist is scaffolding, not a feature: it is a filter INSIDE the real loader rather than a list
 the loader walks, so removing it is a deletion rather than a rewrite — of ONE file, which owns every
@@ -62,6 +64,34 @@ output. Two mechanisms compose to guarantee that:
 The whole existing `specs-shv2` corpus — every program that never touches Clock — is the standing
 proof of this: not one committed fragment moves when Clock is added to the whitelist.
 `no-clock-is-byte-neutral` below is the same guard stated directly.
+
+#### A listed module's own LITERALS must not renumber the program's `.rdata`
+
+Elimination is not the only pass that runs over a listed module's bodies, and it is not the earliest.
+Everything a body registers in the read-only data section is registered BEFORE elimination, by
+lowering: a string literal mints a byte blob and a 48-byte record, a byte-string literal mints a blob,
+and a generic receiver mints a layout descriptor. Elimination prunes FUNCTIONS, never `.rdata`, so
+every one of those payloads outlives the function that asked for it.
+
+That matters because the synthetic `.rdata` labels are minted from ONE counter shared by every prefix.
+A single surviving blob therefore renumbers `__str_blob_`, `__fconst_` AND `__jumptable_` labels
+program-wide — in a program that mentions no string at all. Measured when the first listed module
+containing literals was added: **317 committed fragments moved**, for declarations no user program
+reaches.
+
+So a pre-elimination pass may not let an unreachable stdlib body register anything either, and
+`lowerMaxonToStd` skips such a body on exactly the reachability fact the runtime-floor scan skips on.
+The two derivations are independent — one walks the Maxon module from `main`, the other walks the Std
+module from a larger root set that includes every function an `.rdata` slot names — so the elimination
+pass CHECKS that it drops every function whose body lowering skipped, rather than assuming it. A
+disagreement would otherwise link cleanly and call an empty function.
+
+`a-listed-module's-literals-are-byte-neutral` below is that guard stated as a golden: it compiles a
+program holding a float constant and a dense-`match` jump table, so its fragment names labels from two
+of the three prefixes the shared counter mints, and any listed module that registers `.rdata` for code
+the program cannot reach moves them. (A payload registered under a STRUCTURAL label — a witness table,
+a layout descriptor — does not advance that counter, so it shifts `.rdata` OFFSETS without moving any
+label a fragment prints. The lowering skip covers it; no fragment golden can see it.)
 
 ### The collision rule
 
@@ -227,6 +257,47 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: stdlib-whitelist.a-listed-modules-literals-are-byte-neutral -->
+<!-- targets: x64-windows -->
+The sibling of `no-clock-is-byte-neutral`, for the half that case cannot see. That program's fragment
+names no `.rdata` label at all, so it stays green while every synthetic label in the corpus renumbers.
+This one holds a float constant and a dense-`match` jump table, so its fragment names `__fconst_0` and
+`__jumptable_0` — the first ids of two of the three prefixes minted from the one shared counter. A
+listed module that registers ANY `.rdata` for code no path from `main` reaches moves both.
+```maxon
+typealias Weight = float(0.0 to 100.0)
+
+enum Marker
+	alpha
+	beta
+	gamma
+	delta
+	epsilon
+	zeta
+	eta
+	theta
+end 'Marker'
+
+function main() returns ExitCode
+	let scale = 12.5 as Weight
+	let pick = Marker.gamma
+	let slot = match pick 'which'
+		alpha gives 0
+		beta gives 1
+		gamma gives 2
+		delta gives 3
+		epsilon gives 4
+		zeta gives 5
+		eta gives 6
+		theta gives 7
+	end 'which'
+	return trunc(scale) + slot
+end 'main'
+```
+```exitcode
+14
 ```
 
 <!-- test: stdlib-whitelist.target-refusal-blames-the-crossing-call -->

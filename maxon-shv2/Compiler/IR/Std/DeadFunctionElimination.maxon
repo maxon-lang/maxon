@@ -79,8 +79,40 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 		markCalleesOf(module, func: module.getFunc(idx), byName: byName, reached: reached, worklist: worklist)
 	end 'walk'
 
+	requireUnreachableStdlibStayedDead(project, byName: byName, reached: reached)
 	sweepUnreachedFunctions(module, reached: reached, project: project)
 end 'eliminateDeadFunctions'
+
+// ⭐⭐ **THE PRE-ELIMINATION PASSES BET ON THIS PASS, AND THIS IS WHERE THE BET IS SETTLED.** Four passes
+// that run BEFORE the back end skip a function `StdlibFacts.unreachable` names — `lowerMaxonToStd` (its
+// body, and therefore its `.rdata`), `insertRangeChecks` (its guards), `scanRuntimeUsage` (its runtime
+// floor) and `checkCalls` (its target refusal) — every one of them on the premise that THIS pass drops it.
+// The two derivations are independent: `StdlibFacts` walks the MAXON module from `main` alone, while this
+// walk starts from a strictly LARGER root set (the entry, the stub-called runtime symbols, and every
+// function an `.rdata` slot names) over the STD module. So the premise is a claim about two algorithms
+// agreeing, not a tautology, and it is checked rather than argued.
+//
+// ⚠ **AND THE FAILURE IT CATCHES IS SILENT, WHICH IS WHY IT IS A PANIC AND NOT A COMMENT.** A function
+// whose body `lowerMaxonToStd` skipped is EMPTY; if this walk kept it, the program would link cleanly and
+// call a function that does nothing — a wrong answer with no diagnostic anywhere, the worst outcome this
+// file's header names. The two ways it could happen are a stdlib function reached through a witness table
+// or a layout-descriptor slot (a DATA edge `StdlibSource`'s Maxon-tier walk does not model — its own header
+// records that this is exact "at this rung" and not in general), and a stdlib declaration colliding with a
+// name `seedRoots` roots unconditionally. Both are compiler bugs, so both panic.
+//
+// COST: O(unreachable stdlib functions), bounded by the stdlib source LOADED and independent of the user's
+// program — the set is iterated, never `module.functions`, so a growing user program adds nothing. A name
+// this module does not define is simply not there to keep (the same non-case `markLiveFunction` handles).
+function requireUnreachableStdlibStayedDead(project Project, byName FuncIndexByName, reached BoolArray)
+	for name in project.stdlibFacts.unreachable 'eachSkipped'
+		if let idx = try byName.get(name) 'aModuleFunction'
+			let isLive = try reached.get(idx) otherwise panic("requireUnreachableStdlibStayedDead: reached.get OOB at function index {idx}")
+			if isLive 'reachedAnyway'
+				panic("requireUnreachableStdlibStayedDead: '{String.from(name)}' is in StdlibFacts.unreachable — so `lowerMaxonToStd` lowered no body for it and `insertRangeChecks` emitted no guards — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: either a DATA edge (a witness-table or layout-descriptor slot) reaches a stdlib function, which the Maxon-tier walk in StdlibSource does not model, or a stdlib declaration collides with a name seedRoots roots unconditionally. Keeping it would emit an EMPTY function the program calls")
+			end 'reachedAnyway'
+		end 'aModuleFunction'
+	end 'eachSkipped'
+end 'requireUnreachableStdlibStayedDead'
 
 // Name → `module.functions` index. Built once: without it, resolving a callee would be a linear scan of
 // every function and the whole walk would be O(functions × edges).
