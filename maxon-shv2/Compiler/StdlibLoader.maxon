@@ -256,6 +256,27 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// compiler already answers for `HashValue` — `isSynthesizedIntAliasName`, whose header carries the
 	// argument in full. With that, `maxon-shv2 build stdlib/helpers/string/utf16.maxon` compiles clean.
 	try listWhitelistedModule(stdlibDir, relative: "helpers/string/utf16.maxon", into: listed)
+	// ⭐⭐ **A1s — THE RESERVED-SPACE MODULE, AND THE ONE ENTRY THAT BREAKS THREE OF THIS FILE'S OWN RULES
+	// ON PURPOSE.** `stdlib/Builtins.maxon` is where the language's compiler-facing declarations actually
+	// live: the three `__Managed*Error` enums the runtime throws, `interface Parsable`, and the
+	// `__int_fromString` / `__float_fromString` / `__bool_fromString` helpers. Listing it is what makes
+	// those declarations exist in an ORDINARY program instead of being transcribed a second time inside
+	// the compiler — this file's "one mention, one place" property applied to the stdlib itself.
+	//
+	// ⚠ **IT IS THE FIRST LISTED MODULE THAT CONTAINS LITERALS, AND THAT MADE A FILED DEBT DUE.**
+	// `InsertRangeChecks.maxon:167-179` had already MEASURED that the byte-neutrality invariant above
+	// "holds TODAY only because no listed module contains a literal, which is a property of the three
+	// files listed and not of the mechanism". Measured here on the entry itself: this one line moved
+	// **317 committed goldens** — `__fconst` (156), `__str_blob` (132), `__jumptable` (29) — for
+	// declarations no user program reaches. Paying that debt is part of this rung, not a follow-on.
+	//
+	// ⚠ **AND IT IS THE FIRST LISTED MODULE A USER PROGRAM LEGITIMATELY REDECLARES OVER.** The collision
+	// rule above ("caught loudly by E3006") is the WRONG answer for a name like `ParseError`: the oracle
+	// compiles a user's own `enum ParseError` against this file's, and `specs-shv2/parsable-interface.md`'s
+	// cases depend on it doing so. Hence this rung's shadowing rule — a user declaration WINS over a
+	// listed module's, for every listed module and not only this one. The collision rule above survives
+	// only where the two sides are both stdlib.
+	try listWhitelistedModule(stdlibDir, relative: "Builtins.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 
