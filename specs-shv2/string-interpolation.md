@@ -735,8 +735,15 @@ end 'main'
 
 ### Stringable with Format Specifier
 
-<!-- disabled-test: stringable-format-spec -->
-<!-- P1.7a-s2: FormattedStringable 2-arg interp dispatch + `{x:spec}` format-spec interp parsing. The METHOD OVERLOAD half is closed — `Counter.toString()` and `Counter.toString(format String)` now register as distinct members (D7) — but the two remaining halves are a Stringable-protocol rung, not an overloading one. -->
+⭐ **THESE TWO CASES WERE ONE DISABLED CASE, AND SPLITTING THEM IS THE POINT (R10d).** It bundled a half
+that works today with a half the parser cannot even read, so the whole thing was disabled and the working
+half went untested — *"in the corpus but never executed"*, which reads as coverage in a listing and
+provides none. The halves have different blockers, so they are different cases.
+
+<!-- test: stringable-and-formatted-interp-selects-the-zero-arg-overload -->
+Plain `{c}` on a type implementing **both** protocols must select `toString()`, not `toString(format)`.
+⚠ **The two-argument overload's fallback deliberately returns a DIFFERENT string** — a mis-selection that
+passed an empty format would otherwise print `42` as well, and the case could not tell the two apart.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -752,7 +759,8 @@ type Counter implements Stringable, FormattedStringable
 		if format == "verbose" 'verbose'
 			return "Counter(value={value})"
 		end 'verbose'
-		return "{value}"
+
+		return "two-arg:{value}"
 	end 'toString'
 
 	static function create(value Integer) returns Self
@@ -762,8 +770,9 @@ end 'Counter'
 
 function main() returns ExitCode
 	let c = Counter.create(42)
+
 	print("{c}\n")
-	print("{c:verbose}\n")
+
 	return 0
 end 'main'
 ```
@@ -772,6 +781,46 @@ end 'main'
 ```
 ```stdout
 42
+```
+
+<!-- disabled-test: stringable-format-spec -->
+<!-- BLOCKED ON `{x:spec}` FORMAT-SPEC INTERPOLATION PARSING, and on nothing else — MEASURED 2026-07-31 (R10d), not inferred: this exact program gives `error E2010: Expected 'interpolation end' but got ':'`, so it fails in the LEXER/PARSER and never reaches dispatch. The two other halves this comment used to name are BOTH closed: the method-overload half by D7 (`toString()` and `toString(format String)` register as distinct members), and interp dispatch on a dual-conforming type by the live case above, which passes. A Stringable-protocol rung owns what remains: the `{x:spec}` syntax, and then 2-arg dispatch carrying the parsed spec. -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter implements Stringable, FormattedStringable
+	var value as Integer
+
+	function toString() returns String
+		return "{value}"
+	end 'toString'
+
+	function toString(format String) returns String
+		if format == "verbose" 'verbose'
+			return "Counter(value={value})"
+		end 'verbose'
+
+		return "two-arg:{value}"
+	end 'toString'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.create(42)
+
+	print("{c:verbose}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
 Counter(value=42)
 ```
 

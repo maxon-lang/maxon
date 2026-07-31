@@ -2545,7 +2545,9 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   out today is a **front-end gate, not the lexer the comment credited**. The fix survives because injectivity needs
   only **one** half separator-free, and the interface half is a single `identifier` token, so the split at the LAST
   separator is exact whatever the conformer holds. The guard now sits on the half that carries the promise
-  (`requireSeparatorFreeInterfaceName`, reading the byte **out of** the separator constant so it cannot drift), proved
+  (`requireSeparatorFreeLabelComponent`, `IR/Maxon/IrInterface.maxon:168` — reading the byte **out of** the separator
+  constant so it cannot drift; R10 generalized it from `requireSeparatorFreeInterfaceName` because
+  `witnessSlotImplKey` needs the same scan for a second component), proved
   live by sabotage. *Same defect class the previous rung's review caught twice: a safety argument naming the wrong
   mechanism.*
   ⭐ **DUPLICATION ADJUDICATED BY MEASUREMENT, NOT ARGUMENT.** `WitnessLabelSeparator` and `Parser.MethodNameSeparator`
