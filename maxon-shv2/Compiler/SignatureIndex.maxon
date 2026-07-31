@@ -1759,22 +1759,35 @@ export let ManagedFileIndexParamName = b"index"
 
 // ⭐ **THE `__ManagedMemory` OBJECT SURFACE, COMPLETE AS OF R4.4** — the twelve members the corpus reaches,
 // each of them the reference's own name (v1 `LowerMaxonToStd.maxon:1618-1660`, bootstrap
-// `2-Parser.cs:1470-1512`). SEVEN are spelled identically to an `Array` method and dispatch to the identical
-// runtime entry (`length`≡`count`, `capacity`, `get`, `set`, `append`, `slice`, `clear`); four are the
-// buffer's own (`setLength`, `setByte`, `grow`, `byteAt`); the twelfth is the `create` static.
+// `2-Parser.cs:1470-1512`). SIX of them are spelled IDENTICALLY to an `Array` method and dispatch to the
+// identical runtime entry (`capacity`, `get`, `set`, `append`, `slice`, `clear`); `length` shares the ENTRY
+// with `Array.count` under a DIFFERENT spelling, which is why `mm.count()` is refused (D11b's
+// `error.buffer-has-no-count`) — a shared emission is not a shared name; four are the buffer's own
+// (`setLength`, `setByte`, `grow`, `byteAt`); the twelfth is the `create` static.
 //
 // ⚠⚠ **THE SET IS NOT STATED HERE — IT IS `Parser.bufferSurfaceMemberNames`, WHICH IS ALSO WHAT THE REFUSAL
 // PRINTS (D11b).** This block declares the SPELLINGS; the roster declares MEMBERSHIP, and the paragraph
 // above is a reader's summary of it rather than a second authority. It had been exactly such a second
-// authority, and it was wrong — it said SIX and listed seven — while the dispatch it described accepted
-// twelve `Array` names the message denied.
+// authority, and it was wrong TWICE — it said SIX and listed seven, then D11b said SEVEN and kept the same
+// seven, which reads `length` as an `Array` spelling and so contradicts the case above — while the dispatch
+// it described accepted twelve `Array` names the message denied.
 //
 // ⚠ **`elementSize`, `remove`, `swap`, `shiftLeft`/`shiftRight`, `toCString`, `makeCharFromBytes`,
-// `fromCString` and `createCursor` are DELIBERATELY ABSENT.** Not one of them is written by any case in
-// `/specs` that shv2 can reach — the four cstring/cursor members need a `cstring` type shv2 has no
-// producer for at all — and a member with no reachable caller is a mechanism handed a consumer that cannot
-// exercise it. `Parser.parseManagedMemoryStaticCall` (the statics) and `Parser.dispatchArrayMethod` (the
-// members) name them in their refusals so the gap is a diagnostic rather than a silence.
+// `fromCString` and `createCursor` are DELIBERATELY ABSENT** — the reference's member table is 19 deep, this
+// is the other 8 of it plus the `fromCString` static. None has a caller shv2 can reach: `elementSize` has
+// twelve (`specs/ranged-int-bit-packing.md`, whose subject is ranged-int bit packing shv2 does not have) and
+// `remove`/`swap`/`shiftRight`/`elementSize`/`toCString`/`makeCharFromBytes` have `stdlib/Array.maxon`, which
+// no whitelisted module imports and which shv2 cannot compile at all; the four cstring/cursor members need a
+// `cstring` type shv2 has no producer for. A member with no reachable caller is a mechanism handed a consumer
+// that cannot exercise it. `Parser.parseManagedMemoryStaticCall` (the statics) and `Parser.dispatchArrayMethod`
+// (the members) name them in their refusals so the gap is a diagnostic rather than a silence.
+//
+// ⚠ **THE TWO REFUSALS EACH MISFILE ONE NAME, and the reference's own comment is where it came from:**
+// `createCursor` is registered `["self"], [mm]` — an INSTANCE method — under a `// static methods` heading
+// (`2-Parser.cs:1517-1523`), so the static refusal calls it a static and the member refusal calls
+// `fromCString` (genuinely `isStatic: true`) a member. Neither is a false statement about BUILDABILITY, which
+// is what the sentences are for; correcting the category costs 34 committed goldens, since the `are not built`
+// clause is a literal in the message rather than rendered from a list the way the roster now is.
 export let ManagedMemoryCreateMethod = b"create"
 export let ManagedMemorySetLengthMethod = b"setLength"
 export let ManagedMemorySetByteMethod = b"setByte"
@@ -4549,6 +4562,15 @@ export type ProgramSignatures
 		// `__ManagedMemory` is an ALIAS, not a layout — see `ManagedMemoryTypeName`. Registered through the
 		// SAME `genericAliases` map a user `typealias` folds into, exactly as `CharSet` is, so a
 		// `__ManagedMemory` annotation reaches the ordinary `Array` paths with nothing special-cased.
+		//
+		// ⚠⚠ **"NOTHING SPECIAL-CASED" INCLUDES THE BUFFER SURFACE, AND THAT IS A HOLE IN D11b's RULING.** The
+		// surface is decided by PROVENANCE on a `ValueId` (`Parser.valueIsBufferSurface`), and this alias folds
+		// the SPELLING away — so a value bound by a parameter, a struct field or a return type written
+		// `__ManagedMemory` is indistinguishable from a `ByteArray` and takes the `Array` surface. Measured
+		// 2026-07-31: `function f(m __ManagedMemory)` with `m.push(7)`/`m.count()` compiles, links and RUNS,
+		// while `m.length()` is refused as an unknown `Array` method — the roster inverted. See
+		// `Parser.markBufferSurface`; closing it needs a declared-as-the-alias bit per parameter / field /
+		// return carried through THIS index, which is a rung of its own.
 		// Upserted before the early return below because the two registrations are independent: the alias
 		// must exist even on a second call that finds the layout already there.
 		self.genericAliases.upsert(ManagedMemoryTypeName, value: self.internArrayByteInstance())

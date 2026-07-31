@@ -1485,12 +1485,36 @@ error E3057: specs/fragments/managed-memory-methods/error.byte-at-without-try.te
 roster was a description that guarded nothing: eleven of the `Array` arms were reachable on a buffer because
 nothing gated them, so `mm.push(7)` and `try mm.remove(0)` **compiled, linked and ran** while the very
 message a reader is handed for a typo denied `remove` outright. The message is now the SPECIFICATION — one
-list (`bufferSurfaceMemberNames`) which the refusal renders and the dispatch consults — so it cannot deny a
-member the compiler accepts, and the fall-through past the arms is a compiler PANIC rather than a second
-opinion about what exists.
+list (`bufferSurfaceMemberNames`) which the refusal renders and the dispatch consults — so a value the
+compiler KNOWS is a buffer cannot be handed a member the message denies, and the fall-through past the arms is
+a compiler PANIC rather than a second opinion about what exists.
+
+⛔ **WHAT THIS DOES *NOT* CLOSE, MEASURED IN REVIEW 2026-07-31 — THE SURFACE FOLLOWS THE VALUE'S PROVENANCE,
+NOT THE DECLARED TYPE.** `__ManagedMemory` is a generic ALIAS of `Array with Byte`
+(`ProgramSignatures.registerManagedFileType`), so a value bound by a **parameter**, a **struct field** or a
+**return type** spelled `__ManagedMemory` carries no buffer mark and takes the `Array` surface — the roster
+exactly INVERTED. All three compile, link and RUN today:
+
+```text
+function abuse(m __ManagedMemory) returns int      -- push/reserve/resize/insert/pop/first/last/
+    m.push(7) … m.count()                          -- remove/clone/isEmpty/count all ACCEPTED, exit 24
+function useBuffer(m __ManagedMemory) returns int  -- while the roster's own first member is REFUSED:
+    return m.length()                              -- "`Array` method 'length' — … arrive later"
+function make() returns __ManagedMemory            -- b.push(7); b.count() ACCEPTED, exit 2
+type Box  var buf as __ManagedMemory               -- buf.push(7); buf.count() ACCEPTED, exit 2
+```
+
+No live case in `specs-shv2/` writes any of the three (the only one is a `disabled-test` in
+`interface-conformance.md`), which is why the producer-based enumeration below did not see them — an
+enumeration of *what the corpus calls* cannot bound *what a program may write*. It is not a regression (the
+behaviour is R4.4's and predates D11b) and it is not a wrong ANSWER — the record is the same `Array` record,
+so `__arr_push` on it is well-defined — but the ruling "the legitimate surface is EXACTLY what the roster
+names" is not yet true at those three spellings. Closing it needs a declared-as-the-alias bit carried per
+parameter / field / return through `SignatureIndex` (the spelling is gone by the time `bindParameters` sees a
+`MaxonType`), which is a rung, not a mark.
 
 ⚠ **THE MEASUREMENT THE RULING TURNED ON, and it is why the roster gained nothing.** Every buffer-surface
-call the corpus makes was enumerated from the four producers of a buffer (`__ManagedMemory.create`, a
+call the corpus makes was enumerated from the four producers of a buffer VALUE (`__ManagedMemory.create`, a
 `slice` through the surface, `__ManagedDirectory.filename`/`currentPath`, and the `.managed` field) rather
 than probed: `length`, `capacity`, `get`, `set`, `setLength`, `setByte`, `byteAt`, `grow`, `append`,
 `slice`, `clear` — the roster exactly. The one off-roster member any `/specs` case reaches is

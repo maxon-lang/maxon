@@ -2719,6 +2719,13 @@ end 'arrayMethodMutatesReceiver'
 // only caller of `remove`/`swap`/`shiftRight`/`elementSize` anywhere is `stdlib/Array.maxon`, which is not
 // a whitelisted module and which shv2 cannot compile at all, and the cstring family takes a type shv2 has
 // no producer for. Each arrives with the rung that builds it, and that rung adds its line HERE.
+//
+// ⚠⚠ **AND THAT RUNG MUST STRIKE THE NAME FROM THE REFUSAL'S `are not built` CLAUSE IN THE SAME EDIT.** Only
+// the ROSTER half of that sentence is derived; the `are not built` half is still a LITERAL in the message
+// (the gate below, and again in `parseManagedMemoryStaticCall` for the statics). Add `remove` here and forget
+// it there, and one sentence says `R4.4 provides …/remove` and `remove … is not built` — D11b's own bug, in
+// the message D11b made authoritative. It is a literal rather than a rendered list because rendering it would
+// reword 34 committed goldens; that is a cleanup, not a reason the obligation is optional.
 function bufferSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ManagedMemoryLengthMethod)
@@ -26986,11 +26993,12 @@ export type Parser
 		// gate above admitted only the names `bufferSurfaceMemberNames` lists, and each of those matches an arm
 		// on its own spelling and at most on the surface this line has already established — so a buffer
 		// arriving here means the roster gained a member and the dispatch did not. That is D11's defect one
-		// level up, and the wrong
-		// answer it would otherwise give is unusually convincing: the reader would be handed the roster
-		// refusal for a member the roster PROVIDES. It cannot be caught earlier than the call that reveals it
-		// (an arm is a control-flow position, not an entry a table can enumerate at install time), so it is
-		// caught here, loudly, rather than described in a comment nobody re-reads.
+		// level up, and the wrong answer it would otherwise give is unusually convincing: the reader would be
+		// handed the roster refusal for a member the roster PROVIDES. It cannot be caught earlier than the call
+		// that reveals it (an arm is a control-flow position, not an entry a table can enumerate at install
+		// time), so it is caught here, loudly, rather than described in a comment nobody re-reads.
+		// ⭐ **VERIFIED RED in review (D11b)**: pushing `ManagedMemoryCreateMethod` onto the roster and writing
+		// `mm.create()` reaches this panic, naming `create` and both remedies — not the roster refusal.
 		//
 		// ⚠ **THE REFUSAL BELOW THEREFORE NAMES THE `Array` SURFACE, AND ONLY IT** — the two rosters differ
 		// and a message listing the other one sends the reader to the wrong question: `setLength` is not
@@ -29565,9 +29573,23 @@ export type Parser
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
 	// identical copy-on-write reason, through the same one home for it (`privateValueMarkSet`).
 	//
-	// Its two callers are the two producers of a buffer: `__ManagedMemory.create` and a `slice` taken
-	// THROUGH the buffer surface. Nothing else mints one — `.managed` is an identity read, so it produces no
-	// new value to mark and passes the surface along the dispatch instead (see `dispatchArrayMethod`).
+	// Its THREE callers are the three producers of a buffer VALUE: `__ManagedMemory.create`
+	// (`parseManagedMemoryStaticCall`), a `slice` taken THROUGH the buffer surface (`parseArraySlice`), and
+	// `__ManagedDirectory.filename`/`currentPath` (`emitOwnedManagedMemoryResult`, R4.3). ⚠ It had said TWO,
+	// omitting the third, while D11b's own measurement enumerated four producers — the fourth being `.managed`,
+	// which mints NO value to mark: it is an identity read, so it passes the surface along the dispatch instead
+	// (see `dispatchArrayMethod`).
+	//
+	// ⚠⚠ **THE MARK IS A FACT ABOUT A `ValueId`, SO IT DOES NOT SURVIVE A DECLARED TYPE — AND THAT IS A HOLE
+	// D11b's ruling does NOT yet cover.** `__ManagedMemory` is registered as a generic ALIAS of `Array with
+	// Byte` (`ProgramSignatures.registerManagedFileType`, whose own note calls it "reaches the ordinary `Array`
+	// paths with nothing special-cased" — which is exactly this), so a parameter, a struct field or a return type
+	// SPELLED `__ManagedMemory` resolves to a type indistinguishable from `ByteArray` and the value it binds
+	// carries no mark. The buffer surface is therefore INVERTED at those three spellings, measured 2026-07-31:
+	// inside `function f(m __ManagedMemory)`, `m.push(7)`/`m.count()` compile, link and RUN, while `m.length()`
+	// is refused as an unknown `Array` method. Closing it needs a declared-as-the-buffer-alias bit carried per
+	// parameter / per field / per return through this index — the spelling is gone by the time
+	// `bindParameters` sees a `MaxonType` — which is a rung, not a mark.
 	function markBufferSurface(value ValueId)
 		self.bufferSurfaceValues = privateValueMarkSet(self.bufferSurfaceValues, anchor: sharedEmptyBufferSurfaceValues)
 		self.bufferSurfaceValues.insert(value)
