@@ -259,8 +259,9 @@ FIRING. The message and the backtrace exist only where there is a panic runtime 
 `emitRangePanic` is `i32.const 1; call $exit; unreachable`, its status the shared `PanicExitCode`
 (`Targets/Shared/PanicExitCode.maxon` — the ONE declaration all three backends read since rung A1y, and
 the file that documents why the number is 1 and why it is not a `RuntimeAbort` case), and arm64's
-`lowerRangePanic` is the same shape over the same constant. So each guard is pinned TWICE — once on `wasm32-wasi`, where the assertion is the exit code and
-stderr must be silent, and once on `x64-windows, x64-linux`, where the message is pinned in full.
+`lowerRangePanic` is the same shape over the same constant. So each guard is pinned TWICE — once on
+`wasm32-wasi`, where the assertion is the exit code and stderr must be silent, and once on
+`x64-windows, x64-linux`, where the message is pinned in full.
 
 ⚠ **x64-LINUX MOVED FROM THE SILENT SIDE TO THE MESSAGE SIDE (2026-07-31, rung A1j), AND THE PAIRING IS
 WHAT MADE THE MOVE CHEAP.** It was measured silent when these cases were written, and the reason was
