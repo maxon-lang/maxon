@@ -5,11 +5,11 @@
 #     Does `insertRangeChecks` cost O(ranged return sites), or O(sites x blocks in the function)?
 #
 # ⭐ **WHY THIS IS A SEPARATE LADDER FROM `genrangesites.sh`.** That one drives ALIAS-NAMED sites (a
-# field store through a narrow alias), which resolve their block through `guardSiteAt` /
-# `buildBlockIdIndex`. A ranged `return` resolves an ENTIRELY DIFFERENT WAY — it has no recorded block,
-# only a value, and `takeRetBlock` finds the block whose `ret` still returns it. Two mechanisms, two
-# growth curves, and the alias ladder cannot see this one at all: no store or cast makes a function
-# RETURN a narrow alias.
+# field store through a narrow alias); this one drives ranged `return`s. Both now resolve their block
+# through the SAME `guardChainTail` index (`guardSiteAt` for a store's POSITION, `retBlockOf` for a
+# `return`'s `ret`), but they reach it from different site records and emit through different splits
+# (`splitChainEnd` vs `splitBlockInPlace`) — two code paths, two growth curves, and the alias ladder
+# cannot see this one at all: no store or cast makes a function RETURN a narrow alias.
 #
 # ⚠ **AND `ScaleCorpus.maxon` CANNOT EITHER — for the reason `genrangesites.sh`'s header gives about
 # guards in general, PLUS one of its own: not one generated function has a non-full ranged RETURN type.**
@@ -25,10 +25,18 @@
 # 2,490,520 / 5,493,660 / 13,909,140 / 44,487,360 ticks = **x2.21 x2.53 x3.20 per DOUBLING** — a RISING
 # ratio, i.e. linear + quadratic summed. **Allocations and bytes read a dead-flat x1.99 / x2.03 over the
 # same span**, because a scan allocates NOTHING: this is one of the terms only the CPU column can see, so
-# read that column FIRST on this ladder and the allocation column second. Cured by a per-value index
-# (`buildRetBlockIndex`), after which the same span reads x1.98 x1.97 x1.93 — flat — and n=400 costs
-# 14.5M ticks instead of 44.5M. The ladder is kept because it is the only thing that can show it has not
-# come back.
+# read that column FIRST on this ladder and the allocation column second. Cured by resolving the site's
+# own block through the existing `guardChainTail` index (`retBlockOf`), after which the same span reads
+# x1.96 x1.94 x2.03 — flat — and n=400 costs 15.1M ticks instead of 44.5M. The ladder is kept because it
+# is the only thing that can show it has not come back.
+#
+# ⚠ A1h's FIRST cure was a consumed per-VALUE chain, which was equally O(1) and was REVERTED by its own
+# review: it paired the k-th site with the k-th `ret` IN BLOCK ORDER, which is not the sites' order, and
+# so reported the wrong `return`'s line. This ladder cannot see that — `onefunc` guards every site
+# identically, so a permuted pairing emits the same code — which is exactly why the two
+# `ranged-typealias.md` cases named `return-in-a-loop-body-guards-its-own-line` and
+# `return-guarded-behind-a-cast-in-the-same-branch` exist beside it. A LADDER PRICES A PATH; IT DOES NOT
+# CHECK IT.
 #
 # Usage: genretsites.sh <n> <mode> <outdir>
 #   <n>    = NUMBER OF GUARDED `return` SITES. THE DOUBLING KNOB.

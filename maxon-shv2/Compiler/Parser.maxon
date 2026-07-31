@@ -12306,16 +12306,22 @@ export type Parser
 		// every program that compiled before.
 		let returned = self.coerceToDeclared(retVal, declared: declaredTag, anchor: retTok)
 
+		try self.emitOwnedValueReturn(returned, anchor: retTok)
+
 		// P1.9: a `return` in a ranged-int-alias-returning function is a narrowing site. `returned` is the
-		// scalar the `ret` terminator will carry (a ranged int return is never an owned value, so
+		// scalar the `ret` terminator carries (a ranged int return is never an owned value, so
 		// `emitOwnedValueReturn` passes it through unwrapped), so recording it here matches the id the
 		// Std pass finds on the `ret` op. Anchored on the `return` keyword (the E3005 position). A ranged
 		// INT alias never widens, so this is the value the coercion returned untouched.
+		//
+		// ⚠ **RECORDED AFTER THE `ret` IS EMITTED, BECAUSE THE BLOCK IS HALF THE SITE** (see
+		// `RangeCheckReturnSite.block`): the guard belongs in front of THIS site's own `ret`, and the
+		// block that terminator went into is `currentBlock` as `emitOwnedValueReturn` left it. The
+		// hand-off's scope drops run first and may branch, so the block the `return` keyword was parsed
+		// in is not reliably the one holding the `ret`.
 		if not self.rangeCheckReturnAlias.isEmpty() 'rangedReturn'
-			self.rangeCheckReturnSites.push(RangeCheckReturnSite.create(returned, line: retTok.line, column: retTok.column))
+			self.rangeCheckReturnSites.push(RangeCheckReturnSite.create(returned, block: self.currentBlock.id, line: retTok.line, column: retTok.column))
 		end 'rangedReturn'
-
-		try self.emitOwnedValueReturn(returned, anchor: retTok)
 	end 'parseReturnStatement'
 
 	// ⭐ **EMIT A VALUE `ret` THAT HANDS ITS VALUE TO THE CALLER AS AN OWNED ONE** — the shared tail of a

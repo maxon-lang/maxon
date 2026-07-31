@@ -2267,3 +2267,113 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+### A `return` site's guard belongs to ITS OWN `return`, not to the k-th `ret` in block order
+
+⭐⭐ **The axis the four cases above cannot see, because in all four the blocks happen to be registered
+in the same order the `return`s are written.** A site records the BLOCK its `ret` went into
+(`RangeCheckReturnSite.block`), so the pairing is an identity; pair the sites with the `ret`s by ORDINAL
+instead — the first live `ret` for the first site, and so on — and every case above still passes while
+the two below report the line of a DIFFERENT `return` than the one the value left through.
+
+Both shapes were MEASURED WRONG against `maxon-sharp` before the block was recorded, and both are
+ordinary code rather than corner cases: nothing about a loop or a cast is unusual in a function with a
+ranged return type.
+
+#### A `return` inside a LOOP BODY, whose block is registered AFTER the block that follows the loop
+
+A `while` mints its exit block before its body, so the `return` written FIRST lives in the block
+registered SECOND. Under an ordinal pairing the loop's guard carries the line of the `return` after the
+loop, and the two are on different paths — `pick(7)` proves the after-loop `return` is reachable and
+admits its value, and `pick(400)` must then name the LOOP's line, which is the only line the value it
+refused ever passed through.
+
+<!-- test: return-in-a-loop-body-guards-its-own-line -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE, and `mrt_panic` is appended to the two x64 lanes and to neither of the others, where a range verdict is a bare exit 1 with EMPTY stderr. -->
+```maxon
+typealias Small = int(0 to 100)
+typealias Wide = int(0 to 100000)
+
+function pick(n Wide) returns Small
+	var i = 0
+	while i < 3 'spin'
+		if n > 100 'big'
+			return n
+		end 'big'
+
+		i = i + 1
+	end 'spin'
+
+	return n
+end 'pick'
+
+function main() returns ExitCode
+	print("small={pick(7)}\n")
+	print("big={pick(400)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+small=7
+```
+```stderr
+panic at return-in-a-loop-body-guards-its-own-line.test:9: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in pick
+  in main
+  in mrt_start
+```
+
+#### A `return` whose block an `as` CAST IN THE SAME BRANCH has already split
+
+⭐⭐ **The one an ordinal pairing gets wrong even when the source order and the block order agree.** The
+cast owes its own guard, that guard SPLITS the branch's block, and the split hands the `ret` to an
+`__rc_ok` block appended at the END of `blockRefs` — so this `return`'s `ret`, written second of three,
+becomes the LAST one in block order. The printed `c=5` is what proves the cast's own guard ran and
+admitted its value, so the panic that follows can only be the `return` on the next line.
+
+<!-- test: return-guarded-behind-a-cast-in-the-same-branch -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for the reason given one case up: it pins the panic MESSAGE. -->
+```maxon
+typealias Small = int(0 to 100)
+typealias Wide = int(0 to 100000)
+
+function pick(n Wide, m Wide) returns Small
+	if n > 1000 'high'
+		return n
+	end 'high'
+
+	if n > 100 'mid'
+		let c = m as Small
+		print("c={c}\n")
+		return n
+	end 'mid'
+
+	return n
+end 'pick'
+
+function main() returns ExitCode
+	print("low={pick(7, m: 5)}\n")
+	print("mid={pick(200, m: 5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+low=7
+c=5
+```
+```stderr
+panic at return-guarded-behind-a-cast-in-the-same-branch.test:13: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in pick
+  in main
+  in mrt_start
+```

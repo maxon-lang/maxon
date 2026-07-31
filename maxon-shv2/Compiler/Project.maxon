@@ -1051,15 +1051,30 @@ end 'RangeCheckArgSite'
 
 export typealias RangeCheckArgSiteArray = Array with RangeCheckArgSite
 
-// One `return <expr>` in a function whose declared return type is a ranged alias. The pass
-// finds the `ret` op by `value` and reports/guards against the function's `returnAliasName`.
+// One `return <expr>` in a function whose declared return type is a ranged alias. The pass guards the
+// `ret` terminator of `block` and reports against the function's `returnAliasName`.
+//
+// ⚠⚠ **`block` IS WHAT MAKES A SITE'S GUARD ITS OWN, AND IT IS NOT AN OPTIMIZATION.** A site used to
+// name only its `value`, and `InsertRangeChecks` found "the first block still returning it" — an
+// ORDINAL pairing, which silently mismatches the moment the blocks' order is not the sites' order.
+// MEASURED against `maxon-sharp` on three shapes: a `return` inside a `while` body reported the line of
+// the `return` AFTER the loop; a `return` in a branch that also holds an `as` cast reported the line of
+// the `return` after the `if`, because the cast's own guard had moved that block's `ret` onto an
+// `__rc_ok` block appended at the END of `blockRefs`. Recording the block makes the pairing an
+// IDENTITY: a block carries exactly one terminator, so "the `ret` this site owns" has one answer that
+// no ordering can permute. It is the same fact `RangeCheckSite.block` records, for the same reason.
+//
+// It is the block the `ret` terminator was EMITTED into, read after `emitOwnedValueReturn` has emitted
+// it — not the block the `return` keyword was parsed in. The scope drops a hand-off emits first can
+// branch, and a block a drop left behind carries no `ret`.
 export type RangeCheckReturnSite
 	export var value as ValueId
+	export var block as BlockId
 	export var line as LineNumber
 	export var column as ColumnNumber
 
-	export static function create(value ValueId, line LineNumber, column ColumnNumber) returns RangeCheckReturnSite
-		return Self{value: value, line: line, column: column}
+	export static function create(value ValueId, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckReturnSite
+		return Self{value: value, block: block, line: line, column: column}
 	end 'create'
 end 'RangeCheckReturnSite'
 
