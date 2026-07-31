@@ -123,4 +123,25 @@
     <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; flat-namespace check &quot;$(ProjectDir)..&quot;" />
   </Target>
 
+  <!-- THE THIRD GUARD. The stdlib is parsed PER TARGET (its `#if os(...)` resolve differently) and
+       cached keyed by one; get the key wrong and a cross-compile silently inherits the BUILD
+       MACHINE's stdlib — `ExitCode` as int(0 to u32.max), Windows path separators — while both
+       halves of the compile still succeed and exit 0. There is nothing for a spec test to catch:
+       the runner builds ONE target per process, so on any single machine host == target and the
+       case passes for the same reason it passed before the fix. This runs the compiler we just
+       published, cross-compiling for two targets in one process, so it cannot check a stale binary
+       and it is the only place in the build where a second target is ever asked for.
+
+       It costs ~3.2 s (measured 2026-07-31: 3.52/3.11/3.25 s over three runs) against a ~48-71 s
+       `dotnet build` — call it 5%, for the only check that exercises the cross-compile path at all.
+
+       AFTER the registry and flat-namespace checks, chained to the latter so the order is DEFINED rather than two targets sharing one anchor: a drifted registry is the cheaper, more common failure
+       and wants to be the first thing you see, and unlike this one it is fixable by a command
+       (`maxon error-codes generate`) rather than by a code change. Like that target, this leaves the
+       published binary in place on failure — a compiler that fails this IS broken, but it is also
+       the only compiler you have to debug it with, and the non-zero build is what says so. -->
+  <Target Name="CheckStdlibTargetCache" AfterTargets="CheckFlatNamespace">
+    <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; stdlib-target-selftest" />
+  </Target>
+
 </Project>

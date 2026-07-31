@@ -80,7 +80,7 @@ public class IrPipeline {
     if (returnIr || dumpStagesBasePath != null) {
       if (returnIr) {
         var ir = IrPrinter.Print(module, f => !f.IsStdlib);
-        irBuilder!.AppendLine($"=== {PipelineStages.Maxon}");
+        irBuilder!.AppendLine(PipelineStages.Header(PipelineStages.Maxon));
         irBuilder.Append(ir.TrimEnd());
         irBuilder.AppendLine();
       }
@@ -113,7 +113,7 @@ public class IrPipeline {
     if (returnIr || dumpStagesBasePath != null) {
       if (returnIr) {
         var ir = IrPrinter.Print(stdModule, f => !f.IsStdlib);
-        irBuilder!.AppendLine($"=== {PipelineStages.Standard}");
+        irBuilder!.AppendLine(PipelineStages.Header(PipelineStages.Standard));
         irBuilder.Append(ir.TrimEnd());
         irBuilder.AppendLine();
       }
@@ -137,7 +137,7 @@ public class IrPipeline {
       if (returnIr || dumpStagesBasePath != null) {
         if (returnIr) {
           var ir = IrPrinter.Print(arm64Module, f => !f.IsStdlib);
-          irBuilder!.AppendLine($"=== {PipelineStages.ARM64}");
+          irBuilder!.AppendLine(PipelineStages.Header(PipelineStages.ARM64));
           irBuilder.Append(ir.TrimEnd());
           irBuilder.AppendLine();
         }
@@ -166,7 +166,7 @@ public class IrPipeline {
       if (returnIr || dumpStagesBasePath != null) {
         if (returnIr) {
           var ir = IrPrinter.Print(x86Module, f => !f.IsStdlib);
-          irBuilder!.AppendLine($"=== {PipelineStages.X86}");
+          irBuilder!.AppendLine(PipelineStages.Header(PipelineStages.X86));
           irBuilder.Append(ir.TrimEnd());
           irBuilder.AppendLine();
         }
@@ -188,6 +188,23 @@ public class IrPipeline {
   }
 }
 
+/// <summary>
+/// The stage names in the multi-stage IR dump (<see cref="CompileResult.AllStagesIr"/>), the marker
+/// that separates them, and every reader of that marker.
+///
+/// <para>The READERS live here, beside the four sites that WRITE the marker, because they had drifted
+/// apart while nothing made them agree. There were three, each with its own spelling of the same
+/// rule: <see cref="CompileResult.ArchIr"/> matched <c>"\n=== "</c> — so a marker on the very first
+/// line was invisible to it — the spec runner's section parser matched a TRIMMED line, and the
+/// stdlib-target self-test added a third with its own pair of constants. They agreed only because the
+/// emitter happens to put a newline first and no leading whitespace. Change the marker at the four
+/// writers and two of the three readers stop matching anything: one returns null, one reports every
+/// section as missing, and neither says why.</para>
+///
+/// <para>Note what these readers can and cannot see: the dump is printed with
+/// <c>f => !f.IsStdlib</c>, so stdlib and monomorphized bodies are NOT in it. A question about those
+/// — a stdlib panic label, say — has to be asked of the emitted binary, not of this text.</para>
+/// </summary>
 public static class PipelineStages {
   public const string Maxon = "maxon";
   public const string Standard = "standard";
@@ -195,4 +212,60 @@ public static class PipelineStages {
   public const string ARM64 = "arm64";
 
   public static readonly string[] All = [Maxon, Standard, X86, ARM64];
+
+  /// What separates one stage's dump from the next. Written by <see cref="IrPipeline.Run"/> via
+  /// <see cref="Header"/>, read by everything below.
+  private const string SectionMarker = "=== ";
+
+  /// The header line introducing <paramref name="stage"/>'s dump.
+  public static string Header(string stage) => SectionMarker + stage;
+
+  /// <summary>
+  /// The dump split into (stage name, body) in emission order.
+  ///
+  /// Bodies are re-joined with <c>\n</c> — the form the spec runner's IR comparison has always used,
+  /// which is why <see cref="LastSectionBody"/> exists separately rather than being expressed on top
+  /// of this: the fragment generator writes the last section into a committed golden and must not
+  /// re-line-ending it.
+  /// </summary>
+  public static List<(string Name, string Body)> Split(string allStagesIr) {
+    var sections = new List<(string Name, string Body)>();
+    string? current = null;
+    var body = new List<string>();
+
+    foreach (var line in allStagesIr.Split(['\r', '\n'])) {
+      var trimmed = line.Trim();
+
+      if (trimmed.StartsWith(SectionMarker)) {
+        if (current != null) sections.Add((current, string.Join("\n", body)));
+        current = trimmed[SectionMarker.Length..].Trim();
+        body.Clear();
+        continue;
+      }
+
+      body.Add(line);
+    }
+
+    if (current != null) sections.Add((current, string.Join("\n", body)));
+
+    return sections;
+  }
+
+  /// <summary>
+  /// The last stage's dump — the architecture-specific one — with the ORIGINAL line endings intact,
+  /// or null if the text carries no marker at all.
+  ///
+  /// It slices the input rather than rebuilding it from <see cref="Split"/> because its result is
+  /// written verbatim into committed spec goldens: re-joining with <c>\n</c> would rewrite every
+  /// fragment on a Windows host and call it a diff.
+  /// </summary>
+  public static string? LastSectionBody(string allStagesIr) {
+    var lastMarker = allStagesIr.LastIndexOf('\n' + SectionMarker, StringComparison.Ordinal);
+    if (lastMarker < 0) return null;
+
+    var lineEnd = allStagesIr.IndexOf('\n', lastMarker + 1);
+    if (lineEnd < 0) return null;
+
+    return allStagesIr[(lineEnd + 1)..].TrimEnd();
+  }
 }

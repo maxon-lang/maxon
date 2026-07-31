@@ -1016,7 +1016,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     return (sources, tempDir);
   }
 
-  private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath, Compiler.CompileTarget? target = null) {
+  /// <param name="target">
+  /// REQUIRED, with no host default. All three callers already pass <c>_target</c>, so the default
+  /// was dead — but dead in the one file where a forgotten target is a silent wrong answer rather
+  /// than a compile error: a cross-target run that omitted it would compile the fragment for the
+  /// HOST and report the result under the requested triple's name.
+  /// </param>
+  private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath, Compiler.CompileTarget target) {
     try {
       // Map from per-file path to (fragmentPath, lineOffset) so multi-file
       // error messages can be rewritten to point at the merged fragment
@@ -1265,30 +1271,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// If no headers are found, the entire text is returned as a single unnamed section.
   /// </summary>
   private static Dictionary<string, string> ParseIrSections(string ir) {
+    var split = Compiler.PipelineStages.Split(ir);
+
+    // No markers at all — a RequiredIR block written before the dump grew stages, or a single-stage
+    // fragment. One unnamed block, so the comparison above still has something to compare.
+    if (split.Count == 0) return new Dictionary<string, string> { [""] = ir };
+
     var sections = new Dictionary<string, string>();
-    var lines = ir.Split(['\r', '\n']);
-    string? currentSection = null;
-    var currentLines = new List<string>();
-
-    foreach (var line in lines) {
-      var trimmed = line.Trim();
-      if (trimmed.StartsWith("=== ")) {
-        if (currentSection != null) {
-          sections[currentSection] = string.Join("\n", currentLines);
-        }
-        currentSection = trimmed[4..].Trim();
-        currentLines.Clear();
-      } else {
-        currentLines.Add(line);
-      }
-    }
-
-    if (currentSection != null) {
-      sections[currentSection] = string.Join("\n", currentLines);
-    } else {
-      // No sections found — treat entire text as one block
-      sections[""] = ir;
-    }
+    foreach (var (name, body) in split) sections[name] = body;
 
     return sections;
   }

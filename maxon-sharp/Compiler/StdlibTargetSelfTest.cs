@@ -33,8 +33,6 @@ public static class StdlibTargetSelfTest {
   /// The Standard-dialect spelling of <c>int(0 to 255)</c> — <c>ExitCode</c> on every other OS.
   private const string PosixExitCodeType = "u8";
 
-  private const string SectionHeaderPrefix = "=== ";
-  private const string StandardSectionHeader = "=== standard";
   private const string MainSignaturePrefix = "func @main() -> ";
 
   public static int Run() {
@@ -52,28 +50,48 @@ public static class StdlibTargetSelfTest {
       new("arm64", "macos"),
     ];
 
+    // The four probe binaries are INTERNAL artifacts in exactly this class's sense — nobody runs
+    // them, they exist to be read once and deleted — so they are built under the one scope the
+    // codebase already keeps for that, rather than under whatever flags the process happens to
+    // carry. Without it a caller with --mm-trace or --debugstream set would have the probe's own
+    // emitted binary write to the stream this check reports on.
+    using var _ = InternalCompileScope.Enter();
+
+    // This runs on EVERY `dotnet build` (see MaxonSharp.csproj, CheckStdlibTargetCache), where the
+    // four "Wrote N bytes ..." lines the compiler logs at Info would be eight lines of noise per
+    // build for a check whose whole output is one line. Errors still print.
+    var previousCompilerLevel = Logger.GetLevel(LogCategory.Compiler);
+    Logger.SetLevel(LogCategory.Compiler, LogLevel.Error);
+
     var failures = 0;
-    foreach (var target in sequence) {
-      string actual;
-      try {
-        actual = MainReturnType(target);
-      } catch (Exception ex) {
-        Console.Error.WriteLine($"stdlib-target-selftest FAIL: {target.Triple}: {ex.Message}");
+    try {
+      foreach (var target in sequence) {
+        string actual;
+        try {
+          actual = MainReturnType(target);
+        } catch (Exception ex) {
+          Console.Error.WriteLine($"stdlib-target-selftest FAIL: {target.Triple}: {ex.Message}");
+          failures++;
+          continue;
+        }
+
+        var expected = ExpectedExitCodeType(target);
+        if (actual == expected) continue;
+
+        // ASCII only, here and in the OK line below. This check reports through MSBuild's `Exec`,
+        // whose console encoding mangles an em dash into three replacement characters — and it does
+        // it to the FAILURE text too, which is the one message that has to survive.
+        Console.Error.WriteLine(
+          $"stdlib-target-selftest FAIL: {target.Triple}: ExitCode compiled to '{actual}', expected '{expected}' - "
+          + "the stdlib was parsed for the wrong OS.");
         failures++;
-        continue;
       }
-
-      var expected = ExpectedExitCodeType(target);
-      if (actual == expected) continue;
-
-      Console.Error.WriteLine(
-        $"stdlib-target-selftest FAIL: {target.Triple}: ExitCode compiled to '{actual}', expected '{expected}' — "
-        + "the stdlib was parsed for the wrong OS.");
-      failures++;
+    } finally {
+      Logger.SetLevel(LogCategory.Compiler, previousCompilerLevel);
     }
 
     if (failures == 0)
-      Console.WriteLine($"stdlib-target-selftest: OK — {sequence.Length} compiles across {sequence.Distinct().Count()} targets");
+      Console.WriteLine($"stdlib-target-selftest: OK - {sequence.Length} compiles across {sequence.Distinct().Count()} targets");
     return failures == 0 ? 0 : 1;
   }
 
@@ -128,25 +146,25 @@ public static class StdlibTargetSelfTest {
   /// same register either way, so the answer is unreadable one stage later.
   /// </summary>
   private static string ReadMainReturnType(string allStagesIr) {
-    var inStandardSection = false;
+    // Through PipelineStages rather than a fourth private scanner for the same marker: this check
+    // exists because two halves of a compile disagreed about one fact, and a reader of the dump
+    // format that only this file knows is that shape again, one level down.
+    foreach (var (name, body) in PipelineStages.Split(allStagesIr)) {
+      if (name != PipelineStages.Standard) continue;
 
-    foreach (var rawLine in allStagesIr.Split('\n')) {
-      var line = rawLine.Trim();
+      foreach (var rawLine in body.Split('\n')) {
+        var line = rawLine.Trim();
+        if (!line.StartsWith(MainSignaturePrefix)) continue;
 
-      if (line.StartsWith(SectionHeaderPrefix)) {
-        inStandardSection = line == StandardSectionHeader;
-        continue;
+        // The line is `func @main() -> u32 {`; the type is everything up to the opening brace.
+        var tail = line[MainSignaturePrefix.Length..].Trim();
+        var typeEnd = tail.IndexOf(' ');
+
+        return typeEnd < 0 ? tail : tail[..typeEnd];
       }
-
-      if (!inStandardSection || !line.StartsWith(MainSignaturePrefix)) continue;
-
-      // The line is `func @main() -> u32 {`; the type is everything up to the opening brace.
-      var tail = line[MainSignaturePrefix.Length..].Trim();
-      var typeEnd = tail.IndexOf(' ');
-      return typeEnd < 0 ? tail : tail[..typeEnd];
     }
 
     throw new InvalidOperationException(
-      $"no '{MainSignaturePrefix}' line in the '{StandardSectionHeader}' section of the probe's IR");
+      $"no '{MainSignaturePrefix}' line in the '{PipelineStages.Standard}' section of the probe's IR");
   }
 }

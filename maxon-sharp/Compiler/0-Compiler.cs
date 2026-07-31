@@ -54,21 +54,9 @@ public record CompileResult(
   string? AllStagesIr = null
 ) {
   /// <summary>
-  /// Extracts the architecture-specific stage IR (x86 or arm64) from AllStagesIr.
+  /// The architecture-specific stage IR (x86 or arm64) — the last stage in <see cref="AllStagesIr"/>.
   /// </summary>
-  public string? ArchIr {
-    get {
-      if (AllStagesIr == null) return null;
-      // Find the last === marker (the arch-specific stage)
-      var lastMarker = AllStagesIr.LastIndexOf("\n=== ");
-      if (lastMarker < 0) return null;
-      var start = lastMarker + 1; // skip the leading newline
-      // Skip past the marker line itself
-      var lineEnd = AllStagesIr.IndexOf('\n', start);
-      if (lineEnd < 0) return null;
-      return AllStagesIr[(lineEnd + 1)..].TrimEnd();
-    }
-  }
+  public string? ArchIr => AllStagesIr == null ? null : PipelineStages.LastSectionBody(AllStagesIr);
 };
 
 public class Compiler {
@@ -1170,11 +1158,23 @@ public static class StdlibLoader {
 
       // The stdlib-namespace name counters (Parser's stdlib closure counter, MaxonPanicOp's stdlib
       // label cache) are deliberately NOT reset here, even though this is now reachable more than
-      // once per process. They are monotonic and message-keyed, so letting a second target's parse
-      // continue from the first's keeps every stdlib name unique ACROSS the cached modules. Resetting
-      // them would restart the numbering while an earlier target's module — holding the low numbers —
-      // is still cached and still compilable, so a later synthesized stdlib panic could be handed a
-      // label that already belongs to a different message in that module.
+      // once per process. Resetting them would be a WRONG ANSWER, and the reason is not that the
+      // names stay unique across the cached modules — they do NOT, because both counters are
+      // [ThreadStatic] (Parser._stdlibClosureCounter, MaxonPanicOp._stdlibPanicLabelCache) and a
+      // second target parsed on a second thread starts them at zero. Uniqueness across modules is
+      // also not needed: exactly one target's module takes part in any one compile.
+      //
+      // The reason is that the panic-label cache must stay a SUPERSET of the label->message mapping
+      // of every module a given thread might go on to compile. A cloned stdlib panic op re-mints its
+      // label from that cache (FunctionCloner, MonomorphizationPass), so if the cache were reset per
+      // parse it would end up describing only the LAST target parsed, and a later compile for an
+      // EARLIER target would re-mint labels that collide with that module's parse-time ones — one
+      // label, two messages, and whichever reaches symdata first decides what the panic prints.
+      //
+      // (The cache being ThreadStatic while the modules are process-global is a real pre-existing
+      // hazard in its own right, for the same reason read the other way round. It predates the
+      // per-target cache and is not made reachable by it: before, a worker thread already cloned a
+      // module some other thread had parsed. Filed for its own rung.)
       var stdlibErrors = Compiler.CompileSources(module, sources, true, target);
       if (stdlibErrors.Count > 0) throw stdlibErrors[0];
       foreach (var func in module.Functions) {
