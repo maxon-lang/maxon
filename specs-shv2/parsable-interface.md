@@ -337,8 +337,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: parsable.int-fromstring -->
-<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- test: parsable.int-fromstring -->
 ```maxon
 function main() returns ExitCode
 	let n = try int.fromString("42") otherwise 0
@@ -349,8 +348,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: parsable.int-fromstring-negative -->
-<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- test: parsable.int-fromstring-negative -->
 ```maxon
 function main() returns ExitCode
 	let n = try int.fromString("-7") otherwise 0
@@ -361,8 +359,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: parsable.int-fromstring-invalid -->
-<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- test: parsable.int-fromstring-invalid -->
 ```maxon
 function main() returns ExitCode
 	let n = try int.fromString("abc") otherwise 99
@@ -373,8 +370,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: parsable.float-fromstring -->
-<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- test: parsable.float-fromstring -->
 ```maxon
 function main() returns ExitCode
 	let f = try float.fromString("3.14") otherwise 0.0
@@ -390,8 +386,7 @@ end 'main'
 314
 ```
 
-<!-- disabled-test: parsable.float-fromstring-negative -->
-<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- test: parsable.float-fromstring-negative -->
 ```maxon
 function main() returns ExitCode
 	let f = try float.fromString("-2.5") otherwise 0.0
@@ -402,8 +397,7 @@ end 'main'
 8
 ```
 
-<!-- disabled-test: parsable.bool-fromstring-true -->
-<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- test: parsable.bool-fromstring-true -->
 ```maxon
 function main() returns ExitCode
 	let b = try bool.fromString("true") otherwise false
@@ -417,8 +411,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: parsable.bool-fromstring-false -->
-<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- test: parsable.bool-fromstring-false -->
 ```maxon
 function main() returns ExitCode
 	let b = try bool.fromString("false") otherwise true
@@ -430,4 +423,128 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: parsable.byte-fromstring -->
+**THE SECOND DOOR (A1s-prim), AND THE ONE NEITHER REFERENCE COMPILER HAS.** `byte` is not a keyword in
+shv2 — there is no `TokenKind.byte` at all — so `byte.fromString(…)` never needed a `parsePrimary` arm and
+has always flowed through the ordinary qualified-call path. What it got there was the mangled callee
+`byte.fromString`, which no file declares: `E3004: call to undefined function 'byte.fromString'`, a WRONG
+ANSWER rather than a missing feature. v1 has the identical hole and says so at `Parser.maxon:15975` (it
+tests three TOKEN KINDS, and `byte` lost its keyword there); the bootstrap covers `byte` only because it
+still has a `TokenType.Byte` to test. Recognizing the primitive TYPE NAME rather than its token kind is
+what makes one rule serve both doors.
+```maxon
+function main() returns ExitCode
+	let n = try byte.fromString("41") otherwise 0
+	return n + 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: parsable.byte-user-type-outranks-primitive -->
+**A USER DECLARATION OUTRANKS THE PRIMITIVE READING, and this is the case that makes the clause
+load-bearing.** `type int` is refused at its own name (`E2010: Expected 'identifier' but got 'int'`), so
+`int.`/`float.`/`bool.` can never be contested — but `byte` is an ordinary identifier here, and a `type
+byte` with its own `static function fromString` compiled and ran on this tree BEFORE the rewrite existed.
+Minting `__byte_fromString` ahead of it would silently re-point a call that already worked at the stdlib
+body: a wrong answer with no diagnostic, which no exit code in the rest of this file could see. The
+precedence is asked as `declaresCallee` of the same mangled name the ordinary path builds, so the two
+readings of one call site cannot come to disagree about what "the user declared it" means.
+```maxon
+type byte
+	export let n as int
+
+	export static function fromString(s String) returns int
+		return 7
+	end 'fromString'
+end 'byte'
+
+function main() returns ExitCode
+	return byte.fromString("41")
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.unknown-primitive-static -->
+**AN UNKNOWN STATIC ON A PRIMITIVE NAMES WHAT THE AUTHOR WROTE — NEVER THE MANGLED SYMBOL.** Both
+references fail this in the two available ways: the bootstrap rewrites unconditionally and reports
+`E2004: Undefined function '__int_frobnicate'` (`2-Parser.cs:24399-24411`), naming a symbol the author never
+typed; v1 reports nothing at all and PANICS in the backend (`Targets/Shared/StdOpHelpers.maxon:362`, which
+its own `TypeResolution.maxon:10597-10616` admits). shv2 ruled on that class at D11c, so the check that
+decides whether to rewrite is the same check that keeps the author's spelling in the message.
+
+⚠ **IT IS THE PARSER'S REFUSAL AND IT HAS TO BE — MEASURED BY REMOVING IT, IN TWO STEPS.**
+`isBuiltinConformanceImplName` declares every callee under `int.`/`float.`/`bool.` to be the compiler's own.
+Remove this refusal and the RESERVED-CALLEE gate catches the call instead, telling an author who wrote
+`int.frobnicate` that *"the `__` prefix names a compiler intrinsic"* — the right code, describing a program
+they do not have. Narrow that gate to the `__` prefix as well and there is no diagnostic at all: the same
+qualifier makes `int.frobnicate` an `isSignaturelessCompilerCallee`, `SemanticCheck.validateCall` returns
+for exactly those before its E3004, and `let n = int.frobnicate("41")` reaches the backend —
+`panic … resolveCallFixups: call to unknown function 'int.frobnicate'`. See the `byte` twin below for what
+happens where none of that applies.
+```maxon
+function main() returns ExitCode
+	let n = try int.frobnicate("41") otherwise 0
+	return n
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:3:14: Unsupported: 'int' has no static method named 'frobnicate' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name
+```
+
+<!-- test: error.unknown-byte-static-is-an-ordinary-undefined-function -->
+**THE `byte` TWIN, AND THE CONTROL ON THE ASYMMETRY ABOVE.** `byte.` is an ordinary identifier qualifier —
+nothing declares it compiler-owned — so an unresolved member is left to the authority for "no such
+function", `SemanticCheck`, reading the registry the real parse built. That is `parseQualifiedCall`'s own
+rule (*"the sweep must never own a veto"*) obeyed wherever it can be, and it is also what keeps a user's
+`type byte` answerable in its own terms rather than in the primitive's. This diagnostic is UNCHANGED by the
+rewrite — it is what the tree already reported — and pinning it is what would catch the refusal above
+being widened to a qualifier that does not need it.
+```maxon
+function main() returns ExitCode
+	let n = try byte.frobnicate("41") otherwise 0
+	return n
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:14: call to undefined function 'byte.frobnicate'
+```
+
+<!-- test: parsable.float-otherwise-panic -->
+**THE CONSTRUCT `float.fromString` IS BUILT ON, PINNED IN USER CODE — and the pre-existing compiler PANIC
+that stood between this rung and its two float cases.** `stdlib/Builtins.maxon`'s `__float_fromString`
+divides under `try (digit / fracDiv) otherwise panic(…)`, so enabling `parsable.float-fromstring` made a
+`panic()` inside a FLOAT-returning function reachable for the first time — and it did not compile:
+`panic at X64Backend.maxon:751: a register-to-register move from rax to xmm0 crosses register files`.
+
+The cause is in `Parser.emitDeadReturn`. A diverging `panic()` still owes its block a terminator, and the
+parser emitted `ret <integer 0>` on the grounds that the value is dead. Its BITS are dead; its REGISTER FILE
+is not — `ret` moves the value into the return register, which is XMM0 here. `LowerMaxonToStd`'s
+`emitZeroConstOfReturnType` already states exactly this rule for the THROW edge, quoting the same panic; the
+parser's dead return is the same defect one door over, and now reads the same fact (through
+`floatResolvedTag`, so a `returns ParsedFloat` ranged alias is XMM-classed too).
+
+⚠ **THIS CASE'S PERMANENT HOME IS `specs-shv2/float-type.md`** — it is a float-codegen property with no
+`Parsable` content, and it needs no `try` at all to fire (the minimum reproducer is a float function whose
+body is `if x < 0.0 … panic(…) end / return x`). It is pinned here because A1s-prim's file list does not
+reach that spec, and an unpinned compiler panic is worse than a case in the wrong file.
+```maxon
+function scaled(x float) returns float
+	if x < 0.0 'negative'
+		panic("scaled: negative input")
+	end 'negative'
+	return x * 2.0
+end 'scaled'
+
+function main() returns ExitCode
+	return trunc(scaled(21.0))
+end 'main'
+```
+```exitcode
+42
 ```

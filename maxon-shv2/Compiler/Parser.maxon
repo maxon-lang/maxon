@@ -1283,6 +1283,32 @@ union ConstructorInstance
 	none
 end 'ConstructorInstance'
 
+// ⭐⭐ **WHERE A CALLEE'S NAME CAME FROM — the ONE fact `requireCalleeIsNotReservedName` cannot read off
+// the name, and the fact its own header says the parser is the only tier that holds.**
+//
+// That gate refuses every `__`-prefixed callee arriving at a source call door, because a `__` name the
+// AUTHOR typed is either a compiler internal they may not reach or a link error nothing else would catch.
+// `int.fromString(s)` breaks that reading: the callee `__int_fromString` is reserved, is genuinely
+// declared, and the author wrote no `__` at all — so the name alone can no longer say which of the two
+// happened, and the door has to be told. Threaded as a PARAMETER rather than recorded on the parser,
+// because a call's arguments may themselves contain calls (`int.fromString(prompt(x))`) and a field would
+// be clobbered by the inner one before the outer one reached the door.
+//
+// ⚠ **IT IS AN ENUM, NOT A UNION.** A payload-free union CASE still heap-allocates, and this rides every
+// parsed call — the identical measurement that reverted the math-intrinsic resolver (see the intrinsic
+// table in `parseCallNamed`). An enum is a bare tag.
+enum CalleeSpelling
+	// The author's own bytes: a free call's identifier, a member name after a `.`, or the `Type.method`
+	// mangle built out of two tokens they wrote. A `__` here was TYPED, and is refused.
+	written
+	// Built by the compiler out of a name the author wrote in a DIFFERENT namespace —
+	// `int.fromString` → `__int_fromString`. Reserved BY CONSTRUCTION: `primitiveStaticCallee` is the only
+	// producer, and no source spelling reaches it (`__int_fromString(…)` written literally arrives here
+	// `written`, and stays refused — `specs-shv2/reserved-double-underscore.md`'s
+	// `user-file-cannot-call-a-reserved-name` is the pin on that).
+	minted
+end 'CalleeSpelling'
+
 // ⭐ **THE TWO SHAPES A NESTED (inner) TYPEALIAS TAKES (P1.6-C / P1.7 slice 3b-i).** A `typealias Idx =
 // int(0 to N)` is a RANGED per-instance alias; a `typealias ElementArray = Array with T` is a
 // GENERIC-INSTANCE alias whose instance (`Array with typeParameter(pos)`) is partially opaque. Both record
@@ -1557,6 +1583,108 @@ let MethodNameSeparatorBytes = b"."
 export function qualifiedMethodName(typeName ByteArray, methodName ByteArray) returns ByteArray
 	return "{String.from(typeName)}{MethodNameSeparator}{String.from(methodName)}".toByteArray()
 end 'qualifiedMethodName'
+
+// ⭐⭐ **`int.fromString(s)` IS `__int_fromString(s)` — THE ONE STATIC-CALL BASE THAT NAMES NO DECLARED
+// TYPE.** A primitive has no `type` declaration to hang a `static function` on, so its statics live in the
+// reserved space as free functions and the PARSER is what joins the two spellings. `stdlib/Builtins.maxon`
+// declares all four bodies (`__int_fromString` `:213`, `__float_fromString` `:250`, `__bool_fromString`
+// `:309`, `__byte_fromString` `:321`) and A1s made them reachable from an ordinary program, which is what
+// leaves this rewrite as the last thing between a program and `int.fromString`.
+//
+// ⭐⭐ **THE FOUR ARE NOT ONE TOKEN KIND, AND THAT IS WHY THIS IS A NAME TEST RATHER THAN A KIND TEST —
+// NEITHER REFERENCE COMPILER COVERS BOTH DOORS.** `int`/`float`/`bool` are KEYWORDS (`Lexer.keywordTable`)
+// and reach a dotted expression only through `typeBaseTokenAt`'s primitive arm; `byte` is a PLAIN
+// IDENTIFIER here — shv2 has no `TokenKind.byte` at all — so `byte.fromString(…)` already flows through
+// `parsePrimary`'s `namedPrimary` arm and arrives with nothing to rewrite. v1 tests three TOKEN KINDS and
+// says outright that `byte` is excluded because it lost its keyword there (`Parser.maxon:15975-15996`), so
+// v1 answers `byte.fromString` with a callee no file declares; the bootstrap covers four only because it
+// still HAS a `TokenType.Byte` (`1-Lexer.cs:222`) to test (`2-Parser.cs:24399`). Asking about the primitive
+// TYPE NAME covers both doors with one rule, and a fifth primitive would need no second place taught.
+let ByteTypeName = b"byte"
+
+// The join `stdlib/Builtins.maxon` ALREADY SPELLS — `__`, the primitive's name, `_`, the method's.
+//
+// ⚠ It is DICTATED, not chosen: the target is an existing declaration in that module and both reference
+// compilers emit the identical name, so this is a spelling to MATCH rather than a mangling to design. That
+// is also why the `_` here is not the injective-join question ARCHITECTURE.md raises for
+// `IrInterface.witnessTableLabel` — the left component is drawn from the closed, `_`-free vocabulary
+// `namesAPrimitiveType` states, so no two `(primitive, method)` pairs can spell one name.
+let PrimitiveStaticNameSeparator = "_"
+
+// The reserved-space free function a `<primitive>.<method>(…)` call links to. ONE speller, for
+// `MethodNameSeparator`'s reason: the mint and the "is it declared?" probe that gates it must ask about the
+// same bytes, or the parser would rewrite to a name it never checked for.
+function primitiveStaticCallee(typeName ByteArray, methodName ByteArray) returns ByteArray
+	return "{String.from(ReservedNamePrefix)}{String.from(typeName)}{PrimitiveStaticNameSeparator}{String.from(methodName)}".toByteArray()
+end 'primitiveStaticCallee'
+
+// ⭐ **DOES THIS BASE NAME ONE OF THE FOUR PRIMITIVE TYPES?** Allocation-free, because it is asked of EVERY
+// qualified call's base — the same `equals`-chain discipline the math-intrinsic table documents, and for
+// the same measured reason. The three keyword names are `IrInterface`'s canonical constants rather than
+// fresh literals: those are what a resolved `integer`/`float`/`boolean` tag is called everywhere in the
+// compiler, and a second spelling of `int` is exactly what `BoolConformerName`'s header forbids.
+function namesAPrimitiveType(name ByteArray) returns bool
+	return name.equals(IntConformerName) or name.equals(FloatConformerName) or name.equals(BoolConformerName) or name.equals(ByteTypeName)
+end 'namesAPrimitiveType'
+
+// ⭐ **IS THIS TOKEN A KEYWORD THAT NAMES A PRIMITIVE TYPE?** — the door-1 half, DERIVED from the name list
+// above rather than listed a second time as three `TokenKind`s. A keyword's `value` IS its spelling (the
+// lexer keys `keywordTable` on those very bytes), so "which kinds need the rewrite" falls out of "which
+// names have statics", and a fifth primitive is added in ONE place. v1 wrote the kind list out and paid for
+// it: `byte` lost its keyword there and silently dropped out of the feature (`Parser.maxon:15975-15996`).
+//
+// The identifier exclusion is what makes it the door-1 half specifically: `byte` reaches every type-named
+// form as a plain identifier already, so it needs no rewriting and must not be claimed here. `tokenCanBeAName`
+// excludes the literal kinds, so a `"int"` STRING literal cannot answer yes on its content.
+function keywordNamesAPrimitiveType(tok Token) returns bool
+	return tok.kind != TokenKind.identifier and tokenCanBeAName(tok) and namesAPrimitiveType(tok.value)
+end 'keywordNamesAPrimitiveType'
+
+// ⛔⛔ **AN UNRESOLVED MEMBER ON A PRIMITIVE IS REFUSED *HERE* WHEN THE QUALIFIER IS COMPILER-OWNED — AND
+// THE ASYMMETRY WITH `byte.` IS DERIVED, NOT CHOSEN.**
+//
+// `isBuiltinConformanceImplName` declares EVERY callee under `int.`/`float.`/`bool.` to be the compiler's
+// own, and its soundness argument is that those three are KEYWORDS so no user symbol can wear the
+// qualifier. Two consequences follow, and BOTH were measured by removing a guard rather than reasoned at:
+//
+//   • **Without this refusal, `int.frobnicate` is caught by the RESERVED-CALLEE gate and told about a
+//     prefix it does not have** — `E3004 … 'int.frobnicate': the '__' prefix names a compiler intrinsic,
+//     and no intrinsic of that name exists`. The right code, describing a program the author does not
+//     have. That gate reaches it only because `isCompilerInternalCallee` folds the qualifier test in.
+//   • **Narrow that gate to the `__` prefix as well, and there is NO DIAGNOSTIC AT ALL:** `let n =
+//     int.frobnicate("41")` reaches the backend and panics — `resolveCallFixups: call to unknown function
+//     'int.frobnicate'` — because the same qualifier makes it an `isSignaturelessCompilerCallee`, and
+//     `SemanticCheck.validateCall` returns for exactly those BEFORE its E3004.
+//
+// ⇒ The parser is the only tier that can answer this in the author's own words, and refusing it here is
+// also what keeps that predicate's premise TRUE: no `int.`-qualified callee reaches the IR except one the
+// compiler minted.
+//
+// `byte.` is an ordinary identifier qualifier and carries none of that, so an unresolved `byte.<member>`
+// returns from here untouched and is answered by the authority for "no such function" — `SemanticCheck`,
+// reading the registry the real parse built (`E3004: call to undefined function 'byte.frobnicate'`,
+// measured on this tree before the rewrite existed and unchanged by it). That is `parseQualifiedCall`'s own
+// rule — *"the sweep must never own a veto"* — obeyed wherever it can be, and departed from only where
+// obeying it answers in the wrong words or not at all. It is also what keeps a user's `type byte`
+// answerable in its own terms rather than in the primitive's.
+//
+// ⛔ **THE MESSAGE NAMES WHAT THE AUTHOR WROTE AND NOTHING ELSE.** Not `__int_frobnicate`: that symbol is
+// the compiler's answer to a question, and quoting it describes a program the author does not have. Both
+// references get this wrong in the two available ways — the bootstrap rewrites unconditionally and reports
+// **E2004 `Undefined function '__int_frobnicate'`** (`2-Parser.cs:24399-24411`), and v1 reports NOTHING and
+// PANICS in the backend (`Targets/Shared/StdOpHelpers.maxon:362`, which its own
+// `TypeResolution.maxon:10597-10616` admits). It names no ROSTER of the statics that DO exist either: that
+// set is `stdlib/Builtins.maxon`'s to state, and a list here would be a second copy of it, stale the first
+// time that module grows one. E2015 is the code its two siblings already use for an unknown member on a
+// compiler-owned type — `parseStringStaticCall`'s unknown `String` static, and the *"'int' has no method
+// named 'make'"* of a builtin-conformance dispatch.
+function requirePrimitiveStaticIsResolvable(typeTok Token, memberTok Token, declaredCallee ByteArray) throws ParseError
+	if not isBuiltinConformanceImplName(declaredCallee) 'ordinaryQualifier'
+		return
+	end 'ordinaryQualifier'
+
+	throw ParseError.unsupported("'{String.from(typeTok.value)}' has no static method named '{String.from(memberTok.value)}' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name", line: typeTok.line, column: typeTok.column)
+end 'requirePrimitiveStaticIsResolvable'
 
 // Every function name this FILE has registered — bare names and mangled overload members alike. THE answer
 // to "is this name already claimed here?", which is the whole contest test `overloadRegistrationNameFor`
@@ -2383,10 +2511,26 @@ let NanosPerMillisecond = 1000000
 // per declaration it sees, and the parse contributes one per declaration it registers. There is no check
 // available for it — SemanticCheck cannot tell a source-written `__` callee from a compiler-emitted one,
 // which is this whole function's reason for existing — so it is stated at both ends instead.
-function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, signatures ProgramSignatures) throws ParseError
+function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, spelling CalleeSpelling, signatures ProgramSignatures) throws ParseError
 	if not isCompilerInternalCallee(callee) 'ordinaryCallee'
 		return
 	end 'ordinaryCallee'
+
+	// ⭐⭐ **THE THIRD KIND OF EXEMPTION: THE NAME IS RESERVED AND THE AUTHOR DID NOT WRITE IT (A1s-prim).**
+	// The two clauses below both key on a FILE — "which file is calling?" — because until now every `__`
+	// callee reaching this door was bytes the author typed, so the file was the only variable. A
+	// `<primitive>.<method>(…)` call is the first whose callee the COMPILER spelled, out of a source name
+	// with no `__` in it, so no file fact can tell it from a typed one: `CalleeSpelling` is that fact, and
+	// it is stated by the one routine that mints such a name (`parseQualifiedCall`'s primitive arm).
+	//
+	// ⚠ **`declaresCallee` IS CONJOINED FOR THE OTHER TWO CLAUSES' REASON**, not as belt-and-braces: the
+	// mint says the compiler owns the head, and this says the program actually has that function. The mint
+	// site already refuses an undeclared primitive static in the AUTHOR'S OWN SPELLING (it must — this
+	// message would name `__int_frobnicate`, a symbol nobody wrote), so a `minted` callee that is not
+	// declared is a drift between that check and this one, and lands here rather than in the backend.
+	if spelling == CalleeSpelling.minted and signatures.declaresCallee(callee) 'theCompilersOwnPrimitiveStaticMint'
+		return
+	end 'theCompilersOwnPrimitiveStaticMint'
 
 	if fileDeclaresReservedNames and signatures.declaresCallee(callee) 'theReservedSpacesOwnDeclaration'
 		return
@@ -12808,17 +12952,50 @@ export type Parser
 	end 'parsePanicStatement'
 
 	// The dead return terminator emitted after a diverging op (`panicAbort`): a `retVoid` for a void
-	// function, else a `ret 0`. Unreachable — the preceding op never returns — but every block must
-	// commit to a terminator. Its type need not match the declared return (it is dead code and bypasses
-	// the `return`-statement checks); lowering moves it to the return register like any other `ret`.
+	// function, else a zero. Unreachable — the preceding op never returns — but every block must commit
+	// to a terminator.
+	//
+	// ⛔⛔ **ITS BITS ARE DEAD; ITS REGISTER FILE IS NOT.** The comment here used to say the type "need not
+	// match the declared return … lowering moves it to the return register like any other `ret`", and the
+	// second half is exactly why the first is false: `ret` moves the value into the return register, which
+	// for a float-returning function is XMM0/d0, so an INTEGER zero made the x64 emitter panic —
+	// *"a register-to-register move from rax to xmm0 crosses register files"*. MEASURED on a function whose
+	// whole body is `if x < 0.0 … panic("neg") … end / return x`, with no `try` in sight. The value is dead
+	// either way; the CLASS the allocator colours it in is not, and no diagnostic exists for it because the
+	// program is perfectly legal.
+	//
+	// ⭐ **THIS IS THE THROW EDGE'S BUG, ONE DOOR OVER, AND ITS FIX IS THE SAME FIX.** `LowerMaxonToStd`'s
+	// `emitZeroConstOfReturnType` already states the rule for `errorReturn`'s family-default value, quoting
+	// that same panic — but a `panic()` statement never reaches it, because the parser commits this
+	// terminator at the MAXON tier. Two producers of "the dead value a diverging path returns", and only one
+	// of them knew.
+	//
+	// ⚠ **THE FLOAT TEST GOES THROUGH `floatResolvedTag`, NOT THE BARE TAG.** A `returns ParsedFloat` — the
+	// declared return of `stdlib/Builtins.maxon`'s `__float_fromString` — is a `named` ranged alias at parse
+	// time (aliases erase in `resolveTypes`, which runs later), and a `named` that reduces to `float` occupies
+	// XMM exactly as a bare `float` does. Reading the bare tag classes it GPR and reproduces the panic on the
+	// one declaration this most matters for.
 	function emitDeadReturn(func IrFunction, anchor Token)
 		if maxonReturnTypeIsVoid(func.maxonReturnType) 'void'
 			self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.retVoid, range: SourceRange.ofToken(anchor))
 			return
 		end 'void'
-		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(anchor))
+		let zero = self.emitLiteral(0, valueType: self.deadReturnZeroType(func), range: SourceRange.ofToken(anchor))
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(zero), range: SourceRange.ofToken(anchor))
 	end 'emitDeadReturn'
+
+	// The type a dead return's zero is born with — `float` when the declared return occupies XMM, `integer`
+	// otherwise. Every non-float return type keeps the integer zero it always had, so no existing golden
+	// moves: a String / struct / boxed-union return is a POINTER, which is a GPR value exactly as an `int`
+	// is, and the bits are dead on every one of them.
+	function deadReturnZeroType(func IrFunction) returns MaxonType
+		let declared = func.maxonReturnType
+		if tagIsFloat(self.floatResolvedTag(maxonReturnTypeTag(declared), nameId: maxonReturnTypeNameId(declared))) 'floatReturn'
+			return MaxonType.float
+		end 'floatReturn'
+
+		return MaxonType.integer
+	end 'deadReturnZeroType'
 
 	// ⭐ **THE try/otherwise DESUGAR.** Parses `try <call> [otherwise <handler>]`, emitting a `tryCall`
 	// (the call rewritten to define a second `errorFlag` value), a `compare(flag != 0)` + `condBranch`
@@ -12941,6 +13118,14 @@ export type Parser
 		if self.at(TokenKind.selfType) and self.peekKind() == TokenKind.dot 'selfDottedTarget'
 			return try self.parseDottedPrimary(func, resultUsed: false)
 		end 'selfDottedTarget'
+		// `try int.fromString(s) otherwise 0` — the primitive-static spelling of the qualified static above
+		// (A1s-prim), and the position that MATTERS for it: all four `__<prim>_fromString` declarations throw,
+		// so `try` is the only way a program calls one. `int`/`float`/`bool` are keywords, so they cannot ride
+		// the `named` arm; the SHAPE gate is `parsePrimary`'s, asked from one place so the try target and the
+		// expression admit the same set. `byte.fromString(…)` is an identifier and is served by `named` above.
+		if self.primitiveStaticCallAt(self.pos) 'primitiveStaticTarget'
+			return try self.parseDottedPrimary(func, resultUsed: false)
+		end 'primitiveStaticTarget'
 		// `try [10,20,30].get(0) otherwise …` — a throwing method on an array LITERAL (P1.7 slice 1), and its
 		// exact byte-string analogue `try b"…".get(0)` (P1.7 slice 2). Each parses to an owned array temp that
 		// the postfix chain applies its method to; the temp is a FORK temporary, dropped once per edge by
@@ -21875,6 +22060,17 @@ export type Parser
 			return try self.parseSizeof()
 		end 'sizeofExpr'
 
+		// ⭐ **`int.fromString(s)` — A STATIC ON A PRIMITIVE TYPE (A1s-prim).** Its own arm for `Self`'s
+		// reason, one arm up: `int`/`float`/`bool` are KEYWORDS, so they cannot ride the identifier arm
+		// below — and `keywordIsANameInOperandPosition` cannot admit them either, because it requires the
+		// next token to be `(` or the name to be bound, and `int` followed by `.` is neither. It routes to
+		// `parseDottedPrimary`, which is where every OTHER type-named dotted form is split, so the scope
+		// shadowing rule and the arm order are read from one place rather than restated. `byte.fromString(…)`
+		// needs no arm at all — `byte` is an identifier here, so it is already below.
+		if self.primitiveStaticCallAt(self.pos) 'primitiveStaticCall'
+			return try self.parseDottedPrimary(func, resultUsed: true)
+		end 'primitiveStaticCall'
+
 		// ⭐ **A KEYWORD JOINS THE NAMED ARM WHEN A NAME IS ALL IT CAN BE (D8)** — `return type` reading the
 		// parameter of `function identity(type Integer)`, `return from(41)` calling a function named `from`.
 		// It is the SAME arm and not a parallel one, so a keyword-named value gets the four forms an
@@ -22567,7 +22763,9 @@ export type Parser
 		argLabels.push(EmptySourceText)
 		var argRanges = SourceRangeArray.create()
 		argRanges.push(range)
-		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none)
+		// `written`: the callee is `<the author's own type name>.toString`, so the reserved-space door must
+		// judge it exactly as it judges the same call spelled out (`p.toString()`) — see `CalleeSpelling`.
+		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, spelling: CalleeSpelling.written)
 		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
 	end 'materializeStructToStringPart'
 
@@ -23795,7 +23993,55 @@ export type Parser
 		end 'innerAlias'
 
 		try self.consume(TokenKind.dot)
-		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: self.current().value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(typeTok.value))
+
+		// ⭐⭐ **`int.fromString(s)` / `byte.fromString(s)` — A PRIMITIVE'S STATIC, WHICH IS A FREE FUNCTION IN
+		// THE RESERVED SPACE (A1s-prim).** THE join site, and the only one: door 1 (`int`/`float`/`bool`, a
+		// keyword resolved by `typeBaseTokenAt`) and door 2 (`byte`, a plain identifier that has always flowed
+		// through here) converge on the same base token, so one arm serves both. It is intercepted for the
+		// reason `CharacterSet` and `String` are one arm up — a primitive has no `type` declaration, so the
+		// mangled `int.fromString` below would name a callee no file declares.
+		//
+		// ⭐ **THE MINT IS GATED ON THE TARGET BEING DECLARED, AND THAT GATE *IS* THE FAILURE PATH.** An
+		// unknown member simply does not mint, so the callee stays what the author wrote and every diagnostic
+		// downstream names `int.frobnicate` — never `__int_frobnicate`. Both references leak the mangled symbol
+		// or worse: the bootstrap rewrites unconditionally and reports **E2004 `Undefined function
+		// '__int_frobnicate'`** (`2-Parser.cs:24399-24411`), naming a symbol the author never wrote; v1 reports
+		// NOTHING and PANICS in the backend (`Targets/Shared/StdOpHelpers.maxon:362`, `lookupFuncParamTypes`),
+		// which its own `TypeResolution.maxon:10597-10616` admits. shv2 ruled on this class at D11c, so the
+		// check that decides whether to rewrite is the same check that keeps the user's own spelling in the
+		// message — one question, not a rewrite plus an apology. Where that spelling then goes is
+		// `requirePrimitiveStaticIsResolvable`'s, which is where the two qualifiers part company.
+		//
+		// ⚠⚠ **A USER DECLARATION OUTRANKS THE PRIMITIVE READING, AND THAT CLAUSE IS `byte`'s ALONE.** `type
+		// int` is refused at its own name (`E2010: Expected 'identifier' but got 'int'`, measured), so
+		// `int.`/`float.`/`bool.` can never be contested — but `byte` is an ordinary identifier here, and a
+		// `type byte` declaring `static function fromString` COMPILES AND RUNS on this tree today (measured:
+		// exit 7). Minting ahead of it would silently re-point a call that already worked at the stdlib body,
+		// which is the shape a green suite cannot see. Asked as `declaresCallee` of the SAME mangled name the
+		// ordinary path below builds, so the two readings of one call site cannot disagree about what "the
+		// user declared it" means. ⭐ **AND ASKING IT OF THAT NAME MAKES A GENERIC ALIAS FALL OUT FOR FREE** —
+		// `typealias byte = Box with Num` resolves `byte.fromString` to `Box.fromString` before this test, so a
+		// user's own generic instance keeps its static (measured: exit 9) with no arm of its own here. It is
+		// the identity for the three KEYWORD qualifiers, which can name no declaration at all (`typealias int`
+		// is `E2010: Expected 'identifier' but got 'int'`, measured) — so what
+		// `requirePrimitiveStaticIsResolvable` then tests really is the qualifier the author wrote.
+		//
+		// The order of the two probes is cost: `namesAPrimitiveType` is four `equals` on a short slice and
+		// allocates nothing (the discipline the math-intrinsic table measured), while each `declaresCallee`
+		// needs a joined name. Every qualified call in the program pays the first; only a primitive-based one
+		// pays the rest.
+		let memberTok = self.current()
+		let declaredCallee = qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: memberTok.value)
+		if namesAPrimitiveType(typeTok.value) and not self.signatures.declaresCallee(declaredCallee) 'primitiveStatic'
+			let minted = primitiveStaticCallee(typeTok.value, methodName: memberTok.value)
+			if self.signatures.declaresCallee(minted) 'declaredPrimitiveStatic'
+				return try self.parseCallNamed(func, callee: minted, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, spelling: CalleeSpelling.minted)
+			end 'declaredPrimitiveStatic'
+
+			try requirePrimitiveStaticIsResolvable(typeTok, memberTok: memberTok, declaredCallee: declaredCallee)
+		end 'primitiveStatic'
+
+		let result = try self.parseCallNamed(func, callee: declaredCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(typeTok.value), spelling: CalleeSpelling.written)
 		self.retypeGenericAliasConstructorResult(result, aliasName: typeTok.value)
 		return result
 	end 'parseQualifiedCall'
@@ -24208,7 +24454,7 @@ export type Parser
 		// The enum's name comes from the receiver's TYPE, never from the anchor token: the anchor is a
 		// variable's name (`d`), a `.` for a temporary, and `self` is not even an identifier.
 		let memberTok = self.current()
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: recv.anchor, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: recv.anchor, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, spelling: CalleeSpelling.written)
 	end 'dispatchEnumMethod'
 
 	// ⭐⭐ **THE BINDING A METHOD DISPATCH ACTS ON — and a SELF-FIELD ALIAS is the one that has to be
@@ -24438,7 +24684,7 @@ export type Parser
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
 
-		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box))
+		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), spelling: CalleeSpelling.written)
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 		return result
 	end 'dispatchMethodOnBase'
@@ -28135,6 +28381,25 @@ export type Parser
 		return self.kindAt(index) == TokenKind.intLiteral or tokenCanBeAName(self.tokenAt(index))
 	end 'namesMemberAt'
 
+	// ⭐⭐ **THE TOKEN SHAPE THAT ROUTES A PRIMITIVE-TYPE KEYWORD INTO A DOTTED EXPRESSION (A1s-prim)** —
+	// `<int|float|bool> . <member> (`, and nothing shorter. It is the ONE gate both expression doors ask
+	// (`parsePrimary`, `parseTryCallReceiver`), so the two positions cannot come to disagree about which
+	// keyword shapes open a dotted form — the asymmetry that left `try int.fromString(s)` reporting
+	// *"`try` must be applied to a call … (got 'int')"* while the same call in a `let` had no arm at all.
+	//
+	// ⚠ **IT IS THE WHOLE FOUR-TOKEN SHAPE ON PURPOSE, NOT JUST `<primitive> .`.** A primitive keyword has
+	// no OTHER dotted meaning to fall into — there is no `int.max` bound in this language, and the oracle
+	// says so too (`E3003 Undefined variable 'int'`) — so a two-token gate would route `int.max` to
+	// `parseTypeQualifiedBoundExpression` and answer it with a sized-type complaint in place of the
+	// `expectedExpression` it reports today. Claiming exactly the call shape moves no diagnostic.
+	//
+	// `byte` is deliberately NOT here: it is a plain identifier, so `byte.fromString(…)` is already routed
+	// by the identifier arms and joins the primitive reading further down, at `parseQualifiedCall`. See
+	// `namesAPrimitiveType` for why one door is not enough and neither reference compiler has both.
+	function primitiveStaticCallAt(index TokenIndex) returns bool
+		return keywordNamesAPrimitiveType(self.tokenAt(index)) and self.kindAt(index + 1) == TokenKind.dot and self.namesMemberAt(index + 2) and self.kindAt(index + 3) == TokenKind.leftParen
+	end 'primitiveStaticCallAt'
+
 	// **Is the `.member` at `index` a CALL — `. <member> (`?** The one question that tells a field-chain HOP
 	// from the chain's END: a member followed by `(` is a method (or a call through a function-typed field),
 	// which is not a field the walk may consume, and the value it is called ON is the chain's result.
@@ -31121,12 +31386,12 @@ export type Parser
 		// names nothing declared).
 		if self.isImplicitSelfMethod(calleeTok.value) 'implicitSelfMethod'
 			let receiver = try self.implicitSelfReceiver(calleeTok.value, anchor: calleeTok)
-			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingType, methodName: calleeTok.value), anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
+			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingType, methodName: calleeTok.value), anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, spelling: CalleeSpelling.written)
 		end 'implicitSelfMethod'
 
 		// A free call has no receiver and constructs no generic instance: there is no value to its left, and
 		// a generic type is instantiated only through a `Type.method` qualified call.
-		return try self.parseCallNamed(func, callee: calleeTok.value, anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
+		return try self.parseCallNamed(func, callee: calleeTok.value, anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, spelling: CalleeSpelling.written)
 	end 'parseCall'
 
 	// The call parser proper, taking the callee's NAME rather than reading it — because two call
@@ -31139,7 +31404,11 @@ export type Parser
 	// caller has already consumed any qualification. `anchor` is the token diagnostics point at,
 	// which for a qualified call is the TYPE name — the start of what the user wrote, and the same
 	// anchor the span runs from.
-	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
+	//
+	// `spelling` is threaded straight through to `emitCall`'s reserved-space door and read nowhere else:
+	// every caller but ONE hands it the author's own bytes, and the exception is the primitive-static mint
+	// (`parseQualifiedCall`). See `CalleeSpelling`.
+	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, spelling CalleeSpelling) returns ValueId throws ParseError
 		// The callee's final name token may be a KEYWORD (D8) — `FilePath.from(path)`, `c.to()`, `from(41)`.
 		// The `callee` bytes the caller passed were read off this very token, so refusing it here would have
 		// refused every call to a name the declaration now accepts.
@@ -31308,7 +31577,7 @@ export type Parser
 			end 'sleep'
 		end 'builtinsIntrinsic'
 
-		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance)
+		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, spelling: spelling)
 	end 'parseCallNamed'
 
 	// ⭐ **`__Builtins.currentTimeMs()` — THE NANOSECOND READING, SCALED. NOT the coarse tick.**
@@ -31848,8 +32117,11 @@ export type Parser
 	// The result is minted BEFORE the op is appended, because the op stores its id — and it is
 	// minted through `mintCallResult`, which can REFUSE (a void call in value position), so nothing
 	// is emitted for a call the program is not allowed to make.
-	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, signatures: self.signatures)
+	//
+	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
+	// question the reserved-space door cannot answer from the name — see `CalleeSpelling`.
+	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, spelling CalleeSpelling) returns ValueId throws ParseError
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, spelling: spelling, signatures: self.signatures)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
 		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
@@ -32041,7 +32313,10 @@ export type Parser
 	// So the handle carries `integer`, and `await`/`try await` recover the awaited result type from the
 	// callee (`awaitedResultTag`) — the same defining-`asyncCall` lookup the `try await` desugar already uses.
 	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token) returns ValueId throws ParseError
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, signatures: self.signatures)
+		// `written` is not a default here, it is the shape of the door: `parseAsyncCall` is the sole caller and
+		// it consumes a bare `identifier` callee, so an `async` spawn's name is always the author's own bytes.
+		// `async int.fromString(s)` does not parse at all — the `async` target grammar admits a free call only.
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, spelling: CalleeSpelling.written, signatures: self.signatures)
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
 			if not tagIsAsyncScalar(self.tagOf(argValue)) 'managedArg'
@@ -32917,10 +33192,13 @@ export type Parser
 	// `methodCallsAt`, `memberCallFollows` and `fieldAssignsAt` spell the member half with, so a new
 	// member-naming token is taught to all four at once rather than to three of them.
 	//
-	// The BASE half stays a plain identifier because a keyword cannot NAME a type: `type to` is refused at
-	// its declaration (`E2010: Expected 'identifier' but got 'to'`), and `parseQualifiedCall` — the routine
-	// this predicate hands the shape to — consumes the base with `consume(TokenKind.identifier)`. Widening
-	// it here would claim a shape that routine then cannot parse.
+	// The BASE half stays a plain identifier because a keyword cannot NAME a *declared* type: `type to` is
+	// refused at its declaration (`E2010: Expected 'identifier' but got 'to'`). `parseQualifiedCall` reads
+	// its base through `typeBaseTokenAt`, which resolves two keywords — `Self` and, since A1s-prim, the
+	// primitive-type names — so widening this half would claim a shape the routine CAN parse but no
+	// STATEMENT wants: `Self.m()` and `int.fromString(s)` are refused as statements exactly as
+	// `Point.create()` is, a static call discarding its result. Every primitive static returns a value, so
+	// none of them needs this door; widen it when one that does not appears.
 	function voidStaticCallsAt(index TokenIndex) returns bool
 		if self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.dot or not self.namesMemberAt(index + 2) or self.kindAt(index + 3) != TokenKind.leftParen 'notAQualifiedCall'
 			return false
@@ -33066,6 +33344,24 @@ export type Parser
 		if tok.kind == TokenKind.identifier 'plainTypeName'
 			return tok
 		end 'plainTypeName'
+
+		// ⭐ **`int`/`float`/`bool` NAME TYPES HERE TOO (A1s-prim) — the SECOND keyword this reader resolves,
+		// and it arrives by exactly `Self`'s argument.** A primitive keyword in a dotted base position can
+		// only be the type it spells, so it becomes an identifier-kinded token carrying that spelling and
+		// every arm downstream — the enum split, `parseQualifiedCall`'s mangle, the type-qualified bound —
+		// serves it without learning that a keyword got here. Its line, column and source span are the
+		// keyword's own, so a diagnostic still points at what the author wrote; `identifier`-kinded for the
+		// reason the `Self` rewrite below is, that the token is a NAME now.
+		//
+		// ⚠ **NOTHING ROUTES A NON-CALL PRIMITIVE BASE HERE, AND THAT IS DELIBERATE.** The two doors that
+		// send a primitive keyword into a dotted expression (`parsePrimary`, `parseTryCallReceiver`) both
+		// gate on the WHOLE `<primitive> . <member> (` shape, so `int.max` never reaches this reader and
+		// still reports the `expectedExpression` it always has. The oracle has no such form either
+		// (measured: `int.max` is `E3003 Undefined variable 'int'`), so admitting it here would be inventing
+		// a bound expression, not restoring one.
+		if keywordNamesAPrimitiveType(tok) 'primitiveTypeName'
+			return Token.create(TokenKind.identifier, line: tok.line, column: tok.column, value: tok.value, startByte: tok.startByte, endByte: tok.endByte)
+		end 'primitiveTypeName'
 
 		// Anything else is the mismatch `consume(TokenKind.identifier)` reported before this reader existed,
 		// on the same token and in the same words — a base position admits a type NAME and the one keyword
