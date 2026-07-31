@@ -1226,6 +1226,24 @@ let ReservedNamePrefix = b"__"
 // it is a deliberate default copied from both reference compilers, not an incidental literal.
 let UnresolvableInterfaceUsesArity = 1 as ElementCount
 
+// ⭐ **HOW MANY ASSOCIATED TYPES A CONFORMANCE `with` CLAUSE BINDS FOR ONE INTERFACE — WHEN THE PROGRAM
+// SAYS (R6).** A union rather than a count carrying a default, because the two readers of that number
+// need OPPOSITE answers to the unresolvable case and a shared default can only serve one of them:
+//
+//   • The unparenthesized arm must still decide how many commas to eat, and eats
+//     `UnresolvableInterfaceUsesArity` of them (both references' behaviour — `interfaceUsesArity`).
+//   • The parenthesized arm's SURPLUS REFUSAL must not fire at all. A misspelled interface resolves to
+//     nothing, so a default of one would turn every `implements Onee with (A, B)` into an arity
+//     complaint about an interface the compiler never found — a false reject whose real error, the
+//     whole-program `E3015 … implements unknown interface`, already names the fault precisely.
+//
+// Folding both into one count is exactly the shape that hides a false reject one level below where the
+// rule is tested, so the distinction is carried in the type instead of in a constant.
+union ConformanceUsesArity
+	declared(count ElementCount)
+	unresolvable
+end 'ConformanceUsesArity'
+
 // The receiver a call carries, if any. A union rather than a `ValueId` plus a bool, and rather
 // than a reserved id: `ValueId` has no empty value and a sentinel would be READ as a real argument
 // by everything downstream (`retVoid` exists in the Maxon dialect for precisely this reason).
@@ -9099,9 +9117,21 @@ export type Parser
 	// reader also VALIDATES what it reads (`checkGenericInstance` / `checkGenericArgType`), and a
 	// conformance argument is checked whole-program by `checkConformance` instead, which is the only
 	// place the interface it binds against is reachable.
+	//
+	// ⚖ **THE PARENTHESIZED ARM IS ALSO WHERE A SURPLUS ARGUMENT IS REFUSED (R6), AND ONLY THERE** —
+	// see `checkParenthesizedConformanceArgs` for the rule and `ConformanceUsesArity` for the false
+	// reject it must not commit. The asymmetry with the unparenthesized arm below is deliberate and it
+	// is why the check lives HERE rather than in `ConformanceCheck`: whether the list was written in
+	// parentheses is a fact only the token stream holds. `InterfaceConformance` carries a
+	// `ByteArrayArray` and nothing else, so the two spellings are already indistinguishable one line
+	// later — recording a flag on it purely so a later pass could re-derive what this function is
+	// looking straight at would be plumbing a parse fact through the whole tier for no gain.
 	function parseConformanceWithArgs(interfaceName ByteArray) returns ByteArrayArray throws ParseError
 		var args = ByteArrayArray.create()
 		if self.at(TokenKind.leftParen) 'parenthesized'
+			// The `(` is the anchor for a surplus: it is the token that opens the list whose LENGTH is
+			// the assertion being refused, and it is on the `implements` line the author must edit.
+			let openTok = self.current()
 			try self.consume(TokenKind.leftParen)
 			while true 'eachArg'
 				args.push(try self.readConformanceWithArg())
@@ -9111,6 +9141,7 @@ export type Parser
 				try self.consume(TokenKind.comma)
 			end 'eachArg'
 			try self.consume(TokenKind.rightParen)
+			self.checkParenthesizedConformanceArgs(interfaceName, written: args.count(), openTok: openTok)
 			return args
 		end 'parenthesized'
 
@@ -9141,11 +9172,91 @@ export type Parser
 		return renderDeclaredTypeName(try self.parseTypeReference(), declarationName: self.enclosingType, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
 	end 'readConformanceWithArg'
 
+	// ⚖ **A PARENTHESIZED `with (…)` LIST MAY NOT BE LONGER THAN THE INTERFACE'S `uses` ARITY (R6).**
+	// Before this, `implements One with (Integer, Float)` against `interface One uses A` bound
+	// `A := Integer`, dropped `Float` and compiled clean (measured, exit 42) — a typo nothing reported.
+	//
+	// ⚖ **THE UNPARENTHESIZED SPELLING KEEPS IGNORING ITS SURPLUS, AND THAT IS THE RULE RATHER THAN AN
+	// EXEMPTION FROM IT.** The two spellings are not the same claim. Parentheses make the list explicit,
+	// so its LENGTH is something the author ASSERTED and can be wrong about; without them the length is
+	// decided by the interface's own arity and a trailing comma legitimately belongs to the outer
+	// `implements` list — which is exactly why both references consume precisely `arity` items there
+	// (bootstrap `ParseWithTypeArgs(GetAssociatedTypeCount(iface))`, v1's `moreSingle`) and why
+	// `associated-types.md`'s `surplus-conformance-argument-is-ignored` pins that half. Refusing here
+	// therefore diverges from nothing the unparenthesized rule pinned.
+	//
+	// ⚠ **A DEFICIT IS NOT THIS DIAGNOSTIC AND MUST NOT BECOME ONE.** Too FEW arguments is already
+	// reported whole-program, by NAME rather than by count — `ConformanceCheck.checkOneInterfaceConformance`
+	// says which associated type is left unbound (E3016), which is the sentence the author can act on in
+	// one edit. Adding a count-shaped complaint beside it would be two wordings for one mistake.
+	//
+	// ⚠ **AND IT DOES NOT FIRE ON AN INTERFACE THAT RESOLVES TO NOTHING.** A name no file declares has no
+	// arity to be surplus OF, so the `unresolvable` arm is silent: the program's real error is the
+	// whole-program `E3015 … implements unknown interface`, which names the fault precisely, and an arity
+	// sentence about an interface the compiler never found would blame the wrong thing. That case is carried
+	// by `ConformanceUsesArity` rather than by the count-shaped default the unparenthesized arm takes, which
+	// is the whole reason the two arms do not share one number.
+	//
+	// ⚠ **IT RUNS ONLY ON THE FAR SIDE OF THE DECLARATION FOLD**, the same gate `checkGenericInstance`
+	// and `requireFieldDefaultType` sit behind: during the sweep this index is still being BUILT, so an
+	// interface declared in a not-yet-swept file reads as unresolvable, and a diagnostic built there is
+	// allocation spent on a verdict the throwaway artifact discards.
+	function checkParenthesizedConformanceArgs(interfaceName ByteArray, written ElementCount, openTok Token)
+		if not self.signatures.allFilesFolded 'indexStillBuilding'
+			return
+		end 'indexStillBuilding'
+
+		match self.conformanceUsesArity(interfaceName) 'arity'
+			declared(count) then self.checkConformanceArgsAgainstArity(interfaceName, declared: count, written: written, openTok: openTok)
+			unresolvable then break 'arity'
+		end 'arity'
+	end 'checkParenthesizedConformanceArgs'
+
+	// The comparison and the sentence, once. It names BOTH counts because a reader fixing this needs to
+	// know which one to change, and the interface, because the arity is the interface's fact and not the
+	// conformance's — the `uses` clause the author has to look at may be in another file entirely.
+	function checkConformanceArgsAgainstArity(interfaceName ByteArray, declared ElementCount, written ElementCount, openTok Token)
+		if written <= declared 'withinArity'
+			return
+		end 'withinArity'
+
+		self.recordArtifactDiagnostic(ErrorCode.conformanceWithArgSurplus, message: "interface '{String.from(interfaceName)}' declares {declared} associated type(s), but this parenthesized 'with' clause binds {written}", tok: openTok)
+	end 'checkConformanceArgsAgainstArity'
+
+	// ⭐ **THE ONE PLACE THE NUMBER COMES FROM (R6)** — how many associated types conforming to
+	// `interfaceName` binds, off the ONE parse-time interface door (`lookupInterfaceForParse`). Its two
+	// readers ask the same question and need different things from the miss, so the miss is a CASE and
+	// not a default: see `ConformanceUsesArity` for why folding them into one count is precisely the
+	// shape that hides a false reject.
+	//
+	// ⚠ **IT COUNTS THE INTERFACE'S OWN `uses` NAMES AND DELIBERATELY NOT ITS `extends`-INHERITED ONES,
+	// AND THAT IS AN INCREMENTALITY CONSTRAINT RATHER THAN A PREFERENCE.** `associatedTypeNames.count()`
+	// is a fact that RIDES the signature index's hash (`recordInterfaceDeclaration`), which is what keys
+	// every parse memo; `extendsInterfaces` deliberately does NOT ride it, because nothing in a parse
+	// reads it. Walking the `extends` chain here would make a parse's answer depend on an unhashed fact,
+	// so adding `extends Base` to an interface would change what another file's conformance is told
+	// while that file never re-parsed. Widening this to the transitive count is therefore not a local
+	// change — it needs `extendsInterfaces` to ride the hash first, in `SignatureIndex`.
+	//
+	// The consequence today is bounded and is a MESSAGE change, never an accept becoming a reject:
+	// `interface Sub extends Base` (where `Base uses Element`) leaves `Sub` with an empty own list, so
+	// `implements Sub with (Integer)` is refused here — a program shv2 ALREADY rejects, with E3016's
+	// wrong-signature sentence, because shv2 does not inherit the binding either
+	// (`ConformanceCheck.checkOneInterfaceConformance`). The day inherited bindings land, this count and
+	// that hash move together.
+	function conformanceUsesArity(interfaceName ByteArray) returns ConformanceUsesArity
+		match self.lookupInterfaceForParse(interfaceName) 'lookup'
+			found(iface) then return ConformanceUsesArity.declared(iface.associatedTypeNames.count())
+			notFound then return ConformanceUsesArity.unresolvable
+		end 'lookup'
+	end 'conformanceUsesArity'
+
 	// ⭐ **HOW MANY ARGUMENTS AN UNPARENTHESIZED `with` CLAUSE AFTER `interfaceName` TAKES (R5)** — the count of
-	// that interface's `uses` names, off the ONE parse-time interface door (`lookupInterfaceForParse`). It is
-	// not a separate lookup and after R8 it is not a separate STORE either: the arity IS
-	// `associatedTypeNames.count()` on the declaration that door hands back, so the number cannot disagree with
-	// the interface a witness dispatch resolves under the same name.
+	// that interface's `uses` names, off the ONE arity door (`conformanceUsesArity`, which asks the ONE
+	// parse-time interface door). It is not a separate lookup and after R8 it is not a separate STORE either:
+	// the arity IS `associatedTypeNames.count()` on the declaration that door hands back, so the number cannot
+	// disagree with the interface a witness dispatch resolves under the same name — nor, after R6, with the
+	// count the parenthesized arm refuses a surplus against.
 	//
 	// ⭐ **WHOLE-PROGRAM, AND NOT THIS FILE'S `artifact.interfaces` (R7).** That array is filled by
 	// `recordInterface` as the linear parse REACHES each declaration, so it answered for an interface declared
@@ -9167,10 +9278,10 @@ export type Parser
 	// into a parse error where the whole-program `E3015 … implements unknown interface` already names it
 	// precisely.
 	function interfaceUsesArity(interfaceName ByteArray) returns ElementCount
-		match self.lookupInterfaceForParse(interfaceName) 'lookup'
-			found(iface) then return iface.associatedTypeNames.count()
-			notFound then return UnresolvableInterfaceUsesArity
-		end 'lookup'
+		match self.conformanceUsesArity(interfaceName) 'arity'
+			declared(count) then return count
+			unresolvable then return UnresolvableInterfaceUsesArity
+		end 'arity'
 	end 'interfaceUsesArity'
 
 	// Parse an `enum`/`union` declaration (P1.1b wave B):

@@ -963,13 +963,16 @@ end 'main'
 ```
 
 
-### A `with` argument an interface declares no `uses` name for is IGNORED, not rejected
+### An UNPARENTHESIZED `with` argument an interface declares no `uses` name for is IGNORED, not rejected
 
 The two reference compilers disagree here — the bootstrap binds `min(names, args)` and drops the rest, v1
-rejects the arity — and shv2 takes the bootstrap's answer. See `ConformanceCheck.checkOneInterfaceConformance`
-for the argument in full; the short form is that a surplus rejection would also refuse
-`implements Sub with Score` where `Sub extends` an interface whose `uses` name it inherits, a shape v1
-supports and shv2 does not yet, so refusing it here would be preemptive.
+rejects the arity — and shv2 takes the bootstrap's answer *for this spelling*. See
+`ConformanceCheck.checkOneInterfaceConformance` for the argument in full; the short form is that without
+parentheses the list's LENGTH is not something the author asserted — it is decided by the interface's `uses`
+arity, and a trailing comma legitimately belongs to the outer `implements` list.
+
+⚖ The PARENTHESIZED spelling of the same surplus is refused (R6) — see the case below, which is this exact
+program with two characters added.
 
 <!-- test: surplus-conformance-argument-is-ignored -->
 ```maxon
@@ -1088,3 +1091,230 @@ end 'main'
 42
 ```
 
+
+### ⚖ …but a surplus INSIDE PARENTHESES is REFUSED, and the asymmetry is the whole rule (R6)
+
+The two spellings are not the same claim. **Parentheses make the list explicit, so its LENGTH is
+something the author asserted and can be wrong about.** Without them the length is decided by the
+interface's `uses` arity and a trailing comma legitimately belongs to the outer `implements` list —
+which is why both references consume exactly `arity` items there, and why the case above pins the
+unparenthesized surplus as ignored. So this refusal diverges from nothing that case pinned.
+
+Before it, `implements One with (Integer, Float)` against `interface One uses A` bound `A := Integer`,
+dropped `Float` and COMPILED (measured, exit 42): a typo nothing reported.
+
+<!-- test: error.surplus-parenthesized-conformance-argument -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+interface One uses A
+	function get() returns A
+end 'One'
+
+type Holder implements One with (Integer, Float)
+	let v as Integer
+
+	function get() returns Integer
+		return v
+	end 'get'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(42)
+	return h.get()
+end 'main'
+```
+```maxoncstderr
+error E2066: specs/fragments/associated-types/error.surplus-parenthesized-conformance-argument.test:10:33: interface 'One' declares 1 associated type(s), but this parenthesized 'with' clause binds 2
+```
+
+
+### The SAME program as `surplus-conformance-argument-is-ignored`, written with parentheses
+
+The sharpest statement of the asymmetry: an interface with NO `uses` clause at all. `with Integer` is
+ignored (the case above, unchanged); `with (Integer)` is refused. Nothing but the parentheses differs,
+and the parentheses are exactly what makes the count an assertion.
+
+<!-- test: error.surplus-parenthesized-argument-against-no-uses -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface NoUses
+	function value() returns Integer
+end 'NoUses'
+
+type Odd implements NoUses with (Integer)
+	let n as Integer
+
+	function value() returns Integer
+		return n
+	end 'value'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Odd'
+
+function main() returns ExitCode
+	let o = Odd.create(42)
+	return o.value()
+end 'main'
+```
+```maxoncstderr
+error E2066: specs/fragments/associated-types/error.surplus-parenthesized-argument-against-no-uses.test:9:33: interface 'NoUses' declares 0 associated type(s), but this parenthesized 'with' clause binds 1
+```
+
+
+### ⚠ THE FALSE-REJECT GUARD: an interface name that resolves to NOTHING has no arity to be surplus of
+
+The hazard a new refusal carries is that it fires one nesting level below where it was tested. An
+interface no file declares is the sharpest instance: the arity door answers `unresolvable`, and a
+count-shaped default (there is one, for the unparenthesized arm — `UnresolvableInterfaceUsesArity`)
+would turn every misspelled interface with a two-argument `with (…)` into an arity complaint about an
+interface the compiler never found. The program's real error is that the name resolves to nothing, and
+that is the only sentence it earns.
+
+<!-- test: error.surplus-parenthesized-argument-on-unresolvable-interface -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+interface One uses A
+	function get() returns A
+end 'One'
+
+type Holder implements Onee with (Integer, Float)
+	let v as Integer
+
+	function get() returns Integer
+		return v
+	end 'get'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(42)
+	return h.get()
+end 'main'
+```
+```maxoncstderr
+error E3015: specs/fragments/associated-types/error.surplus-parenthesized-argument-on-unresolvable-interface.test:10:6: type 'Holder' implements unknown interface 'Onee'
+```
+
+
+### The three shapes a `with` clause gets RIGHT, one case each — the guards the refusal must not touch
+
+A rejection rule is worth nothing if it also rejects the programs it was supposed to leave alone, so
+each legal shape is pinned on its own rather than left to be inferred from a suite that happens to be
+green. `with (A)` ≡ `with A` is prose elsewhere (`specs-shv2/interfaces.md`); here it is two cases that
+differ in nothing but the parentheses.
+
+<!-- test: conformance-argument-in-parentheses-at-arity-one -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface One uses A
+	function get() returns A
+end 'One'
+
+type Holder implements One with (Integer)
+	let v as Integer
+
+	function get() returns Integer
+		return v
+	end 'get'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(42)
+	return h.get()
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: conformance-argument-unparenthesized-at-arity-one -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface One uses A
+	function get() returns A
+end 'One'
+
+type Holder implements One with Integer
+	let v as Integer
+
+	function get() returns Integer
+		return v
+	end 'get'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(42)
+	return h.get()
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: conformance-arguments-in-parentheses-at-arity-two -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+interface Two uses A, B
+	function first() returns A
+	function second() returns B
+end 'Two'
+
+type Pair implements Two with (Integer, Float)
+	let a as Integer
+	let b as Float
+
+	function first() returns Integer
+		return a
+	end 'first'
+
+	function second() returns Float
+		return b
+	end 'second'
+
+	static function create(a Integer, b Float) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(42, b: 1.5)
+	return p.first()
+end 'main'
+```
+```exitcode
+42
+```

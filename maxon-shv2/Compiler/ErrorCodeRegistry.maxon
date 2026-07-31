@@ -176,6 +176,26 @@ export enum ErrorCode
 	// so '#if os(Windows) os(Linux)' is a hard error on Windows and silence on Linux, where the
 	// region is dead and the junk is skipped along with it. A condition ends at its own newline.
 	directiveMalformedCondition = "E2065"
+	// A conformance's PARENTHESIZED 'with (...)' list binds more arguments than the interface
+	// declares 'uses' names -- 'type Holder implements One with (Integer, Float)' against
+	// 'interface One uses A', which bound A := Integer, silently DROPPED Float and compiled clean
+	// (measured, exit 42): a typo nothing reported.
+	// DELIBERATELY ASYMMETRIC, and the asymmetry IS the rule. The same surplus written WITHOUT
+	// parentheses is still ignored, because the two spellings are not the same claim: parentheses
+	// make the list explicit, so its LENGTH is something the author asserted and can be wrong
+	// about, while unparenthesized the length is decided by the interface's 'uses' arity and a
+	// trailing comma legitimately belongs to the outer 'implements' list. Both references consume
+	// exactly 'arity' items in the unparenthesized form, and 'surplus-conformance-argument-is-
+	// ignored' pins it.
+	// NOT E2056 GenericArityMismatch, which is a different construct with a different rule. That
+	// one is a generic INSTANTIATION ('Pair with Integer' as a type reference) and its arity is
+	// SYMMETRIC -- too few is the same error as too many. Here too FEW is a different diagnostic
+	// entirely (E3016, naming the first UNBOUND associated type, raised whole-program by
+	// ConformanceCheck), and too many is refused only in one of the two spellings. One code over
+	// two rules that agree on neither symmetry nor spelling would document neither.
+	// It is NOT raised when the interface name resolves to nothing: a name no file declares has no
+	// arity to be surplus of, and the program's real error is E3015 'implements unknown interface'.
+	conformanceWithArgSurplus = "E2066"
 
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"

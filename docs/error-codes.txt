@@ -439,6 +439,28 @@ E2065 DirectiveMalformedCondition
 	doc so '#if os(Windows) os(Linux)' is a hard error on Windows and silence on Linux, where the
 	doc region is dead and the junk is skipped along with it. A condition ends at its own newline.
 
+E2066 ConformanceWithArgSurplus
+	shv2 conformanceWithArgSurplus
+	doc A conformance's PARENTHESIZED 'with (...)' list binds more arguments than the interface
+	doc declares 'uses' names -- 'type Holder implements One with (Integer, Float)' against
+	doc 'interface One uses A', which bound A := Integer, silently DROPPED Float and compiled clean
+	doc (measured, exit 42): a typo nothing reported.
+	doc DELIBERATELY ASYMMETRIC, and the asymmetry IS the rule. The same surplus written WITHOUT
+	doc parentheses is still ignored, because the two spellings are not the same claim: parentheses
+	doc make the list explicit, so its LENGTH is something the author asserted and can be wrong
+	doc about, while unparenthesized the length is decided by the interface's 'uses' arity and a
+	doc trailing comma legitimately belongs to the outer 'implements' list. Both references consume
+	doc exactly 'arity' items in the unparenthesized form, and 'surplus-conformance-argument-is-
+	doc ignored' pins it.
+	doc NOT E2056 GenericArityMismatch, which is a different construct with a different rule. That
+	doc one is a generic INSTANTIATION ('Pair with Integer' as a type reference) and its arity is
+	doc SYMMETRIC -- too few is the same error as too many. Here too FEW is a different diagnostic
+	doc entirely (E3016, naming the first UNBOUND associated type, raised whole-program by
+	doc ConformanceCheck), and too many is refused only in one of the two spellings. One code over
+	doc two rules that agree on neither symmetry nor spelling would document neither.
+	doc It is NOT raised when the interface name resolves to nothing: a name no file declares has no
+	doc arity to be surplus of, and the program's real error is E3015 'implements unknown interface'.
+
 E3001 SemanticNoMain
 	csharp SemanticNoMain
 	selfhosted semanticNoMain

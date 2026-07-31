@@ -229,35 +229,37 @@ end 'checkOneConformance'
 // than listing all of them is the references' shape, and it is the right one: a missing binding is written
 // at a single site the author fixes in one edit.
 //
-// ⚠ **A SURPLUS ARGUMENT IS DELIBERATELY NOT DIAGNOSED, AND THE TWO REFERENCES DISAGREE ABOUT IT.** The
-// bootstrap binds `min(names, args)` and ignores the rest (`ResolveWithTypeParams`, `2-Parser.cs:2947-2953`);
-// v1 rejects an arity mismatch in either direction (`TypeResolution.maxon:1152-1168`, as an E3015). shv2
-// takes the bootstrap's, for two reasons and not as a coin flip:
+// ⚖ **A SURPLUS ARGUMENT IS NOT DIAGNOSED *HERE*, AND AFTER R6 THAT IS A STATEMENT ABOUT THE TIER RATHER
+// THAN ABOUT THE RULE.** The rule now splits on the SPELLING — `implements One with (Integer, Float)` against
+// `interface One uses A` is refused (**E2066**, `Parser.checkParenthesizedConformanceArgs`), while the same
+// surplus written WITHOUT parentheses is still ignored. That split cannot be made at this tier and never
+// could: `InterfaceConformance` carries a `ByteArrayArray`, so by the time a conformance reaches this
+// function the parentheses are gone and the two spellings are one value. Whether the list was written
+// explicitly is a fact only the token stream holds, which is why the refusal lives in the parser.
+//
+// The two references disagree about the surplus, and shv2 takes NEITHER wholesale. The bootstrap binds
+// `min(names, args)` and ignores the rest (`ResolveWithTypeParams`, `2-Parser.cs:2947-2953`); v1 rejects an
+// arity mismatch in either direction (`TypeResolution.maxon:1152-1168`, as an E3015). shv2 keeps the
+// bootstrap's silence for the UNPARENTHESIZED form, for two reasons and not as a coin flip:
 //
 //   • ONE rule then covers both shapes a conformance can get wrong. An argument list that is too SHORT is a
 //     NAMED missing binding whatever its length, so `Pair with Integer` against `uses First, Second` says
 //     `Second` — where v1 reaches its arity arm and reports a count instead, needing a second wording.
-//   • **A surplus rejection would collide with INHERITED `uses` NAMES, which shv2 does not implement and
-//     must not preemptively refuse.** `interface Sub extends Base` where `Base uses Element` leaves `Sub`
-//     with an empty `associatedTypeNames` here, so `implements Sub with Score` — a shape v1 supports
-//     outright (`findInheritedBindings`) — would be rejected for having "too many" arguments against an
-//     interface that transitively requires exactly that one. Ignoring the surplus leaves that program
-//     behaving exactly as it does today, which is the only honest answer while the binding is not inherited.
-//     ⚠ **AND "AS IT DOES TODAY" IS A REJECTION, NOT AN ACCEPTANCE — MEASURED, and only v1 is the outlier.**
-//     `interface Base uses Element` + `interface Sub extends Base` + `type Impl implements Sub with Integer`
-//     gives shv2 AND THE BOOTSTRAP the identical sentence, character for character:
-//     `E3016 … get() returns Integer (expected get() returns Element)`. So this bullet is a
-//     FORWARD-COMPATIBILITY argument (do not grow a second refusal for a shape that is meant to become
-//     legal) rather than a claim that shv2 accepts it now, and the first bullet carries the live weight.
+//     **This half is UNCHANGED by R6**: a deficit is still reported by name, in either spelling, right below.
+//   • Unparenthesized, the LENGTH is not the author's assertion — it is decided by the interface's arity,
+//     and a trailing comma legitimately belongs to the outer `implements` list (which is why both references
+//     consume exactly `arity` items there, and why `surplus-conformance-argument-is-ignored` pins it).
+//     Parenthesized, the length IS asserted, and an assertion can be wrong.
 //
-// ⚠ **THE COST, STATED: A SURPLUS ARGUMENT IS A TYPO NOTHING REPORTS.** `implements One with (Integer, Float)`
-// against `interface One uses A` binds `A := Integer`, drops `Float` and COMPILES (measured, exit 42). The
-// bootstrap rejects that exact program — but not by an arity rule: with one `uses` name it reads the
-// parenthesized pair as a TUPLE type and reports `expected one() returns (int, float)`. shv2 cannot read it
-// that way, because `implements Iterable with (Byte, ByteIterator)` is how `stdlib/` writes a two-name
-// binding and `specs-shv2/interfaces.md` pins `with (A)` ≡ `with A`. The list reading is therefore settled;
-// what is NOT settled is whether a surplus inside it deserves its own diagnostic. Left as the references'
-// silence, and flagged.
+// ⚠ **THE INHERITED-`uses` ARGUMENT SURVIVES R6, NARROWED.** `interface Sub extends Base` where
+// `Base uses Element` leaves `Sub` with an empty `associatedTypeNames` here, so `implements Sub with Score`
+// — a shape v1 supports outright (`findInheritedBindings`) — has "too many" arguments against an interface
+// that transitively requires exactly that one. That program is REJECTED TODAY EITHER WAY, and only v1 is the
+// outlier: shv2 AND the bootstrap give the identical sentence, character for character,
+// `E3016 … get() returns Integer (expected get() returns Element)`, because shv2 does not inherit the
+// binding either. So R6 changes which sentence the parenthesized spelling gets, never accept into reject.
+// The forward-compatibility obligation is recorded where it can be acted on — `Parser.conformanceUsesArity`,
+// which also states why the transitive count cannot simply be walked at parse time today.
 function checkOneInterfaceConformance(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	if entry.withArgs.count() < iface.associatedTypeNames.count() 'unboundAssociatedType'
 		let unbound = try iface.associatedTypeNames.get(entry.withArgs.count()) otherwise panic("checkOneInterfaceConformance: associatedTypeNames.get OOB at {entry.withArgs.count()} below count {iface.associatedTypeNames.count()}")

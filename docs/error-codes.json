@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "40bbf590c97fe754",
+  "sourceHash": "f5fe5ad3e8084309",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -496,6 +496,15 @@
       "stage": "parser",
       "doc": "A '#if' condition the directive grammar has no production for. Two shapes reach it: the\ncondition itself does not parse (a missing ')', an 'and' with no right-hand side, a bare\n'true' where a predicate call belongs, a condition that runs off the end of the file), or the\ncondition parses but TEXT FOLLOWS IT on the same line.\nSplit out of E2064, which names a different fault: there the condition reads fine and the\nfunction it calls does not exist, and the fix is to correct a NAME. Here there is nothing to\nlook up. One code answering both told a reader with an unbalanced paren that their predicate\nname was unknown.\nThe trailing-text shape is a REFUSAL where the bootstrap is silent (measured: it discards the\nremainder of a '#if' line, so '#if os(Windows) n = 5' assigns nothing). Accepting it is a\nwrong-answer generator: the tokens after the condition are emitted into the program as code,\nso '#if os(Windows) os(Linux)' is a hard error on Windows and silence on Linux, where the\nregion is dead and the junk is skipped along with it. A condition ends at its own newline.",
       "emittedBy": {"shv2": "directiveMalformedCondition"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 2066,
+      "tag": "E2066",
+      "name": "ConformanceWithArgSurplus",
+      "stage": "parser",
+      "doc": "A conformance's PARENTHESIZED 'with (...)' list binds more arguments than the interface\ndeclares 'uses' names -- 'type Holder implements One with (Integer, Float)' against\n'interface One uses A', which bound A := Integer, silently DROPPED Float and compiled clean\n(measured, exit 42): a typo nothing reported.\nDELIBERATELY ASYMMETRIC, and the asymmetry IS the rule. The same surplus written WITHOUT\nparentheses is still ignored, because the two spellings are not the same claim: parentheses\nmake the list explicit, so its LENGTH is something the author asserted and can be wrong\nabout, while unparenthesized the length is decided by the interface's 'uses' arity and a\ntrailing comma legitimately belongs to the outer 'implements' list. Both references consume\nexactly 'arity' items in the unparenthesized form, and 'surplus-conformance-argument-is-\nignored' pins it.\nNOT E2056 GenericArityMismatch, which is a different construct with a different rule. That\none is a generic INSTANTIATION ('Pair with Integer' as a type reference) and its arity is\nSYMMETRIC -- too few is the same error as too many. Here too FEW is a different diagnostic\nentirely (E3016, naming the first UNBOUND associated type, raised whole-program by\nConformanceCheck), and too many is refused only in one of the two spellings. One code over\ntwo rules that agree on neither symmetry nor spelling would document neither.\nIt is NOT raised when the interface name resolves to nothing: a name no file declares has no\narity to be surplus of, and the program's real error is E3015 'implements unknown interface'.",
+      "emittedBy": {"shv2": "conformanceWithArgSurplus"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
