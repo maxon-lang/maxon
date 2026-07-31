@@ -1154,8 +1154,13 @@ type MaxonToStdLowering
 
 	// Resolve an interface NAME when building a witness table (P1.7a slice 2a) — a synthesized builtin FIRST
 	// (matching `ConformanceCheck.resolveInterface`), then a user interface from the merged `project.interfaces`.
-	// A witness table is only built for a constraint whose interface the parser already resolved same-file, so an
-	// unresolved name here is an internal invariant break, not a user error.
+	// A witness table is only built for a constraint whose interface the parser already resolved, so an
+	// unresolved name here is an internal invariant break, not a user error. ⚠ **"same-file" WAS the rule and R8
+	// DELETED IT**: the parser now resolves a constraint's interface against the whole-program declaration index
+	// (`lookupInterfaceForParse` → `signatures.interfaceOf`), so it resolves an interface declared below its use
+	// or in any other file. That widens what reaches here and does NOT weaken the invariant — this store
+	// (`project.interfaces`, merged after every file parses) is a superset of what the parse-time index could
+	// answer, so a name the parser resolved is necessarily present here.
 	function resolveWitnessInterface(interfaceName ByteArray) returns IrInterface
 		match builtinInterface(interfaceName) 'builtin'
 			found(iface) then return iface
