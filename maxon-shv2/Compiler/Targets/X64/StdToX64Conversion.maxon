@@ -135,11 +135,6 @@ let NullPointer = 0x0
 // (first) signaled handle; `__gt_proc_check` tests that value.
 let WaitAnyHandle = 0x0
 
-// The exit code a range-check violation ends the process with on an OS that has no panic-backtrace
-// runtime yet (x64-linux). The x64 twin of arm64's/wasm's `RangePanicExitCode` — same value 1, so a
-// range violation is a plain non-zero exit wherever the message-printing `mrt_panic` is unavailable.
-let RangePanicExitCode = 1 as MachineWord
-
 // --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's Win32 magic values ---
 // The exact constants v1's `__subp_create_overlapped_pipe` (read path) and the bootstrap's IOCP init use, named
 // once here so the pipe/iocp/event/thread lowerings cannot restate them. `INBOUND|OVERLAPPED|FIRST_PIPE_INSTANCE`
@@ -1836,36 +1831,26 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(LinuxSyscallExitGroup))
 	end 'lowerOsExitLinux'
 
-	// Lower `osRangePanic <label>` (a P1.9 range-check violation) to the platform's abort — the exact
-	// split `lowerOsExit` makes, and for the same reason: `mrt_panic` is a Windows-only `.text` runtime
-	// chunk, so calling it on x64-linux is `resolveCallFixups: call to unknown function 'mrt_panic'`.
-	// Windows prints the message plus a backtrace and exits; Linux, which has no panic-backtrace runtime
-	// yet, ends with a bare `exit_group(1)` — the x64 twin of the arm64/wasm bare exit-1. (The two
-	// runtime-panic spec cases are `targets: x64-windows` because only Windows produces the message.)
+	// Lower `osRangePanic <label>` (a P1.9 range-check violation) to `mrt_panic`, which reads the baked
+	// `panic at …` line, prints it plus a symbolized backtrace, and exits — the message address in RCX,
+	// then the call. A `callDirect` (not `iatCall`) because `mrt_panic` is one of the program's own
+	// `.text` runtime chunks, resolved by the intra-`.text` call fixup. `functionMakesCall` sees the
+	// `callDirect` and reserves the shadow space it needs. RCX is written and immediately consumed, so no
+	// intervening op can clobber it.
+	//
+	// ⭐ NO OS SPLIT HERE, and that is the point (rung A1j). It had one — a Windows arm that called
+	// `mrt_panic` and a Linux arm that materialized a bare `exit_group(1)`, because `mrt_panic` was
+	// appended only to the Windows lane. Once it is appended to both (`appendX64LinuxRuntimeChunks`) the
+	// two arms are byte-identical, because RCX is not a Win64-ABI fact here: it is THIS FILE'S private
+	// convention for "the cstr argument", and `X64Runtime.emitPrintString` — which both lanes' stderr
+	// writers are called through — already spells it that way. The one genuine OS difference is the
+	// process exit, and it lives inside the chunk, where `emitPanicProcessExit` asks `x64OsCallKind`
+	// exactly as `lowerOsExit` does. A third spelling of "which OS am I" bought nothing but a lane that
+	// silently said less.
 	function lowerRangePanic(label ByteArray, dstBlock IrBlock)
-		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerRangePanicWin64(label, dstBlock: dstBlock)
-			syscall then self.lowerRangePanicLinux(dstBlock)
-		end 'route'
-	end 'lowerRangePanic'
-
-	// Win64: the message address in RCX (the first-argument register, exactly as `lowerOsExit` puts the
-	// exit code there), then `call mrt_panic` — which reads it, prints it plus a backtrace, and exits. A
-	// `callDirect` (not `iatCall`) because `mrt_panic` is one of the program's own `.text` runtime chunks,
-	// resolved by the intra-`.text` call fixup. `functionMakesCall` sees the `callDirect` and reserves the
-	// shadow space it needs. RCX is written and immediately consumed, so no intervening op can clobber it.
-	function lowerRangePanicWin64(label ByteArray, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(x64PhysReg(X64Register.rcx), label: label))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(PanicName))
-	end 'lowerRangePanicWin64'
-
-	// Linux: no panic-backtrace runtime yet, so the message label is unused and the range verdict is the
-	// exit code — the exit code 1 in EDI (syscall arg 0), then `exit_group` via a raw syscall, identical
-	// to `lowerOsExitLinux` but for a constant code. Mirrors arm64/wasm's bare exit-1.
-	function lowerRangePanicLinux(dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: RangePanicExitCode))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(LinuxSyscallExitGroup))
-	end 'lowerRangePanicLinux'
+	end 'lowerRangePanic'
 
 	// Lower `osAllocPages` to the x64-windows page source: `VirtualAlloc(NULL, size,
 	// MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` through the IAT.

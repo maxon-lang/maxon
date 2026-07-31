@@ -269,8 +269,8 @@ end 'main'
 ### Float range check: runtime guard on a non-literal
 
 <!-- test: float-runtime-range-panic -->
-<!-- targets: x64-windows -->
-<!-- x64-windows ONLY — a PANIC-RUNTIME restriction: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` (which prints both) is a hand-assembled Windows-only `.text` runtime chunk (`X64Runtime.maxon`). Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — `lowerRangePanicLinux` says so for x64-linux, `RangePanicExitCode` for arm64 ("arm64 has no panic runtime"), and wasm the same. Measured 2026-07-26: identical empty-stderr failure on arm64-macos AND wasm32-wasi, which is what makes this the RUNTIME's absence rather than either backend's. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when a non-Windows panic runtime lands. -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY — a PANIC-RUNTIME restriction, and this file's CANONICAL statement of it (every other panic-text case here points back at this one rather than restating it): the case pins the panic MESSAGE and the BACKTRACE, which only a panic runtime prints. **Both x64 lanes have one** — `mrt_panic` in `X64Runtime.maxon`, one hand-assembled chunk over whichever stderr writer and process-exit route the OS uses — so both are pinned. arm64 and wasm have NONE: their range verdict is a bare exit 1 with EMPTY stderr, named `RangePanicExitCode` at `StdToArm64Conversion.lowerRangePanic` and `StdToWasm.emitRangePanic`. Measured 2026-07-26 for arm64-macos and wasm32-wasi; x64-linux was measured silent then too and joined the message side on 2026-07-31 (rung A1j), which is why the exclusion now names the two backends that lack the runtime rather than the one OS that had it. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when an arm64 or wasm panic runtime lands. -->
 ```maxon
 typealias Pct = float(0.0 to 100.0)
 typealias Wide = float(f64.min to f64.max)
@@ -296,8 +296,8 @@ Stack trace:
 ```
 
 <!-- test: float-runtime-negative-bound-panic -->
-<!-- targets: x64-windows -->
-<!-- x64-windows ONLY — a PANIC-RUNTIME restriction: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` (which prints both) is a hand-assembled Windows-only `.text` runtime chunk (`X64Runtime.maxon`). Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — `lowerRangePanicLinux` says so for x64-linux, `RangePanicExitCode` for arm64 ("arm64 has no panic runtime"), and wasm the same. Measured 2026-07-26: identical empty-stderr failure on arm64-macos AND wasm32-wasi, which is what makes this the RUNTIME's absence rather than either backend's. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when a non-Windows panic runtime lands. -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. -->
 ```maxon
 typealias Neg = float(-100.0 to -1.0)
 typealias Wide = float(f64.min to f64.max)
@@ -347,8 +347,8 @@ The narrowing an `f32`-bounded alias promises, checked at run time — a value a
 f64 holds comfortably but an f32 cannot.
 
 <!-- test: float-narrow-f64-to-f32 -->
-<!-- targets: x64-windows -->
-<!-- x64-windows ONLY — a PANIC-RUNTIME restriction: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` (which prints both) is a hand-assembled Windows-only `.text` runtime chunk (`X64Runtime.maxon`). Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — `lowerRangePanicLinux` says so for x64-linux, `RangePanicExitCode` for arm64 ("arm64 has no panic runtime"), and wasm the same. Measured 2026-07-26: identical empty-stderr failure on arm64-macos AND wasm32-wasi, which is what makes this the RUNTIME's absence rather than either backend's. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when a non-Windows panic runtime lands. -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. -->
 ```maxon
 typealias Wide = float(f64.min to f64.max)
 typealias Narrow = float(f32.min to f32.max)
@@ -519,8 +519,8 @@ end 'main'
 ### Runtime range check fails (panic)
 
 <!-- test: runtime-check-fail -->
-<!-- targets: x64-windows -->
-<!-- x64-windows ONLY — a PANIC-RUNTIME restriction: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` (which prints both) is a hand-assembled Windows-only `.text` runtime chunk (`X64Runtime.maxon`). Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — `lowerRangePanicLinux` says so for x64-linux, `RangePanicExitCode` for arm64 ("arm64 has no panic runtime"), and wasm the same. Measured 2026-07-26: identical empty-stderr failure on arm64-macos AND wasm32-wasi, which is what makes this the RUNTIME's absence rather than either backend's. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when a non-Windows panic runtime lands. -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
@@ -637,8 +637,8 @@ end 'main'
 ### Return value range check: runtime panic
 
 <!-- test: return-runtime-check-fail -->
-<!-- targets: x64-windows -->
-<!-- x64-windows ONLY — a PANIC-RUNTIME restriction: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` (which prints both) is a hand-assembled Windows-only `.text` runtime chunk (`X64Runtime.maxon`). Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — `lowerRangePanicLinux` says so for x64-linux, `RangePanicExitCode` for arm64 ("arm64 has no panic runtime"), and wasm the same. Measured 2026-07-26: identical empty-stderr failure on arm64-macos AND wasm32-wasi, which is what makes this the RUNTIME's absence rather than either backend's. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when a non-Windows panic runtime lands. -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. -->
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -1372,8 +1372,8 @@ The half a literal cannot reach. `grow(5)` is a call result, so nothing folds it
 where the value does, at the store.
 
 <!-- test: field-store-runtime-panic -->
-<!-- targets: x64-windows -->
-<!-- x64-windows ONLY, for `return-runtime-check-fail`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` is a hand-assembled Windows-only `.text` runtime chunk. Everywhere else the range verdict is a bare exit 1 with EMPTY stderr. The CHECK is target-neutral and the compile-time cases beside this one cover it on every target. -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. The CHECK is target-neutral and the compile-time cases beside this one cover it on every target. -->
 ```maxon
 typealias Wide = int(0 to 1000)
 typealias Percent = int(0 to 100)
@@ -1562,8 +1562,8 @@ already fails. (The compiled fragment carries a `// test:` line ahead of the sou
 its line 12 and `let y` its line 13 — the number below names the FIRST of the two.)
 
 <!-- test: guards-run-in-source-order -->
-<!-- targets: x64-windows -->
-<!-- x64-windows ONLY, for `field-store-runtime-panic`'s reason: this case pins the panic MESSAGE, and `mrt_panic` is a hand-assembled Windows-only `.text` runtime chunk. Everywhere else the range verdict is a bare exit 1 with EMPTY stderr, which cannot tell the two lines apart — so the ORDER this case exists to pin is only observable here. -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. On arm64 and wasm the bare exit 1 cannot tell the two lines apart, so the ORDER this case exists to pin is observable only on x64. -->
 ```maxon
 typealias Small = int(0 to 10)
 typealias Wide = int(0 to 100000)
@@ -1597,10 +1597,10 @@ guard anchored at the END of its block still exits 1, so an exit-code-only case 
 what separates them is the output the program produced before dying, and the fault that killed it.
 
 The first three each print through `unpinned` stdout or a pinned one, and every line of that output is
-a statement that must NOT have run. They are `x64-windows` only for `field-store-runtime-panic`'s
-reason: each pins the panic MESSAGE, and `mrt_panic` is a hand-assembled Windows-only `.text` runtime
-chunk — everywhere else a range verdict is a bare exit 1 with EMPTY stderr. The fourth is the in-range
-control and runs on every target.
+a statement that must NOT have run. They are x64 only for `float-runtime-range-panic`'s reason: each
+pins the panic MESSAGE, and `mrt_panic` — the hand-assembled `.text` chunk that prints it — is appended
+to the two x64 lanes and to neither of the others, where a range verdict is a bare exit 1 with EMPTY
+stderr. The fourth is the in-range control and runs on every target.
 
 #### The store's guard runs BEFORE the store
 
@@ -1610,7 +1610,7 @@ slot cannot legally hold, observed by the program that owns it. There is no ```s
 itself the assertion (`SpecParser.SpecStdout`): an unpinned stdout asserts the program printed NOTHING.
 
 <!-- test: store-guard-fires-before-the-store -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, x64-linux -->
 ```maxon
 typealias Percent = int(0 to 100)
 typealias Wide = int(0 to 100000)
@@ -1653,7 +1653,7 @@ DIVISION ran first and the program died `integer divide by zero` — the same ex
 diagnostic, and the check the language promises never ran at all.
 
 <!-- test: cast-guard-fires-before-the-division -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, x64-linux -->
 ```maxon
 typealias NonZero = int(1 to 1000)
 typealias Wide = int(0 to 100000)
@@ -1689,7 +1689,7 @@ after a guard must have printed and the third must not — which is the whole cl
 to an exit code.
 
 <!-- test: guards-fire-at-their-own-site-in-source-order -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, x64-linux -->
 ```maxon
 typealias Small = int(0 to 10)
 typealias Wide = int(0 to 100000)
@@ -2028,8 +2028,8 @@ end 'main'
 ```
 
 <!-- test: closure-body-out-of-range-cast-panics-in-the-closure -->
-<!-- targets: x64-windows -->
-<!-- x64-windows ONLY, for `field-store-runtime-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` is a hand-assembled Windows-only `.text` runtime chunk. Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — and the FRAME NAME is the whole point of this case, so only here is it observable. The check itself is target-neutral and the in-range case above covers it everywhere. -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. The FRAME NAME is the whole point of this case, and arm64/wasm's bare exit 1 carries none; the check itself is target-neutral and the in-range case above covers it everywhere. -->
 The frame the trace names is the load-bearing part: the guard runs inside the lifted closure, so
 `main$closure_0` is on the stack when it fires. `maxon-sharp` names its own spelling of the same frame.
 ```maxon

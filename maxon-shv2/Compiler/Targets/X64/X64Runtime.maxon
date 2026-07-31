@@ -456,6 +456,40 @@ function emitFaultAddressesAndBacktrace(asm X64RuntimeAsm, ripSlot StackSize, rb
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: FaultBacktraceName)
 end 'emitFaultAddressesAndBacktrace'
 
+// Terminate the process with `PanicExitCode` — the LAST instruction of every terminal diagnostic in
+// this file, and the ONE thing about a panic that is still an OS question once the message and the
+// backtrace are printed. Reached through `route`, the same door `StdToX64Conversion.lowerOsExit`
+// consults, so this file cannot grow a third opinion about which OSes the x64 backend serves.
+//
+// Shared by all THREE terminal paths — the Windows fault thunk, the Linux fault handler, and the
+// OS-parametric `mrt_panic` — for `emitFaultAddressesAndBacktrace`'s reason: the first two had each
+// open-coded their two instructions, and `mrt_panic` becoming OS-parametric would have made that two
+// copies apiece. A panic's exit code and the register it travels in are one fact per OS.
+//
+// ⚠ THE ARGUMENT REGISTER IS PART OF THE DOOR, NOT A DETAIL BESIDE IT. Win64 passes `ExitProcess`'s
+// code in ECX; the Linux syscall ABI passes `exit_group`'s in EDI. That is why the immediate load sits
+// inside each arm rather than above the match — exactly the split `lowerOsExit` makes, and for the
+// same reason.
+function emitPanicProcessExit(asm X64RuntimeAsm, route X64OsCallKind)
+	match route 'route'
+		importCall then emitWin64PanicProcessExit(asm)
+		syscall then emitLinuxPanicProcessExit(asm)
+	end 'route'
+end 'emitPanicProcessExit'
+
+// Windows: `ExitProcess(PanicExitCode)` through the IAT. Never returns, so nothing follows it.
+function emitWin64PanicProcessExit(asm X64RuntimeAsm)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PanicExitCode)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.ExitProcess))
+end 'emitWin64PanicProcessExit'
+
+// Linux: `exit_group(PanicExitCode)` via a raw syscall. `exit_group` and not `exit` for the reason
+// `X64LinuxRuntime.LinuxSyscallExitGroup` states — a panic ends the thread GROUP.
+function emitLinuxPanicProcessExit(asm X64RuntimeAsm)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: PanicExitCode)
+	encodeX64Syscall(asm.code, number: LinuxSyscallExitGroup)
+end 'emitLinuxPanicProcessExit'
+
 // Emit the two bounds checks that decide whether `addrReg` (already reduced to a `.text`
 // offset) names code this image can symbolize, jumping to `rejectLabel` if not:
 // `0 <= offset < __symtable - mrt_start`. Signed comparisons throughout — a return address
@@ -934,8 +968,7 @@ function buildFaultThunkChunk() returns FunctionCodeChunk
 
 	// ExitProcess(1) — never returns. There is no `recover()` and no scheduler to resume
 	// onto, so a converted fault is terminal.
-	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PanicExitCode)
-	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.ExitProcess))
+	emitPanicProcessExit(asm, route: X64OsCallKind.importCall)
 
 	// Falls through: unreachable after ExitProcess, and the single `ret` every other code
 	// reaches directly.
@@ -982,14 +1015,28 @@ end 'buildRuntimeInitChunk'
 //       compiled frames build rather than range-validating it) walks from THIS frame — so `[rbp+8]`,
 //       the return address into the function whose guard fired, is the first symbolized frame and
 //       `mrt_panic` never appears in the trace;
-//   (4) `ExitProcess(1)`.
+//   (4) `exit(PanicExitCode)` through `exitRoute`'s OS door.
 //
 // This is the reader the walker's software arm was written for and had been waiting on (X64Runtime's
-// header noted the arm was unreached until P1.2's `panic()`; the range guard reaches it first). It
-// preserves rbp across the two writer calls (Win64 callee-saved, restored by their `pop rbp`), so the
-// current frame pointer is still valid when it is loaded for the walk. Win64 ABI throughout, and it
-// takes NO slots — the message is consumed immediately and nothing is live across the calls.
-function buildPanicChunk() returns FunctionCodeChunk
+// header noted the arm was unreached until P1.2's `panic()`; the range guard reaches it first).
+//
+// ⭐ THE ONLY OS-PARAMETRIC CHUNK IN THIS FILE, and steps (1)–(3) are why: every primitive it calls is
+// either OS-NEUTRAL (the walker, the frame printer, `__symtable` — one chunk each, appended to BOTH
+// lanes) or reached BY NAME through a writer each lane appends its own copy of under the same
+// `mrt_write_cstr_stderr` label. So the assembly above is identical on Windows and Linux, and only
+// step (4) — the process exit — has an OS in it. `exitRoute` carries exactly that and nothing more.
+// Every other chunk here is either shared outright or named for its one OS (`buildLinux…`).
+//
+// ⚠ RBP MUST SURVIVE STEPS (1) AND (2), because step (3) loads it as the walk's seed — and a walk over
+// a clobbered frame pointer prints plausible nonsense, which on a fault path is strictly worse than
+// printing nothing. It survives on BOTH lanes, and NOT because of a callee-saved convention this file
+// could only assume: `X64RuntimeAsm.beginFunction` gives every chunk a `push rbp` prologue and
+// `finishFunction` the matching `pop rbp`, so each writer restores it by balanced arithmetic. This is
+// what makes the Linux writer safe here despite ending in a `syscall`, which CLOBBERS RCX AND R11 —
+// neither of which this chunk reads across a call (the message in RCX is consumed by step (1) itself,
+// and step (3) re-loads RCX from RBP). It takes NO slots for the same reason: nothing is live across
+// the calls.
+function buildPanicChunk(exitRoute X64OsCallKind) returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
 
 	// (1) The caller's message — already in RCX, NUL-terminated and newline-suffixed by the pass.
@@ -1005,9 +1052,8 @@ function buildPanicChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.r8, src: X64Register.r8, wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
 
-	// (4) ExitProcess(PanicExitCode).
-	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PanicExitCode)
-	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.ExitProcess))
+	// (4) exit(PanicExitCode) — the one step with an OS in it.
+	emitPanicProcessExit(asm, route: exitRoute)
 
 	return asm.finishFunction(PanicName)
 end 'buildPanicChunk'
@@ -1105,8 +1151,7 @@ function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotRip, rbpSlot: SlotRbp, rspSlot: SlotRsp)
 
 	// exit_group(1) — never returns. A converted fault is terminal (no recover(), no scheduler).
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: PanicExitCode)
-	encodeX64Syscall(asm.code, number: LinuxSyscallExitGroup)
+	emitPanicProcessExit(asm, route: X64OsCallKind.syscall)
 
 	return asm.finishFunction(LinuxFaultHandlerName)
 end 'buildLinuxFaultHandlerChunk'
@@ -1164,9 +1209,16 @@ end 'appendX64RuntimeChunks'
 
 // The Windows fault runtime: the VEH `runtime_init`/`fault_thunk`, the software `mrt_panic`, and the
 // shared backtrace/hex chunks over a GetStdHandle+WriteFile stderr writer.
+//
+// The route `mrt_panic` exits through is named here rather than derived from a `Target` this function
+// does not take: it is this OS's chunk set by name and by content — `buildFaultThunkChunk` is a VEH
+// callback and `buildRuntimeInitChunk` calls `AddVectoredExceptionHandler` — so "Windows reaches the
+// OS through an import" is this function's existing identity, not a second copy of `x64OsCallKind`'s
+// answer. The Linux appender states its own the same way, as `buildLinuxFaultHandlerChunk` already
+// does for `exit_group`.
 function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray)
 	chunks.push(buildRuntimeInitChunk())
-	chunks.push(buildPanicChunk())
+	chunks.push(buildPanicChunk(X64OsCallKind.importCall))
 	chunks.push(buildFaultThunkChunk())
 	chunks.push(buildFaultBacktraceChunk())
 	chunks.push(buildWalkFramesChunk())
@@ -1176,11 +1228,19 @@ function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray)
 end 'appendX64WindowsRuntimeChunks'
 
 // The Linux fault runtime: the rt_sigaction `runtime_init` + the SIGFPE `fault_handler`, the SAME shared
-// backtrace/hex/print chunks the Windows path uses, over a `write`-syscall stderr writer. NO `mrt_panic`:
-// the software-panic entry is a range-guard target, and no x64-linux test emits `call mrt_panic` (the
-// suite is green with no runtime at all today); it grows back with the range-panic diagnostic if needed.
+// backtrace/hex/print chunks the Windows path uses, over a `write`-syscall stderr writer — and the SAME
+// software `mrt_panic`, differing from the Windows one only in the route it exits through.
+//
+// ⭐ `mrt_panic` HAD BEEN OMITTED HERE, AND THAT OMISSION WAS THE WHOLE OF THE BUG THIS LANE SHIPPED
+// (rung A1j): a range-check violation exited 1 with EMPTY stderr on x64-linux while x64-windows printed
+// the message and a full backtrace. Nothing else was missing — every primitive `mrt_panic` assembles was
+// already on this list — so the diagnostic was one `push` away, and the comment that used to stand here
+// justified the gap by observing that no x64-linux test called `mrt_panic`. It was circular: the reason
+// no test called it was that 16 spec cases had been narrowed to `targets: x64-windows` BECAUSE the
+// message did not appear. A green suite measured the narrowing, not the runtime.
 function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray)
 	chunks.push(buildLinuxRuntimeInitChunk())
+	chunks.push(buildPanicChunk(X64OsCallKind.syscall))
 	chunks.push(buildLinuxSigreturnTrampolineChunk())
 	chunks.push(buildLinuxFaultHandlerChunk())
 	chunks.push(buildFaultBacktraceChunk())
