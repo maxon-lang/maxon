@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "4530da96567573c9",
+  "sourceHash": "bec7dc3368311256",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1263,6 +1263,15 @@
       "stage": "semantic",
       "doc": "One conforming type reaches ONE interface's requirement by two routes that select DIFFERENT\nmembers for it. A conforming type has exactly one witness table per interface and exactly one\naddress per method slot, so an interface has to be conformed to exactly ONE way; two routes\nthat substitute a requirement differently want two addresses in one slot.\nBoth routes are ordinary source. `implements Conv with Whole, Conv with Real` names one\ninterface twice and binds its associated type differently each time; and\n`implements Child with Whole, Parent with Real`, where `Child extends Parent` re-declares the\nsame `uses` name, reaches `Parent` twice while naming no interface twice at all -- which is\nwhy the condition is detected where the two selections MEET rather than by a rule about the\nshape of the `implements` clause.\nIt takes two overloads of the member's name to be reachable. With one member per name the\nsecond route simply fails to match and the type is refused as a partial implementation\n(E3016) instead; the overload set is what lets both routes succeed and disagree.\nThe message names both selected members' SIGNATURES rather than their registration names --\n`convert#Real` is a key this compiler mints, not something an author wrote.",
       "emittedBy": {"shv2": "semanticConflictingInterfaceConformance"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3112,
+      "tag": "E3112",
+      "name": "SemanticShadowedStdlibNameIsAlsoAMember",
+      "stage": "semantic",
+      "doc": "A user program declares a type name that a whitelisted stdlib module ALSO declares, and that\nsame spelling is used by stdlib source as a MEMBER name -- a field, a method, or an argument\nlabel. The shadowing rule moves the stdlib TYPE declaration into the reserved `__` space so both\ndeclarations can coexist, and that rename is applied uniformly to the stdlib file's identifier\ntokens, which is what makes it reach every spelling of the type at once. A member is the one\nspelling that is also reachable from USER code, whose tokens are never rewritten, so the two\nsides would disagree about one name and the member would silently stop resolving. Refused\nrather than risked; rename the type in the user program.",
+      "emittedBy": {"shv2": "stdlibShadowedNameIsAlsoAMember"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

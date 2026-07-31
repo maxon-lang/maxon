@@ -563,6 +563,15 @@ export enum ErrorCode
 	// The message names both selected members' SIGNATURES rather than their registration names --
 	// `convert#Real` is a key this compiler mints, not something an author wrote.
 	semanticConflictingInterfaceConformance = "E3111"
+	// A user program declares a type name that a whitelisted stdlib module ALSO declares, and that
+	// same spelling is used by stdlib source as a MEMBER name -- a field, a method, or an argument
+	// label. The shadowing rule moves the stdlib TYPE declaration into the reserved `__` space so both
+	// declarations can coexist, and that rename is applied uniformly to the stdlib file's identifier
+	// tokens, which is what makes it reach every spelling of the type at once. A member is the one
+	// spelling that is also reachable from USER code, whose tokens are never rewritten, so the two
+	// sides would disagree about one name and the member would silently stop resolving. Refused
+	// rather than risked; rename the type in the user program.
+	stdlibShadowedNameIsAlsoAMember = "E3112"
 
 	// a declaration in the source compiles to the same symbol name as a function the
 	// compiler EMITS into the program, and a program cannot hold two functions of one

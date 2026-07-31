@@ -991,6 +991,12 @@ end 'immutableMutatingCallMessage'
 // Every type NAME one file writes in a type position (P1.9). See `Parser.usedTypeNames`.
 export typealias UsedTypeNameSet = Set with ByteArray
 
+// The conformance list of an enum/union that declares no `implements` clause — ONE shared empty for the
+// whole compile, following `sharedEmptyInnerAliases` and its family: nearly every enum in the corpus
+// declares nothing, and a fresh empty array per declaration would be an allocation for a fact that is the
+// absence of one. Read-only; `readOptionalImplementsClause` builds a real list only for a real clause.
+let sharedEmptyEnumConformances = ByteArrayArray.create()
+
 // The set every file that names no type at all shares — most files name several, but the sweep's and
 // the const evaluator's `Parser`s reach no type position whatever, and neither should allocate one.
 // Copy-on-write, exactly as `sharedEmptyInnerAliases` is (`Parser.recordTypeNameUse`).
@@ -2391,6 +2397,16 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 	if fileDeclaresReservedNames and signatures.declaresCallee(callee) 'theReservedSpacesOwnDeclaration'
 		return
 	end 'theReservedSpacesOwnDeclaration'
+
+	// ⭐ **THE CALL-SIDE HALF OF THE SHADOW MINT (A1s wave 2)** — `requireUnreservedName`'s new arm, one door
+	// over, and the SAME conjunction A1r landed here rather than a second rule. `stdlib/Clock.maxon`'s own
+	// `Clock.nowMs()` becomes `__Clock.nowMs()` when a user program declares `type Clock`, so a `__` callee
+	// can now be a name the compiler itself minted for a declaration that genuinely exists. Both clauses are
+	// load-bearing for A1r's stated reason: the mint says the compiler owns the head, and `declaresCallee`
+	// says the program actually has that function — a mint-only door would admit `__Clock.whatever`.
+	if signatures.isMintedStdlibShadowCallee(callee) and signatures.declaresCallee(callee) 'theCompilersOwnMint'
+		return
+	end 'theCompilersOwnMint'
 
 	throw ParseError.unknownCompilerIntrinsic(String.from(callee), line: anchor.line, column: anchor.column)
 end 'requireCalleeIsNotReservedName'
@@ -5058,9 +5074,63 @@ export type Parser
 	var declaredFuncNames as DeclaredFuncNameSet
 	var overloadMembers as OverloadMemberMap
 
+	// ⭐⭐ **THE STDLIB/USER SHADOW RENAME IS APPLIED HERE, TO THE TOKENS, AND THAT PLACEMENT IS THE WHOLE
+	// DESIGN (A1s wave 2).**
+	//
+	// A contested stdlib declaration is moved into the reserved space (`StdlibShadowRenameMap`), and the
+	// hard half is not moving the DECLARATION — it is reaching every other spelling of the name. shv2
+	// identifies types by NAME all the way down: `structRef(name)`, `aggregateNameFor`, `__destruct_<name>`,
+	// `__layout_<name>`, both enum registries, the interface registry, a `throws` clause, a qualified case
+	// value, a `Type.method` callee, a struct-literal head. **A rename that reached the declaration and
+	// missed one of those would be a silent wrong answer rather than a compile error** — so it is applied
+	// ONCE, to the identifier tokens the file is parsed from, and every one of those spellings follows by
+	// construction. There is no roster of doors to keep complete, and no door to forget.
+	//
+	// ⚠ **IT IS SOUND BECAUSE IT IS UNIFORM OVER STDLIB SOURCE.** Every stdlib file is rewritten with the
+	// same table, so a name renamed at its declaration is renamed at every stdlib use of it — including a
+	// method's `Type.` head and a cross-module reference — and everything stdlib-internal is therefore
+	// unchanged. What DOES change is exactly the rule: the bare name is no longer reachable from user code,
+	// whose tokens are never rewritten. The one shape that argument does not cover — a stdlib MEMBER spelled
+	// like a contested type name, which user code can name — is refused before this runs
+	// (`Queries.refuseContestedNamesUsedAsMembers`, E3112).
+	//
+	// ⚠ **NOT IN `queryActiveTokens`, AND THAT IS NOT A PREFERENCE.** That query is memoized on the file's
+	// CONTENT HASH alone and is what the declaration SWEEP reads — so a rewrite there would key a
+	// whole-program fact under a per-file hash, and worse, would need the contest before the sweep that
+	// decides it. Here there is no memo and no circularity: a `Parser` is built per pass, after the contest.
+	//
+	// A compile that contests nothing gets its own array back, so it allocates nothing and parses the very
+	// tokens it did before this existed — which is what keeps every committed golden byte-identical.
+	static function shadowRenamedTokens(tokens TokenArray, signatures ProgramSignatures, isStdlibSource bool) returns TokenArray
+		if not isStdlibSource or not signatures.hasStdlibShadowRenames() 'nothingToRename'
+			return tokens
+		end 'nothingToRename'
+
+		var renamed = TokenArray.create()
+		renamed.reserve(tokens.count())
+		for tok in tokens 'eachToken'
+			if tok.kind != TokenKind.identifier 'notAName'
+				renamed.push(tok)
+				continue
+			end 'notAName'
+
+			let name = signatures.stdlibShadowRenameOf(tok.value)
+			if name.equals(tok.value) 'uncontested'
+				renamed.push(tok)
+				continue
+			end 'uncontested'
+
+			// The POSITION is carried over unchanged: a diagnostic raised on this token must still point at
+			// the source the author can read, and the rename is a fact about the name space rather than
+			// about the file's text.
+			renamed.push(Token.create(TokenKind.identifier, line: tok.line, column: tok.column, value: name, startByte: tok.startByte, endByte: tok.endByte))
+		end 'eachToken'
+		return renamed
+	end 'shadowRenamedTokens'
+
 	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool) returns Parser
 		return Self{
-			tokens: tokens,
+			tokens: shadowRenamedTokens(tokens, signatures: signatures, isStdlibSource: isStdlibSource),
 			pos: 0,
 			filePath: filePath,
 			namespace: namespace,
@@ -5421,7 +5491,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
 		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
@@ -7411,7 +7481,11 @@ export type Parser
 		// The site is the cursor BEFORE the keyword is consumed, because that is where the reader has to be
 		// put back down: `readInterfaceDeclaration` opens by consuming `interface`, exactly as the real parse
 		// reaches it.
-		sites.push(InterfaceDeclSite.create(self.filePath, tokenPos: self.pos))
+		// The NAME travels with the site (A1s wave 2, see `InterfaceDeclSite.name`) — read off the token after
+		// the keyword, which is the same one `readInterfaceDeclaration` consumes. A malformed header carries
+		// the empty name and records nothing the contest can act on, which is the tolerance every sweep entry
+		// point keeps: the real parse reports it, with a position.
+		sites.push(InterfaceDeclSite.create(self.filePath, tokenPos: self.pos, name: self.identifierNameAt(self.pos + 1)))
 
 		try self.consume(TokenKind.interface) otherwise return
 		while not self.isEof() 'body'
@@ -7467,10 +7541,10 @@ export type Parser
 	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, isUnion bool)
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum) otherwise return
 		let nameTok = try self.consume(TokenKind.identifier) otherwise return
-		try self.skipOptionalImplementsClause() otherwise return
+		let conformsTo = try self.readOptionalImplementsClause() otherwise return
 		self.enterTypeScope(nameTok, isEnum: true)
 
-		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion)
+		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo)
 		var state = EnumBackingState.create()
 
 		var depth = 0 as BlockDepth
@@ -9539,10 +9613,10 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
 		try self.requireTypeNameNotCompilerOwned(nameTok)
-		try self.skipOptionalImplementsClause()
+		let conformsTo = try self.readOptionalImplementsClause()
 		self.enterTypeScope(nameTok, isEnum: true)
 
-		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion)
+		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo)
 		var state = EnumBackingState.create()
 
 		// The cursor sits at the enum body start; remember it so the lazy sibling-receiver walk (#65) can
@@ -10585,17 +10659,30 @@ export type Parser
 	end 'parseOptionalThrowsClause'
 
 	// The optional `implements <Interface>` clause on an enum/union declaration — error enums declare
-	// `implements Error` (P1.4b). Interfaces are not yet modelled in shv2, so the clause is CONSUMED and
-	// the conformance ASSUMED; the payload-free-enum-conforms-to-Error check the CONTRACT names is a
-	// follow-up (no Wave-1 case declares a non-Error throws enum). Shared by the tolerant declaration sweep
-	// and the real parse, exactly as `parseOptionalThrowsClause` is.
-	function skipOptionalImplementsClause() throws ParseError
+	// `implements Error` (P1.4b). Shared by the tolerant declaration sweep and the real parse, exactly as
+	// `parseOptionalThrowsClause` is, so the two record the same conformance.
+	//
+	// ⭐ **IT USED TO CONSUME AND DISCARD, AND THAT WAS THE HOLE (A1s wave 2).** Its predecessor
+	// (`skipOptionalImplementsClause`) called the payload-free-enum conforms-to-`Error` check "a follow-up",
+	// which was true while nothing asked — but wave 1's abstract-`throws` narrowing began asking, and with
+	// no record to consult it narrowed `throws Error` to ANY enum. See `EnumLayout.conformsTo`.
+	//
+	// A COMMA LIST, matching `parseTypeImplementsClause`'s: `enum E implements Error, Debuggable` names two.
+	// An enum that implements nothing returns the SHARED empty, so the common case allocates nothing.
+	function readOptionalImplementsClause() returns ByteArrayArray throws ParseError
 		if not self.at(TokenKind.implements) 'noImplements'
-			return
+			return sharedEmptyEnumConformances
 		end 'noImplements'
 		try self.consume(TokenKind.implements)
-		_ = try self.consume(TokenKind.identifier)
-	end 'skipOptionalImplementsClause'
+
+		var names = ByteArrayArray.create()
+		names.push((try self.consume(TokenKind.identifier)).value)
+		while self.at(TokenKind.comma) 'moreInterfaces'
+			try self.consume(TokenKind.comma)
+			names.push((try self.consume(TokenKind.identifier)).value)
+		end 'moreInterfaces'
+		return names
+	end 'readOptionalImplementsClause'
 
 	// A type reference. M1: a bare identifier (a named type like `ExitCode`,
 	// interned into the artifact's local interner) or a bare primitive keyword.
@@ -11954,6 +12041,20 @@ export type Parser
 		if self.declaresCompilerInternalNames 'theReservedSpacesOwnFile'
 			return
 		end 'theReservedSpacesOwnFile'
+
+		// ⭐ **A NAME THE *COMPILER* MINTED FOR THIS COMPILE IS NOT A NAME THE AUTHOR WROTE (A1s wave 2).**
+		// A contested stdlib declaration is moved into the reserved space, and the move is applied to the
+		// file's identifier TOKENS — so what reaches this check is `__Clock` at `stdlib/Clock.maxon`'s own
+		// `type Clock`, a `__` name no source contains. MEASURED before this arm: `E2051 … identifier
+		// '__Clock' is reserved` reported against a line whose text reads `type Clock`.
+		//
+		// ⚠ **IT IS NOT A WIDENING OF THE `__` RESERVATION, AND THE DIFFERENCE IS THE MINT.** The exemption
+		// is not "a stdlib file may declare `__` names" — it is "this exact name is one THIS COMPILE minted",
+		// asked of the rename table itself. A stdlib file writing its own `__Foo` is still E2051 unless it is
+		// `stdlib/Builtins.maxon`, because nothing minted `__Foo`.
+		if self.signatures.isMintedStdlibShadowName(nameTok.value) 'theCompilersOwnMint'
+			return
+		end 'theCompilersOwnMint'
 
 		if bytesStartWith(nameTok.value, prefix: ReservedNamePrefix) 'reserved'
 			throw ParseError.reservedIdentifier(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
@@ -32550,6 +32651,18 @@ export type Parser
 	function kindAt(index TokenIndex) returns TokenKind
 		return self.tokenAt(index).kind
 	end 'kindAt'
+
+	// The IDENTIFIER text at an ABSOLUTE index, or the empty source text when that token is anything else
+	// (a malformed header, or past the end). The tolerant read a SWEEP needs: it must not throw, because a
+	// declaration it cannot read is the real parse's to report with a position.
+	function identifierNameAt(index TokenIndex) returns ByteArray
+		let tok = self.tokenAt(index)
+		if tok.kind != TokenKind.identifier 'notAName'
+			return EmptySourceText
+		end 'notAName'
+
+		return tok.value
+	end 'identifierNameAt'
 
 	// **THE token shape of a reassignment, asked at an ABSOLUTE index — and there is exactly ONE
 	// of these on purpose.** Two callers ask it and they must never disagree:

@@ -90,6 +90,11 @@ let DeclShapeEnum = 20 as ContentHash
 let EnumKindEnum = 21 as ContentHash
 let EnumKindUnion = 22 as ContentHash
 
+// One `implements <Interface>` name on an enum/union declaration (A1s wave 2), mixed per name so a
+// SECOND interface moves the hash rather than being absorbed by the first. Its own discriminator for
+// `DeclShapeStruct`'s reason: the list is a distinct fact from the case list beside it.
+let DeclShapeEnumConformance = 55 as ContentHash
+
 // The `MaxonType.structRef` arm's discriminator. It is DISTINCT from `TypeShapeNamed`, and that is
 // load-bearing rather than tidy: `named(Point)` and `structRef(Point)` carry the same NAME and mean
 // different things in every reader — one is a ranged int, the other a pointer — so a hash that
@@ -2212,6 +2217,35 @@ typealias ManagedTopLevelNameSet = Set with ByteArray
 // file?" — is a file's. See `ProgramSignatures.constCastTargets`.
 typealias ConstCastTargetSet = Set with ByteArray
 
+// The type names a USER file declares (A1s wave 2) — see `ProgramSignatures.userDeclaredTypeNames`.
+typealias UserDeclaredTypeNameSet = Set with ByteArray
+
+// ⭐⭐ **THE SHADOW RENAME TABLE — bare name ⇒ the reserved name a LISTED STDLIB module's declaration of
+// that name is moved to (A1s wave 2).**
+//
+// ⚠ **THE RULE IT IMPLEMENTS IS THE ORACLE'S, MEASURED, AND IT IS A SCOPING RULE RATHER THAN A TIE-BREAK.**
+// Against `maxon-sharp`, a user `enum ParseError` and a call to `int.fromString("41")` COEXIST in one
+// program (exit 42) — the user's declaration answers user code while `stdlib/Builtins.maxon`'s own body
+// goes on throwing its own `ParseError.invalidFormat`. The bootstrap gets that from parse ORDER: it binds
+// every reference inside `stdlib/` before the user file overwrites the registry entry. shv2 cannot, and
+// that is its thesis working as designed — `queryProgramSignatures` folds EVERY file's declarations before
+// any file is parsed, so there is no "already bound" state and no file order produces one.
+//
+// ⚠ **AND A PLAIN "the user's declaration displaces the stdlib one" RULE IS A WRONG ANSWER, MEASURED.**
+// Built that way, `type`/`union`/`interface`/ranged-`typealias` shadowing all worked, and a user
+// `enum ParseError { Invalid = 1 }` produced **`E3034: stdlib/Builtins.maxon:222:11: unknown enum case:
+// 'invalidFormat'`** — a diagnostic inside a file the author never opened, because that module REFERENCES
+// the name it declares. Two declarations of one name have to coexist, and shv2 identifies aggregates by
+// NAME all the way down (`structRef(name)`, `aggregateNameFor`, `__destruct_<name>`, `__layout_<name>`), so
+// coexisting means one of them is RENAMED.
+//
+// ⇒ The stdlib one moves, into the space `E2051` already reserves — the identical trade
+// `ProgramSignatures.reservedIfDeclared` makes for a contested COMPILED name, one namespace over, and for
+// the identical reason: `__` is a prefix no declaration may take, so the moved name cannot contest anything
+// and no user program can reach it. Re-probed rather than prefixed once, and ON CONTEST ONLY — a program
+// that shadows nothing renames nothing and compiles to the bytes it did before this existed.
+typealias StdlibShadowRenameMap = Map with (ByteArray, ByteArray)
+
 // ⭐ **THE GENERIC-INSTANCE INTERNER (P1.6-A)** — `Box with Integer` ⇒ a `GenericInstanceId`, with the
 // `(baseId, argTypes)` payload held OUT OF LINE (inlining args into `MaxonType` would make the union
 // recursively aggregate — E4014). Two instances with the same base and structurally equal args share
@@ -2465,9 +2499,14 @@ export typealias MethodInnerAliasParamEntryArray = Array with MethodInnerAliasPa
 export type InterfaceDeclSite
 	export var path as FilePath
 	export var tokenPos as TokenIndex
+	// The DECLARED name, read by the sweep off the token after the keyword (A1s wave 2). The declaration
+	// itself is not read until `foldInterfaceDeclarations`, which runs after the whole sweep — and the
+	// stdlib/user shadow contest is settled BEFORE that, so the name has to travel with the site or an
+	// `interface` would be the one declaration kind the contest could not see.
+	export var name as ByteArray
 
-	export static function create(path FilePath, tokenPos TokenIndex) returns InterfaceDeclSite
-		return Self{path: path, tokenPos: tokenPos}
+	export static function create(path FilePath, tokenPos TokenIndex, name ByteArray) returns InterfaceDeclSite
+		return Self{path: path, tokenPos: tokenPos, name: name}
 	end 'create'
 end 'InterfaceDeclSite'
 
@@ -2532,6 +2571,16 @@ end 'containsQualifier'
 export function joinQualifiedName(prefix ByteArray, member ByteArray) returns ByteArray
 	return "{String.from(prefix)}{QualifiedAliasSeparator}{String.from(member)}".toByteArray()
 end 'joinQualifiedName'
+
+// The TYPE half of a `Type.method` callee, or the callee itself when it names a free function. Written
+// through `splitQualifiedName` rather than as a second scan for the separator, so the one inverse of
+// `joinQualifiedName` stays the only place the split is spelled.
+export function qualifiedCalleeHead(callee ByteArray) returns ByteArray
+	return match splitQualifiedName(callee) 'shape'
+		parts(prefix, _) gives prefix
+		notQualified gives callee
+	end 'shape'
+end 'qualifiedCalleeHead'
 
 // The (prefix, member) of a `prefix.member` name, or `notQualified`. An identifier carries no ".", so a
 // two-segment split is EXACT: a plain alias (`Score`) or a name that never was qualified yields
@@ -2801,10 +2850,140 @@ export type ProgramSignatures
 	// **0 IS A REAL `GenericInstanceId`**, so there is no spare value to mean "not yet".
 	var arrayByteInstance as GenericInstanceId
 	var arrayByteInstanceComputed as bool
+	// ⭐⭐ **WHICH TYPE NAMES A *USER* FILE DECLARES (A1s wave 2)** — one half of the shadow contest. Filled
+	// by `foldFile` for every non-stdlib file, and read only while deciding which of a LISTED STDLIB
+	// module's declarations a user program has taken the name of. See `StdlibShadowRenameMap`.
+	var userDeclaredTypeNames as UserDeclaredTypeNameSet
+	// The contest's ANSWER: bare name ⇒ the reserved name the stdlib declaration is moved to. EMPTY for
+	// every program that shadows nothing, which is the whole existing corpus — and that emptiness is what
+	// makes this mechanism byte-neutral rather than merely cheap (see `Parser.shadowRenamedTokens`).
+	var stdlibShadowRenames as StdlibShadowRenameMap
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: UserDeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create()}
 	end 'create'
+
+	// --- The stdlib/user SHADOW CONTEST (A1s wave 2). See `StdlibShadowRenameMap`. ---
+
+	// Note that a USER file declares this type name. Called from `foldFile` for every non-stdlib file, over
+	// the same declaration arrays the registries are built from — so "what the user declared" and "what the
+	// index holds" are one walk and cannot come to disagree.
+	// ⚠⚠ **A NAME NO USER DECLARATION MAY LEGALLY HOLD IS NOT A CONTEST, AND THE SWEEP CANNOT TELL —
+	// SO THIS DOOR DOES.** The declaration sweep is deliberately TOLERANT (`Parser.recordScannedType`): it
+	// folds a declaration in before the real parse gets to refuse it, so this set would otherwise hold
+	// names the program is about to be rejected for writing. MEASURED: a user
+	// `enum __ManagedDirectoryError` — which `requireUnreservedName` refuses with E2051 — contested
+	// `stdlib/Builtins.maxon`'s own declaration of that name, renamed it out from under the runtime, and
+	// added a second, bogus **E4016** beside the E2051 that `managed-directory.error-enum-name-is-reserved`
+	// pins. Both refusals are re-stated here rather than deferred to the parse, because the contest is
+	// decided BEFORE any file is parsed.
+	function noteUserDeclaredTypeName(name ByteArray)
+		if bytesStartWith(name, prefix: ReservedTypeNamePrefix) 'reservedSpace'
+			return
+		end 'reservedSpace'
+
+		if isCompilerOwnedTypeName(name) 'compilerOwned'
+			return
+		end 'compilerOwned'
+
+		self.userDeclaredTypeNames.insert(name)
+	end 'noteUserDeclaredTypeName'
+
+	// Every type name ONE user file declares, over the arrays `foldFile` was handed. An `interface` comes
+	// through its SITE rather than through an `IrInterface`, because the declaration itself is not read
+	// until `foldInterfaceDeclarations` — which runs AFTER the contest is settled. See `InterfaceDeclSite.name`.
+	function noteUserDeclaredTypeNames(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, interfaceSites InterfaceDeclSiteArray)
+		for alias in aliases 'eachAlias'
+			self.noteUserDeclaredTypeName(alias.name)
+		end 'eachAlias'
+		for functionAlias in functionAliases 'eachFunctionAlias'
+			self.noteUserDeclaredTypeName(functionAlias.name)
+		end 'eachFunctionAlias'
+		for layout in structs 'eachStruct'
+			self.noteUserDeclaredTypeName(layout.name)
+		end 'eachStruct'
+		for enumLayout in enums 'eachEnum'
+			self.noteUserDeclaredTypeName(enumLayout.name)
+		end 'eachEnum'
+		for genericAlias in genericAliasEntries 'eachGenericAlias'
+			self.noteUserDeclaredTypeName(genericAlias.aliasName)
+		end 'eachGenericAlias'
+		for site in interfaceSites 'eachInterface'
+			self.noteUserDeclaredTypeName(site.name)
+		end 'eachInterface'
+	end 'noteUserDeclaredTypeNames'
+
+	// ⭐ **DECIDE THE CONTEST FOR ONE NAME A LISTED STDLIB MODULE DECLARES.** A no-op unless a USER file
+	// declares it too; otherwise it mints the reserved name the stdlib declaration will be keyed under and
+	// files it. Called once per stdlib-declared name, between the two sweep phases — see
+	// `Queries.contestStdlibDeclarationsAgainstUserNames`.
+	//
+	// ⚠ **RE-PROBED, NOT PREFIXED ONCE, and against BOTH sides** — `__ParseError` could itself be declared
+	// by a user program (E2051 forbids it, so in practice never) or be a second stdlib declaration's minted
+	// name. The loop terminates because each pass makes the candidate strictly longer while both sets are
+	// finite and already complete. It is `reservedIfDeclared`'s loop, one namespace over.
+	export function contestStdlibTypeName(name ByteArray)
+		if not self.userDeclaredTypeNames.contains(name) 'uncontested'
+			return
+		end 'uncontested'
+
+		if self.stdlibShadowRenames.contains(name) 'alreadyContested'
+			return
+		end 'alreadyContested'
+
+		var renamed = "{String.from(ReservedTypeNamePrefix)}{String.from(name)}".toByteArray()
+		while self.shadowRenameIsTaken(renamed) 'stillTaken'
+			renamed = "{String.from(ReservedTypeNamePrefix)}{String.from(renamed)}".toByteArray()
+		end 'stillTaken'
+		self.stdlibShadowRenames.upsert(name, value: renamed)
+	end 'contestStdlibTypeName'
+
+	// Is this candidate reserved name already spoken for — by a user declaration, or by an earlier
+	// contest's mint? Both halves matter: two contested names must not land on ONE reserved name, which is
+	// the collision `reservedIfDeclared`'s own header warns a non-reserved prefix would make silent.
+	function shadowRenameIsTaken(candidate ByteArray) returns bool
+		if self.userDeclaredTypeNames.contains(candidate) 'aUserDeclarationHoldsIt'
+			return true
+		end 'aUserDeclarationHoldsIt'
+
+		return self.isMintedStdlibShadowName(candidate)
+	end 'shadowRenameIsTaken'
+
+	// Does this compile have any contest at all? The ONE gate every cost of this mechanism sits behind: for
+	// the whole existing corpus it answers false, the token rewrite never runs, and the emitted bytes are
+	// what they were before the mechanism existed.
+	export function hasStdlibShadowRenames() returns bool
+		return self.stdlibShadowRenames.count() > 0
+	end 'hasStdlibShadowRenames'
+
+	// ⭐ **IS THIS A NAME *THIS COMPILE* MINTED FOR A CONTESTED STDLIB DECLARATION?** Asked by
+	// `Parser.requireUnreservedName`, which would otherwise refuse the compiler's own mint as a user's
+	// reserved-prefix declaration. A linear scan of the table, which is the right shape: it is asked only
+	// while a contest exists (never, for the whole existing corpus), the table holds one entry per contested
+	// name, and a second index keyed the other way would be the same fact stored twice.
+	export function isMintedStdlibShadowName(name ByteArray) returns bool
+		for (_, minted) in self.stdlibShadowRenames 'eachMinted'
+			if minted.equals(name) 'thisMint'
+				return true
+			end 'thisMint'
+		end 'eachMinted'
+		return false
+	end 'isMintedStdlibShadowName'
+
+	// ⭐ **IS THIS CALLEE ONE OF THIS COMPILE'S OWN MINTS, or a METHOD OF ONE?** `__Clock.nowMs` is what
+	// `stdlib/Clock.maxon`'s own `Clock.nowMs` becomes when a user program declares `type Clock`, and the
+	// reserved-CALL door (A1r) would otherwise refuse it as a user reaching for a compiler intrinsic. The
+	// HEAD is what carries the mint, so the test splits the callee rather than matching a prefix — a prefix
+	// test would admit `__Clockwork.tick`.
+	export function isMintedStdlibShadowCallee(callee ByteArray) returns bool
+		return self.isMintedStdlibShadowName(qualifiedCalleeHead(callee))
+	end 'isMintedStdlibShadowCallee'
+
+	// The name a STDLIB file must spell this identifier under — the renamed one if the name is contested,
+	// and the name itself otherwise. THE one reader of the table, so a caller cannot half-apply the rename.
+	export function stdlibShadowRenameOf(name ByteArray) returns ByteArray
+		return try self.stdlibShadowRenames.get(name) otherwise name
+	end 'stdlibShadowRenameOf'
 
 	// Could `name` denote a top-level MANAGED binding — `let` or `var` — anywhere in this program? A
 	// `false` is final; a `true` still has to be resolved by `constantValueOf`/`globalDeclFor`, which is
@@ -2822,7 +3001,16 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner, isStdlibSource bool)
+		// ⭐ **THE USER HALF OF THE SHADOW CONTEST (A1s wave 2)** — recorded from the SAME declaration arrays
+		// the registries below are built from, so "what the user declared" and "what the index holds" are one
+		// walk. Every KIND is noted, not just the four nominal ones: the contest is asymmetric on purpose (see
+		// `Queries.contestStdlibDeclarationsAgainstUserNames`), because a user's ranged `typealias ParseError`
+		// takes the name from a stdlib `enum ParseError` exactly as a user `type` would.
+		if not isStdlibSource 'theUsersOwnFile'
+			self.noteUserDeclaredTypeNames(aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliasEntries, interfaceSites: interfaceSites)
+		end 'theUsersOwnFile'
+
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
@@ -3199,6 +3387,14 @@ export type ProgramSignatures
 		upsertDeclaredEnum(self.enumTypes, layout: layout)
 
 		var state = mix(mixBytes(mix(self.hash, value: DeclShapeEnum), bytes: layout.name), value: EnumKindUnion if layout.isUnion else EnumKindEnum)
+		// The `implements` list rides for the field list's reason (A1s wave 2): whether `enum E implements
+		// Error` says so decides whether ANOTHER file's `type X implements Parsable` with `throws E` is
+		// ACCEPTED (`ConformanceCheck.requireImplErrorConformsToRequirement`) — so adding or removing the
+		// clause changes what that file compiles to while its own bytes never move, which is exactly the
+		// rule stated at `recordStruct`.
+		for name in layout.conformsTo 'eachConformance'
+			state = mixBytes(mix(state, value: DeclShapeEnumConformance), bytes: name)
+		end 'eachConformance'
 		for i in 0 upto layout.caseCount() 'eachCase'
 			state = self.mixEnumCase(state, layout: layout, index: i)
 		end 'eachCase'

@@ -80,8 +80,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: parsable.type-implements-parsable -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. -->
+<!-- test: parsable.type-implements-parsable -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -107,8 +106,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: parsable.successful-parse -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. -->
+<!-- test: parsable.successful-parse -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -137,8 +135,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: parsable.throws-on-invalid-input -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. -->
+<!-- test: parsable.throws-on-invalid-input -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -170,8 +167,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: parsable.multiple-error-conditions -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. -->
+<!-- test: parsable.multiple-error-conditions -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -209,8 +205,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: parsable.otherwise-fallthrough -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. -->
+<!-- test: parsable.otherwise-fallthrough -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -257,8 +252,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: error.missing-throws -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. -->
+<!-- test: error.missing-throws -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -280,8 +274,7 @@ end 'main'
 error E3016: specs/fragments/parsable-interface/error.missing-throws.test:6:6: Method 'Value.fromString' must throw 'Error' as required by interface 'Parsable'
 ```
 
-<!-- disabled-test: error.throws-non-error-type -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. -->
+<!-- test: error.throws-non-error-type -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -308,7 +301,7 @@ error E3016: specs/fragments/parsable-interface/error.throws-non-error-type.test
 ```
 
 <!-- disabled-test: parsable.int-fromstring -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. And a SECOND thing is still missing for these: the `<prim>.<method>(args)` → `__<prim>_<method>` rewrite both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`). Today: `E2015: `try` must be applied to a call … (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
 ```maxon
 function main() returns ExitCode
 	let n = try int.fromString("42") otherwise 0
@@ -320,7 +313,7 @@ end 'main'
 ```
 
 <!-- disabled-test: parsable.int-fromstring-negative -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. And a SECOND thing is still missing for these: the `<prim>.<method>(args)` → `__<prim>_<method>` rewrite both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`). Today: `E2015: `try` must be applied to a call … (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
 ```maxon
 function main() returns ExitCode
 	let n = try int.fromString("-7") otherwise 0
@@ -332,7 +325,7 @@ end 'main'
 ```
 
 <!-- disabled-test: parsable.int-fromstring-invalid -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. And a SECOND thing is still missing for these: the `<prim>.<method>(args)` → `__<prim>_<method>` rewrite both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`). Today: `E2015: `try` must be applied to a call … (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
 ```maxon
 function main() returns ExitCode
 	let n = try int.fromString("abc") otherwise 99
@@ -344,7 +337,7 @@ end 'main'
 ```
 
 <!-- disabled-test: parsable.float-fromstring -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. And a SECOND thing is still missing for these: the `<prim>.<method>(args)` → `__<prim>_<method>` rewrite both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`). Today: `E2015: `try` must be applied to a call … (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
 ```maxon
 function main() returns ExitCode
 	let f = try float.fromString("3.14") otherwise 0.0
@@ -361,7 +354,7 @@ end 'main'
 ```
 
 <!-- disabled-test: parsable.float-fromstring-negative -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. And a SECOND thing is still missing for these: the `<prim>.<method>(args)` → `__<prim>_<method>` rewrite both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`). Today: `E2015: `try` must be applied to a call … (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
 ```maxon
 function main() returns ExitCode
 	let f = try float.fromString("-2.5") otherwise 0.0
@@ -373,7 +366,7 @@ end 'main'
 ```
 
 <!-- disabled-test: parsable.bool-fromstring-true -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. And a SECOND thing is still missing for these: the `<prim>.<method>(args)` → `__<prim>_<method>` rewrite both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`). Today: `E2015: `try` must be applied to a call … (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
 ```maxon
 function main() returns ExitCode
 	let b = try bool.fromString("true") otherwise false
@@ -388,7 +381,7 @@ end 'main'
 ```
 
 <!-- disabled-test: parsable.bool-fromstring-false -->
-<!-- BLOCKED ON `stdlib/Builtins.maxon` BEING LOADABLE, which is where `interface Parsable` and `__int_fromString` / `__float_fromString` / `__bool_fromString` are all declared. D6 cleared two of that module's three blockers (an interface ASSOCIATED-TYPE `typealias` at its line 56, and the reserved `__` declaration prefix its error enums and parse helpers carry). The one left is its line 285, `try (digit / fracDiv) otherwise panic(…)`: shv2's `/` is TOTAL BY DESIGN (`specs-shv2/division.md` — “no compiler-inserted guard”, a divide by zero is a hardware `#DE` for a future fault handler), so shv2 has no throwing division for a `try` to catch and rejects the form with `E2015: `try` must be applied to a call … (got '(')`. Unblocking it is the FALLIBLE-DIVISION rung, not this one: the oracle desugars a possibly-zero divide to a throwing `__checked_div` / `__checked_mod` builtin over a synthesized `__DivisionByZeroError` and requires `try` on it (E3057, E3103 — `maxon-sharp/Compiler/2-Parser.cs:23604-23641`), which would newly refuse the divides in `specs-shv2/arithmetic.md` and `arithmetic-operators.md`. And a SECOND thing is still missing for these: the `<prim>.<method>(args)` → `__<prim>_<method>` rewrite both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`). Today: `E2015: `try` must be applied to a call … (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
+<!-- BLOCKED ON THE `<prim>.<method>(args)` -> `__<prim>_<method>` REWRITE both references perform (v1 `Parser.maxon:15980-16020`, bootstrap `2-Parser.cs:24263-24276`), which shv2 does not have. `stdlib/Builtins.maxon` IS loaded now (A1s) and declares `__int_fromString` / `__float_fromString` / `__bool_fromString`, so the DECLARATIONS these need are present and reachable; what is missing is the call door. Today: `E2015: `try` must be applied to a call ... (got 'int')`, because `int` is a KEYWORD TokenKind with no `parsePrimary` arm. -->
 ```maxon
 function main() returns ExitCode
 	let b = try bool.fromString("false") otherwise true

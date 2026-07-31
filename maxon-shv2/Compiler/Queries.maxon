@@ -188,21 +188,42 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	project.db.signatureMisses = project.db.signatureMisses + 1
 
 	var signatures = ProgramSignatures.create()
-	for path in project.db.sourcePaths 'eachFile'
-		// Outside the probe, exactly as `queryAllModule` keeps `queryParseOps` outside its `merge`
-		// probe: the tokens query does its own `lex` timing, and a phase that absorbed another's is
-		// the defect CompileTimings' header is about.
-		let tokens = try queryActiveTokens(project, path: path)
 
-		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
-		// A `Parser` IS the sweeper — same cursor, same `parseOptionalReturnType` — so the sweep and
-		// the real parse cannot drift on what `returns X` means (see `foldDeclaredSignaturesInto`). It
-		// is handed the index it is BUILDING, which is safe because a sweep types no call and so never
-		// reads it; nothing else in the Parser needs a signature.
-		var scanner = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path))
-		scanner.foldDeclaredSignaturesInto(signatures)
-		recordPhase(project, phase: CompilePhase.signatures, probe: probe)
+	// ⭐⭐ **THE SWEEP IS PARTITIONED BY PROVENANCE — USER FILES FIRST, STDLIB FILES SECOND (A1s wave 2).**
+	// The shadow contest is decided BETWEEN the two halves, and that placement is the whole reason the
+	// partition exists: deciding it needs both sides known, and a stdlib file must already know the answer
+	// when it is folded, because the fold is what records its declarations AND every name its own
+	// signatures reference. A single pass could satisfy at most one of those two.
+	//
+	// ⚠ **THIS IS NOT A DEPENDENCE ON FILE ORDER, WHICH `StdlibLoader`'s HEADER RULES OUT.** That rule is
+	// about the FILESYSTEM's order, and it is kept: within each half the walk's own order is untouched and
+	// unsorted, so a latent order dependence still surfaces rather than being hidden. What is fixed here is
+	// a PROVENANCE order, derived from a fact the loader already recorded, and stated rather than relied on
+	// — the previous arrangement happened to visit user files first (the loader appends stdlib after the
+	// user's sources) and the contest would have silently depended on that.
+	//
+	// Each path is classified ONCE. `isStdlibSourceFile` costs about four String allocations a call
+	// (Windows `canonicalForCompare` clones and lower-cases both sides), which is why asking it per file is
+	// affordable and asking it twice per file would not be — the number `StdlibSource`'s header rejects.
+	var userPaths = MaxonSourcePathArray.create()
+	var stdlibPaths = MaxonSourcePathArray.create()
+	for path in project.db.sourcePaths 'eachFile'
+		if isStdlibSourceFile(project, path: path) 'stdlibSource'
+			stdlibPaths.push(path)
+			continue
+		end 'stdlibSource'
+		userPaths.push(path)
 	end 'eachFile'
+
+	for path in userPaths 'eachUserFile'
+		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false)
+	end 'eachUserFile'
+
+	try contestStdlibDeclarationsAgainstUserNames(project, signatures: signatures, stdlibPaths: stdlibPaths)
+
+	for path in stdlibPaths 'eachStdlibFile'
+		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: true)
+	end 'eachStdlibFile'
 
 	// ⭐ **THE INDEX IS NOW WHOLE-PROGRAM, AND IT SAYS SO.** Every reader below this line — the constant
 	// evaluator, the real parse — gets an index in which an absence MEANS the program does not declare
@@ -248,6 +269,133 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: compositeSourceHash(project), computed: true)
 	return signatures
 end 'queryProgramSignatures'
+
+// Sweep ONE file's declarations into the index. Split out of `queryProgramSignatures` when the sweep was
+// partitioned by provenance, so the two halves are one body rather than two copies of it — and so the
+// `isStdlibSource` bit each half already knows is PASSED rather than re-derived per file.
+function foldOneFileInto(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool) throws CompileError
+	// Outside the probe, exactly as `queryAllModule` keeps `queryParseOps` outside its `merge`
+	// probe: the tokens query does its own `lex` timing, and a phase that absorbed another's is
+	// the defect CompileTimings' header is about.
+	let tokens = try queryActiveTokens(project, path: path)
+
+	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
+	// A `Parser` IS the sweeper — same cursor, same `parseOptionalReturnType` — so the sweep and
+	// the real parse cannot drift on what `returns X` means (see `foldDeclaredSignaturesInto`). It
+	// is handed the index it is BUILDING, which is safe because a sweep types no call and so never
+	// reads it; nothing else in the Parser needs a signature.
+	var scanner = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path))
+	scanner.foldDeclaredSignaturesInto(signatures)
+	recordPhase(project, phase: CompilePhase.signatures, probe: probe)
+end 'foldOneFileInto'
+
+// ⭐⭐ **DECIDE THE STDLIB/USER SHADOW CONTEST — between the two halves of the sweep (A1s wave 2).** Every
+// NOMINAL type name a listed stdlib module declares is offered to `contestStdlibTypeName`, which keeps only
+// the ones a user file has already claimed. See `SignatureIndex.StdlibShadowRenameMap` for the rule and for
+// the measurement that made a rename necessary rather than a tie-break.
+//
+// ⚠ **IT READS THE TOKENS RATHER THAN THE SWEPT DECLARATIONS, AND THAT IS FORCED BY THE ORDERING** — the
+// stdlib fold is what has to KNOW the answer, so the answer cannot come from it. The grammar it relies on
+// is the narrowest one that exists: a declaration keyword followed by an identifier, which is exactly what
+// `readTypeHeader` and its enum/interface twins consume. Over-approximating is safe and under-approximating
+// is not, so it takes every such pair and lets `contestStdlibTypeName` discard the uncontested ones — which
+// is all of them for the whole existing corpus.
+//
+// ⚠ **THE FOUR NOMINAL KINDS ONLY, AND `typealias` IS ABSENT ON PURPOSE.** Those four are what a user
+// declaration collides with today (E3006); an alias FORM is already file-local (`TypeNameRegistry`'s one
+// carve-out), so a user's own ranged `typealias DurationMs` already coexists with `stdlib/Clock.maxon`'s and
+// already answers for the user's file — MEASURED, including for its RANGE. Contesting an alias would move a
+// name that already works, for nothing.
+//
+// The token walk is skipped entirely when the user program declares no type name at all.
+function contestStdlibDeclarationsAgainstUserNames(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
+	for path in stdlibPaths 'eachStdlibFile'
+		// A memo HIT in every case: the fold below asks for the same file's tokens moments later, and the
+		// user half has already primed nothing of this file — so this is the miss and the fold is the hit.
+		let tokens = try queryActiveTokens(project, path: path)
+		for i in 0 upto tokens.count() 'eachToken'
+			let tok = try tokens.get(i) otherwise panic("contestStdlibDeclarationsAgainstUserNames: tokens.get OOB at {i} below count {tokens.count()}")
+			if not declaresANominalTypeName(tok.kind) 'notADeclarationKeyword'
+				continue
+			end 'notADeclarationKeyword'
+
+			let nameTok = try tokens.get(i + 1) otherwise break
+			if nameTok.kind != TokenKind.identifier 'malformedDeclaration'
+				continue
+			end 'malformedDeclaration'
+
+			signatures.contestStdlibTypeName(nameTok.value)
+		end 'eachToken'
+	end 'eachStdlibFile'
+
+	if not signatures.hasStdlibShadowRenames() 'nothingContested'
+		return
+	end 'nothingContested'
+
+	try refuseContestedNamesUsedAsMembers(project, signatures: signatures, stdlibPaths: stdlibPaths)
+end 'contestStdlibDeclarationsAgainstUserNames'
+
+// The four keywords that mint a NOMINAL type name — the set `contestStdlibDeclarationsAgainstUserNames`
+// contests over. `typealias` is deliberately not among them; see that function.
+function declaresANominalTypeName(kind TokenKind) returns bool
+	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface
+end 'declaresANominalTypeName'
+
+// ⚠⚠ **THE ONE HAZARD THE RENAME HAS, REFUSED RATHER THAN RISKED (A1s wave 2).**
+//
+// The rename is applied to a stdlib file's IDENTIFIER TOKENS (`Parser.shadowRenamedTokens`), which is what
+// makes it reach every spelling of the name at once — the declaration, every type reference, a qualified
+// case value, a `Type.method` callee, a struct literal head — with no roster of doors to keep complete. It
+// is sound because it is UNIFORM over stdlib source: a name renamed at its declaration is renamed at every
+// stdlib use of it, so anything stdlib-internal is unaffected and only the CROSS-FILE reachability of the
+// bare name changes, which is the rule.
+//
+// The one thing that argument does not cover is a MEMBER of a stdlib type spelled exactly like a contested
+// TYPE name — a field, a method, or a parameter label. Those are reachable from USER code, whose tokens are
+// never rewritten, so the two sides would disagree about one name: the stdlib declaration `var ParseError`
+// would become `__ParseError` while a user's `x.ParseError` stayed bare. That is a silent wrong answer, and
+// it is the shape this project refuses to ship however unlikely — so it is DETECTED here and the program is
+// refused, naming the collision.
+//
+// Both member shapes are token-shaped and need no parse: a member access is an identifier PRECEDED by `.`,
+// and an argument label is one FOLLOWED by `:`. Scanned only when something is actually contested, i.e.
+// never for the whole existing corpus.
+function refuseContestedNamesUsedAsMembers(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
+	for path in stdlibPaths 'eachStdlibFile'
+		let tokens = try queryActiveTokens(project, path: path)
+		for i in 0 upto tokens.count() 'eachToken'
+			let tok = try tokens.get(i) otherwise panic("refuseContestedNamesUsedAsMembers: tokens.get OOB at {i} below count {tokens.count()}")
+			if tok.kind != TokenKind.identifier 'notAName'
+				continue
+			end 'notAName'
+
+			if signatures.stdlibShadowRenameOf(tok.value).equals(tok.value) 'notContested'
+				continue
+			end 'notContested'
+
+			if not tokenIsAMemberSpelling(tokens, index: i) 'notAMember'
+				continue
+			end 'notAMember'
+
+			reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.stdlibShadowedNameIsAlsoAMember, message: "'{String.from(tok.value)}' cannot be shadowed: this program declares it as a type, and a stdlib module also uses it as a MEMBER name (a field, a method or an argument label). Shadowing moves the stdlib TYPE into the reserved space, which would leave that member reachable from user code under a name the stdlib side no longer spells — rename the type in this program"))
+			return
+		end 'eachToken'
+	end 'eachStdlibFile'
+end 'refuseContestedNamesUsedAsMembers'
+
+// Is the identifier at `index` written in a MEMBER position — preceded by `.` (a field or method access) or
+// followed by `:` (an argument label)? The two token shapes a member name has; see the caller.
+function tokenIsAMemberSpelling(tokens TokenArray, index TokenIndex) returns bool
+	if index > 0 'hasPredecessor'
+		let previous = try tokens.get(index - 1) otherwise panic("tokenIsAMemberSpelling: tokens.get OOB at {index - 1}")
+		if previous.kind == TokenKind.dot 'memberAccess'
+			return true
+		end 'memberAccess'
+	end 'hasPredecessor'
+
+	let next = try tokens.get(index + 1) otherwise return false
+	return next.kind == TokenKind.colon
+end 'tokenIsAMemberSpelling'
 
 // ⭐⭐ **EVERY DECLARED `interface`'s REQUIREMENTS, READ ONLY ONCE THE WHOLE PROGRAM IS KNOWN (R8).** The
 // second half of the declaration sweep, and it is a SECOND PASS for a reason that is a correctness property

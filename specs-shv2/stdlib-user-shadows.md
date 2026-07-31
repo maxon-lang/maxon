@@ -36,31 +36,51 @@ code sees the user's declaration and stdlib code keeps its own.** The bootstrap 
 from parse ORDER — it parses all of `stdlib/` first, so every reference inside a stdlib body is already
 bound before the user's declaration overwrites the registry entry.
 
-### Why shv2 cannot get it the same way
+### Why shv2 cannot get it the same way — and what it does instead
 
 shv2's front end is a WHOLE-PROGRAM DECLARATION SWEEP: `queryProgramSignatures` folds every file's
 declarations into one index BEFORE any file is parsed, and the real parse of every file — stdlib and user
 alike — then resolves names against that finished index. There is no "already bound" state for a stdlib
 body to have been parsed into, so reordering the files changes nothing. That is the rewrite's thesis
-working exactly as designed, and it is also what makes this rule a SCOPING mechanism in shv2 rather than a
+working exactly as designed, and it is what makes this rule a SCOPING mechanism in shv2 rather than a
 tie-break.
 
-MEASURED, on an shv2 built with a plain "a user declaration displaces a stdlib one" rule in every
+MEASURED, on an shv2 built with the obvious rule — "a user declaration displaces a stdlib one" in every
 declaration registry:
 
 - a user `type Clock`, `enum CursorError`, `interface Parsable` or ranged `typealias DurationMs` shadowing
-  a listed module's — **all compile and run, the user's declaration answering**;
+  a listed module's — **all compiled and ran, the user's declaration answering**;
 - a user `enum ParseError { Invalid = 1 }` — **`error E3034: stdlib/Builtins.maxon:222:11: unknown enum
-  case: 'invalidFormat'`**, twice, inside a file the author never opened. `Builtins.maxon` references the
-  name it declares, so displacing its declaration retargets its own body at the user's enum.
+  case: 'invalidFormat'`**, twice, inside a file the author never opened. `Builtins.maxon` REFERENCES the
+  name it declares, so displacing its declaration retargeted its own body at the user's enum.
 
-So the boundary is exact: a stdlib declaration NO stdlib source references can simply lose, and one that IS
-referenced needs two declarations of one name to coexist. shv2 identifies aggregates by NAME all the way
-down — `structRef(name)`, `aggregateNameFor`, `__destruct_<name>`, `__layout_<name>` — so two live
-declarations under one name are not representable in the merged IR without renaming one of them. The
-compiler already has the mechanism for exactly that (`ProgramSignatures.mangleGenericInstance`'s
-`reservedIfDeclared` mints a contested compiled name behind the reserved `__` prefix), which is where a
-future rung should start.
+So two declarations of one name have to coexist, and shv2 identifies aggregates by NAME all the way down —
+`structRef(name)`, `aggregateNameFor`, `__destruct_<name>`, `__layout_<name>`, both enum registries, the
+interface registry. Coexisting therefore means one of them is RENAMED.
+
+**THE STDLIB ONE MOVES, into the space `E2051` already reserves.** It is the identical trade
+`ProgramSignatures.reservedIfDeclared` makes for a contested COMPILED name one namespace over, and for the
+identical reason: `__` is a prefix no declaration may take, so the moved name contests nothing and no user
+program can reach it. `stdlib/Clock.maxon`'s `type Clock` becomes `__Clock` — declaration, `Self`, methods
+(`__Clock.nowMs`) and cross-module references alike — and a user program's own `Clock` keeps the bare name.
+It happens ON CONTEST ONLY: a program that shadows nothing renames nothing and compiles to the bytes it did
+before the mechanism existed.
+
+The rename is applied to the stdlib file's IDENTIFIER TOKENS, once, at `Parser.create`. That is the whole
+design rather than an implementation note: a rename that reached the declaration and missed one of the
+derived spellings above would be a SILENT WRONG ANSWER rather than a compile error, so there is deliberately
+no roster of doors to keep complete. It is sound because it is UNIFORM over stdlib source — a name renamed
+at its declaration is renamed at every stdlib use of it — so everything stdlib-internal is unchanged and
+only the cross-file reachability of the bare name moves, which is exactly the rule.
+
+### The one shape the rename cannot cover, and is refused for
+
+A MEMBER of a stdlib type spelled exactly like a contested TYPE name — a field, a method, or an argument
+label — is reachable from USER code, whose tokens are never rewritten. The stdlib declaration `var
+ParseError` would become `__ParseError` while a user's `x.ParseError` stayed bare, and the two sides would
+disagree about one name. Both shapes are token-shaped (an identifier PRECEDED by `.`, or one FOLLOWED by
+`:`), so the contest detects them and refuses the program with **E3112** rather than risking it. Nothing in
+`stdlib/` does this today; the refusal is what makes that a checked fact rather than an assumption.
 
 ### What the rule must NOT do
 
@@ -117,12 +137,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: stdlib-user-shadows.user-enum-shadows-a-listed-module -->
-<!-- BLOCKED ON PROVENANCE-SCOPED NAME RESOLUTION. `stdlib/Builtins.maxon:133` declares `enum ParseError`
-     and REFERENCES it from twelve sites in its own bodies, so the user's declaration cannot simply
-     displace it: measured, doing so reports `E3034 unknown enum case: 'invalidFormat'` inside
-     `Builtins.maxon` itself. Two declarations of one name must coexist, which shv2's name-keyed aggregate
-     identity cannot express until one of them is renamed (see the Documentation above). -->
+<!-- test: stdlib-user-shadows.user-enum-shadows-a-listed-module -->
 ```maxon
 enum ParseError implements Error
 	Invalid = 1
@@ -139,11 +154,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: stdlib-user-shadows.user-type-shadows-a-listed-module -->
-<!-- BLOCKED ON THE SAME RUNG. This one is not blocked by a stdlib self-reference — measured, it compiles
-     and returns 9 the moment a user declaration is allowed to displace a stdlib one — but it is held with
-     its siblings so the rule lands as ONE rule for every declaration kind rather than a per-kind list,
-     which is exactly the asymmetry this project's collision rules keep having to undo. -->
+<!-- test: stdlib-user-shadows.user-type-shadows-a-listed-module -->
 ```maxon
 type Clock
 	export var x as int
@@ -162,10 +173,7 @@ end 'main'
 9
 ```
 
-<!-- disabled-test: stdlib-user-shadows.user-union-shadows-a-listed-module -->
-<!-- BLOCKED ON THE SAME RUNG, and held with its siblings for the same reason. `stdlib/Builtins.maxon:138`
-     declares `enum CursorError` and references it nowhere, so this compiles and returns 6 as soon as the
-     rule lands. -->
+<!-- test: stdlib-user-shadows.user-union-shadows-a-listed-module -->
 ```maxon
 union CursorError
 	mine
@@ -184,11 +192,7 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: stdlib-user-shadows.two-user-declarations-still-collide -->
-<!-- BLOCKED ON THE SAME RUNG — not because the collision is missing today (it fires exactly as written),
-     but because it is the CONTROL on that rung and must be enabled with it. A rule that admitted a
-     shadowed stdlib declaration by widening `TypeNameRegistry.record` would take this case with it, and a
-     suite that never ran it could not tell. -->
+<!-- test: stdlib-user-shadows.two-user-declarations-still-collide -->
 ```maxon
 type Clock
 	export var x as int
@@ -203,5 +207,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:7:6: duplicate definition of 'Clock' — already declared as `type Clock`
+error E3006: <fragment>:6:6: duplicate definition of 'Clock' — already declared as `type Clock`
 ```

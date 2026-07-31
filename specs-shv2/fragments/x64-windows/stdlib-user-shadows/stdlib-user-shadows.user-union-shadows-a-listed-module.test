@@ -1,0 +1,39 @@
+// Test: stdlib-user-shadows.user-union-shadows-a-listed-module
+union CursorError
+	mine
+	yours
+end 'CursorError'
+
+function main() returns ExitCode
+	let e = CursorError.mine
+	return match e 'which'
+		mine gives 6
+		yours gives 1
+	end 'which'
+end 'main'
+---
+ExitCode: 6
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 6
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

@@ -1536,10 +1536,34 @@ export type EnumLayout
 	// box is allocated iff SOME case carries a payload (`isBoxed`), and all cases of a boxed union —
 	// payload-free ones included — take the boxed form (a bare tag in a box).
 	export var casePayloads as PayloadFieldArrayArray
+	// ⭐ **THE INTERFACES THIS ENUM/UNION DECLARES `implements` (A1s wave 2).** Until now the clause was
+	// CONSUMED AND DISCARDED — `skipOptionalImplementsClause`'s own comment called the payload-free-enum
+	// conforms-to-`Error` check "a follow-up" — so the compiler had no record that `enum ParseError
+	// implements Error` says anything. It is the fact the abstract-`throws` narrowing needs
+	// (`ConformanceCheck.requireImplErrorConformsToRequirement`): without it, `throws Error` narrowed to ANY
+	// enum, including one that declares no conformance at all, which the bootstrap refuses with E3016.
+	//
+	// ⚠ It is NOT a `ConformanceDecl`, and that asymmetry with `type X implements I` is deliberate: a
+	// ConformanceDecl drives `checkConformance`'s METHOD checking, and an enum has no methods to check
+	// against a requirement. What is recorded here is the DECLARATION only — the nominal fact a narrowing
+	// asks for — which is exactly what the clause means for an error enum.
+	export var conformsTo as ByteArrayArray
 
-	export static function create(name ByteArray, isUnion bool) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), casePayloads: PayloadFieldArrayArray.create()}
+	export static function create(name ByteArray, isUnion bool, conformsTo ByteArrayArray) returns EnumLayout
+		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo}
 	end 'create'
+
+	// Does this enum/union declare `implements interfaceName`? Nominal and direct, matching
+	// `ConformanceCheck.typeDeclaresInterfaceAmong`'s model for a `type`: shv2's conformance is DECLARED,
+	// never inferred. A linear scan of a list that holds one entry per name in one clause.
+	export function declaresConformanceTo(interfaceName ByteArray) returns bool
+		for declaredInterface in self.conformsTo 'each'
+			if declaredInterface.equals(interfaceName) 'declaresIt'
+				return true
+			end 'declaresIt'
+		end 'each'
+		return false
+	end 'declaresConformanceTo'
 
 	// Append one declared case. THE one writer of all THREE columns, so they cannot drift — a caller
 	// that pushed a name and forgot the payloads would shift every later case's payloads onto the
@@ -1656,7 +1680,7 @@ export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 // user `enum` gets, so every downstream reader (a qualified case value, a `match` scrutinee, TypeResolution's
 // erase-to-`integer`, the aggregate-identity check) sees an ordinary enum and needs no arm of its own.
 export function builtinOrderingEnum() returns EnumLayout
-	var layout = EnumLayout.create(OrderingTypeName, isUnion: false)
+	var layout = EnumLayout.create(OrderingTypeName, isUnion: false, conformsTo: ByteArrayArray.create())
 	addBuiltinEnumCase(layout, caseName: OrderingLessThanCaseName)
 	addBuiltinEnumCase(layout, caseName: OrderingEqualToCaseName)
 	addBuiltinEnumCase(layout, caseName: OrderingGreaterThanCaseName)
@@ -1696,7 +1720,7 @@ end 'builtinOrderingEnum'
 // Seeded UNCONDITIONALLY beside the other two builtin error enums for their stated reason: `createEnumRegistry`
 // is the one door that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`.
 export function builtinArrayErrorEnum() returns EnumLayout
-	var layout = EnumLayout.create(ArrayErrorTypeName, isUnion: false)
+	var layout = EnumLayout.create(ArrayErrorTypeName, isUnion: false, conformsTo: ByteArrayArray.create())
 	addBuiltinEnumCase(layout, caseName: ManagedMemoryIndexOutOfBoundsCaseName)
 	addBuiltinEnumCase(layout, caseName: ManagedMemoryEmptySlotCaseName)
 	return layout
@@ -1714,7 +1738,7 @@ end 'builtinArrayErrorEnum'
 // Seeded UNCONDITIONALLY beside the other four for their stated reason: `createEnumRegistry` is the one door
 // that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`.
 export function builtinDivisionByZeroErrorEnum() returns EnumLayout
-	var layout = EnumLayout.create(DivisionByZeroErrorTypeName, isUnion: false)
+	var layout = EnumLayout.create(DivisionByZeroErrorTypeName, isUnion: false, conformsTo: ByteArrayArray.create())
 	addBuiltinEnumCase(layout, caseName: DivisionByZeroCaseName)
 	return layout
 end 'builtinDivisionByZeroErrorEnum'

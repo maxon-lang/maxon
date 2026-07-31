@@ -635,7 +635,7 @@ end 'renderMemberSignatures'
 // wrong. `throwsRequirementIsAbstract` is where same-name stops standing in for same-decode.
 //
 // ⚠ **THE FLAG SHAPE STILL HAS TO AGREE, so the exemption reaches only a SCALAR impl error**
-// (`requireImplErrorIsScalar`). An abstract requirement is caught through the `ordinal + ErrorFlagOrdinalBias`
+// (`requireImplErrorIsANarrowableError`). An abstract requirement is caught through the `ordinal + ErrorFlagOrdinalBias`
 // ABI — `Parser.throwsTypeIsBoxedUnion` answers `false` for a name in no enum registry — while a
 // payload-carrying union hands its error over as a heap BOX POINTER. MEASURED on the plain direct-call
 // spelling of that pair (`function f() returns Code throws Error` throwing a boxed union): **exit 101, a
@@ -694,7 +694,7 @@ function requireSameErrorType(project Project, signatures ProgramSignatures, con
 	end 'sameErrorType'
 
 	if throwsRequirementIsAbstract(project, signatures: signatures, required: required) 'abstractRequirement'
-		requireImplErrorIsScalar(project, signatures: signatures, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared)
+		requireImplErrorIsANarrowableError(project, signatures: signatures, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared)
 		return
 	end 'abstractRequirement'
 
@@ -754,12 +754,47 @@ end 'throwsRequirementIsAbstract'
 // before either question is asked, so nothing that compiled before A1s can reach here. (`throws Bogus` on a
 // PLAIN function stays accepted — that is a separate, pre-existing front-end gap, and closing it belongs to
 // whichever rung owns `throws`-clause resolution, not to this door.)
-function requireImplErrorIsScalar(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
+function requireImplErrorIsANarrowableError(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
 	match signatures.enumOf(declared.toByteArray()) 'implError'
-		declared(layout) then refuseBoxedImplError(project, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared, implIsBoxed: layout.isBoxed())
+		declared(layout) then requireImplErrorConformsAndIsScalar(project, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared, layout: layout)
 		undeclared then reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it 'throws {required}', and '{declared}' names no declared enum or union — the narrowing an abstract requirement permits is granted only to an error type whose flag SHAPE the compiler can see, and an unresolvable name is a mistake rather than a licence. Declare '{declared}', or name '{required}' itself")
 	end 'implError'
-end 'requireImplErrorIsScalar'
+end 'requireImplErrorIsANarrowableError'
+
+// ⭐⭐ **AN ABSTRACT REQUIREMENT NARROWS TO A CONFORMER, NOT TO ANY ENUM AT ALL (A1s wave 2).** The narrowing
+// an abstract `throws Error` permits is "an error type", and this is the half that says WHICH: the impl's
+// enum must DECLARE `implements <the requirement's interface>`. Without it the exemption read `throws Error`
+// as `throws anything`, a strictly weaker rule than the same-name one it replaced.
+//
+// ⚠ **MEASURED AGAINST THE ORACLE, NOT ARGUED**: `enum NotAnError { Bad = 1 }`, declaring no conformance,
+// used as a `Parsable.fromString`'s `throws` type is refused by the bootstrap with **`error E3016: … Method
+// 'Value.fromString' throws 'NotAnError' which does not conform to Error`**, and was ACCEPTED here — it
+// compiled, linked and ran. `specs-shv2/parsable-interface.md`'s `error.throws-non-error-type` is the pin,
+// and it names why the gap shipped with wave 1: the case that catches it could not be enabled until the
+// stdlib module declaring `interface Parsable` was loadable.
+//
+// ⚠ **THE ANSWER COMES OFF THE ENUM'S OWN LAYOUT, NOT OFF `project.conformances`.** A `ConformanceDecl` is
+// recorded only by `Parser.parseTypeDeclaration`; an `enum`/`union` `implements` clause is a different door
+// (`readOptionalImplementsClause`) and files its names on the layout instead, because an enum has no METHODS
+// for `checkConformance` to check against a requirement. Asking `project.conformances` here answers `false`
+// for EVERY error enum in the corpus — measured, on the first cut of this check: all five `Parsable`
+// conformers were refused, each naming its own `implements Error`.
+//
+// ⚠ **AND IT IS ASKED AFTER RESOLVABILITY, WHICH IS THE DIAGNOSTIC AND NOT AN ORDERING PREFERENCE.** A name
+// in no registry is refused by the arm above with the message that says exactly that; telling that author
+// their type "does not conform to Error" would blame the wrong thing about a type that does not exist.
+// `error.throws-unresolvable-impl-type-under-abstract-requirement` is the pin, and it caught this order
+// being wrong.
+//
+// The wording is the oracles' verbatim, exactly as `requireImplThrowsSameType`'s missing-clause arm is.
+function requireImplErrorConformsAndIsScalar(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String, layout EnumLayout)
+	if not layout.declaresConformanceTo(required.toByteArray()) 'doesNotConform'
+		reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' which does not conform to {required}")
+		return
+	end 'doesNotConform'
+
+	refuseBoxedImplError(project, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared, implIsBoxed: layout.isBoxed())
+end 'requireImplErrorConformsAndIsScalar'
 
 // The boxed half of the question above, split out because the verdict is a labelled `if` — the shape a
 // `match` arm cannot hold inline, and the same reason `requireSameErrorType` is split out of

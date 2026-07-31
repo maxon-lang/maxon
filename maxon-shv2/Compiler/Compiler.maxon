@@ -264,10 +264,20 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// installs run AFTER the pipeline where a diagnostic would have no gate left to fail against. Here they
 	// have both: `queryAllModule` has merged every declaration, and the pipeline's error gate below turns an
 	// E4016 into a failed build with no binary written.
-	verifyManagedFileOrdinals(project)
-	verifyManagedDirectoryOrdinals(project)
-	verifyArrayRuntimeOrdinals(project)
-	verifyDivisionByZeroOrdinals(project)
+	//
+	// ⚠ **NOT ON A PROGRAM THAT IS ALREADY FAILING (A1s wave 2).** A file whose parse failed merged none of
+	// its declarations, so `stdlib/Builtins.maxon` failing to parse leaves the three DECLARED families
+	// absent — and each would then report an E4016 saying the module was not loaded, on top of the real
+	// diagnostic that says why. MEASURED while sabotaging the shadow guard with a deliberately malformed
+	// addition to that module: one E3058 followed by two E4016s about a module the compile plainly HAD.
+	// It is the refusal `checkTypeSymbolNamespace` and `checkGenericAliasCycles` above make, for the same
+	// reason: a check whose inputs are half-built cannot produce a verdict worth reading.
+	if not projectHasErrors(project) 'wellFormedSoFar'
+		verifyManagedFileOrdinals(project)
+		verifyManagedDirectoryOrdinals(project)
+		verifyArrayRuntimeOrdinals(project)
+		verifyDivisionByZeroOrdinals(project)
+	end 'wellFormedSoFar'
 
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
 	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
