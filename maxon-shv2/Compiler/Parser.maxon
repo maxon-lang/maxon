@@ -25250,7 +25250,7 @@ export type Parser
 		// the generic-alias → base rewrite below (which would mangle it to `Array.create`, a callee no file
 		// declares): `Array` has no base struct, so its statics lower to the array runtime, not a user method.
 		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.isArrayInstance(self.signatures.genericAliasInstance(typeTok.value)) 'arrayStatic'
-			return try self.parseArrayStaticCall(typeTok, giid: self.signatures.genericAliasInstance(typeTok.value))
+			return try self.parseArrayStaticCall(func, aliasTok: typeTok, giid: self.signatures.genericAliasInstance(typeTok.value))
 		end 'arrayStatic'
 
 		// `IntSet.create()` — a static call on a `Set` instance alias (P1.7b slice A), intercepted before the
@@ -25268,7 +25268,7 @@ export type Parser
 		if self.enclosingInnerAliases.contains(typeTok.value) 'innerAlias'
 			let qualified = joinQualifiedName(self.enclosingType, member: typeTok.value)
 			if self.signatures.isGenericAlias(qualified) and self.signatures.isArrayInstance(self.signatures.genericAliasInstance(qualified)) 'innerArrayStatic'
-				return try self.parseArrayStaticCall(typeTok, giid: self.signatures.genericAliasInstance(qualified))
+				return try self.parseArrayStaticCall(func, aliasTok: typeTok, giid: self.signatures.genericAliasInstance(qualified))
 			end 'innerArrayStatic'
 		end 'innerAlias'
 
@@ -27701,23 +27701,115 @@ export type Parser
 		return result
 	end 'emitRuntimeFuncAddr'
 
-	// `IntArray.create()` — the one `Array` static factory at this slice. Yields an OWNED empty array. Serves
-	// a CONCRETE instance (`Array with Integer`) and an OPAQUE one (`Array with T` inside a generic body, P1.7
-	// slice 3b) alike — `emitArrayCreateOp` branches on the element. A MANAGED opaque element is fully created
-	// here (`emitOpaqueArrayCreateOp` stamps its `element_destroy@40` from the threaded descriptor, P1.7 slice
-	// 3b-iii); the element READ (borrow), MOVE-OUT (`__drop_type_param`) and COPY (`__arr_*_opaque` via the
-	// descriptor `copyFunc@32`, P1.7 slice 3b-vi-b-β) are all served through the descriptor, never creation.
-	function parseArrayStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
+	// The `Array` statics. `create()` (P1.7 slice 1) yields an OWNED empty array; `init(managed)` (BATCH2
+	// slice 5) ADOPTS an existing buffer as the array around it. Both serve a CONCRETE instance
+	// (`Array with Integer`) and an OPAQUE one (`Array with T` inside a generic body, P1.7 slice 3b) alike —
+	// `emitArrayCreateOp` branches on the element, and the adoption is element-agnostic by construction.
+	//
+	// `create()`: a MANAGED opaque element is fully created here (`emitOpaqueArrayCreateOp` stamps its
+	// `element_destroy@40` from the threaded descriptor, P1.7 slice 3b-iii); the element READ (borrow),
+	// MOVE-OUT (`__drop_type_param`) and COPY (`__arr_*_opaque` via the descriptor `copyFunc@32`, P1.7 slice
+	// 3b-vi-b-β) are all served through the descriptor, never creation.
+	//
+	// ⚠ **THE REFUSAL BELOW NAMES BOTH, AND KEEPING IT CURRENT IS NOT COSMETIC.** It read *"P1.7 slice 1
+	// provides `create()` only"* until this rung, and a reader trusts a refusal's NOUN over the source — a
+	// stale one sends them looking for a mechanism that is one line away.
+	function parseArrayStaticCall(func IrFunction, aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
-		if not methodTok.value.equals(CreateMethod) 'unknownStatic'
-			throw ParseError.unsupported("`Array` static method '{String.from(methodTok.value)}' — P1.7 slice 1 provides `create()` only", line: methodTok.line, column: methodTok.column)
-		end 'unknownStatic'
-		try self.consumeEmptyArgList()
-		let arr = self.emitArrayCreateOp(giid, range: SourceRange.between(aliasTok, last: methodTok))
-		self.trackOwnedTemp(arr)
-		return arr
+		let range = SourceRange.between(aliasTok, last: methodTok)
+
+		if methodTok.value.equals(CreateMethod) 'createStatic'
+			try self.consumeEmptyArgList()
+			let arr = self.emitArrayCreateOp(giid, range: range)
+			self.trackOwnedTemp(arr)
+			return arr
+		end 'createStatic'
+
+		// `StringInitMethod` is the ONE constant over the spelling `init`, not a borrowed one: this file's
+		// method-name block states the rule (*"a method NAME is a token spelling, not a container's
+		// property"*) and `parseStringLiteralInitConstruction` already builds a USER type's `Type.init` callee
+		// from this very constant. A second `b"init"` here would be the one-fact-written-twice it exists to stop.
+		// (What its `String`-prefixed NAME now understates is a naming debt, not a second fact.)
+		if methodTok.value.equals(StringInitMethod) 'initStatic'
+			return try self.parseArrayInitStatic(func, giid: giid, methodTok: methodTok, range: range)
+		end 'initStatic'
+
+		throw ParseError.unsupported("`Array` static method '{String.from(methodTok.value)}' — shv2 provides two: `create()` and `init(managed)`", line: methodTok.line, column: methodTok.column)
 	end 'parseArrayStaticCall'
+
+	// ⭐⭐ **`ByteArray.init(managed)` — ADOPT A BUFFER AS THE ARRAY AROUND IT (BATCH2 slice 5).**
+	// `stdlib/Array.maxon:113-115` declares `init(managed ElementMemory) returns Self` with the body
+	// `return Self{managed: managed}`, where `ElementMemory = __ManagedMemory with Element`. In shv2 that
+	// struct literal is an IDENTITY on the record rather than a construction: `Array with T` and
+	// `__ManagedMemory with T` are ONE record with TWO SURFACES (`SignatureIndex.ManagedMemoryTypeName` is
+	// registered as a generic ALIAS of the `Array with Byte` instance), so there is no second record for the
+	// buffer to become a field of. No allocation, no copy, no element walk.
+	//
+	// ⚠ **IT IS DELIBERATELY NOT `String.init(managed)`'S ARM, WHICH COPIES** (`__str_from_bytes`). The two
+	// statics share a name, a parameter name and an argument door, and the copy is CORRECT there for a reason
+	// that does not hold here: a String record differs from an Array record at slot `@40`, so it has to build
+	// one. Copying here would defeat the static's entire purpose — the caller fills a raw buffer and then
+	// names it as the container.
+	//
+	// ⭐ **THE EMISSION IS `retainBorrowedAggregate`, AND BOTH OF ITS PROPERTIES ARE LOAD-BEARING.**
+	//   • **A FRESH `ValueId` IS WHAT FLIPS THE SURFACE.** The two surfaces are told apart by PROVENANCE, and
+	//     the ARRAY surface is the ABSENCE of the buffer mark (`markBufferSurface`; `bufferSurfaceValues` is
+	//     only ever inserted into). The argument typically CARRIES that mark, so a pure identity handing back
+	//     its own `ValueId` would return a value still dispatching on the BUFFER roster —
+	//     `init(…).push(…)` refused as an unknown `Array` method, the roster exactly inverted.
+	//     `array-init.the-surface-flips` is the case that says so.
+	//   • **THE REFCOUNT BALANCES.** The source is still live and still drops at its own scope exit, so the
+	//     adopted array must be a SECOND owner, not a stolen one. `__mm_retain` raises the same refcount word
+	//     `__arr_decref` lowers — both go through `MmRuntime.emitRefcountCheckToLastOwner` — so
+	//     `let a = ByteArray.init(mm)` traces rc 0 → 1 → (`a` drops) 0 → (`mm` drops) freed.
+	//
+	// `trackOwnedTemp` on top of the door's own `markValueOwnsHeap`: the door is written for a value whose
+	// drop a BINDING owes (`promoteBorrowedToOwned`), and a static CALL's result may be bound to nothing —
+	// `ByteArray.init(mm).count()` — so it needs the statement-scoped obligation `create()` above takes, and
+	// takes it through the same one door rather than reaching into `pendingTempDrops` beside it.
+	function parseArrayInitStatic(func IrFunction, giid GenericInstanceId, methodTok Token, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let managed = try self.parseExpression(func, block: self.currentBlock)
+		try self.requireSameInstanceBuffer(managed, giid: giid, anchor: methodTok)
+		try self.consume(TokenKind.rightParen)
+
+		let adopted = self.retainBorrowedAggregate(managed, range: range)
+		self.trackOwnedTemp(adopted)
+		return adopted
+	end 'parseArrayInitStatic'
+
+	// ⭐ **THE `init(managed)` ARGUMENT RULE IS SAME-INSTANCE — AND THE OBVIOUS DOOR IS THE WRONG ONE.**
+	// `String.init` checks its argument with `requireManagedMemoryValue`, which is BYTE-ONLY
+	// (`valueIsByteArray` requires `arrayElementSize == 1`). That is right for a String — it is reading the
+	// bytes — and wrong here in the direction that costs a WRONG ANSWER rather than a refusal: it would
+	// ACCEPT `IntArray.init(<a byte buffer>)`, an `Array with Integer` striding by 8 through a byte-packed
+	// allocation, giving back whichever bytes fell on the boundaries. So `String.init`'s door is left alone —
+	// it still needs the byte rule — and this is a second rule BESIDE it rather than a widening of it.
+	//
+	// The rule: the argument's generic instance must EQUAL the receiver alias's. That is element-agnostic and
+	// strictly STRONGER than the byte rule, and it is what keeps the element STRIDE honest at every element
+	// type rather than at one. `array-init.error.a-buffer-of-the-wrong-element` is the refusal.
+	//
+	// ⚠ **EVERY ADOPTION REACHABLE TODAY IS NONETHELESS A BYTE ONE, AND THAT IS THE `Array_int` GAP SHOWING
+	// THROUGH — NOT THIS RULE.** `managedMemoryInstanceForElementSize` mints exactly two instances, and the
+	// word one is `Array with int`, which NO program can name: `Array with int` is E2061 (a bare `int` is not
+	// a type argument) and every ranged alias over it interns a different instance — the same `Array_int` vs
+	// `Array_Integer` split `specs-shv2/default-values.md` and `string-views.md` already pin for array
+	// literals. MEASURED, all three rows, in `specs-shv2/array-init.md`. Keying on element WIDTH instead
+	// would reach the word row only by giving up the soundness above — a managed element and an `int` are
+	// both 8 bytes wide, so an `Array with String` would adopt a buffer of raw integers as String pointers.
+	//
+	// ⚠ The sentence names `__ManagedMemory with <element>` because that is what the SIGNATURE declares
+	// (`ElementMemory`), not the `Array` spelling of the same instance — the split `ParseError`'s two
+	// builtin-argument sentences already draw, for the same reason.
+	function requireSameInstanceBuffer(value ValueId, giid GenericInstanceId, anchor Token) throws ParseError
+		if self.tagOf(value) == ValueTypeTag.genericInstance and self.valueNameId(value) == giid 'sameInstance'
+			return
+		end 'sameInstance'
+
+		throw ParseError.builtinArgumentType(String.from(StringInitManagedParamName), expected: "{String.from(ManagedMemoryTypeName)} with {self.signatures.arrayElementDisplayName(giid)}", got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
+	end 'requireSameInstanceBuffer'
 
 	// `IntSet.create()` — the one `Set` static factory at this slice (P1.7b slice A). Yields an OWNED empty set
 	// (`__set_create`), tracked so its scope-exit drop routes through `genericInstanceBoxDropCallee` →
