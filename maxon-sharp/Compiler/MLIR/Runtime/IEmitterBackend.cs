@@ -227,9 +227,11 @@ public interface IEmitterBackend {
   /// <summary>
   /// Emit the architecture's spin-wait hint (PAUSE on x86, YIELD on ARM64): tells the core that
   /// this loop is waiting on another core rather than doing work, so it can drop the pipeline
-  /// speculation and, on SMT, hand the sibling thread the front end. Every hand-emitted spin in
-  /// this runtime already uses it (__io_complete_gt_spin, __gt_ppw_spin, the trace lock); shared
-  /// code needs the same instruction under a portable name.
+  /// speculation and, on SMT, hand the sibling thread the front end. The hand-emitted spins in this
+  /// runtime already use it (__gt_ppw_spin and EmitAwaitedStackVacatedGate, both in
+  /// ARM64CodeEmitter.Runtime.cs); shared code needs the same instruction under a portable name, and
+  /// the park protocol's two waits — __netpoll_claim_done's ioYielded gate and __netpoll_park_done's
+  /// Claiming gate — are what ask for it.
   /// </summary>
   void SpinHint();
 

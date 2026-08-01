@@ -7515,9 +7515,21 @@ public partial class X86CodeEmitter {
   /// __io_check_completions(): Drain the IoCompletion done queue and re-enqueue green threads.
   /// Called from __gt_cleanup drain loop and __gt_yield_completed.
   /// Non-blocking: returns immediately if no completions are pending.
+  ///
+  /// ⚠ THIS DRAIN IS UNREACHABLE IN THE CURRENT CALL GRAPH, AND IS KEPT DELIBERATELY. The only
+  /// producer for the done queue is <c>__io_enqueue_completion</c>, which both backends DEFINE and
+  /// neither backend CALLS — every live completion goes through <c>__io_complete_gt</c> (IOCP drain
+  /// thread and sync worker) or, on macOS, <c>__io_poll_kqueue</c> / <c>__io_op_done</c> — so
+  /// <c>__io_dequeue_completion</c> below always returns NULL and the loop body never runs. It is
+  /// nonetheless carried through every change to the park protocol: a third completer that silently
+  /// kept an older handshake is exactly the shape of the drift this protocol exists to prevent, and
+  /// the day the queue is reconnected it must already be correct. Removing it instead is a separate
+  /// decision, filed separately; do not take it as part of a protocol change.
   /// </summary>
   private void EmitIoCheckCompletions() {
     EmitRuntimeFunctionStart("__io_check_completions", 0, 0x30);
+    // [rbp-0x08] = comp, [rbp-0x10] = waiter gt, [rbp-0x18] = park state claimed FROM,
+    // [rbp-0x20] = GT to enqueue once the completion is fully released (0 = none)
 
     DefineLabel("__io_check_comp_loop");
     // Directly dequeue — don't poll the event. The event is used only for blocking waits;
@@ -7534,7 +7546,41 @@ public partial class X86CodeEmitter {
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, IoCompOffWaiter);
     EmitMovMemReg(-0x10, X86Register.Rcx, 8); // save gt
 
-    // gt->io_result_val = comp->result_val
+    // Default: nothing to enqueue. Set before the claim so the shared tail below reads one slot
+    // whichever way the claim goes.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+
+    // ⭐ STEP 1 — CLAIM THE WAKEUP (Go's netpollunblock, first half), which is what OPEN #66 was
+    // waiting for, BEFORE a single result field is copied out of the completion.
+    //
+    // The gap recorded here used to say a mechanical port of arm64's guard was impossible, and it
+    // was RIGHT about the reason: arm64's fix worked by DECLINING to consume the wakeup (skip the
+    // kqueue event, leave the timer entry in the heap, retry on a later poll), and an IOCP
+    // completion has no such option — dequeuing it from the port CONSUMES it, so a guard that
+    // merely skipped the enqueue would lose the wakeup forever. The shared protocol removes that
+    // dilemma instead of working around it: the completer does not SKIP, it CLAIMS, and what it
+    // claims tells it what to do. `Wait` means the waiter has not committed to parking and will
+    // self-detect through the park word; `Parked` means the enqueue is ours and we wait for the
+    // context save. Nothing is ever declined-and-lost.
+    //
+    // ⚠ THE ioYielded PROTOCOLS STILL DIFFER BETWEEN THE BACKENDS, and the difference survives this
+    // change: arm64's __gt_context_switch sets from.ioYielded = 1 itself, while x86's relies on the
+    // RESUMER setting it once the switch returns. So x86 publishes "parked" strictly later. The
+    // spin inside __netpoll_claim_done is bounded on both — on x86 by the handful of instructions
+    // the switched-to scheduler loop runs before it stamps the flag, which is the bound the
+    // pre-netpoll ioYielded spin-gate in __io_complete_gt always relied on — but it is a LONGER
+    // bound here, and anyone touching either backend's switch must keep that stamp on the immediate
+    // resume path.
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // gt
+    EmitCallRuntimeLabel("__netpoll_claim");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__io_check_comp_free");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // claimedFrom
+
+    // STEP 2 — PUBLISH. gt->io_result_val = comp->result_val
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // comp
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // gt
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, IoCompOffResult);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoResultVal, X86Register.Rdx);
 
@@ -7546,41 +7592,28 @@ public partial class X86CodeEmitter {
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, IoCompOffError);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoErrorCode, X86Register.Rdx);
 
-    // Free comp
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
-
-    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
-
     // Set waiter status = ready
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // gt
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax); // status = ready
 
-    // ⭐ CLAIM THE WAKEUP (Go's netpollunblock), which is what OPEN #66 was waiting for.
-    //
-    // The gap recorded here used to say a mechanical port of arm64's guard was impossible, and it
-    // was RIGHT about the reason: arm64's fix worked by DECLINING to consume the wakeup (skip the
-    // kqueue event, leave the timer entry in the heap, retry on a later poll), and an IOCP
-    // completion has no such option — dequeuing it from the port CONSUMES it, so a guard that
-    // merely skipped the enqueue would lose the wakeup forever. The shared protocol removes that
-    // dilemma instead of working around it: the completer does not SKIP, it CLAIMS, and what it
-    // claims tells it what to do. `Wait` means the waiter has not committed to parking and will
-    // self-detect the status it can already see; `Parked` means the enqueue is ours and we wait for
-    // the context save. Nothing is ever declined-and-lost.
-    //
-    // ⚠ THE ioYielded PROTOCOLS STILL DIFFER BETWEEN THE BACKENDS, and the difference survives this
-    // change: arm64's __gt_context_switch sets from.ioYielded = 1 itself, while x86's relies on the
-    // RESUMER setting it once the switch returns. So x86 publishes "parked" strictly later. The
-    // spin inside __netpoll_unblock is bounded on both — on x86 by the handful of instructions the
-    // switched-to scheduler loop runs before it stamps the flag, which is the bound the pre-netpoll
-    // ioYielded spin-gate in __io_complete_gt always relied on — but it is a LONGER bound here, and
-    // anyone touching either backend's switch must keep that stamp on the immediate resume path.
-    EmitCallRuntimeLabel("__netpoll_unblock");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", "__io_check_comp_skip_enqueue");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    // ⭐ STEP 3/4 — RELEASE the word and find out whether the enqueue is ours. The `comp` free moved
+    // BELOW this call: mm_raw_free can take the slab's remote-free path, and a call inside the
+    // claim window is time a waiter's __netpoll_park_done may have to spin through for no reason.
+    // Everything between a claim and its release should be straight-line stores.
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // gt
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8); // claimedFrom
+    EmitCallRuntimeLabel("__netpoll_claim_done");
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // GT to enqueue, or 0
+
+    DefineLabel("__io_check_comp_free");
+    // Free comp
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
+    EmitJcc("z", "__io_check_comp_loop");
     EmitCallRuntimeLabel("__gt_enqueue");
-    DefineLabel("__io_check_comp_skip_enqueue");
 
     EmitJmp("__io_check_comp_loop");
 
@@ -7900,7 +7933,14 @@ public partial class X86CodeEmitter {
   /// <summary>
   /// netpoll: the last instruction that can still change its mind. Jumps to
   /// <paramref name="abortLabel"/> when a completer has already claimed this GT's wakeup, in which
-  /// case the caller must NOT park — the completion is already published in status/io_result_val.
+  /// case the caller must NOT park.
+  ///
+  /// ⚠ "CLAIMED" DOES NOT MEAN "PUBLISHED", so <paramref name="abortLabel"/> must be a path that
+  /// reaches <see cref="EmitNetpollParkDoneCurrent"/> BEFORE it reads io_result_val. The commit CAS
+  /// fails against <c>Claiming</c> as well as <c>Ready</c>, and <c>Claiming</c> means the results are
+  /// still going in; <c>__netpoll_park_done</c> is what waits them out. All five submit families
+  /// satisfy this by aborting to their own <c>_resume</c>, whose first instruction is that call.
+  ///
   /// The fault-injection delay sits immediately before the commit so the window it widens is
   /// exactly the one the protocol closes.
   /// Clobbers the call-clobbered set, so the caller must re-establish RCX/RDX afterwards.
@@ -7919,11 +7959,11 @@ public partial class X86CodeEmitter {
   /// the release rule in RuntimeEmitter.Netpoll.cs.
   ///
   /// ⚠ THE FIVE MAIN-THREAD PARK LOOPS USED TO ASK <c>gt-&gt;status != waiting</c> INSTEAD, AND THAT
-  /// WAS A SECOND CHANNEL THE PROTOCOL COULD NOT AFFORD. A completer publishes status and
-  /// io_result_val BEFORE it claims, so inside that window `status` says "done" while the word is
-  /// still `Wait`; a waiter that left the park there ran __netpoll_park_done, released a word its
-  /// completer was still in flight toward, and handed the late claim to its NEXT park — whose
-  /// commit then failed against a completion that never happened.
+  /// WAS A SECOND CHANNEL THE PROTOCOL COULD NOT AFFORD. A completer writes status and io_result_val
+  /// while it owns the word but has not released it, so inside that window `status` says "done"
+  /// while the word is not yet `Ready`; a waiter that left the park there ran __netpoll_park_done,
+  /// released a word its completer was still in flight toward, and handed the late claim to its NEXT
+  /// park — whose commit then failed against a completion that never happened.
   ///
   /// ⭐ IT ALSO RETIRES A SECOND, OLDER HAZARD ON THIS BACKEND. Three of the five submit families
   /// stamp <c>mainThread.status = running</c> on their way into <c>__gt_context_switch</c>, and two
@@ -8075,7 +8115,8 @@ public partial class X86CodeEmitter {
 
     // Non-mainThread: commit the park (Go's netpollblockcommit), then switch to P->mainThread.
     // A failed commit means a completer claimed the wakeup while we were getting here, so we must
-    // NOT park — status and io_result_val are already published and _resume reads them.
+    // NOT park — _resume's __netpoll_park_done waits out any publish still in flight and then reads
+    // status and io_result_val.
     EmitNetpollCommitCurrentOrAbort($"{labelPrefix}_resume");
     // Clear ioYielded flag BEFORE context switch so the completer that claimed `Parked` spins
     // until the switch has saved our RSP/RBP (preventing a race where the IOCP thread enqueues us
@@ -8215,8 +8256,27 @@ public partial class X86CodeEmitter {
   private void EmitIoCompleteGt() {
     EmitRuntimeFunctionStart("__io_complete_gt", 4, 0x30);
     // params saved by prologue: [rbp-0x08]=gt, [rbp-0x10]=result, [rbp-0x18]=len, [rbp-0x20]=error
+    // [rbp-0x28] = park state the wakeup was claimed FROM (__netpoll_claim -> __netpoll_claim_done)
 
-    // gt->io_result_val = result
+    // ⭐ STEP 1 — CLAIM THE WAKEUP (Go's netpollunblock, first half), BEFORE a single result field is
+    // written. It decides — atomically — whether this GT is ours to touch at all, and it subsumes
+    // both of the tests that stood here: the mainThread skip (a mainThread never commits, so the
+    // claim finds `Wait` and declines the enqueue) and the ioYielded spin (which now runs inside
+    // __netpoll_claim_done, and only after claiming `Parked`, i.e. only for a waiter that provably
+    // cannot turn around).
+    //
+    // ⚠ IT COMES FIRST, AND THAT ORDER IS THE FIX RATHER THAN A TIDY-UP. Publishing before claiming
+    // left the word reading `Parked` for the whole of a healthy publish, which is indistinguishable
+    // from a lost wakeup, so the recovery net raced live completers. A claim we LOSE now means we
+    // write nothing at all — `Nil`, `Ready` and `Claiming` each mean another party owns this GT's
+    // result fields, and storing into them is the hazard rather than a harmless duplicate.
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // gt
+    EmitCallRuntimeLabel("__netpoll_claim");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__io_complete_gt_signal");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // claimedFrom
+
+    // STEP 2 — PUBLISH. gt->io_result_val = result
     EmitMovRegMem(X86Register.Rcx, -0x08, 8); // gt
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // result
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoResultVal, X86Register.Rdx);
@@ -8233,17 +8293,15 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax);
 
-    // ⭐ CLAIM THE WAKEUP (Go's netpollunblock), which decides — atomically — whether the enqueue is
-    // ours at all, and waits for the context save only once it is. It subsumes both of the tests
-    // that stood here: the mainThread skip (a mainThread never commits, so the claim finds `Wait`
-    // and declines) and the ioYielded spin (which now runs INSIDE the claim, and only after
-    // claiming `Parked`, i.e. only for a waiter that provably cannot turn around).
+    // ⭐ STEP 3/4 — RELEASE the word and find out whether the enqueue is ours. Nothing below may read
+    // or write this GT except through the returned pointer.
     //
-    // The signal below still runs on every path — a completion has been published whether or not
-    // this particular GT needed an enqueue, and a mainThread parked in WaitForSingleObject is woken
-    // by exactly that event.
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // reload gt
-    EmitCallRuntimeLabel("__netpoll_unblock");
+    // The signal below still runs on every path, INCLUDING the lost-claim path that now publishes
+    // nothing: an OS-level completion has been reaped whether or not this GT was ours to touch, and
+    // a mainThread parked in WaitForSingleObject is woken by exactly that event.
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // gt
+    EmitMovRegMem(X86Register.Rdx, -0x28, 8); // claimedFrom
+    EmitCallRuntimeLabel("__netpoll_claim_done");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
     EmitJcc("z", "__io_complete_gt_signal");
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax);

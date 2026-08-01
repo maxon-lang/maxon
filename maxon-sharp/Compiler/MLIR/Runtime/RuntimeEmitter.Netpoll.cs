@@ -25,38 +25,62 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 /// instead of by two independent words with a gap between them. The parker does not publish
 /// "I am parked" and hope; it CASes <c>Wait -&gt; Parked</c>, and <b>that CAS is allowed to fail</b>
 /// — a completer got there first, so the park is ABORTED and the green thread simply keeps running.
-/// The completer does not test a flag and guess; it CASes to <c>Ready</c>, and what it finds tells
-/// it exactly what to do: <c>Wait</c> means the waiter has not committed and will abort itself,
-/// <c>Parked</c> means the enqueue is the completer's job. Exactly one side acts, always.
+/// The completer does not test a flag and guess; it CASes to <c>Claiming</c>, and what it finds
+/// tells it exactly what to do: <c>Wait</c> means the waiter has not committed and will abort
+/// itself, <c>Parked</c> means the enqueue is the completer's job. Exactly one side acts, always.
 ///
 /// ⭐⭐⭐ THE RELEASE RULE, WHICH IS WHAT MAKES THAT SINGLE OPERATION SINGLE: <b>a waiter that has
 /// armed the park word may learn its I/O completed ONLY through that word</b> — never through
-/// <c>status</c>, never through <c>io_result_val</c>, never through anything a completer publishes
-/// BEFORE it claims. Go has no choice about this and neither do we: in <c>netpoll.go</c> a goroutine
-/// learns readiness from <c>pd.rg</c> alone, because the completer's transition to <c>pdReady</c>
-/// IS the publication and there is no earlier channel to observe.
+/// <c>status</c>, never through <c>io_result_val</c>, never through anything a completer writes into
+/// the GT. Go has no choice about this and neither do we: in <c>netpoll.go</c> a goroutine learns
+/// readiness from <c>pd.rg</c> alone, because the completer's transition to <c>pdReady</c> IS the
+/// publication and there is no other channel to observe.
 ///
-/// ⚠ WE BRIEFLY HAD AN EARLIER CHANNEL, AND IT COST A WAKEUP. Every completer here publishes
-/// <c>io_result_val</c> and <c>status = ready</c> and THEN claims the word, so for the handful of
-/// instructions in between, <c>status</c> says "done" while the word is still unclaimed. A waiter
+/// ⚠ WE BRIEFLY HAD ANOTHER CHANNEL, AND IT COST A WAKEUP. Every completer here USED TO publish
+/// <c>io_result_val</c> and <c>status = ready</c> and THEN claim the word, so for the handful of
+/// instructions in between, <c>status</c> said "done" while the word was still unclaimed. A waiter
 /// that self-detected on <c>status</c> in that gap left the park and ran <c>__netpoll_park_done</c>,
 /// which accepts <c>Wait</c> and swaps the word to <c>Nil</c> — RELEASING a word a completer was
 /// still in flight toward. It then armed its NEXT I/O, the late completer's CAS landed on THAT
 /// park's <c>Wait</c>, marked it <c>Ready</c> and reported "nothing to wake", and the next park's
 /// commit CAS failed against a completion that had never happened: a read on an fd nobody signalled.
 /// Reproducible on demand — <c>MAXON_GT_CLAIM_DELAY_MS=5</c> took the park driver from 5/5 clean to
-/// 0/5, every failure leaking and four in five tripping the recovery net below. The fix is the rule:
-/// <c>__netpoll_woken</c> is the only question a parked waiter is allowed to ask.
+/// 0/5, every failure leaking and four in five tripping the recovery net below.
+///
+/// ⭐⭐⭐⭐ SO THE ORDER IS INVERTED: <b>CLAIM, THEN PUBLISH, THEN RELEASE.</b> The release rule alone
+/// silenced the waiter, but it left the completer's ownership INVISIBLE — the word said <c>Parked</c>
+/// for the whole of a healthy publish, which is indistinguishable from a wakeup nobody owns, and the
+/// recovery net below (whose suspicion condition IS that window) therefore raced live completers and
+/// re-created the very defect one level up: it rescued a merely-SLOW completer, whose late claim then
+/// landed on the waiter's NEXT park. Three steps, and every one of them is load-bearing:
+///
+///   1. CLAIM   — <c>__netpoll_claim</c> CASes <c>Wait|Parked -&gt; Claiming</c>. From here the
+///                completer OWNS the GT's result fields, and the word says so.
+///   2. PUBLISH — the caller writes <c>io_result_val</c> / <c>io_result_len</c> /
+///                <c>io_error_code</c> / <c>status</c>. It writes them ONLY because step 1 won.
+///   3. RELEASE — <c>__netpoll_claim_done</c> store-releases <c>Ready</c>, and only now may a waiter
+///                leave the park.
+///
+/// ⚠ STEP 3 IS WHY THIS IS A FIFTH STATE AND NOT A REORDERING. If step 1 stored <c>Ready</c>
+/// directly, a waiter claimed from <c>Wait</c> — which is STILL RUNNING — would see
+/// <c>__netpoll_woken() == 1</c> at once and leave the park before step 2 stored anything, and step 2
+/// would then write into a GT that had moved on to its next operation. <c>Claiming</c> is the state
+/// that says "owned, not yet publishable"; see <see cref="GtLayout.NetpollClaiming"/>.
+///
+/// ⭐ AND THE INVARIANT IT BUYS, WHICH IS THE WHOLE POINT: <b>readiness is published ONLY while the
+/// word says a completer owns it.</b> So <c>Parked</c> + published-readiness — the recovery net's
+/// suspicion condition — is unreachable during a healthy completion, by construction rather than by
+/// timing, and a net hit is a real regression again.
 ///
 /// ⚠ THE COMPLETER NEVER BLOCKS ON THE DECISION, and that is load-bearing rather than incidental.
 /// On macOS the kqueue drain (<c>__io_poll_kqueue</c>) runs INLINE inside every scheduler idle turn,
 /// so a decision that waited on another thread would stall every other pending completion — the
-/// livelock <c>__io_op_done</c>'s own comment warns about. <c>netpollunblock</c> is a pure CAS loop
-/// that waits for nobody, which is precisely why the protocol fits at a site where a spin gate does
-/// not. (It does spin AFTER claiming <c>Parked</c>, for <c>ioYielded</c> — see
-/// <see cref="EmitNetpollUnblock"/> for why that one terminates and the old one could not.)
+/// livelock <c>__io_op_done</c>'s own comment warns about. <see cref="EmitNetpollClaim"/> is a pure
+/// CAS loop that waits for nobody, which is precisely why the protocol fits at a site where a spin
+/// gate does not. (It does spin AFTER claiming <c>Parked</c>, for <c>ioYielded</c> — see
+/// <see cref="EmitNetpollClaimDone"/> for why that one terminates and the old one could not.)
 ///
-/// ⚠ DEVIATIONS FROM netpoll.go ARE MARKED "DEVIATION" AT THEIR SITE. There are three, and each has
+/// ⚠ DEVIATIONS FROM netpoll.go ARE MARKED "DEVIATION" AT THEIR SITE. There are four, and each has
 /// a reason recorded next to it. A partial port of Go has already cost this project a real bug (the
 /// green-thread stack took Go's <c>_StackMin</c> and the 928-byte guard but dropped
 /// <c>_StackSystem</c>, so a CPU fault inside <c>async</c> dies with the panic lost), so silent
@@ -68,7 +92,7 @@ public partial class RuntimeEmitter {
 
   /// <summary>
   /// How many wakeups the recovery net has had to rescue. THE POINT OF THE NET IS THAT THIS STAYS 0:
-  /// under a correct protocol nothing can ever readied-but-unclaimed, so a non-zero value is not a
+  /// under a correct protocol no GT can ever be readied-but-unclaimed, so a non-zero value is not a
   /// statistic, it is a bug report. It is a counter rather than a log line because the net runs from
   /// scheduler idle turns where an I/O of its own would be absurd; <c>__netpoll_recovered</c> is
   /// readable from a debugger, from the debug agent's global reads, and by a test binary.
@@ -100,8 +124,12 @@ public partial class RuntimeEmitter {
   /// recycled by <c>__gt_spawn</c>'s free list, and the recycled GT can be a genuine two-sighting
   /// candidate on the second sighting while the first sighting was some other thread entirely. That
   /// is one spurious sighting out of the two the test needs, so it can only ever let a real
-  /// unclaimed-<c>Parked</c> GT be rescued a scan earlier than it should be — the CAS still makes
-  /// the net and any real completer mutually exclusive, so nothing is double-scheduled either way.
+  /// unclaimed-<c>Parked</c> GT be rescued a scan earlier than it should be — and an early rescue is
+  /// now harmless, which it was not before <c>Claiming</c> existed. The net's CAS expects
+  /// <c>Parked</c>, and a completer that has begun on this GT has already moved the word off it, so
+  /// the net and any live completer are mutually exclusive for the completer's WHOLE completion
+  /// rather than only for its final store. Nothing is double-scheduled and no late claim survives to
+  /// land on the GT's next park.
   /// </summary>
   private const string NetpollSuspectLabel = "__netpoll_suspect";
 
@@ -120,16 +148,25 @@ public partial class RuntimeEmitter {
   public const string NetpollParkDelayEnvName = "MAXON_GT_PARK_DELAY_MS";
 
   /// <summary>
-  /// FAULT INJECTION on the COMPLETER's side, in milliseconds; 0 = off.
+  /// FAULT INJECTION on the COMPLETER's side, in milliseconds; 0 = off. It widens the interval in
+  /// which the completer OWNS the park word but has not yet released it — the gap between
+  /// <see cref="EmitNetpollClaim"/>'s winning CAS and <see cref="EmitNetpollClaimDone"/>'s
+  /// store-release, with the caller's publish inside it.
   ///
   /// ⭐ WHY A SECOND KNOB EXISTS: A HANDSHAKE HAS TWO SIDES AND ONLY ONE OF THEM WAS INSTRUMENTED.
   /// <see cref="NetpollParkDelayMsLabel"/> widens the parker's window; nothing widened the
-  /// COMPLETER's, which is the gap between "I published <c>status = ready</c>" and "I claimed the
-  /// park word". Every completer in this runtime has that gap — it is a handful of instructions, so
-  /// only a preemption lands in it. An instrument that can only stretch one side can only find bugs
-  /// on one side, and this one found the other side's: with the waiter still self-detecting on
-  /// <c>status</c>, 5 ms here took the park driver from 5/5 clean to 0/5. The release rule in the
-  /// class comment is what closed it; this knob is what proves it stays closed.
+  /// COMPLETER's. An instrument that can only stretch one side can only find bugs on one side, and
+  /// this one found the other side's — twice. First, with the waiter still self-detecting on
+  /// <c>status</c>, 5 ms took the park driver from 5/5 clean to 0/5. Then, with that closed, 5 ms
+  /// took it to 1/10 by a DIFFERENT route: the recovery net could not tell a slow completer from a
+  /// lost wakeup, so it raced live ones (see <see cref="EmitNetpollRecover"/>).
+  ///
+  /// ⚠ IT IS THE SAME WINDOW, RE-AIMED, NOT A DIFFERENT ONE. It used to be documented as the gap
+  /// between "I published <c>status = ready</c>" and "I claimed the park word", because that was the
+  /// order completers ran in. Claim-then-publish did not remove that interval, it INVERTED it: the
+  /// instructions between a completer's first and last act on a GT are the same instructions, and
+  /// what changed is that the word now says who owns them. Stretching it is still exactly "hold a
+  /// completer mid-completion and see what the rest of the runtime does".
   /// </summary>
   private const string NetpollClaimDelayMsLabel = "__netpoll_claim_delay_ms";
 
@@ -148,7 +185,7 @@ public partial class RuntimeEmitter {
 
   private const string NetpollDoubleWaitMsg = "__netpoll_msg_double_wait";
   private const string NetpollCorruptMsg = "__netpoll_msg_corrupt";
-  private const string NetpollUnblockStateMsg = "__netpoll_msg_unblock_state";
+  private const string NetpollClaimStateMsg = "__netpoll_msg_claim_state";
 
   /// <summary>
   /// Printed to stderr the FIRST time the recovery net has to rescue a wakeup. A counter alone is
@@ -177,8 +214,8 @@ public partial class RuntimeEmitter {
       System.Text.Encoding.UTF8.GetBytes("runtime: double wait\n\0"));
     _b.DefineSymdata(NetpollCorruptMsg,
       System.Text.Encoding.UTF8.GetBytes("runtime: corrupted parkstate\n\0"));
-    _b.DefineSymdata(NetpollUnblockStateMsg,
-      System.Text.Encoding.UTF8.GetBytes("runtime: netpollunblock claimed an impossible state\n\0"));
+    _b.DefineSymdata(NetpollClaimStateMsg, System.Text.Encoding.UTF8.GetBytes(
+      "runtime: netpoll claim_done given a state nothing can be claimed from\n\0"));
     _b.DefineSymdata(NetpollRecoveredMsg, System.Text.Encoding.UTF8.GetBytes(
       "warning: async-I/O wakeup recovered by the netpoll safety net — the park protocol lost one; "
       + "count is in " + NetpollRecoveredLabel + "\n\0"));
@@ -186,30 +223,45 @@ public partial class RuntimeEmitter {
 
   /// <summary>
   /// Emit every function of the park protocol. Both backends call this; the LABELS are the interface
-  /// a platform's readiness plumbing binds to, and there are only five of them:
+  /// a platform's readiness plumbing binds to, and there are only six of them:
   ///
   ///   <c>__netpoll_arm(gt)</c>        — before publishing a registration the completer can see.
-  ///   <c>__netpoll_woken(gt) -&gt; 0|1</c> — "has a completer CLAIMED my wakeup?", the ONLY question
-  ///                                     a waiter that armed is allowed to ask.
+  ///   <c>__netpoll_woken(gt) -&gt; 0|1</c> — "has a completer CLAIMED AND PUBLISHED my wakeup?", the
+  ///                                     ONLY question a waiter that armed is allowed to ask.
   ///   <c>__netpoll_commit(gt) -&gt; ok</c> — the last instruction that can still change its mind.
   ///   <c>__netpoll_park_done(gt)</c>  — after the park ends, however it ended.
-  ///   <c>__netpoll_unblock(gt) -&gt; gt|0</c> — the completer's whole decision.
+  ///   <c>__netpoll_claim(gt) -&gt; 0|from</c> — the completer's decision, taken BEFORE it publishes.
+  ///   <c>__netpoll_claim_done(gt, from) -&gt; gt|0</c> — publish over, release the word and say who
+  ///                                     owes the enqueue.
   ///
   /// A new platform supplies readiness discovery (epoll_wait, kevent, GetQueuedCompletionStatus) and
-  /// calls these five. It writes no state machine of its own.
+  /// calls these six. It writes no state machine of its own.
   ///
-  /// ⚠ THE FIFTH EXISTS BECAUSE DISCOVERY AND OWNERSHIP ARE DIFFERENT QUESTIONS AND EVERY PLATFORM
+  /// ⚠ THE LAST TWO EXIST BECAUSE DISCOVERY AND OWNERSHIP ARE DIFFERENT QUESTIONS AND EVERY PLATFORM
   /// CONFLATES THEM IF LET. A backend always has some earlier, cheaper-looking sign that the I/O
-  /// finished — <c>status</c> here, a dequeued IOCP packet, a reaped kevent — and asking THAT is
+  /// finished — <c>status</c> here, a dequeued IOCP packet, a reaped kevent — and acting on THAT is
   /// what reopens the window in the class comment. So the question is a label, not a load: a
-  /// platform that discovers readiness some other way must still ask it this way.
+  /// platform that discovers readiness some other way must still ask it this way, and must ask it
+  /// BEFORE it writes anything into the GT.
+  ///
+  /// ⚠ WHY OWNERSHIP IS TWO CALLS AND NOT ONE, given that one call taking
+  /// <c>(gt, resultVal, resultLen, errorCode)</c> and owning the publish too would make the ordering
+  /// impossible to get wrong — the shape this was weighed against. Because the CONTENT of
+  /// the publish is not the protocol's business and differs per site: <c>__io_poll_kqueue</c> writes
+  /// two fields, <c>__io_complete_gt</c> three, and <c>__io_check_completions</c> three copied out
+  /// of a queued <c>IoCompletion</c>. A single signature wide enough for all of them would force the
+  /// kqueue site to supply an <c>io_result_len</c> it does not have — turning a field it deliberately
+  /// leaves alone into one it zeroes — so the union of every site's fields would become the protocol's
+  /// API. The seam is therefore ORDERING (protocol) versus CONTENT (site), which is also why the
+  /// backends' publishing code is untouched by this design.
   /// </summary>
   public void EmitNetpollFunctions() {
     EmitNetpollArm();
     EmitNetpollWoken();
     EmitNetpollCommit();
     EmitNetpollParkDone();
-    EmitNetpollUnblock();
+    EmitNetpollClaim();
+    EmitNetpollClaimDone();
     EmitNetpollDelayFn(NetpollParkDelayFn, NetpollParkDelayMsLabel);
     EmitNetpollDelayFn(NetpollClaimDelayFn, NetpollClaimDelayMsLabel);
     EmitNetpollRecover();
@@ -217,12 +269,14 @@ public partial class RuntimeEmitter {
   }
 
   // ⚠ EVERY READ OF THE PARK WORD IS A LoadAcquire, AND THAT IS NOT DECORATION. Each reader goes on
-  // to read something the writer published BEFORE it — the completer publishes io_result_val and
-  // status before it claims; the parker's context is saved before ioYielded — and on a weakly
-  // ordered machine a control dependency orders a later STORE, never a later LOAD. The CAS supplies
-  // the same pairing on its own (arm64's is LDAXR/STLXR, so its release half orders the claimer's
-  // prior stores and its acquire half orders the loser's subsequent loads), which is why the old
-  // two-word handshake's hand-rolled Dekker fence could be retired with it rather than kept beside it.
+  // to read something the writer stored BEFORE it — the completer writes io_result_val and status
+  // before it releases the word; the parker's context is saved before ioYielded — and on a weakly
+  // ordered machine a control dependency orders a later STORE, never a later LOAD. Two writers pair
+  // with those acquires and both are genuine release operations on this one location:
+  // __netpoll_claim_done's StoreRelease (arm64 STLR), which is what publishes the results, and every
+  // AtomicCAS on the word (arm64 LDAXR/STLXR, whose release half orders the claimer's prior stores
+  // and whose acquire half orders the loser's subsequent loads). That is why the old two-word
+  // handshake's hand-rolled Dekker fence could be retired with it rather than kept beside it.
 
   /// <summary>
   /// Panic with <paramref name="msgSymdata"/>. The equivalent of Go's <c>throw</c>: an invariant
@@ -271,9 +325,10 @@ public partial class RuntimeEmitter {
     _b.AtomicCAS(VReg.Scratch1, GtOffParkState, VReg.Scratch2, VReg.Arg1);
     _b.JumpIfNonZero(VReg.Scratch3, okLabel);
 
-    // A GT that is already Wait/Parked/Ready is one that armed a registration and never ran
-    // __netpoll_park_done — a missing park_done at some submit site, which would otherwise present
-    // itself much later as a wakeup delivered to the wrong park.
+    // Any state but Nil is a GT that armed a registration and never ran __netpoll_park_done — a
+    // missing park_done at some submit site, or (for Claiming) a completer that took the wakeup and
+    // never released it. Either would otherwise present itself much later as a wakeup delivered to
+    // the wrong park.
     EmitNetpollThrow(NetpollDoubleWaitMsg);
 
     _b.DefineLabel(okLabel);
@@ -281,18 +336,24 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// <c>__netpoll_woken(gt)</c> -&gt; 1 when a completer has CLAIMED this GT's wakeup, else 0.
+  /// <c>__netpoll_woken(gt)</c> -&gt; 1 when a completer has claimed this GT's wakeup AND FINISHED
+  /// PUBLISHING it, else 0.
   ///
   /// ⭐ THE ONE CHANNEL. A waiter that has run <see cref="EmitNetpollArm"/> asks THIS and nothing
-  /// else — not <c>status</c>, which its completer publishes strictly BEFORE claiming, and which is
-  /// therefore true for a window in which the word is still unclaimed. See the class comment for
-  /// what a waiter that leaves the park inside that window goes on to do to the NEXT park's word.
-  /// There is no CAS here and no side effect: this asks who owns the wakeup, it does not take it.
+  /// else — not <c>status</c>, which its completer writes while the word says <c>Claiming</c>, i.e.
+  /// while the rest of the result is still going in. See the class comment for what a waiter that
+  /// leaves the park inside that window goes on to do to the NEXT park's word. There is no CAS here
+  /// and no side effect: this asks who owns the wakeup, it does not take it.
+  ///
+  /// ⚠ IT TESTS <c>== Ready</c> AND MUST NOT BE LOOSENED TO "ANYTHING A COMPLETER HAS TOUCHED".
+  /// <c>Claiming</c> answers 0 precisely because it means "owned, not yet publishable": a waiter that
+  /// left the park on it would race the very stores it is about to read.
   ///
   /// ⚠ THE <c>LoadAcquire</c> IS LOAD-BEARING, NOT HOUSE STYLE. It is the acquire half that pairs
-  /// with the claiming CAS's release half (arm64's <c>AtomicCAS</c> is LDAXR/STLXR), and it is what
-  /// orders the completer's prior <c>io_result_val</c> / <c>io_error_code</c> / <c>status</c> stores
-  /// before the LOADS every caller makes of them once this returns 1. That pairing is STRONGER than
+  /// with <see cref="EmitNetpollClaimDone"/>'s <c>StoreRelease</c> of <c>Ready</c> (arm64 STLR), and
+  /// it is what orders the completer's prior <c>io_result_val</c> / <c>io_error_code</c> /
+  /// <c>status</c> stores before the LOADS every caller makes of them once this returns 1 — which is
+  /// precisely why the release is the LAST thing a completer does. That pairing is STRONGER than
   /// what it replaces — a plain <c>status</c> load with a hand-rolled <c>DMB ISH</c> after it —
   /// because it is an acquire on the very word the completer released, rather than a fence hoping
   /// to stand in for one.
@@ -329,6 +390,14 @@ public partial class RuntimeEmitter {
   /// <see cref="EmitNetpollWoken"/>, and a completer that claims its <c>Wait</c> correctly declines
   /// the enqueue. Both answers are "go on", so both are non-zero; they are different STATES, and a
   /// caller that ever needs to tell them apart must ask the word, not this return value.
+  ///
+  /// ⚠ A ZERO RETURN MEANS "A COMPLETER HAS TAKEN THE WAKEUP", NOT "THE RESULTS ARE THERE", AND THAT
+  /// PUTS AN OBLIGATION ON THE ABORT PATH. The CAS fails against <c>Claiming</c> exactly as it fails
+  /// against <c>Ready</c>, and <c>Claiming</c> means the completer is still writing
+  /// <c>io_result_val</c>. So every abort must reach <see cref="EmitNetpollParkDone"/> — which waits
+  /// the state out — BEFORE it reads a result field. Both backends satisfy this structurally by
+  /// aborting into the same single-exit resume path the committed park uses, and that is the reason
+  /// to keep it single-exit.
   ///
   /// ⭐ THAT GUARD LIVES HERE BECAUSE IT IS ONE RULE AND WAS SPELLED TWICE. arm64 tested
   /// <c>stackBase == 0</c> and branched around the commit; x86 tested
@@ -413,11 +482,28 @@ public partial class RuntimeEmitter {
   /// <c>Parked</c> means we resumed from a committed park that nobody ever claimed — Go's
   /// "corrupted polldesc", exactly. <c>Nil</c> means we are ending a park we never armed. Both are
   /// the same class of bug and get the same throw.
+  ///
+  /// ⚠⚠ <c>Claiming</c> IS NEITHER VALID NOR INVALID — IT IS NOT YET AN ANSWER, SO THIS WAITS IT OUT.
+  /// A completer that claimed our <c>Wait</c> is mid-publish; releasing the word to <c>Nil</c>
+  /// underneath it is EXACTLY the bug in the class comment, with this function in the role it played
+  /// there — the word would go back to <c>Nil</c>, the GT would arm its next I/O, and the completer's
+  /// store-release of <c>Ready</c> would land on THAT park. So the swap is not attempted until the
+  /// word has left <c>Claiming</c>. (Reachable on the ordinary abort path: our commit CAS
+  /// <c>Wait -&gt; Parked</c> fails precisely because a completer has taken <c>Wait -&gt; Claiming</c>,
+  /// and the abort runs straight here.)
+  ///
+  /// The spin is bounded for the same reason <see cref="EmitNetpollClaimDone"/>'s is: everything
+  /// between a claim and its release is straight-line stores in the completer, so the bound is a
+  /// scheduling quantum — plus <see cref="NetpollClaimDelayMsLabel"/> when the fault injection is
+  /// armed, which is a deliberate sleep and bounded by construction. It cannot self-deadlock either:
+  /// claim → publish → release is one straight-line region inside a single call frame, so no thread
+  /// can be inside it and in this function at once, and the completer waited on is always another M.
   /// </summary>
   private void EmitNetpollParkDone() {
     _b.FunctionStart("__netpoll_park_done", 1, 0x40);
 
     var retryLabel = UniqueLabel("netpoll_park_done_retry");
+    var swapLabel = UniqueLabel("netpoll_park_done_swap");
     var okLabel = UniqueLabel("netpoll_park_done_ok");
 
     // Swap(Nil), spelled as a CAS loop: there is no atomic-exchange primitive in IEmitterBackend and
@@ -426,6 +512,14 @@ public partial class RuntimeEmitter {
     _b.DefineLabel(retryLabel);
     _b.LoadLocal(VReg.Scratch1, 0);              // gt
     _b.LoadAcquire(VReg.Scratch2, VReg.Scratch1, GtOffParkState);
+    _b.CmpRegImm(VReg.Scratch2, NetpollClaiming);
+    _b.JumpIf(Condition.NotEqual, swapLabel);
+
+    // A completer owns the word and has not published yet. Let it finish; do not take the word off it.
+    _b.SpinHint();
+    _b.Jump(retryLabel);
+
+    _b.DefineLabel(swapLabel);
     _b.MovRegImm(VReg.Arg1, NetpollNil);
     _b.AtomicCAS(VReg.Scratch1, GtOffParkState, VReg.Scratch2, VReg.Arg1);
     _b.JumpIfZero(VReg.Scratch3, retryLabel);
@@ -442,9 +536,13 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// <c>__netpoll_unblock(gt)</c> -&gt; the GT to enqueue, or 0 — Go's <c>netpollunblock</c> with
-  /// <c>ioready = true</c> (our completers only ever run because an I/O finished; there is no
-  /// timeout or close path that unblocks with <c>ioready = false</c>).
+  /// <c>__netpoll_claim(gt)</c> -&gt; the state the wakeup was claimed FROM (<c>Wait</c> or
+  /// <c>Parked</c>), or 0 when it was not ours to claim. STEP 1 of the completer's three, and it must
+  /// run BEFORE the caller writes a single one of the GT's result fields.
+  ///
+  /// Together with <see cref="EmitNetpollClaimDone"/> this is Go's <c>netpollunblock</c> with
+  /// <c>ioready = true</c> (our completers only ever run because an I/O finished; there is no timeout
+  /// or close path that unblocks with <c>ioready = false</c>):
   ///
   /// <code>
   ///   for {
@@ -458,13 +556,19 @@ public partial class RuntimeEmitter {
   ///   }
   /// </code>
   ///
-  /// ⭐ THIS ONE FUNCTION REPLACES THE THREE-WAY GUARD every completer in this runtime used to spell
-  /// for itself, and it subsumes all three rather than dropping any:
+  /// ⚠ DEVIATION 4 — GO CASES TO <c>pdReady</c>; WE CAS TO <c>Claiming</c> AND PUBLISH <c>Ready</c>
+  /// LATER, WHICH IS WHY THIS IS TWO FUNCTIONS WHERE GO HAS ONE. Go's completer has nothing to
+  /// publish, so its claim and its publication are the same store; ours has <c>io_result_val</c> and
+  /// friends to write first. See <see cref="GtLayout.NetpollClaiming"/> for why splitting the two
+  /// needs a state rather than just an ordering.
+  ///
+  /// ⭐ THESE TWO FUNCTIONS REPLACE THE THREE-WAY GUARD every completer in this runtime used to spell
+  /// for itself, and they subsume all three rather than dropping any:
   ///   (a) <c>stackBase == 0</c> — the main OS thread. It has no schedulable stack, so it never
-  ///       commits; a completer finds <c>Wait</c> and declines, and it self-detects in its own await
-  ///       loop, exactly as before. This is no longer a property the protocol merely HAPPENS to
-  ///       have: <see cref="EmitNetpollCommit"/> enforces it, refusing to move the word for a GT
-  ///       with no stack, so "a stackless GT is always <c>Wait</c>" is checked rather than argued.
+  ///       commits; a completer finds <c>Wait</c> and declines the enqueue, and it self-detects in
+  ///       its own await loop, exactly as before. This is no longer a property the protocol merely
+  ///       HAPPENS to have: <see cref="EmitNetpollCommit"/> enforces it, refusing to move the word
+  ///       for a GT with no stack, so "a stackless GT is always <c>Wait</c>" is checked, not argued.
   ///   (b) <c>waiter == P-&gt;currentGt</c> — the waiter is driving this very poll from its own park
   ///       loop. It has not committed either, so again <c>Wait</c>, again decline. This one IS a
   ///       consequence rather than a rule: a GT cannot be inside a completer and past its own commit
@@ -477,47 +581,116 @@ public partial class RuntimeEmitter {
   ///
   /// ⚠ DEVIATION — Go's <c>pdNil</c> arm STORES <c>pdReady</c> and returns nil, carrying the
   /// readiness forward for the next <c>netpollblock</c> to consume. We return without touching the
-  /// word. Same reason as <see cref="EmitNetpollArm"/>'s: Go's word outlives the goroutine and is
-  /// the only place a pending notification could live, whereas ours belongs to the GT and the
-  /// readiness is already published in <c>status</c>/<c>io_result_val</c>. Storing <c>Ready</c> into
-  /// a <c>Nil</c> word here would leave a stale claim that the GT's NEXT park would trip over.
+  /// word. Same reason as <see cref="EmitNetpollArm"/>'s: Go's word outlives the goroutine and is the
+  /// only place a pending notification could live, whereas ours belongs to the GT. Storing
+  /// <c>Ready</c> into a <c>Nil</c> word here would leave a stale claim that the GT's NEXT park would
+  /// trip over.
+  ///
+  /// ⚠ RETURNING 0 MEANS "PUBLISH NOTHING", AND THAT IS STRICTER THAN THE OLD ORDER WAS. Completers
+  /// used to write the result fields unconditionally and only then ask whose wakeup it was; now the
+  /// ask comes first and a lost race means the GT is not touched at all. <c>Nil</c> is "not waiting
+  /// on anything", <c>Ready</c> is "already claimed and published", <c>Claiming</c> is "claimed by
+  /// someone still publishing" — in all three another party owns the outcome, and writing
+  /// <c>io_result_val</c> into a GT that has moved on is the hazard, not a harmless duplicate.
+  ///
+  /// ⚠ A COMPLETER THAT CLAIMS AND NEVER CALLS <see cref="EmitNetpollClaimDone"/> WEDGES THE GT IN
+  /// <c>Claiming</c> FOREVER: its waiter's <c>__netpoll_woken</c> answers 0 for ever and its
+  /// <c>__netpoll_park_done</c> spins for ever. That is the price of splitting the claim from the
+  /// release, and it is the same bargain <see cref="EmitNetpollArm"/> / <see cref="EmitNetpollParkDone"/>
+  /// already strike on the waiter's side — an unpaired <c>arm</c> throws "double wait" at the GT's
+  /// next park. Every path out of a completer between these two calls must reach the second one.
   /// </summary>
-  private void EmitNetpollUnblock() {
-    _b.FunctionStart("__netpoll_unblock", 1, 0x40);
+  private void EmitNetpollClaim() {
+    _b.FunctionStart("__netpoll_claim", 1, 0x40);
 
-    var loopLabel = UniqueLabel("netpoll_unblock_loop");
-    var spinLabel = UniqueLabel("netpoll_unblock_spin");
-    var enqueueLabel = UniqueLabel("netpoll_unblock_enqueue");
-    var noneLabel = UniqueLabel("netpoll_unblock_none");
-
-    // Fault injection, the completer's half. It sits OUTSIDE the retry loop and before the first
-    // read, so what it widens is exactly the gap between our caller's `status = ready` store and
-    // this claim — the interval in which a waiter can self-detect on `status` alone.
-    _b.Call(NetpollClaimDelayFn);
+    const int slotClaimedFrom = 1;
+    var loopLabel = UniqueLabel("netpoll_claim_loop");
+    var takeLabel = UniqueLabel("netpoll_claim_take");
+    var noneLabel = UniqueLabel("netpoll_claim_none");
 
     _b.DefineLabel(loopLabel);
     _b.LoadLocal(VReg.Scratch1, 0);              // gt
     _b.LoadAcquire(VReg.Scratch2, VReg.Scratch1, GtOffParkState);
 
-    // Already claimed by another completer, or the waiter has already left the park and consumed
-    // the readiness itself. Either way there is nothing for us to do.
-    _b.CmpRegImm(VReg.Scratch2, NetpollReady);
-    _b.JumpIf(Condition.Equal, noneLabel);
-    _b.CmpRegImm(VReg.Scratch2, NetpollNil);
-    _b.JumpIf(Condition.Equal, noneLabel);
+    // Wait and Parked are the only two states a wakeup can be taken FROM; see the note above for why
+    // the other three mean "touch nothing".
+    _b.CmpRegImm(VReg.Scratch2, NetpollWait);
+    _b.JumpIf(Condition.Equal, takeLabel);
+    _b.CmpRegImm(VReg.Scratch2, NetpollParked);
+    _b.JumpIf(Condition.NotEqual, noneLabel);
 
-    _b.MovRegImm(VReg.Arg1, NetpollReady);
+    _b.DefineLabel(takeLabel);
+    _b.MovRegImm(VReg.Arg1, NetpollClaiming);
     _b.AtomicCAS(VReg.Scratch1, GtOffParkState, VReg.Scratch2, VReg.Arg1);
     _b.JumpIfZero(VReg.Scratch3, loopLabel);     // lost the race — re-read and decide again
 
-    // Scratch2 still holds the state we claimed FROM: the CAS leaves it alone on both backends.
-    _b.CmpRegImm(VReg.Scratch2, NetpollWait);
-    _b.JumpIf(Condition.Equal, noneLabel);       // not committed: it will abort its own park
-    _b.CmpRegImm(VReg.Scratch2, NetpollParked);
-    _b.JumpIf(Condition.Equal, spinLabel);
+    // Scratch2 still holds the state we claimed FROM: the CAS leaves it alone on both backends. Home
+    // it before the call below, which clobbers the whole scratch set.
+    _b.StoreLocal(slotClaimedFrom, VReg.Scratch2);
 
-    // Nil and Ready both returned above, so nothing else can reach here.
-    EmitNetpollThrow(NetpollUnblockStateMsg);
+    // Fault injection, the completer's half. It sits AFTER the winning CAS, so what it widens is
+    // exactly the interval in which this completer owns the word and has not released it — the
+    // window the caller's publish happens inside. Nothing observable has changed yet at this point:
+    // the GT's result fields still hold their previous values and `status` still says `waiting`.
+    _b.Call(NetpollClaimDelayFn);
+
+    _b.LoadLocal(VReg.Scratch0, slotClaimedFrom);
+    _b.ReturnValue(VReg.Scratch0);
+
+    _b.DefineLabel(noneLabel);
+    _b.ZeroReg(VReg.Scratch0);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  /// <summary>
+  /// <c>__netpoll_claim_done(gt, claimedFrom)</c> -&gt; the GT to enqueue, or 0. STEPS 3 and 4 of the
+  /// completer's four: release the word, then decide whose job the enqueue is. <c>gt</c> and
+  /// <c>claimedFrom</c> are exactly what the matching <see cref="EmitNetpollClaim"/> was given and
+  /// returned.
+  ///
+  /// ⭐ THE STORE-RELEASE IS THE GATE, AND IT IS THE ONLY THING THAT OPENS IT. Every result the
+  /// caller published since the claim becomes visible to a waiter at this instruction and not before:
+  /// <see cref="EmitNetpollWoken"/>'s <c>LoadAcquire</c> pairs with this <c>StoreRelease</c> on the
+  /// very same word, which is a genuine acquire/release pair on one location rather than a fence
+  /// hoping to stand in for one. It is a plain store rather than a CAS because nothing else can be
+  /// racing us: <c>Claiming</c> is claimable by nobody, so this word has exactly one writer.
+  ///
+  /// ⚠ ORDER WITHIN THIS FUNCTION IS ITSELF LOAD-BEARING: the enqueue decision reads
+  /// <c>claimedFrom</c>, but the RELEASE must not wait on the <c>ioYielded</c> spin below it. A
+  /// waiter claimed from <c>Parked</c> is asleep and cannot set <c>ioYielded</c> any faster for our
+  /// waiting, but a DIFFERENT GT's <c>__netpoll_park_done</c> may be spinning on this very word, and
+  /// holding the release behind an unrelated spin would stretch that wait for no reason.
+  /// </summary>
+  private void EmitNetpollClaimDone() {
+    _b.FunctionStart("__netpoll_claim_done", 2, 0x40);
+
+    var validLabel = UniqueLabel("netpoll_claim_done_valid");
+    var spinLabel = UniqueLabel("netpoll_claim_done_spin");
+    var enqueueLabel = UniqueLabel("netpoll_claim_done_enqueue");
+    var noneLabel = UniqueLabel("netpoll_claim_done_none");
+
+    // Validate BEFORE releasing: a claimedFrom that is neither state __netpoll_claim can return is a
+    // caller bug, and releasing on the way to the panic would leave a `Ready` word behind a message
+    // saying the protocol is broken.
+    _b.LoadLocal(VReg.Scratch2, 1);              // claimedFrom
+    _b.CmpRegImm(VReg.Scratch2, NetpollParked);
+    _b.JumpIf(Condition.Equal, validLabel);
+    _b.CmpRegImm(VReg.Scratch2, NetpollWait);
+    _b.JumpIf(Condition.Equal, validLabel);
+
+    EmitNetpollThrow(NetpollClaimStateMsg);
+
+    _b.DefineLabel(validLabel);
+    _b.LoadLocal(VReg.Scratch1, 0);              // gt
+    _b.MovRegImm(VReg.Scratch0, NetpollReady);
+    _b.StoreRelease(VReg.Scratch1, GtOffParkState, VReg.Scratch0);
+
+    // Claimed from `Wait`: the waiter never committed, is still running, and resumes by asking the
+    // word itself — either its commit CAS fails or its next __netpoll_woken returns 1. Only a
+    // `Parked` claim owns the enqueue.
+    _b.LoadLocal(VReg.Scratch2, 1);
+    _b.CmpRegImm(VReg.Scratch2, NetpollWait);
+    _b.JumpIf(Condition.Equal, noneLabel);
 
     // The enqueue is ours. Wait for the context save to finish before handing this GT to another M:
     // ioYielded goes to 1 inside __gt_context_switch, after the callee-saved block and gt.sp are
@@ -567,8 +740,9 @@ public partial class RuntimeEmitter {
   ///
   /// ⚠ THERE ARE TWO SUCH INSTRUCTIONS, ONE PER SIDE, WHICH IS WHY THIS TAKES ITS GLOBAL AS A
   /// PARAMETER. <see cref="NetpollParkDelayFn"/> sits between the parker's last self-detect and its
-  /// commit CAS; <see cref="NetpollClaimDelayFn"/> sits between the completer's <c>status = ready</c>
-  /// and its claim. Widening only the first can only ever falsify the parker's half of the protocol.
+  /// commit CAS; <see cref="NetpollClaimDelayFn"/> sits inside <see cref="EmitNetpollClaim"/>, on the
+  /// far side of the winning CAS, so it holds a completer mid-completion with the word reading
+  /// <c>Claiming</c>. Widening only the first can only ever falsify the parker's half of the protocol.
   ///
   /// It SHIPS rather than hiding behind a build flag, deliberately: unset, each costs one
   /// predictable-not-taken load and branch, and it is the only way a future change to this handshake
@@ -624,56 +798,50 @@ public partial class RuntimeEmitter {
   /// a REGRESSION DETECTOR that also happens to rescue the run. It claims the wakeup itself with the
   /// same CAS a real completer would use, so it can never double-schedule against one.
   ///
-  /// ⚠ A CANDIDATE MUST BE SEEN TWICE, A SCAN INTERVAL APART, and that is not caution — one sighting
-  /// is genuinely ambiguous. A real completer publishes <c>status = ready</c> and THEN claims, so for
-  /// the handful of instructions in between, a perfectly healthy completion looks exactly like the
-  /// condition above. Acting on one sighting would increment <c>__netpoll_recovered</c> for a
-  /// completion that was never lost, and a counter that cries wolf is worth nothing as a regression
-  /// detector. Ten milliseconds of persistence is several orders of magnitude wider than that window
-  /// and far narrower than a hang.
+  /// ⭐⭐ "UNREACHABLE" IS NOW A PROPERTY OF THE STATE MACHINE, NOT OF TIMING, AND THAT IS THE WHOLE
+  /// REASON THIS SCAN IS WORTH RUNNING. Readiness is published ONLY between
+  /// <see cref="EmitNetpollClaim"/>'s winning CAS and <see cref="EmitNetpollClaimDone"/>'s release,
+  /// i.e. only while the word reads <c>Claiming</c> — so no healthy completion is ever <c>Parked</c>
+  /// with <c>status != waiting</c>, for any duration, on any schedule. The condition above therefore
+  /// SELECTS lost wakeups instead of merely outrunning healthy ones.
   ///
-  /// ⚠⚠ WHICH IS WHY THE TIME GATE IS A CAS AND NOT A LOAD-COMPARE-STORE. It was the latter, on a
-  /// global every M runs through, so two Ms could pass it in the same instant — both scan, both find
-  /// the same GT, and the SECOND one reads the FIRST one's <c>__netpoll_suspect</c> and "confirms" a
-  /// candidate seen twice MICROSECONDS apart. "Seen twice a scan interval apart" then means nothing,
-  /// and the rule collapses onto exactly the healthy publish-then-claim window it was written to
-  /// clear. Measured: with the completer-side injection widening that window to 5 ms, the net fired
-  /// on EVERY run of the park driver at 12 Ps and on NONE at <c>MAXON_MAX_PROCS=1</c> — a
-  /// regression detector reporting a regression that was not there, which is worse than no detector.
-  /// The CAS makes the gate the scan's mutex as well as its clock: exactly one M owns each interval,
-  /// so <c>__netpoll_suspect</c> has one writer at a time and two sightings really are one interval
-  /// apart. Losing the CAS means another M is scanning right now — there is nothing to wait for.
+  /// ⚠ IT DID NOT USED TO, AND THE COST WAS MEASURED. Completers used to publish and THEN claim, so a
+  /// perfectly healthy completion spent its whole publish looking exactly like the condition above.
+  /// The A/B, on one build, under <c>MAXON_GT_CLAIM_DELAY_MS=5</c> — which is DEFINED as the knob
+  /// that widens a completer's window: net armed ⇒ <b>1/10 clean</b>, the failures leaking 1-4
+  /// allocations each and one wedging outright; net inert ⇒ <b>10/10 clean</b>, same park protocol.
+  /// The net was not rescuing anything real. It was rescuing completers that were merely SLOW, and
+  /// each "rescue" then handed that completer's late claim to the waiter's NEXT park — the class
+  /// comment's defect one level up, which "the CAS makes them mutually exclusive" never covered,
+  /// because mutual exclusion on THIS park says nothing about the next one.
   ///
-  /// ⚠⚠ A RESIDUAL THE CAS DOES NOT REMOVE, AND IT IS MEASURED, NOT SUSPECTED. When the net acts on
-  /// a completer that is merely SLOW rather than gone, that completer's later claim lands on whatever
-  /// the word holds THEN — and if the rescued GT has since finished its park and armed the next one,
-  /// that is the NEXT park's <c>Wait</c>. It is marked <c>Ready</c>, the completer reports "nothing
-  /// to wake", and the next park aborts against a completion that never happened, orphaning the
-  /// registration it had just armed. This is the class comment's defect one level up, and the old
-  /// "the CAS makes them mutually exclusive so the GT is enqueued exactly once either way" argument
-  /// does NOT cover it: mutual exclusion on THIS park says nothing about the next one.
+  /// The instrument and the detector were aimed at one interval, so arming the first necessarily
+  /// tripped the second, at ANY confirmation interval — which is exactly why widening
+  /// <see cref="NetpollRecoverIntervalMs"/> was never the fix. Claim-then-publish is: the interval
+  /// still exists and the knob still widens it, but the word now NAMES it, and this scan skips it.
   ///
-  /// The A/B, on one build, under <c>MAXON_GT_CLAIM_DELAY_MS=5</c>: net armed ⇒ <b>0/10</b>, every
-  /// run exit 101 with 1-4 leaked allocations; net inert ⇒ <b>10/10 clean</b>, same park protocol,
-  /// no wedge and no leak. So under injection the net never rescued anything real — it raced live
-  /// completers and every one of its "rescues" was a false positive that cost a leak.
+  /// ⚠ A CANDIDATE IS STILL SEEN TWICE, A SCAN INTERVAL APART, AND THAT REQUIREMENT STAYS. It is no
+  /// longer load-bearing against a healthy completion — those are excluded by construction now — but
+  /// it costs one word and one comparison, and it is what keeps a single unlucky read of a GT
+  /// mid-transition from being reported as a lost wakeup. A counter whose whole job is to be exactly
+  /// 0 does not get to cry wolf even once.
   ///
-  /// ⚠ AND THE FALSE POSITIVE IS STRUCTURAL, NOT A TUNING PROBLEM. This scan's suspicion condition
-  /// IS the completer's publish-then-claim window, and <see cref="NetpollClaimDelayMsLabel"/> is
-  /// DEFINED as the knob that widens that same window. The instrument and the detector are aimed at
-  /// one interval; arming the first necessarily trips the second, whatever the confirmation interval
-  /// is set to. Widening <see cref="NetpollRecoverIntervalMs"/> to hide it would be editing the
-  /// instrument to make a number look better, which is the one thing this project does not do.
+  /// ⚠⚠ WHICH IS ALSO WHY THE TIME GATE IS A CAS AND NOT A LOAD-COMPARE-STORE. It was the latter, on
+  /// a global every M runs through, so two Ms could pass it in the same instant — both scan, both
+  /// find the same GT, and the SECOND one reads the FIRST one's <c>__netpoll_suspect</c> and
+  /// "confirms" a candidate seen twice MICROSECONDS apart, collapsing "a scan interval apart" onto
+  /// nothing. Measured at the time: the net fired on EVERY run of the park driver at 12 Ps and on
+  /// NONE at <c>MAXON_MAX_PROCS=1</c>. The CAS makes the gate the scan's mutex as well as its clock:
+  /// exactly one M owns each interval, so <c>__netpoll_suspect</c> has one writer at a time. Losing
+  /// the CAS means another M is scanning right now — there is nothing to wait for.
   ///
-  /// ⇒ BOTH are closed by the same design, and neither by anything smaller: make the completer's
-  /// ownership VISIBLE IN THE WORD. A fifth state — <c>Claiming</c> — CASed <c>Parked -&gt;
-  /// Claiming</c> at the TOP of <see cref="EmitNetpollUnblock"/>, before the results are published,
-  /// with <c>Ready</c> stored after them, would make this scan skip a GT a completer has begun on
-  /// (no false positive, however slow that completer is) and make the net's own claim reachable only
-  /// for a <c>Parked</c> GT nobody has begun on (no race, so no late claim onto the next park). It
-  /// costs the completers their result-publishing step, which has to move inside the claim. Not done
-  /// here: it changes the word's state set and <c>__netpoll_unblock</c>'s signature at three
-  /// completers across two backends, which is a slice, not a fix.
+  /// ⚠ A GT WEDGED IN <c>Claiming</c> IS A REAL FAILURE THIS SCAN DELIBERATELY DOES NOT REPORT. A
+  /// completer that claimed and then stalled or died leaves its waiter unwakeable, and the walk below
+  /// passes straight over it. Counting it was considered and rejected: the only instrument that can
+  /// produce one on purpose is <see cref="NetpollClaimDelayMsLabel"/>, which is DEFINED as the knob
+  /// that widens the <c>Claiming</c> window — so a <c>Claiming</c>-based detector would recreate the
+  /// exact instrument-versus-detector collision this pass exists to remove, one state along. It needs
+  /// a signal the injection cannot forge, and that is not this scan.
   ///
   /// ⚠ IT IS ALSO DELIBERATELY NOT A SPIN. A candidate whose context is not yet saved
   /// (<c>ioYielded == 0</c>) is LEFT ALONE for the next scan rather than waited on: this runs inside
@@ -750,7 +918,7 @@ public partial class RuntimeEmitter {
     _b.AllThreadsLockRelease();
 
     // Publish this scan's candidate (possibly none) and act only if the PREVIOUS scan saw the same
-    // GT. A completer's publish-then-claim window cannot survive a scan interval.
+    // GT. No transient state of a live completer survives a scan interval.
     _b.LoadLocal(VReg.Scratch0, slotCandidate);
     _b.LoadGlobal(VReg.Scratch1, NetpollSuspectLabel);
     _b.StoreGlobal(NetpollSuspectLabel, VReg.Scratch0);
@@ -768,6 +936,11 @@ public partial class RuntimeEmitter {
     _b.Jump(retLabel);
 
     _b.DefineLabel(claimLabel);
+    // Parked -> Ready in ONE CAS, skipping `Claiming`, and that is right rather than sloppy: the
+    // intermediate state exists to say "results are going in", and the net has no results to write.
+    // Expecting `Parked` is also what makes the rescue safe now that `Claiming` exists — a completer
+    // that has begun on this GT has already moved the word, so this CAS cannot take it from under one
+    // however slowly it is publishing, and the net therefore cannot produce the late claim it used to.
     _b.LoadLocal(VReg.Scratch1, slotCandidate);
     _b.MovRegImm(VReg.Scratch2, NetpollParked);
     _b.MovRegImm(VReg.Arg1, NetpollReady);

@@ -33,7 +33,7 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0xC0  fault_redirect_rip       RIP to resume at (epilog writes into ucontext)
 ///   0xC8  fault_redirect_rsp       SP to resume at
 ///   0xD0  fault_redirect_fp        FP to resume at
-///   0xD8  park_state               async-I/O wakeup ownership (see the GtPark* constants)
+///   0xD8  park_state               async-I/O wakeup ownership (see the Netpoll* constants)
 ///
 /// ProcContext struct (360 bytes = 0x168):
 ///   0x00  local_queue_head         per-P run queue (no lock needed)
@@ -144,14 +144,12 @@ public static class GtLayout {
   // operation per side, so exactly one of them acts.
   //
   // ⚠⚠ ONCE A WAITER HAS ARMED THIS WORD, THIS WORD IS THE ONLY THING IT MAY ASK. Not `status`,
-  // not `io_result_val` — nothing a completer publishes BEFORE it claims. Every completer here
-  // publishes readiness and then claims, so for the instructions in between, `status` says "done"
-  // while the word is still unclaimed; a waiter that left the park there ran __netpoll_park_done,
-  // which accepts `Wait` and swaps to `Nil`, RELEASING a word its completer was still in flight
-  // toward. The late claim then landed on the waiter's NEXT park and that park's commit failed
-  // against a completion that never happened. `__netpoll_woken` exists so the question has exactly
-  // one form; see RuntimeEmitter.Netpoll.cs. (Reproduced: MAXON_GT_CLAIM_DELAY_MS=5 took the park
-  // driver from 5/5 clean to 0/5, every failure leaking.)
+  // not `io_result_val` — nothing a completer writes into the GT. A waiter that left the park on
+  // `status` ran __netpoll_park_done, which swaps the word to `Nil`, RELEASING a word its completer
+  // was still in flight toward. The late claim then landed on the waiter's NEXT park and that
+  // park's commit failed against a completion that never happened. `__netpoll_woken` exists so the
+  // question has exactly one form; see RuntimeEmitter.Netpoll.cs. (Reproduced:
+  // MAXON_GT_CLAIM_DELAY_MS=5 took the park driver from 5/5 clean to 0/5, every failure leaking.)
   //
   // ⚠ IT DOES NOT REPLACE `status` OR `ioYielded`, AND MUST NOT — it narrows who may READ them, not
   // what they mean. Go keeps `g.atomicstatus` separate from `pd.rg` because they answer different
@@ -160,33 +158,62 @@ public static class GtLayout {
   // waiter deciding whether to leave a park, and `ioYielded` still says whether the register context
   // has been saved.
   //
-  // The names and the ORDER are Go's, so `old > NetpollWait` reads the same here as there:
+  // The first four names and their VALUES are Go's:
   //
-  //   Nil     none of the below: this GT is not waiting on an async-I/O completion.
-  //   Ready   a completer has CLAIMED the wakeup. It either enqueued the GT (claimed from Parked)
-  //           or left the GT to self-detect (claimed from Wait).
-  //   Wait    the GT has armed a registration and MAY park; it is still running and can still
-  //           abort. A completer that claims this does NOT enqueue — the waiter's own commit CAS
-  //           will fail, or its next __netpoll_woken will return 1, and it resumes itself. This is
-  //           also the terminal state of a GT that has no schedulable stack: __netpoll_commit
-  //           refuses to move the word for a stackBase==0 GT, so the main OS thread is `Wait` for
-  //           its whole park and every completer correctly declines to enqueue it.
-  //   Parked  the GT has COMMITTED to park (the commit CAS Wait -> Parked won) and is executing
-  //           straight-line code into __gt_context_switch. A completer that claims this owns the
-  //           enqueue, and may safely spin for ioYielded==1 because nothing on that path can turn
-  //           the waiter around — the termination argument __gt_ppw_spin already makes for its own
-  //           parker, and the one the I/O park path could not make until this word existed, because
-  //           its parker COULD turn around.
+  //   Nil       none of the below: this GT is not waiting on an async-I/O completion.
+  //   Ready     a completer has CLAIMED the wakeup AND PUBLISHED its results. It either enqueued the
+  //             GT (claimed from Parked) or left the GT to self-detect (claimed from Wait). This is
+  //             the ONLY state a waiter may leave a park on.
+  //   Wait      the GT has armed a registration and MAY park; it is still running and can still
+  //             abort. A completer that claims this does NOT enqueue — the waiter's own commit CAS
+  //             will fail, or its next __netpoll_woken will return 1, and it resumes itself. This is
+  //             also the terminal state of a GT that has no schedulable stack: __netpoll_commit
+  //             refuses to move the word for a stackBase==0 GT, so the main OS thread is `Wait` for
+  //             its whole park and every completer correctly declines to enqueue it.
+  //   Parked    the GT has COMMITTED to park (the commit CAS Wait -> Parked won) and is executing
+  //             straight-line code into __gt_context_switch. A completer that claims this owns the
+  //             enqueue, and may safely spin for ioYielded==1 because nothing on that path can turn
+  //             the waiter around — the termination argument __gt_ppw_spin already makes for its own
+  //             parker, and the one the I/O park path could not make until this word existed, because
+  //             its parker COULD turn around.
+  //   Claiming  a completer has TAKEN the wakeup and is writing io_result_val / io_error_code /
+  //             status right now. OWNED, NOT YET PUBLISHABLE: __netpoll_woken declines it,
+  //             __netpoll_park_done waits it out, __netpoll_claim declines it, and the recovery net
+  //             skips it. Only the store-release of `Ready` at the end of __netpoll_claim_done opens
+  //             the gate.
   //
   // ⭐ Parked is a CONSTANT where Go stores a `*g`. Go's word lives in a per-fd pollDesc, so it has
   // to name WHICH goroutine parked; ours lives in the GT itself, so "which" is the word's own
-  // address and the fourth state degenerates to a sentinel. That is the only structural difference
-  // between this state machine and netpoll.go's, and it is why `netpollunblock`'s return value —
-  // Go's `*g` — is here just "the GT you were given, or nothing".
+  // address and the fourth state degenerates to a sentinel. That is the first of the two structural
+  // differences between this state machine and netpoll.go's, and it is why `netpollunblock`'s
+  // return value — Go's `*g` — is here just "the GT you were given, or nothing".
+  //
+  // ⭐⭐ Claiming is the SECOND, and it exists because OUR COMPLETER HAS SOMETHING TO PUBLISH AND
+  // GO'S DOES NOT. In netpoll.go the transition to `pdReady` IS the entire notification: a goroutine
+  // that observes it reads nothing else, so "owned" and "publishable" are the same instant and four
+  // states suffice. Our completers carry io_result_val / io_error_code / status alongside the word,
+  // so those are two DIFFERENT instants and the word has to be able to say which one it is in.
+  //
+  // Claiming BEFORE publishing is necessary and not sufficient, which is why this is a fifth state
+  // and not merely a reordering. Were the claim to go straight to `Ready`, a waiter claimed from
+  // `Wait` — which is still RUNNING — would see __netpoll_woken() == 1 immediately and leave the
+  // park BEFORE its results were stored; the completer would then write io_result_val into a GT that
+  // had already moved on to its next operation, which is the class comment's defect with the roles
+  // swapped. `Claiming` is what makes the ownership visible without making it consumable.
+  //
+  // ⭐ ITS NUMBER IS APPENDED, NOT INSERTED. Keeping Go's four at Go's values is what lets anyone
+  // diffing this against netpoll.go read pdNil/pdReady/pdWait/`*g` across unchanged; renumbering
+  // Parked to make room would have broken that correspondence for the one constant that already
+  // carries the biggest structural deviation. Nothing here tests the word by ORDER, so appending
+  // costs no property: Go's `old > pdWait` throw is spelled as two explicit equality tests in
+  // __netpoll_park_done. Nor could any placement have preserved it — `old > pdWait` means "invalid
+  // at park_done", and Claiming is not invalid there, it is a state to WAIT OUT. It needs its own
+  // arm wherever it appears, at any number.
   public const int NetpollNil = 0;
   public const int NetpollReady = 1;
   public const int NetpollWait = 2;
   public const int NetpollParked = 3;
+  public const int NetpollClaiming = 4;
 
   // ---- Stack growth ----
   //

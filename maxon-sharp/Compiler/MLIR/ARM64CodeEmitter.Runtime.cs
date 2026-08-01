@@ -4516,7 +4516,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X0, GtOffSp, 8);
 
     // from-GT's context is now fully saved. Set ioYielded=1 to signal that it's
-    // safe for a completer on another thread (__netpoll_unblock's post-claim spin, __io_op_done,
+    // safe for a completer on another thread (__netpoll_claim_done's post-claim spin, __io_op_done,
     // __gt_process_pending_waiter) to enqueue this GT.
     //
     // StoreStore barrier FIRST. Everything that makes the GT resumable — the callee-saved
@@ -4535,7 +4535,7 @@ public partial class ARM64CodeEmitter {
     // off-stack (safe to enqueue)" and never lingers stale-1 on a running GT. Without this,
     // a GT that switched off once (ioYielded=1) and was later resumed keeps ioYielded=1 while
     // running; the ioYielded==1 gates (__io_op_done / __gt_process_pending_waiter /
-    // __netpoll_unblock's post-claim spin) would then enqueue a still-running GT and a second M
+    // __netpoll_claim_done's post-claim spin) would then enqueue a still-running GT and a second M
     // would resume it onto the same stack — the double-schedule.
     EmitMovRegImm(ARM64Register.X9, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X1, GtOffIoYielded, 8);
@@ -6930,7 +6930,7 @@ public partial class ARM64CodeEmitter {
     // half-saved register block — garbage / SIGILL). The awaiter cleared ioYielded=0 before
     // publishing promise.waiter, and __gt_context_switch sets it to 1 after the save; the
     // await idle path guarantees the awaiter always reaches a context switch, so this
-    // terminates. Same bound as __netpoll_unblock's post-claim spin.
+    // terminates. Same bound as __netpoll_claim_done's post-claim spin.
     DefineLabel("__gt_ppw_spin");
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // w
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffIoYielded, 8);
@@ -7033,7 +7033,8 @@ public partial class ARM64CodeEmitter {
   // the handshake, sitting where a future reader would reasonably copy it. It also still carried the
   // pre-netpoll unbounded `ioYielded` spin, which under the park protocol can no longer terminate:
   // a `Wait` parker is entitled to abort and never set the flag, so a live caller would have hung.
-  // x86's twin IS live and DOES claim through __netpoll_unblock; that is the one to read.
+  // x86's twin IS live and DOES claim through __netpoll_claim / __netpoll_claim_done; that is the
+  // one to read.
 
   /// <summary>
   /// __io_get_last_error() -> i64 in X0: returns gt->io_error_code for the current
@@ -7062,6 +7063,7 @@ public partial class ARM64CodeEmitter {
     // Stack: [x29+16] = nready, [x29+24] = loop index, [x29+32] = kevent ptr
     //        [x29+40..55] = zero timeout / reused for result and getsockopt buffers
     //        [x29+56] = saved ctx ptr, [x29+64] = saved waiter GT ptr
+    //        [x29+72] = park state the wakeup was claimed FROM (__netpoll_claim -> __netpoll_claim_done)
     // Thread safety: green threads run across multiple worker OS threads, so the
     // kevent eventlist must NOT be shared. Each call reads into the calling P's own
     // 1 KiB slice of __io_kevent_bufs_base (computed below into [x29+0x50]); kqueue's
@@ -7179,7 +7181,34 @@ public partial class ARM64CodeEmitter {
     // X0 = result (bytes transferred, fd, or error code)
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save result
 
-    // Reload waiter GT and store result
+    // ⭐ STEP 1 — CLAIM THE WAKEUP (Go's netpollunblock, first half), BEFORE a single result field is
+    // written. This one call replaces the three-way guard that used to stand here — main-thread,
+    // self, and the ioYielded snapshot — and it replaces it because that third guard was UNABLE to do
+    // its job: "ioYielded == 0" cannot distinguish a waiter that will self-detect from one that is
+    // about to park, since those are the same instant. `Wait` versus `Parked` is exactly that
+    // distinction, and it is decided atomically. See RuntimeEmitter.Netpoll.cs, which owns the state
+    // machine for every target.
+    //
+    // ⚠ IT COMES FIRST, AND THAT ORDER IS THE FIX RATHER THAN A TIDY-UP. Publishing before claiming
+    // left the word reading `Parked` for the whole of a healthy publish, which is indistinguishable
+    // from a lost wakeup — so the recovery net raced live completers, and each rescue handed the
+    // completer's late claim to the waiter's NEXT park. Claiming first makes the ownership visible,
+    // and a claim we LOSE now means we write nothing at all: another party owns this GT's fields.
+    // The getsockopt/close side effects above are deliberately outside the claim — they are the
+    // kernel's business, not the waiter's, and must happen however the claim goes.
+    //
+    // Still non-blocking as far as the DECISION goes, which is what this site requires: it runs
+    // inside the loop that DRIVES I/O, and a decision that waited on another thread would stall
+    // every other pending completion — the livelock __io_op_done documents. It waits only AFTER it
+    // has claimed a GT that has already committed to parking, and that wait is bounded by a
+    // scheduling quantum because a committed parker runs straight-line to ioYielded=1.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 64, 8); // waiter GT
+    EmitBranchLink("__netpoll_claim");
+    EmitCbz(ARM64Register.X0, "__io_poll_kqueue_free_ctx");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 72, 8); // claimedFrom
+
+    // STEP 2 — PUBLISH. The waiter comes out of the frame: X10 has been clobbered by every call
+    // since it was homed at [x29+64], the claim above included.
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X29, 64, 8); // waiter GT
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // result
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffIoResultVal, 8);
@@ -7190,35 +7219,25 @@ public partial class ARM64CodeEmitter {
 
     // StoreStore RELEASE: publish io_result_val / io_error_code BEFORE the status that
     // advertises them. arm64 lets stores to different addresses retire out of order, so without
-    // this a waiter that SELF-DETECTS status=ready (maxon_net_tcp_connect's rt_ntc_resumed reads
-    // io_result_val the instant it sees the status change) can read the PREVIOUS value of
-    // io_result_val — 0 on a first connect, which rt_ntc_check_result accepts as a valid fd and
-    // wraps in a __ManagedSocket. A silent wrong answer, not a hang. __io_op_done, the sync-side
-    // twin of this completion, has always taken this fence and says why; the kqueue side did not.
+    // this a reader that observes status=ready can read the PREVIOUS value of io_result_val — 0 on a
+    // first connect, which rt_ntc_check_result accepts as a valid fd and wraps in a __ManagedSocket.
+    // A silent wrong answer, not a hang. __io_op_done, the sync-side twin of this completion, has
+    // always taken this fence and says why; the kqueue side did not.
+    //
+    // ⚠ IT IS NOT MADE REDUNDANT BY THE STLR IN __netpoll_claim_done BELOW, though that one orders
+    // all three of these stores before the word goes `Ready`. `status` is read by paths that never
+    // armed a park word at all (__gt_timer_check's gate, the debug agent), and the release rule binds
+    // only readers of the word. This fence is what those readers stand on.
     EmitDmbIsh();
 
     EmitMovRegImm(ARM64Register.X0, GtStatusReady);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffStatus, 8);
 
-    // ⭐ CLAIM THE WAKEUP (Go's netpollunblock). This one call replaces the three-way guard that
-    // used to stand here — main-thread, self, and the ioYielded snapshot — and it replaces it
-    // because that third guard was UNABLE to do its job: "ioYielded == 0" cannot distinguish a
-    // waiter that will self-detect from one that is about to park, since those are the same
-    // instant. `Wait` versus `Parked` is exactly that distinction, and it is decided atomically.
-    // See RuntimeEmitter.Netpoll.cs, which owns the state machine for every target.
-    //
-    // The status store above needs no StoreLoad fence of its own any more: the claim's CAS is
-    // LDAXR/STLXR, so its release half orders that store before the claim becomes visible, and the
-    // waiter's own commit CAS supplies the acquire half. An acquire/release RMW subsumes the
-    // barrier the old two-word Dekker handshake had to hand-roll.
-    //
-    // Still non-blocking as far as the DECISION goes, which is what this site requires: it runs
-    // inside the loop that DRIVES I/O, and a decision that waited on another thread would stall
-    // every other pending completion — the livelock __io_op_done documents. It waits only AFTER it
-    // has claimed a GT that has already committed to parking, and that wait is bounded by a
-    // scheduling quantum because a committed parker runs straight-line to ioYielded=1.
-    EmitMovRegReg(ARM64Register.X0, ARM64Register.X10);
-    EmitBranchLink("__netpoll_unblock");
+    // ⭐ STEP 3/4 — RELEASE the word and find out whether the enqueue is ours. Nothing below may read
+    // or write this GT except through the returned pointer.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 64, 8); // waiter GT
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 72, 8); // claimedFrom
+    EmitBranchLink("__netpoll_claim_done");
     EmitCbz(ARM64Register.X0, "__io_poll_kqueue_free_ctx");
     EmitBranchLink("__gt_enqueue");
 
@@ -7268,8 +7287,8 @@ public partial class ARM64CodeEmitter {
   /// ⚠ THERE WERE THREE UNTIL THE NETPOLL PORT, and this comment said so for one rung after it
   /// stopped being true. __io_poll_kqueue's StoreLoad existed to order its status store before its
   /// own `ioYielded` LOAD, and that load no longer happens there: it moved inside
-  /// __netpoll_unblock, behind a claim whose LDAXR/STLXR supplies the same pairing. The fence went
-  /// with the load it was fencing.
+  /// __netpoll_claim_done, behind a claim whose LDAXR/STLXR supplies the same pairing. The fence
+  /// went with the load it was fencing.
   /// </summary>
   private void EmitMarkWaitingAndArmKevent(int keventSlot, string siteName) {
     // netpoll: take ownership of this GT's wakeup BEFORE the registration a completer can see.
@@ -7314,19 +7333,19 @@ public partial class ARM64CodeEmitter {
   /// the ONLY question any of them is allowed to ask — see RuntimeEmitter.Netpoll.cs's release rule.
   ///
   /// ⚠ IT USED TO READ `status`, AND THAT WAS THE SECOND CHANNEL THE PROTOCOL COULD NOT AFFORD.
-  /// A completer publishes io_result_val and status BEFORE it claims, so `status != waiting` is
-  /// true for a window in which the word is still `Wait`; a waiter that left the park there ran
-  /// __netpoll_park_done, released a word its completer was still in flight toward, and handed the
-  /// late claim to its NEXT park. Measured, not reasoned: MAXON_GT_CLAIM_DELAY_MS=5 took
-  /// scripts/netpoll-park-driver from 5/5 clean to 0/5.
+  /// A completer writes io_result_val and status while it OWNS the word but has not released it, so
+  /// `status != waiting` is true for a window in which the word is not yet `Ready`; a waiter that
+  /// left the park there ran __netpoll_park_done, released a word its completer was still in flight
+  /// toward, and handed the late claim to its NEXT park. Measured, not reasoned:
+  /// MAXON_GT_CLAIM_DELAY_MS=5 took scripts/netpoll-park-driver from 5/5 clean to 0/5.
   ///
   /// ⚠ THE DMB IS GONE WITH THE LOAD IT WAS FENCING, NOT BECAUSE THE ORDERING STOPPED MATTERING.
   /// It was the acquire half of the completer's release fence, hand-rolled because a control
   /// dependency orders a later STORE on arm64 and never a later LOAD. That acquire MOVED INSIDE
-  /// __netpoll_woken, which LDARs the very word the claiming CAS's STLXR released — a genuine
+  /// __netpoll_woken, which LDARs the very word __netpoll_claim_done's STLR released — a genuine
   /// acquire/release pair on one location, which is strictly stronger than a fence standing in for
   /// one. This is the SECOND fence retired for exactly this reason; the first was
-  /// __io_poll_kqueue's StoreLoad, whose `ioYielded` load moved inside __netpoll_unblock.
+  /// __io_poll_kqueue's StoreLoad, whose `ioYielded` load moved inside __netpoll_claim_done.
   ///
   /// ⚠ THIS IS A BL, NOT A LOAD: it clobbers the whole caller-saved set, not just X0/X9 as the
   /// status read did. Every value a caller needs across it must already be homed in the frame —
@@ -7381,8 +7400,13 @@ public partial class ARM64CodeEmitter {
     // ⭐ COMMIT THE PARK, AND LET IT FAIL (Go's netpollblockcommit). Everything from here to
     // __gt_context_switch's ioYielded=1 is straight-line code, so a completer that claims `Parked`
     // knows we cannot turn around and may wait for the context save. If the commit fails, a
-    // completer has already claimed the wakeup, so we must NOT park: abort exactly as if the
+    // completer has already taken the wakeup, so we must NOT park: abort exactly as if the
     // pre-check above had caught it.
+    //
+    // ⚠ "TAKEN" IS NOT "PUBLISHED": the CAS fails against `Claiming` too, and that means the results
+    // are still going in. The abort is safe only because it converges on {labelPrefix}_park_done,
+    // whose __netpoll_park_done waits `Claiming` out before the caller's resume path reads
+    // io_result_val. That is one more reason this park has a single exit.
     //
     // The MAIN OS THREAD never commits — it has no schedulable stack and nothing ever enqueues it,
     // so "committed to park" is not a state it can be in — and __netpoll_commit is where that is
@@ -7420,8 +7444,10 @@ public partial class ARM64CodeEmitter {
     EmitCbz(ARM64Register.X0, $"{labelPrefix}_try_dequeue");
 
     // A COMMITTED WORKER GT cannot: the only two things that enqueue a `Parked` GT are
-    // __netpoll_unblock and the recovery net, and BOTH reach the enqueue only by winning the CAS
-    // that leaves the word `Ready` — which the ask above would have seen. Resuming here therefore
+    // __netpoll_claim/__netpoll_claim_done and the recovery net, and BOTH reach the enqueue only by
+    // winning a CAS off `Parked` and leaving the word `Ready` — which the ask above would have seen.
+    // (The claim pair passes through `Claiming` on the way, and the ask declines that too, so a GT
+    // resuming here cannot be one whose completer is merely mid-publish.) Resuming here therefore
     // means some OTHER resumer picked up a parked I/O waiter — the hazard B1 could only describe
     // ("properties of today's code, not invariants"), now a checked one. Say so instead of looping:
     // a second commit attempt would find `Parked` rather than `Wait`, fail, and fall through to an
