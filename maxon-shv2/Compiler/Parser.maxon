@@ -1077,6 +1077,34 @@ let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 // safe to share across the per-file parse fan-out. A method-free file never touches the field at all.
 let sharedEmptySiblingReceivers = SiblingReceiverMap.create()
 
+// An interface NAME -> its transitive witness slot list (`IrInterface.interfaceWitnessSlots`), memoized per
+// Parser. The key is the constraint's interface name, which is the same key the interface registry is
+// keyed by, so a lookup here and a lookup there answer about one interface.
+typealias WitnessSlotsByInterfaceMap = Map with (ByteArray, CollectedInterfaceMethodArray)
+
+// ⚠⚠ **THE SLOT LIST IS BUILT ONCE PER INTERFACE PER FILE, NOT ONCE PER DISPATCH SITE, AND THE DIFFERENCE
+// IS A MEASURED QUADRATIC.** `findWitnessDispatchCandidates` runs at EVERY method call on a constrained type
+// parameter and needs the slot NUMBERING to compile `[witnessAddr + 24 + 8*i]`; asking
+// `interfaceWitnessSlotsOf` there rebuilt the whole transitive list at each one, and a `CollectedInterfaceMethod`
+// is a heap record, so the walk allocates one per requirement. That is O(dispatch sites x requirements) —
+// MEASURED on `Testing/ladders/genwitness.sh 1 <M> dispatch` as `1.02*M^2 + 19*M` extra allocations in
+// `phase:parse` (+200 at M=8 rising to +19,072 at M=128, a ratio approaching x4 per doubling), against a
+// scan that allocated NOTHING before R10c widened it. Memoized, the list is built once per interface the
+// file dispatches through and the per-site cost is a map lookup.
+//
+// ⚠ **PER `Parser` AND NOT ON `ProgramSignatures`, WHICH IS WHERE IT LOOKS LIKE IT BELONGS.** That object is
+// READ-ONLY during parse by design and is SHARED by the per-file parse fan-out; a mutable memo on it would
+// be a data race the moment two files parse at once. A `Parser` is private to one file's parse, which is
+// what makes this shape safe — the same shape and the same reason as `sharedEmptySurfaceRoster`'s rosters.
+//
+// ⚠ The memoized array is HANDED OUT and never mutated by its reader (`findWitnessDispatchCandidates` only
+// reads slots out of it), which is what lets one list serve every site.
+//
+// The INITIAL value is this shared empty map, so a file that dispatches through no constraint at all — the
+// whole corpus bar the generic bodies — allocates nothing. The lazy builder REPLACES the field with a fresh
+// map before its first insert, so this placeholder stays empty and is safe across the parse fan-out.
+let sharedEmptyWitnessSlots = WitnessSlotsByInterfaceMap.create()
+
 // The module-level shared empty type-parameter-FEED array (P1.6-B2) every non-generic consuming function's
 // `ParamConsumeInfo` holds — a feed requires a type parameter, so such a function never fills one and it is
 // never mutated. ONE allocation for the whole compile (like `sharedEmptyDescriptorNeeds`), so a generics-free
@@ -5231,6 +5259,9 @@ export type Parser
 	// `recordScannedType` are the writers); points at `sharedEmptyWhereConstraints` for an unconstrained
 	// type, so a non-generic (or unconstrained-generic) type declaration allocates nothing here.
 	var enclosingWhereConstraints as WhereConstraintArray
+	// ⭐ The transitive witness SLOT LIST of each interface this file dispatches through, memoized off its
+	// shared empty anchor — see `sharedEmptyWitnessSlots` for the quadratic that put it here.
+	var witnessSlotsByInterface as WitnessSlotsByInterfaceMap
 	// ⭐ **THE PARSE-TIME FACTS OF THE MOST RECENTLY EMITTED `witnessDispatch` (P1.7a slice 2b-v)** — its op
 	// INDEX, the interface method's NAME, and the method's declared `throws`. A `try` is written BEFORE its
 	// target, so the only thing that can turn a dispatch into a throwing one is the in-place rewrite
@@ -5554,6 +5585,7 @@ export type Parser
 			enclosingTypeIsEnum: false,
 			enclosingTypeParams: ByteArrayArray.create(),
 			enclosingWhereConstraints: sharedEmptyWhereConstraints,
+			witnessSlotsByInterface: sharedEmptyWitnessSlots,
 			lastWitnessDispatchIndex: 0,
 			lastWitnessDispatchName: EmptySourceText,
 			lastWitnessDispatchThrows: ThrowsClause.none,
@@ -27373,7 +27405,7 @@ export type Parser
 			end 'otherParam'
 
 			let iface = try self.requireInterfaceForParse(constraint.interfaceName, methodTok: errorTok)
-			let slots = self.signatures.interfaceWitnessSlotsOf(iface)
+			let slots = self.witnessSlotsOf(iface)
 			for slotIndex in 0 upto slots.count() 'eachSlot'
 				let slot = try slots.get(slotIndex) otherwise panic("findWitnessDispatchCandidates: slots.get OOB at {slotIndex} below count {slots.count()}")
 				if not slot.method.name.equals(methodName) 'otherMethod'
@@ -27386,6 +27418,28 @@ export type Parser
 
 		return candidates
 	end 'findWitnessDispatchCandidates'
+
+	// `iface`'s transitive witness slot list, built on this file's FIRST dispatch through that interface and
+	// held after — see `sharedEmptyWitnessSlots` for the measured quadratic this removes and for why the memo
+	// is per `Parser` rather than on `ProgramSignatures`.
+	//
+	// The list is a pure function of the interface DECLARATION INDEX, which `ProgramSignatures` fixes before
+	// any parse begins and no parse can move, so one answer serves the whole file — the same property that
+	// makes the numbering safe to bake into another file's emitted offsets in the first place.
+	function witnessSlotsOf(iface IrInterface) returns CollectedInterfaceMethodArray
+		if let existing = try self.witnessSlotsByInterface.get(iface.name) 'alreadyBuilt'
+			return existing
+		end 'alreadyBuilt'
+
+		// COPY-ON-WRITE off the shared empty map before the first dispatch in this file.
+		if self.witnessSlotsByInterface is sharedEmptyWitnessSlots 'firstDispatchInThisFile'
+			self.witnessSlotsByInterface = WitnessSlotsByInterfaceMap.create()
+		end 'firstDispatchInThisFile'
+
+		let slots = self.signatures.interfaceWitnessSlotsOf(iface)
+		self.witnessSlotsByInterface.upsert(iface.name, value: slots)
+		return slots
+	end 'witnessSlotsOf'
 
 	// ⭐ **WHICH CANDIDATE A `.method(…)` CALL MEANS: THE ONE TAKING THIS MANY ARGUMENTS (R10c).** An interface
 	// and its `extends` parents may each declare the name — `Base.label()` beside `Derived.label(width)` is
