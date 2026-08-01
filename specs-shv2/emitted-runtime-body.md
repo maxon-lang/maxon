@@ -32,7 +32,24 @@ __str_bytes_view
 Only the named functions are added, and only to that test's fragment; every test without
 the block renders byte-identically to a test written before the block existed. A name
 that matches no emitted function — or one that names a function the fragment already
-shows — is refused by the compiler, so a misspelling cannot silently pin nothing.
+shows — is refused by the compiler, so a misspelling cannot silently pin nothing. An
+EMPTY block is refused by the spec parser for the same reason: it would render no body at
+all, leaving the golden identical to a test that never asked.
+
+### What it pins, and what it does not
+
+⚠ **This block pins the compiler's Target IR — what the backend DECIDED — not the bytes the
+linker wrote.** It is the `printDataSection` half of the pair, not the ```RequiredData
+half: the text is the printer's own rendering of a lowered, register-allocated body, so it
+moves on any change to lowering, allocation or block structure, and is BLIND to anything
+below it. An instruction encoder that emits different bytes for the same mnemonic and
+operands leaves this golden identical. ```RequiredData / ```RequiredRdata are the gates
+that read the linked image back; ```RequiredRuntime is not one of them.
+
+⚠ It also cannot reach a runtime piece that has no IR at all. The hand-assembled byte-level
+chunks — `__gt_morestack`, `__gt_context_switch` — never enter the module's function list,
+so no spelling of them renders; naming one is refused as "this program emits no function
+named …".
 
 ## Tests
 

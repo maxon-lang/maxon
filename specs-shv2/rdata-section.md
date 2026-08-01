@@ -28,6 +28,17 @@ bytes a spec names. It is read back OUT of the linked binary, never out of the c
 opinion of it, which is what makes it the only gate that can see a section header with a
 wrong RVA or a payload the writer moved.
 
+⚠ **A prefix pins a prefix.** Bytes past the last one a block names are unpinned, so a
+change that APPENDS to the read-only section is invisible to this gate while a change that
+moves the pinned payload, reorders what precedes it, or shortens the section fails loudly.
+Choose a program whose read-only image is small enough that the block covers it — the case
+below pins 64 bytes against a section that is exactly 64 bytes today.
+
+An EMPTY ```RequiredRdata block is refused by the spec parser rather than recorded: the
+empty prefix matches every image ever linked, so it cannot fail, and it cannot express "the
+section is empty" either. A block on a case that expects a COMPILE ERROR is refused for the
+same reason — that case never links, so there is no image to read.
+
 ### Why it exists
 
 A `.rdata` payload registered under a STRUCTURAL label — a `__layout_*` descriptor, a

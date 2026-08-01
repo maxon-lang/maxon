@@ -86,15 +86,13 @@ end 'printDataSection'
 // So the axis is a NAME LIST rather than a boolean. A boolean has only a useless second state here —
 // "render all of it", into every fragment at once — while a list renders exactly the body a rung has
 // just written into exactly the test that is about it, and leaves all 3,198 other goldens byte-
-// identical. A name that matches nothing is REFUSED (`requireRuntimeNamesRenderable`), because a
+// identical. A name that RENDERED nothing is REFUSED (`requireEveryNameRendered`), because a
 // misspelling that quietly rendered nothing would leave a test claiming a gate it does not have.
 //
 // The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
 // owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
 // would make printing a module quadratic in its own output.
 export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray) returns String
-	requireRuntimeNamesRenderable(module, runtimeNames: runtimeNames)
-
 	var body = StringBuilder.create()
 	let dataText = printDataSection(globalData)
 	body.append(dataText)
@@ -106,8 +104,29 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	// own) name their operands against the right register file. See `moduleTargetCpu`.
 	let cpu = moduleTargetCpu(module)
 
+	// ⭐⭐ **THE REFUSAL IS DERIVED FROM THE RENDER, not computed beside it.** One flag per requested
+	// name, and the ONLY thing that raises a flag is the very test the loop below uses to decide
+	// whether to print a function. An earlier draft asked the question twice — a `requireRuntimeNames-
+	// Renderable` pre-pass that scanned the module for each name, and a `namesFunction` predicate the
+	// print loop consulted — which is this project's signature bug in miniature: two readers of one
+	// question, nothing making them agree, and a divergence that reports a WRONG ANSWER rather than a
+	// compile error: the check says the name will render, the skip rule renders nothing, the golden is
+	// recorded without the body, and the test claiming the gate goes green for ever. A future edit to
+	// the skip rule now cannot bypass the refusal, because there is no second rule left to bypass.
+	var rendered = BoolArray.create()
+	rendered.resize(runtimeNames.count())
+
 	for func in module.functions 'eachFunc'
-		if isRuntimeFunction(func) and not namesFunction(runtimeNames, func: func) 'skipRuntime'
+		let named = markNamedBy(runtimeNames, func: func, rendered: rendered)
+
+		// Naming a function the fragment ALREADY shows says nothing new, and reading the block as if it
+		// had would be a reader's mistake. It is caught here rather than in a pre-pass so it, too, reads
+		// the one selection rule.
+		if named and not isRuntimeFunction(func) 'notEmitted'
+			panic("printTargetModule: '{String.from(func.name)}' is not a compiler-emitted runtime function — it is parsed from {func.sourceFilePath} and the fragment already renders it, so naming it in a ```RequiredRuntime block pins nothing new")
+		end 'notEmitted'
+
+		if isRuntimeFunction(func) and not named 'skipRuntime'
 			continue
 		end 'skipRuntime'
 
@@ -119,59 +138,54 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 		afterFirst = true
 	end 'eachFunc'
 
+	requireEveryNameRendered(runtimeNames, rendered: rendered)
+
 	return body.build()
 end 'printTargetModule'
 
-// True when `runtimeNames` names this function. A linear scan over a list a spec author typed by
-// hand — one or two entries, never more — against a `ByteArray` compare, so no `String` is
-// materialized per function per name on the way.
-function namesFunction(runtimeNames RuntimeFunctionNameArray, func IrFunction) returns bool
-	for name in runtimeNames 'each'
+// Raise `rendered[k]` for every name that selects `func`, and answer whether any did. THE one place a
+// name is matched against a function — the print loop's skip rule and the refusal above both read
+// this and nothing else.
+//
+// A linear scan over a list a spec author typed by hand (one or two entries, never more), against
+// `IrFunction.name`'s own `ByteArray`.
+function markNamedBy(runtimeNames RuntimeFunctionNameArray, func IrFunction, rendered BoolArray) returns bool
+	var named = false
+	for (iter, name) in runtimeNames.withIterator() 'each'
 		if func.name.equals(name.toByteArray()) 'match'
-			return true
+			try rendered.set(iter.index(), value: true) otherwise panic("markNamedBy: flag write at {iter.index()} is outside a column sized by the same list")
+			named = true
 		end 'match'
 	end 'each'
-	return false
-end 'namesFunction'
+	return named
+end 'markNamedBy'
 
-// ⭐ **A NAME THAT RENDERS NOTHING IS REFUSED, because the alternative is a test that claims a gate
+// ⭐ **A NAME THAT RENDERED NOTHING IS REFUSED, because the alternative is a test that claims a gate
 // it does not have.** A ```RequiredRuntime block exists to put ONE body under a golden; a typo in it
 // would add nothing to the fragment, the golden would be recorded without the body, and the case
 // would pass for ever while pinning exactly what it pinned before — the "a gate that cannot see its
 // own property must not report PASS" rule, arriving through a spelling mistake.
 //
-// Two refusals, because there are two ways to name nothing:
-//   * NO function of that name — a misspelling, or a runtime family this program does not use (the
-//     emitted runtime is installed on DEMAND, so `__str_bytes_view` exists only in a program whose
-//     stdlib cone takes a String's bytes);
-//   * a function that is NOT compiler-emitted — it is already in the fragment, so naming it says
-//     nothing, and reading the block as if it had would be a reader's mistake this prevents.
+// The cause is a misspelling, or a runtime family this program does not use: the emitted runtime is
+// installed on DEMAND, so `__str_bytes_view` exists only in a program whose stdlib cone takes a
+// String's bytes. (The other way to name nothing — naming a function the fragment already shows — is
+// caught inside the render loop, where the function is in hand.)
+//
+// ⚠ A hand-assembled runtime CHUNK is a third cause and is not repairable by respelling: the byte-
+// level pieces (`__gt_morestack`, `__gt_context_switch`) never enter `module.functions` at all, so
+// they have no IR body to render and cannot be pinned by this mechanism at any spelling.
 //
 // It panics rather than reporting a diagnostic: the list arrives on a `--emit-ir-runtime=` command
 // line, which is the spec runner's own instrument rather than a program's source, and a panic
 // carries the message into the runner's captured stderr where the failing test shows it.
-function requireRuntimeNamesRenderable(module TargetModule, runtimeNames RuntimeFunctionNameArray)
-	for name in runtimeNames 'eachName'
-		let wanted = name.toByteArray()
-		var found = false
-		for func in module.functions 'eachFunc'
-			if not func.name.equals(wanted) 'other'
-				continue
-			end 'other'
-
-			if not isRuntimeFunction(func) 'notEmitted'
-				panic("printTargetModule: '{name}' is not a compiler-emitted runtime function — it is parsed from {func.sourceFilePath} and the fragment already renders it, so naming it in a ```RequiredRuntime block pins nothing new")
-			end 'notEmitted'
-
-			found = true
-			break
-		end 'eachFunc'
-
-		if not found 'noSuchFunction'
-			panic("printTargetModule: this program emits no function named '{name}', so a ```RequiredRuntime block naming it would render nothing and the golden would pin nothing. Check the spelling, or pick a program whose runtime includes it — the emitted runtime is installed on demand")
+function requireEveryNameRendered(runtimeNames RuntimeFunctionNameArray, rendered BoolArray)
+	for (iter, name) in runtimeNames.withIterator() 'eachName'
+		let didRender = try rendered.get(iter.index()) otherwise panic("requireEveryNameRendered: flag read at {iter.index()} is outside a column sized by the same list")
+		if not didRender 'noSuchFunction'
+			panic("printTargetModule: this program emits no function named '{name}', so a ```RequiredRuntime block naming it would render nothing and the golden would pin nothing. Check the spelling, or pick a program whose runtime includes it — the emitted runtime is installed on demand, and a hand-assembled runtime chunk has no IR body at all")
 		end 'noSuchFunction'
 	end 'eachName'
-end 'requireRuntimeNamesRenderable'
+end 'requireEveryNameRendered'
 
 // True for the runtime/entry functions shv2's backend synthesizes (not from user source): the entry stub
 // `mrt_start`, the emitted `__`-prefixed runtime (`__slab_*`, `__mm_*`, `__destruct_*`, …), the

@@ -634,16 +634,21 @@ export type MaxonArgs
 			end 'emitIrFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
 				// ⚠ It cannot be swallowed by the arm above even though it shares its prefix: that one
 				// tests `==`, and this one is the only arm that tests this prefix.
-				let named = try CommandLine.optionValue(arg) otherwise ""
-				// A VALUELESS `--emit-ir-runtime=` is a BAD OPTION, not an empty list — the same door
-				// `--compiler=` refuses through. Empty is how this field spells "the caller named no
-				// runtime function", so letting an empty VALUE reach it would render a sidecar with no
-				// runtime body under a command line that asked for one, and the golden built from it
-				// would pin exactly what it pinned before while claiming otherwise.
-				if named.isEmpty() 'noRuntimeNames'
+				// ⚠ **THE CHECK IS ON THE PARSED NAMES, NOT ON THE RAW VALUE, and that is the whole
+				// point of doing it after the split.** A valueless `--emit-ir-runtime=` is a BAD OPTION,
+				// not an empty list — the same door `--compiler=` refuses through — but so is
+				// `--emit-ir-runtime=,` and `--emit-ir-runtime=" "`, which carry a NON-empty value that
+				// names no function: `splitRuntimeNames` drops empty parts, so a raw-value check passed
+				// them straight through to an empty list. Empty is how this field spells "the caller
+				// named no runtime function", so either spelling would render a sidecar with no runtime
+				// body under a command line that asked for one, and the golden built from it would pin
+				// exactly what it pinned before while claiming otherwise. One check, on the value that
+				// actually reaches the printer.
+				let named = splitRuntimeNames(try CommandLine.optionValue(arg) otherwise "")
+				if named.count() == 0 'noRuntimeNames'
 					badOption = firstBadOption(badOption, arg: arg)
 				end 'noRuntimeNames' else 'hasRuntimeNames'
-					runtimeIrNames = splitRuntimeNames(named)
+					runtimeIrNames = named
 					// A list of functions to PRINT is a request for the printing. Without this the flag
 					// would be silently inert whenever `--emit-ir` was forgotten — a no-op that looks like
 					// a rendering, which is the one outcome the printer's own refusals exist to prevent.

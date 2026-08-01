@@ -260,13 +260,18 @@ end 'SpecStdout'
 // ONE ```RequiredData / ```RequiredRdata block: which section it names, and the typed-value text it
 // claims for it.
 //
-// ⚠ **AN ARRAY OF THESE REPLACED A `SpecStderr`-SHAPED UNION, and the union's own argument is what
-// retired it.** `unpinned`/`pinned` existed to distinguish "says nothing about `.data`" from "says
-// `.data` is EMPTY", which an empty String cannot do — and an ARRAY draws exactly that distinction
-// with no arm at all: a case that says nothing contributes no ENTRY, and a case pinning an empty
-// section contributes an entry whose text is empty. The count is the literal number of blocks the
-// case wrote, so it is not a sentinel; and unlike a pair of union-valued fields it does not have to
-// grow a field per section.
+// ⚠ **AN ARRAY OF THESE REPLACED A `SpecStderr`-SHAPED UNION.** `unpinned`/`pinned` existed to
+// distinguish "says nothing about `.data`" from "says `.data` is EMPTY", which an empty String
+// cannot do; an ARRAY draws the first half of that distinction with no arm at all — a case that says
+// nothing contributes no ENTRY — and unlike a pair of union-valued fields it does not have to grow a
+// field per section. The count is the literal number of blocks the case wrote, so it is not a
+// sentinel.
+//
+// ⚠⚠ **THE SECOND HALF OF THAT DISTINCTION DOES NOT EXIST, AND THE UNION NEVER DELIVERED IT EITHER.**
+// "The section is EMPTY" is not a claim this gate can make, because the compare is a PREFIX
+// (`SpecTestRunner.compareLinkedSection`) and the empty prefix matches every image ever linked —
+// `pinned("")` was as vacuous as `pinned` was expressive. An empty block is therefore REFUSED at
+// parse time (`refuseVacuousDirective`) rather than recorded as a claim nothing can fail.
 export type SpecSectionPin
 	export let section as LinkedSectionKind
 	export let text as String
@@ -660,19 +665,17 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		// reading and the recording are written once and the difference is the argument. See
 		// `RequiredDataFence` for why the two fences cannot swallow one another.
 		if line.startsWith(RequiredDataFence) 'globalsPin'
-			i = pushSectionPin(lines, openIndex: i, section: LinkedSectionKind.globals, pins: sectionPins)
+			i = pushSectionPin(lines, openIndex: i, testName: name, fence: RequiredDataFence, section: LinkedSectionKind.globals, pins: sectionPins)
 			continue
 		end 'globalsPin'
 
 		if line.startsWith(RequiredRdataFence) 'readOnlyPin'
-			i = pushSectionPin(lines, openIndex: i, section: LinkedSectionKind.readOnly, pins: sectionPins)
+			i = pushSectionPin(lines, openIndex: i, testName: name, fence: RequiredRdataFence, section: LinkedSectionKind.readOnly, pins: sectionPins)
 			continue
 		end 'readOnlyPin'
 
 		if line.startsWith(RequiredRuntimeFence) 'runtimeBlock'
-			let block = readFence(lines, openIndex: i)
-			runtimeNames = parseRuntimeNames(block.text)
-			i = block.nextIndex
+			i = pushRuntimeNames(lines, openIndex: i, testName: name, names: runtimeNames)
 			continue
 		end 'runtimeBlock'
 
@@ -709,6 +712,18 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// and a spec carrying both is asserting the compile FAILS — which no exit code of the
 	// program it never produced could also be true of.
 	if haveCompilerError 'rejected'
+		// ⭐⭐ **A REJECTED CASE PRODUCES NO BINARY, so every block that reads one is refused here
+		// rather than silently discarded** — and silently discarded is exactly what happened: a
+		// ```RequiredRdata claiming bytes no image could hold rode along beside a ```maxoncstderr and
+		// the case PASSED, because `SpecExpectation.compilerError` has nowhere to carry a section pin
+		// and the compile that would have been read never linked. A ```RequiredRuntime is the same
+		// story one flag over: the runner still spells `--emit-ir-runtime=` onto the command line, but
+		// the compile fails before the printer runs, so neither the render nor the printer's own
+		// misspelling refusal ever happens.
+		if sectionPins.count() > 0 or runtimeNames.count() > 0 'pinsOnARejectedCase'
+			panic("SpecParser: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
+		end 'pinsOnARejectedCase'
+
 		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError), targets: targets, runtimeNames: runtimeNames))
 		return i
 	end 'rejected'
@@ -727,24 +742,70 @@ end 'scanTestFromMarker'
 // Consume a section-pin fence opening at `openIndex` and record what it claims about `section`,
 // returning the line index to resume the block scan from. THE one place a pin is read, so the two
 // fences cannot come to disagree about how a block becomes a claim.
-function pushSectionPin(lines StringArray, openIndex LineIndex, section LinkedSectionKind, pins SpecSectionPinArray) returns LineIndex
+//
+// ⚠ Pins ACCUMULATE, which is why this pushes rather than assigns: a case may pin both sections, and
+// a second block of the same kind is still a second claim about the same link rather than a
+// replacement for the first.
+function pushSectionPin(lines StringArray, openIndex LineIndex, testName String, fence String, section LinkedSectionKind, pins SpecSectionPinArray) returns LineIndex
 	let block = readFence(lines, openIndex: openIndex)
-	pins.push(SpecSectionPin.create(section, text: block.text.trim()))
+	let text = block.text.trim()
+
+	// A section pin is compared as a PREFIX (`SpecTestRunner.compareLinkedSection`), and the empty
+	// prefix is a prefix of EVERY image — so a block with no typed values is a claim no binary can
+	// fail. See `refuseVacuousDirective`.
+	if text.isEmpty() 'noValues'
+		refuseVacuousDirective(testName, fence: fence, remedy: "write the typed values it claims (`i64 42`, `i8 1`, `f64 3.14`, one per line), or delete the block. A section pin is compared as a PREFIX, and an EMPTY prefix matches every image ever linked — it cannot even say the section is empty")
+	end 'noValues'
+
+	pins.push(SpecSectionPin.create(section, text: text))
 	return block.nextIndex
 end 'pushSectionPin'
 
-// The function names a ```RequiredRuntime block lists — one per line, blank lines skipped, exactly
-// as `parseTypedSectionValues` skips them in a section pin.
-function parseRuntimeNames(block String) returns RuntimeFunctionNameArray
-	var names = RuntimeFunctionNameArray.create()
-	for rawLine in block.split("\n") 'eachLine'
+// Consume a ```RequiredRuntime fence and record the emitted-function names it lists — one per line,
+// blank lines skipped, exactly as `parseTypedSectionValues` skips them in a section pin.
+//
+// ⚠ Names ACCUMULATE across blocks, for `pushSectionPin`'s reason and one more: this used to ASSIGN,
+// so a case carrying two ```RequiredRuntime blocks silently rendered only the second one's bodies
+// while reading as though it had asked for both.
+function pushRuntimeNames(lines StringArray, openIndex LineIndex, testName String, names RuntimeFunctionNameArray) returns LineIndex
+	let block = readFence(lines, openIndex: openIndex)
+
+	// What THIS block contributed is the difference the accumulator itself reports — not a counter
+	// beside it, which would be a second tally of one fact and free to disagree with the pushes.
+	let before = names.count()
+
+	for rawLine in block.text.split("\n") 'eachLine'
 		let name = rawLine.trim()
 		if not name.isEmpty() 'nonBlank'
 			names.push(name)
 		end 'nonBlank'
 	end 'eachLine'
-	return names
-end 'parseRuntimeNames'
+
+	// ⚠ **THE REFUSAL THE COMPILER'S OWN CANNOT REACH.** `TargetPrinter.requireEveryNameRendered`
+	// catches a MISSPELLED name, but it only ever runs on a `--emit-ir-runtime=` the runner emitted —
+	// and the runner emits nothing for a block that listed nothing. An empty block therefore renders
+	// the same golden a test WITHOUT the block renders, for ever, while claiming a gate on an emitted
+	// body. See `refuseVacuousDirective`.
+	if names.count() == before 'noNames'
+		refuseVacuousDirective(testName, fence: RequiredRuntimeFence, remedy: "name the emitted functions it renders (`__str_bytes_view`, `mrt_start`, one per line), or delete the block. An empty one renders no body at all, so the golden is byte-identical to a test that never asked")
+	end 'noNames'
+
+	return block.nextIndex
+end 'pushRuntimeNames'
+
+// ⭐⭐ **A DIRECTIVE THAT PINS NOTHING IS REFUSED, and it is `pinsAnyResult`'s rule aimed one level
+// down.** That guard asks whether a case pinned ANY result and panics when it pinned none; this asks
+// whether each block a case DID write can fail, because a block that cannot fail is worse than an
+// absent one on both counts — it claims a gate the case does not have, AND it satisfies the guard
+// that would otherwise have caught the case for having no gate at all. (Measured, not feared: a case
+// whose only block was an empty ```RequiredRdata passed `pinsAnyResult` and then passed its own pin,
+// checking literally nothing.)
+//
+// It panics rather than skipping the case for the reason `pinsNothing` panics: a spec-authoring
+// mistake that DOWNGRADED itself to a skip would be the same silence one step quieter.
+function refuseVacuousDirective(testName String, fence String, remedy String)
+	panic("SpecParser: test '{testName}' carries a {fence} block that pins NOTHING — {remedy}. A block that no binary can fail is not a gate, and it also satisfies the `pinsAnyResult` guard that exists to catch a case with nothing to check")
+end 'refuseVacuousDirective'
 
 // Does this case assert ANYTHING about the run? The push condition, and the one place the four halves of
 // a run expectation are asked as a group — a fifth half added to `SpecExpectation.run` without a clause
