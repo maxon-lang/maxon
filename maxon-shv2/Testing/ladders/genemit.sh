@@ -3,8 +3,8 @@
 #
 # The question: `phase:encode` reads superlinear in CPU on the scale corpus (~x2.3 per doubling
 # against a ladder that doubles) while its allocations read ~x1.95. That is the shape only the CPU
-# column can see — a cost that walks or re-walks without allocating. The corpus doubles all
-# twenty-five knobs at once, so it cannot say whether the term is per-FUNCTION or per-op-WITHIN a
+# column can see — a cost that walks or re-walks without allocating. The corpus doubles
+# EVERY knob it has at once, so it cannot say whether the term is per-FUNCTION or per-op-WITHIN a
 # function: both read x2 there.
 #
 # ⚠ THE THREE KNOBS ARE INDEPENDENT, WHICH IS THE WHOLE POINT (the same discipline gennest.sh and

@@ -224,6 +224,11 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// real message is in another process's stderr. The workers inherit the answer by never starting.
 	requireRunnerAvailable(effectiveTarget)
 
+	// The hand-built ladders' index against the ladders themselves, asked once and by the PARENT for
+	// `requireRunnerAvailable`'s reason. It rides the suite because the suite is the thing that already
+	// runs: a check nobody runs is exactly the drift it exists to catch, one level up (see LadderIndex).
+	requireLadderIndexComplete()
+
 	let run = try runSpecPool(compilerExe, workerExe: workerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return 1

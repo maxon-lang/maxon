@@ -11,12 +11,16 @@
 # (`splitChainEnd` vs `splitBlockInPlace`) — two code paths, two growth curves, and the alias ladder
 # cannot see this one at all: no store or cast makes a function RETURN a narrow alias.
 #
-# ⚠ **AND `ScaleCorpus.maxon` CANNOT EITHER — for the reason `genrangesites.sh`'s header gives about
-# guards in general, PLUS one of its own: not one generated function has a non-full ranged RETURN type.**
+# ⚠ **`ScaleCorpus.maxon` COULD NOT EITHER, UNTIL A2a — and the reason it could not is worth keeping.**
 # `ScaleXHoldValue`, `ScaleMeasure<N>`, `ScaleElement` and the rest are all declared
 # `int(i64.min to i64.max)`, and `rangeIsFull` discards a full range before a site can be recorded at
-# all. So `phase:insertRangeChecks` reads a flat Δ0 for this whole path at every rung of the standing
-# instrument — the CORPUS blind spot, which no amount of CPU-column coverage cures.
+# all, so not one generated function had a non-full ranged RETURN type and `phase:insertRangeChecks` read
+# a flat Δ0 for this whole path at every rung — the CORPUS blind spot, which no amount of CPU-column
+# coverage cures. The corpus's `p_rreturn` knob (`RangedReturnSitesBase`) now generates exactly this
+# shape's `onefunc` mode at a DOUBLING site count, 8 at rung 0 to 256 at rung 5, so the axis is on the
+# standing instrument and the cure below has something that re-checks it. THIS LADDER STAYS, for what the
+# corpus knob deliberately is not: it drives n to 400+ in one function with everything else held still,
+# and it carries the `spread` CONTROL the corpus does not pay for at every rung.
 #
 # ⭐ **WHAT IT MEASURED (A1h, 2026-07-31).** `findRetBlock` walked every `func.blockRefs` entry and read
 # each terminator, ONCE PER SITE — and each guard it emits APPENDS `__rc_ok` + `__rc_panic` to the very

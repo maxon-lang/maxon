@@ -1,0 +1,203 @@
+// LadderIndex — the ONE fact `Testing/ladders/README.md` writes down twice, and the check between the
+// two copies.
+//
+// That directory's own thesis is that **a headline nobody can re-run is not a result**: every optimizer
+// pass used to build a throwaway ladder, throw it away, and leave a number in the trend log nobody could
+// ever reproduce. The generators are kept so the numbers stay re-runnable. But a generator nobody can
+// FIND is the same failure one step later — and the only thing that makes one findable is a row in that
+// README's table.
+//
+// ⚠ **THE TABLE HAD DRIFTED, SILENTLY, FOR SIX SCRIPTS** (`genborrow`, `gennest`, `genstring-grapheme`,
+// `genstringviews`, `genwhitelist`, `gentuples`) — 25 rows against 31 scripts when this was written, and
+// `gennest.sh` was even discussed in the PROSE while having no row, which is the worst version: a reader
+// who greps the table concludes the ladder does not exist, and a reader who reads the prose cannot tell
+// whether the omission is deliberate. **Nothing anywhere reconciled the two.** A hand-maintained list
+// beside a directory is the project's own signature bug — ONE FACT WRITTEN TWICE — and the cure it has
+// settled on everywhere else (the error-code registry, `RungDriver`, `mainSource`'s driver list) is
+// never "be careful": it is a check the copies are compared by, wired to something that already runs.
+//
+// ⭐ **WHY A CHECK RATHER THAN A GENERATED TABLE.** Only ONE of the table's three columns is derivable.
+// The script NAME is; the SHAPE and THE QUESTION IT ANSWERS are prose a human wrote after reading the
+// generator, and they are the whole value of the index — `genwidelive.sh`'s row explains that its two
+// modes are a shape and its control rather than two axes, which no header field could have said. To
+// generate them, every script would have to carry those sentences in a machine-readable field, which is
+// the SAME sentence in two places again (the header comment already says it, at length, for a reader who
+// opens the file). So the derivable half is DERIVED — the row SET, which is exactly the half that
+// drifted — and the prose half stays hand-written and is merely required to EXIST.
+//
+// ⚠ **IT IS CHECKED IN BOTH DIRECTIONS, AND FOR DUPLICATES**, because all three failures are real and
+// only one of them is the one that happened: a script with no row is a measurement nobody will find, a
+// row naming a script that is not there is a reader sent after a generator that was renamed or deleted,
+// and two rows for one script are two descriptions free to disagree — the disease itself, inside the
+// cure.
+//
+// WHAT COUNTS AS A ROW is stated by the check rather than guessed at: a markdown table row whose FIRST
+// cell opens with a backticked `*.sh` name. That admits every row of the index (they all open
+// ``| `gen….sh <args>` | …``) and admits nothing else in the file — the four other tables' first cells
+// are either plain words or backticked names that are not scripts, and a mention in ordinary prose is
+// deliberately NOT a row, which is what makes `gennest.sh`'s old prose-only mention a failure here.
+
+// Where the hand-built ladders live, relative to the repo root. Anchored at the working directory for
+// the same reason `spec-test`'s own default spec directory is: the suite is invoked from the repo root,
+// and a run from anywhere else has already failed to find `specs-shv2`.
+let LaddersRelativeDir = "maxon-shv2/Testing/ladders"
+
+// The index itself, and what a ladder is on disk.
+let LadderIndexFileName = "README.md"
+let LadderScriptExtension = ".sh"
+
+// The three markdown tokens the row rule is spelled in. Named because each is a magic character in a
+// format this file is PARSING, and a bare "`" three lines apart is the kind of literal that drifts into
+// being two different rules.
+let TableCellSeparator = "|"
+let CodeQuote = "`"
+let UsageArgumentSeparator = " "
+
+// The `<script> <shape> <question>` index must name every generator in the directory, and every name it
+// carries must be a generator that is there. Called ONCE, by the spec suite's parent process — see this
+// file's header for why it is wired to something that already runs rather than to a command someone has
+// to remember.
+//
+// A PANIC rather than a returned verdict, matching `requireRunnerAvailable`: this is a property of the
+// TREE, not of any one test, so there is no test to fail and nothing downstream that could act on it.
+export function requireLadderIndexComplete()
+	let dir = try FilePath.from(LaddersRelativeDir) otherwise panic("LadderIndex: '{LaddersRelativeDir}' is not a valid path")
+
+	let scripts = ladderScriptNames(dir)
+	let indexed = indexedScriptNames(dir)
+
+	let unindexed = namesMissingFrom(scripts, other: indexed)
+	let stale = namesMissingFrom(indexed, other: scripts)
+	// A THIRD failure, and it is this file's own disease rather than a tidiness rule: two rows for one
+	// script are two descriptions of one ladder, free to disagree, with nothing to say which is current.
+	let repeated = namesRepeatedIn(indexed)
+	if unindexed.isEmpty() and stale.isEmpty() and repeated.isEmpty() 'consistent'
+		return
+	end 'consistent'
+
+	// ⚠ **`panic` TAKES A STRING LITERAL** — `panic(msg)` for a `let`-bound String is rejected outright
+	// ("panic requires a string argument"), which is why the two lists are built as text and
+	// INTERPOLATED rather than assembled into one builder and handed over. Same constraint
+	// `Project.StructLayout`'s per-column panics document.
+	let unindexedClause = nameListClause(unindexed, lead: "NOT IN THE TABLE (a ladder nobody can find is a measurement nobody will re-run — add a row giving its SHAPE and the QUESTION IT ANSWERS, read out of the script's own header)")
+	let staleClause = nameListClause(stale, lead: "IN THE TABLE BUT NOT ON DISK (a reader sent after a generator that was renamed or deleted — move the row with it, or delete it)")
+	let repeatedClause = nameListClause(repeated, lead: "NAMED BY MORE THAN ONE ROW (two descriptions of one ladder, free to disagree — merge them)")
+	panic("LadderIndex: {LaddersRelativeDir}/{LadderIndexFileName} does not match the directory it indexes.{unindexedClause}{staleClause}{repeatedClause}")
+end 'requireLadderIndexComplete'
+
+// One `lead: <names>` clause of the message, EMPTY when that direction is clean — a failure in one
+// direction must not print a heading for the other, which reads as a second problem. (Empty text for
+// "nothing to say" is this driver's own idiom for a message fragment; see `Main.filterSuffix`.)
+function nameListClause(names StringArray, lead String) returns String
+	if names.isEmpty() 'nothingToSay'
+		return ""
+	end 'nothingToSay'
+
+	var clause = StringBuilder.create()
+	clause.append("\n  {lead}:\n")
+	for name in names 'eachName'
+		clause.append("    {name}\n")
+	end 'eachName'
+	return clause.build()
+end 'nameListClause'
+
+// The set difference, written once because it is asked in BOTH directions and the two questions differ
+// only in which list is which.
+function namesMissingFrom(names StringArray, other StringArray) returns StringArray
+	var missing = StringArray.create()
+	for name in names 'eachName'
+		if not other.contains(name) 'absent'
+			missing.push(name)
+		end 'absent'
+	end 'eachName'
+	return missing
+end 'namesMissingFrom'
+
+// Every name that appears more than once, reported ONCE however many rows carry it — a list that named
+// the same script three times would be the duplication it is complaining about.
+function namesRepeatedIn(names StringArray) returns StringArray
+	var seen = StringArray.create()
+	var repeated = StringArray.create()
+	for name in names 'eachName'
+		if not seen.contains(name) 'firstTime'
+			seen.push(name)
+			continue
+		end 'firstTime'
+
+		if not repeated.contains(name) 'notYetReported'
+			repeated.push(name)
+		end 'notYetReported'
+	end 'eachName'
+	return repeated
+end 'namesRepeatedIn'
+
+// Every `*.sh` in the ladders directory. A missing directory is a FAILURE and not a skip: this check
+// exists because a silent omission read as coverage for six scripts, and "the directory was not there"
+// is an omission that would cover all thirty-one at once.
+function ladderScriptNames(dir FilePath) returns StringArray
+	let entries = try Directory.list(dir) otherwise panic("LadderIndex: could not list {LaddersRelativeDir} — it holds the hand-built ladders this check reconciles against their index. Run the suite from the repo root.")
+
+	var names = StringArray.create()
+	for entry in entries 'eachEntry'
+		let name = entry.filename()
+		if name.endsWith(LadderScriptExtension) 'isScript'
+			names.push(name)
+		end 'isScript'
+	end 'eachEntry'
+	return names
+end 'ladderScriptNames'
+
+// Every script the index has a ROW for — see the header for what a row is, and why a mention in prose
+// deliberately is not one.
+function indexedScriptNames(dir FilePath) returns StringArray
+	// Bound to a FilePath first: `join` is overloaded on String and FilePath and a bare String constant
+	// matches both (E3007) — the same disambiguation `ScaleTestRunner.corpusRootFile` makes.
+	let indexFile = try FilePath.from(LadderIndexFileName) otherwise panic("LadderIndex: '{LadderIndexFileName}' is not a valid path component")
+	let path = dir.join(indexFile)
+	let text = try File.readText(path) otherwise panic("LadderIndex: could not read {LaddersRelativeDir}/{LadderIndexFileName} — it is the index every hand-built ladder is found through. Run the suite from the repo root.")
+
+	var names = StringArray.create()
+	for line in text.split("\n") 'eachLine'
+		match rowScriptName(line) 'row'
+			notARow then continue
+			named(name) then names.push(name)
+		end 'row'
+	end 'eachLine'
+	return names
+end 'indexedScriptNames'
+
+// What a line contributes to the index: the `*.sh` name its first table cell is ABOUT, or nothing.
+//
+// A union rather than an empty String, because "this line is not a table row" and "this row names a
+// script" are different answers and a sentinel would make the caller re-derive the difference.
+union IndexedRow
+	named(script String)
+	notARow
+end 'IndexedRow'
+
+// The row rule, in one place: a table row (`| … | … |`) whose first cell OPENS with a backticked name
+// ending in `.sh`. The name is the first word inside the backticks, because the index spells each row as
+// the script's USAGE — ``| `genretsites.sh <n> <onefunc|spread> <outdir>` | … | … |``.
+function rowScriptName(line String) returns IndexedRow
+	if not line.startsWith(TableCellSeparator) 'notATableRow'
+		return IndexedRow.notARow
+	end 'notATableRow'
+
+	// `"| a | b |".split("|")` leads with the empty text before the first separator, so the first CELL
+	// is element 1 — and a line that is only a separator has no element 1 at all.
+	let cells = line.split(TableCellSeparator)
+	let firstCell = try cells.get(1) otherwise return IndexedRow.notARow
+
+	// Likewise: the text before the opening backtick is element 0, so the quoted run is element 1. A cell
+	// with no backtick (`| script |`, `| ladder |`, `| 256 |`) has no element 1 and is not a row about a
+	// ladder — which is exactly how the file's four OTHER tables are held out of this.
+	let quoted = firstCell.split(CodeQuote)
+	let usage = try quoted.get(1) otherwise return IndexedRow.notARow
+
+	let name = try usage.split(UsageArgumentSeparator).get(0) otherwise return IndexedRow.notARow
+	if not name.endsWith(LadderScriptExtension) 'notAScriptName'
+		return IndexedRow.notARow
+	end 'notAScriptName'
+
+	return IndexedRow.named(name)
+end 'rowScriptName'

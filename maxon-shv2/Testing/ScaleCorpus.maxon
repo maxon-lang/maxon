@@ -1,12 +1,18 @@
 // ScaleCorpus — the generated ladder the scale suite measures.
 //
-// ONE PROGRAM PER RUNG, and each rung DOUBLES all twenty-five structural knobs at once. Six rungs is a
-// 32x span in six compiles. The alternative — a matrix, one axis per knob — would be twenty-five ladders
-// and a hundred and fifty compiles to learn the same thing, because the question is never "which knob is
+// ONE PROGRAM PER RUNG, and each rung DOUBLES EVERY structural knob at once. Six rungs is a 32x span in
+// six compiles. The alternative — a matrix, one axis per knob — would be one ladder per knob and six
+// compiles each to learn the same thing, because the question is never "which knob is
 // the compiler slow in" (the per-phase table answers that already) but "does the whole thing stay
 // linear as a program grows", and a program grows in every direction at once. (Some shapes ride
 // along that are COVERAGE, not knobs — they are fixed-size and do not double; see `shiftCoverageSource`
 // and `scalarCoverageSource`.)
+//
+// ⚠ THIS PARAGRAPH USED TO SAY "twenty-five", AND SO DID THE HEADING OVER THE KNOB LIST. THE FILE HAD
+// TWENTY-SIX when that was last read, and has twenty-seven now. A COUNT IS A DERIVED FACT, and one
+// written into prose is a fact nothing can keep true — so the count is gone rather than corrected. The
+// live spelling is `grep -c 'knobAt(' ` over `generateRung`, and it cannot drift because it IS the
+// enumeration.
 //
 // ⚠ THE CORPUS NOW DECLARES ITSELF. Every run prints `printCorpusManifest` — the constructs it
 // generates, the dimensions it scales, and, load-bearing, the ones it structurally CANNOT see (it
@@ -173,7 +179,7 @@ export typealias KnobSize = int(1 to 1048576)
 typealias KnobIndex = int(0 to 1048575)
 
 // ===========================================================================================
-// The twenty-five knobs, and their rung-0 sizes
+// The knobs, and their rung-0 sizes
 // ===========================================================================================
 //
 // Each is `base << rung`. The bases are tuned so that rung 0 clears fixed process + stdlib
@@ -447,6 +453,48 @@ let DivisorMask = 7
 // than `i64.max` is deliberate — it keeps the range HONEST about what the mask produces, at the cost of
 // one extra `cmp` per group that the ladder measures along with everything else.
 let ScaleDivisorAlias = "ScaleDivisor"
+
+// ⭐ **THE RANGED-`return` KNOB (A2a): ONE function, N `return` sites guarded against a NARROWED alias.**
+//
+// ⚠ **THE CORPUS REACHED EVERY GUARD DOOR BUT THIS ONE**, and the precision matters, because the two
+// nearest write-ups of it were BOTH WRONG in the direction that reads as less coverage than there is.
+// `Testing/ladders/genrangesites.sh` said "the rung0 and rung5 binaries each contain exactly ONE
+// range-check panic blob" and the ladders README repeated it; MEASURED on the corpus as it stood the day
+// this knob was written, the two binaries held **33 and 1,025** — 32 and 1,024 of them `ScaleDivisor`,
+// the A1 divide knob's `((acc and DivisorMask) + 1) as ScaleDivisor`, which is an ALIAS-NAMED cast site
+// that DOUBLES with `IntDivideBase`, plus the one fixed `CoverageNarrowAlias` cast. So the cast door,
+// `guardSiteAt` and the guard CHAIN have been priced here since A1. (Both write-ups are corrected; the
+// count is now stated there as the COMMAND that re-derives it: `grep -c "Range check failed"`.)
+//
+// What was absent is the OTHER door. Not one generated function DECLARED a narrowed RETURN type — the
+// aliases that reach a `return` (`ScaleXHoldValue`, `ScaleMeasure<N>`, `ScaleElement` and the rest) are
+// all `int(i64.min to i64.max)`, which `rangeIsFull` discards before a site can be recorded, and the
+// per-instance `GenericInstanceElemPrefix` aliases are only ever generic TYPE ARGUMENTS, erased before
+// any door sees them. So `InsertRangeChecks.processReturnSites` — and `retBlockOf` and
+// `splitBlockInPlace` behind it — ran exactly ZERO times at every rung of a 32x ladder, which is the
+// `FloatSpillHeadroom` failure again in its hardest form: not a family nobody thought of, but one whose
+// NEIGHBOUR was covered, so the manifest line above it read as covering both.
+//
+// ⚠ **AND THE COST THAT HID THERE WAS REAL.** A1h found `findRetBlock` walking every `func.blockRefs`
+// entry once per site, over a set each guard it emits GROWS by three: MEASURED on the hand ladder
+// (`Testing/ladders/genretsites.sh`, n = 50/100/200/400) at **x2.21 x2.53 x3.20 CPU per doubling** — a
+// RISING ratio — while allocations and bytes read a dead-flat x1.99, because a scan allocates nothing.
+// The cure (resolve the site's own block through the existing `guardChainTail` index) reads x1.96 x1.94
+// x2.03. Both numbers live in a script nothing re-runs, so nothing re-checks that the cure holds; this
+// knob is what puts that axis under the standing instrument.
+//
+// ⚠ **ONE FUNCTION RATHER THAN N, BECAUSE THE CONCENTRATION *IS* THE AXIS.** The term A1h found is
+// sites x blocks-in-this-function, so it is invisible to a shape that spreads one site per function
+// however many sites there are. `genretsites.sh`'s `spread` mode is the CONTROL that separates the
+// product term from the per-site cost, and it stays there: a control answers a question that is only
+// asked once a bend has appeared, and paying for it at every rung of every run would buy a second
+// column for a question nobody has yet.
+//
+// The base is HALF the checked-divide knob, by that knob's own rule. A checked divide costs three
+// blocks per group; a guarded ranged `return` costs FIVE — the `if`'s then-block and continuation, plus
+// the guard's `__rc_ok`, `__rc_panic` and the one `__rc_chk` a two-bound cascade threads between them —
+// and the ladder doubles all of them.
+let RangedReturnSitesBase = 8 as KnobSize
 
 // How many SCOPE-FILLER locals a long generated function carries — the V DIMENSION, and it DOUBLES.
 //
@@ -849,6 +897,9 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_divide", source: intDivideSource(knobAt(IntDivideBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(DivideDriver))
 	// Its A1 twin — the THROWING divide shape, on its own knob for the reason `CheckedDivideBase` gives.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_cdivide", source: checkedDivideSource(knobAt(CheckedDivideBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(CheckedDivideDriver))
+	// Beside the two divide knobs because it is the third door whose per-site cost is BLOCKS rather than
+	// ops — and the only one in the corpus that reaches a ranged-`return` guard at all (A2a).
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_rreturn", source: rangedReturnSource(knobAt(RangedReturnSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(RangedReturnDriver))
 	// The ten knobs for what the language gained between P1.1b and P1.7a. Every one is
 	// cross-target-safe: no `where` clause, no witness dispatch, no `Set` — see their section header.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "q_enums", source: enumTypesSource(knobAt(EnumTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(EnumTypesDriver))
@@ -1789,6 +1840,58 @@ function checkedDivideSource(groupCount KnobSize) returns String
 	out.append("end '{CheckedDivideDriver}'\n")
 	return out.build()
 end 'checkedDivideSource'
+
+let RangedReturnDriver = "scaleRangedReturns"
+let RangedReturnPickName = "scaleRangedReturnPick"
+let RangedReturnNarrowAlias = "ScaleRetNarrow"
+
+// ⭐ **THE RANGED-`return` KNOB (A2a): N guarded `return` sites, all in ONE function and all returning
+// the SAME parameter.** See `RangedReturnSitesBase` for what this axis is and why the corpus had none of
+// it; this is the shape `Testing/ladders/genretsites.sh` generates in its `onefunc` mode, so a reading
+// here and a reading there are about the same construct.
+//
+// THREE properties of the emitted text are load-bearing, and each closes a way the site could stop being
+// a site:
+//   * THE RETURNED VALUE IS A PARAMETER. `needsRuntimeGuard` settles a LITERAL `return` at compile time
+//     and emits no code, so a knob returning constants would generate N sites and zero guards — the
+//     blindness this exists to escape, reintroduced one level down.
+//   * THE RETURN TYPE'S RANGE IS NOT FULL. `rangeIsFull` discards a full range before a site is
+//     recorded, which is exactly why the corpus's existing aliases reach no guard.
+//   * EVERY SITE RETURNS THE SAME PARAMETER, so all N share ONE ValueId. That is the shape a value-keyed
+//     lookup must CONSUME rather than merely answer, and it is what an ordinary wide `match` returning a
+//     ranged alias looks like — it is also the shape A1h's first, reverted cure got WRONG.
+function rangedReturnSource(siteCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the ranged-`return` knob — {siteCount} guarded `return` sites in ONE function, every one returning the SAME parameter through a NARROWED alias.\n")
+	// The upper bound IS the site count, so site `i` — which runs only when the parameter equals `i` —
+	// returns a value the guard admits. The compiler cannot see that (the value is an opaque parameter,
+	// so the guard is emitted at every site either way), which is the only thing the measurement needs;
+	// what the derivation buys is a program that RUNS, rather than one that panics at the first site the
+	// top rung adds past a bound written down as a constant.
+	out.append("typealias {RangedReturnNarrowAlias} = int(0 to {siteCount})\n")
+	out.append("\n")
+	out.append("function {RangedReturnPickName}(n int) returns {RangedReturnNarrowAlias}\n")
+
+	for i in 0 upto siteCount 'eachSite'
+		out.append("\tif n == {i} 'rr{i}'\n")
+		out.append("\t\treturn n\n")
+		out.append("\tend 'rr{i}'\n")
+		out.append("\n")
+	end 'eachSite'
+
+	// A LITERAL `return` closes the body, and it does not move the knob: it is settled at compile time
+	// and emits no guard.
+	out.append("\treturn 0\n")
+	out.append("end '{RangedReturnPickName}'\n")
+	out.append("\n")
+	// The driver returns a plain `int`, so it contributes no ranged site of its own and the knob stays
+	// exactly `siteCount` — the same reason `genretsites.sh`'s `spread` dispatcher returns the wide alias.
+	out.append("function {RangedReturnDriver}(a int) returns int\n")
+	out.append("\tlet picked = {RangedReturnPickName}(a)\n")
+	out.append("\treturn a + (picked as int)\n")
+	out.append("end '{RangedReturnDriver}'\n")
+	return out.build()
+end 'rangedReturnSource'
 
 // The mask that bounds a dynamic shift COUNT to a sane, non-negative range. A count derived this way
 // is a runtime value the folder cannot see, so it takes the GUARDED shift path — the 6-7 ops that
@@ -2838,8 +2941,18 @@ export function printCorpusManifest()
 	print("      bitwise `and` / `or` / `xor` / `not` over ints\n")
 	print("    shl / shr with: a CONSTANT count (folded) AND a DYNAMIC count (runtime-guarded), over a\n")
 	print("      SIGNED operand (arithmetic/sign fill) AND a ranged int(0 to u64.max) operand (zero fill)\n")
-	print("    ranged typealiases, and an `as` cast of an OPAQUE value (which emits a runtime RANGE GUARD;\n")
-	print("      a cast of a literal is checked at compile time and emits nothing)\n")
+	print("    ranged typealiases at BOTH doors that emit a RUNTIME RANGE GUARD over an OPAQUE value —\n")
+	print("      a cast or a `return` of a LITERAL is settled at compile time and emits nothing, so both\n")
+	print("      are driven from the opaque seed. `grep -c 'Range check failed' <rung binary>` is the\n")
+	print("      audit, and it reads 41 at rung 0 and 1,281 at rung 5:\n")
+	print("        an ALIAS-NAMED `as` cast — the divisor cast into `{ScaleDivisorAlias}`, one per\n")
+	print("          int-divide group so it DOUBLES, plus ONE fixed `{CoverageNarrowAlias}` cast. This\n")
+	print("          door carries `guardSiteAt`, the guard CHAIN and `splitChainEnd`\n")
+	print("        a narrowed `return` TYPE — its own doubling SITE count, all in ONE function and all\n")
+	print("          returning ONE parameter. This door carries `retBlockOf` and `splitBlockInPlace`,\n")
+	print("          and NOTHING generated one until A2a: every alias reaching a `return` was\n")
+	print("          full-range, which `rangeIsFull` discards, so a per-site scan measured at x3.20 CPU\n")
+	print("          per doubling on a hand ladder read Δ0 here in every column\n")
 	print("    `print` — the formatted-output path\n")
 	print("    FLOAT (the SSE band): + - * / , compares in BOTH forms (feeding a jcc, and materialized\n")
 	print("      as a bool), float PHIs (branch-merged and loop-carried), int->float promotion and\n")
@@ -2881,7 +2994,11 @@ export function printCorpusManifest()
 	print("    pressured-loop COUNT, loop-nest DEPTH, locals-in-scope per function (the V dimension),\n")
 	print("    float-op groups, float-spill loop COUNT, top-level `let` COUNT, top-level `var` COUNT,\n")
 	print("    `type` declaration COUNT (a per-TYPE cost), struct `create` SITE count (a per-SITE cost,\n")
-	print("    over a FIXED set of types, so the two move independently), int-divide groups,\n")
+	print("    over a FIXED set of types, so the two move independently), int-divide groups AND\n")
+	print("    CHECKED-divide groups (two knobs, because the second costs three BLOCKS per group where the\n")
+	print("    first costs none — it was named under CONSTRUCTS and missing from this list until A2a),\n")
+	print("    guarded ranged-`return` SITE count — all in ONE function and all returning ONE parameter, so\n")
+	print("    the column carries the sites x blocks-in-the-function product a per-site scan would cost,\n")
 	print("    `enum` declaration COUNT (per-TYPE) and `match` SITE count (per-SITE, over a fixed pair of\n")
 	print("    enums, so a change to tag layout and a change to dispatch strategy move different columns),\n")
 	print("    String op-group count, managed-struct TYPE count (per synthesized __destruct_<T> body),\n")

@@ -1,38 +1,50 @@
 #!/usr/bin/env bash
-# THE RANGE-CHECK-SITE LADDER — the axis the SHARED corpus does not have, and cannot get by doubling.
+# THE RANGE-CHECK-SITE LADDER — the ALIAS-NAMED guard axis, ISOLATED and with a control.
 #
 #     Does `insertRangeChecks` cost O(runtime guards), or O(guards x blocks in the function)?
 #
-# ⭐ **WHY THE SHARED LADDER CANNOT ASK IT, AND THE REASON IS THE HARD KIND OF BLINDNESS.**
-# `Testing/ScaleCorpus.maxon` DOES declare narrow ranged typealiases — `ScaleCoverNarrow = int(0 to
-# 4095)`, `ScaleWide = int(0 to u64.max)`, and 4->128 `ScaleXElem<N> = int(0 to 10<N>)` that double
-# with the rung — so a reader checking the manifest for "does the corpus emit ranged aliases at all"
-# gets YES and stops. But NOT ONE of them reaches a position that emits a guard:
+# ⛔⛔ **THIS HEADER USED TO OPEN "the axis the SHARED corpus does not have, and cannot get by
+# doubling", AND SAID — in bold, as a MEASUREMENT — that "the compiled rung0 binary and the compiled
+# rung5 binary each contain exactly ONE range-check panic blob" and that the shared ladder "has never
+# once measured the EMISSION of a guard". EVERY WORD OF THAT IS FALSE, AND WAS ALREADY FALSE THE DAY IT
+# WAS WRITTEN.** Re-measured 2026-07-31 the way the original claim was — by counting the blobs in the
+# compiled rung binaries, `grep -c 'Range check failed' <rung>.out.exe` — against the corpus as it stood
+# before A2a: **33 at rung 0 and 1,025 at rung 5.** 32 and 1,024 of them name `ScaleDivisor`.
 #
-#   * `ScaleXElem<N>` is only ever a generic TYPE ARGUMENT (`ScaleXBox with ScaleXElem<N>`). The
-#     declared type of the field and the parameter it flows through is the type PARAMETER `T`, which
-#     is opaque; the alias is erased before any door sees it. 128 narrow aliases, zero doors.
-#   * every alias that DOES reach a door — `ScaleXHoldValue`, `ScaleMeasure<N>`, `ScaleElement`,
-#     `ScaleNamedValue`, `ScaleRowValue`, `ScaleSigned`, `ScaleDispMeasure`, `ScaleGenElement` — is
-#     declared `int(i64.min to i64.max)`, i.e. FULL RANGE, which `needsRuntimeGuard` discards at
-#     `rangeIsFull` before it can emit anything.
-#   * `ScaleCoverNarrow` is the one narrow alias at a real door, used at exactly ONE `as` cast
-#     (`h_cover.maxon`), and that one site does not double with the rung.
+# `ScaleDivisor` is the A1 divide knob's `((acc and DivisorMask) + 1) as ScaleDivisor` — a narrow
+# (`int(1 to 8)`) ALIAS-NAMED cast over a value the compiler cannot fold, one per int-divide group, ALL
+# IN ONE FUNCTION (`p_divide.maxon` declares exactly one), doubling with `IntDivideBase`. That is not a
+# near-miss of this ladder's shape: **it IS `onefunc`, at n = 32 rising to 1,024.** So `guardSiteAt`,
+# `emitGuardAt`, `emitPanicBlock`, the compare cascade, `splitChainEnd` and the whole guard CHAIN have
+# been priced by the standing instrument since A1 landed that cast, and a Δ0 there means what a Δ0
+# normally means.
 #
-# ⇒ **MEASURED: the compiled rung0 binary and the compiled rung5 binary each contain exactly ONE
-#   range-check panic blob, the same one.** A 32x corpus emits the same single guard. So every column
-#   of the shared instrument — allocations, bytes AND CPU — reads the RECORDING of sites that are then
-#   discarded as vacuous, and has never once measured the EMISSION of a guard. That is the corpus
-#   blindness `ScaleCorpus`'s own manifest warns about, in its subtler form: the construct is present,
-#   the KNOB THAT MAKES IT COST ANYTHING is not.
+# ⇒ **HOW THE ORIGINAL SURVEY GOT IT WRONG IS THE PART TO CARRY FORWARD.** It enumerated the corpus's
+#   ALIAS DECLARATIONS and asked which reached a door — a sound question, correctly answered for every
+#   alias it listed. `ScaleDivisor` was simply not on the list, because the survey was run once and the
+#   knob that mints it landed afterwards. A survey nobody can re-run is not a survey; that is this
+#   directory's own thesis, and this file was the counter-example to it. The cheap re-run is the blob
+#   count above, and it is now written down as a COMMAND rather than as a number.
 #
-# ⚠ **AND THE COST THIS LADDER IS AIMED AT IS ON THE EMISSION PATH ONLY.** `blockEndGuardSite` (now `guardSiteAt`) re-fetched
-# the site's block with `IrModule.getBlockByIdIn`, which was a LINEAR SCAN over `func.blockRefs`; and each
-# guard it then emits APPENDS TWO BLOCKS to that same function (`__rc_ok`, `__rc_panic`), so the scan the
-# k-th guard paid was over a block set the previous k-1 guards had grown. THAT TERM IS GONE — the site's
-# block now resolves through `buildBlockIdIndex`/`blockById` — and the ladder is kept because it is the
-# only thing that can show it has NOT come back. Recording a site is O(1) and discarding a full-range one
-# is O(1) — which is the whole of what the shared ladder exercises.
+# ⇒ **WHAT THIS LADDER IS STILL FOR, stated so it can be checked:** it moves the site count with
+#   NOTHING ELSE MOVING (the corpus doubles every knob it has at once, so a bend there names a phase and
+#   not a term); it carries the `spread` CONTROL, which the corpus has no counterpart to at all; and it
+#   drives n past what the corpus reaches without a 32x program behind it.
+#
+# ⚠ **A2a ADDED THE OTHER DOOR, AND IT IS NOT THIS ONE.** `ScaleCorpus`'s `p_rreturn` knob now emits a
+#   doubling count of guarded ranged `return`s (8 blobs at rung 0, 256 at rung 5, on top of the divisor
+#   casts). A `return` site resolves its block through `retBlockOf` and splits with `splitBlockInPlace`,
+#   so it exercises neither `splitChainEnd` nor `materializeChainTails`. Two doors, two paths.
+#
+# ⚠ **AND THE COST THIS LADDER IS AIMED AT IS ON THE EMISSION PATH ONLY.** `blockEndGuardSite` (now
+# `guardSiteAt`) re-fetched the site's block with `IrModule.getBlockByIdIn`, which was a LINEAR SCAN over
+# `func.blockRefs`; and each guard it then emits APPENDS TWO BLOCKS to that same function (`__rc_ok`,
+# `__rc_panic`), so the scan the k-th guard paid was over a block set the previous k-1 guards had grown.
+# THAT TERM IS GONE — the site's block now resolves through `buildBlockIdIndex`/`blockById` — and this
+# ladder is kept because it can show it has NOT come back with ONE knob moving instead of all of them.
+# Recording a site is O(1) and discarding a full-range one is O(1), so the corpus's many vacuous
+# full-range aliases cost it nothing; what the corpus DOES exercise on this path is the divisor cast
+# above, and the isolation is the difference between the two, not presence versus absence.
 #
 # Usage: genrangesites.sh <n> <mode> <outdir>
 #   <n>    = NUMBER OF RUNTIME RANGE-CHECK SITES. THE DOUBLING KNOB.
