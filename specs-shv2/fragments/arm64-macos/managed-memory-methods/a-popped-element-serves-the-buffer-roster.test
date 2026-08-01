@@ -1,0 +1,71 @@
+// Test: a-popped-element-serves-the-buffer-roster
+typealias BufArray = Array with __ManagedMemory
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let p = try a.pop() otherwise return 1
+	return p.length() as ExitCode
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __arr_decref
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x20, __str_rec_1
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl __str_to_bytes
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __arr_push
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_pop
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_count
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

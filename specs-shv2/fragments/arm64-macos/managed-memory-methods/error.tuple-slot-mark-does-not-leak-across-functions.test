@@ -1,0 +1,25 @@
+// Test: error.tuple-slot-mark-does-not-leak-across-functions
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function bufferPair() returns (__ManagedMemory, Int)
+	return ("hello".toByteArray(), 7)
+end 'bufferPair'
+
+function arrayPair() returns (ByteArray, Int)
+	return ("hi".toByteArray(), 3)
+end 'arrayPair'
+
+function useBufferPair() returns Int
+	let p = bufferPair()
+	return p.0.length()
+end 'useBufferPair'
+
+function main() returns ExitCode
+	let q = arrayPair()
+	return (q.0.length() + useBufferPair()) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:21:14: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later

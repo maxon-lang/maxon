@@ -37,6 +37,7 @@
 // type-name rung's memory cost, spent on nothing.
 let sharedEmptyInterfaces = IrInterfaceArray.create()
 let sharedEmptyConformances = ConformanceDeclArray.create()
+
 // A `<Type> from "…"` construction is rare — and, like `typeNameDecls`, it has the stronger reason:
 // only the REAL parse can build one, so the tolerant declaration sweep and every top-level constant's
 // transient `Parser` would otherwise each pay for an array with no writer.
@@ -53,20 +54,20 @@ let sharedEmptyOverloadSets = OverloadSetMap.create()
 // declared return type, recorded by the parser. Ordered in an array so the
 // merge order is the declaration order.
 //
-// ⭐ **`declaredBufferSurface` IS THE PRE-ERASURE SPELLING OF THAT RETURN TYPE (A2j)** — true iff the
-// source wrote `__ManagedMemory`, which `parseTypeReference` folds into `genericInstance(Array with Byte)`
+// ⭐ **`declaredSurface` IS THE PRE-ERASURE `__ManagedMemory` SPELLING OF THAT RETURN TYPE (A2j / A2m)** —
+// where the source named the alias, which `parseTypeReference` folds into `genericInstance(Array with Byte)`
 // before a `MaxonReturnType` exists. It rides THIS record rather than a column of its own for one reason:
 // the two facts must never disagree about the same declaration, and they cannot when they are written,
 // remapped and folded as one entry. `ProgramSignatures.record` applies them together, with identical
-// last-wins semantics, so the buffer bit is exactly as accurate as the return type it accompanies —
+// last-wins semantics, so the surface is exactly as accurate as the return type it accompanies —
 // including for an overload set, where the sweep publishes ONE answer per bare name for both.
 export type FuncReturnTypeEntry
 	export var name as ByteArray
 	export var returnType as MaxonReturnType
-	export var declaredBufferSurface as bool
+	export var declaredSurface as DeclaredSurface
 
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredBufferSurface bool) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType, declaredBufferSurface: declaredBufferSurface}
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface}
 	end 'create'
 end 'FuncReturnTypeEntry'
 
@@ -324,8 +325,8 @@ export type FileParseArtifact
 	// Record a function's return type as this file's contribution to the
 	// project-wide `funcReturnTypes` registry. Called by the parser after it
 	// builds a function — NEVER touching `Project`.
-	export function recordFuncReturnType(name ByteArray, returnType MaxonReturnType, declaredBufferSurface bool)
-		self.funcReturnTypes.push(FuncReturnTypeEntry.create(name, returnType: returnType, declaredBufferSurface: declaredBufferSurface))
+	export function recordFuncReturnType(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface)
+		self.funcReturnTypes.push(FuncReturnTypeEntry.create(name, returnType: returnType, declaredSurface: declaredSurface))
 	end 'recordFuncReturnType'
 
 	// Record a function's parameter signature as this file's contribution to the

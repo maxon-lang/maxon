@@ -1998,6 +1998,10 @@ buffer's.** A wrong surface either way, decided by declaration order. It joins t
 `throws` clause under `requireOverloadableName`, refused with the same E2015 and for the same reason: the
 cure is per-member facts in the sweep, and until then a refusal beats a silent wrong answer. A set with only
 ONE declaration is untouched — that is the whole corpus, and the cases above.
+
+⚠ **A2m widened the refusal from `returns` to NAMES, and the sentence with it.** A tuple slot and an array
+element name the buffer through the same one-entry-per-bare-name sweep, are chosen at the same moment, and
+are just as unrepairable — see the case below, which was ACCEPTED with a silently wrong surface before A2m.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
@@ -2017,7 +2021,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: overloading 'make' — one of its declarations returns `__ManagedMemory`, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names
+error E2015: <fragment>:10:10: Unsupported: overloading 'make' — one of its declarations NAMES `__ManagedMemory` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names
 ```
 
 ### A2k — the `Array` roster is DERIVED from the arms it describes
@@ -2044,4 +2048,534 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:8:13: Unsupported: `Array` member 'create' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+### A2m — the buffer surface rides a SLOT, so a tuple element and an array element carry it
+
+⚖ **USER RULING, 2026-07-31 (D11b), reached one container deeper.** A2j closed the three WHOLE-VALUE
+declared spellings. A slot's is the same fact and the same mechanism — `__ManagedMemory` is a generic ALIAS
+of `Array with Byte`, so `(__ManagedMemory, Int)` and `(ByteArray, Int)` intern to ONE tuple type sharing ONE
+`StructLayout`, and `Array with __ManagedMemory` and `Array with ByteArray` share ONE `GenericInstanceId`.
+Neither slot's spelling survives into any `MaxonType`, so it must ride the VALUE.
+
+**MEASURED before A2m, on the programs below**: `p.0.length()` was refused as an unknown `Array` method
+while `p.0.count()` compiled and RAN — the roster exactly inverted, at five entrances (a tuple return, a
+tuple destructuring, a tuple parameter, an array element, an array element behind a struct field).
+
+**The over-acceptance controls are the load-bearing half.** The layout and the instance are SHARED, so the
+one way to get this wrong is to hand the buffer surface to `(ByteArray, Int)` and `Array with ByteArray` as
+well — a wrong ACCEPTANCE no diagnostic reports, decided by whichever spelling interned first. The four
+`…-keeps-the-array-surface` / `…-still-serves-count` cases are what prove the per-value carriers were not
+quietly written onto the shared layout column.
+
+<!-- test: tuple-element-serves-the-roster -->
+
+The tuple RETURN spelling's false-reject half. `p.0` is rewritten to a positional field token and reaches the
+same `emitFieldLoad` a struct field does, so the slot mask minted on the call result is what the read
+consults. The element is an ordinary `"hello".toByteArray()` — nothing about the VALUE says buffer.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+function pair() returns (__ManagedMemory, Int)
+	return ("hello".toByteArray(), 7)
+end 'pair'
+
+function main() returns ExitCode
+	let p = pair()
+	return p.0.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: tuple-destructuring-serves-the-roster -->
+
+`let (m, n) = pair()` binds each name to a field load off the hidden temp, so a destructured name inherits
+the bit for ITS position and nothing else. This entrance was not on the defect row; it was found by walking
+what reads a tuple.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+function pair() returns (__ManagedMemory, Int)
+	return ("hello".toByteArray(), 7)
+end 'pair'
+
+function main() returns ExitCode
+	let (m, n) = pair()
+	return m.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: tuple-parameter-serves-the-roster -->
+
+The tuple PARAMETER spelling. The mask is read off the annotation's TOKENS at the same moment A2j's
+whole-value bit is, and travels the same parse-local column into `bindParameters`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+function shown(t (__ManagedMemory, Int)) returns Int
+	return t.0.length()
+end 'shown'
+
+function main() returns ExitCode
+	return shown(("hello".toByteArray(), 7)) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: tuple-through-a-struct-field-serves-the-roster -->
+
+A struct FIELD whose declared type is a tuple — the composed shape, which falls out of the two mechanisms
+rather than needing a third: the field's declared surface carries the mask, `h.p` mints it onto the loaded
+tuple, and `.0` reads it there.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder
+	export var p as (__ManagedMemory, Int)
+
+	export static function create(p (__ManagedMemory, Int)) returns Self
+		return Self{p: p}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(("hello".toByteArray(), 7))
+	return h.p.0.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: array-element-serves-the-roster -->
+
+The generic ARRAY ELEMENT spelling. `Array with T` is writable only as a `typealias` RHS, so the element's
+spelling is recorded per ALIAS NAME at the one place a generic instantiation's arguments are read, and a
+value whose declared type names that alias carries "my elements are buffers". The `push` proves the type is
+NOT forked: an ordinary `Array with Byte` still goes into it.
+```maxon
+typealias BufArray = Array with __ManagedMemory
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let m = try a.get(0) otherwise return 1
+	return m.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: array-element-through-a-struct-field-serves-the-roster -->
+
+The same element mark reached through a struct FIELD declared with the alias. The field column is written by
+the declaration SWEEP, which runs before any alias is interned, so the element half cannot ride it — it is
+DERIVED at the read from the alias name the swept `named` type still holds.
+```maxon
+typealias BufArray = Array with __ManagedMemory
+
+type Holder
+	export var bufs as BufArray
+
+	export static function create(bufs BufArray) returns Self
+		return Self{bufs: bufs}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let h = Holder.create(a)
+	let m = try h.bufs.get(0) otherwise return 1
+	return m.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.tuple-element-has-the-buffer-surface -->
+
+The refusal half of the tuple slot. `count` is an `Array` member and not a buffer one, and this program
+compiled, linked and RAN (exit 5) before A2m.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+function pair() returns (__ManagedMemory, Int)
+	return ("hello".toByteArray(), 7)
+end 'pair'
+
+function main() returns ExitCode
+	let p = pair()
+	return p.0.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.array-element-has-the-buffer-surface -->
+
+The refusal half of the array element, which likewise ran (exit 5) before A2m.
+```maxon
+typealias BufArray = Array with __ManagedMemory
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let m = try a.get(0) otherwise return 1
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: error.a-tuple-of-byte-arrays-keeps-the-array-surface -->
+
+⭐⭐ **THE OVER-ACCEPTANCE CONTROL FOR THE TUPLE, and it is the case this rung is graded on.**
+`(ByteArray, Int)` and `(__ManagedMemory, Int)` are ONE interned tuple type sharing ONE `StructLayout`, so
+populating that layout's surface column would hand the buffer's roster to BOTH — the direction no diagnostic
+reports, decided by whichever spelling interned first. The mask rides the VALUE instead, so this stays
+refused with the `Array` roster.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function pair() returns (ByteArray, Int)
+	return ("hello".toByteArray(), 7)
+end 'pair'
+
+function main() returns ExitCode
+	let p = pair()
+	return p.0.length() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:13: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+<!-- test: a-tuple-of-byte-arrays-still-serves-count -->
+
+The control's positive half — the same tuple type, still answering the `Array` roster it belongs to. A
+refusal case alone would pass just as well if the element had lost BOTH surfaces.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function pair() returns (ByteArray, Int)
+	return ("hello".toByteArray(), 7)
+end 'pair'
+
+function main() returns ExitCode
+	let p = pair()
+	return p.0.count() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.an-array-of-byte-arrays-keeps-the-array-surface -->
+
+⭐⭐ **THE OVER-ACCEPTANCE CONTROL FOR THE ARRAY ELEMENT.** `Array with ByteArray` and
+`Array with __ManagedMemory` share one `GenericInstanceId`, so the element surface may not be keyed on the
+instance. It is keyed on the ALIAS NAME the declaration wrote, and this alias did not write the buffer's.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BufArray = Array with ByteArray
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let m = try a.get(0) otherwise return 1
+	return m.length() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+<!-- test: an-array-of-byte-arrays-still-serves-count -->
+
+The array control's positive half, for the reason its tuple twin has one.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BufArray = Array with ByteArray
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let m = try a.get(0) otherwise return 1
+	return m.count() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.tuple-slot-mark-does-not-leak-across-functions -->
+
+The slot mask's copy-on-write twin of `error.buffer-mark-does-not-leak-across-functions`, and it is needed
+for the identical reason: `ValueId`s restart at 0 in every function, the mask table's empty anchor is
+MODULE-level, and a write into the anchor would name an id in an unrelated function's SSA space.
+
+**The two functions are shaped ALIKE ON PURPOSE, and that is what makes the case work rather than a
+coincidence of padding**: each binds its tuple from a bare call as its first statement, so `p` and `q` are
+both ValueId 0 and a leaked mark lands exactly on top. **MEASURED, by removing the copy-on-write detach: this
+program then COMPILED, LINKED AND RAN, exit 7** — `q.0.length()` accepted on a slot declared
+`Array with Byte`, which is the over-acceptance no diagnostic reports.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function bufferPair() returns (__ManagedMemory, Int)
+	return ("hello".toByteArray(), 7)
+end 'bufferPair'
+
+function arrayPair() returns (ByteArray, Int)
+	return ("hi".toByteArray(), 3)
+end 'arrayPair'
+
+function useBufferPair() returns Int
+	let p = bufferPair()
+	return p.0.length()
+end 'useBufferPair'
+
+function main() returns ExitCode
+	let q = arrayPair()
+	return (q.0.length() + useBufferPair()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:14: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+### A2m pins — four behaviours that were already RIGHT and had nothing holding them there
+
+Each of these was MEASURED correct on the tree A2m started from, and none had a test. They are the
+regressions a rung that moves the buffer mark is most likely to cause, so they are pinned before it moves.
+
+<!-- test: managed-field-chained-serves-the-buffer-roster -->
+
+`arr.managed` is an IDENTITY read that passes the buffer surface along the dispatch rather than minting a
+value, so the chained spelling reaches the buffer's roster. (A bare `let m = arr.managed` is refused one
+level earlier, by the `Array`-is-a-builtin field rule — a different gap, and not this one.)
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(1 as Byte)
+	arr.push(2 as Byte)
+	return arr.managed.length() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: error.managed-field-chain-does-not-mark-the-array -->
+
+And the surface does NOT flow back onto the receiver: after `arr.managed.length()`, `arr` is still an
+`Array` and still refused `length`. The identity read passes the surface to ONE dispatch, not to the value.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(1 as Byte)
+	arr.push(2 as Byte)
+	let n = arr.managed.length()
+	return (n + arr.length()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:18: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+<!-- test: buffer-surface-survives-a-var-reassignment -->
+
+A `var` reassigned from another buffer keeps the buffer surface. The mark rides the VALUE, and a reassignment
+rebinds the NAME to a new value — so this holds only because the new value is itself marked, which is exactly
+what a future change to how a `var` merges its values could break silently.
+```maxon
+function main() returns ExitCode
+	var v = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try v.setLength(4) otherwise return 2
+	var w = try __ManagedMemory.create(2, elementSize: 1) otherwise return 3
+	try w.setLength(2) otherwise return 4
+	v = w
+	return v.length() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: buffer-surface-survives-a-var-reassigned-from-a-slice -->
+
+The same rebinding, from a `slice` of the buffer's OWN value — the one producer whose result is marked by
+`parseArraySlice` rather than by a declaration.
+```maxon
+function main() returns ExitCode
+	var v = try __ManagedMemory.create(6, elementSize: 1) otherwise return 1
+	try v.setLength(6) otherwise return 2
+	v = try v.slice(1, 4) otherwise return 3
+	return v.length() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: error.a-tuple-returning-overload-is-refused-the-same-way -->
+
+⭐ **THE WIDENED HALF (A2m).** Neither declaration RETURNS `__ManagedMemory`; one of them names it at a tuple
+SLOT, which is the identical ambiguity through the identical channel. Before A2m this program compiled, and
+the surface `make()`'s result carried was decided by which member was written first.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function make() returns (__ManagedMemory, Int)
+	return ("hello".toByteArray(), 7)
+end 'make'
+
+function make(n Int) returns (ByteArray, Int)
+	return ("abc".toByteArray(), n)
+end 'make'
+
+function main() returns ExitCode
+	let a = make()
+	return a.0.length() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:10: Unsupported: overloading 'make' — one of its declarations NAMES `__ManagedMemory` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names
+```
+
+### A2m — every door out of an array of buffers, and every copy of one
+
+Found by probing the element mark rather than by the defect row, which named only `get`. An element read has
+SIX spellings and a whole-array copy has TWO, and a mark that reached some of them would be the same
+inverted roster at the spellings it missed.
+
+<!-- test: every-borrowing-element-member-serves-the-buffer-roster -->
+
+`get`, `first` and `last` all BORROW an element, and all three funnel through the ONE accessor mint — so the
+mark is made there rather than per arm.
+```maxon
+typealias BufArray = Array with __ManagedMemory
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	a.push("ab".toByteArray())
+	let g = try a.get(0) otherwise return 1
+	let f = try a.first() otherwise return 2
+	let l = try a.last() otherwise return 3
+	return (g.length() + f.length() + l.length()) as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: a-popped-element-serves-the-buffer-roster -->
+
+`pop` MOVES the element out instead of borrowing it, so it gets its own case for two reasons: it may not
+share a function with a live borrow of the same array (E3070), and the OWNED buffer must reach the roster
+AND still be dropped exactly once — the exit code proves the first, the leak gate the second.
+```maxon
+typealias BufArray = Array with __ManagedMemory
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let p = try a.pop() otherwise return 1
+	return p.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-for-loop-element-serves-the-buffer-roster -->
+
+The fifth spelling: `for m in bufs` reads its element through the same accessor, with the loop's own
+unchecked callee. It is a BORROW, so nothing here is dropped twice.
+```maxon
+typealias BufArray = Array with __ManagedMemory
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	a.push("ab".toByteArray())
+	var total = 0
+	for m in a 'each'
+		total = total + m.length()
+	end 'each'
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-clone-of-an-array-of-buffers-still-holds-buffers -->
+
+⭐ **FOUND BY PROBING, AND IT WAS BROKEN.** `clone` hands back a whole array of the receiver's OWN instance,
+and that instance cannot carry the element spelling — `Array with __ManagedMemory` and `Array with ByteArray`
+are one `GenericInstanceId`. MEASURED before the fix: `a.clone()` then `.get(0).length()` was refused as an
+unknown `Array` method while `a.get(0).length()` answered, on the same array in the same function.
+```maxon
+typealias BufArray = Array with __ManagedMemory
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let b = a.clone()
+	let m = try b.get(0) otherwise return 1
+	return m.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-slice-of-an-array-of-buffers-still-holds-buffers -->
+
+The `Array`-surface `slice` is the other whole-array producer, and it carries the element surface for the
+reason `clone` does — one container out from the rule that already made a slice of a BUFFER a buffer.
+```maxon
+typealias BufArray = Array with __ManagedMemory
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	a.push("ab".toByteArray())
+	let b = try a.slice(1, endIndex: 2) otherwise return 1
+	let m = try b.get(0) otherwise return 2
+	return m.length() as ExitCode
+end 'main'
+```
+```exitcode
+2
 ```

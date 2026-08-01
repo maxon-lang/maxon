@@ -1171,6 +1171,15 @@ let sharedEmptyImmutableGlobalReads = ValueMarkSet.create()
 // never names `__ManagedMemory` leaves it empty, which is the whole corpus bar a handful of files.
 let sharedEmptyBufferSurfaceValues = ValueMarkSet.create()
 
+// The module-level shared EMPTY TUPLE-SLOT surface table (A2m), held as the initial value of
+// `bufferSurfaceSlots` AND as the COW anchor its per-function reset points at —
+// `sharedEmptyBufferSurfaceValues`'s pattern, for its reason and with its invariant.
+let sharedEmptyBufferSurfaceSlots = ValueSlotSurfaceMap.create()
+
+// The module-level shared EMPTY ARRAY-ELEMENT surface mark set (A2m) — `sharedEmptyBufferSurfaceValues`'s
+// pattern, for its reason and with its invariant.
+let sharedEmptyBufferSurfaceElements = ValueMarkSet.create()
+
 // The module-level shared EMPTY iteration-lock stack (P1.8 slice A), held as the initial value of
 // `iterationLockedBindings` AND as the COW anchor its per-function reset points at —
 // `sharedEmptyInstanceAliasMap`'s pattern, for its reason and with its invariant. It is not a micro-
@@ -4435,6 +4444,16 @@ typealias ValueInstanceAliasMap = Map with (ValueId, TypeNameId)
 // per-mark purpose is carried by the FIELD name, which is where it varies.
 typealias ValueMarkSet = Set with ValueId
 
+// ⭐ **A PER-VALUE TUPLE-SLOT SURFACE (A2m)** — an SSA value that is a TUPLE ⇒ the `DeclaredSurface` word
+// whose slot bits say which of its ELEMENTS the declaration spelled `__ManagedMemory`. A keyed payload
+// rather than bare membership, which is what separates it from `ValueMarkSet`: "this value is a buffer" is
+// one bit, "this value's element 0 but not element 1 is a buffer" is not.
+//
+// ⚠ **IT MAY NOT LIVE ON THE TUPLE'S TYPE, AND THAT IS THE WHOLE POINT** — `(__ManagedMemory, Int)` and
+// `(ByteArray, Int)` canonicalize to ONE interned tuple with ONE `StructLayout`, so a surface written there
+// would be read by both spellings. See `SignatureIndex.tupleStructLayout`'s ⚠⚠ block.
+typealias ValueSlotSurfaceMap = Map with (ValueId, DeclaredSurface)
+
 // ⭐⭐ **THE COPY-ON-WRITE OFF THE SHARED EMPTY ANCHOR — THE ONE HOME OF THE HALF OF A MARK THAT IS
 // DANGEROUS TO WRITE TWICE (review, R4.4).** Hand back the set the caller may INSERT into: its own, when it
 // already has one, and a fresh empty set when it is still holding `anchor`.
@@ -4456,6 +4475,18 @@ function privateValueMarkSet(current ValueMarkSet, anchor ValueMarkSet) returns 
 
 	return current
 end 'privateValueMarkSet'
+
+// `privateValueMarkSet` for the KEYED mark (A2m) — the identical discipline, the identical hazard, over the
+// one shape a `Set with ValueId` cannot express. It is a second function and not a second COPY: the two
+// differ only in the type they take, which Maxon cannot abstract over here, and every word of
+// `privateValueMarkSet`'s header applies to this one unchanged.
+function privateValueSlotSurfaceMap(current ValueSlotSurfaceMap, anchor ValueSlotSurfaceMap) returns ValueSlotSurfaceMap
+	if current is anchor 'stillShared'
+		return ValueSlotSurfaceMap.create()
+	end 'stillShared'
+
+	return current
+end 'privateValueSlotSurfaceMap'
 
 // One enclosing loop on the parser's loop-context stack. `break`/`continue` read it
 // to find their targets (innermost, or by label) and to build the block-arg value
@@ -4631,7 +4662,7 @@ end 'ErrorExitDoor'
 
 // ⭐ **WHICH DOOR MADE A BORROWED MANAGED VALUE OWNED (S5).** Each door names the ONE function that spends it,
 // so this reads as a mapping rather than as a COUNT that goes stale the next time a caller is factored (this
-// file has had a call-site count go wrong three times — see `markDeclaredBufferSurface`; do not write a number
+// file has had a call-site count go wrong three times — see `markDeclaredSurface`; do not write a number
 // here). The doors share every rule EXCEPT two, and the door is what tells them apart: the immutable-global
 // refusal has to name the door it was reached through, or it describes a `var` binding that the program does
 // not contain — and a TRIVIAL TUPLE copies at a HAND-OFF while it increfs at a BINDING
@@ -5446,6 +5477,22 @@ export type Parser
 	// names `__ManagedMemory` — sharing the same module-level empty anchor discipline. Reset per function and
 	// SWAPPED across a closure body, exactly like the sibling value marks.
 	var bufferSurfaceValues as ValueMarkSet
+	// ⭐ **WHICH OF A TUPLE VALUE'S SLOTS DENOTE THE BUFFER (A2m)** — `bufferSurfaceValues` one container
+	// deeper, and a SEPARATE carrier because a tuple slot and a whole value are different facts: `p` is an
+	// ordinary tuple record whatever `p.0` denotes. Written where a declaration that spelled a tuple binds its
+	// value (a parameter, a return, a field read); read at `emitFieldLoad`, which every `p.0`, every
+	// `let (m, n) = …` and every chain hop funnels through.
+	//
+	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
+	var bufferSurfaceSlots as ValueSlotSurfaceMap
+	// ⭐ **WHOSE ELEMENTS DENOTE THE BUFFER (A2m)** — an ARRAY value declared through an alias written
+	// `Array with __ManagedMemory`. A third fact and not a reserved slot index of the mask above: an array has
+	// ONE element type and a tuple has one type per position, so folding them into one word would make a
+	// reader ask "is this a tuple?" before it could read either. Read at `emitArrayElementAccessor`, the one
+	// door every element-yielding array member comes out of.
+	//
+	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
+	var bufferSurfaceElements as ValueMarkSet
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THE BARE IDENTIFIER `parseVariableReference` LAST RESOLVED**,
 	// empty when that binding may be written through. A scalar hand-off from the ONE resolution that can
 	// answer it to the ONE consumer that needs it (`bareArgImmutableName`, at a call argument), because a
@@ -5880,6 +5927,8 @@ export type Parser
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
+			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
+			bufferSurfaceElements: sharedEmptyBufferSurfaceElements,
 			lastBareBindingImmutableName: EmptySourceText,
 			captureNames: ByteArrayArray.create(),
 			captureValues: ValueIdArray.create(),
@@ -6627,14 +6676,14 @@ export type Parser
 		if not self.skipBalancedParens() 'malformedParams'
 			return
 		end 'malformedParams'
-		// ⭐ **THE RETURN TYPE's PRE-ERASURE SPELLING (A2j)** — read before `parseOptionalReturnType` on the
-		// next line destroys it. This is the SWEEP's copy, and it is the one a call site reads
-		// (`ProgramSignatures.returnsBufferSurface`): the callee may be in another file, so only the
+		// ⭐ **THE RETURN TYPE's PRE-ERASURE SPELLING (A2j / A2m)** — read before `parseOptionalReturnType` on
+		// the next line destroys it. This is the SWEEP's copy, and it is the one a call site reads
+		// (`ProgramSignatures.declaredReturnSurface`): the callee may be in another file, so only the
 		// whole-program index can answer for it.
-		let declaredBufferSurface = self.returnSpellingDenotesBuffer()
+		let declaredSurface = self.returnDeclaredSurface()
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		let funcName = self.declaredMethodName(nameTok)
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredBufferSurface: declaredBufferSurface))
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface))
 		// ⭐ Whether the declaration takes a receiver decides where its own parameters sit in a CALL's
 		// argument list, so it is read here, once, and shared by the default scan below and the consume scan
 		// at the end of this routine — the two facts that are recorded CALL-ALIGNED.
@@ -6755,15 +6804,15 @@ export type Parser
 				// surfaced as a backend `call to unknown function` with no source position at all.)
 				let helperName = paramDefaultHelperName(funcName, paramIndex: helperNames.count())
 				helperNames.push(helperName)
-				// ⭐ **AND ITS PRE-ERASURE SPELLING RIDES TOO (A2j).** The helper's return type IS the
-				// parameter's declared type, so if the parameter was written `__ManagedMemory` the helper
-				// RETURNS the buffer surface — and `emitCall`'s `markDeclaredBufferSurface` reads that off
-				// the whole-program index by callee name, which for this callee is the entry pushed here.
-				// Hardcoded `false`, a defaulted buffer parameter would hand its call site a value bearing
-				// the `Array` member roster instead of the buffer's: a wrong surface, which is a wrong
-				// answer rather than a compile error. Asked at `typeStart`, the one place the spelling is
-				// still readable, through the same door `parseFunctionParameters` asks it at.
-				entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredBufferSurface: self.typeSpellingAtDenotesBuffer(typeStart)))
+				// ⭐ **AND ITS PRE-ERASURE SPELLING RIDES TOO (A2j / A2m).** The helper's return type IS the
+				// parameter's declared type, so if the parameter was written `__ManagedMemory` — or a TUPLE
+				// with a buffer in a slot — the helper RETURNS that surface, and `emitCall`'s
+				// `markDeclaredSurface` reads it off the whole-program index by callee name, which for this
+				// callee is the entry pushed here. Hardcoded plain, a defaulted buffer parameter would hand
+				// its call site a value bearing the `Array` member roster instead of the buffer's: a wrong
+				// surface, which is a wrong answer rather than a compile error. Asked at `typeStart`, the one
+				// place the spelling is still readable, through the same door `parseFunctionParameters` uses.
+				entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart)))
 			end 'hasDefault'
 
 			if self.kindAt(itemEnd) != TokenKind.comma 'endList'
@@ -8133,8 +8182,12 @@ export type Parser
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations `throws`, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told which overload's error type it recovers. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'throwingOverload'
 
-		if self.signatures.returnsBufferSurface(base) 'bufferReturningOverload'
-			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations returns `{String.from(ManagedMemoryTypeName)}`, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
+		// ⚠ **ASKED OF THE WHOLE SURFACE AND NOT ONLY THE OUTRIGHT SPELLING (A2m).** A tuple slot and an array
+		// element name the buffer through the same one-entry-per-bare-name sweep and are chosen at the same
+		// moment, so an overload set that differs only at a slot has the identical unrepairable ambiguity — the
+		// message therefore says NAMES rather than returns.
+		if self.signatures.declaredReturnSurface(base) != PlainDeclaredSurface 'bufferReturningOverload'
+			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations NAMES `{String.from(ManagedMemoryTypeName)}` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'bufferReturningOverload'
 
 		// ⭐ **PARAMETER DEFAULTS (BATCH2 slice 4) — the `throws` clause's exact shape, one declaration fact
@@ -8755,21 +8808,25 @@ export type Parser
 			let inferred = try self.readFieldDefaultLiteral()
 			// Shape 2 has no annotation at all, so no spelling can name the buffer alias (A2j); the type
 			// comes from a LITERAL, and no literal produces a `__ManagedMemory`.
-			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag), declaredBufferSurface: false)
+			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag), declaredSurface: PlainDeclaredSurface)
 			return
 		end 'typeFromLiteral'
 
 		try self.consume(TokenKind.as)
-		// ⭐ **THE FIELD's PRE-ERASURE SPELLING (A2j)** — asked at the cursor, which now sits on the
+		// ⭐ **THE FIELD's PRE-ERASURE SPELLING (A2j / A2m)** — asked at the cursor, which now sits on the
 		// annotation's first token, because `parseTypeReference` on the next line folds `__ManagedMemory`
 		// into the very `genericInstance` a `ByteArray` field resolves to. Captured in the ONE shared field
 		// reader, so the tolerant sweep's layout — the whole-program one every read door consults — and the
-		// real parse's carry the identical bit, for the reason this reader is shared at all.
-		let declaresBufferSurface = self.typeSpellingAtDenotesBuffer(self.pos)
+		// real parse's carry the identical word, for the reason this reader is shared at all.
+		//
+		// ⚠ Its ELEMENT bit is necessarily clear here: the SWEEP runs while the alias table is still being
+		// built, so `var bufs as BufArray` cannot be asked whether `BufArray` holds buffers at this moment. It
+		// is derived instead where every file is folded — see `ProgramSignatures.fieldSurfaceOf`.
+		let declaredSurface = self.declaredSurfaceAt(self.pos)
 		let fieldType = try self.parseTypeReference()
 
 		if not self.at(TokenKind.equals) 'noDefault'
-			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.none, declaredBufferSurface: declaresBufferSurface)
+			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.none, declaredSurface: declaredSurface)
 			return
 		end 'noDefault'
 
@@ -8786,7 +8843,7 @@ export type Parser
 		try self.consume(TokenKind.equals)
 		let given = try self.readFieldDefaultLiteral()
 		try self.requireFieldDefaultType(nameTok, fieldType: fieldType, given: given)
-		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(given.payload, tag: given.tag), declaredBufferSurface: declaresBufferSurface)
+		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(given.payload, tag: given.tag), declaredSurface: declaredSurface)
 	end 'readStructFieldInto'
 
 	// ⭐ **THE VERDICT ON A FIELD'S LITERAL DEFAULT, ASKED ONLY WHERE IT CAN BE ANSWERED.** `as Integer =
@@ -9466,7 +9523,7 @@ export type Parser
 	// stamps the field type with (`joinQualifiedName`), so the field's stored `named("Container.ElementArray")`
 	// and this `genericAliases` key are one string.
 	function qualifiedInnerGenericAlias(entry GenericAliasEntry) returns GenericAliasEntry
-		return GenericAliasEntry.create(joinQualifiedName(self.enclosingType, member: entry.aliasName), baseName: entry.baseName, argCount: entry.argCount, args: entry.args)
+		return GenericAliasEntry.create(joinQualifiedName(self.enclosingType, member: entry.aliasName), baseName: entry.baseName, argCount: entry.argCount, args: entry.args, elementIsBuffer: entry.elementIsBuffer)
 	end 'qualifiedInnerGenericAlias'
 
 	// ⭐ **A GENERIC-INSTANCE TYPEALIAS (P1.6-A)** — `typealias IntBox = Box with Integer`. The cursor
@@ -9499,11 +9556,30 @@ export type Parser
 	function readGenericInstanceAlias(aliasTok Token, genericOut GenericAliasEntryArray) throws ParseError
 		let baseTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.with)
+		// ⭐ **ARGUMENT 0's PRE-ERASURE SPELLING (A2m)**, read with the cursor still on it — `parseGenericArgNodes`
+		// below reaches `parseTypeReference`, whose generic-alias arm folds `__ManagedMemory` into the very
+		// `genericInstance(Array with Byte)` a `ByteArray` argument resolves to. For an `Array` base argument 0
+		// is the ELEMENT, so this is the whole of what tells `Array with __ManagedMemory` from
+		// `Array with ByteArray` — one instance, two spellings. See `GenericAliasEntry.elementIsBuffer`.
+		let elementIsBuffer = self.firstGenericArgSpellingDenotesBuffer()
 		var args = GenericArgNodeArray.create()
 		let argCount = try self.parseGenericArgNodes(args)
-		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath))
+		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath))
 		self.checkGenericInstance(baseTok, argCount: argCount)
 	end 'readGenericInstanceAlias'
+
+	// Was the FIRST type argument of the `Base with …` at the cursor spelled `__ManagedMemory` (A2m)? The
+	// cursor sits just past `with`, so the answer is the token there — or the one after it for the
+	// parenthesized list form, whose `(` is not an argument. Asked HERE rather than inside
+	// `parseGenericArgNode`, because that routine also reads NESTED instances' arguments, where "argument 0 of
+	// the alias being declared" is not a question it can answer.
+	function firstGenericArgSpellingDenotesBuffer() returns bool
+		if self.at(TokenKind.leftParen) 'parenthesizedArgList'
+			return self.typeSpellingAtDenotesBuffer((self.pos + 1) as TokenIndex)
+		end 'parenthesizedArgList'
+
+		return self.typeSpellingAtDenotesBuffer(self.pos)
+	end 'firstGenericArgSpellingDenotesBuffer'
 
 	// Record a whole-program semantic DIAGNOSTIC the pure parser detected, WITHOUT unwinding the parse
 	// (P1.6-A) — the parser twin of `reportPositioned`, writing into the artifact (which `mergeArtifact`
@@ -10287,9 +10363,9 @@ export type Parser
 		// declared-buffer-alias column (A2j) is filled and dropped here. It is not omitted from the call,
 		// because `parseFunctionParameters` fills every column in lockstep and a caller that could opt out
 		// would be a second way for the columns to come apart.
-		var paramBufferSurfaces = BoolArray.create()
+		var paramSurfaces = DeclaredSurfaceArray.create()
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces, owner: ParamDefaultOwner.interfaceRequirement)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.interfaceRequirement)
 		try self.consume(TokenKind.rightParen)
 
 		let returnType = try self.parseOptionalReturnType()
@@ -10978,7 +11054,7 @@ export type Parser
 		var paramRanges = SourceRangeArray.create()
 		// Parallel to `paramNames` too: whether the parameter's DECLARED TYPE spelled `__ManagedMemory`
 		// (A2j) — the fact `parseTypeReference` is about to erase, read by `bindParameters` below.
-		var paramBufferSurfaces = BoolArray.create()
+		var paramSurfaces = DeclaredSurfaceArray.create()
 
 		// ⭐ **THE RECEIVER IS AN ORDINARY PARAMETER, PUSHED FIRST.** That is the entire mechanism:
 		// it occupies position 0, so it is ValueId 0 by the same Std-ABI seeding every parameter
@@ -11003,11 +11079,11 @@ export type Parser
 			paramRanges.push(SourceRange.ofToken(nameTok))
 			// The receiver is typed by `enclosingSelfType`, never by a source spelling, so it can never be
 			// the buffer alias — but it occupies position 0 and every column here is indexed by position.
-			paramBufferSurfaces.push(false)
+			paramSurfaces.push(PlainDeclaredSurface)
 		end 'receiverParam'
 
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces, owner: ParamDefaultOwner.declaredFunction(sourceName))
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.declaredFunction(sourceName))
 		try self.consume(TokenKind.rightParen)
 
 		// ⭐ **A STRUCT PARAMETER OR RETURN TYPE IS RE-TAGGED `structRef` HERE**, in the real parse where
@@ -11019,7 +11095,7 @@ export type Parser
 		// The return type's pre-erasure spelling (A2j), read through the same one reader the SWEEP reads it
 		// through, so the two passes cannot form two opinions of what `returns __ManagedMemory` means — the
 		// property `parseOptionalReturnType` is shared for. This copy reaches `project.funcReturnTypes`.
-		let returnsBufferSurface = self.returnSpellingDenotesBuffer()
+		let declaredReturnSurface = self.returnDeclaredSurface()
 		let returnType = self.resolveNamedStructReturn(try self.parseOptionalReturnType())
 		// The `throws E` clause (P1.4b) — stamped onto the function so the body parse (`throw`/propagate)
 		// and the lowering (`ret` → `errorReturn` inside a throwing function) can read it off `func`.
@@ -11122,9 +11198,11 @@ export type Parser
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
-		// The buffer-surface marks (R4.4) are per-function for exactly that reason too — see
-		// `bufferSurfaceValues`.
+		// The buffer-surface marks (R4.4, A2m) are per-function for exactly that reason too — see
+		// `bufferSurfaceValues`. All THREE reset together, because they describe one value space.
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
+		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
+		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
 		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias name
 		// and the PARAMETER alias names are fixed by the DECLARED signature and known here, before the
 		// body is parsed and before `resolveTypes` erases either; the three site lists fill as the body
@@ -11229,7 +11307,7 @@ export type Parser
 		// overload's mangled registration name. `overloadRegistrationNameFor` refuses an overload set whose
 		// name has consume facts at all, precisely so that this per-name answer cannot be one sibling's read
 		// as another's.
-		try self.bindParameters(sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces)
+		try self.bindParameters(sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces)
 
 		self.skipNewlines()
 		// parseStatements threads a "current block" that control-flow statements can
@@ -11241,7 +11319,7 @@ export type Parser
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 
-		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredBufferSurface: returnsBufferSurface)
+		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
 		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(name)
@@ -11430,12 +11508,12 @@ export type Parser
 	// `= <default>` after the type is captured for `owner` (see `ParamDefaultOwner`).
 	// The caller has already consumed the `(` and consumes the closing `)`.
 	//
-	// ⭐ **`paramBufferSurfaces` IS THE PRE-ERASURE SPELLING COLUMN (A2j)**, the shape
+	// ⭐ **`paramSurfaces` IS THE PRE-ERASURE SPELLING COLUMN (A2j / A2m)**, the shape
 	// `FuncSignature.paramAggregateNames` already established for a union parameter's name: a fact the
 	// declaration holds and `parseTypeReference` is about to destroy, captured at the last moment it is
 	// readable and carried alongside the columns it describes. It needs no signature-index entry, because the
 	// only reader is `bindParameters` — and both live inside one `parseFunction`.
-	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramBufferSurfaces BoolArray, owner ParamDefaultOwner) throws ParseError
+	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, owner ParamDefaultOwner) throws ParseError
 		if self.at(TokenKind.rightParen) 'noParams'
 			return
 		end 'noParams'
@@ -11448,8 +11526,8 @@ export type Parser
 			let nameTok = try self.consumeNameToken(NamePosition.declaration)
 			try self.requireUnreservedName(nameTok)
 			// Asked at the cursor, which sits on the type's first token — the last instant the spelling
-			// `__ManagedMemory` still exists (`typeSpellingAtDenotesBuffer`).
-			let declaresBufferSurface = self.typeSpellingAtDenotesBuffer(self.pos)
+			// `__ManagedMemory` still exists, at any depth (`declaredSurfaceAt`).
+			let declaredSurface = self.declaredSurfaceAt(self.pos)
 			let paramType = try self.parseTypeReference()
 
 			// ⭐ **A DEFAULT VALUE IS CAPTURED, NOT PARSED HERE (BATCH2 slice 4)** — its expression becomes the
@@ -11484,7 +11562,7 @@ export type Parser
 			paramNames.push(nameTok.value)
 			paramTypes.push(paramType)
 			paramRanges.push(SourceRange.ofToken(nameTok))
-			paramBufferSurfaces.push(declaresBufferSurface)
+			paramSurfaces.push(declaredSurface)
 
 			// ⚠ NO COUNT CHECK HERE. There used to be one, testing `paramNames.count()` against the old
 			// register cap — a SECOND, and WEAKER, spelling of the ceiling: it counted only the parameters the
@@ -11674,7 +11752,7 @@ export type Parser
 
 		try self.parseCheckedValueReturn(helper, block: entry, anchor: anchor)
 
-		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredBufferSurface: false)
+		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredSurface: PlainDeclaredSurface)
 		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create()), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(helperName)
 	end 'parseParamDefaultHelper'
@@ -11690,7 +11768,7 @@ export type Parser
 	// is where that refusal becomes E3006, anchored on the PARAMETER's own name token, which is
 	// the declaration that has to change. The bootstrap reports the identical program at the
 	// identical token.
-	function bindParameters(funcName ByteArray, paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramBufferSurfaces BoolArray) throws ParseError
+	function bindParameters(funcName ByteArray, paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray) throws ParseError
 		// ⭐ **ONLY AN INSTANCE METHOD's feed is an OPAQUE-ARRAY feed** (P1.7 slice 3b-v). A feed can be an ARRAY
 		// feed (`self.items.push(item)` / a sibling forward — marked for instance methods) OR a P1.6-B2 STRUCT-
 		// FIELD feed (`Self{value: v}` — marked ONLY for a receiverless function, `scanConsumeBits`'s
@@ -11731,11 +11809,11 @@ export type Parser
 			end 'writesThisScanCannotSee'
 
 			let binding = try self.scope.declareParameterBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
-			// ⭐ **A PARAMETER DECLARED `__ManagedMemory` DENOTES THE BUFFER (A2j)** — the spelling was read at
-			// the declaration (`parseFunctionParameters`) and this is the site that BINDS the value it named,
-			// so this is where the fact becomes the mark `dispatchArrayMethod` already reads. Parameter `i`
-			// owns ValueId `i`, which is what makes the column's index the value's.
-			self.markDeclaredBufferSurface(i as ValueId, declaredAsBuffer: try paramBufferSurfaces.get(i) otherwise panic("bindParameters: paramBufferSurfaces.get OOB at {i} — a parameter's columns are built in lockstep"))
+			// ⭐ **A PARAMETER THAT NAMED `__ManagedMemory` DENOTES THE BUFFER THERE (A2j / A2m)** — the spelling
+			// was read at the declaration (`parseFunctionParameters`) and this is the site that BINDS the value it
+			// named, so this is where the fact becomes the marks `dispatchArrayMethod` and `emitFieldLoad` read.
+			// Parameter `i` owns ValueId `i`, which is what makes the column's index the value's.
+			self.markDeclaredSurface(i as ValueId, declared: try paramSurfaces.get(i) otherwise panic("bindParameters: paramSurfaces.get OOB at {i} — a parameter's columns are built in lockstep"))
 			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
 			// diagnostic can resolve the parameter to source (it is minted by no op — see
 			// ParamOriginTable — so it has no `emitOp` origin).
@@ -23784,6 +23862,16 @@ export type Parser
 			throw ParseError.unsupported("a one-element tuple type (a tuple has at least {MinTupleArity} elements, and parentheses around a single type would be indistinguishable from grouping)", line: openTok.line, column: openTok.column)
 		end 'singleElement'
 
+		// ⚠⚠ **AND A TUPLE WIDER THAN THE SURFACE MASK IS REFUSED RATHER THAN SILENTLY LOSING A SLOT (A2m).**
+		// Each element's declared `__ManagedMemory` spelling rides one bit of a `DeclaredSurface`
+		// (`MaxSurfaceMarkedTupleArity`), and a slot past the last bit would take the WRONG member roster — an
+		// accepted `count()` on a buffer, or a refused `length()` — with no diagnostic in either direction.
+		// Refused at the ONE place a tuple type is minted, unconditionally rather than only for a tuple that
+		// names the buffer, so the limit is a property of the type and not of what happens to be written in it.
+		if elements.count() > MaxSurfaceMarkedTupleArity 'tooManyElements'
+			throw ParseError.unsupported("a tuple type of {elements.count()} elements (shv2 records each element's declared `{String.from(ManagedMemoryTypeName)}` spelling in one bit of a 64-bit per-value word, so it carries at most {MaxSurfaceMarkedTupleArity}; a slot past that would silently take the wrong member roster). Name a `type` with the fields you need", line: openTok.line, column: openTok.column)
+		end 'tooManyElements'
+
 		return MaxonType.structRef(self.artifact.typeNames.intern((try self.internTupleLayout(elements, anchor: openTok)).name))
 	end 'parseTupleTypeReference'
 
@@ -25381,7 +25469,7 @@ export type Parser
 		// the generic-alias → base rewrite below (which would mangle it to `Array.create`, a callee no file
 		// declares): `Array` has no base struct, so its statics lower to the array runtime, not a user method.
 		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.isArrayInstance(self.signatures.genericAliasInstance(typeTok.value)) 'arrayStatic'
-			return try self.parseArrayStaticCall(func, aliasTok: typeTok, giid: self.signatures.genericAliasInstance(typeTok.value))
+			return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: typeTok.value, giid: self.signatures.genericAliasInstance(typeTok.value))
 		end 'arrayStatic'
 
 		// `IntSet.create()` — a static call on a `Set` instance alias (P1.7b slice A), intercepted before the
@@ -25399,7 +25487,7 @@ export type Parser
 		if self.enclosingInnerAliases.contains(typeTok.value) 'innerAlias'
 			let qualified = joinQualifiedName(self.enclosingType, member: typeTok.value)
 			if self.signatures.isGenericAlias(qualified) and self.signatures.isArrayInstance(self.signatures.genericAliasInstance(qualified)) 'innerArrayStatic'
-				return try self.parseArrayStaticCall(func, aliasTok: typeTok, giid: self.signatures.genericAliasInstance(qualified))
+				return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: qualified, giid: self.signatures.genericAliasInstance(qualified))
 			end 'innerArrayStatic'
 		end 'innerAlias'
 
@@ -27907,7 +27995,7 @@ export type Parser
 	// ⚠ **THE REFUSAL BELOW NAMES BOTH, AND KEEPING IT CURRENT IS NOT COSMETIC.** It read *"P1.7 slice 1
 	// provides `create()` only"* until this rung, and a reader trusts a refusal's NOUN over the source — a
 	// stale one sends them looking for a mechanism that is one line away.
-	function parseArrayStaticCall(func IrFunction, aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
+	function parseArrayStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(aliasTok, last: methodTok)
@@ -27916,6 +28004,14 @@ export type Parser
 			try self.consumeEmptyArgList()
 			let arr = self.emitArrayCreateOp(giid, range: range)
 			self.trackOwnedTemp(arr)
+			// ⭐ **`BufArray.create()` YIELDS AN ARRAY OF BUFFERS (A2m)** — asked of the ALIAS NAME and never of
+			// `giid`, which cannot answer: `Array with __ManagedMemory` and `Array with ByteArray` intern to the
+			// SAME instance. The name is the caller's because the two doors spell it differently — a top-level
+			// alias is its own token, a nested one is base-qualified — and only they know which.
+			if self.signatures.aliasElementIsBufferSurface(aliasName) 'elementsAreBuffers'
+				self.markBufferSurfaceElements(arr)
+			end 'elementsAreBuffers'
+
 			return arr
 		end 'createStatic'
 
@@ -29130,13 +29226,7 @@ export type Parser
 		if methodTok.value.equals(CloneMethod) 'clone'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			try self.consumeEmptyArgList()
-			if self.signatures.arrayElementIsOpaque(giid) 'opaqueClone'
-				return self.emitOwnedRuntimeResult(ArrCloneOpaqueName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
-			end 'opaqueClone'
-			if self.signatures.arrayElementIsManaged(giid) 'managedClone'
-				return self.emitOwnedRuntimeResult(ArrCloneManagedName, args: pairArgs(arr, second: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
-			end 'managedClone'
-			return self.emitOwnedRuntimeResult(ArrCloneName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+			return self.inheritArrayElementSurface(self.emitArrayCloneCall(giid, arr: arr, range: range), source: arr)
 		end 'clone'
 
 		// ⭐ **THE VOID MUTATORS — AND EACH REFUSES VALUE POSITION FROM INSIDE ITS OWN ARM
@@ -29653,6 +29743,7 @@ export type Parser
 
 		let resultType = self.elementAccessorResultType(giid)
 		let result = self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: range)
+		self.markElementReadSurface(result, args: args, callee: callee)
 		if owned 'moveOut'
 			self.trackOwnedTemp(result)
 		end 'moveOut' else 'borrowsInPlace'
@@ -29662,6 +29753,23 @@ export type Parser
 		end 'borrowsInPlace'
 		return result
 	end 'emitArrayElementAccessor'
+
+	// ⭐ **AN ELEMENT READ OFF AN ARRAY OF BUFFERS IS A BUFFER (A2m).** Placed at the accessor's ONE mint
+	// rather than at the five arms that reach it (`get`, `first`, `last`, `pop`, `remove` — plus the `for … in`
+	// loop's unchecked read), because every one of them funnels through that line and a per-arm mark would be
+	// the enumeration that misses the sixth. A trivial element never arrives here at all: an `Array with
+	// Integer` returns from the early arm above, and no trivial element can be a buffer.
+	//
+	// ⚠ **THE RECEIVER IS ARGUMENT 0, WHICH IS THE RUNTIME ABI AND NOT A COINCIDENCE OF THESE CALL SITES** —
+	// `__arr_get(arr, i)`, `__arr_pop(arr)`, `__arr_remove(arr, i)` all take the array first. Recovering it
+	// here rather than threading it through six callers keeps the receiver ONE value: a threaded copy would be
+	// a second spelling of `args`'s own first element, free to disagree with it.
+	function markElementReadSurface(result ValueId, args ValueIdArray, callee ByteArray)
+		let receiver = try args.get(0) otherwise panic("markElementReadSurface: `{String.from(callee)}` was emitted with no arguments — every array element accessor's runtime callee takes the array as its first argument")
+		if self.valueElementIsBufferSurface(receiver) 'receiverHoldsBuffers'
+			self.markBufferSurface(result)
+		end 'receiverHoldsBuffers'
+	end 'markElementReadSurface'
 
 	// The VALUE type an element accessor's result carries — the opaque element's own `typeParameter(pos)` for an
 	// OPAQUE array (the shared body keeps the element opaque; its drop is descriptor-gated, `decrefCalleeFor`'s
@@ -29720,13 +29828,42 @@ export type Parser
 		if bufferSurface 'sliceOfABuffer'
 			self.markBufferSurface(sliced)
 		end 'sliceOfABuffer'
-		return sliced
+		// And a slice of an array OF buffers is an array of buffers — the same rule one container out, which is
+		// why the two live side by side rather than in one test: a value can be either, and never both.
+		return self.inheritArrayElementSurface(sliced, source: arr)
 	end 'parseArraySlice'
 
 	// Which of the three `slice` runtimes this instance's element takes — the trivial COW view, the per-element
 	// DEEP CLONE, or the descriptor-gated opaque wrapper. Split out of `parseArraySlice` so the buffer-surface
 	// mark has ONE value to name rather than one per arm; the three-way choice is `clone`'s and `append`'s
 	// verbatim.
+	// Which of the three `clone` runtimes this instance's element takes — `emitArraySliceCall`'s three-way
+	// choice verbatim, split out of the `clone` arm for the identical reason: the element-surface inheritance
+	// needs ONE value to name rather than one per arm.
+	function emitArrayCloneCall(giid GenericInstanceId, arr ValueId, range SourceRange) returns ValueId
+		if self.signatures.arrayElementIsOpaque(giid) 'opaqueClone'
+			return self.emitOwnedRuntimeResult(ArrCloneOpaqueName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+		end 'opaqueClone'
+		if self.signatures.arrayElementIsManaged(giid) 'managedClone'
+			return self.emitOwnedRuntimeResult(ArrCloneManagedName, args: pairArgs(arr, second: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+		end 'managedClone'
+		return self.emitOwnedRuntimeResult(ArrCloneName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+	end 'emitArrayCloneCall'
+
+	// ⭐ **A COPY OF AN ARRAY OF BUFFERS HOLDS BUFFERS (A2m).** `clone` and the `Array`-surface `slice` are the
+	// only two members that hand back a WHOLE array of the receiver's own instance, and the element spelling
+	// cannot ride that instance (`Array with __ManagedMemory` and `Array with ByteArray` are one id) — so it
+	// rides the value here, exactly as `parseArraySlice` carries the receiver's OWN buffer surface across the
+	// same operation. MEASURED before this line: `bufs.clone().get(0).length()` was refused as an unknown
+	// `Array` method while `bufs.get(0).length()` answered.
+	function inheritArrayElementSurface(result ValueId, source ValueId) returns ValueId
+		if self.valueElementIsBufferSurface(source) 'sourceHoldsBuffers'
+			self.markBufferSurfaceElements(result)
+		end 'sourceHoldsBuffers'
+
+		return result
+	end 'inheritArrayElementSurface'
+
 	function emitArraySliceCall(giid GenericInstanceId, arr ValueId, start ValueId, endIndex ValueId, range SourceRange) returns ValueId
 		if self.signatures.arrayElementIsOpaque(giid) 'opaqueSlice'
 			return self.emitOwnedRuntimeResult(ArrSliceOpaqueName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
@@ -31389,7 +31526,19 @@ export type Parser
 		// that reach it — `h.buf`, `self.buf`, a bare `buf` in a method, a chain hop, a compound assignment's
 		// read — because every one of them funnels through this line, and a per-door mark would be the
 		// enumeration that misses the tenth.
-		self.markDeclaredBufferSurface(result, declaredAsBuffer: layout.fieldIsBufferSurface(index))
+		self.markDeclaredSurface(result, declared: self.signatures.fieldSurfaceOf(layout.name, index: index))
+
+		// ⭐ **AND THE PER-VALUE SLOT MASK, WHICH THE LAYOUT CANNOT CARRY (A2m).** When `box` is a TUPLE, its
+		// layout is SHARED with every other tuple of the same canonical element types — `(__ManagedMemory, Int)`
+		// and `(ByteArray, Int)` are one registration — so the buffer-ness of slot `index` is a fact about THIS
+		// VALUE and about nothing the layout knows. Read here in ADDITION to the column above rather than
+		// instead of it: the column stays authoritative for a real struct field, whose declaration is its own.
+		//
+		// This one line is what serves `p.0`, `let (m, n) = pair()` and `h.p.0` alike — every read of a tuple
+		// element in the language funnels through this mint.
+		if self.valueSlotIsBufferSurface(box, slot: index) 'valueSaysThisSlotIsABuffer'
+			self.markBufferSurface(result)
+		end 'valueSaysThisSlotIsABuffer'
 
 		return result
 	end 'emitFieldLoad'
@@ -31897,7 +32046,7 @@ export type Parser
 	// VALUE that mint one — `__ManagedMemory.create` (`parseManagedMemoryStaticCall`), a `slice` taken
 	// THROUGH the buffer surface (`parseArraySlice`), `__ManagedDirectory.filename`/`currentPath`
 	// (`emitOwnedManagedMemoryResult`, R4.3) and `String.addressableBytes()` (`dispatchStringMethod`,
-	// BATCH2 slice 1) — plus `markDeclaredBufferSurface` below, which A2j reaches from the three sites that
+	// BATCH2 slice 1) — plus `markDeclaredSurface` below, which A2j reaches from the three sites that
 	// bind a value whose DECLARED type spelled the alias.
 	// ⚠⚠ **THIS COUNT HAS NOW BEEN WRONG THREE TIMES** — it said TWO while there were three, THREE while
 	// there were four, and the two independent corrections (A2j's and BATCH2's) each restated it without
@@ -31923,6 +32072,28 @@ export type Parser
 		self.bufferSurfaceValues.insert(value)
 	end 'markBufferSurface'
 
+	// ⭐ **THE ONE WRITER OF `bufferSurfaceSlots` (A2m)** — `markBufferSurface`'s twin for a TUPLE value,
+	// through the same one home for the copy-on-write (`privateValueSlotSurfaceMap`) and with the same hazard:
+	// the anchor is module-level, so a write into it names slots of an unrelated function's SSA space.
+	// `error.tuple-slot-mark-does-not-leak-across-functions` is what holds that shut.
+	//
+	// Only a NON-PLAIN mask is stored, so a program whose tuples name no buffer allocates no table.
+	function markBufferSurfaceSlots(value ValueId, slots DeclaredSurface)
+		if slots == PlainDeclaredSurface 'noSlotNamesTheBuffer'
+			return
+		end 'noSlotNamesTheBuffer'
+
+		self.bufferSurfaceSlots = privateValueSlotSurfaceMap(self.bufferSurfaceSlots, anchor: sharedEmptyBufferSurfaceSlots)
+		self.bufferSurfaceSlots.upsert(value, value: slots)
+	end 'markBufferSurfaceSlots'
+
+	// ⭐ **THE ONE WRITER OF `bufferSurfaceElements` (A2m)** — `markBufferSurface`'s twin for an ARRAY whose
+	// ELEMENTS are buffers, on the same discipline and against the same anchor hazard.
+	function markBufferSurfaceElements(value ValueId)
+		self.bufferSurfaceElements = privateValueMarkSet(self.bufferSurfaceElements, anchor: sharedEmptyBufferSurfaceElements)
+		self.bufferSurfaceElements.insert(value)
+	end 'markBufferSurfaceElements'
+
 	// ⭐⭐ **THE ONE DECISION: A TYPE SPELLED `__ManagedMemory` DENOTES THE BUFFER (A2j).** ⚖ **USER RULING,
 	// 2026-07-31** — D11b's ("the buffer's legitimate surface is EXACTLY what its roster names",
 	// `bufferSurfaceMemberNames`) applied to the spelling that NAMES the buffer. The alternative — a declared
@@ -31944,25 +32115,126 @@ export type Parser
 		return self.identifierNameAt(index).equals(ManagedMemoryTypeName)
 	end 'typeSpellingAtDenotesBuffer'
 
+	// ⭐⭐ **WHERE DOES THE TYPE WRITTEN AT `index` NAME `__ManagedMemory` (A2m)?** THE one reader every
+	// declaration door asks — a parameter, a struct field, a return clause — and the generalisation of the
+	// single-token test above from a BIT to a `DeclaredSurface` word. Three depths, one walk:
+	//
+	//   • `m __ManagedMemory`          ⇒ the outright bit
+	//   • `t (__ManagedMemory, Int)`   ⇒ slot 0's bit
+	//   • `a BufArray`                 ⇒ the element bit, where `BufArray = Array with __ManagedMemory`
+	//
+	// ⚠ **IT IS ASKED OF THE TOKENS, BEFORE `parseTypeReference` RUNS, FOR THE REASON A2j STATES ABOVE** —
+	// and the tuple depth is why the word cannot be recovered afterwards even in principle: two tuple types
+	// that differ only in a slot's spelling canonicalize to ONE interned name with ONE layout, so by the time
+	// a `MaxonType` exists the difference is not merely erased, it does not exist.
+	//
+	// ⚠ **THE ELEMENT BIT IS THE ONE ARM THAT CONSULTS A REGISTRY, AND ITS ASKERS ARE THEREFORE THE REAL-PARSE
+	// DOORS ONLY** (a parameter, an array static). The sweep would answer it from a half-built alias table —
+	// an answer about how far the sweep had got — so the two doors the sweep DOES feed (a struct field, a
+	// return type) leave it clear here and have it derived where every file is folded
+	// (`ProgramSignatures.declaredElementIsBufferSurface`). Asking it here costs a `Set.contains` on the
+	// shared empty set, which returns before it hashes.
+	function declaredSurfaceAt(index TokenIndex) returns DeclaredSurface
+		if self.kindAt(index) == TokenKind.leftParen 'tupleType'
+			return self.tupleSlotSurfacesAt(index)
+		end 'tupleType'
+
+		if self.typeSpellingAtDenotesBuffer(index) 'spelledTheAlias'
+			return SurfaceBitIsBuffer
+		end 'spelledTheAlias'
+
+		if self.signatures.aliasElementIsBufferSurface(self.identifierNameAt(index)) 'namedAnArrayOfBuffers'
+			return SurfaceBitElementIsBuffer
+		end 'namedAnArrayOfBuffers'
+
+		return PlainDeclaredSurface
+	end 'declaredSurfaceAt'
+
+	// The slot bits of a TUPLE type written at `open` (which is its `(`). It walks the element list at PAREN
+	// DEPTH 1 — a nested tuple element is a type of its own, and its inner spellings belong to ITS slots, not
+	// to this tuple's — and reads each top-level element's first token through the same single-token test the
+	// outright spelling uses.
+	//
+	// A malformed or unterminated type is not this walk's to report: it stops at the matching `)` or at the
+	// end of the token array, and `parseTupleTypeReference` reports what is actually wrong a moment later.
+	function tupleSlotSurfacesAt(open TokenIndex) returns DeclaredSurface
+		var surface = PlainDeclaredSurface
+		var slot = 0 as FieldIndex
+		var depth = 0
+		var at = open
+		var elementStart = (open + 1) as TokenIndex
+		while at < self.tokens.count() 'scanTuple'
+			let kind = self.kindAt(at)
+			if kind == TokenKind.leftParen 'openNested'
+				depth = depth + 1
+			end 'openNested'
+
+			if kind == TokenKind.rightParen 'closeNested'
+				depth = depth - 1
+				if depth == 0 'endOfThisTuple'
+					return self.withTupleSlotSurface(surface, slot: slot, elementStart: elementStart)
+				end 'endOfThisTuple'
+			end 'closeNested'
+
+			if kind == TokenKind.comma and depth == 1 'nextElement'
+				surface = self.withTupleSlotSurface(surface, slot: slot, elementStart: elementStart)
+				slot = (slot + 1) as FieldIndex
+				elementStart = (at + 1) as TokenIndex
+			end 'nextElement'
+
+			at = at + 1
+		end 'scanTuple'
+
+		return surface
+	end 'tupleSlotSurfacesAt'
+
+	// Fold one tuple element's spelling into the running mask. Split out because the walk above ends an
+	// element at TWO places — a top-level comma and the closing paren — and a second copy of the test is
+	// exactly how one of the two would come to disagree with the other about which bit a slot owns.
+	//
+	// A slot the mask cannot express is silently skipped HERE and refused THERE: `parseTupleTypeReference`
+	// rejects a tuple type wider than `MaxSurfaceMarkedTupleArity` outright, so no such type is ever minted
+	// and no value of one reaches a reader. See `MaxSurfaceMarkedTupleArity`.
+	function withTupleSlotSurface(surface DeclaredSurface, slot FieldIndex, elementStart TokenIndex) returns DeclaredSurface
+		if slot >= MaxSurfaceMarkedTupleArity or not self.typeSpellingAtDenotesBuffer(elementStart) 'notABufferSlot'
+			return surface
+		end 'notABufferSlot'
+
+		return surface or tupleSlotSurfaceBit(slot)
+	end 'withTupleSlotSurface'
+
 	// The RETURN clause's spelling, asked with the cursor ON `returns` — so the type token is the next one.
 	// ⚠ **ONE reader, because BOTH passes ask it**: the tolerant declaration sweep (`recordScannedSignature`,
 	// whose answer reaches every call site through the whole-program index) and the real parse
 	// (`parseFunction`). That is exactly why `parseOptionalReturnType` is shared, and a second hand-written
 	// peek beside it would be free to disagree the moment a return clause grows a second shape — silently,
 	// since a wrong SURFACE is a wrong answer and not a compile error.
-	function returnSpellingDenotesBuffer() returns bool
-		return self.at(TokenKind.returns) and self.typeSpellingAtDenotesBuffer((self.pos + 1) as TokenIndex)
-	end 'returnSpellingDenotesBuffer'
+	function returnDeclaredSurface() returns DeclaredSurface
+		if not self.at(TokenKind.returns) 'noReturnClause'
+			return PlainDeclaredSurface
+		end 'noReturnClause'
 
-	// ⭐ **THE ONE BRIDGE FROM A DECLARED SPELLING TO THE VALUE MARK.** Three declaration sites carry the bit
-	// (a parameter, a return type, a struct field) and three separate sites bind the value it describes, so
-	// three storage COLUMNS are inherent — parameters, returns and fields have three separate registries.
-	// Three copies of the *decision* are not, and this is what keeps them at one.
-	function markDeclaredBufferSurface(value ValueId, declaredAsBuffer bool)
-		if declaredAsBuffer 'declaredTheAlias'
+		return self.declaredSurfaceAt((self.pos + 1) as TokenIndex)
+	end 'returnDeclaredSurface'
+
+	// ⭐ **THE ONE BRIDGE FROM A DECLARED SPELLING TO THE VALUE MARKS.** Three declaration sites carry the
+	// surface (a parameter, a return type, a struct field) and three separate sites bind the value it
+	// describes, so three storage COLUMNS are inherent — parameters, returns and fields have three separate
+	// registries. Three copies of the *decision* are not, and this is what keeps them at one.
+	//
+	// A2m made the surface a WORD, and this is where the word is unpacked onto the three carriers — so a door
+	// that gains a depth gains it here, once, rather than at each binder.
+	function markDeclaredSurface(value ValueId, declared DeclaredSurface)
+		if surfaceIsBuffer(declared) 'declaredTheAlias'
 			self.markBufferSurface(value)
 		end 'declaredTheAlias'
-	end 'markDeclaredBufferSurface'
+
+		if surfaceElementIsBuffer(declared) 'declaredAnArrayOfBuffers'
+			self.markBufferSurfaceElements(value)
+		end 'declaredAnArrayOfBuffers'
+
+		self.markBufferSurfaceSlots(value, slots: declared)
+	end 'markDeclaredSurface'
 
 	// Does `value` denote a `__ManagedMemory` BUFFER rather than the `Array` around it? The read side of the
 	// mark above — asked once per array-method dispatch, and `Set.contains` on the shared zero-capacity set
@@ -31970,6 +32242,20 @@ export type Parser
 	function valueIsBufferSurface(value ValueId) returns bool
 		return self.bufferSurfaceValues.contains(value)
 	end 'valueIsBufferSurface'
+
+	// Does element `slot` of the TUPLE `value` denote the buffer (A2m)? The read side of
+	// `markBufferSurfaceSlots`, asked at `emitFieldLoad` — which every `p.0`, every destructured name and
+	// every chain hop funnels through. A value with no entry has no buffer slot, which is every tuple in a
+	// program that never writes the alias.
+	function valueSlotIsBufferSurface(value ValueId, slot FieldIndex) returns bool
+		return surfaceTupleSlotIsBuffer(try self.bufferSurfaceSlots.get(value) otherwise PlainDeclaredSurface, slot: slot)
+	end 'valueSlotIsBufferSurface'
+
+	// Do the ELEMENTS of the array `value` denote buffers (A2m)? The read side of
+	// `markBufferSurfaceElements`, asked at `emitArrayElementAccessor`.
+	function valueElementIsBufferSurface(value ValueId) returns bool
+		return self.bufferSurfaceElements.contains(value)
+	end 'valueElementIsBufferSurface'
 
 	// ⭐ **A BARE FUNCTION NAME USED AS A VALUE → a `functionRef`** (P1.5-A1), the last resort a name
 	// falls to after it is not a local, a self-field, a top-level constant or a `var`. It is what makes
@@ -32038,8 +32324,8 @@ export type Parser
 		var paramRanges = SourceRangeArray.create()
 		// A closure parameter may spell `__ManagedMemory` exactly as a function's may (A2j) — it reaches the
 		// same `parseFunctionParameters` and the same `bindParameters`, so it needs no separate treatment.
-		var paramBufferSurfaces = BoolArray.create()
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces, owner: ParamDefaultOwner.closureLiteral)
+		var paramSurfaces = DeclaredSurfaceArray.create()
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.closureLiteral)
 		try self.consume(TokenKind.rightParen)
 		// A struct parameter is re-tagged `structRef` here, exactly as `parseFunction` does — the whole-program
 		// struct registry is complete in the real parse (see `resolveNamedStruct`).
@@ -32118,6 +32404,8 @@ export type Parser
 		let savedValueInstanceAlias = self.valueInstanceAlias
 		let savedImmutableGlobalReads = self.immutableGlobalReads
 		let savedBufferSurfaceValues = self.bufferSurfaceValues
+		let savedBufferSurfaceSlots = self.bufferSurfaceSlots
+		let savedBufferSurfaceElements = self.bufferSurfaceElements
 		let savedCaptureNames = self.captureNames
 		let savedCaptureValues = self.captureValues
 		let savedCaptureTypes = self.captureTypes
@@ -32187,6 +32475,8 @@ export type Parser
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
+		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
+		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
 		self.captureNames = ByteArrayArray.create()
 		self.captureValues = ValueIdArray.create()
 		self.captureTypes = MaxonTypeArray.create()
@@ -32239,7 +32529,7 @@ export type Parser
 		let entry = self.artifact.module.addBlockAt(lifted, label: b"entry", filePath: self.filePath.toString(), firstLine: givesTok.line)
 		self.currentBlock = entry
 
-		try self.bindParameters(closureName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces)
+		try self.bindParameters(closureName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces)
 
 		// Parse the single body expression, then close the lifted function like a value `return`: the body
 		// IS the closure's returned value, so `emitOwnedValueReturn` promotes a borrowed String to owned and
@@ -32283,7 +32573,7 @@ export type Parser
 		lifted.maxonReturnType = returnType
 		// A closure's return type is INFERRED from its body expression, never spelled, so no declared
 		// spelling can name the buffer alias here (A2j).
-		self.artifact.recordFuncReturnType(closureName, returnType: returnType, declaredBufferSurface: false)
+		self.artifact.recordFuncReturnType(closureName, returnType: returnType, declaredSurface: PlainDeclaredSurface)
 		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
 		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
 		self.closureReturns.upsert(closureName, value: returnType)
@@ -32324,6 +32614,8 @@ export type Parser
 		self.valueInstanceAlias = savedValueInstanceAlias
 		self.immutableGlobalReads = savedImmutableGlobalReads
 		self.bufferSurfaceValues = savedBufferSurfaceValues
+		self.bufferSurfaceSlots = savedBufferSurfaceSlots
+		self.bufferSurfaceElements = savedBufferSurfaceElements
 		self.captureNames = savedCaptureNames
 		self.captureValues = savedCaptureValues
 		self.captureTypes = savedCaptureTypes
@@ -34133,7 +34425,7 @@ export type Parser
 		// rather than inside the mint chain because the mint's tail (`mintOwnedCallResult`) is handed a
 		// `MaxonType` and not the callee name — and the name is the only thing that still knows the spelling,
 		// the alias having erased it. Every direct, method and static call funnels through this one line.
-		self.markDeclaredBufferSurface(result, declaredAsBuffer: self.signatures.returnsBufferSurface(callee))
+		self.markDeclaredSurface(result, declared: self.signatures.declaredReturnSurface(callee))
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
