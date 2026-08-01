@@ -1953,6 +1953,176 @@ end 'main'
 error E3114: <fragment>:29:17: 'equals' taking 1 argument(s) is provided by both Equatable.equals(other Self) returns bool and AlsoEquatable.equals(other Self) returns bool through the constraints on type parameter 'T' — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints
 ```
 
+### A `static` requirement is NOT reachable through a type parameter (A2w)
+
+A `static` member has no receiver, so a value of `T` cannot dispatch one — and until this code existed the
+resolver matched a requirement by NAME ALONE and bound the static's slot anyway, prepending a receiver the
+callee has no parameter for. **MEASURED on the program below: x64-windows compiled clean and returned 7 (the
+right answer, by ABI luck — the spurious receiver landed in an argument register the zero-parameter callee
+never read), while `--target=wasm32-wasi` compiled clean and then trapped `indirect call type mismatch` at
+runtime.** `call_indirect` checks the declared functype against the target's own, so wasm caught what x64's
+registers let slide: the slot's signature genuinely disagrees with the callee's.
+
+Neither existing message could be reused. E3036's is about an argument COUNT (it is what the same call shape
+gets on a CONCRETE receiver — `'Widget.origin' expects 0 argument(s) but 1 were provided` — counting the
+receiver as an argument), and E2015's `no `where` constraint … declares a method 'origin'` would be FALSE:
+the constraint declares it, as a static. Target-independent.
+
+<!-- test: where-clauses.error.static-requirement-through-type-param -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Origin
+	static function origin() returns Code
+	function digest() returns Code
+end 'Origin'
+
+type Widget implements Origin
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export static function origin() returns Code
+		return 7
+	end 'origin'
+
+	export function digest() returns Code
+		return self.seed
+	end 'digest'
+end 'Widget'
+
+type Box uses T where T is Origin
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function go() returns Code
+		return self.item.origin()
+	end 'go'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	return WidgetBox.create(Widget.create(7)).go() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:33:20: 'Origin.origin' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+### The ESCAPE HATCH: a `static` member is reached on the CONCRETE type, and still is
+
+The refusal above is only safe because the capability has a route, so the route is pinned beside it. `Widget`
+is named outright, which is the one thing a `where` constraint does not tell you — and the same body still
+dispatches an INSTANCE requirement through the witness, so the two forms are proved to coexist. Returns
+`2 + 7`.
+
+<!-- test: where-clauses.concrete-static-beside-witness-dispatch -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Origin
+	static function origin() returns Code
+	function digest() returns Code
+end 'Origin'
+
+type Widget implements Origin
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export static function origin() returns Code
+		return 7
+	end 'origin'
+
+	export function digest() returns Code
+		return self.seed
+	end 'digest'
+end 'Widget'
+
+type Box uses T where T is Origin
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function go() returns Code
+		return self.item.digest() + Widget.origin()
+	end 'go'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	return WidgetBox.create(Widget.create(2)).go() as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+### The OPERATOR path had the SAME hole, one door over
+
+`witnessTargetIsProtocol` decides whether a constraint's `equals` IS `Equatable` by comparing the result
+type, the `throws` clause and the formals — and it did not compare the RECEIVER KIND, so a `static equals`
+passed a shape test the protocol's own instance method defines. **MEASURED on the program below with the
+comparison reached (`a.seed` 7, `b.seed` 1, so the answer is `false`): x64-windows compiled clean and
+returned `true` — the static impl read the RECEIVER as its `other`, not the right operand, a SILENT WRONG
+ANSWER — and wasm trapped `indirect call type mismatch`.** A static look-alike is no more `Equatable` than a
+throwing one or a wrong-arity one, so it takes the same E3005 those already take: the author's cure is the
+same sentence. Target-independent.
+
+<!-- test: where-clauses.error.static-operator-witness -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface StaticEq
+	static function equals(other Self) returns bool
+end 'StaticEq'
+
+type Widget implements StaticEq
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export static function equals(other Self) returns bool
+		return other.seed == 7
+	end 'equals'
+end 'Widget'
+
+type Pair uses T where T is StaticEq
+	export var a as T
+	export var b as T
+
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+
+	export function same() returns bool
+		return self.a == self.b
+	end 'same'
+end 'Pair'
+
+typealias WidgetPair = Pair with Widget
+
+function main() returns ExitCode
+	return 1 if WidgetPair.create(Widget.create(7), b: Widget.create(1)).same() else 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:29:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
+```
+
 ### Basic where clause with Map
 
 Map requires `Key is Hashable`. String implements Hashable, so this should work:

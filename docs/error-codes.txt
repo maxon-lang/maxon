@@ -1355,6 +1355,26 @@ E3115 SemanticNoWitnessRequirementForArgCount
 	doc reported by E3036 as it always was, so this code is reached only where a choice genuinely
 	doc existed.
 
+E3116 SemanticStaticRequirementNotDispatchable
+	shv2 semanticStaticRequirementNotDispatchable
+	doc A method call on a VALUE of a constrained type parameter names a requirement its `where`
+	doc constraints declare `static`. A `static` member has no receiver, so there is nothing for the
+	doc call to dispatch on; a `static` member is called on a concrete type, which is exactly what a
+	doc `where` constraint does not name.
+	doc The resolver matched a requirement by NAME alone, so it bound the static's witness slot and
+	doc prepended a receiver the callee has no parameter for. That is an ABI disagreement inside a
+	doc slot, not a near-miss: x64 compiled clean and answered correctly only because the spurious
+	doc receiver landed in an argument register a zero-parameter callee never reads, while wasm's
+	doc `call_indirect` -- which checks the declared functype against the target's own -- trapped
+	doc `indirect call type mismatch` at runtime.
+	doc Neither neighbouring message could carry it. E3036 states an argument COUNT, which is what the
+	doc same call shape gets on a CONCRETE receiver and is about the wrong thing; E2015's "no `where`
+	doc constraint declares a method" would be FALSE, since the constraint declares it and only its
+	doc receiver kind is wrong.
+	doc The OPERATOR form of the same hole takes E3005 instead, and deliberately: there the question is
+	doc "is this requirement the `Equatable`/`Comparable` protocol?", a static one is not, and the
+	doc author's cure is the sentence E3005 already prints for a throwing or wrong-arity look-alike.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

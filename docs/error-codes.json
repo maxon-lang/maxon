@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "88bf21fa5b68200f",
+  "sourceHash": "16726d21a05e7260",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1299,6 +1299,15 @@
       "stage": "semantic",
       "doc": "A method call on a constrained type parameter names a method that the parameter's `where`\nconstraints supply SEVERAL requirements for, and the call's argument count matches none of\nthem.\nIt is E3036's case (an arity mismatch) at a call site where E3036 cannot be written: that code\nnames ONE callee and ONE expected count, and here there are several, none of which is the one\nthe author meant. Blaming an arbitrary candidate would print a true sentence about the wrong\nrequirement -- the exact failure `interface Derived extends Base` produced before the\nrequirement list became transitive, when `Derived.label` was reported to expect one argument\non a call to an inherited zero-argument `label()`.\nWith exactly ONE requirement of the name there is nothing to select between and the arity is\nreported by E3036 as it always was, so this code is reached only where a choice genuinely\nexisted.",
       "emittedBy": {"shv2": "semanticNoWitnessRequirementForArgCount"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3116,
+      "tag": "E3116",
+      "name": "SemanticStaticRequirementNotDispatchable",
+      "stage": "semantic",
+      "doc": "A method call on a VALUE of a constrained type parameter names a requirement its `where`\nconstraints declare `static`. A `static` member has no receiver, so there is nothing for the\ncall to dispatch on; a `static` member is called on a concrete type, which is exactly what a\n`where` constraint does not name.\nThe resolver matched a requirement by NAME alone, so it bound the static's witness slot and\nprepended a receiver the callee has no parameter for. That is an ABI disagreement inside a\nslot, not a near-miss: x64 compiled clean and answered correctly only because the spurious\nreceiver landed in an argument register a zero-parameter callee never reads, while wasm's\n`call_indirect` -- which checks the declared functype against the target's own -- trapped\n`indirect call type mismatch` at runtime.\nNeither neighbouring message could carry it. E3036 states an argument COUNT, which is what the\nsame call shape gets on a CONCRETE receiver and is about the wrong thing; E2015's \"no `where`\nconstraint declares a method\" would be FALSE, since the constraint declares it and only its\nreceiver kind is wrong.\nThe OPERATOR form of the same hole takes E3005 instead, and deliberately: there the question is\n\"is this requirement the `Equatable`/`Comparable` protocol?\", a static one is not, and the\nauthor's cure is the sentence E3005 already prints for a throwing or wrong-arity look-alike.",
+      "emittedBy": {"shv2": "semanticStaticRequirementNotDispatchable"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

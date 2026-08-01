@@ -27514,12 +27514,60 @@ export type Parser
 	// The requirements `<receiver>.<method>(…)` could bind, or the "no constraint provides it" reject when the
 	// constraints supply none. The reject is the `.method()` form's own; the OPERATOR form asks
 	// `findWitnessDispatchCandidates` directly because its miss is E3005 (see `requireOperatorWitness`).
+	//
+	// ⭐⭐ **A `static` REQUIREMENT IS NOT A CANDIDATE FOR A CALL THAT SUPPLIES A RECEIVER (A2w).** The search
+	// matches by METHOD NAME (it must — see `findWitnessDispatchCandidates`), so a `static` requirement was
+	// reached by `self.item.origin()` and its slot bound, with the receiver prepended at `args[0]` in front of
+	// a callee that declares no parameter for it. **MEASURED: x64-windows compiled clean and returned the
+	// right answer by ABI LUCK** — the spurious receiver landed in an argument register the zero-parameter
+	// impl never reads — **while `--target=wasm32-wasi` compiled clean and TRAPPED `indirect call type
+	// mismatch`**, because `call_indirect` compares the declared functype against the target's own. The same
+	// wall `floatWidenedWitnessArgs` describes: an argument-placement disagreement x64's registers absorb and
+	// wasm's typed calls do not.
+	//
+	// ⚠ **IT IS A FILTER, NOT A VERDICT ON THE CHOSEN ONE, for `witnessTargetIsProtocol`'s reason.** Two
+	// requirements may share a name and differ in receiver kind, and an instance-syntax call can only ever
+	// mean the instance one — so the statics are removed BEFORE arity selects, and the arity/ambiguity
+	// messages then speak only of requirements the call could have meant.
+	//
+	// ⚠ **IT RECORDS RATHER THAN THROWS, and returns the candidates it just refused.** A new `ParseError` arm
+	// would be a 97th managed union case for a message a `Diagnostic` already carries (see
+	// `recordArtifactDiagnostic`, and `readGenericInstanceAlias`'s header for the union limit that argument
+	// starts from). Handing the statics back keeps the parse on exactly the path it took before this reject
+	// existed — which is a path MEASURED to compile cleanly, so it cannot panic and it adds no second,
+	// cascading message — and the recorded diagnostic fails the build long before anything runs it.
 	function requireWitnessDispatchCandidates(receiverParamPos TypeParamId, methodTok Token) returns WitnessDispatchTargetArray throws ParseError
 		let candidates = try self.findWitnessDispatchCandidates(receiverParamPos, methodName: methodTok.value, errorTok: methodTok)
 		if candidates.count() == 0 'noneProvideIt'
 			throw ParseError.unsupported("no `where` constraint on this type parameter declares a method '{String.from(methodTok.value)}' — a method call on a constrained type parameter must be provided by one of its interfaces", line: methodTok.line, column: methodTok.column)
 		end 'noneProvideIt'
 
+		// FAST PATH, for `floatWidenedWitnessArgs`' reason: a `static` requirement is rare — a sweep of both
+		// spec corpora, the compiler and the stdlib found exactly ONE outside `stdlib/Builtins.maxon`'s
+		// literal-init protocols, and NO program anywhere that reaches one through a constraint — so almost
+		// every dispatch hands its candidates straight back: no array built, and the whole conformance corpus
+		// stays allocation-identical (measured: scale-test delta 0 at all six rungs).
+		if not witnessCandidatesIncludeStatic(candidates) 'allTakeAReceiver'
+			return candidates
+		end 'allTakeAReceiver'
+
+		var dispatchable = WitnessDispatchTargetArray.create()
+		for i in 0 upto candidates.count() 'eachCandidate'
+			let candidate = try candidates.get(i) otherwise panic("requireWitnessDispatchCandidates: candidates.get OOB at {i} below count {candidates.count()}")
+			if not candidate.isStatic 'takesAReceiver'
+				dispatchable.push(candidate)
+			end 'takesAReceiver'
+		end 'eachCandidate'
+
+		if dispatchable.count() > 0 'someTakeAReceiver'
+			return dispatchable
+		end 'someTakeAReceiver'
+
+		// The filter kept NOTHING, so every requirement of this name is `static` — which makes candidate 0 one
+		// of them, and the one the author wrote the call against. A second static of the same name is the same
+		// fact twice, not a rival, so only the first is named.
+		let refused = try candidates.get(0) otherwise panic("requireWitnessDispatchCandidates: candidates.count() is {candidates.count()} but get(0) failed")
+		self.recordArtifactDiagnostic(ErrorCode.semanticStaticRequirementNotDispatchable, message: "'{self.witnessCalleeName(refused)}' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of type parameter '{String.from(self.enclosingTypeParamName(receiverParamPos))}' cannot reach it. Call a `static` member on a concrete type", tok: methodTok)
 		return candidates
 	end 'requireWitnessDispatchCandidates'
 

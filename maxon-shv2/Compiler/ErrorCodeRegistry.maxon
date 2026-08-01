@@ -616,6 +616,24 @@ export enum ErrorCode
 	// reported by E3036 as it always was, so this code is reached only where a choice genuinely
 	// existed.
 	semanticNoWitnessRequirementForArgCount = "E3115"
+	// A method call on a VALUE of a constrained type parameter names a requirement its `where`
+	// constraints declare `static`. A `static` member has no receiver, so there is nothing for the
+	// call to dispatch on; a `static` member is called on a concrete type, which is exactly what a
+	// `where` constraint does not name.
+	// The resolver matched a requirement by NAME alone, so it bound the static's witness slot and
+	// prepended a receiver the callee has no parameter for. That is an ABI disagreement inside a
+	// slot, not a near-miss: x64 compiled clean and answered correctly only because the spurious
+	// receiver landed in an argument register a zero-parameter callee never reads, while wasm's
+	// `call_indirect` -- which checks the declared functype against the target's own -- trapped
+	// `indirect call type mismatch` at runtime.
+	// Neither neighbouring message could carry it. E3036 states an argument COUNT, which is what the
+	// same call shape gets on a CONCRETE receiver and is about the wrong thing; E2015's "no `where`
+	// constraint declares a method" would be FALSE, since the constraint declares it and only its
+	// receiver kind is wrong.
+	// The OPERATOR form of the same hole takes E3005 instead, and deliberately: there the question is
+	// "is this requirement the `Equatable`/`Comparable` protocol?", a static one is not, and the
+	// author's cure is the sentence E3005 already prints for a throwing or wrong-arity look-alike.
+	semanticStaticRequirementNotDispatchable = "E3116"
 
 	// a declaration in the source took a function name that belongs to the compiler.
 	// Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations may

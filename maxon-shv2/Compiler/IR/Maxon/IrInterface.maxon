@@ -576,6 +576,21 @@ export function witnessCandidateAlreadyCollected(candidates WitnessDispatchTarge
 	return false
 end 'witnessCandidateAlreadyCollected'
 
+// Does any collected requirement declare itself `static` (A2w)? The predicate
+// `Parser.requireWitnessDispatchCandidates` takes its FAST PATH on: a `static` requirement is rare enough
+// that answering "no" without building a filtered array keeps the whole conformance corpus
+// allocation-identical, exactly as `witnessTargetHasFloatFormal` does for the float widening. It lives here
+// beside `witnessCandidateAlreadyCollected`, the other whole-candidate-list question, and takes no `self`.
+export function witnessCandidatesIncludeStatic(candidates WitnessDispatchTargetArray) returns bool
+	for i in 0 upto candidates.count() 'eachCandidate'
+		if (try candidates.get(i) otherwise panic("witnessCandidatesIncludeStatic: candidates.get OOB at {i} below count {candidates.count()}")).isStatic 'isStatic'
+			return true
+		end 'isStatic'
+	end 'eachCandidate'
+
+	return false
+end 'witnessCandidatesIncludeStatic'
+
 // Do two interface methods declare the SAME formals — the same rendered types, in the same order (and so,
 // by construction, the same arity)? Both sides are `InterfaceMethodSig.paramTypeNames`, which are rendered
 // by ONE renderer (`Parser.renderInterfaceTypeName`) that spells the enclosing interface `Self` either way,
@@ -688,8 +703,24 @@ end 'appendInterfaceWitnessSlots'
 // a `Parser` member (`requireProtocolShape`) that both tested the shape and threw the reject, and splitting
 // the two is what let the test become the FILTER a candidate list is narrowed by, rather than a verdict on
 // whichever candidate a name search happened to reach first.
+//
+// ⚠⚠ **THE RECEIVER KIND WAS THE FIFTH HOLE IN THAT WALL, AND IT WAS A SILENT WRONG ANSWER TOO (A2w).** A
+// `static equals(other Self) returns bool` agrees with the protocol on all three of the tests above and is
+// still not `Equatable`: `Equatable.equals` takes a receiver and a static takes none, so the operator's
+// dispatch prepends one in front of a callee that declares no parameter for it and every actual shifts by a
+// slot. **MEASURED on `interface StaticEq { static function equals(other Self) returns bool }` under `where
+// T is StaticEq`: x64-windows compiled clean and the impl read the RECEIVER as its `other` — `self.a ==
+// self.b` answered on the LEFT operand twice, `true` where the answer is `false` — and wasm trapped
+// `indirect call type mismatch`.** The `.method()` form's twin of this is
+// `Parser.requireWitnessDispatchCandidates`, which needs a diagnostic naming the requirement (E3116) because
+// there is no protocol there to be measured against; here the protocol IS the yardstick, so a static
+// look-alike simply is not it and takes the same E3005 a throwing or wrong-arity one takes.
+//
+// Asked against `want.isStatic` rather than as a bare `not target.isStatic`, for this function's header
+// reason: every clause compares the candidate against the FETCHED protocol, so the protocol stays the one
+// place a requirement's shape is stated.
 export function witnessTargetIsProtocol(target WitnessDispatchTarget, want InterfaceMethodSig) returns bool
-	return target.returnTypeName.equals(want.returnTypeName) and not throwsClauseIsThrowing(target.throwsClause) and interfaceFormalsMatch(target.paramTypeNames, b: want.paramTypeNames)
+	return target.returnTypeName.equals(want.returnTypeName) and target.isStatic == want.isStatic and not throwsClauseIsThrowing(target.throwsClause) and interfaceFormalsMatch(target.paramTypeNames, b: want.paramTypeNames)
 end 'witnessTargetIsProtocol'
 
 // A nullary interface method (`hash()`, `toString()`, `clone()`). Every SYNTHESIZED protocol method is

@@ -1,0 +1,40 @@
+// Test: where-clauses.error.static-operator-witness
+typealias Code = int(0 to u32.max)
+
+interface StaticEq
+	static function equals(other Self) returns bool
+end 'StaticEq'
+
+type Widget implements StaticEq
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export static function equals(other Self) returns bool
+		return other.seed == 7
+	end 'equals'
+end 'Widget'
+
+type Pair uses T where T is StaticEq
+	export var a as T
+	export var b as T
+
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+
+	export function same() returns bool
+		return self.a == self.b
+	end 'same'
+end 'Pair'
+
+typealias WidgetPair = Pair with Widget
+
+function main() returns ExitCode
+	return 1 if WidgetPair.create(Widget.create(7), b: Widget.create(1)).same() else 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:29:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
