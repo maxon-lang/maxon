@@ -27,7 +27,11 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0x90  tib_stack_base           saved TIB StackBase (Win32: gs:[0x08]); unused on macOS
 ///   0x98  tib_stack_limit          saved TIB StackLimit (Win32: gs:[0x10]); unused on macOS
 ///   0xA0  trace_id                 async trace ID (only meaningful with --async-trace)
-///   0xA8  io_yielded               0=not yet yielded, 1=context switch complete (IOCP/kqueue sync)
+///   0xA8  io_yielded               1=suspended OFF ITS OWN STACK, so another M may be handed it;
+///                                  0=running (or mid-suspend, context not yet saved). Written by
+///                                  __gt_context_switch alone — 1 on the outgoing GT once its
+///                                  context is saved, 0 on the incoming one — plus the initial 1
+///                                  __gt_spawn gives a GT that has not run yet
 ///   0xB0  fault_rip                RIP/PC of faulting instruction (set by fault handler)
 ///   0xB8  fault_msg                ptr to static panic message string (set by fault handler)
 ///   0xC0  fault_redirect_rip       RIP to resume at (epilog writes into ucontext)

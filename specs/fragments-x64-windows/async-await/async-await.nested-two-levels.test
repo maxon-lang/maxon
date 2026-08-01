@@ -1,0 +1,168 @@
+// Test: async-await.nested-two-levels
+typealias Integer = int(i64.min to i64.max)
+
+function leaf(n Integer) returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return n + 1
+end 'leaf'
+
+function mid(n Integer) returns Integer
+		let p = async leaf(n)
+		return await p
+end 'mid'
+
+function outer(n Integer) returns Integer
+		let p = async mid(n)
+		return await p
+end 'outer'
+
+function main() returns ExitCode
+		let q = async outer(11)
+		return await q
+end 'main'
+---
+ExitCode: 12
+---
+// CompiledIR
+module {
+  func @leaf(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea_rdata rax, [__str_0]
+    x64.mov rdx, rax
+    x64.mov rax, 11
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov rsi, rbx
+    x64.mov [rbp-24], rcx
+    x64.mov [rbp-32], rdx
+    x64.mov rdx, rsi
+    x64.mov rcx, 48
+    x64.mov r8, 7
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, -2
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-32]
+    x64.mov [rsi+0], rdi
+    x64.mov r8, [rbp-8]
+    x64.mov r9, 11
+    x64.mov [r8+8], r9
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+32], rbx
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+40], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.FilePath.init
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call stdlib.File.exists
+    x64.mov rcx, 1
+    x64.mov rdx, [rbp-24]
+    x64.add rdx, rcx
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-40], rax
+    x64.mov [rbp-48], rdx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  }
+  func @mid(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, 24
+    x64.call mm_raw_alloc
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.xor edx, edx
+    x64.mov [rax+8], rdx
+    x64.mov rdx, [rbp-8]
+    x64.mov [rax+16], rdx
+    x64.lea_func rdx, [leaf]
+    x64.mov r8, rax
+    x64.xchg rdx, rcx
+    x64.call __gt_spawn
+    x64.mov rcx, rax
+    x64.call __gt_await
+    x64.epilogue
+    x64.ret
+  }
+  func @outer(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, 24
+    x64.call mm_raw_alloc
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.xor edx, edx
+    x64.mov [rax+8], rdx
+    x64.mov rdx, [rbp-8]
+    x64.mov [rax+16], rdx
+    x64.lea_func rdx, [mid]
+    x64.mov r8, rax
+    x64.xchg rdx, rcx
+    x64.call __gt_spawn
+    x64.mov rcx, rax
+    x64.call __gt_await
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 11
+    x64.mov rcx, 24
+    x64.call mm_raw_alloc
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.xor edx, edx
+    x64.mov [rax+8], rdx
+    x64.mov rbx, 11
+    x64.mov [rax+16], rbx
+    x64.lea_func rsi, [outer]
+    x64.mov rdx, rcx
+    x64.mov r8, rax
+    x64.mov rcx, rsi
+    x64.call __gt_spawn
+    x64.mov rcx, rax
+    x64.call __gt_await
+    x64.xor edi, edi
+    x64.mov r8, 4294967295
+    x64.cmp rax, r8
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rdi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

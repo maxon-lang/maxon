@@ -1292,3 +1292,212 @@ end 'main'
 ```exitcode
 8
 ```
+
+<!-- test: async-await.nested -->
+`async` NESTS: a green thread may itself spawn and await another. This is the
+minimal shape — one `async` inside one `async`, where the inner one does I/O —
+and it deadlocked the whole process at N=1 for as long as the feature existed,
+because the flag that says "this green thread has finished switching off its
+stack" was published by the scheduler loop that DISPATCHED a thread rather than
+by the switch itself. One level deep those are the same thread; nested they are
+not, so the inner thread's completion spun for ever inside `__netpoll_claim_done`
+and pinned a core. Nothing in this file exercised the shape.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function leaf(n Integer) returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return n
+end 'leaf'
+
+function outer() returns Integer
+		let p1 = async leaf(41)
+		return await p1
+end 'outer'
+
+function main() returns ExitCode
+		let q = async outer()
+		return await q
+end 'main'
+```
+```exitcode
+41
+```
+
+<!-- test: async-await.nested-two-levels -->
+Two levels of nesting: `main` awaits a thread that awaits a thread that awaits a
+thread. Each level hands the next one its M directly out of its own `__gt_await`
+scheduling loop, so the dispatcher and the suspending thread differ at every
+level rather than only at the innermost one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function leaf(n Integer) returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return n + 1
+end 'leaf'
+
+function mid(n Integer) returns Integer
+		let p = async leaf(n)
+		return await p
+end 'mid'
+
+function outer(n Integer) returns Integer
+		let p = async mid(n)
+		return await p
+end 'outer'
+
+function main() returns ExitCode
+		let q = async outer(11)
+		return await q
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: async-await.nested-in-expression -->
+A nested `await` used as an operand rather than bound to its own `let`, and two
+of them in one expression: the value has to survive the resume, not just the
+scheduling.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function leaf(n Integer) returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return n * 2
+end 'leaf'
+
+function outer() returns Integer
+		let a = async leaf(3)
+		let b = async leaf(4)
+		return (await a) + (await b) + 1
+end 'outer'
+
+function main() returns ExitCode
+		let q = async outer()
+		return await q
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: async-await.nested-spawn-then-await-late -->
+The nested thread is spawned EARLY and awaited LATE — the outer thread does its
+own I/O in between, so it suspends and resumes once before it ever awaits its
+child, and the child may be picked up either by the outer thread's own await
+loop or by a worker.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function leaf(n Integer) returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return n
+end 'leaf'
+
+function outer() returns Integer
+		let p1 = async leaf(3)
+		_ = File.exists(FilePath from "noyield.txt")
+		let p2 = async leaf(4)
+		_ = File.exists(FilePath from "noyield.txt")
+		return (await p1) + (await p2)
+end 'outer'
+
+function main() returns ExitCode
+		let q = async outer()
+		return await q
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-await.nested-void -->
+A nested `async` on a void function: the inner thread's completion has no result
+to publish, so the wakeup is the whole notification.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var flag = 0
+
+function setFlag()
+		_ = File.exists(FilePath from "noyield.txt")
+		flag = 1
+end 'setFlag'
+
+function bump() returns Integer
+		let p = async setFlag()
+		await p
+		return flag + 40
+end 'bump'
+
+function main() returns ExitCode
+		let q = async bump()
+		return await q
+end 'main'
+```
+```exitcode
+41
+```
+
+<!-- test: async-await.nested-try-await -->
+`try await` inside an `async` function, on a nested throwing thread — the
+throwing await has its own scheduling loop, distinct from plain `await`'s.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum TestError implements Error
+		failed
+end 'TestError'
+
+function mayFail(succeed bool) returns Integer throws TestError
+		_ = File.exists(FilePath from "noyield.txt")
+		if succeed 'ok'
+				return 20
+		end 'ok'
+		throw TestError.failed
+end 'mayFail'
+
+function outer() returns Integer
+		let good = async mayFail(true)
+		let bad = async mayFail(false)
+		let a = try await good otherwise 0
+		let b = try await bad otherwise 5
+		return a + b
+end 'outer'
+
+function main() returns ExitCode
+		let q = async outer()
+		return await q
+end 'main'
+```
+```exitcode
+25
+```
+
+<!-- test: async-await.nested-sleep -->
+The nested thread parks on the TIMER heap rather than on an I/O registration.
+`__gt_timer_check`'s park gate reads the same off-stack flag the I/O completer
+does, so nesting has to keep that flag honest for the timer path too.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function leaf(n Integer) returns Integer
+		sleep(5)
+		return n
+end 'leaf'
+
+function outer() returns Integer
+		let p1 = async leaf(9)
+		return await p1
+end 'outer'
+
+function main() returns ExitCode
+		let q = async outer()
+		return await q
+end 'main'
+```
+```exitcode
+9
+```

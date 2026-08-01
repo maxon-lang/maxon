@@ -2828,15 +2828,9 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, GtStatusWaiting);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
 
-    // This site never adopted OPEN #66's clear-before-arm — it still clears ioYielded down in the
-    // yield branch — and it keeps that shape deliberately: unlike the other four submit families
-    // rt_ntc never RESTORES ioYielded=1 on its sync paths, so a clear here would leave a GT that
-    // returned synchronously running at ioYielded==0. What the clear must NOT be is LATE: see the
-    // ordering note at rt_ntc_yield, where it now runs strictly before the commit CAS.
-    //
-    // Between the arm and that commit the stale ioYielded==1 a running GT carries is harmless, and
-    // the park word is why: a completer that reaps the ConnectEx completion claims the word, finds
-    // `Wait` (we have not committed) and declines the enqueue, so it never looks at ioYielded at all.
+    // No ioYielded clear here, and none is needed: a RUNNING GT already reads 0 — see the invariant
+    // in __gt_context_switch, which is the only writer of that word. The clear in the yield branch
+    // below is belt-and-braces; what it must NOT be is LATE, and the note there says why.
     EmitNetpollArmCurrent();
 
     // --- Call ConnectEx via function pointer ---
@@ -2928,16 +2922,13 @@ public partial class X86CodeEmitter {
     DefineLabel("rt_ntc_yield");
     EmitJumpIfMainThread("rt_ntc_mainthread_loop");
 
-    // ⚠ CLEAR ioYielded BEFORE THE COMMIT, NEVER AFTER — this is the ONE of the five submit families
-    // that had it the other way round, and the ordering is a correctness rule rather than a tidy-up.
-    // x86's convention leaves a RUNNING GT at ioYielded==1 (the sync paths restore 1, and the resumer
-    // stamps 1 after every context switch), so 1 is the normal value here for any GT that has parked
-    // before. The commit CAS PUBLISHES `Parked`: from that instruction on, a completer may claim this
-    // GT, and __netpoll_claim_done's spin then reads ioYielded to decide the context save is
-    // finished. With the clear below the commit, that spin can read the STALE 1 and enqueue a GT that
-    // is still executing these instructions — a second M resumes it on a stale sp/rbp, which is
-    // precisely the double-schedule the spin exists to prevent. Cleared first, the completer either
-    // sees 0 and waits for __gt_context_switch's resumer to stamp 1, or never gets that far.
+    // ⚠ CLEAR ioYielded BEFORE THE COMMIT, NEVER AFTER, and the ordering is a correctness rule
+    // rather than a tidy-up. The commit CAS PUBLISHES `Parked`: from that instruction on a completer
+    // may claim this GT, and __netpoll_claim_done's spin then reads ioYielded to decide whether the
+    // context save has finished. A clear placed BELOW the commit would sit inside that window, so a
+    // completer could read whatever preceded it and enqueue a GT still executing these instructions.
+    // The store itself is redundant — __gt_context_switch's invariant already leaves a RUNNING GT at
+    // 0 — but its POSITION is what the five submit families must keep identical.
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
@@ -2976,9 +2967,6 @@ public partial class X86CodeEmitter {
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitMovRegMem(X86Register.Rdx, -0x30, 8);
     EmitCallRuntimeLabel("__gt_context_switch");
-    EmitMovRegMem(X86Register.Rax, -0x30, 8);
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
     EmitJmp("rt_ntc_mainthread_loop");
     // No GT — park briefly
     DefineLabel("rt_ntc_mainthread_park");
@@ -3121,8 +3109,7 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
 
     // OPEN #66: clear ioYielded=0 BEFORE arming the overlapped WSA op, not after in the async-yield
-    // branch (see EmitIoSubmitPipeOverlapped for the full rationale). The sync-completion paths
-    // below restore ioYielded=1 since they never park (FILE_SKIP_COMPLETION suppresses their packet).
+    // branch (see EmitIoSubmitPipeOverlapped for the full rationale).
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
 
@@ -3211,9 +3198,6 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx); // clear io_handle
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx); // status = ready (0)
-    // OPEN #66: restore ioYielded=1 (never parked on this sync-error path).
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     EmitMovRegMem(X86Register.Rax, -0x38, 8); // restore error code
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     // Free ctx
@@ -3240,9 +3224,6 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoResultVal, X86Register.Rcx); // gt->io_result_val = bytes
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax); // status = ready (0)
-    // OPEN #66: restore ioYielded=1 (never parked on this sync-completion path).
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     // Free ctx
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
 
@@ -3290,10 +3271,6 @@ public partial class X86CodeEmitter {
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitMovRegMem(X86Register.Rdx, -0x38, 8);
     EmitCallRuntimeLabel("__gt_context_switch");
-    // Signal that the GT's context switch is complete so __io_complete_gt can safely enqueue it.
-    EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = the GT that just yielded
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
     EmitJmp($"{labelPrefix}_mainthread_loop");
     // No GT -- park briefly
     DefineLabel($"{labelPrefix}_mainthread_park");
@@ -3494,14 +3471,14 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
 
     // OPEN #66 fix: clear ioYielded=0 BEFORE arming the overlapped read — not after, in the
-    // async-yield branch below. The old order armed the IOCP read while ioYielded still held
-    // the stale 1 a running GT carries, so a completion reaped in that window passed
+    // async-yield branch below. The old order armed the IOCP read while ioYielded could still hold a
+    // 1 left over from an earlier park, so a completion reaped in that window passed
     // __io_complete_gt's spin-gate and enqueued this GT while it was still executing here — a
     // second M then resumed it onto its pre-__gt_morestack (relocated, munmapped) stack.
-    // With the clear moved ahead of the arm, ioYielded==0 for the entire armed period, so the
-    // completer's spin-gate blocks until this GT actually parks and its resumer republishes
-    // ioYielded=1. The sync-completion paths (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS suppresses
-    // their IOCP packet, so no completer targets them) restore ioYielded=1 since they never park.
+    // ioYielded==0 for the entire armed period is what the spin-gate needs, so that it blocks until
+    // this GT actually parks and __gt_context_switch publishes 1. The store is now redundant with
+    // that function's invariant (a running GT reads 0); it is its POSITION, ahead of the arm, that
+    // the five submit families must keep identical.
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
 
@@ -3568,9 +3545,6 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx); // clear io_handle
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx);   // status = ready
-    // OPEN #66: restore ioYielded=1 (cleared before the arm above; this GT never parked).
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     EmitMovRegMem(X86Register.Rax, -0x48, 8);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     EmitMovRegMem(X86Register.Rcx, -0x20, 8); // free ctx
@@ -3588,9 +3562,6 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rcx); // no error
-    // OPEN #66: restore ioYielded=1 (cleared before the arm above; this GT never parked).
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
 
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
@@ -3610,9 +3581,6 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoResultVal, X86Register.Rcx);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
-    // OPEN #66: restore ioYielded=1 (cleared before the arm above; this GT never parked).
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     // Free ctx — the IOCP packet has been suppressed.
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
@@ -3632,7 +3600,7 @@ public partial class X86CodeEmitter {
     // mainThread's mainthread_loop is the canonical owner of its status
     // field and decides when to transition it.
     // (ioYielded was already cleared to 0 before the arm above — OPEN #66; this keeps the
-    // historical "clear before the context switch" invariant explicit and is a harmless no-op.)
+    // "clear before the context switch" ordering explicit and is a harmless no-op.)
     //
     // Commit first (Go's netpollblockcommit): a failed commit means a completer claimed the wakeup
     // while we were getting here, so we must NOT park — _resume reads the published result.
@@ -3659,9 +3627,6 @@ public partial class X86CodeEmitter {
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitMovRegMem(X86Register.Rdx, -0x38, 8);
     EmitCallRuntimeLabel("__gt_context_switch");
-    EmitMovRegMem(X86Register.Rax, -0x38, 8);
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
     EmitJmp($"{labelPrefix}_mainthread_loop");
     DefineLabel($"{labelPrefix}_mainthread_park");
     EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
@@ -4026,10 +3991,6 @@ public partial class X86CodeEmitter {
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitMovRegMem(X86Register.Rdx, -0x18, 8);
     EmitCallRuntimeLabel("__gt_context_switch");
-    // Signal that the GT's context switch is complete
-    EmitMovRegMem(X86Register.Rax, -0x18, 8);
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
     EmitJmp("__sleep_mainthread_loop");
     // No GT to run — park briefly, then retry
     DefineLabel("__sleep_mainthread_park");
@@ -4916,7 +4877,9 @@ public partial class X86CodeEmitter {
     // gt.threw = 0
     EmitMovIndirectMemReg(gt, GtOffThrew, X86Register.Rax);
 
-    // gt.ioYielded = 1 (start as "yielded" so the first __io_complete_gt doesn't spin)
+    // gt.ioYielded = 1: a spawned GT that has not run yet IS suspended off-stack, so it is safe to
+    // hand to any M — which is exactly what the enqueue below does. __gt_context_switch clears it
+    // when some M switches to it for the first time.
     EmitMovRegImm(X86Register.Rax, 1);
     EmitMovIndirectMemReg(gt, GtOffIoYielded, X86Register.Rax);
 
@@ -5206,6 +5169,25 @@ public partial class X86CodeEmitter {
   /// __gt_context_switch(from_rcx, to_rdx): Core context switch.
   /// Saves callee-saved registers + RSP/RBP on 'from', restores from 'to'.
   /// Updates __gt_current to 'to'.
+  ///
+  /// ⭐⭐ THIS FUNCTION IS THE SOLE WRITER OF <c>ioYielded</c> FOR A RUNNING OR SUSPENDING GT, AND
+  /// THAT SOLENESS IS THE POINT. The flag means exactly "this GT is suspended OFF ITS OWN STACK, so
+  /// another M may be handed it" — the gate <c>__netpoll_claim_done</c>'s post-claim spin,
+  /// <c>__gt_timer_check</c>'s park gate and <c>__gt_process_pending_waiter</c> all stand on. Only a
+  /// context switch knows both halves of that fact, because only it knows WHICH GT is leaving its
+  /// stack.
+  ///
+  /// ⚠ IT USED TO BE THE RESUMER'S JOB ON x86, AND THE RESUMER CANNOT KNOW. Ten scheduler loops each
+  /// stamped <c>ioYielded = 1</c> on the GT THEY DISPATCHED once the switch returned to them, which
+  /// is only the same GT while dispatch is one level deep. Nest one <c>async</c> inside another and
+  /// it is not: the outer GT's own <c>__gt_await</c> loop dequeues the inner GT and switches to it
+  /// directly, so when the inner GT parks on I/O and lands back on the scheduler, the scheduler
+  /// stamps the OUTER one. The inner GT's flag stays 0 for ever, <c>__netpoll_claim_done</c> spins on
+  /// it for ever holding the sync-I/O worker thread, and the process hangs at N=1 with one core
+  /// pinned. (Measured 20/20 on the minimal nested repro; 0/20 after this change.) arm64 never had
+  /// the bug because its switch already did this; the shared park protocol in
+  /// RuntimeEmitter.Netpoll.cs documents the arm64 behaviour as though it were universal, and x86
+  /// silently did not honour it.
   /// </summary>
   private void EmitGtContextSwitch() {
     DefineLabel("__gt_context_switch");
@@ -5222,10 +5204,6 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffRsp, X86Register.Rsp);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffRbp, X86Register.Rbp);
 
-    // Restore RSP and RBP from 'to'
-    EmitMovRegIndirectMem(X86Register.Rsp, X86Register.Rdx, GtOffRsp);
-    EmitMovRegIndirectMem(X86Register.Rbp, X86Register.Rdx, GtOffRbp);
-
     // Save the TIB's stack bounds to 'from'. Win32 APIs use these for stack overflow detection
     // (__chkstk) and SEH; without updating them, calling Win32 on a green thread's stack crashes.
     //
@@ -5236,10 +5214,33 @@ public partial class X86CodeEmitter {
     // load-incoming pair over TWO different GT structs — 'from' in RCX, 'to' in RDX, RAX free by
     // construction because nothing is live across a context switch. They share only the two
     // gs:-relative fields, which is what the encoder above now expresses.
+    //
+    // ⚠ THE OUTGOING HALF RUNS BEFORE THE RSP SWITCH, AND THAT ORDER IS LOAD-BEARING rather than
+    // stylistic: it is the last write into 'from', so the ioYielded publish below it can be the
+    // release for EVERY field a resumer reads back out of 'from' (rsp, rbp and both TIB bounds).
+    // Reading gs: here is unaffected by where RSP points, so nothing else cares.
     EmitTibBoundLoad(X86Register.Rax, TibStackBaseGsOffset);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffTibStackBase, X86Register.Rax);
     EmitTibBoundLoad(X86Register.Rax, TibStackLimitGsOffset);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffTibStackLimit, X86Register.Rax);
+
+    // 'from' is now fully saved and nothing below writes to it or to its stack, so publish the flag
+    // that says so. x86-TSO does not reorder stores with stores, so the four stores above are
+    // globally visible before this one without an explicit fence (arm64 needs a DMB here and has
+    // one).
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
+
+    // 'to' is about to run, so it is no longer off-stack. Clearing here — BEFORE we adopt its stack —
+    // leaves no window in which a completer or the timer gate could read a stale 1 and hand a running
+    // GT to a second M, which is the double-schedule those gates exist to prevent. It also makes
+    // from==to (a self-switch) settle on 0, the safe value for a GT that is still running.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.Rdx, GtOffIoYielded, X86Register.Rax);
+
+    // Restore RSP and RBP from 'to'
+    EmitMovRegIndirectMem(X86Register.Rsp, X86Register.Rdx, GtOffRsp);
+    EmitMovRegIndirectMem(X86Register.Rbp, X86Register.Rdx, GtOffRbp);
 
     // Restore TIB StackBase and StackLimit from 'to'
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rdx, GtOffTibStackBase);
@@ -5396,10 +5397,6 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rdx, -0x10, 8);          // to = next
     EmitCallRuntimeLabel("__gt_context_switch");
     // Resume here when woken (via waiter mechanism).
-    // Signal that the GT's context switch is complete so __io_complete_gt can safely enqueue it.
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = the GT that just yielded
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
     // Check if promise is done — if not, keep scheduling
     EmitMovRegMem(X86Register.R10, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
@@ -5564,10 +5561,6 @@ public partial class X86CodeEmitter {
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitMovRegMem(X86Register.Rdx, -0x10, 8);
     EmitCallRuntimeLabel("__gt_context_switch");
-    // Signal that the GT's context switch is complete so __io_complete_gt can safely enqueue it.
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = the GT that just yielded
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
     // Check if promise is done
     EmitMovRegMem(X86Register.R10, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
@@ -5832,11 +5825,6 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__gt_context_switch");
 
     // We resume here when the green thread yields/completes back to mainThread.
-    // Signal that the GT's context switch is complete so __io_complete_gt can safely
-    // enqueue it. The GT is at [rbp-0x10] (saved before the switch).
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = the GT that just yielded
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
     EmitJmp("__sched_wloop_top");
 
     // === Park: no work available ===
@@ -6062,10 +6050,6 @@ public partial class X86CodeEmitter {
     EmitLeaMainThreadInline(X86Register.Rcx); // from = P[0]->mainThread
     EmitMovRegMem(X86Register.Rdx, -0x08, 8);
     EmitCallRuntimeLabel("__gt_context_switch");
-    // Signal that the GT's context switch is complete so __io_complete_gt can safely enqueue it.
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = the GT that just yielded
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
 
     // If the GT completed, free its stack and return struct to free list.
     // This handles un-awaited promises (e.g. cancelled tasks nobody awaited).
@@ -7594,14 +7578,12 @@ public partial class X86CodeEmitter {
     // self-detect through the park word; `Parked` means the enqueue is ours and we wait for the
     // context save. Nothing is ever declined-and-lost.
     //
-    // ⚠ THE ioYielded PROTOCOLS STILL DIFFER BETWEEN THE BACKENDS, and the difference survives this
-    // change: arm64's __gt_context_switch sets from.ioYielded = 1 itself, while x86's relies on the
-    // RESUMER setting it once the switch returns. So x86 publishes "parked" strictly later. The
-    // spin inside __netpoll_claim_done is bounded on both — on x86 by the handful of instructions
-    // the switched-to scheduler loop runs before it stamps the flag, which is the bound the
-    // pre-netpoll ioYielded spin-gate in __io_complete_gt always relied on — but it is a LONGER
-    // bound here, and anyone touching either backend's switch must keep that stamp on the immediate
-    // resume path.
+    // ⚠ THE ioYielded PROTOCOLS USED TO DIFFER BETWEEN THE BACKENDS, AND THAT DIFFERENCE WAS A
+    // DETERMINISTIC HANG. arm64's __gt_context_switch set from.ioYielded = 1 itself; x86 left it to
+    // whichever scheduler loop the switch returned into, and that loop stamped the GT IT had
+    // dispatched, which is a different GT as soon as one `async` nests inside another. Both backends
+    // now publish it from the switch, so __netpoll_claim_done's spin is bounded by the same
+    // straight-line stretch on each — see the invariant on __gt_context_switch.
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // gt
     EmitCallRuntimeLabel("__netpoll_claim");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
@@ -7690,8 +7672,8 @@ public partial class X86CodeEmitter {
 
     // Set current thread status = waiting and clear ioYielded BEFORE enqueueing.
     // The sync worker may complete and call __io_complete_gt immediately after SetEvent;
-    // ioYielded must be 0 at that point so the spinwait blocks until our context switch
-    // saves RSP/RBP. Only after the worker loop resumes does it set ioYielded=1.
+    // ioYielded must be 0 at that point so the spinwait blocks until __gt_context_switch has
+    // saved RSP/RBP and published 1 on the way out.
     EmitLoadCurrentGtInline(X86Register.R10);
     EmitMovRegImm(X86Register.Rdx, GtStatusWaiting);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rdx);
@@ -7760,10 +7742,6 @@ public partial class X86CodeEmitter {
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitMovRegMem(X86Register.Rdx, -0x30, 8);
     EmitCallRuntimeLabel("__gt_context_switch");
-    // Signal that the GT's context switch is complete so __io_complete_gt can safely enqueue it.
-    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = the GT that just yielded
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
     EmitJmp("__io_submit_sync_mainthread_loop"); // re-check after returning
     // No GT to run — park on done event briefly, then retry
     DefineLabel("__io_submit_sync_mainthread_park");
@@ -8063,10 +8041,8 @@ public partial class X86CodeEmitter {
 
     // OPEN #66: clear ioYielded=0 BEFORE arming the overlapped op, not after in the async-yield
     // branch (see EmitIoSubmitPipeOverlapped for the full rationale — a completion reaped in the
-    // arm→clear window otherwise passed __io_complete_gt's spin-gate on the stale ioYielded==1 a
-    // running GT carries and enqueued it while it was still executing here). The sync-completion
-    // paths below restore ioYielded=1 since they never park (FILE_SKIP_COMPLETION suppresses their
-    // IOCP packet, so no completer targets them).
+    // arm→clear window otherwise passed __io_complete_gt's spin-gate on a 1 left over from an
+    // earlier park and enqueued this GT while it was still executing here).
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
 
@@ -8101,9 +8077,6 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx); // clear io_handle
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx); // status = ready (0)
-    // OPEN #66: restore ioYielded=1 (never parked on this sync-error path).
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore error code
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     // Free ctx
@@ -8130,9 +8103,6 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoResultVal, X86Register.Rcx); // gt->io_result_val = bytes
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax); // status = ready (0)
-    // OPEN #66: restore ioYielded=1 (never parked on this sync-completion path).
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     // Free ctx
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
 
@@ -8179,10 +8149,6 @@ public partial class X86CodeEmitter {
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitMovRegMem(X86Register.Rdx, -0x28, 8);
     EmitCallRuntimeLabel("__gt_context_switch");
-    // Signal that the GT's context switch is complete so __io_complete_gt can safely enqueue it.
-    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = the GT that just yielded
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
     EmitJmp($"{labelPrefix}_mainthread_loop");
     // No GT — park briefly
     DefineLabel($"{labelPrefix}_mainthread_park");
