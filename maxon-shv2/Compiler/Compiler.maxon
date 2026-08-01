@@ -149,10 +149,18 @@ function discardPreviousOutput(project Project, outputPath FilePath) throws Comp
 		// `build; suite` therefore runs the PREVIOUS binary and reports a false red — or a false green.
 		// Measured during A1: a false red of exactly four tests.
 		//
-		// The deadline is QUOTED from `WedgeWatchdogMs`, never re-spelled: it is the only bound on how
-		// long an abandoned run can hold the file, and a prose "~5 min" here would be a second copy of
-		// it, free to drift the moment the watchdog is retuned.
-		let likelyCause = "The likeliest cause is that it is still running — a spec-test or an earlier build in this tree that has not exited; end that process (one that has stopped making progress aborts itself after {formatSeconds(WedgeWatchdogMs)} and releases the file), or clear the read-only flag."
+		// The deadline is QUOTED from `WedgeWatchdogMs`, never re-spelled: a prose "~5 min" here would
+		// be a second copy of it, free to drift the moment the watchdog is retuned.
+		//
+		// ⚠⚠ AND IT IS ATTACHED TO THE ONE HOLDER IT ACTUALLY BOUNDS. `WedgeWatchdogMs` lives in the
+		// spec pool's dispatch loop and bounds exactly that loop; a plain `maxon-shv2 build` runs under
+		// no deadline of any kind. This message names TWO possible holders, so a deadline stated over
+		// both of them is false for one — and falsely reassuring in the worse direction, because it
+		// tells the reader to WAIT. This row's own second incident is the counterexample: a stray
+		// `build --emit-ir` held the binary for ~30 minutes, a hundredfold past the number quoted here,
+		// and nothing was ever going to end it. So the two holders get two different sentences: the one
+		// that self-limits says so with the constant, and the one that does not says THAT.
+		let likelyCause = "The likeliest cause is that it is still running — a spec-test or an earlier build in this tree that has not exited. A spec-test that has stopped making progress aborts itself after {formatSeconds(WedgeWatchdogMs)} and releases the file; a stalled build is bounded by nothing and has to be ended by hand. If no process holds it, clear the read-only flag."
 		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotReplaceable, message: "could not remove the previous build output at {outputPath} — it is locked or read-only, so this build cannot replace it, and the PREVIOUS build's binary is still in place and will answer anything you run next. {likelyCause}"))
 		try refuseCompile(project)
 	end 'undeletable'
