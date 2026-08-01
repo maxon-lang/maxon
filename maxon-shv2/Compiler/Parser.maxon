@@ -3151,6 +3151,94 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	return names
 end 'arraySurfaceMemberNames'
 
+// ⭐⭐ **WHICH MEMBERS THE `String` SURFACE HAS (A2q)** — the third roster, and the one whose hand-written
+// predecessor is why the shape exists at all. It carries the identical obligations: the entries are the
+// very constants `dispatchStringMethod`'s arms match on, the ORDER is the message's order because the
+// message is joined from this list, the dispatch GATES on it ahead of every arm, and its fall-through is a
+// PANIC naming it.
+//
+// ⚠⚠ **THE LITERAL IT REPLACES HAD ALREADY LIED TWICE, AND WAS STILL LYING WHEN THIS LANDED.** BATCH2
+// slice 2 fixed one round of it (the sentence claimed `utf16` "has no consumer yet" while the arm above
+// dispatches it, and omitted five working Slice E/B2 methods) and left the SHAPE — so the very next rung to
+// add an arm broke it again: `addressableBytes` and `byteAtOrPanic` were dispatched, tested and refused for
+// VISIBILITY, and denied by silence in the only sentence a user has to go on. **Rendering the constants
+// alone would have caught neither**; both were the *arm added, roster not updated* direction, which is what
+// the gate and the panic close.
+//
+// ⚠ **THE TWO STDLIB-ONLY NAMES ARE ON THE ROSTER, and that is deliberate.** A roster says what the
+// dispatch SERVES; who may call it is the arms' own business, already stated by
+// `requireStdlibOnlyStringMethod` at its own span. Leaving a real member off to signal "you cannot have
+// this" is exactly the lie above — so the refusal's tail clause says they are stdlib-only instead, and a
+// reader is not sent at a door that will refuse them.
+//
+// ⚠ **THE CONFORMANCE PAIR IS APPENDED FROM ITS OWN SOURCE, NOT TYPED OUT** (`hash`/`equals`, and
+// `compare` the day `String` becomes `Comparable`). `dispatchStringMethod`'s last door resolves by LOOKUP
+// through `builtinConformerMethod`, so a name it can supply must be a name this gate admits — one list
+// serving the gate, the message and the drift panic at once.
+//
+// ⚠⚠ **AND THE RUNG THAT BUILDS ONE OF THE ABSENT NAMES ADDS ITS LINE HERE AND STRIKES IT FROM THE
+// REFUSAL'S TAIL CLAUSE IN THE SAME EDIT** — `bufferSurfaceMemberNames`' obligation, verbatim, for the same
+// reason: only the ROSTER half of that sentence is derived. `charAt`/`indexAfter`/`indexBefore` wait on a
+// BACKWARD UAX#29 segmenter and `graphemes` has no consumer yet; add one here and forget it there, and one
+// sentence will both provide a member and call it unbuilt.
+function stringSurfaceMemberNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(AppendMethod)
+	names.push(StringByteLengthMethod)
+	names.push(StringStartsWithMethod)
+	names.push(StringEndsWithMethod)
+	names.push(ContainsMethod)
+	names.push(StringToLowerMethod)
+	names.push(StringToUpperMethod)
+	names.push(StringReplaceMethod)
+	names.push(StringSplitMethod)
+	names.push(CountMethod)
+	names.push(ByteViewMethod)
+	names.push(StringToByteArrayMethod)
+	names.push(CodepointViewMethod)
+	names.push(Utf16ViewMethod)
+	names.push(IsEmptyMethod)
+	names.push(CloneMethod)
+	names.push(StringReplaceFirstMethod)
+	names.push(StringStartIndexMethod)
+	names.push(StringEndIndexMethod)
+	names.push(StringFindFirstMethod)
+	names.push(StringFindLastMethod)
+	names.push(SliceMethod)
+	names.push(StringTrimMethod)
+	names.push(StringTrimStartMethod)
+	names.push(StringTrimEndMethod)
+	names.push(StringAddressableBytesMethod)
+	names.push(StringByteAtOrPanicMethod)
+	for conformanceMethod in builtinConformerMethodNameList(StringConformerName) 'eachConformance'
+		names.push(conformanceMethod)
+	end 'eachConformance'
+	return names
+end 'stringSurfaceMemberNames'
+
+// ⭐ **WHICH MEMBERS THE `Character` SURFACE HAS (A2q).** Two, and the pair is a roster for the same reason
+// twenty-nine are: the count is not what makes a second copy of a list drift, an EDIT is, and a dispatcher
+// with two arms gains a third exactly as one with twenty-seven does. `asciiValue` and the rest are the
+// refusal's tail clause, under `dispatchCharacterMethod`'s own obligation to move a name from there to here
+// in one edit.
+function characterSurfaceMemberNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(ByteViewMethod)
+	names.push(StringByteLengthMethod)
+	return names
+end 'characterSurfaceMemberNames'
+
+// ⭐ **WHICH MEMBERS THE `StringIndex` SURFACE HAS (A2q)** — the `Character` roster's twin, one type over,
+// and its `equals`/`compare` are absent for a reason the tail clause states rather than omits: they are
+// reached through `==`/`<`, so a reader who asks for one must be sent to the operator and not merely told
+// no.
+function stringIndexSurfaceMemberNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(StringIndexCharIndexMethod)
+	names.push(StringIndexBytePosMethod)
+	return names
+end 'stringIndexSurfaceMemberNames'
+
 // ⚠⚠ **A ROSTER IS BUILT ONCE PER FILE THAT ASKS FOR IT, NOT ONCE PER CALL SITE, AND THE DIFFERENCE IS
 // MEASURED.** Both lists are CONSTANTS — the two functions above only push, and nothing mutates what they
 // return — so `dispatchArrayMethod` can hold a reference instead of rebuilding one. Rebuilt per dispatch
@@ -3169,10 +3257,23 @@ end 'arraySurfaceMemberNames'
 // for its reason: `Parser.create` runs once per FILE **and once per top-level constant**
 // (`walkConstInitializer`), so building these eagerly would bill two arrays to every constant in the
 // program for a structure most Parsers never read. The identity test is what keeps that at one pointer.
-// ⚠ ONE anchor for BOTH memos, not one each: it is only ever compared for identity, never read or written,
-// so a second would add nothing but a chance to test a field against the wrong one — a copy-paste that
-// disables the memo silently, with no compile error and no wrong answer to find it by.
+// ⚠ ONE anchor for ALL FIVE memos, not one each: it is only ever compared for identity, never read or
+// written, so a second would add nothing but a chance to test a field against the wrong one — a copy-paste
+// that disables the memo silently, with no compile error and no wrong answer to find it by.
 let sharedEmptySurfaceRoster = ByteArrayArray.create()
+
+// ⭐ **WHICH BUILTIN SURFACE A ROSTER ANSWERS FOR.** Five types carry members shv2 dispatches by name, and
+// each has exactly one roster — so the surface is the memo's key, the builder's selector and the refusal's
+// subject at once. It replaced a `isManagedMemory bool` that could only tell two of the five apart.
+enum MemberSurface
+	// `__ManagedMemory` — the buffer under an `Array`'s record, reached through `.managed` or minted as one.
+	buffer
+	// `Array` — the surface around that same record.
+	array
+	string
+	character
+	stringIndex
+end 'MemberSurface'
 
 // The read side of a roster — asked ONCE per array-method call, ahead of every arm.
 function rosterHasMember(name ByteArray, roster ByteArrayArray) returns bool
@@ -3213,9 +3314,28 @@ end 'rosterList'
 // reader to a parse error for the one entry on it that is not one — the same shape as naming `create` among
 // the members, which is the defect A2k exists to remove. `member` is true of all eighteen, and it is already
 // the noun the buffer's half uses, so the two halves now agree by construction rather than by review.
-function rosterRefusalSentence(typeName ByteArray, member ByteArray, roster ByteArrayArray, milestone String, absentClause String) returns String
-	return "`{String.from(typeName)}` member '{String.from(member)}' — {milestone} provides {rosterList(roster)}; {absentClause}"
+//
+// ⚠ **`provider` IS WHO PROVIDES, NOT WHEN IT LANDED, and the difference is what let the third surface
+// join (A2q).** A milestone is right for a roster ONE rung built — the buffer's is R4.4's and the `Array`'s
+// is P1.7's — and wrong for one assembled across several: `String`'s twenty-nine members arrive from P1.2
+// wave D, four P1.8 slices and two BATCH2 slices, so no single rung name is true of the list and a reader
+// gains nothing from whichever one was picked. Those say `shv2`, which is what their sentences said before
+// they were derived and what stays true as the surface grows.
+function rosterRefusalSentence(typeName ByteArray, member ByteArray, roster ByteArrayArray, provider String, absentClause String) returns String
+	return "`{String.from(typeName)}` member '{String.from(member)}' — {provider} provides {rosterList(roster)}; {absentClause}"
 end 'rosterRefusalSentence'
+
+// ⭐⭐ **WHAT A ROSTER/DISPATCH DRIFT PANICS WITH — ONE SENTENCE FOR EVERY SURFACE**, joined here for
+// `rosterRefusalSentence`'s own reason one level up: five copies of a paragraph about keeping one fact in
+// one place would be four spellings too many, and a panic is the one message no test ever renders, so a
+// drifted copy of it would never be read until the day it was needed.
+//
+// The pairing it reports cannot be verified at install time — an arm is a CONTROL-FLOW POSITION, not an
+// entry a table can enumerate — so the check sits at the one moment it is observable, and names both
+// remedies rather than only the one the reader happens to be looking at.
+function rosterDriftMessage(dispatchName String, member ByteArray, roster ByteArrayArray, rosterFuncs String) returns String
+	return "{dispatchName}: '{String.from(member)}' is on this receiver's roster ({rosterList(roster)}) and no arm served it. EITHER add the arm, or take the name back out of {rosterFuncs} — the gate at the top of that dispatch admits nothing else, so this line is unreachable while the two agree"
+end 'rosterDriftMessage'
 
 // The refusal for a member the receiver's surface does not have. ONE gate throws it, and the SURFACE picks
 // which sentence answers — because a roster must answer for the type it is shown about: a reader handed the
@@ -3228,10 +3348,10 @@ end 'rosterRefusalSentence'
 // tail HERE, in the same edit.
 function surfaceRosterRefusal(member ByteArray, roster ByteArrayArray, isManagedMemory bool) returns String
 	if isManagedMemory 'bufferSurface'
-		return rosterRefusalSentence(ManagedMemoryTypeName, member: member, roster: roster, milestone: "R4.4", absentClause: "`elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for")
+		return rosterRefusalSentence(ManagedMemoryTypeName, member: member, roster: roster, provider: "R4.4", absentClause: "`elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for")
 	end 'bufferSurface'
 
-	return rosterRefusalSentence(ArrayBuiltinBaseName, member: member, roster: roster, milestone: "P1.7", absentClause: "`create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later")
+	return rosterRefusalSentence(ArrayBuiltinBaseName, member: member, roster: roster, provider: "P1.7", absentClause: "`create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later")
 end 'surfaceRosterRefusal'
 
 // ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the same immutable-receiver rule,
@@ -5662,10 +5782,14 @@ export type Parser
 	// allocation-neutral against the shared empty — until a name is actually declared twice.
 	var declaredFuncNames as DeclaredFuncNameSet
 	var overloadMembers as OverloadMemberMap
-	// ⭐ The two MEMBER ROSTERS `dispatchArrayMethod` gates on, memoized per file off their shared empty
-	// anchors — see `sharedEmptySurfaceRoster` for the measurement that put them here.
+	// ⭐ The five MEMBER ROSTERS the builtin dispatchers gate on, memoized per file off their shared empty
+	// anchor — see `sharedEmptySurfaceRoster` for the measurement that put them here, and `MemberSurface`
+	// for which dispatch reads which.
 	var arraySurfaceRoster as ByteArrayArray
 	var bufferSurfaceRoster as ByteArrayArray
+	var stringSurfaceRoster as ByteArrayArray
+	var characterSurfaceRoster as ByteArrayArray
+	var stringIndexSurfaceRoster as ByteArrayArray
 
 	// ⭐⭐ **THE STDLIB/USER SHADOW RENAME IS APPLIED HERE, TO THE TOKENS, AND THAT PLACEMENT IS THE WHOLE
 	// DESIGN (A1s wave 2).**
@@ -5800,7 +5924,10 @@ export type Parser
 			declaredFuncNames: sharedEmptyDeclaredFuncNames,
 			overloadMembers: sharedEmptyOverloadMembers,
 			arraySurfaceRoster: sharedEmptySurfaceRoster,
-			bufferSurfaceRoster: sharedEmptySurfaceRoster
+			bufferSurfaceRoster: sharedEmptySurfaceRoster,
+			stringSurfaceRoster: sharedEmptySurfaceRoster,
+			characterSurfaceRoster: sharedEmptySurfaceRoster,
+			stringIndexSurfaceRoster: sharedEmptySurfaceRoster
 		}
 	end 'create'
 
@@ -26152,6 +26279,28 @@ export type Parser
 	function dispatchStringMethod(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws ParseError
 		let baseTok = recv.anchor
 		let methodTok = try self.consume(TokenKind.identifier)
+
+		// ⭐⭐ **THE ROSTER IS THE SURFACE, AND IT IS ASKED BEFORE ANY ARM (A2q)** — `dispatchArrayMethod`'s
+		// gate, one type over, for its reason: "does this member exist?" is the question every other refusal
+		// about the call presupposes, and a rule about HOW a member may be used must not speak for a member
+		// the receiver does not have.
+		//
+		// ⚠ **IT IS BEHAVIOUR-NEUTRAL, and the derived list is what guarantees that**: every name off this
+		// roster reached the hand-written refusal at the bottom of this function before and is refused here
+		// now, with the same E2015 at the same token — only the sentence moved. Nothing ON the roster can be
+		// refused here, because every entry matches an arm or the conformance lookup (the panic at the end of
+		// this function is what says so).
+		//
+		// ⚠ **THE TWO STDLIB-ONLY NAMES PASS THIS GATE AND ARE REFUSED BY THEIR OWN ARMS.** That ordering is
+		// the point of putting them on the roster at all: "shv2 has no such method" and "this method exists
+		// and is not yours to call" are different statements, and the gate must not turn the second into the
+		// first. `stdlib-only-string-methods.md` pins both directions — the two real names get the visibility
+		// refusal, a near miss of one of them gets this roster.
+		let roster = self.surfaceMemberNames(MemberSurface.string)
+		if not rosterHasMember(methodTok.value, roster: roster) 'notAStringMember'
+			throw ParseError.unsupported(rosterRefusalSentence(StringConformerName, member: methodTok.value, roster: roster, provider: "shv2", absentClause: "`{String.from(StringAddressableBytesMethod)}` and `{String.from(StringByteAtOrPanicMethod)}` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet"), line: methodTok.line, column: methodTok.column)
+		end 'notAStringMember'
+
 		if methodTok.value.equals(AppendMethod) 'append'
 			return try self.parseStringAppend(func, recv: recv, methodTok: methodTok, resultUsed: resultUsed)
 		end 'append'
@@ -26312,11 +26461,17 @@ export type Parser
 			notSupplied then break 'conformanceMethod'
 		end 'conformanceMethod'
 
-		// The conformance pair is RENDERED rather than typed out, for `builtinConformerMethodNames`' own
-		// stated reason: a roster written as a literal is a copy of a decision made elsewhere, and this one
-		// had already gone stale in the other direction — it claimed `utf16` "has no consumer yet" while the
-		// arm above dispatches it, and omitted five Slice E/B2 methods that work.
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `isEmpty`, `clone`, `bytes`, `toByteArray`, `codepoints`, `utf16`, the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `replaceFirst`, `split`), the `StringIndex` family (`startIndex`, `endIndex`, `findFirst`, `findLast`, `slice`), the three trims (`trim`, `trimStart`, `trimEnd`) and the builtin conformances ({builtinConformerMethodNames(StringConformerName)}); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet", line: methodTok.line, column: methodTok.column)
+		// ⚠⚠ **NO `String` RECEIVER CAN REACH HERE, AND THIS IS THE CHECK THAT SAYS SO (A2q).** The gate at
+		// the top admitted only the names `stringSurfaceMemberNames` lists, and each of those matches an arm
+		// above or the conformance lookup on its own spelling — so arriving here means the roster gained a
+		// member and the dispatch did not. That is the defect this rung exists to close, one level up, and the
+		// wrong answer it would otherwise give is unusually convincing: the reader would be handed the roster
+		// refusal for a member the roster PROVIDES. It is exactly what a hand-written sentence could never
+		// notice, which is how `addressableBytes` and `byteAtOrPanic` went unadvertised for a whole rung.
+		// ⭐ **VERIFIED RED**: pushing a bogus name onto `stringSurfaceMemberNames` and calling it reaches
+		// this panic, naming the member and both remedies rather than the roster refusal.
+		let drift = rosterDriftMessage("dispatchStringMethod", member: methodTok.value, roster: roster, rosterFuncs: "`stringSurfaceMemberNames` (whose tail is `IrInterface.builtinConformerMethodNameList`)")
+		panic("{drift}")
 	end 'dispatchStringMethod'
 
 	// ⭐⭐ **A `module`-VISIBLE STRING METHOD IS `stdlib/`'s ALONE, AND THIS IS THE ONE PLACE THAT SAYS SO.**
@@ -26343,15 +26498,22 @@ export type Parser
 	// (`declaresCompilerInternalNames`); this door repeated it one file over. Being reachable by a
 	// `module`-visible method is a property of the FILE, never of how a command line spelled the project.
 	//
-	// ⚠ **IT NAMES THE REASON RATHER THAN FALLING THROUGH TO THE UNKNOWN-METHOD ROSTER.** "shv2 does not
+	// ⚠ **IT NAMES THE REASON RATHER THAN FALLING THROUGH TO THE UNKNOWN-MEMBER ROSTER.** "shv2 does not
 	// have this method" and "this method exists and is not yours to call" are different statements, and the
-	// first one about a method the compiler DOES implement is exactly the false claim D11 was about.
+	// first one about a method the compiler DOES implement is exactly the false claim D11 was about. Both
+	// names are ON the roster (`stringSurfaceMemberNames`), so the gate ahead of the arms admits them and
+	// they arrive HERE — which is what makes that distinction observable rather than merely intended.
+	//
+	// ⚠ **THE THREE METHOD NAMES ARE RENDERED FROM THE ARMS' OWN CONSTANTS, NOT TYPED OUT (A2q)**, because
+	// this sentence and the roster's tail clause name the same pair and a rename that reached one would leave
+	// the other confidently wrong. It stays a two-name VISIBILITY sentence rather than becoming a roster: it
+	// answers "who may call this?", not "what is there?", and the two questions have different lists.
 	function requireStdlibOnlyStringMethod(methodTok Token) throws ParseError
 		if self.livesUnderStdlibDirectory 'thestdlibsOwn'
 			return
 		end 'thestdlibsOwn'
 
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(StringAddressableBytesMethod)}` hands out a live view of a String's own bytes and `{String.from(StringByteAtOrPanicMethod)}` reads one with no catchable failure; user code reaches the bytes through `{String.from(StringToByteArrayMethod)}()`, which copies", line: methodTok.line, column: methodTok.column)
 	end 'requireStdlibOnlyStringMethod'
 
 	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime
@@ -26537,6 +26699,12 @@ export type Parser
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(recv.anchor, last: methodTok)
 
+		// The roster gate, `dispatchStringMethod`'s twin — see there for why it is asked ahead of every arm.
+		let roster = self.surfaceMemberNames(MemberSurface.character)
+		if not rosterHasMember(methodTok.value, roster: roster) 'notACharacterMember'
+			throw ParseError.unsupported(rosterRefusalSentence(CharacterConformerName, member: methodTok.value, roster: roster, provider: "shv2", absentClause: "`asciiValue` is throwing and its `if try …` call form does not exist yet, and `codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus"), line: methodTok.line, column: methodTok.column)
+		end 'notACharacterMember'
+
 		if methodTok.value.equals(ByteViewMethod) 'bytes'
 			return try self.parseByteView(recv.value, range: range)
 		end 'bytes'
@@ -26547,14 +26715,18 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitLoadStringField(recv.value, offset: StringLengthOffset, range: range)
 		end 'byteLength'
-		// ⚠ **`asciiValue()` IS ABSENT ON PURPOSE, NOT MISSING BY OVERSIGHT.** It is a THROWING method
+		// ⚠ **`asciiValue()` IS ABSENT ON PURPOSE, NOT MISSING BY OVERSIGHT** — which is why it is named in the
+		// gate's tail clause rather than left out of it. It is a THROWING method
 		// (`stdlib/Character.maxon:154-166` — `CharacterError.notAscii`), and its two corpus cases spell the
 		// call `if try c.asciiValue()`, the SUCCESS-TEST form of `try` in a condition. shv2 does not have
 		// that form for ANY throwing call — measured on an already-throwing builtin: `if try a.first()` on
 		// an `Array` is `E3005: 'if' requires a bool condition, got 'int'` — so it is a gap in the `try`
 		// machinery, not in this type. Shipping the method regardless would be vocabulary ahead of its
 		// consumer, and a non-throwing version would have to answer a non-ASCII cluster with a sentinel.
-		throw ParseError.unsupported("Character method '{String.from(methodTok.value)}' -- shv2 provides `bytes` and `byteLength`; `asciiValue` is throwing and its `if try …` call form does not exist yet, and `codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus", line: methodTok.line, column: methodTok.column)
+		// ⇒ The rung that builds it pushes it onto `characterSurfaceMemberNames` and strikes it from that
+		// tail clause in the same edit.
+		let drift = rosterDriftMessage("dispatchCharacterMethod", member: methodTok.value, roster: roster, rosterFuncs: "`characterSurfaceMemberNames`")
+		panic("{drift}")
 	end 'dispatchCharacterMethod'
 
 	// ============================================================================================
@@ -26895,8 +27067,13 @@ export type Parser
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(typeTok, last: methodTok)
 
+		// ⚠ **ONE STATIC, so the name and its two parameter labels are rendered from the very constants this
+		// call is parsed with, and not a one-element roster (A2q)** — `dispatchCharacterSetMethod`'s reason,
+		// with a second name's worth of drift on top: the `(count, elementSize)` in the sentence and the
+		// `parseTwoBuiltinIntegerArgList` below must agree about what the argument labels ARE, and now do so
+		// by construction.
 		if not methodTok.value.equals(ManagedMemoryCreateMethod) 'unknownStatic'
-			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` static '{String.from(methodTok.value)}' — R4.4 provides `create(count, elementSize)`; `fromCString` and `createCursor` are not built: each needs a `cstring` / cursor type shv2 has no producer for, so no spec can reach one", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` static '{String.from(methodTok.value)}' — R4.4 provides `{String.from(ManagedMemoryCreateMethod)}({String.from(ManagedMemoryCountParamName)}, {String.from(ManagedMemoryElementSizeParamName)})`; `fromCString` and `createCursor` are not built: each needs a `cstring` / cursor type shv2 has no producer for, so no spec can reach one", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
 
 		let elementSizeStart = self.pos
@@ -27095,8 +27272,13 @@ export type Parser
 	function dispatchCharacterSetMethod(func IrFunction, recv MethodReceiver) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(recv.anchor, last: methodTok)
+		// ⚠ **ONE MEMBER, SO THE NAME IS RENDERED FROM ITS OWN CONSTANT AND NOT A ONE-ELEMENT ROSTER (A2q).**
+		// The roster shape buys two things — a message joined from the arms' constants, and a GATE that makes
+		// an unadvertised arm unreachable — and only the first of them is worth anything against a single
+		// `equals` whose refusal is the next line. A roster here would be an allocation, a memo field and a
+		// linear scan to restate an `if`, and the second member is what should introduce it.
 		if not methodTok.value.equals(ContainsMethod) 'unknownMethod'
-			throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` method '{String.from(methodTok.value)}' — shv2 provides `contains`; the reference's set algebra (`union`, `intersection`, `inverted`) has no consumer in the corpus", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` method '{String.from(methodTok.value)}' — shv2 provides `{String.from(ContainsMethod)}`; the reference's set algebra (`union`, `intersection`, `inverted`) has no consumer in the corpus", line: methodTok.line, column: methodTok.column)
 		end 'unknownMethod'
 
 		try self.consume(TokenKind.leftParen)
@@ -27186,6 +27368,12 @@ export type Parser
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(recv.anchor, last: methodTok)
 
+		// The roster gate, `dispatchStringMethod`'s twin — see there for why it is asked ahead of every arm.
+		let roster = self.surfaceMemberNames(MemberSurface.stringIndex)
+		if not rosterHasMember(methodTok.value, roster: roster) 'notAStringIndexMember'
+			throw ParseError.unsupported(rosterRefusalSentence(StringIndexTypeName, member: methodTok.value, roster: roster, provider: "shv2", absentClause: "the reference's `equals`/`compare` are reached through `==`/`<` instead, and `String.charAt`/`indexAfter`/`indexBefore` (the other consumers of an index) need a BACKWARD UAX#29 segmenter"), line: methodTok.line, column: methodTok.column)
+		end 'notAStringIndexMember'
+
 		if methodTok.value.equals(StringIndexCharIndexMethod) 'charIndex'
 			try self.consumeEmptyArgList()
 			return self.emitStringIndexField(recv.value, index: StringIndexCharIdxFieldIndex, range: range)
@@ -27195,7 +27383,8 @@ export type Parser
 			return self.emitStringIndexField(recv.value, index: StringIndexBytePosFieldIndex, range: range)
 		end 'bytePos'
 
-		throw ParseError.unsupported("`{String.from(StringIndexTypeName)}` method '{String.from(methodTok.value)}' -- shv2 provides `charIndex` and `bytePos`; the reference's `equals`/`compare` are reached through `==`/`<` instead, and `String.charAt`/`indexAfter`/`indexBefore` (the other consumers of an index) need a BACKWARD UAX#29 segmenter", line: methodTok.line, column: methodTok.column)
+		let drift = rosterDriftMessage("dispatchStringIndexMethod", member: methodTok.value, roster: roster, rosterFuncs: "`stringIndexSurfaceMemberNames`")
+		panic("{drift}")
 	end 'dispatchStringIndexMethod'
 
 	// ⭐ **MINT A `StringIndex` — the parser's half of the one door.** `startIndex()` is the only producer the
@@ -28651,15 +28840,18 @@ export type Parser
 		return try self.parsePostfix(func, value: try self.dispatchMethodOnReceiver(func, recv: self.valueReceiver(receiver, immutableName: self.iterationLockNameOf(subjectName), subjectName: subjectName), resultUsed: resultUsed), resultUsed: resultUsed)
 	end 'parseFieldChainCall'
 
-	// ⭐ **WHICH ROSTER ANSWERS FOR THIS RECEIVER** — the ONE place the surface picks a member list, so the
-	// gate in `dispatchArrayMethod`, the refusal it throws and the drift panic at the end of that dispatch all
-	// read the same answer. One record, two surfaces (`SignatureIndex.ManagedMemoryTypeName`); the surface is
-	// decided once, by `dispatchArrayMethod`, and this turns that answer into the list it implies.
+	// ⭐ **WHICH ROSTER ANSWERS FOR THIS SURFACE** — the ONE place a member list is picked, so every
+	// dispatcher's gate, the refusal it throws and the drift panic at its fall-through all read the same
+	// answer. `dispatchArrayMethod` decides `buffer` vs `array` once (one record, two surfaces —
+	// `SignatureIndex.ManagedMemoryTypeName`); the other three surfaces are the receiver's type outright.
 	//
-	// The roster is built on this file's FIRST array-method call and held after — see
-	// `sharedEmptySurfaceRoster` for why the memo is per Parser and why it is lazy.
-	function surfaceMemberNames(isManagedMemory bool) returns ByteArrayArray
-		if isManagedMemory 'bufferSurface'
+	// A roster is built on this file's FIRST call into its surface and held after — see
+	// `sharedEmptySurfaceRoster` for why the memo is per Parser and why it is lazy. The five arms differ
+	// only in which field they fill, which is the whole of what Maxon cannot abstract here: there is no way
+	// to hand a function the field to lazily populate, so the alternative to five arms in one home is five
+	// homes.
+	function surfaceMemberNames(surface MemberSurface) returns ByteArrayArray
+		if surface == MemberSurface.buffer 'bufferSurface'
 			if self.bufferSurfaceRoster is sharedEmptySurfaceRoster 'firstBufferCallInThisFile'
 				self.bufferSurfaceRoster = bufferSurfaceMemberNames()
 			end 'firstBufferCallInThisFile'
@@ -28667,11 +28859,39 @@ export type Parser
 			return self.bufferSurfaceRoster
 		end 'bufferSurface'
 
-		if self.arraySurfaceRoster is sharedEmptySurfaceRoster 'firstArrayCallInThisFile'
-			self.arraySurfaceRoster = arraySurfaceMemberNames()
-		end 'firstArrayCallInThisFile'
+		if surface == MemberSurface.array 'arraySurface'
+			if self.arraySurfaceRoster is sharedEmptySurfaceRoster 'firstArrayCallInThisFile'
+				self.arraySurfaceRoster = arraySurfaceMemberNames()
+			end 'firstArrayCallInThisFile'
 
-		return self.arraySurfaceRoster
+			return self.arraySurfaceRoster
+		end 'arraySurface'
+
+		if surface == MemberSurface.string 'stringSurface'
+			if self.stringSurfaceRoster is sharedEmptySurfaceRoster 'firstStringCallInThisFile'
+				self.stringSurfaceRoster = stringSurfaceMemberNames()
+			end 'firstStringCallInThisFile'
+
+			return self.stringSurfaceRoster
+		end 'stringSurface'
+
+		if surface == MemberSurface.character 'characterSurface'
+			if self.characterSurfaceRoster is sharedEmptySurfaceRoster 'firstCharacterCallInThisFile'
+				self.characterSurfaceRoster = characterSurfaceMemberNames()
+			end 'firstCharacterCallInThisFile'
+
+			return self.characterSurfaceRoster
+		end 'characterSurface'
+
+		if surface == MemberSurface.stringIndex 'stringIndexSurface'
+			if self.stringIndexSurfaceRoster is sharedEmptySurfaceRoster 'firstStringIndexCallInThisFile'
+				self.stringIndexSurfaceRoster = stringIndexSurfaceMemberNames()
+			end 'firstStringIndexCallInThisFile'
+
+			return self.stringIndexSurfaceRoster
+		end 'stringIndexSurface'
+
+		panic("surfaceMemberNames: no roster for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then answer for by falling through")
 	end 'surfaceMemberNames'
 
 	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
@@ -28734,7 +28954,7 @@ export type Parser
 		// every name off the `Array` roster reached the fall-through refusal before and is refused here now,
 		// with the same E2015 at the same token — only the sentence moved. Nothing on the roster can be
 		// refused, because every entry matches an arm (the panic at the end of this function is what says so).
-		let roster = self.surfaceMemberNames(isManagedMemory)
+		let roster = self.surfaceMemberNames(MemberSurface.buffer if isManagedMemory else MemberSurface.array)
 		if not rosterHasMember(methodTok.value, roster: roster) 'notASurfaceMember'
 			throw ParseError.unsupported(surfaceRosterRefusal(methodTok.value, roster: roster, isManagedMemory: isManagedMemory), line: methodTok.line, column: methodTok.column)
 		end 'notASurfaceMember'
@@ -29041,7 +29261,8 @@ export type Parser
 		// writing `mm.create()` reached this panic in D11b's review; pushing a bogus name onto
 		// `arraySurfaceMemberNames` and calling it reached it in A2k's — each naming the member and both
 		// remedies, not the roster refusal.
-		panic("dispatchArrayMethod: '{String.from(methodTok.value)}' is on this receiver's roster ({rosterList(roster)}) and no arm served it. EITHER add the arm, or take the name back out of `arraySurfaceMemberNames`/`bufferSurfaceMemberNames` — the gate at the top of this function admits nothing else, so this line is unreachable while the two agree")
+		let drift = rosterDriftMessage("dispatchArrayMethod", member: methodTok.value, roster: roster, rosterFuncs: "`arraySurfaceMemberNames`/`bufferSurfaceMemberNames`")
+		panic("{drift}")
 	end 'dispatchArrayMethod'
 
 	// ⭐⭐ **REFUSE A RECEIVER-WRITING METHOD ON AN IMMUTABLE RECEIVER (E3019) — ONE RULE, ONE HOME, FOR

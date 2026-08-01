@@ -1271,16 +1271,23 @@ export function builtinConformerMethod(typeName ByteArray, methodName ByteArray)
 	return BuiltinConformerMethodLookup.notSupplied
 end 'builtinConformerMethod'
 
-// ⭐ **THE METHODS A BUILTIN CONFORMER ACTUALLY SUPPLIES, RENDERED** — what the reject for a method it does
-// NOT supply prints. DERIVED from the very walk `builtinConformerMethod` searches, so a diagnostic can never
-// advertise a method the dispatch would then fail to find. That is not hypothetical: the reject used to name
-// "`hash`, `equals` and `compare`" as a fixed list, which became a WRONG answer the moment a conformer with
-// a ragged conformance row arrived — `b.hash()` would be told `bool` supplies `hash` while
-// `isIntrinsicBuiltinConformance` withholds `Hashable` from it (see that predicate's ragged-table warning).
-// The row that first made this concrete was `float`, which had `equals`/`compare` and no `hash`; `float` is
-// fully `Hashable` now, and the derivation is what let that change land here with no edit at all.
-export function builtinConformerMethodNames(typeName ByteArray) returns String
-	var rendered = ""
+// ⭐ **THE METHODS A BUILTIN CONFORMER ACTUALLY SUPPLIES** — DERIVED from the very walk
+// `builtinConformerMethod` searches, so nothing downstream can advertise a method the dispatch would then
+// fail to find. That is not hypothetical: the reject below used to name "`hash`, `equals` and `compare`" as
+// a fixed list, which became a WRONG answer the moment a conformer with a ragged conformance row arrived —
+// `b.hash()` would be told `bool` supplies `hash` while `isIntrinsicBuiltinConformance` withholds `Hashable`
+// from it (see that predicate's ragged-table warning). The row that first made this concrete was `float`,
+// which had `equals`/`compare` and no `hash`; `float` is fully `Hashable` now, and the derivation is what let
+// that change land with no edit at all.
+//
+// ⚠ **IT IS A LIST RATHER THAN A SENTENCE BECAUSE TWO CONSUMERS NEED IT AND ONLY ONE OF THEM IS PROSE
+// (A2q).** `Parser.stringSurfaceMemberNames` pushes these onto the `String` MEMBER ROSTER that
+// `dispatchStringMethod` GATES on — so the conformance door cannot offer a name the gate would refuse, and
+// the day `String` gains `Comparable` its `compare()` joins gate, message and dispatch together. Rendering
+// first and re-reading the prose would be parsing a diagnostic; re-walking the protocols beside it would be
+// a second copy of this answer.
+export function builtinConformerMethodNameList(typeName ByteArray) returns ByteArrayArray
+	var names = ByteArrayArray.create()
 	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
 		if not isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName) 'doesNotConform'
 			continue
@@ -1288,11 +1295,21 @@ export function builtinConformerMethodNames(typeName ByteArray) returns String
 
 		let iface = requireBuiltinInterface(protocolName)
 		for method in iface.methods 'eachMethod'
-			if not rendered.isEmpty() 'separator'
-				rendered = "{rendered}, "
-			end 'separator'
-			rendered = "{rendered}`{String.from(method.name)}`"
+			names.push(method.name)
 		end 'eachMethod'
 	end 'eachProtocol'
+	return names
+end 'builtinConformerMethodNameList'
+
+// The same answer as a diagnostic prints it — "`hash`, `equals`". Joined from the list above rather than
+// walked a second time, for the reason stated there.
+export function builtinConformerMethodNames(typeName ByteArray) returns String
+	var rendered = ""
+	for methodName in builtinConformerMethodNameList(typeName) 'eachMethod'
+		if not rendered.isEmpty() 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+		rendered = "{rendered}`{String.from(methodName)}`"
+	end 'eachMethod'
 	return rendered
 end 'builtinConformerMethodNames'

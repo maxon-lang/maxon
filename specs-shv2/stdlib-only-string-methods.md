@@ -38,6 +38,13 @@ stdlib half is pinned by every `url` case, which compiles `stdlib/URL.maxon` thr
 User code that wants a string's bytes uses `toByteArray()`, which COPIES, so nothing it is handed can
 alias the string.
 
+⚠ **BOTH NAMES ARE ON THE `String` MEMBER ROSTER, and the unknown-member refusal names them (A2q).** The
+roster describes what the dispatch SERVES; being stdlib-only is a property of the two arms, stated by
+the refusal above. Left off the roster, the only sentence a user has to go on denied two real methods by
+silence — which it did, measured, for as long as that sentence was a hand-written second copy of the arm
+list. The roster is now derived from the very constants the arms match on, so it cannot deny one again;
+the two cases below pin both halves of that.
+
 ## Tests
 
 <!-- test: error.addressable-bytes-is-stdlib-only -->
@@ -74,6 +81,10 @@ end 'main'
 error E2015: <fragment>:5:12: Unsupported: String method 'addressableBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
+A NEAR MISS of one of the two — `addressableByte` for `addressableBytes` — is a typo and must be answered
+as one. The visibility refusal is reachable only once a real method NAME has matched, so the roster
+answers here and nobody is told they lack permission for a method nobody has.
+
 <!-- test: unknown-string-method-still-gets-the-roster -->
 ```maxon
 function main() returns ExitCode
@@ -81,5 +92,19 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: String method 'addressableByte' -- shv2 provides `append`, `byteLength`, `count`, `isEmpty`, `clone`, `bytes`, `toByteArray`, `codepoints`, `utf16`, the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `replaceFirst`, `split`), the `StringIndex` family (`startIndex`, `endIndex`, `findFirst`, `findLast`, `slice`), the three trims (`trim`, `trimStart`, `trimEnd`) and the builtin conformances (`hash`, `equals`); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet
+error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/byteLength/startsWith/endsWith/contains/toLower/toUpper/replace/split/count/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/slice/trim/trimStart/trimEnd/addressableBytes/byteAtOrPanic/hash/equals; `addressableBytes` and `byteAtOrPanic` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet
+```
+
+And the roster a user program is handed NAMES both stdlib-only methods. This is the case the derivation
+exists for: before it, the sentence listed twenty-six members by hand and omitted exactly these two, so a
+user searching it for a way at a String's bytes was told — by silence — that neither existed.
+
+<!-- test: error.unknown-string-method-names-the-stdlib-only-pair -->
+```maxon
+function main() returns ExitCode
+	return "abc".frobnicate()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides append/byteLength/startsWith/endsWith/contains/toLower/toUpper/replace/split/count/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/slice/trim/trimStart/trimEnd/addressableBytes/byteAtOrPanic/hash/equals; `addressableBytes` and `byteAtOrPanic` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet
 ```

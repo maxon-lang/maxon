@@ -362,7 +362,7 @@ end 'main'
 
 
 <!-- disabled-test: character-element-type -->
-<!-- TWO blockers, and the FIRST one is NOT the associated-type gap. MEASURED: `E2015 … Character method 'codepoints' — shv2 provides `bytes` and `byteLength` …`, raised in `main` before conformance is ever checked. Past that it needs the substitution rung as well, its `implements CharSource with Character` binding `Element := Character` exactly as the cases above do. Both, in that order. -->
+<!-- TWO blockers, and the FIRST one is NOT the associated-type gap. MEASURED: `E2015 … `Character` member 'codepoints' — shv2 provides bytes/byteLength …`, raised in `main` before conformance is ever checked. Past that it needs the substitution rung as well, its `implements CharSource with Character` binding `Element := Character` exactly as the cases above do. Both, in that order. -->
 ```maxon
 // character is a grapheme cluster type, use codepoints() to access codepoint values
 interface CharSource uses Element
