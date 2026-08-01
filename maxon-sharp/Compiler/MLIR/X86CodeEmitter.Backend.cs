@@ -619,13 +619,30 @@ public partial class X86CodeEmitter {
 
     public void SpawnWorker(VReg p) {
       // CreateThread(NULL, 0, __sched_worker_loop, P[i], 0, NULL)
-      // R10 is volatile on Windows x64 and clobbered by CreateThread on the
-      // main-thread path of SystemStackEnter/Leave. Save P[i] to the caller's
-      // stack frame via RBP, which is callee-saved and guaranteed valid.
-      // We use [rbp-0x30] as a scratch slot (caller must ensure frame >= 0x30).
+      //
+      // ⚠⚠ P[i] IS CARRIED ACROSS THE STACK SWITCH IN MEMORY, NEVER IN A REGISTER, and that is the
+      // whole reason [rbp-0x30] exists here. `EmitSystemStackEnter` is a CONDITIONAL: its green-
+      // thread arm does `PUSH R10 / MOV R10, RSP` to shuttle the outgoing RSP across the switch,
+      // and its main-thread arm is a bare `SUB RSP`. So R10 holds the caller's value on one arm and
+      // the OUTGOING GT RSP on the other — anything staged there before the Enter is a STACK
+      // ADDRESS by the time the argument setup reads it.
+      //
+      // ⚠ THIS WAS A LIVE ACCESS VIOLATION, NOT A THEORETICAL ONE. `__gt_enqueue` calls this from
+      // whatever thread made a GT runnable, and a green thread making another green thread runnable
+      // is the ordinary case; when the scan finds no idle P it lands here ON THE GT STACK.
+      // `MOV R9, R10` then handed `__sched_worker_loop` a stack pointer as its P*, and the new
+      // worker dereferenced it: measured 2026-08-01, a nested `async` (8 spawns from inside an
+      // `async` body) crashed 12/12 with 0xC0000005 while the identical 8 spawns from `main` — the
+      // straight-through arm — passed 5/5. Same shape as B3's RAX defect, one register over.
+      //
+      // RBP is callee-saved and still addresses the caller's frame inside the switched region, so
+      // the slot is readable from both arms. The caller must have a frame of at least 0x30
+      // (`__gt_enqueue` declares 0x60 and uses slots 0-4, i.e. down to [rbp-0x28]).
+      const int PSlotDisp = -0x30;
+
       var pReg = R(p);
-      _e.EmitMovMemReg(-0x30, pReg, 8); // save P[i] to [rbp-0x30]
-      _e.EmitMovRegReg(X86Register.R10, pReg); // R10 = P[i] for lpParameter
+      _e.EmitMovMemReg(PSlotDisp, pReg, 8); // save P[i] to [rbp-0x30]
+
       // Switch to system stack and set up 6 args for CreateThread
       _e.EmitSystemStackEnter(0x30); // shadow(0x20) + 2 stack args(0x10) = 0x30
       _e.EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);     // lpThreadAttributes = NULL
@@ -634,15 +651,16 @@ public partial class X86CodeEmitter {
       _e.EmitByte(0x4C); _e.EmitByte(0x8D); _e.EmitByte(0x05);
       _e._jumpFixups.Add((_e._code.Count, "__sched_worker_loop"));
       _e.EmitDword(0);
-      _e.EmitMovRegReg(X86Register.R9, X86Register.R10);       // lpParameter = P[i]
+      _e.EmitMovRegMem(X86Register.R9, PSlotDisp, 8);          // lpParameter = P[i], reloaded via RBP
       // Args 5 and 6 on stack: [rsp+0x20] = dwCreationFlags=0, [rsp+0x28] = lpThreadId=NULL
       _e.EmitXorRegReg(X86Register.Rax, X86Register.Rax);
       _e.EmitMovMemRspReg(0x20, X86Register.Rax); // dwCreationFlags = 0
       _e.EmitMovMemRspReg(0x28, X86Register.Rax); // lpThreadId = NULL
       _e.EmitCallImport("kernel32.dll", "CreateThread");
       _e.EmitSystemStackLeave(0x30);
-      // Reload P[i] from stack frame (R10 may have been clobbered on main-thread path)
-      _e.EmitMovRegMem(X86Register.R10, -0x30, 8);
+
+      // Reload P[i] from the frame — CreateThread destroyed R10 by ABI on both arms.
+      _e.EmitMovRegMem(X86Register.R10, PSlotDisp, 8);
       // Store thread handle in P[i]->osThreadHandle (RAX has the handle)
       _e.EmitMovIndirectMemReg(X86Register.R10, 0x40, X86Register.Rax); // POffOsThreadHandle = 0x40
     }

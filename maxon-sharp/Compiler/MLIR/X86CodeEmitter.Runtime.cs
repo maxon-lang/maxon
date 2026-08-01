@@ -4633,11 +4633,9 @@ public partial class X86CodeEmitter {
     // When we context-switch away from main, these values will be saved/restored
     // so that Win32 APIs on green threads see correct stack bounds.
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = P[0]
-    // MOV RCX, gs:[0x08]  (TIB StackBase)
-    EmitBytes(0x65, 0x48, 0x8B, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);
+    EmitTibBoundLoad(X86Register.Rcx, TibStackBaseGsOffset);
     EmitMovIndirectMemReg(X86Register.Rax, POffMainThread + GtOffTibStackBase, X86Register.Rcx);
-    // MOV RCX, gs:[0x10]  (TIB StackLimit)
-    EmitBytes(0x65, 0x48, 0x8B, 0x0C, 0x25, 0x10, 0x00, 0x00, 0x00);
+    EmitTibBoundLoad(X86Register.Rcx, TibStackLimitGsOffset);
     EmitMovIndirectMemReg(X86Register.Rax, POffMainThread + GtOffTibStackLimit, X86Register.Rcx);
 
     // P[0]->currentGt = &P[0]->mainThread
@@ -5228,23 +5226,26 @@ public partial class X86CodeEmitter {
     EmitMovRegIndirectMem(X86Register.Rsp, X86Register.Rdx, GtOffRsp);
     EmitMovRegIndirectMem(X86Register.Rbp, X86Register.Rdx, GtOffRbp);
 
-    // Save TIB StackBase (gs:[0x08]) and StackLimit (gs:[0x10]) to 'from'.
-    // Win32 APIs use these for stack overflow detection (__chkstk) and SEH;
-    // without updating them, calling Win32 on a green thread's stack crashes.
-    // MOV RAX, gs:[0x08]
-    EmitBytes(0x65, 0x48, 0x8B, 0x04, 0x25, 0x08, 0x00, 0x00, 0x00);
+    // Save the TIB's stack bounds to 'from'. Win32 APIs use these for stack overflow detection
+    // (__chkstk) and SEH; without updating them, calling Win32 on a green thread's stack crashes.
+    //
+    // ⚠ THIS IS NOT THE SAME OPERATION AS EmitTibRepointToSystemStack / EmitTibRestoreFromGt, and
+    // must not be folded into them. Those two are the arms of a CONDITIONAL that borrows the P's
+    // system stack for the duration of ONE kernel call, and their register contract is dictated by
+    // that conditional (R11 only, RAX untouched). This is an unconditional save-outgoing/
+    // load-incoming pair over TWO different GT structs — 'from' in RCX, 'to' in RDX, RAX free by
+    // construction because nothing is live across a context switch. They share only the two
+    // gs:-relative fields, which is what the encoder above now expresses.
+    EmitTibBoundLoad(X86Register.Rax, TibStackBaseGsOffset);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffTibStackBase, X86Register.Rax);
-    // MOV RAX, gs:[0x10]
-    EmitBytes(0x65, 0x48, 0x8B, 0x04, 0x25, 0x10, 0x00, 0x00, 0x00);
+    EmitTibBoundLoad(X86Register.Rax, TibStackLimitGsOffset);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffTibStackLimit, X86Register.Rax);
 
     // Restore TIB StackBase and StackLimit from 'to'
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rdx, GtOffTibStackBase);
-    // MOV gs:[0x08], RAX
-    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x08, 0x00, 0x00, 0x00);
+    EmitTibBoundStore(TibStackBaseGsOffset, X86Register.Rax);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rdx, GtOffTibStackLimit);
-    // MOV gs:[0x10], RAX
-    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x10, 0x00, 0x00, 0x00);
+    EmitTibBoundStore(TibStackLimitGsOffset, X86Register.Rax);
 
     // Update P->currentGt = to (via inline gs: TLS access)
     // We cannot call TlsGetValue here because the stack is being switched.
@@ -5749,11 +5750,9 @@ public partial class X86CodeEmitter {
     // The first context switch will save these to 'from', and when we switch back,
     // the TIB will be restored to the OS thread's real stack bounds.
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = P*
-    // MOV RCX, gs:[0x08]  (TIB StackBase)
-    EmitBytes(0x65, 0x48, 0x8B, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);
+    EmitTibBoundLoad(X86Register.Rcx, TibStackBaseGsOffset);
     EmitMovIndirectMemReg(X86Register.Rax, POffMainThread + GtOffTibStackBase, X86Register.Rcx);
-    // MOV RCX, gs:[0x10]  (TIB StackLimit)
-    EmitBytes(0x65, 0x48, 0x8B, 0x0C, 0x25, 0x10, 0x00, 0x00, 0x00);
+    EmitTibBoundLoad(X86Register.Rcx, TibStackLimitGsOffset);
     EmitMovIndirectMemReg(X86Register.Rax, POffMainThread + GtOffTibStackLimit, X86Register.Rcx);
 
     // P->currentGt = &P->mainThread
@@ -6381,11 +6380,9 @@ public partial class X86CodeEmitter {
     EmitMovRegReg(X86Register.Rcx, X86Register.R15);
     EmitAddRegReg(X86Register.Rcx, X86Register.R14); // RCX = new_base + new_size
     EmitMovIndirectMemReg(X86Register.Rbx, GtOffTibStackBase, X86Register.Rcx);
-    // MOV gs:[0x08], RCX
-    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);
+    EmitTibBoundStore(TibStackBaseGsOffset, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.Rbx, GtOffTibStackLimit, X86Register.R15);
-    // MOV gs:[0x10], R15
-    EmitBytes(0x65, 0x4C, 0x89, 0x3C, 0x25, 0x10, 0x00, 0x00, 0x00);
+    EmitTibBoundStore(TibStackLimitGsOffset, X86Register.R15);
 
     // --- Step 8: VirtualFree(old_base, 0, MEM_RELEASE) ---
     // Save offset (RAX) in RBP temporarily — RBP was already adjusted in step 6,

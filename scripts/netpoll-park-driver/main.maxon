@@ -7,10 +7,14 @@ typealias Count = int(0 to 1000000)
 // lines across 4 readers hit the park path only ~3 times, because the data is already in the pipe
 // buffer before the reader asks. A GT parks only when it genuinely outruns its producer.
 //
-// Pacing the producer at ~2 ms per line does two things at once: every read finds an empty pipe and
-// PARKS, and the completion then lands a couple of milliseconds later — comparable to the injected
-// window — so `MAXON_GT_PARK_DELAY_MS` has a real chance of straddling it. That is the interleaving
-// the old protocol loses a wakeup on, and it cannot be summoned from a fast producer at all.
+// Pacing the producer at ~2 ms per line is meant to do two things at once: a read finds an empty
+// pipe and PARKS, and the completion then lands a couple of milliseconds later — comparable to the
+// injected window — so `MAXON_GT_PARK_DELAY_MS` has a real chance of straddling it. That is the
+// interleaving the old protocol loses a wakeup on, and it cannot be summoned from a fast producer
+// at all.
+// ⚠ THE FIRST HALF OF THAT HOLDS ON arm64/kqueue AND IS MEASURED FALSE ON x64-windows, where only
+// ~8 of a reader's 400 reads reach the parker's commit. It is a property of the BACKEND, not of the
+// pacing, and re-pacing does not move it — see the Windows arm below for the measurements.
 // ⚠ THE PRODUCER IS EXTERNAL ON PURPOSE, ON BOTH PLATFORMS. Spawning this driver's own binary in
 // a "produce" mode would be simpler and would pace exactly — and it would make the instrument
 // depend on the runtime it exists to measure. A producer that hangs for the same reason the reader
@@ -28,15 +32,19 @@ function reader(lines Count) returns Count
 	// 2026-08-01) — so this producer is genuinely slow and genuinely un-bursty.
 	//
 	// ⚠⚠ AND YET "EVERY READ FINDS AN EMPTY PIPE AND PARKS" IS FALSE ON THIS BACKEND. That
-	// sentence stood here as the justification for the 2 ms and it was never measured on Windows;
-	// B3 measured it and it is wrong by ~50x. Off the PARK knob's slope, ~8 of a reader's 400 reads
-	// reach the parker's commit — the rest return synchronously. It is NOT a pacing problem and
-	// cannot be paced away: 2 / 10 / 25 / 50 / 200 ms, an explicitly flushed producer and a
-	// 1-40 ms jittered one all land in the same 1-8 range. Slowing this arm down buys almost no
-	// park coverage and costs the run linearly, so it stays at 2 ms.
+	// sentence stood at the top of this file as the justification for the 2 ms and it was never
+	// measured on Windows; B3 measured it and it is wrong by ~50x. Off the PARK knob's slope,
+	// ~8 of a reader's 400 reads reach the parker's commit — the rest return synchronously. It is
+	// NOT a pacing problem and cannot be paced away: 2 / 10 / 25 / 50 / 200 ms, an explicitly
+	// flushed producer and a 1-40 ms jittered one all land in the same 1-8 range. Slowing this arm
+	// down buys almost no park coverage and costs the run linearly, so it stays at 2 ms.
 	// ⇒ What the Windows arm of this driver drives hard is the COMPLETER side, which is this row's
 	// acceptance anyway; see run.sh's header for the numbers behind both halves.
-	let exe = Executable.path(try FilePath.from("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe") otherwise panic("powershell path"))
+	//
+	// PATH-resolved, not an absolute path: `Executable.name` hands the bare name to CreateProcessW,
+	// which applies PATH + PATHEXT itself. An absolute `C:/Windows/System32/...` stood here and
+	// assumed both the system drive letter and the 32/64-bit flavour of the install.
+	let exe = Executable.name("powershell")
 	var argv = StringArray.create()
 	argv.push("-NoProfile")
 	argv.push("-Command")

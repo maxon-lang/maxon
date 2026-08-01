@@ -626,6 +626,45 @@ public partial class X86CodeEmitter() {
   }
 
   /// <summary>
+  /// Where the Win64 TIB keeps the running thread's stack bounds, as offsets from GS. The TIB is at
+  /// gs:[0] and these two fields are part of the platform ABI, not of anything this compiler lays
+  /// out — the GT struct's own copies live in <c>GtLayout</c> and are a DIFFERENT pair of numbers.
+  /// </summary>
+  private const int TibStackBaseGsOffset = 0x08;
+  private const int TibStackLimitGsOffset = 0x10;
+
+  /// <summary>
+  /// Emit <c>MOV gs:[tibGsOffset], src</c> — write one of the TIB's stack-bound fields.
+  ///
+  /// ⚠ THE POINT OF ROUTING THIS THROUGH AN ENCODER IS THAT THE REGISTER IS IN THE ModRM BYTE. There
+  /// were six of these written as literal <c>EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, ...)</c> runs,
+  /// each carrying a hand-computed REX and ModRM — so 0x0C meant RCX, 0x1C meant R11 and 0x3C meant
+  /// R15, and changing which register a sequence used meant recomputing a byte by hand. Getting that
+  /// wrong writes the WRONG REGISTER into the TIB, which is not a crash where it happens: it is a
+  /// bad stack bound that the next Win32 call faults on, somewhere else entirely.
+  /// </summary>
+  private void EmitTibBoundStore(int tibGsOffset, X86Register src) {
+    RequireGpr(src, nameof(EmitTibBoundStore));
+    EmitByte(0x65);                               // GS segment override
+    Rex.W().Reg(src).Emit(this);
+    EmitByte(0x89);                               // MOV r/m64, r64
+    EmitByte((byte)(0x04 | (RegCode(src) << 3))); // mod=00, r/m=100 (SIB follows)
+    EmitByte(0x25);                               // SIB: index=none, base=101 → disp32 absolute
+    EmitDword(tibGsOffset);
+  }
+
+  /// <summary>Emit <c>MOV dest, gs:[tibGsOffset]</c> — read one of the TIB's stack-bound fields.</summary>
+  private void EmitTibBoundLoad(X86Register dest, int tibGsOffset) {
+    RequireGpr(dest, nameof(EmitTibBoundLoad));
+    EmitByte(0x65);                                // GS segment override
+    Rex.W().Reg(dest).Emit(this);
+    EmitByte(0x8B);                                // MOV r64, r/m64
+    EmitByte((byte)(0x04 | (RegCode(dest) << 3))); // mod=00, r/m=100 (SIB follows)
+    EmitByte(0x25);                                // SIB: index=none, base=101 → disp32 absolute
+    EmitDword(tibGsOffset);
+  }
+
+  /// <summary>
   /// Point the TIB's stack bounds at the P's system stack, for the duration of one kernel call.
   /// Heavy Win32 calls (CreateProcessW, CreateFileW, ...) probe the TIB during their internal RPC
   /// and fault when RSP is outside [gs:[0x10], gs:[0x08]).
@@ -636,24 +675,29 @@ public partial class X86CodeEmitter() {
   /// </summary>
   private void EmitTibRepointToSystemStack() {
     EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, POffSystemStackSP);
-    EmitBytes(0x65, 0x4C, 0x89, 0x1C, 0x25, 0x08, 0x00, 0x00, 0x00); // MOV gs:[0x08], R11
+    EmitTibBoundStore(TibStackBaseGsOffset, X86Register.R11);
     EmitSubRegImm(X86Register.R11, PSystemStackSize);
-    EmitBytes(0x65, 0x4C, 0x89, 0x1C, 0x25, 0x10, 0x00, 0x00, 0x00); // MOV gs:[0x10], R11
+    EmitTibBoundStore(TibStackLimitGsOffset, X86Register.R11);
   }
 
   /// <summary>
   /// Put the TIB's stack bounds back to the green thread's own, from the bounds the GT saved.
   ///
   /// Requires R11 = GT. Clobbers R11 and RCX; PRESERVES RAX, which at every call site is the kernel
-  /// call's return value. RCX is free here for a reason that holds at both call sites and is worth
-  /// stating rather than re-deriving: this only ever runs immediately after a Win64 call, and RCX is
-  /// volatile under that ABI, so nothing can be live in it.
+  /// call's return value.
+  ///
+  /// ⚠ RCX IS A SECOND ARM-ASYMMETRY, and it is safe only because of WHERE this runs, so the
+  /// premise is worth stating rather than re-deriving. In `EmitCallImportOnSystemStack` both arms
+  /// make the call, so RCX is volatile-dead on both. In `EmitSystemStackLeave` only the switching
+  /// arm comes through here — but every Leave in the tree is emitted with the CALL as the
+  /// immediately preceding instruction (checked: all 46 sites, `EmitCallImport` or `CALL RAX`), so
+  /// RCX is dead on that arm too. A Leave emitted without an intervening call would break this.
   /// </summary>
   private void EmitTibRestoreFromGt() {
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackBase);
-    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);             // MOV gs:[0x08], RCX
+    EmitTibBoundStore(TibStackBaseGsOffset, X86Register.Rcx);
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackLimit);
-    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x10, 0x00, 0x00, 0x00);             // MOV gs:[0x10], RCX
+    EmitTibBoundStore(TibStackLimitGsOffset, X86Register.Rcx);
   }
 
   /// <summary>
@@ -742,15 +786,33 @@ public partial class X86CodeEmitter() {
   ///
   /// So the switching arm may clobber ONLY what the straight-through arm already clobbers, which is
   /// exactly R11: the guard's `EmitGlobalLoadReg(R11, ...)` below runs BEFORE the first branch, so
-  /// R11 is destroyed on every path in and is therefore free for the switch to use. (R10 is
-  /// disturbed only BETWEEN Enter and Leave, where the Win64 call being set up destroys it anyway.)
+  /// R11 is destroyed on every path in and is therefore free for the switch to use.
+  ///
+  /// ⚠⚠ R10 IS THE ONE ASYMMETRY THIS MACRO STILL HAS, AND IT IS NOT COVERED BY THAT RULE. The
+  /// switching arm does `PUSH R10 / MOV R10, RSP` to shuttle the outgoing RSP across; the
+  /// straight-through arm leaves R10 alone. `EmitSystemStackLeave` restores it on both arms, so R10
+  /// is symmetric ACROSS THE PAIR — but inside it, R10 holds the caller's value on one arm and a
+  /// stack address on the other. ⇒ **NO ARGUMENT MAY BE STAGED IN R10 ACROSS AN Enter.** The window
+  /// that is genuinely safe starts at the CALL, which destroys R10 by the Win64 ABI, not at the
+  /// Enter. This exact distinction was once written here as "R10 is disturbed only between Enter and
+  /// Leave, where the call destroys it anyway", and `SpawnWorker` was violating it at the time:
+  /// `MOV R9, R10` after the Enter handed CreateThread a stack pointer as `__sched_worker_loop`'s
+  /// P*, so a green thread that made another green thread runnable crashed the new worker
+  /// (0xC0000005, 12/12; the same program's spawns from `main` passed 5/5). Carry such a value in a
+  /// frame slot — RBP still addresses the caller's frame inside the switched region.
   ///
   /// ⚠ IT USED TO STAGE THE NEW TIB BOUNDS THROUGH RAX, AND THAT COST A REAL BUG. RAX is the natural
   /// register to compute an argument into, and two call sites in `__subp_create_overlapped_pipe` did
   /// exactly that: on a green thread their `CreateNamedPipeW` / `CreateFileW` argument was replaced
   /// by (systemStackTop - PSystemStackSize), so every streaming subprocess spawn issued from an
-  /// `async` body failed while the identical spawn from `main` worked. Pinned by
-  /// specs/subprocess.md's `subprocess-streaming-spawn-from-green-thread`.
+  /// `async` body failed while the identical spawn from `main` worked.
+  ///
+  /// ⚠ NO TEST GOES RED IF THIS RAX DISCIPLINE REGRESSES, and the honest reason is that nothing
+  /// depends on it: those two call sites were ALSO fixed, and a sweep of all 46 Enter/Leave regions
+  /// finds every one of them WRITING RAX before it reads it. `subprocess-streaming-spawn-from-green-
+  /// thread` pins the composite defect and would survive a revert of either half alone. This is a
+  /// CLASS fix — it makes the next call site safe — and a class fix is untestable exactly while
+  /// every existing member of the class is independently safe.
   /// </summary>
   private void EmitSystemStackEnter(int frameSize) {
     var id = _sysStackLabelCounter++;

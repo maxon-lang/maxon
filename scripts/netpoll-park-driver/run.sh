@@ -7,8 +7,14 @@
 # the next person to touch this handshake needs to re-run it, not re-derive it.
 #
 # ⭐ WHAT IT DRIVES. `main.maxon` runs four green threads each reading 400 lines from a DELIBERATELY
-# SLOW child (~2 ms per line), so every read finds an empty pipe and takes the async park path. A
-# fast producer is drained almost entirely through the self-detect fast path and exercises nothing.
+# SLOW child (~2 ms per line). A fast producer is drained almost entirely through the self-detect
+# fast path and exercises nothing.
+# ⚠ HOW MUCH OF THAT REACHES THE PARK PATH IS A PER-BACKEND FACT, NOT A PROPERTY OF THE PACING. On
+# arm64/kqueue essentially every read finds an empty pipe and parks; on x64-windows only ~8 of a
+# reader's 400 do, because the parent end of the pipe carries
+# FILE_SKIP_COMPLETION_PORT_ON_SUCCESS and the read usually completes synchronously. Both numbers
+# are measured (2026-08-01) and neither is reachable by re-pacing the producer — see the arm64/
+# x64-windows block below, and main.maxon's Windows arm.
 #
 # ⚠ THE FOUR READERS ARE LOAD-BEARING, NOT A ROUND NUMBER — one of the two knobs is UNREACHABLE
 # without them. On the arm64 park handshake (EmitGtParkForIoCompletion) the parker's injection point
@@ -35,8 +41,11 @@
 # ⭐⭐ EVERY FIGURE ABOVE WAS TAKEN ON arm64/kqueue, AND ONE OF THEM DOES NOT CARRY TO x64-WINDOWS.
 # Measured 2026-08-01 (B3, the first run of this driver on Windows), 4x400 lines, ~6.5 s baseline:
 #   CLAIM=1000 -> +8 s. The completer knob costs two sleeps per traversal, so that is ~4 traversals
-#     per run landing where a reader waits — the SAME ORDER as the ~80-traversals-per-run figure the
-#     note above records for arm64. ⇒ THE ACCEPTANCE ARM IS DRIVEN COMPARABLY ON BOTH BACKENDS.
+#     per run landing where a reader waits. ⚠ COMPARE THAT AGAINST arm64's CRITICAL-PATH figure —
+#     "about four or five traversals per run" from its own CLAIM=1000 -> +8.5 s — and NOT against
+#     its ~80 total traversals, which is the other number this header just warned is not the same
+#     number. Like for like it is 4 vs 4-5. ⇒ THE ACCEPTANCE ARM IS DRIVEN COMPARABLY ON BOTH
+#     BACKENDS. (Total traversals on Windows are NOT measured; only the exposure is.)
 #   PARK=1000  -> +8 s, i.e. ~8 parks per READER per run — NOT the 400 per reader the arm64 slope
 #     above resolves to. On Windows the streaming pipe read returns synchronously the great majority
 #     of the time (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS on the parent end), so the parker's commit is
