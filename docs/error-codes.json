@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "3ccb02ef6f9632fa",
+  "sourceHash": "ffeb7da30c01de83",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1273,6 +1273,15 @@
       "doc": "A user program declares a type name that a whitelisted stdlib module ALSO declares, and that\nsame spelling is used by stdlib source as a MEMBER name -- a field, a method, or an argument\nlabel. The shadowing rule moves the stdlib TYPE declaration into the reserved `__` space so both\ndeclarations can coexist, and that rename is applied uniformly to the stdlib file's identifier\ntokens, which is what makes it reach every spelling of the type at once. A member is the one\nspelling that is also reachable from USER code, whose tokens are never rewritten, so the two\nsides would disagree about one name and the member would silently stop resolving. Refused\nrather than risked; rename the type in the user program.",
       "emittedBy": {"shv2": "stdlibShadowedNameIsAlsoAMember"},
       "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3113,
+      "tag": "E3113",
+      "name": "SemanticThrowsTypeNotAnErrorEnum",
+      "stage": "semantic",
+      "doc": "A function's `throws` clause names something that is not a declared enum or union.\nThe error-flag ABI carries a caught error as `ordinal + ErrorFlagOrdinalBias` for a payload-free\nenum and as a heap BOX POINTER for a payload-carrying union, and which of the two it is comes\noff the DECLARED clause at the catch site while the throw site derives it from the value it\nactually throws. A clause naming anything with no declared cases -- an INTERFACE (`throws Error`),\na struct, or a name that resolves to nothing at all -- leaves those two derivations free to\ndisagree: `throws Error` throwing a payload-carrying union was decoded as an ordinal and the box\nwas never released (exit 101, a leak, in BOTH compilers before this check existed).\nIt is a rule about a FUNCTION's own clause, not about an interface REQUIREMENT's: a requirement\nwhose `throws` names an interface is the abstract error channel `Error` exists for, is dispatched\nthrough the witness ABI, and is guarded separately by E3016.",
+      "emittedBy": {"csharp": "SemanticThrowsTypeNotAnErrorEnum", "shv2": "throwsTypeNotAnErrorEnum"},
+      "notEmittedBy": ["selfhosted"]
     },
     {
       "code": 4001,

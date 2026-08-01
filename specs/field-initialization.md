@@ -367,6 +367,10 @@ type Inner
 	end 'create'
 end 'Inner'
 
+enum ParseFailure implements Error
+	badDigit
+end 'ParseFailure'
+
 type Outer
 	export var found as bool
 	export var inner as Inner
@@ -376,7 +380,7 @@ type Outer
 	end 'miss'
 end 'Outer'
 
-function parseB() returns Integer throws Inner
+function parseB() returns Integer throws ParseFailure
 	return 7
 end 'parseB'
 

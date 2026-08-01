@@ -1934,3 +1934,207 @@ end 'main'
 ```exitcode
 8
 ```
+
+<!-- test: error.throws-interface-on-a-plain-function -->
+⭐⭐ **A PLAIN FUNCTION'S `throws` CLAUSE MUST NAME A DECLARED ENUM OR UNION, AND THIS IS THE PROGRAM THAT
+BOUGHT THE RULE (A1s-throwsbox).** The error-flag ABI has two shapes — `ordinal + ErrorFlagOrdinalBias` for a
+payload-free enum, a heap BOX POINTER for a payload-carrying union — and the two ends of a throw derive which
+one is in play from different places: the THROW site from the value it actually throws, the CATCH site from
+the DECLARED clause. `Error` is an interface, so it is in no enum registry, so the catch decoded a heap
+pointer as an ordinal and never released the box. **MEASURED before the check existed: exit 101 — a leak —
+in shv2 AND in the C# oracle, with `MM leak: 1 allocation(s) remain`.** Nothing reconciled the two
+derivations, and nothing can: a clause with no declared cases has no flag shape to reconcile to. The
+abstract `throws Error` an INTERFACE REQUIREMENT declares is a different door, dispatched through the witness
+ABI and guarded by E3016 — see `specs-shv2/interface-conformance.md`.
+```maxon
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(x Code) returns Code throws Error
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3113: <fragment>:8:10: 'throws Error' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws
+```
+
+<!-- test: throws-concrete-union-is-untouched -->
+⭐ **THE CONTROL THAT PROVES THE RIGHT THING WAS REFUSED.** The identical program with the CONCRETE clause —
+the only difference is `throws BoxedError` for `throws Error` — still compiles, still catches the boxed
+error, and still releases the box. This is the bisection the refusal above rests on: same union, same throw,
+same catch, only the declared clause differs.
+```maxon
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(x Code) returns Code throws BoxedError
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+```
+```exitcode
+55
+```
+
+<!-- test: error.throws-unresolvable-type-on-a-plain-function -->
+⭐ **THE SIBLING THROUGH THE SAME DOOR: A `throws` CLAUSE NAMING NOTHING AT ALL.** `throws Bogus` names no
+declared enum, no union, and no interface — and before the check it COMPILED AND RAN, the author's typo read
+as a licence for an untyped error channel. It is the same argument
+`ConformanceCheck.throwsRequirementIsAbstract` makes one door over: an error type is something a function
+DECLARES, not something a name fails to be.
+```maxon
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(x Code) returns Code throws Bogus
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3113: <fragment>:8:10: 'throws Bogus' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
+```
+
+<!-- test: error.throws-interface-on-a-method -->
+⭐ **THE RULE REACHES A METHOD AND A STATIC, NOT ONLY A TOP-LEVEL FUNCTION** — every function with a BODY
+declares its own clause and every one of them is caught the same way, so the check walks the merged module's
+functions rather than the top-level declarations. `Holder` implements nothing, so no conformance rule is in
+play: this is the plain-function refusal reaching a method.
+```maxon
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+type Holder
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function get() returns Code throws Error
+		if self.x < 10 'small'
+			throw BoxedError.withMessage("nope")
+		end 'small'
+		return self.x
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(3)
+	return try h.get() otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3113: <fragment>:15:18: 'throws Error' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws
+```
+
+<!-- test: error.throws-a-struct-type -->
+⭐ **A STRUCT IS NOT AN ERROR TYPE EITHER, AND THE CHECK ASKS ONE QUESTION TO SAY SO.** The rule is "names a
+declared enum or union" — the registry the catch DECODE itself consults — rather than a list of things a
+clause may not be, so a `type`, a ranged alias and a primitive are all refused by the same arm, with no
+per-shape case to add today or to forget tomorrow.
+```maxon
+typealias Code = int(0 to u32.max)
+
+type Payload
+	export var v as Code
+
+	export static function create(v Code) returns Self
+		return Self{ v: v }
+	end 'create'
+end 'Payload'
+
+function f(x Code) returns Code throws Payload
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(55) otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3113: <fragment>:12:10: 'throws Payload' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
+```
+
+<!-- test: error.throws-a-stdlib-error-shv2-does-not-declare -->
+⚠ **A MEASURED NARROWING, PINNED BECAUSE IT IS THE ONE PLACE THE RULE READS DIFFERENTLY FROM THE ORACLE
+(A1s-throwsbox).** `StringError` is declared in `stdlib/String.maxon` — a module the C# bootstrap's type
+registry holds and `StdlibLoader.whitelistedStdlibModules` does NOT list, because shv2 EMITS its String
+runtime rather than compiling that file. So in shv2 the name resolves to nothing, and this clause was
+accepted only as an unchecked opaque label: `throw StringError.notFound` does not parse here, and neither
+does a `match` over the caught binding. It is `throws Bogus` wearing a real name, and accepting one while
+refusing the other would need a hardcoded second copy of the stdlib's declarations inside the compiler —
+exactly what listing a module exists to avoid. ⭐ **The working spelling is the author's own error enum, and
+it is strictly better**, because it can be matched: `throws-a-stdlib-error-has-a-user-declared-spelling`
+below is the same program with one, and it answers 2. ⚠ **This case flips the day `stdlib/String.maxon` is
+listed** — that is the signal, not a maintenance cost.
+```maxon
+typealias Num = int(0 to 1000)
+
+function firstSpace(s String) returns Num throws StringError
+	let idx = try s.findFirst(" ")
+	return idx.bytePos() as Num
+end 'firstSpace'
+
+function main() returns ExitCode
+	return (try firstSpace("ab cd") otherwise 99) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3113: <fragment>:4:10: 'throws StringError' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
+```
+
+<!-- test: throws-a-stdlib-error-has-a-user-declared-spelling -->
+⭐ **THE CONTROL FOR THE CASE ABOVE**: the identical program with the author's own `enum SearchFailed
+implements Error` compiles and answers 2 — the byte position of the space in `"ab cd"` — so nothing this
+rung refuses leaves a program with no way to say what it meant.
+```maxon
+typealias Num = int(0 to 1000)
+
+enum SearchFailed implements Error
+	notFound
+end 'SearchFailed'
+
+function firstSpace(s String) returns Num throws SearchFailed
+	let idx = try s.findFirst(" ")
+	return idx.bytePos() as Num
+end 'firstSpace'
+
+function main() returns ExitCode
+	return (try firstSpace("ab cd") otherwise 99) as ExitCode
+end 'main'
+```
+```exitcode
+2
+```

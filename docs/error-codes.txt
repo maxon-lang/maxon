@@ -1304,6 +1304,21 @@ E3112 SemanticShadowedStdlibNameIsAlsoAMember
 	doc sides would disagree about one name and the member would silently stop resolving. Refused
 	doc rather than risked; rename the type in the user program.
 
+E3113 SemanticThrowsTypeNotAnErrorEnum
+	csharp SemanticThrowsTypeNotAnErrorEnum
+	shv2 throwsTypeNotAnErrorEnum
+	doc A function's `throws` clause names something that is not a declared enum or union.
+	doc The error-flag ABI carries a caught error as `ordinal + ErrorFlagOrdinalBias` for a payload-free
+	doc enum and as a heap BOX POINTER for a payload-carrying union, and which of the two it is comes
+	doc off the DECLARED clause at the catch site while the throw site derives it from the value it
+	doc actually throws. A clause naming anything with no declared cases -- an INTERFACE (`throws Error`),
+	doc a struct, or a name that resolves to nothing at all -- leaves those two derivations free to
+	doc disagree: `throws Error` throwing a payload-carrying union was decoded as an ordinal and the box
+	doc was never released (exit 101, a leak, in BOTH compilers before this check existed).
+	doc It is a rule about a FUNCTION's own clause, not about an interface REQUIREMENT's: a requirement
+	doc whose `throws` names an interface is the abstract error channel `Error` exists for, is dispatched
+	doc through the witness ABI, and is guarded separately by E3016.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

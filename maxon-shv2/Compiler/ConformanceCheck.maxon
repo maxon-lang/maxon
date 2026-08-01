@@ -647,8 +647,12 @@ end 'renderMemberSignatures'
 // ABI — `Parser.throwsTypeIsBoxedUnion` answers `false` for a name in no enum registry — while a
 // payload-carrying union hands its error over as a heap BOX POINTER. MEASURED on the plain direct-call
 // spelling of that pair (`function f() returns Code throws Error` throwing a boxed union): **exit 101, a
-// leaked box, in shv2 AND in the C# oracle.** That hole is unguarded on the direct path and is reported
-// separately; this rung refuses the witness-dispatch route into it rather than opening a second door to it.
+// leaked box, in shv2 AND in the C# oracle.** This rung refused the witness-dispatch route into it rather
+// than opening a second door to it; the FIRST door was shut by A1s-throwsbox, whose E3113
+// (`SemanticCheck.checkThrowsClausesNameDeclaredErrors`) requires a FUNCTION's own clause to name a declared
+// enum or union. The two checks own disjoint sides — this one the relation between a requirement and its
+// impl, that one a function's own clause — so an impl method reaches both, and reaches THIS one first
+// (`checkConformance` runs before the pipeline) because only it can name the requirement being violated.
 //
 // Split on the INTERFACE's clause first: each side then asks a different question of the impl's, and both
 // answers come out of a `match` on it rather than a boolean pair, so a clause is never re-extracted behind an
@@ -760,8 +764,8 @@ end 'throwsRequirementIsAbstract'
 //
 // ⚠ It refuses only pairs the OLD rule already refused: a same-named pair returns from `requireSameErrorType`
 // before either question is asked, so nothing that compiled before A1s can reach here. (`throws Bogus` on a
-// PLAIN function stays accepted — that is a separate, pre-existing front-end gap, and closing it belongs to
-// whichever rung owns `throws`-clause resolution, not to this door.)
+// PLAIN function was accepted when this was written; A1s-throwsbox's E3113 closed that gap, and this arm
+// still owns the IMPL-side spelling because it alone can name the requirement the impl is violating.)
 function requireImplErrorIsANarrowableError(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
 	match signatures.enumOf(declared.toByteArray()) 'implError'
 		declared(layout) then requireImplErrorConformsAndIsScalar(project, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared, layout: layout)

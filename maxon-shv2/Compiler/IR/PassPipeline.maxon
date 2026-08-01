@@ -173,13 +173,26 @@ export type PassPipeline
 	export var maxonModule as MaxonModule
 	export var stdModule as StdModule
 	export var passes as PassKindArray
+	// The whole-program declaration index. `semanticCheck` reads its ENUM registry (E3113, A1s-throwsbox):
+	// `Parser.throwsTypeIsBoxedUnion` — the catch-site DECODE that decides whether an error flag is an ordinal
+	// or a box pointer — resolves a `throws` clause through `ProgramSignatures.enumOf`, so the check that a
+	// clause names something classifiable has to ask THAT registry and not the `Project.enumTypes` authority
+	// beside it. The two are fed identically today (one `createEnumRegistry`, the same declarations); asking
+	// the other one and calling it "the decode's registry" would be this project's signature bug — one fact
+	// written down twice — waiting for the day they diverge.
+	//
+	// It is a FIELD rather than an argument threaded through `dispatch` because that is this type's stated
+	// arrangement for cross-cutting state, and because the query is memoized: `compileToCodeResult` has
+	// already forced it, so binding it here costs a reference and no work.
+	export var signatures as ProgramSignatures
 
-	export static function create(project Project, maxonModule MaxonModule) returns PassPipeline
+	export static function create(project Project, maxonModule MaxonModule, signatures ProgramSignatures) returns PassPipeline
 		return Self{
 			project: project,
 			maxonModule: maxonModule,
 			stdModule: StdModule.create(),
-			passes: PassKindArray.create()
+			passes: PassKindArray.create(),
+			signatures: signatures
 		}
 	end 'create'
 
@@ -221,7 +234,7 @@ export type PassPipeline
 
 		match pass 'dispatch'
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
-			semanticCheck then semanticCheck(self.project, module: self.maxonModule)
+			semanticCheck then semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)

@@ -1,0 +1,23 @@
+// Test: error.throws-interface-on-a-plain-function
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(x Code) returns Code throws Error
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+---
+MaxoncStderr: ```
+error E3113: specs/fragments/error-handling/error.throws-interface-on-a-plain-function.test:8:40: 'throws Error' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws
+```
+---
+---

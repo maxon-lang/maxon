@@ -3058,7 +3058,47 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private IrType? ParseThrowsClause() {
     if (!Check(TokenType.Throws)) return null;
     Advance(); // consume 'throws'
-    return ParseTypeRef();
+    var typeNameToken = Current();
+    var throwsType = ParseTypeRef();
+    RequireThrowsTypeIsAnErrorEnum(throwsType, typeNameToken);
+    return throwsType;
+  }
+
+  /// <summary>
+  /// A function's own `throws` clause must name a declared enum or union (A1s-throwsbox). Until this
+  /// check existed the clause was validated by NOTHING, and the error-flag ABI has two shapes whose two
+  /// ends derive which is in play from DIFFERENT places: the throw site stamps boxedness off the value it
+  /// actually throws (ParseThrow -> the thrown value's type; MaxonToStandardConversion.Calls decides the
+  /// register shape from it), while the CATCH site reads the DECLARED clause (EmitErrorBinding pattern-
+  /// matches `errorType is IrEnumType`). A clause naming an INTERFACE -- `throws Error` -- resolves to an
+  /// IrInterfaceType, so the catch fell into the untyped-Integer branch, read a heap box pointer as an
+  /// ordinal and never released the box. MEASURED before this check: `exit 101, MM leak: 1 allocation(s)
+  /// remain`, and shv2 had the identical asymmetry.
+  ///
+  /// Nothing reconciled the two derivations and nothing can: a clause with no declared cases has no flag
+  /// shape to reconcile to. The refusal is the fix, and `specs/error-handling.md` states the rule the
+  /// corpus has always documented -- "Error types must be enums that conform to the Error interface".
+  ///
+  /// It is a rule about a FUNCTION's own clause, not about an interface REQUIREMENT's. An interface
+  /// method's `throws` is parsed by name inside ParseInterfaceDeclaration and never travels through here,
+  /// so `interface Parsable`'s `fromString(...) throws Error` -- the abstract error channel dispatched
+  /// through the witness ABI -- is untouched, and stays guarded by ValidateThrowsConformance's E3016.
+  ///
+  /// A union is an IrEnumType here (with associated values), so one test covers both declarations.
+  /// </summary>
+  private void RequireThrowsTypeIsAnErrorEnum(IrType throwsType, Token typeNameToken) {
+    if (throwsType is IrEnumType) return;
+
+    // Split into two sentences rather than one, because the two mistakes are different mistakes: naming
+    // an interface is reaching for an abstract error channel a plain function has no ABI for, while
+    // naming a struct or a typo is naming something that was never an error type at all. shv2's
+    // SemanticCheck.throwsClauseNames*Message carries this pair verbatim -- one rule refused by two
+    // compilers should read as one rule.
+    var message = throwsType is IrInterfaceType
+      ? $"'throws {throwsType.Name}' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws"
+      : $"'throws {throwsType.Name}' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into";
+    throw new CompileError(ErrorCode.SemanticThrowsTypeNotAnErrorEnum, message,
+      typeNameToken.Line, typeNameToken.Column);
   }
 
   private void RemoveAssociatedTypePlaceholders(List<string> associatedTypeNames) {

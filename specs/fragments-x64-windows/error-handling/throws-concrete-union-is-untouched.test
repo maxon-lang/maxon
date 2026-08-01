@@ -1,0 +1,143 @@
+// Test: throws-concrete-union-is-untouched
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(x Code) returns Code throws BoxedError
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+---
+ExitCode: 55
+---
+// CompiledIR
+module {
+  func @f(x: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, 10
+    x64.cmp rcx, rax
+    x64.jge f.small_0.after
+  small_0:
+    x64.lea rax, [rip+__static_lit_2]
+    x64.mov rcx, rax
+    x64.mov rdx, 32
+    x64.add rcx, rdx
+    x64.mov [rbp-16], rcx
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.lea_func rsi, [__destruct_BoxedError]
+    x64.mov rdi, rsi
+    x64.mov rdx, rdi
+    x64.mov rcx, 16
+    x64.mov r8, 6
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.xor r8d, r8d
+    x64.mov [rax+0], r8
+    x64.mov r9, [rbp-16]
+    x64.mov [rax+8], r9
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-24]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  small_0.after:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg f.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl f.__range_panic_0
+    x64.jmp f.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 3
+    x64.call f
+    x64.mov ecx, rax
+    x64.mov rax, 55
+    x64.mov [rbp-8], rax
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-24], rcx
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_BoxedError(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
+    x64.jne __destruct_BoxedError.done
+  case_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_BoxedError.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

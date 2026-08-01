@@ -1217,3 +1217,87 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: error.throws-interface-on-a-plain-function -->
+A plain function's `throws` clause must name a declared enum or union, and this is the program that bought
+the rule. The error-flag ABI has two shapes — `ordinal + bias` for a payload-free enum, a heap BOX POINTER
+for a payload-carrying union — and the two ends of a throw derive which one is in play from different
+places: the THROW site from the value it actually throws, the CATCH site from the DECLARED clause. `Error`
+is an interface, so the catch decoded a heap pointer as an ordinal and never released the box. **Measured
+before the check existed: `exit 101` with `MM leak: 1 allocation(s) remain`, and shv2 had the identical
+asymmetry.** The abstract `throws Error` an INTERFACE REQUIREMENT declares is a different door — it is
+dispatched through the witness ABI and guarded by E3016.
+```maxon
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(x Code) returns Code throws Error
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3113: specs/fragments/error-handling/error.throws-interface-on-a-plain-function.test:8:40: 'throws Error' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws
+```
+
+<!-- test: throws-concrete-union-is-untouched -->
+The control that proves the right thing was refused: the identical program with the CONCRETE clause — the
+only difference is `throws BoxedError` for `throws Error` — still compiles, still catches the boxed error,
+and still releases the box.
+```maxon
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(x Code) returns Code throws BoxedError
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+```
+```exitcode
+55
+```
+
+<!-- test: error.throws-a-struct-type -->
+A struct is not an error type either, and the check asks one question to say so: the rule is "names a
+declared enum or union" rather than a list of things a clause may not be, so a `type`, a ranged alias and a
+generic type PARAMETER are all refused by the same arm.
+```maxon
+typealias Code = int(0 to u32.max)
+
+type Payload
+	export var v as Code
+
+	export static function create(v Code) returns Self
+		return Self{ v: v }
+	end 'create'
+end 'Payload'
+
+function f(x Code) returns Code throws Payload
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(55) otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3113: specs/fragments/error-handling/error.throws-a-struct-type.test:12:40: 'throws Payload' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
+```

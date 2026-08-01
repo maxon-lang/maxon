@@ -572,6 +572,18 @@ export enum ErrorCode
 	// sides would disagree about one name and the member would silently stop resolving. Refused
 	// rather than risked; rename the type in the user program.
 	stdlibShadowedNameIsAlsoAMember = "E3112"
+	// A function's `throws` clause names something that is not a declared enum or union.
+	// The error-flag ABI carries a caught error as `ordinal + ErrorFlagOrdinalBias` for a payload-free
+	// enum and as a heap BOX POINTER for a payload-carrying union, and which of the two it is comes
+	// off the DECLARED clause at the catch site while the throw site derives it from the value it
+	// actually throws. A clause naming anything with no declared cases -- an INTERFACE (`throws Error`),
+	// a struct, or a name that resolves to nothing at all -- leaves those two derivations free to
+	// disagree: `throws Error` throwing a payload-carrying union was decoded as an ordinal and the box
+	// was never released (exit 101, a leak, in BOTH compilers before this check existed).
+	// It is a rule about a FUNCTION's own clause, not about an interface REQUIREMENT's: a requirement
+	// whose `throws` names an interface is the abstract error channel `Error` exists for, is dispatched
+	// through the witness ABI, and is guarded separately by E3016.
+	throwsTypeNotAnErrorEnum = "E3113"
 
 	// a declaration in the source took a function name that belongs to the compiler.
 	// Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations may

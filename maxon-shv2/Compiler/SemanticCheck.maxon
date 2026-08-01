@@ -23,7 +23,7 @@ let MainWrongReturnMessage = "Function 'main' must return ExitCode"
 // `name:` label names a distinct parameter, and every argument's TYPE agrees with its
 // parameter's) — the checks that need the callee's signature, which only the whole-program
 // `funcSignatures` registry carries.
-export function semanticCheck(project Project, module MaxonModule)
+export function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures)
 	// ⭐ **OVERLOAD RESOLUTION RUNS FIRST, BEFORE ANYTHING READS A CALLEE** (D7). Until it has run, a call to
 	// an overloaded name carries the BARE name the source wrote, which is the registration name of the FIRST
 	// declaration only — so `checkCalls` would validate every one of them against that member's signature and
@@ -32,6 +32,10 @@ export function semanticCheck(project Project, module MaxonModule)
 	resolveOverloadedCalls(project, module: module)
 	checkMainFunction(project)
 	checkMainCannotThrow(project, module: module)
+	// E3113 — every `throws` clause in the program names a declared enum or union. It runs BEFORE the throws
+	// map below, and before every check that reads one: `buildThrowsMap` and the catch-site decode both treat
+	// a clause as an error TYPE, and a clause naming an interface (or nothing) is not one.
+	checkThrowsClausesNameDeclaredErrors(project, module: module, signatures: signatures)
 	// The whole-program throws map (name -> its `throws` clause, throwing functions only) — built once
 	// from the merged module and read at every call site to decide whether a plain call needs a `try`
 	// (E3057). The parser handled the mirror rule (E3055, `try` on a non-throwing call) at the `try` token.
@@ -593,6 +597,90 @@ function checkMainCannotThrow(project Project, module MaxonModule)
 		end 'mainThrows'
 	end 'eachFunc'
 end 'checkMainCannotThrow'
+
+// ⭐⭐ **A FUNCTION'S OWN `throws` CLAUSE MUST NAME A DECLARED ENUM OR UNION (A1s-throwsbox).** Until this
+// check existed the clause was validated by NOTHING, and that single absence produced two measured defects:
+//
+//   • **`throws Error` on a plain function LEAKED THE BOX — exit 101 in shv2 AND in the C# oracle.** The
+//     error-flag ABI has two shapes, and the two ends of a throw derive which one is in play from DIFFERENT
+//     places: the THROW site reads the value it actually throws (`Parser.emitThrowError` →
+//     `throwsTypeIsBoxedUnion(self.typeOf(errValue))`, and `lowerThrowError` then writes the box pointer
+//     verbatim), while the CATCH site reads the DECLARED clause (`tryErrorEnumType` → the same predicate over
+//     the clause name). `Error` is an INTERFACE, so it is in no enum registry, so the catch answered `false`,
+//     subtracted `ErrorFlagOrdinalBias` from what was really a heap pointer, and never enrolled the box for
+//     release. Nothing reconciled the two derivations — and nothing CAN, because a clause with no declared
+//     cases has no flag shape to reconcile TO.
+//   • **`throws Bogus`, a name resolving to nothing at all, compiled and RAN.** Same hole, other end.
+//
+// **The rule is "names a declared enum or union", asked of the registry the catch DECODE ITSELF consults**
+// (`ProgramSignatures.enumTypes`, which `Parser.throwsTypeIsBoxedUnion` reaches through `enumOf`, and NOT the
+// `Project.enumTypes` authority beside it — see `PassPipeline.signatures`). Asking the decode's own question
+// is what makes the answer honest: a clause this check admits is one `throwsTypeIsBoxedUnion` can classify,
+// and a clause it refuses is one that classifier could only have guessed about. The same argument
+// `ConformanceCheck.throwsRequirementIsAbstract` makes one door over.
+//
+// ⚠ **IT IS A RULE ABOUT A FUNCTION'S OWN CLAUSE, NOT ABOUT AN INTERFACE REQUIREMENT'S, and the two are
+// structurally separated rather than separated by a test.** `interface Parsable`'s
+// `fromString(…) throws Error` is the abstract error channel `Error` exists for: a requirement declares no
+// body, is dispatched through the witness ABI, and is already guarded by `validateThrowsConformance` (E3016,
+// which narrows an abstract requirement only to a SCALAR-flagged impl error). An interface method is an
+// `InterfaceMethodSig` on the interface declaration and never becomes an `IrFunction`, so walking
+// `module.functions` cannot reach one.
+//
+// ⚠ **AND IT RUNS HERE, IN THE PIPELINE, WHICH KEEPS IT BEHIND `checkConformance`'S ERROR GATE.** An impl
+// method declaring `throws Bogus` under an abstract requirement is refused by E3016 with a message that can
+// name the requirement it violates; `checkConformance` runs before the pipeline, so that program never
+// reaches this pass and gets the better-informed sentence rather than two diagnostics about one clause.
+// (`specs-shv2/interface-conformance.md`'s `error.throws-unresolvable-impl-type-under-abstract-requirement`
+// is the pin on that ordering.)
+//
+// ⚠ **A PARSE-TIME REFUSAL WAS THE ALTERNATIVE AND IS NOT AVAILABLE.** `parseOptionalThrowsClause` is
+// deliberately tolerant — its own comment says the clause is "validated later, in SemanticCheck" — because it
+// runs in BOTH the tolerant declaration sweep and the real parse, and the sweep reads a signature while the
+// whole-program index is still being BUILT. Asking "is this a declared enum?" there would make a
+// declaration's acceptance depend on its POSITION in the sweep, which is the argument
+// `Parser.parseTypeReference`'s header already makes about `Self`. This pass is the first point that holds a
+// merged module and a complete registry.
+function checkThrowsClausesNameDeclaredErrors(project Project, module MaxonModule, signatures ProgramSignatures)
+	for func in module.functions 'eachFunc'
+		match func.throwsTypeName 'clause'
+			none then break 'clause'
+			throwing(declared) then requireThrowsClauseNamesADeclaredError(project, signatures: signatures, func: func, declared: declared)
+		end 'clause'
+	end 'eachFunc'
+end 'checkThrowsClausesNameDeclaredErrors'
+
+// One function's clause. Split into two refusals rather than one, because the two mistakes are different
+// mistakes and the reader has to be told which one they made: naming an interface is reaching for an
+// abstract error channel a plain function has no ABI for, and naming a struct or a typo is naming something
+// that was never an error type at all. The same split
+// `ConformanceCheck.requireImplErrorIsANarrowableError` makes, for the same reason.
+//
+// ⚠ **NEITHER MESSAGE NAMES THE FUNCTION, AND THAT IS SO THE ORACLE CAN SAY THE SAME SENTENCE.** The
+// bootstrap refuses this at its `ParseThrowsClause`, where the enclosing declaration's registration name is
+// not in hand (and would be spelled with ITS namespace scheme even where it is); `maxon-sharp`'s
+// `RequireThrowsTypeIsAnErrorEnum` carries both sentences below VERBATIM. One rule refused by two compilers
+// should read as one rule, and both position the diagnostic at a file:line:column that identifies the
+// declaration exactly — so the name in the prose would have bought nothing but a second spelling for the two
+// corpora to keep in step by hand.
+function requireThrowsClauseNamesADeclaredError(project Project, signatures ProgramSignatures, func IrFunction, declared String)
+	let declaredName = declared.toByteArray()
+	if signatures.containsEnum(declaredName) 'declaresItsCases'
+		return
+	end 'declaresItsCases'
+
+	match lookupInterface(project.interfaces, name: declaredName) 'iface'
+		found then reportThrowsClauseViolation(project, func: func, message: "'throws {declared}' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws")
+		notFound then reportThrowsClauseViolation(project, func: func, message: "'throws {declared}' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into")
+	end 'iface'
+end 'requireThrowsClauseNamesADeclaredError'
+
+// The ONE report site for the check above — it derives three of `reportPositioned`'s six arguments from the
+// function, which each arm would otherwise spell out separately, exactly as
+// `ConformanceCheck.reportThrowsViolation` does for its four.
+function reportThrowsClauseViolation(project Project, func IrFunction, message String)
+	reportPositioned(project, code: ErrorCode.throwsTypeNotAnErrorEnum, message: message, line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
+end 'reportThrowsClauseViolation'
 
 // The throws clauses of every THROWING function in the program, keyed by (mangled) name. A non-throwing
 // function is absent — the same "absence is the answer" the parser's `ProgramSignatures.funcThrows` uses.

@@ -1612,9 +1612,19 @@ error E3016: <fragment>:12:6: Method 'Point.digest' throws 'Error' but interface
 ⭐⭐ **THE RELAXATION STOPS AT THE FLAG SHAPE, AND THAT BOUNDARY IS A MEMORY-SAFETY OBLIGATION RATHER THAN A
 WRONG ANSWER.** An abstract requirement declares no case, so a `try` at the dispatch catches it through the
 SCALAR `ordinal + bias` ABI — while a payload-carrying union hands its error over as a heap BOX POINTER. Were
-this accepted, the pointer would be decoded as an ordinal and the box would never be released: the same
-program written as a plain `throws Error` function exits 101 (a leak) in shv2 AND in the reference oracle.
+this accepted, the pointer would be decoded as an ordinal and the box would never be released.
 The narrowing is granted only to error types whose own flag is that same scalar.
+
+⚠ **THE PLAIN-FUNCTION SPELLING OF THIS PROGRAM USED TO EXIT 101 — A LEAK — IN shv2 AND IN THE REFERENCE
+ORACLE ALIKE, AND IT NO LONGER COMPILES IN EITHER (A1s-throwsbox).** When this case shipped, refusing the
+witness-dispatch route was explicitly *"rather than opening a second door"* to a hole that stood open on the
+direct path: `function f(x Code) returns Code throws Error` throwing this same `BoxedError` and caught by
+`try f(3) otherwise 55` linked, ran, decoded the box pointer as an ordinal and leaked the box. The FIRST
+door is now shut too — a plain function's `throws` clause must name a declared enum or union (**E3113**,
+`specs-shv2/error-handling.md`'s `error.throws-interface-on-a-plain-function`) — so the two routes into the
+boxed-flag mismatch are refused by two checks that each own their own side: E3016 owns the relation between
+a requirement and its impl, E3113 owns a function's own clause. This case's own program is untouched by
+E3113: `Digest.digest`'s `throws Error` is an interface REQUIREMENT, which never becomes a function.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -1739,7 +1749,10 @@ same-name rule the exemption relaxes had refused it.
 
 ⚠ The refusal reaches only pairs the strict rule ALREADY refused — a same-named pair never asks either
 question — so nothing that compiled before the exemption existed is touched by it. `throws Bogus` on a
-plain function remains accepted; that is a separate front-end gap and this door is not where it is closed.
+plain function was accepted when this case shipped, and this door was not where that got closed:
+A1s-throwsbox's **E3113** closed it, at the function's own clause. Both fire on the program below, and this
+one WINS, deliberately — `checkConformance` runs before the pipeline, and it is the only one of the two that
+can name the requirement the implementation is violating.
 ```maxon
 typealias Code = int(0 to u32.max)
 
