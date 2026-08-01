@@ -330,9 +330,13 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//
 	// ⚠ Its blockers were TWO `String` methods, and neither was a missing type: `addressableBytes()` and
 	// `byteAtOrPanic()` are `module function`s of `stdlib/String.maxon` — a file shv2 does not and will not
-	// parse, since `String` is compiler-owned — so they are answered as dispatch arms with a stdlib-provenance
-	// gate (`Parser.requireStdlibOnlyStringMethod`), which is what keeps a user program's
-	// `"x".addressableBytes()` refused exactly as the oracle refuses it.
+	// parse, since `String` is compiler-owned — so they are answered as dispatch arms gated on the caller's
+	// file being physically under `stdlib/` (`Parser.requireStdlibOnlyStringMethod`), which is what keeps a
+	// user program's `"x".addressableBytes()` refused exactly as the oracle refuses it.
+	//
+	// ⚠ **THAT GATE MUST READ `livesUnderStdlibDirectory`, NEVER `isStdlibSource`** — the first version read
+	// the latter and broke `maxon-shv2 build stdlib/URL.maxon`, i.e. the command THIS FILE's collision rule
+	// prescribes for checking a module before listing it. See `Queries.livesUnderStdlibDirectory`.
 	try listWhitelistedModule(stdlibDir, relative: "URL.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "helpers/url/urlHelpers.maxon", into: listed)
 	return listed

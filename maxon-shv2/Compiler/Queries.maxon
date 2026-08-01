@@ -188,6 +188,11 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	project.db.signatureMisses = project.db.signatureMisses + 1
 
 	var signatures = ProgramSignatures.create()
+	// ⭐ **THE ONE PROBE THIS COMPILE MAKES OF THE PROJECT ROOT** — set before any file is swept, so every
+	// reader below (and every `Parser.create` in every later query) sees the answer rather than the seeded
+	// `false`. It is what lets `livesUnderStdlibDirectory` be a derivation instead of a per-file path probe;
+	// see that function for the proof and for the ladder measurement that rejected the per-file version.
+	signatures.rootIsUnderStdlibDirectory = rootIsUnderStdlibDirectory(project)
 
 	// ⭐⭐ **THE SWEEP IS PARTITIONED BY PROVENANCE — USER FILES FIRST, STDLIB FILES SECOND (A1s wave 2).**
 	// The shadow contest is decided BETWEEN the two halves, and that placement is the whole reason the
@@ -284,7 +289,7 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	// the real parse cannot drift on what `returns X` means (see `foldDeclaredSignaturesInto`). It
 	// is handed the index it is BUILDING, which is safe because a sweep types no call and so never
 	// reads it; nothing else in the Parser needs a signature.
-	var scanner = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path))
+	var scanner = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
 	scanner.foldDeclaredSignaturesInto(signatures)
 	recordPhase(project, phase: CompilePhase.signatures, probe: probe)
 end 'foldOneFileInto'
@@ -468,7 +473,10 @@ function foldInterfaceDeclarations(project Project, signatures ProgramSignatures
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
 		let tokens = try queryActiveTokens(project, path: path)
-		var reader = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path))
+		// ONE classification, read twice: `isStdlibSourceFile` is the four-String-allocation probe its own
+		// header prices, and `livesUnderStdlibDirectory` is a derivation over its answer, not a second one.
+		let isStdlibSource = isStdlibSourceFile(project, path: path)
+		var reader = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")
@@ -515,7 +523,10 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 
 	// M1 single-file build: namespace is empty (no cross-file qualification).
 	// Namespace derivation from the path grows with multi-file builds at M2.
-	var parser = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path))
+	// ONE classification, read twice — see `foldInterfaceDeclarations` for why the second read is a
+	// derivation over the first and not a second probe.
+	let isStdlibSource = isStdlibSourceFile(project, path: path)
+	var parser = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
 	let errorCountBefore = project.diagnostics.count()
 	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		reportParseError(project, path: path, error: parseErr)
@@ -712,6 +723,51 @@ function isStdlibSourceFile(project Project, path FilePath) returns bool
 
 	return resolvedPath.isInside(project.stdlibDir)
 end 'isStdlibSourceFile'
+
+// ⭐⭐ **IS THIS FILE PHYSICALLY INSIDE `stdlib/` (BATCH2 slice 1)?** Read by
+// `Parser.requireStdlibOnlyStringMethod`, the gate on the two `module`-visible `String` methods
+// (`addressableBytes`, `byteAtOrPanic`) that `stdlib/URL.maxon` and its helper cone need.
+//
+// ⚠⚠ **IT IS DELIBERATELY NOT `isStdlibSourceFile`, AND THIS IS D6's DISTINCTION ONE DOOR OVER — ASKED
+// AND ANSWERED WRONG ONCE ALREADY.** That function decides VISIBILITY, and its root-inside-`stdlib/` arm
+// hands a project ROOTED under `stdlib/` its own files back as the USER's, which is correct for
+// visibility (A1t bar 2) and is exactly the ruling `StdlibLoader.registeredPathsWhenTheRootIsInsideStdlib`
+// makes. Gated on THAT answer, the two methods' refusal told
+// `maxon-shv2 build stdlib/URL.maxon` that `stdlib\URL.maxon` "is not stdlib source" — a false sentence
+// about a file whose path says otherwise, and it broke the command this workstream measures its blockers
+// WITH, for precisely the modules the workstream is about. `Parser.declaresCompilerInternalNames`
+// predicted it in prose ("would have made `maxon-shv2 build stdlib/Builtins.maxon` … refuse the very
+// module the loader is about to list"); this is that sentence coming true for the second door.
+//
+// ⭐⭐ **AND IT IS A DERIVATION, NOT A SECOND PATH PROBE — WHICH IS THE WHOLE OF WHY IT IS AFFORDABLE.**
+// The two answers differ in exactly ONE situation, and it is a property of the COMPILE rather than of the
+// file: when the project ROOT is itself under `stdlib/`, every source the compile loads is under `stdlib/`
+// too — the project's own because the root is, and the loader's because it walks `stdlib/`. Off that path
+// the two COINCIDE, because `isStdlibSourceFile` is then literally `path.isInside(stdlibDir)`. So:
+//
+//     livesUnderStdlib(path)  ==  isStdlibSource(path)  OR  rootIsUnderStdlibDirectory
+//
+// and the right-hand term is asked ONCE PER COMPILE (`ProgramSignatures.rootIsUnderStdlibDirectory`,
+// set in `queryProgramSignatures`), never per file.
+//
+// ⚠ **MEASURED, because the obvious version — a second `resolve` + `isInside` per file — is the shape
+// `isStdlibSourceFile`'s own header rules out ("asking it twice per file would not be [affordable]").**
+// Shipped that way for one build, the scale ladder read **+2,438 allocations at rung 0 rising to +13,350
+// at rung 5** ON TOP of this rung's whitelist cost, growing with the file count — a per-file term bought
+// to answer a per-compile question. As a derivation over one root probe it is **+32 allocations, EXACTLY
+// FLAT at all six rungs**: the probe itself, once, and nothing that scales.
+function livesUnderStdlibDirectory(signatures ProgramSignatures, isStdlibSource bool) returns bool
+	return isStdlibSource or signatures.rootIsUnderStdlibDirectory
+end 'livesUnderStdlibDirectory'
+
+// ⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/`?** The per-compile half of the derivation above, probed
+// once and stored on the signatures index (which is built once per compile and threaded to every
+// `Parser.create`). Resolved before comparing, for the reason `isStdlibSourceFile` states in full:
+// `isInside` compares SPELLINGS, so a relative `stdlib/URL.maxon` and an absolute one would otherwise be
+// two different answers about one file — the bug this door exists to not have.
+function rootIsUnderStdlibDirectory(project Project) returns bool
+	return project.rootPath.resolve(Directory.currentPath()).isInside(project.stdlibDir)
+end 'rootIsUnderStdlibDirectory'
 
 // The one module whose declarations MAY carry the reserved `__` prefix — `stdlib/Builtins.maxon`, the
 // type-system bridge to the compiler's intrinsics (the error enums a builtin throws, the parse helpers

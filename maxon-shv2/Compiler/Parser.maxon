@@ -2640,8 +2640,10 @@ let StringToByteArrayMethod = b"toByteArray"
 // (`stdlib/String.maxon:181` and `:281`), which is a real visibility and not a convention: the oracle
 // answers a user program `E3008: not exported`. shv2 has no `module` keyword — `export` is the only
 // modifier its lexer knows — and it parses no `stdlib/String.maxon` at all, so the visibility cannot be
-// read off a declaration. It is enforced on PROVENANCE instead (`requireStdlibOnlyStringMethod`), the fact
-// `Parser.isStdlibSource` already carries and already "decides VISIBILITY" by its own header.
+// read off a declaration. It is enforced on the file's PHYSICAL LOCATION instead
+// (`requireStdlibOnlyStringMethod`, reading `livesUnderStdlibDirectory`) — and emphatically NOT on
+// `isStdlibSource`, which answers a different question and broke `maxon-shv2 build stdlib/URL.maxon` when
+// this gate first borrowed it.
 //
 // They are listed apart from the method families above because that is what they are: not a slice of the
 // language's String surface, but the two doors `stdlib/URL.maxon` and `stdlib/helpers/url/urlHelpers.maxon`
@@ -5377,6 +5379,21 @@ export type Parser
 	// checking whether a module is ready to be listed — refuse the very module the loader is about to list.
 	// Being the compiler's internal bridge is a property of the FILE, not of how a command line spelled it.
 	let declaresCompilerInternalNames as bool
+	// ⭐ **IS THIS FILE PHYSICALLY INSIDE `stdlib/` (BATCH2 slice 1)?** True for every module the loader
+	// lists AND for a module named directly on the command line (`maxon-shv2 build stdlib/URL.maxon`),
+	// because being under `stdlib/` is a property of the FILE. Read by the one gate on the two
+	// `module`-visible `String` methods (`requireStdlibOnlyStringMethod`).
+	//
+	// ⭐ It is DERIVED, not probed: `isStdlibSource` already answers it except when the project ROOT is
+	// itself under `stdlib/`, and that is a fact about the COMPILE, asked once
+	// (`Queries.livesUnderStdlibDirectory`, which carries the proof and the ladder measurement).
+	//
+	// ⚠ **IT IS DELIBERATELY NOT `isStdlibSource`, FOR `declaresCompilerInternalNames`' REASON, AND THAT
+	// REASON WAS MEASURED HERE RATHER THAN PREDICTED.** Gated on the visibility bit, the refusal told
+	// `maxon-shv2 build stdlib/URL.maxon` that the file "is not stdlib source" — false about that path, and
+	// it broke the one command that finds a module's blockers before it is listed. See
+	// `Queries.livesUnderStdlibDirectory`.
+	let livesUnderStdlibDirectory as bool
 	var usedTypeNames as UsedTypeNameSet
 	// ⭐ **DOES THIS WALK COLLECT USES AT ALL?** Set by `parseModule` and false everywhere else, because
 	// `parseModule` is the only entry point that ever REPORTS (`reportUnusedTypeAliases`). The
@@ -5453,7 +5470,7 @@ export type Parser
 		return renamed
 	end 'shadowRenamedTokens'
 
-	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool) returns Parser
+	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool, livesUnderStdlibDirectory bool) returns Parser
 		return Self{
 			tokens: shadowRenamedTokens(tokens, signatures: signatures, isStdlibSource: isStdlibSource),
 			pos: 0,
@@ -5523,6 +5540,7 @@ export type Parser
 			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()),
 			isStdlibSource: isStdlibSource,
 			declaresCompilerInternalNames: declaresCompilerInternalNames,
+			livesUnderStdlibDirectory: livesUnderStdlibDirectory,
 			usedTypeNames: sharedEmptyUsedTypeNames,
 			collectsTypeNameUses: false,
 			declaredTypeAliases: sharedEmptyDeferredNameDiagnostics,
@@ -25332,22 +25350,32 @@ export type Parser
 		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `bytes`, the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`), the `StringIndex` family (`startIndex`, `endIndex`, `findFirst`, `findLast`, `slice`) and the three trims (`trim`, `trimStart`, `trimEnd`); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes`/`utf16` have no consumer yet", line: methodTok.line, column: methodTok.column)
 	end 'dispatchStringMethod'
 
-	// ⭐⭐ **A `module`-VISIBLE STRING METHOD IS STDLIB SOURCE'S ALONE, AND THIS IS THE ONE PLACE THAT SAYS
-	// SO.** `addressableBytes` hands out a live view of a String's bytes and `byteAtOrPanic` reads one
-	// without a catchable failure; the corpus declares BOTH `module function`, so a user program calling
-	// either gets `E3008: not exported` from the oracle. shv2 cannot answer with E3008 — it has no `module`
-	// keyword and no declaration of these to attach a visibility to — so it refuses on the fact it does
-	// have: which SOURCE this call is being parsed out of.
+	// ⭐⭐ **A `module`-VISIBLE STRING METHOD IS `stdlib/`'s ALONE, AND THIS IS THE ONE PLACE THAT SAYS SO.**
+	// `addressableBytes` hands out a live view of a String's bytes and `byteAtOrPanic` reads one without a
+	// catchable failure; the corpus declares BOTH `module function`, so a user program calling either gets
+	// `E3008: not exported` from the oracle. shv2 cannot answer with E3008 — it has no `module` keyword and
+	// no declaration of these to attach a visibility to — so it refuses on the fact it does have: WHERE the
+	// file being parsed physically lives.
+	//
+	// ⚠⚠ **THE FACT IS `livesUnderStdlibDirectory`, NOT `isStdlibSource`, AND THE DIFFERENCE COST THE
+	// WORKSTREAM ITS MEASUREMENT COMMAND FOR ONE COMMIT.** `isStdlibSource` answers a VISIBILITY question,
+	// and it deliberately hands a project ROOTED under `stdlib/` its own files back as the USER's — so
+	// gated on it, this refusal told `maxon-shv2 build stdlib/URL.maxon` that `stdlib\URL.maxon` "is not
+	// stdlib source", which is false about that path and breaks the command `StdlibLoader`'s own collision
+	// rule prescribes for deciding whether a module is ready to be listed. D6 had already drawn this
+	// distinction and NAMED this consequence for `stdlib/Builtins.maxon`
+	// (`declaresCompilerInternalNames`); this door repeated it one file over. Being reachable by a
+	// `module`-visible method is a property of the FILE, never of how a command line spelled the project.
 	//
 	// ⚠ **IT NAMES THE REASON RATHER THAN FALLING THROUGH TO THE UNKNOWN-METHOD ROSTER.** "shv2 does not
 	// have this method" and "this method exists and is not yours to call" are different statements, and the
 	// first one about a method the compiler DOES implement is exactly the false claim D11 was about.
 	function requireStdlibOnlyStringMethod(methodTok Token) throws ParseError
-		if self.isStdlibSource 'thestdlibsOwn'
+		if self.livesUnderStdlibDirectory 'thestdlibsOwn'
 			return
 		end 'thestdlibsOwn'
 
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference refuses to user code as E3008) and this file is not stdlib source. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference refuses to user code as E3008) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies", line: methodTok.line, column: methodTok.column)
 	end 'requireStdlibOnlyStringMethod'
 
 	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime

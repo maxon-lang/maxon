@@ -2888,6 +2888,15 @@ export type ProgramSignatures
 	// index knows which side of the fold each of them is on. A flag threaded through `Parser.create`
 	// would be the same fact written down at three call sites, free to be passed wrongly at any of them.
 	export var allFilesFolded as bool
+	// ⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/` (BATCH2 slice 1)?** A per-COMPILE fact, probed once by
+	// `Queries.queryProgramSignatures` and read at every `Parser.create` to derive that parser's
+	// `livesUnderStdlibDirectory` — see `Queries.livesUnderStdlibDirectory` for the derivation, its proof and
+	// the ladder measurement that rejected asking it per FILE instead.
+	//
+	// ⚠ It lives HERE rather than on `Project` because this index is the one thing already built once per
+	// compile AND threaded to every `Parser.create` site, which is exactly the shape the fact has. It is set
+	// before any file is swept, so no reader can see the seeded `false`.
+	export var rootIsUnderStdlibDirectory as bool
 	// ⭐ **THE TYPE NAMES TOP-LEVEL CONSTANT INITIALIZERS CAST TO, scoped by declaring file** (P1.9) —
 	// the one `use` the E3062 check cannot get from the parser. Written by `recordConstCastTarget` from
 	// inside the constant evaluator, read by `Parser.reportUnusedTypeAliases`; both doors carry the
@@ -2927,7 +2936,7 @@ export type ProgramSignatures
 	var stdlibShadowRenames as StdlibShadowRenameMap
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), bufferSurfaceReturns: BufferSurfaceReturnNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), bufferSurfaceReturns: BufferSurfaceReturnNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create()}
 	end 'create'
 
 	// --- The stdlib/user SHADOW CONTEST (A1s wave 2). See `StdlibShadowRenameMap`. ---
@@ -3868,7 +3877,12 @@ export type ProgramSignatures
 		// `declaresCompilerInternalNames: false` is exact for the same reason and its own: an initializer
 		// declares no NAME at all, so the reserved-prefix rule this walk would exempt has no site to fire
 		// at — and the decl whose initializer this is has already been through the real parse's check.
-		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: "", signatures: self, isStdlibSource: false, declaresCompilerInternalNames: false)
+		// `livesUnderStdlibDirectory: false` is exact for the third variant of that reason: it gates the
+		// two `module`-visible `String` METHODS, and a constant initializer is const-EVALUATED — it reaches
+		// no method dispatch at all, so the gate has no site to fire at either. This walk never asks the
+		// project for a path, and giving it a reason to would put a `Directory.currentPath()` probe on the
+		// per-declaration path to answer a question nothing here can pose.
+		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: "", signatures: self, isStdlibSource: false, declaresCompilerInternalNames: false, livesUnderStdlibDirectory: false)
 		let folded = try parser.evalConstInitializer(decl, stack: stack) otherwise (err) 'noValue'
 			return self.recordFailure(decl, error: err)
 		end 'noValue'
