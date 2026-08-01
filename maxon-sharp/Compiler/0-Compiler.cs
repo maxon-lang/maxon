@@ -5,31 +5,93 @@ using MaxonSharp.Compiler.Ir.Passes;
 
 namespace MaxonSharp.Compiler;
 
+/// <summary>
+/// The object-file format an executable is written in.
+///
+/// <para>It is a property of the OPERATING SYSTEM, not of the architecture — and that distinction is
+/// why this type exists. The writer dispatch used to key on <see cref="CompileTarget.Arch"/> alone,
+/// so `--target=x64-linux` was handed to the PE writer and produced a WINDOWS executable whose
+/// stdlib had been parsed with `#if os(Linux)` taken, while `arm64-windows` produced a Mach-O named
+/// `.exe`. Both exited 0.</para>
+/// </summary>
+public enum ObjectFormat { Pe, MachO }
+
 public record CompileTarget(string Arch, string Os) {
+  // The arch and os spellings a triple uses, named once. They are the keys of the roster below, the
+  // arms of every switch over a target, and the halves of `Triple`; spelled inline they were four
+  // separate copies of one vocabulary.
+  public const string X64Arch = "x64";
+  public const string Arm64Arch = "arm64";
+  public const string WindowsOs = "windows";
+  public const string MacosOs = "macos";
+  public const string LinuxOs = "linux";
+
+  /// <summary>
+  /// Every (arch, os) pair this compiler can WRITE an executable for, and the object format it
+  /// writes for it.
+  ///
+  /// <para>The roster is THIS IMPLEMENTATION's, not the language's: maxon-sharp ships a PE writer
+  /// and a Mach-O writer and nothing else — there is no ELF writer anywhere in it — so a pair absent
+  /// here has no honest binary to produce. maxon-shv2 is where the real ELF and wasm backends live.
+  /// </para>
+  ///
+  /// <para>⭐ It is read by the writer dispatch, by <see cref="Unsupported"/>'s diagnostic AND by
+  /// `--target`'s help text, so what the compiler ADVERTISES cannot outrun what it can EMIT. It had:
+  /// the usage text offered `x64-linux` as an example of a target that worked.</para>
+  /// </summary>
+  private static readonly Dictionary<(string Arch, string Os), ObjectFormat> SupportedTargets = new() {
+    [(X64Arch, WindowsOs)] = ObjectFormat.Pe,
+    [(Arm64Arch, MacosOs)] = ObjectFormat.MachO,
+  };
+
+  /// The roster as targets, for the callers that must ENUMERATE it rather than ask about one target
+  /// — the self-test that checks each one's emitted object format, and the triple list below.
+  public static IEnumerable<(CompileTarget Target, ObjectFormat Format)> Supported =>
+    SupportedTargets.Select(entry => (new CompileTarget(entry.Key.Arch, entry.Key.Os), entry.Value));
+
+  /// The supported triples, sorted and comma-separated — the one roster a diagnostic or a help line
+  /// quotes, so neither can drift from the table it describes. Sorted rather than left in insertion
+  /// order because a user-visible list must not depend on a dictionary's enumeration order.
+  public static string SupportedTriples =>
+    string.Join(", ", Supported.Select(supported => supported.Target.Triple).Order());
+
   public static CompileTarget Default => Native;
 
+  /// <summary>
+  /// The machine this compiler is RUNNING on, reported truthfully — including `linux`, which is not
+  /// a target it can emit for. Saying so is the point: <see cref="Unsupported"/> then refuses a
+  /// plain `maxon build` on a Linux box by name, where mapping the host to something emittable would
+  /// hand back the same silently-wrong PE this roster exists to stop.
+  /// </summary>
   public static CompileTarget Native {
     get {
       var arch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture switch {
-        System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
-        System.Runtime.InteropServices.Architecture.X64 => "x64",
+        System.Runtime.InteropServices.Architecture.Arm64 => Arm64Arch,
+        System.Runtime.InteropServices.Architecture.X64 => X64Arch,
         var unsupported => throw new PlatformNotSupportedException($"Unsupported architecture: {unsupported}")
       };
       var os = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-        System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
+        System.Runtime.InteropServices.OSPlatform.OSX) ? MacosOs :
         System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-          System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
+          System.Runtime.InteropServices.OSPlatform.Linux) ? LinuxOs : WindowsOs;
       return new CompileTarget(arch, os);
     }
   }
 
   /// <summary>
   /// Maps CompileTarget.Os to the Parser's targetOs parameter value.
+  ///
+  /// <para>⚠ `Linux` stays, and is NOT governed by <see cref="SupportedTargets"/>. This answers a
+  /// different question: which `#if os(...)` branch of the SOURCE is selected. The LANGUAGE knows
+  /// three operating systems and `#if os(Linux)` is a legal predicate the parser evaluates on every
+  /// target; this COMPILER can write executables for two of them. Deleting the arm would conflate
+  /// "cannot emit for Linux" with "does not know what Linux is", and the stdlib's own
+  /// `#if os(Windows) … #else` depends on the second being false.</para>
   /// </summary>
   public string ParserOs => Os.ToLowerInvariant() switch {
-    "macos" => "Macos",
-    "windows" => "Windows",
-    "linux" => "Linux",
+    MacosOs => "Macos",
+    WindowsOs => "Windows",
+    LinuxOs => "Linux",
     var unknown => throw new ArgumentException($"Unknown OS '{unknown}' in CompileTarget. Expected macos, windows, or linux.")
   };
 
@@ -38,13 +100,55 @@ public record CompileTarget(string Arch, string Os) {
   public string Triple => $"{Arch}-{Os}";
 
   /// <summary>
-  /// Parses a target triple string like "arm64-macos" into a CompileTarget.
+  /// The object format this target's executable is written in.
+  ///
+  /// <para>Throwing rather than returning a default is deliberate: every entry point that can name a
+  /// target refuses an unsupported one first — <see cref="Parse"/> at the `--target` flag and
+  /// <see cref="Compiler.Compile"/> for a target that never passed through it — so reaching here
+  /// with a pair the roster does not hold means one of those gates was removed, not that a user
+  /// asked for something odd. A default here is exactly how the defect worked.</para>
+  /// </summary>
+  public ObjectFormat ObjectFormat => SupportedTargets.TryGetValue((Arch, Os), out var format)
+    ? format
+    : throw new InvalidOperationException(
+        $"no object writer for '{Triple}' — an unsupported target must be refused before code emission");
+
+  /// <summary>
+  /// The one statement of "this compiler cannot write an executable for that target", as an error or
+  /// null — the shape <see cref="Compiler.CoverageConflict"/> already uses, and for the same reason:
+  /// the rule is needed in two kinds of place and must read identically in both.
+  ///
+  /// <para><see cref="Parse"/> asks it at the `--target` flag, so a refusal lands before the output
+  /// path's extension is chosen and before the build cache is consulted — a cached binary must not
+  /// be handed back for a request that should have been refused. <see cref="Compiler.Compile"/> asks
+  /// it again, because a CompileTarget also arrives WITHOUT passing through Parse:
+  /// <see cref="Native"/> on a Linux host is exactly that, and it is how a plain `maxon build` there
+  /// produced a Windows PE.</para>
+  /// </summary>
+  public CompileError? Unsupported => SupportedTargets.ContainsKey((Arch, Os)) ? null : new CompileError(
+    ErrorCode.CodeEmitterUnsupportedTarget,
+    $"this compiler cannot write an executable for target '{Triple}'. It supports: {SupportedTriples}. "
+    + "maxon-sharp ships a PE writer and a Mach-O writer and no others, so any other target would be "
+    + "emitted in some other platform's object format while carrying the requested platform's stdlib "
+    + $"semantics — a Windows PE for {X64Arch}-{LinuxOs}, a Mach-O for {Arm64Arch}-{WindowsOs}. "
+    + "maxon-shv2 has the ELF and wasm backends; build with it for those targets.");
+
+  /// <summary>
+  /// Parses a target triple string like "arm64-macos" into a CompileTarget, refusing one this
+  /// compiler cannot write.
+  ///
+  /// <para>ArgumentException for both refusals because that is already this method's contract for
+  /// "not a usable triple", and `maxon test` catches exactly it to turn into a usage message.</para>
   /// </summary>
   public static CompileTarget Parse(string triple) {
     var parts = triple.Split('-', 2);
     if (parts.Length != 2)
       throw new ArgumentException($"Invalid target format '{triple}'. Expected 'arch-os' (e.g., 'arm64-macos').");
-    return new CompileTarget(parts[0], parts[1]);
+
+    var target = new CompileTarget(parts[0], parts[1]);
+    if (target.Unsupported is { } unsupported) throw new ArgumentException(unsupported.Format());
+
+    return target;
   }
 }
 
@@ -167,6 +271,12 @@ public class Compiler {
 
     if (CoverageConflict() is { } conflict) return new CompileResult(false, [conflict]);
 
+    // Ahead of every other step, including DiscardPreviousOutput: a target with no object writer
+    // must cost nothing and must not disturb the previous build's artifacts. This is the gate that
+    // sees a target which never passed through CompileTarget.Parse — the LSP's, `maxon test`'s, and
+    // above all the DEFAULT, which is the host and is `x64-linux` on a Linux box.
+    if (target.Unsupported is { } unsupportedTarget) return new CompileResult(false, [unsupportedTarget]);
+
     using var _ = _context.PushScope();
 
     try {
@@ -211,33 +321,44 @@ public class Compiler {
           IrPipeline.WriteIrOutput(irResult.ARM64Module, irOutputPath);
       }
 
-      if (target.Arch == "arm64") {
-        // Stage 5: Code emission (ARM64 dialect -> machine code)
-        var codeResult = ARM64CodeEmitterStage.Emit(irResult.ARM64Module!);
-        long emitMs = 0;
-        if (stageSw != null) { emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
+      // Stage 5: Code emission. The ARCHITECTURE picks the emitter, and only the architecture — an
+      // instruction encoder depends on nothing else about the target.
+      var codeResult = target.Arch switch {
+        CompileTarget.Arm64Arch => ARM64CodeEmitterStage.Emit(irResult.ARM64Module!),
+        CompileTarget.X64Arch => X86CodeEmitter.Emit(irResult.X86Module!),
+        var unsupported => throw new InvalidOperationException(
+          $"no code emitter for architecture '{unsupported}': CompileTarget's roster admitted a target this switch does not handle")
+      };
+      long emitMs = 0;
+      if (stageSw != null) { emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
 
-        // Stage 6: Write Mach-O executable
-        MachOWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, symdata: codeResult.Symdata, got: codeResult.Got, importNames: codeResult.ImportNames);
-        WriteDebugSidecar(codeResult, outputPath, target);
-        if (stageSw != null)
-          Console.Error.WriteLine($"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={stageSw.ElapsedMilliseconds}ms");
-        Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata to {outputPath} in {totalSw.ElapsedMilliseconds}ms");
-      } else if (target.Arch == "x64") {
-        // Stage 5: Code emission (X86 dialect -> machine code)
-        var codeResult = X86CodeEmitter.Emit(irResult.X86Module!);
-        long emitMs = 0;
-        if (stageSw != null) { emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
-
-        // Stage 6: Write PE executable
-        PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, codeResult.Imports, codeResult.Symdata);
-        WriteDebugSidecar(codeResult, outputPath, target);
-        if (stageSw != null)
-          Console.Error.WriteLine($"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={stageSw.ElapsedMilliseconds}ms");
-        Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata, {codeResult.Imports.Count} imports to {outputPath} in {totalSw.ElapsedMilliseconds}ms");
-      } else {
-        throw new InvalidOperationException($"Unsupported target architecture: {target.Arch}");
+      // Stage 6: Write the executable. The OPERATING SYSTEM picks the object format — keying this on
+      // the ARCHITECTURE is the defect it replaces: `--target=x64-linux` reached the PE writer and
+      // exited 0 having produced a Windows executable carrying POSIX stdlib semantics, and
+      // `arm64-windows` reached the Mach-O writer and wrote a Mach-O named `.exe`.
+      //
+      // The imports note is format-specific because the two formats record imports in different
+      // places: a PE carries an import table, while a Mach-O reaches its through the GOT and the
+      // import NAMES, so quoting `Imports.Count` for one would report 0 for a binary that has them.
+      string importsNote;
+      switch (target.ObjectFormat) {
+        case ObjectFormat.MachO:
+          MachOWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, symdata: codeResult.Symdata, got: codeResult.Got, importNames: codeResult.ImportNames);
+          importsNote = "";
+          break;
+        case ObjectFormat.Pe:
+          PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, codeResult.Imports, codeResult.Symdata);
+          importsNote = $", {codeResult.Imports.Count} imports";
+          break;
+        default:
+          throw new InvalidOperationException(
+            $"no object writer for format '{target.ObjectFormat}' (target '{target.Triple}')");
       }
+
+      WriteDebugSidecar(codeResult, outputPath, target);
+      if (stageSw != null)
+        Console.Error.WriteLine($"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={stageSw.ElapsedMilliseconds}ms");
+      Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata{importsNote} to {outputPath} in {totalSw.ElapsedMilliseconds}ms");
 
       return new CompileResult(true, [], irResult.AllStagesIr);
     } catch (CompileError ex) {

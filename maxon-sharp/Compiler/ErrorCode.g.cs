@@ -783,6 +783,21 @@ public enum ErrorCode {
   /// dropping either half.
   /// </summary>
   CodeEmitterCoverageNeedsDebugInfo = 5003,
+  /// <summary>
+  /// The requested target is one this compiler cannot write an executable for. maxon-sharp ships a
+  /// PE writer and a Mach-O writer and no others, so the pairs it can emit are exactly x64-windows
+  /// and arm64-macos.
+  /// Refused rather than approximated, because the approximation was silent and wrong: the object
+  /// writer used to be chosen by ARCHITECTURE alone, so `--target=x64-linux` reached the PE writer
+  /// and exited 0 having produced a WINDOWS executable whose stdlib had been parsed with
+  /// `#if os(Linux)` taken -- POSIX semantics inside a PE. `arm64-linux` and `arm64-windows` reached
+  /// the Mach-O writer the same way, the latter writing a Mach-O named `.exe`.
+  /// The DEFAULT target is checked too, not only an explicit `--target=`: the default is the host,
+  /// which on a Linux box is x64-linux, so a plain `maxon build` there produced a PE as well.
+  /// Source-level Linux awareness is unaffected and deliberately kept -- `#if os(Linux)` remains a
+  /// legal predicate the parser evaluates. What is withdrawn is the claim to EMIT for it.
+  /// </summary>
+  CodeEmitterUnsupportedTarget = 5004,
 
   /// <summary>
   /// The previous build output at this path could not be removed before the build began, so this

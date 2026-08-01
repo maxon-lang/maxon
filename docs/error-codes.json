@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "16726d21a05e7260",
+  "sourceHash": "083b18463740568e",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1449,6 +1449,15 @@
       "stage": "codegen",
       "doc": "`--coverage` was combined with `--no-debug-info`. The instrumented binary's counters are\nanonymous numbers: what each one counts lives in the `.mxdbg` sidecar's coverage-point\ntable, which `--no-debug-info` suppresses. Emitting them anyway would produce a `.mxcov`\ndata file nothing could ever interpret, so the combination is refused rather than silently\ndropping either half.",
       "emittedBy": {"csharp": "CodeEmitterCoverageNeedsDebugInfo"},
+      "notEmittedBy": ["selfhosted", "shv2"]
+    },
+    {
+      "code": 5004,
+      "tag": "E5004",
+      "name": "CodeEmitterUnsupportedTarget",
+      "stage": "codegen",
+      "doc": "The requested target is one this compiler cannot write an executable for. maxon-sharp ships a\nPE writer and a Mach-O writer and no others, so the pairs it can emit are exactly x64-windows\nand arm64-macos.\nRefused rather than approximated, because the approximation was silent and wrong: the object\nwriter used to be chosen by ARCHITECTURE alone, so `--target=x64-linux` reached the PE writer\nand exited 0 having produced a WINDOWS executable whose stdlib had been parsed with\n`#if os(Linux)` taken -- POSIX semantics inside a PE. `arm64-linux` and `arm64-windows` reached\nthe Mach-O writer the same way, the latter writing a Mach-O named `.exe`.\nThe DEFAULT target is checked too, not only an explicit `--target=`: the default is the host,\nwhich on a Linux box is x64-linux, so a plain `maxon build` there produced a PE as well.\nSource-level Linux awareness is unaffected and deliberately kept -- `#if os(Linux)` remains a\nlegal predicate the parser evaluates. What is withdrawn is the claim to EMIT for it.",
+      "emittedBy": {"csharp": "CodeEmitterUnsupportedTarget"},
       "notEmittedBy": ["selfhosted", "shv2"]
     },
     {

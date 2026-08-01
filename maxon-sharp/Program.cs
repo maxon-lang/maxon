@@ -62,8 +62,12 @@ class Program {
     Console.WriteLine("  mcp [options]            Start the MCP server (HTTP, loopback only); see 'MCP options'");
     Console.WriteLine();
     Console.WriteLine("Build options (build, run):");
-    Console.WriteLine("  --target=ARCH-OS         Set compilation target (default: x64-windows)");
-    Console.WriteLine("                           Examples: x64-windows, arm64-macos, x64-linux");
+    // Both lines are DERIVED, never restated. The default is the host, and the roster comes from the
+    // one table that also picks the object writer — the old text hard-coded both and was wrong
+    // twice: it named a fixed default the code does not use, and it offered x64-linux as a working
+    // example of a target this compiler has no writer for.
+    Console.WriteLine($"  {TargetFlag}ARCH-OS         Set compilation target (default: the host, {Compiler.CompileTarget.Native.Triple})");
+    Console.WriteLine($"                           Supported: {Compiler.CompileTarget.SupportedTriples}");
     Console.WriteLine("  --emit-ir                Write .ir file");
     Console.WriteLine("  --dump-stages            Write IR at each pipeline stage (.1-maxon.ir, etc.)");
     Console.WriteLine("  --mm-trace               Enable runtime memory manager trace output (stderr)");
@@ -329,6 +333,11 @@ class Program {
   /// two would come to disagree about what it is called.
   internal const string TargetEnvFlag = "--target-env=";
 
+  /// The flag that names the compilation target. Spelled once: it is read by the option validator,
+  /// by <see cref="ParseTarget"/>, by `spec-test`'s own option set and by the usage text, and a
+  /// literal at each was four chances for them to disagree about what the flag is called.
+  internal const string TargetFlag = "--target=";
+
   /// <summary>
   /// Parse a <see cref="TargetEnvFlag"/> value as `NAME=VALUE`. The NAME must be non-empty and must not
   /// itself contain '=' (the first '=' separates), and an EMPTY VALUE is accepted — setting a variable to
@@ -559,7 +568,7 @@ class Program {
           Compiler.StageTimer.Enabled = true;
           Compiler.StageTimer.HotFunctions = n;
         }
-      } else if (arg.StartsWith("--target=")) {
+      } else if (arg.StartsWith(TargetFlag)) {
         // Recognized as first-class option; parsed individually in each command
       } else if (arg.StartsWith("--log=")) {
         if (!Logger.ParseOption(arg["--log=".Length..])) {
@@ -584,21 +593,55 @@ class Program {
     return (emitIr, dumpStages, true);
   }
 
-  static Compiler.CompileTarget ParseTarget(string[] args) {
-    foreach (var arg in args) {
-      if (arg.StartsWith("--target=")) {
-        return Compiler.CompileTarget.Parse(arg["--target=".Length..]);
+  /// <summary>
+  /// The target this invocation compiles for, or null if the compiler refused it — in which case the
+  /// diagnostic has already been printed and the caller need only fail.
+  ///
+  /// <para>The DEFAULT is put through the same refusal as an explicit `--target=`, and that half is
+  /// not redundant: the default is the HOST, which on a Linux box is `x64-linux`, so a plain
+  /// `maxon build` there used to emit a Windows PE with no flag involved at all.</para>
+  ///
+  /// <para>It refuses HERE rather than leaving it to <see cref="Compiler.Compiler.Compile"/> because
+  /// two things happen first and neither survives an unsupported target: the output file's extension
+  /// is chosen from the OS (which used to die on an unknown one with an unhandled ArgumentException
+  /// and a stack trace), and the build cache is consulted — a cached binary must not be handed back
+  /// for a request that should have been refused.</para>
+  /// </summary>
+  static Compiler.CompileTarget? ParseTarget(string[] args) {
+    try {
+      foreach (var arg in args) {
+        if (arg.StartsWith(TargetFlag)) {
+          return Compiler.CompileTarget.Parse(arg[TargetFlag.Length..]);
+        }
       }
+    } catch (ArgumentException ex) {
+      Console.Error.WriteLine(ex.Message);
+      return null;
     }
-    return Compiler.CompileTarget.Default;
+
+    var host = Compiler.CompileTarget.Default;
+    if (host.Unsupported is { } unsupported) {
+      Console.Error.WriteLine(unsupported.Format());
+      return null;
+    }
+
+    return host;
   }
 
+  /// <summary>
+  /// The extension an executable carries on this target's OS.
+  ///
+  /// <para>Only the OSes <see cref="Compiler.CompileTarget.SupportedTriples"/> lists can reach here:
+  /// a target with no object writer is refused at <see cref="ParseTarget"/>, above every caller. The
+  /// throwing arm is therefore an assertion that the two agree, and it must stay loud — a target
+  /// added to the roster and forgotten here must fail, not quietly acquire an empty extension.</para>
+  /// </summary>
   internal static string GetOutputExtension(Compiler.CompileTarget target) {
     return target.Os.ToLowerInvariant() switch {
-      "windows" => ".exe",
-      "macos" => "",
-      "linux" => "",
-      var unknown => throw new ArgumentException($"Unknown OS '{unknown}' for output extension. Expected windows, macos, or linux.")
+      Compiler.CompileTarget.WindowsOs => ".exe",
+      Compiler.CompileTarget.MacosOs => "",
+      var unknown => throw new ArgumentException(
+        $"No executable extension is recorded for OS '{unknown}'; it is not one of the targets this compiler writes ({Compiler.CompileTarget.SupportedTriples}).")
     };
   }
 
@@ -623,7 +666,7 @@ class Program {
     var (emitIr, dumpStages, valid) = ParseOptions(args);
     if (!valid) return Fail();
 
-    var target = ParseTarget(args);
+    if (ParseTarget(args) is not { } target) return 1;
     var path = GetNonOptionArg(args) ?? Directory.GetCurrentDirectory();
 
     // The debug-info sidecar is ON BY DEFAULT for `maxon build`; --no-debug-info opts out, and a
@@ -839,7 +882,7 @@ class Program {
     var (emitIr, dumpStages, valid) = ParseOptions(buildArgs);
     if (!valid) return Fail();
 
-    var target = ParseTarget(buildArgs);
+    if (ParseTarget(buildArgs) is not { } target) return 1;
     var cliName = splitIndex < 0 ? null : args[splitIndex];
     // Translate dashes to underscores so CLI uses dashes but Maxon uses underscores
     var functionName = cliName?.Replace('-', '_');
@@ -1145,7 +1188,7 @@ class Program {
   static int RunSpecTests(string[] args) {
     SetupTestLogging();
 
-    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", "--target=", "--verbose", "--no-batch", "--network" };
+    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", TargetFlag, "--verbose", "--no-batch", "--network" };
     var (_, _, valid) = ParseOptions(args, specTestOptions);
     if (!valid) return Fail();
 
@@ -1155,7 +1198,11 @@ class Program {
     bool verbose = false;
     bool noBatch = false;
     bool includeNetwork = false;
-    Compiler.CompileTarget? target = null;
+
+    // Through the same door as `build` and `run`, rather than a second `--target=` reader here: the
+    // suite must refuse a target the compiler cannot write for exactly the reason a build does, and
+    // this loop's own copy neither refused one nor caught the malformed-triple exception.
+    if (ParseTarget(args) is not { } target) return 1;
 
     foreach (var arg in args) {
       if (arg.StartsWith("--filter=")) {
@@ -1174,12 +1221,8 @@ class Program {
         noBatch = true;
       } else if (arg == "--network") {
         includeNetwork = true;
-      } else if (arg.StartsWith("--target=")) {
-        target = Compiler.CompileTarget.Parse(arg["--target=".Length..]);
       }
     }
-
-    target ??= Compiler.CompileTarget.Default;
 
     var projectDir = FindProjectRoot();
     if (projectDir == null) {
@@ -1188,7 +1231,7 @@ class Program {
     }
 
     var specDir = Path.Combine(projectDir, "specs");
-    var fragmentDir = Path.Combine(specDir, $"fragments-{target.Arch}-{target.Os}");
+    var fragmentDir = Path.Combine(specDir, $"fragments-{target.Triple}");
     var tempDir = Path.Combine(projectDir, "temp");
 
     Compiler.CompileError.ProjectRoot = projectDir;

@@ -99,6 +99,20 @@ end 'main'
 13
 ```
 
+<!-- test: directives.os-linux-alone -->
+```maxon
+function main() returns ExitCode
+	#if os(Linux)
+		this_function_does_not_exist_and_should_not_be_parsed()
+	#else
+		return 23
+	#endif
+end 'main'
+```
+```exitcode
+23
+```
+
 <!-- test: directives.arch-supported -->
 ```maxon
 function main() returns ExitCode

@@ -1478,6 +1478,21 @@ E5003 CodeEmitterCoverageNeedsDebugInfo
 	doc data file nothing could ever interpret, so the combination is refused rather than silently
 	doc dropping either half.
 
+E5004 CodeEmitterUnsupportedTarget
+	csharp CodeEmitterUnsupportedTarget
+	doc The requested target is one this compiler cannot write an executable for. maxon-sharp ships a
+	doc PE writer and a Mach-O writer and no others, so the pairs it can emit are exactly x64-windows
+	doc and arm64-macos.
+	doc Refused rather than approximated, because the approximation was silent and wrong: the object
+	doc writer used to be chosen by ARCHITECTURE alone, so `--target=x64-linux` reached the PE writer
+	doc and exited 0 having produced a WINDOWS executable whose stdlib had been parsed with
+	doc `#if os(Linux)` taken -- POSIX semantics inside a PE. `arm64-linux` and `arm64-windows` reached
+	doc the Mach-O writer the same way, the latter writing a Mach-O named `.exe`.
+	doc The DEFAULT target is checked too, not only an explicit `--target=`: the default is the host,
+	doc which on a Linux box is x64-linux, so a plain `maxon build` there produced a PE as well.
+	doc Source-level Linux awareness is unaffected and deliberately kept -- `#if os(Linux)` remains a
+	doc legal predicate the parser evaluates. What is withdrawn is the claim to EMIT for it.
+
 E6001 PeWriteError
 	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc The PE writer could not produce the output image.
