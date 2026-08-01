@@ -4012,23 +4012,40 @@ function isSpillable(index UseIndex, valueId ValueId, placement SpillPlacement) 
 	end 'p'
 end 'isSpillable'
 
-// A value is COLD-spillable iff its def AND every use are at loop depth 0, it is not a phi,
-// and it is not passed on any branch edge. That exact shape is what a COLD spill needs: the store
-// (after a depth-0 def or before-peak use) and every reload (before a depth-0 after-peak use)
-// then lie OUTSIDE every loop, so no spill code is added to a loop body. A value USED inside a
-// loop is deliberately excluded HERE — at a FULL-pool overflow it is the loop's genuine working
-// set, and if that exceeds the machine the answer is E5001, not a reload at every use.
+// A value is COLD-spillable iff its def — an op def, or a PHI's own block entry — AND every use — an
+// op operand or a BRANCH-EDGE ARG alike — are at loop depth 0. That exact shape is what a COLD spill needs: the store
+// (after its def) and every reload (before a depth-0 after-peak use) then lie OUTSIDE every loop, so
+// no spill code is added to a loop body. A value USED inside a loop is deliberately excluded HERE —
+// at a FULL-pool overflow it is the loop's genuine working set, and if that exceeds the machine the
+// answer is E5001, not a reload at every use.
+//
+// ⚠⚠ **THERE USED TO BE A THIRD BAR — "not passed on ANY branch edge" — AND IT WAS A FALSE-E5001
+// GENERATOR.** It was the only safe reading available while `touchesLoop` saw op operands only: with
+// no depth recorded for an edge use, "edge-passed" was the closest available over-approximation of
+// "edge-passed inside a loop". But an edge arg is how EVERY `var` assigned in one arm of an `if`
+// reaches the join, so the bar refused values that had nothing to do with any loop. MEASURED on
+// `stdlib/URL.maxon`'s `URL.parse`: E5001 against a loop with 23 values live, **nineteen of them used
+// ZERO times in it** — every one a result field set after the loop and merely handed across a depth-0
+// join. The program fits the machine easily; the splitter was forbidden from relieving it.
+// `indexBlockEdgeUses` now records the depth of an edge use like any other, so the question is asked
+// once, as a depth, and the blanket bar is gone. `spillOneValue` has always rewritten branch-edge args
+// alongside op uses (see its header and `hasStoreAnchor`'s), so nothing else had to change for a
+// depth-0 edge use to be relievable — the capability was there and the gate was refusing to reach it.
+//
+// ⚠⚠ **THE PHI BAR WAS THE SAME OVER-APPROXIMATION, MEASURED ON THE SAME FUNCTION, AND IT IS GONE
+// TOO.** A phi HAS a sound store anchor — the top of its own block, which dominates every use of it —
+// and `insertStore` has always used it (`hasStoreAnchor`'s `phiDef` arm, the FORCED path's victim of
+// choice). What made a phi look unspillable is that the phis which matter are usually LOOP-HEADER
+// phis, and those must never be cold-spilled; but a phi of a depth-0 `if` join is not one, and in
+// straight-line code nearly EVERY merged `var` is one. MEASURED on `URL.parse` after the edge bar came
+// off: E5001 at the 12-field `URL{…}` literal, 15 values live, **twelve of them depth-0 join phis**
+// each carrying one result field. `indexBlockArgDefs` now records a phi block's depth, so the loop
+// header is still refused — by the depth, which is the fact that mattered all along.
 //
 // NOTE this is the FULL-POOL gate only. A fixed-register (clobber-only) peak uses
 // `hasStoreAnchor` instead: there the value is NOT over the machine's capacity, so refusing to
 // spill it would be a false E5001 (see `PressurePeak.clobberOnly`).
 function isColdSpillable(index UseIndex, valueId ValueId) returns bool
-	if index.isPhiValue(valueId) 'phi'
-		return false
-	end 'phi'
-	if index.isEdgePassed(valueId) 'edge'
-		return false
-	end 'edge'
 	return index.defAndUsesAtDepthZero(valueId)
 end 'isColdSpillable'
 

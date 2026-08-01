@@ -1947,8 +1947,18 @@ export type UseIndex
 		return ValueSpillSlot.slot(try self.spillSlot.get(valueId) otherwise panic("UseIndex.spillSlotOf: spillSlot.get OOB for value {valueId}"))
 	end 'spillSlotOf'
 
-	// True iff `valueId`'s def block and every block that touches it as an op operand are at loop
-	// depth 0 — the shape a COLD spill needs.
+	// True iff `valueId`'s def block and every block that touches it — as an OP OPERAND *or* as a
+	// BRANCH-EDGE ARG — are at loop depth 0, which is exactly the shape a COLD spill needs: the store
+	// after its def and every reload before an after-peak use then lie outside every loop.
+	//
+	// ⚠ **THE EDGE HALF USED TO BE MISSING HERE AND MADE UP FOR BY A BLANKET BAR**, and that bar was a
+	// FALSE E5001 generator. `isColdSpillable` refused every edge-passed value outright — the only safe
+	// reading available while this column saw op operands only — so a value merely handed across a
+	// depth-0 `if` join (which is what EVERY `var` assigned in one arm of a branch is) counted as part
+	// of the working set of an unrelated loop it never touched. MEASURED on `stdlib/URL.maxon`'s
+	// `URL.parse`: 23 values "must be held in registers at once inside this loop", NINETEEN of them
+	// used ZERO times in it. The fact a cold spill actually needs is a DEPTH, and a depth is what this
+	// column now holds for both kinds of use.
 	export function defAndUsesAtDepthZero(valueId ValueId) returns bool
 		return not (try self.touchesLoop.get(valueId) otherwise panic("UseIndex.defAndUsesAtDepthZero: value {valueId} out of range"))
 	end 'defAndUsesAtDepthZero'
@@ -2304,7 +2314,7 @@ end 'scannedValuesHold'
 // number leads with its block.
 function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal CfgIndex, which ScannedValues, buf OperandList, ordered OpIndexArray, opFacts OpVariantFacts) returns OpSeq
 	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
-	indexBlockArgDefs(index, block: block, blockLocal: blockLocal, which: which)
+	indexBlockArgDefs(index, cfg: cfg, block: block, blockLocal: blockLocal, which: which)
 
 	ordered.clear()
 	collectBlockOps(block, out: ordered)
@@ -2313,16 +2323,25 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 		indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, pos: pos, opIdx: try ordered.get(pos) otherwise panic("indexBlockFacts: ordered.get OOB"), which: which, buf: buf, opFacts: opFacts)
 	end 'eachOp'
 
-	indexBlockEdgeUses(index, block: block, blockLocal: blockLocal, opCount: opCount, which: which)
+	indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: opCount, which: which)
 	return opCount
 end 'indexBlockFacts'
 
 // The block-arg DEFS of one block. A block-arg's def is its block's entry, so it carries no position and
 // no ordering constraint.
-function indexBlockArgDefs(index UseIndex, block IrBlock, blockLocal CfgIndex, which ScannedValues)
+function indexBlockArgDefs(index UseIndex, cfg FuncCfg, block IrBlock, blockLocal CfgIndex, which ScannedValues)
+	// A phi's DEF is its own block's entry, so a phi of a block inside a loop is (re)defined once per
+	// iteration — the same fact `touchesLoop` records for an op def, and the reason a loop-carried
+	// accumulator must never be cold-spilled. Recorded here so `isColdSpillable` can ask ONE question
+	// about depth instead of barring every phi outright (see `defAndUsesAtDepthZero`).
+	let inLoop = (try cfg.loopDepth.get(blockLocal) otherwise panic("indexBlockArgDefs: loopDepth.get OOB")) != 0
+
 	for arg in block.blockArgs 'eachPhi'
 		if scannedValuesHold(which, valueId: arg.valueId) 'recorded'
 			index.setPhiDef(arg.valueId, blockLocal: blockLocal)
+			if inLoop 'insideLoop'
+				index.setTouchesLoop(arg.valueId)
+			end 'insideLoop'
 		end 'recorded'
 	end 'eachPhi'
 end 'indexBlockArgDefs'
@@ -2377,13 +2396,23 @@ end 'indexOneOpFacts'
 // The EDGE uses of one block, which go LAST for it, at the terminator's sequence — where the edge is
 // genuinely read (after every body op). That ordering is what lets the reload a split places before the
 // block's first after-peak use dominate the edge too.
-function indexBlockEdgeUses(index UseIndex, block IrBlock, blockLocal CfgIndex, opCount OpSeq, which ScannedValues)
+function indexBlockEdgeUses(index UseIndex, cfg FuncCfg, block IrBlock, blockLocal CfgIndex, opCount OpSeq, which ScannedValues)
+	// An edge arg is READ at the end of this block, so a block inside a loop touches its args once per
+	// iteration exactly as an op operand does — and `touchesLoop` is the one column that says so. It is
+	// recorded here rather than left to `isColdSpillable`'s old blanket edge bar, which could not tell a
+	// loop-carried arg from one handed across a depth-0 `if` join and refused both (see
+	// `defAndUsesAtDepthZero`).
+	let inLoop = (try cfg.loopDepth.get(blockLocal) otherwise panic("indexBlockEdgeUses: loopDepth.get OOB")) != 0
+
 	for edge in block.branchEdges 'eachEdge'
 		for argId in edge.argIds 'eachArg'
 			if not scannedValuesHold(which, valueId: argId) 'notRecorded'
 				continue
 			end 'notRecorded'
 			index.setEdgePassed(argId)
+			if inLoop 'insideLoop'
+				index.setTouchesLoop(argId)
+			end 'insideLoop'
 			if index.blockHasEdgeUseOf(argId, blockLocal: blockLocal) 'dedupe'
 				continue
 			end 'dedupe'
@@ -2460,7 +2489,7 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
 		let blockLocal = dirty.at(k)
 		let block = blockAt(module, topo: cfg.topo, local: blockLocal)
-		indexBlockArgDefs(index, block: block, blockLocal: blockLocal, which: which)
+		indexBlockArgDefs(index, cfg: cfg, block: block, blockLocal: blockLocal, which: which)
 
 		// The candidates sitting in THIS block. Both lists are ascending and every candidate is in some
 		// dirty block, so one cursor walks them together — no search, no per-block filter.
@@ -2488,7 +2517,7 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
 		// BLOCK POSITION, and block positions are stated by `opRefs` + the terminator; the index's count
 		// is a copy derived from that. Reading the copy here would put an edge record at a sequence the
 		// block does not have the moment the two ever disagree.
-		indexBlockEdgeUses(index, block: block, blockLocal: blockLocal, opCount: blockOpCount(block), which: which)
+		indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: blockOpCount(block), which: which)
 	end 'eachDirtyBlock'
 
 	if next != candidates.count() 'candidatesOutsideTheDirtyRegion'
