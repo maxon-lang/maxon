@@ -67,6 +67,10 @@ Hello Maxon
 ```
 
 <!-- test: tcp-client.connect-error -->
+⚠ The `default` arm says *unreachable*, and in a function declaring no `throws` it has to say so with
+`panic` rather than `throws`: `main` has no error channel, so a `default throws` here is silently discarded —
+and with a payload-carrying error it leaks the box (measured: `exit 101`). E3059 refuses it (A1s-throwsbox
+review).
 ```maxon
 function main() returns ExitCode
 	if let client = try TcpClient.connect("192.0.2.1", port: 1) 'ok'
@@ -74,7 +78,7 @@ function main() returns ExitCode
 	end 'ok' else (e) 'err'
 		match e 'check'
 			connectFailed then return 0
-			default throws NetworkError.resolveFailed
+			default panic("unreachable: TcpClient.connect reports only resolveFailed or connectFailed")
 		end 'check'
 	end 'err'
 end 'main'
@@ -84,6 +88,10 @@ end 'main'
 ```
 
 <!-- test: tcp-client.resolve-error -->
+⚠ The `default` arm says *unreachable*, and in a function declaring no `throws` it has to say so with
+`panic` rather than `throws`: `main` has no error channel, so a `default throws` here is silently discarded —
+and with a payload-carrying error it leaks the box (measured: `exit 101`). E3059 refuses it (A1s-throwsbox
+review).
 ```maxon
 function main() returns ExitCode
 	if let client = try TcpClient.connect("this.host.does.not.exist.invalid", port: 1) 'ok'
@@ -91,7 +99,7 @@ function main() returns ExitCode
 	end 'ok' else (e) 'err'
 		match e 'check'
 			resolveFailed then return 0
-			default throws NetworkError.connectFailed
+			default panic("unreachable: TcpClient.connect reports only resolveFailed or connectFailed")
 		end 'check'
 	end 'err'
 end 'main'

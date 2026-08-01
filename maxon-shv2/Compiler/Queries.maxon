@@ -1046,6 +1046,8 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		awaitThrowingPromiseNeedsTry(callee, line, column) then reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing function requires try: 'await' on a promise from throwing '{callee}' drops the error — use 'try await'", line: line, column: column, filePath: path)
 		byteStringCodepointRange(message) then reportPositioned(project, code: ErrorCode.lexerInvalidEscape, message: message, line: 0, column: 0, filePath: path)
 		propagateTypeMismatch(propagated, enclosing, line, column) then reportPositioned(project, code: ErrorCode.errorTypeMismatch, message: "try propagates '{propagated}' but enclosing function throws '{enclosing}' — add 'otherwise' to convert", line: line, column: column, filePath: path)
+		// The oracle's own sentence, verbatim — see `ParseError.thrownValueNotAnErrorEnum`.
+		thrownValueNotAnErrorEnum(line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "throw requires an error enum value", line: line, column: column, filePath: path)
 		// ⭐ E3004, the SAME code `SemanticCheck.validateCall` gives an undeclared ordinary function, because
 		// it is the same fact — the call names something that does not exist. It shares the code and not the
 		// wording: the message must say WHY no declaration could ever supply this one, since `__` is the

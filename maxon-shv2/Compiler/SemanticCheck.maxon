@@ -663,16 +663,17 @@ end 'checkThrowsClausesNameDeclaredErrors'
 // should read as one rule, and both position the diagnostic at a file:line:column that identifies the
 // declaration exactly — so the name in the prose would have bought nothing but a second spelling for the two
 // corpora to keep in step by hand.
+// ⚠ **THE SORTING IS `ConformanceCheck.classifyThrowsClauseName`'S, AND ASKING IT IS THE POINT (A1s review).**
+// This check and `throwsRequirementIsAbstract` one door over are about different relations, but both begin by
+// sorting one clause name into the same three boxes — and each began with its own copy of the two lookups,
+// with nothing making the copies agree. A future edit to either ("a typealias to an enum is concrete too")
+// would have made the impl side and the plain-function side disagree about what an error type IS, silently.
 function requireThrowsClauseNamesADeclaredError(project Project, signatures ProgramSignatures, func IrFunction, declared String)
-	let declaredName = declared.toByteArray()
-	if signatures.containsEnum(declaredName) 'declaresItsCases'
-		return
-	end 'declaresItsCases'
-
-	match lookupInterface(project.interfaces, name: declaredName) 'iface'
-		found then reportThrowsClauseViolation(project, func: func, message: "'throws {declared}' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws")
-		notFound then reportThrowsClauseViolation(project, func: func, message: "'throws {declared}' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into")
-	end 'iface'
+	match classifyThrowsClauseName(project, signatures: signatures, name: declared) 'kind'
+		concreteError then break 'kind'
+		abstractInterface then reportThrowsClauseViolation(project, func: func, message: "'throws {declared}' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws")
+		undeclared then reportThrowsClauseViolation(project, func: func, message: "'throws {declared}' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into")
+	end 'kind'
 end 'requireThrowsClauseNamesADeclaredError'
 
 // The ONE report site for the check above — it derives three of `reportPositioned`'s six arguments from the

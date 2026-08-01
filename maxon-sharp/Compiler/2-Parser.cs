@@ -9094,19 +9094,90 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   private void ParseThrow() {
     var throwToken = Advance(); // consume 'throw'
-    var expr = ParseExpression();
-    var errorValue = ResolveExprValue(expr);
+    EmitThrownError(ParseExpression(), throwToken, ThrowStatementKeyword);
+  }
+
+  /// The source keyword each thrown-error spelling was written with, for the not-an-error-enum sentence:
+  /// the `throw <e>` statement, and the three `throws <e>` forms (a match `default` arm, a match
+  /// expression's arm, and a try-block handler's terminal form).
+  private const string ThrowStatementKeyword = "throw";
+  private const string ThrowsArmKeyword = "throws";
+
+  /// <summary>
+  /// ⭐⭐ THE ONE PLACE A THROWN ERROR IS VALIDATED AND EMITTED (A1s-throwsbox review).
+  ///
+  /// These eight lines existed in THREE copies — the `throw &lt;e&gt;` statement, a try-block handler's
+  /// terminal `throws &lt;e&gt;`, and a match arm's `throws &lt;e&gt;` (EmitThrowsArmBody) — and nothing made
+  /// them agree. That is not hypothetical: when this review wired the enclosing-`throws` check in, it landed
+  /// in two of the three, and the match arm went on accepting `default throws ErrB.bZero` inside a function
+  /// declaring `throws ErrA` — the silent wrong answer the check exists to stop, still reachable through the
+  /// copy that was missed. One door now, so a fourth spelling inherits every rule by construction rather than
+  /// by whoever adds it remembering.
+  ///
+  /// The order is load-bearing. Routing is asked FIRST: a throw caught by an enclosing
+  /// `try 'label' … end` block never leaves this function, joins that block's synthesized error union, and
+  /// owes the enclosing `throws` clause nothing — so the clause check must not see it.
+  /// </summary>
+  private void EmitThrownError(ExprResult throwExpr, Token anchor, string keyword) {
+    var errorValue = ResolveExprValue(throwExpr);
     if (errorValue is not MaxonEnum enumVal) {
-      throw new CompileError(ErrorCode.SemanticTypeMismatch, "throw requires an error enum value", throwToken.Line, throwToken.Column);
+      throw new CompileError(ErrorCode.SemanticTypeMismatch, $"{keyword} requires an error enum value", anchor.Line, anchor.Column);
     }
+
     // Inside an active try block, route the error to the block's shared handler — do not
     // emit ScopeEnd here (that would release managed vars the handler still needs live).
-    if (RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, throwToken)) return;
+    if (RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, anchor)) return;
+
+    RequireThrownTypeMatchesEnclosingThrows(enumVal.TypeName, anchor);
+
     // Keep the thrown value alive across scope cleanup — it transfers to the caller exactly as a
     // returned value does (OPEN #63). Without this, `throw e` frees + nulls `e` before the throw
     // loads it → mm_incref NULL.
-    _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars(), ComputeTransferKeepVars(expr)) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-    _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName) { IsOwnedLocalTransfer = ThrowsOwnedLocal(expr) });
+    _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars(), ComputeTransferKeepVars(throwExpr)) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+    _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName) { IsOwnedLocalTransfer = ThrowsOwnedLocal(throwExpr) });
+  }
+
+  /// <summary>
+  /// A thrown error must be a case of the type the enclosing function DECLARES it throws
+  /// (A1s-throwsbox review). An error leaves a function by exactly two doors — a bare `try`
+  /// re-publishing a callee's flag, and a `throw` minting one — and both hand the caller a flag the
+  /// caller decodes against the DECLARED clause. ParseTryExpression has guarded the propagate door
+  /// with E3059 since the clause existed; the throw door was guarded by nothing, and three defects
+  /// followed, all MEASURED here and in shv2 before this check:
+  ///
+  ///   * `throw &lt;payload-carrying union&gt;` under a declared SCALAR enum clause wrote a heap box
+  ///     pointer where the catch read an ordinal, so the box was never released:
+  ///     `exit 101, MM leak: 1 allocation(s) remain` — the identical signature A1s-throwsbox exists
+  ///     to close, one door over.
+  ///   * `throw ErrB.bOne` under `throws ErrA` was a SILENT WRONG ANSWER: the caller matched the
+  ///     ordinal against ErrA's cases and ran the `aOne` arm.
+  ///   * `throw` at all in a function declaring no `throws` had nowhere to publish the flag, so the
+  ///     error was discarded and the throw path's primary register `0` came back as a real answer —
+  ///     the same discard `try without otherwise requires the enclosing function to have 'throws'`
+  ///     already refuses at the try door.
+  ///
+  /// It runs only where the throw actually LEAVES the function: a throw routed into an enclosing
+  /// `try 'label' ... end` block (RouteBareThrowToTryBlock) is caught in this same function, joins
+  /// that block's synthesized error union, and owes the clause nothing.
+  ///
+  /// The clause itself is already known to name a declared enum — RequireThrowsTypeIsAnErrorEnum
+  /// refuses anything else in ParseThrowsClause, which runs on the signature before this body is
+  /// parsed — so unlike shv2 (which validates the clause later, in the pipeline) there is no
+  /// not-an-error-type case to defer here. Both compilers say the same two sentences.
+  /// </summary>
+  private void RequireThrownTypeMatchesEnclosingThrows(string thrownTypeName, Token throwToken) {
+    var enclosing = _currentFunction?.ThrowsType;
+    if (enclosing == null) {
+      throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
+        $"type mismatch: 'throw of '{thrownTypeName}' but the enclosing function declares no 'throws' — the error flag has nowhere to be published and would be silently dropped, the throw path handing back the primary register's 0 as a real answer; declare 'throws {thrownTypeName}', or handle it here with a `try … otherwise`'",
+        throwToken.Line, throwToken.Column);
+    }
+
+    if (enclosing.Name == thrownTypeName) return;
+
+    throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
+      $"type mismatch: 'throw of '{thrownTypeName}' but the enclosing function throws '{enclosing.Name}' — the caller decodes the error flag against '{enclosing.Name}', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a '{enclosing.Name}' case, or declare 'throws {thrownTypeName}''",
+      throwToken.Line, throwToken.Column);
   }
 
   /// <summary>
@@ -9283,18 +9354,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         ParsePanic();
       } else {
         var throwsToken = Advance(); // consume 'throws'
-        var throwExpr = ParseExpression();
-        var errorValue = ResolveExprValue(throwExpr);
-        if (errorValue is not MaxonEnum enumVal) {
-          throw new CompileError(ErrorCode.SemanticTypeMismatch,
-            "throws requires an error enum value",
-            throwsToken.Line, throwsToken.Column);
-        }
-        if (!RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, throwsToken)) {
-          // Keep the thrown value alive across scope cleanup — transfers to the caller (OPEN #63).
-          _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars(), ComputeTransferKeepVars(throwExpr)) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-          _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName) { IsOwnedLocalTransfer = ThrowsOwnedLocal(throwExpr) });
-        }
+        EmitThrownError(ParseExpression(), throwsToken, ThrowsArmKeyword);
       }
 
       if (pushedScope) {
@@ -14899,18 +14959,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private void EmitThrowsArmBody(Token armToken) {
     Advance(); // consume 'throws'
-    var throwExpr = ParseExpression();
-    var errorValue = ResolveExprValue(throwExpr);
-    if (errorValue is not MaxonEnum enumVal) {
-      throw new CompileError(ErrorCode.SemanticTypeMismatch, "throws requires an error enum value", armToken.Line, armToken.Column);
-    }
-    // Inside an active try block, route the error to the block's shared handler — do not
-    // emit ScopeEnd here (that would release managed vars the handler still needs live).
-    if (!RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, armToken)) {
-      // Keep the thrown value alive across scope cleanup — transfers to the caller (OPEN #63).
-      _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars(), ComputeTransferKeepVars(throwExpr)) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-      _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName) { IsOwnedLocalTransfer = ThrowsOwnedLocal(throwExpr) });
-    }
+    EmitThrownError(ParseExpression(), armToken, ThrowsArmKeyword);
   }
 
   /// <summary>

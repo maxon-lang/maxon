@@ -756,6 +756,13 @@ export union ParseError implements Error
 	// a silent miscompile a boxed union turns into a wild free. `propagated` is the callee's error type,
 	// `enclosing` the function's.
 	propagateTypeMismatch(propagated String, enclosing String, line LineNumber, column ColumnNumber)
+	// A `throw <e>` (or a match `default throws <e>`) whose value is not an error enum or union at all —
+	// `throw 1` (A1s-throwsbox review). Renders as **E3005**, positioned at the `throw`/`throws` keyword,
+	// carrying the runnable oracle's sentence VERBATIM (`2-Parser.ParseThrow`'s "throw requires an error enum
+	// value", which has always refused this while shv2 compiled it into a flag nothing could decode). E3005 and
+	// not E3059 because the mistake is not that one error type does not fit another — it is that the value is
+	// not an error at all, which is the plain type mismatch its sibling `throwsClause` is the arm for.
+	thrownValueNotAnErrorEnum(line LineNumber, column ColumnNumber)
 	// ⭐ A `__`-prefixed CALLEE written in source that names no compiler intrinsic (P1.0b step 2). Renders as
 	// **E3004** — the SAME code `SemanticCheck.validateCall` gives `undeclaredThing()` — because it is the
 	// same fact: the call names a function that does not exist. `__whatever()` and `whatever()` are one
@@ -4195,6 +4202,29 @@ enum NamePosition
 	// An enum/union CASE name, whose wording is the bootstrap's.
 	enumCase
 end 'NamePosition'
+
+// ⭐⭐ **THE TWO DOORS AN ERROR LEAVES A FUNCTION BY (A1s-throwsbox review).** Both hand the caller a flag the
+// caller decodes against the enclosing function's DECLARED `throws` clause, so both owe that clause the same
+// debt — and until this enum existed the debt was paid at the `try` door only, leaving a measured leak and a
+// measured wrong answer at the `throw` door. It exists so `requireErrorTypeFitsEnclosing` can be the ONE
+// comparison while still telling each author what THEY have to change; it must never gate the comparison
+// itself. See `Parser.requireThrownTypeFitsEnclosing`.
+enum ErrorExitDoor
+	// A bare `try f()` — the callee's flag re-published into the enclosing function's error register verbatim.
+	propagate
+	// A `throw <e>` statement, or a match's `default throws <E.case>` arm — a flag minted here.
+	throwStatement
+end 'ErrorExitDoor'
+
+// The sentence for an error type leaving a function that declares no `throws` at all. Each door names the
+// remedy its author can actually reach for: the `try` door can convert the error with an `otherwise`, the
+// `throw` door has no such move and can only declare the clause.
+function noEnclosingThrowsDetail(errorType String, door ErrorExitDoor) returns String
+	return match door 'which'
+		propagate gives "try propagates '{errorType}' but the enclosing function declares no 'throws' — the error has nowhere to go and would be dropped; add 'otherwise' to handle it, or declare 'throws {errorType}'"
+		throwStatement gives "throw of '{errorType}' but the enclosing function declares no 'throws' — the error flag has nowhere to be published and would be silently dropped, the throw path handing back the primary register's 0 as a real answer; declare 'throws {errorType}', or handle it here with a `try … otherwise`"
+	end 'which'
+end 'noEnclosingThrowsDetail'
 
 // The expectation text for a `NamePosition`, rendered on the FAILURE path only (see `NamePosition`).
 function nameExpectationOf(position NamePosition) returns String
@@ -12875,7 +12905,16 @@ export type Parser
 	// keyword their caller consumed — `throw` vs `throws`).
 	function emitThrowError(func IrFunction, anchor Token) throws ParseError
 		let errValue = try self.parseExpression(func, block: self.currentBlock)
-		let errorIsBoxed = self.throwsTypeIsBoxedUnion(self.typeOf(errValue))
+		let errorType = self.typeOf(errValue)
+
+		// ⭐⭐ **THE THROWN VALUE'S TYPE IS WHAT MAKES THE NEXT LINE AGREE WITH THE CATCH SITE (A1s-throwsbox
+		// review).** `errorIsBoxed` below is derived from the VALUE; the catch derives the same fact from the
+		// enclosing function's DECLARED CLAUSE (`tryErrorEnumType` → the same predicate over the clause name).
+		// Two derivations of ONE fact, and until this check nothing made them agree — the same shape, and the
+		// same door, the propagate form has guarded with E3059 since P1.4b.
+		try self.requireThrownTypeFitsEnclosing(func, errorType: errorType, anchor: anchor)
+
+		let errorIsBoxed = self.throwsTypeIsBoxedUnion(errorType)
 
 		// ⭐ **A THROWN BOX MUST BE OWNED BY THIS FRAME — a box owned elsewhere is MOVED OUT of an OWNED-LOCAL
 		// container, RETAINED out of a BORROWED one, or refused.** A boxed error is handed to the caller through
@@ -14024,13 +14063,40 @@ export type Parser
 	function checkPropagateType(func IrFunction, throwsClause ThrowsClause, tryTok Token) throws ParseError
 		match throwsClause 'calleeThrows'
 			none then break 'calleeThrows'
-			throwing(propagated) then try self.rejectPropagateAgainstEnclosing(func, propagated: propagated, tryTok: tryTok)
+			throwing(propagated) then try self.requireErrorTypeFitsEnclosing(func, errorType: propagated, door: ErrorExitDoor.propagate, anchor: tryTok)
 		end 'calleeThrows'
 	end 'checkPropagateType'
 
-	// The enclosing-function half of the propagate-type check: refuse when the enclosing function throws a
-	// DIFFERENT named type than `propagated` — or NO type at all. Split so the nested `match`/comparison is
-	// not an inline labelled-if in a match arm (which the parser rejects).
+	// ⭐⭐ **THE THROW DOOR'S HALF OF THE RULE ABOVE (A1s-throwsbox review), and the reason it is the SAME
+	// function underneath.** An error leaves a function by exactly two doors — a bare `try` re-publishes a
+	// callee's flag, a `throw` publishes a fresh one — and BOTH hand the caller a flag the caller decodes
+	// against the enclosing function's DECLARED clause. So both owe the clause the same debt, and the debt was
+	// paid at one door only. MEASURED at the unguarded one, in shv2 AND in the C# oracle:
+	//
+	//   • `throw <payload-carrying union>` under a declared SCALAR enum clause — the throw writes a heap box
+	//     pointer, the catch reads an ordinal and never releases it: **exit 101, `MM leak: 1 allocation(s)
+	//     remain`.** The identical signature A1s-throwsbox was opened to close, one door over.
+	//   • `throw ErrB.bOne` under `throws ErrA` — no leak, a SILENT WRONG ANSWER: the caller matched the
+	//     ordinal against `ErrA`'s cases and ran the `aOne` arm for a `bOne` throw.
+	//   • `throw` at all in a function declaring no `throws` — the flag has nowhere to be published, so the
+	//     error was silently discarded and the throw path's primary register `0` came back as a real answer.
+	//     (`rejectPropagateAgainstEnclosing`'s `none` arm had already measured and refused exactly this at the
+	//     `try` door; the prose describing it is kept below.)
+	//
+	// A value whose type is not `named` at all (`throw 1`) is refused here too: the error flag encodes an enum
+	// ORDINAL or a union BOX POINTER and has no third shape, so there is nothing for the catch to decode.
+	function requireThrownTypeFitsEnclosing(func IrFunction, errorType MaxonType, anchor Token) throws ParseError
+		if maxonTypeTag(errorType) != ValueTypeTag.named 'notAnErrorType'
+			throw ParseError.thrownValueNotAnErrorEnum(anchor.line, column: anchor.column)
+		end 'notAnErrorType'
+
+		let thrownName = try self.artifact.typeNames.nameOf(typeNameIdOf(errorType)) otherwise panic("requireThrownTypeFitsEnclosing: a `named` MaxonType's TypeNameId did not resolve in the artifact's interner — every such id was minted by `intern` against this same interner")
+		try self.requireErrorTypeFitsEnclosing(func, errorType: String.from(thrownName), door: ErrorExitDoor.throwStatement, anchor: anchor)
+	end 'requireThrownTypeFitsEnclosing'
+
+	// ⭐ **THE ONE PLACE AN OUTGOING ERROR TYPE IS MEASURED AGAINST THE ENCLOSING `throws` CLAUSE.** Refuses
+	// when the enclosing function declares a DIFFERENT named type than `errorType` — or NO type at all. Split
+	// so the nested `match`/comparison is not an inline labelled-if in a match arm (which the parser rejects).
 	//
 	// ⚠ **THE `none` ARM IS A REJECT, NOT A FALLTHROUGH.** A bare `try f()` inside a function declaring no
 	// `throws` has nowhere to re-publish the flag: `propagateError` writes the enclosing function's error
@@ -14044,17 +14110,48 @@ export type Parser
 	// E3059 through the existing free-form `errorTypeMismatch` arm rather than a new `ParseError` variant,
 	// because it is the SAME fact that arm's four other messages carry: the error type does not fit where it
 	// is going. A `none` enclosing clause is that mismatch at its limit — there is no there to fit into.
-	function rejectPropagateAgainstEnclosing(func IrFunction, propagated String, tryTok Token) throws ParseError
+	// The `throw` door measured the same discard independently (see `requireThrownTypeFitsEnclosing`).
+	//
+	// ⚠ **`door` PICKS THE SENTENCE AND NOTHING ELSE.** The two doors are one rule and must never answer
+	// differently about whether a type fits; they differ only in what the author has to be told to do about
+	// it, which is why the wording — and not the comparison — is what branches.
+	//
+	// ⚠⚠ **AN ENCLOSING CLAUSE THAT NAMES NO DECLARED ENUM IS NOT THIS CHECK'S TO REPORT, AND SAYING SO IS
+	// WHAT KEEPS THE ROOT CAUSE ON TOP.** This check compares two error TYPES; a clause naming an interface,
+	// a struct or a typo denotes no type, so there is nothing here to compare against and blaming the `throw`
+	// would be blaming the symptom. Worse, its remedy would be actively wrong — `throws Error` with a
+	// `throw DigestError.x` inside would be told to *declare* `throws DigestError` when the clause is the
+	// thing at fault. Two checks already own that clause and both outrank this one because both can name WHY
+	// the clause is wrong: A1s-throwsbox's **E3113** (`SemanticCheck.checkThrowsClausesNameDeclaredErrors`) for
+	// a function's own clause, and **E3016** (`ConformanceCheck.validateThrowsConformance`) for an impl method
+	// under a requirement. Nothing escapes by deferring — both run on every program this arm declines, which is
+	// exactly why the condition is "the DECODE's own registry does not declare it" (`signatures.containsEnum`,
+	// the registry `throwsTypeIsBoxedUnion` resolves through) and not a hand-listed set of bad shapes.
+	function requireErrorTypeFitsEnclosing(func IrFunction, errorType String, door ErrorExitDoor, anchor Token) throws ParseError
 		match func.throwsTypeName 'enclosing'
-			none then throw ParseError.errorTypeMismatch("try propagates '{propagated}' but the enclosing function declares no 'throws' — the error has nowhere to go and would be dropped; add 'otherwise' to handle it, or declare 'throws {propagated}'", line: tryTok.line, column: tryTok.column)
-			throwing(enclosing) then try self.rejectIfDifferentThrows(propagated, enclosing: enclosing, tryTok: tryTok)
+			none then throw ParseError.errorTypeMismatch(noEnclosingThrowsDetail(errorType, door: door), line: anchor.line, column: anchor.column)
+			throwing(enclosing) then try self.rejectIfDifferentThrows(errorType, enclosing: enclosing, door: door, anchor: anchor)
 		end 'enclosing'
-	end 'rejectPropagateAgainstEnclosing'
+	end 'requireErrorTypeFitsEnclosing'
 
-	function rejectIfDifferentThrows(propagated String, enclosing String, tryTok Token) throws ParseError
-		if not propagated.equals(enclosing) 'mismatch'
-			throw ParseError.propagateTypeMismatch(propagated, enclosing: enclosing, line: tryTok.line, column: tryTok.column)
-		end 'mismatch'
+	// The comparison itself — ONE `equals`, for both doors. The PROPAGATE mismatch keeps its dedicated
+	// `propagateTypeMismatch` arm (whose sentence the corpus pins byte-for-byte); the THROW mismatch rides the
+	// free-form `errorTypeMismatch` arm, exactly as the `none` sentences above do, because it is the same fact
+	// on the same code (E3059): the error type does not fit where it is going.
+	function rejectIfDifferentThrows(errorType String, enclosing String, door ErrorExitDoor, anchor Token) throws ParseError
+		if errorType.equals(enclosing) 'fits'
+			return
+		end 'fits'
+
+		// The enclosing clause denotes no error type — E3113 or E3016 owns this program (see the header above).
+		if not self.signatures.containsEnum(enclosing.toByteArray()) 'clauseIsNotAnErrorType'
+			return
+		end 'clauseIsNotAnErrorType'
+
+		match door 'which'
+			propagate then throw ParseError.propagateTypeMismatch(errorType, enclosing: enclosing, line: anchor.line, column: anchor.column)
+			throwStatement then throw ParseError.errorTypeMismatch("throw of '{errorType}' but the enclosing function throws '{enclosing}' — the caller decodes the error flag against '{enclosing}', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a '{enclosing}' case, or declare 'throws {errorType}'", line: anchor.line, column: anchor.column)
+		end 'which'
 	end 'rejectIfDifferentThrows'
 
 	// The ERROR TYPE a `try` target throws — the second of the two questions the desugar asks its target, and

@@ -1,0 +1,34 @@
+// Test: error.throw-a-different-scalar-error-than-declared
+typealias Code = int(0 to u32.max)
+
+enum ErrA implements Error
+	aZero
+	aOne
+end 'ErrA'
+
+enum ErrB implements Error
+	bZero
+	bOne
+end 'ErrB'
+
+function f(x Code) returns Code throws ErrA
+	if x < 10 'small'
+		throw ErrB.bOne
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise (e) 'caught'
+		match e 'which'
+			aZero then return 1
+			aOne then return 2
+		end 'which'
+	end 'caught'
+end 'main'
+---
+MaxoncStderr: ```
+error E3059: specs/fragments/error-handling/error.throw-a-different-scalar-error-than-declared.test:16:3: type mismatch: 'throw of 'ErrB' but the enclosing function throws 'ErrA' — the caller decodes the error flag against 'ErrA', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a 'ErrA' case, or declare 'throws ErrB''
+```
+---
+---

@@ -2138,3 +2138,244 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: error.throw-a-boxed-union-under-a-scalar-clause -->
+⭐⭐ **THE SIBLING DOOR INTO A1s-throwsbox's OWN DEFECT, FOUND BY PROBING ITS FIX (A1s-throwsbox review).**
+The rung refused a clause that names no declared enum; it did not refuse a clause that names a DIFFERENT one.
+The mechanism is identical and so is the failure: the THROW site stamps boxedness off the value it actually
+throws (a heap BOX POINTER for this payload-carrying union), the CATCH site derives it off the DECLARED
+clause (`ScalarError`, an ordinal), and the box is decoded as an ordinal and never released. **MEASURED
+before this check: `exit 101` — `MM leak: 1 allocation(s) remain` — in shv2 AND in the C# oracle**, the same
+signature the rung's own motivating program produced. An error leaves a function by exactly two doors, and
+the `try` door has refused this since P1.4b (E3059, `try propagates 'X' but enclosing function throws 'Y'`);
+this is that one rule reaching its other door.
+```maxon
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+enum ScalarError implements Error
+	plain
+end 'ScalarError'
+
+function f(x Code) returns Code throws ScalarError
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:14:3: type mismatch: 'throw of 'BoxedError' but the enclosing function throws 'ScalarError' — the caller decodes the error flag against 'ScalarError', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a 'ScalarError' case, or declare 'throws BoxedError''
+```
+
+<!-- test: error.throw-a-different-scalar-error-than-declared -->
+⭐⭐ **THE SAME HOLE WITH NO LEAK IN IT — A SILENT WRONG ANSWER, which is why the rule is about the TYPE and
+not about boxedness.** Both enums are scalar, so nothing is allocated and the `exit 101` gate above is blind.
+The caller still decodes the flag against the DECLARED clause: **measured before this check, `throw ErrB.bOne`
+under `throws ErrA` ran the handler's `aOne` arm and the program answered 7** — one enum's ordinals read as
+another's tags, in shv2 and in the C# oracle alike. A refusal that only asked "do the two agree about a box?"
+would have let this through.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum ErrA implements Error
+	aZero
+	aOne
+end 'ErrA'
+
+enum ErrB implements Error
+	bZero
+	bOne
+end 'ErrB'
+
+function f(x Code) returns Code throws ErrA
+	if x < 10 'small'
+		throw ErrB.bOne
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise (e) 'caught'
+		match e 'which'
+			aZero then return 1
+			aOne then return 2
+		end 'which'
+	end 'caught'
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:16:3: type mismatch: 'throw of 'ErrB' but the enclosing function throws 'ErrA' — the caller decodes the error flag against 'ErrA', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a 'ErrA' case, or declare 'throws ErrB''
+```
+
+<!-- test: error.throw-with-no-enclosing-throws -->
+⭐ **A `throw` IN A FUNCTION THAT DECLARES NO `throws` HAD NOWHERE TO PUBLISH THE FLAG, so the error was
+silently discarded — measured, the program exited 0 where the answer is the error path**, in both compilers.
+`rejectPropagateAgainstEnclosing`'s `none` arm had already measured and refused exactly this discard at the
+`try` door; the `throw` door is the same rule's other half, and the `none` case is that mismatch at its
+limit — there is no there to fit into.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum ErrA implements Error
+	aZero
+end 'ErrA'
+
+function f(x Code) returns Code
+	if x < 10 'small'
+		throw ErrA.aZero
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return f(3)
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:10:3: type mismatch: 'throw of 'ErrA' but the enclosing function declares no 'throws' — the error flag has nowhere to be published and would be silently dropped, the throw path handing back the primary register's 0 as a real answer; declare 'throws ErrA', or handle it here with a `try … otherwise`'
+```
+
+<!-- test: error.throw-a-value-that-is-not-an-error -->
+⭐ **THE THIRD SHAPE THE FLAG HAS NO ENCODING FOR: a value that is not an error type at all.** The error flag
+carries an enum ORDINAL or a union BOX POINTER and has no third shape, so `throw 1` produced a flag nothing
+could decode — shv2 compiled and RAN it. **E3005, and the runnable oracle's own sentence verbatim**, because
+the bootstrap has always refused this: one rule refused by two compilers reads as one rule.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum ErrA implements Error
+	aZero
+end 'ErrA'
+
+function f(x Code) returns Code throws ErrA
+	if x < 10 'small'
+		throw 1
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:3: throw requires an error enum value
+```
+
+<!-- test: throw-matching-the-declared-clause-is-untouched -->
+⭐ **THE CONTROL FOR ALL FOUR REFUSALS ABOVE.** The same two error types, the same throw, the same catch —
+only the thrown type now IS the declared one, and it compiles, runs, and decodes `bOne` as `bOne`, answering
+2. Nothing the review refuses leaves an author without a spelling for what they meant.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum ErrA implements Error
+	aZero
+	aOne
+end 'ErrA'
+
+enum ErrB implements Error
+	bZero
+	bOne
+end 'ErrB'
+
+function f(x Code) returns Code throws ErrB
+	if x < 10 'small'
+		throw ErrB.bOne
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise (e) 'caught'
+		match e 'which'
+			bZero then return 1
+			bOne then return 2
+		end 'which'
+	end 'caught'
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: error.default-throws-arm-a-different-error-than-declared -->
+⭐⭐ **THE SPELLING THAT FOUND A MISSED DOOR.** A match's `default throws <E.case>` publishes the enclosing
+function's error flag exactly as a `throw` statement does, so it owes the declared clause the same debt — and
+when this rule was first wired in, the C# bootstrap had THREE copies of the thrown-error emission and the fix
+landed in two of them, leaving this arm quietly accepting `default throws ErrB.bZero` inside `throws ErrA`.
+shv2 has one emission site and inherited the rule for free; the bootstrap's three are now one. Pinned in both
+corpora so a fourth spelling cannot reopen it.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum Kind
+	alpha
+	beta
+end 'Kind'
+
+enum ErrA implements Error
+	aZero
+end 'ErrA'
+
+enum ErrB implements Error
+	bZero
+end 'ErrB'
+
+function f(k Kind) returns Code throws ErrA
+	match k 'm'
+		alpha then return 1
+		default throws ErrB.bZero
+	end 'm'
+end 'f'
+
+function main() returns ExitCode
+	return try f(Kind.beta) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:20:11: type mismatch: 'throw of 'ErrB' but the enclosing function throws 'ErrA' — the caller decodes the error flag against 'ErrA', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a 'ErrA' case, or declare 'throws ErrB''
+```
+
+<!-- test: error.default-throws-arm-with-no-enclosing-throws -->
+⭐⭐ **THE `default` ARM IS THE "UNREACHABLE" MARKER THE ENUM-`match` GRAMMAR DEMANDS, and in a function that
+declares no `throws` it has to be spelled `default panic(...)`** — there is no error channel for a `throws` to
+publish into. It was accepted in both compilers, and it is the SAME leak by another door: **measured with a
+payload-carrying union, `exit 101` / `MM leak: 1 allocation(s) remain`**, because the arm minted a heap box no
+caller ever adopted. Four committed programs in the bootstrap's corpus (`tcp-client`, `managed-socket`) held
+exactly this shape and were the false-reject sweep's only hits — they now say `panic`, which is what they
+always meant.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum Kind
+	alpha
+	beta
+end 'Kind'
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(k Kind) returns Code
+	match k 'm'
+		alpha then return 1
+		default throws BoxedError.withMessage("reached")
+	end 'm'
+end 'f'
+
+function main() returns ExitCode
+	return f(Kind.beta)
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:16:11: type mismatch: 'throw of 'BoxedError' but the enclosing function declares no 'throws' — the error flag has nowhere to be published and would be silently dropped, the throw path handing back the primary register's 0 as a real answer; declare 'throws BoxedError', or handle it here with a `try … otherwise`'
+```

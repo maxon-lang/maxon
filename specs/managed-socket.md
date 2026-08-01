@@ -42,13 +42,17 @@ error E3072: specs/fragments/managed-socket/managed-socket.error-direct-construc
 ```
 
 <!-- test: managed-socket.connect-bad-host -->
+⚠ The `default` arm says *unreachable*, and in a function declaring no `throws` it has to say so with
+`panic` rather than `throws`: `main` has no error channel, so a `default throws` here is silently discarded —
+and with a payload-carrying error it leaks the box (measured: `exit 101`). E3059 refuses it (A1s-throwsbox
+review).
 ```maxon
 function main() returns ExitCode
 	let host = "no-such-host-xyz-98765.invalid"
 	try __ManagedSocket.tcpConnect(host.toByteArray().managed, 80) otherwise (e) 'connErr'
 		match e 'check'
 			resolveFailed then print("resolve failed")
-			default throws __ManagedSocketError.connectFailed
+			default panic("unreachable: tcpConnect reports only resolveFailed or connectFailed")
 		end 'check'
 		return 42
 	end 'connErr'
@@ -63,13 +67,17 @@ resolve failed
 ```
 
 <!-- test: managed-socket.connect-refused -->
+⚠ The `default` arm says *unreachable*, and in a function declaring no `throws` it has to say so with
+`panic` rather than `throws`: `main` has no error channel, so a `default throws` here is silently discarded —
+and with a payload-carrying error it leaks the box (measured: `exit 101`). E3059 refuses it (A1s-throwsbox
+review).
 ```maxon
 function main() returns ExitCode
 	let host = "192.0.2.1"
 	try __ManagedSocket.tcpConnect(host.toByteArray().managed, 1) otherwise (e) 'connErr'
 		match e 'check'
 			connectFailed then print("connect failed")
-			default throws __ManagedSocketError.resolveFailed
+			default panic("unreachable: tcpConnect reports only resolveFailed or connectFailed")
 		end 'check'
 		return 42
 	end 'connErr'

@@ -1301,3 +1301,234 @@ end 'main'
 ```maxoncstderr
 error E3113: specs/fragments/error-handling/error.throws-a-struct-type.test:12:40: 'throws Payload' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
 ```
+
+<!-- test: error.throw-a-boxed-union-under-a-scalar-clause -->
+The sibling door into the defect A1s-throwsbox closed: that rung refused a clause naming no declared enum,
+but not a clause naming a DIFFERENT one. The mechanism is identical and so is the failure — the THROW site
+stamps boxedness off the value it actually throws (a heap BOX POINTER for this payload-carrying union), the
+CATCH site derives it off the DECLARED clause (`ScalarError`, an ordinal), and the box is decoded as an
+ordinal and never released. **Measured before this check: `exit 101` with `MM leak: 1 allocation(s) remain`,
+in this compiler and in shv2.** An error leaves a function by exactly two doors, and the `try` door has
+refused this for as long as the clause has existed (`try propagates 'X' but enclosing function throws 'Y'`).
+```maxon
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+enum ScalarError implements Error
+	plain
+end 'ScalarError'
+
+function f(x Code) returns Code throws ScalarError
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.throw-a-boxed-union-under-a-scalar-clause.test:14:3: type mismatch: 'throw of 'BoxedError' but the enclosing function throws 'ScalarError' — the caller decodes the error flag against 'ScalarError', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a 'ScalarError' case, or declare 'throws BoxedError''
+```
+
+<!-- test: error.throw-a-different-scalar-error-than-declared -->
+The same hole with no leak in it — a silent wrong answer, which is why the rule is about the TYPE and not
+about boxedness. Both enums are scalar, so nothing is allocated and the exit-101 gate is blind. The caller
+still decodes the flag against the DECLARED clause: measured before this check, `throw ErrB.bOne` under
+`throws ErrA` ran the handler's `aOne` arm and the program answered 7, here and in shv2 alike.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum ErrA implements Error
+	aZero
+	aOne
+end 'ErrA'
+
+enum ErrB implements Error
+	bZero
+	bOne
+end 'ErrB'
+
+function f(x Code) returns Code throws ErrA
+	if x < 10 'small'
+		throw ErrB.bOne
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise (e) 'caught'
+		match e 'which'
+			aZero then return 1
+			aOne then return 2
+		end 'which'
+	end 'caught'
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.throw-a-different-scalar-error-than-declared.test:16:3: type mismatch: 'throw of 'ErrB' but the enclosing function throws 'ErrA' — the caller decodes the error flag against 'ErrA', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a 'ErrA' case, or declare 'throws ErrB''
+```
+
+<!-- test: error.throw-with-no-enclosing-throws -->
+A `throw` in a function that declares no `throws` had nowhere to publish the flag, so the error was silently
+discarded — measured, the program exited 0 where the answer is the error path, in both compilers. The `try`
+door already refuses the same discard ("try without otherwise requires the enclosing function to have
+'throws'"); this is that rule's other half, the mismatch at its limit, with no there to fit into.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum ErrA implements Error
+	aZero
+end 'ErrA'
+
+function f(x Code) returns Code
+	if x < 10 'small'
+		throw ErrA.aZero
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return f(3)
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.throw-with-no-enclosing-throws.test:10:3: type mismatch: 'throw of 'ErrA' but the enclosing function declares no 'throws' — the error flag has nowhere to be published and would be silently dropped, the throw path handing back the primary register's 0 as a real answer; declare 'throws ErrA', or handle it here with a `try … otherwise`'
+```
+
+<!-- test: throw-matching-the-declared-clause-is-untouched -->
+The control for the three refusals above: the same two error types, the same throw, the same catch — only the
+thrown type now IS the declared one, and it compiles, runs, and decodes `bOne` as `bOne`, answering 2.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum ErrA implements Error
+	aZero
+	aOne
+end 'ErrA'
+
+enum ErrB implements Error
+	bZero
+	bOne
+end 'ErrB'
+
+function f(x Code) returns Code throws ErrB
+	if x < 10 'small'
+		throw ErrB.bOne
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise (e) 'caught'
+		match e 'which'
+			bZero then return 1
+			bOne then return 2
+		end 'which'
+	end 'caught'
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: error.throw-a-value-that-is-not-an-error -->
+The third shape the error flag has no encoding for: a value that is not an error type at all. The flag
+carries an enum ORDINAL or a union BOX POINTER and has no third shape. This compiler has always refused it;
+the case is pinned here because shv2 now carries this sentence verbatim, so one rule reads as one rule.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum ErrA implements Error
+	aZero
+end 'ErrA'
+
+function f(x Code) returns Code throws ErrA
+	if x < 10 'small'
+		throw 1
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/error-handling/error.throw-a-value-that-is-not-an-error.test:10:3: throw requires an error enum value
+```
+
+<!-- test: error.default-throws-arm-a-different-error-than-declared -->
+A match's `default throws <E.case>` publishes the enclosing function's error flag exactly as a `throw`
+statement does, so it owes the declared clause the same debt. This spelling is the one that found a missed
+door: the thrown-error emission existed in THREE copies here — the `throw` statement, a try-block handler's
+terminal `throws`, and this match arm — and the enclosing-clause check landed in two of them, leaving this
+arm accepting `default throws ErrB.bZero` inside `throws ErrA`. The three copies are now one.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum Kind
+	alpha
+	beta
+end 'Kind'
+
+enum ErrA implements Error
+	aZero
+end 'ErrA'
+
+enum ErrB implements Error
+	bZero
+end 'ErrB'
+
+function f(k Kind) returns Code throws ErrA
+	match k 'm'
+		alpha then return 1
+		default throws ErrB.bZero
+	end 'm'
+end 'f'
+
+function main() returns ExitCode
+	return try f(Kind.beta) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.default-throws-arm-a-different-error-than-declared.test:20:3: type mismatch: 'throw of 'ErrB' but the enclosing function throws 'ErrA' — the caller decodes the error flag against 'ErrA', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a 'ErrA' case, or declare 'throws ErrB''
+```
+
+<!-- test: error.default-throws-arm-with-no-enclosing-throws -->
+The `default` arm of an enum `match` is the "unreachable" marker the grammar demands, and in a function that
+declares no `throws` it must be spelled `default panic(...)`: there is no error channel for a `throws` to
+publish into. It was accepted, and it is the same leak by another door — **measured with a payload-carrying
+union: `exit 101`, `MM leak: 1 allocation(s) remain`**, because the arm minted a heap box that no caller ever
+adopted. Four committed corpus programs (`tcp-client`, `managed-socket`) held this shape and now say `panic`.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum Kind
+	alpha
+	beta
+end 'Kind'
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(k Kind) returns Code
+	match k 'm'
+		alpha then return 1
+		default throws BoxedError.withMessage("reached")
+	end 'm'
+end 'f'
+
+function main() returns ExitCode
+	return f(Kind.beta)
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.default-throws-arm-with-no-enclosing-throws.test:16:3: type mismatch: 'throw of 'BoxedError' but the enclosing function declares no 'throws' — the error flag has nowhere to be published and would be silently dropped, the throw path handing back the primary register's 0 as a real answer; declare 'throws BoxedError', or handle it here with a `try … otherwise`'
+```

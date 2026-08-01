@@ -714,32 +714,66 @@ function requireSameErrorType(project Project, signatures ProgramSignatures, con
 end 'requireSameErrorType'
 
 // ⭐⭐ **DOES THE REQUIREMENT'S `throws` TYPE NAME AN INTERFACE RATHER THAN A CONCRETE ERROR — i.e. is there
-// anything for the dispatch's `(e)` binding to decode WRONG (A1s)?** Two conditions, and each rules out a
-// wrong answer the other cannot:
-//
-//   • **It must name no declared enum/union.** That is the registry the catch DECODE itself consults
-//     (`Parser.throwsTypeIsBoxedUnion` → `enumOf(name)`), so it is the only honest answer to "can this
-//     requirement be discriminated?". Asking it rather than testing the literal name `Error` is what keeps a
-//     user's own `enum Error` — which the language accepts, and which `throws Error` would then decode the
-//     ordinals of — from silently taking the narrowing: for that program the requirement IS concrete and the
-//     strict same-name rule is the correct one. `containsEnum` and not `enumOf`, because this half needs no
-//     layout and `enumOf` would box one to throw it away.
-//   • **It must name an INTERFACE.** "Decodes nothing" alone would have made a TYPO'd requirement
-//     (`throws Bogus`, a name in no registry at all) accept any error type whatsoever, silently — the
-//     author's mistake read as a licence. Abstractness is something a requirement DECLARES, not something it
-//     fails to be. `lookupInterface` answers for the synthesized `Error` and for a user interface alike, off
-//     the one door every other conformance question in this file already asks through.
+// anything for the dispatch's `(e)` binding to decode WRONG (A1s)?** The sorting is
+// `classifyThrowsClauseName`'s, below, where the reason each of its three answers exists is written down
+// ONCE; what belongs here is only what this caller does with them. `undeclared` reads as NOT abstract, which
+// is the whole point of the classifier's third box: a typo'd requirement must not buy the abstract
+// requirement's narrowing, so it falls to the strict same-name rule and is refused by it.
 function throwsRequirementIsAbstract(project Project, signatures ProgramSignatures, required String) returns bool
-	let requiredName = required.toByteArray()
-	if signatures.containsEnum(requiredName) 'namesAConcreteError'
-		return false
+	return match classifyThrowsClauseName(project, signatures: signatures, name: required) 'kind'
+		concreteError gives false
+		abstractInterface gives true
+		undeclared gives false
+	end 'kind'
+end 'throwsRequirementIsAbstract'
+
+// ⭐⭐ **WHAT A `throws` CLAUSE NAME DENOTES — ONE CLASSIFIER, FOR THE TWO RULES THAT ASK (A1s-throwsbox
+// review).** The two questions above and `SemanticCheck.requireThrowsClauseNamesADeclaredError`'s E3113 are
+// about DIFFERENT things — this file owns the relation between a requirement's clause and its impl's, that
+// one owns a function's own clause — but both begin by sorting one name into the SAME three boxes, and both
+// were sorting it with their own copy of the two lookups. Nothing made the copies agree, and the way they
+// would have come apart is silent: teach one of them that a `typealias` to an enum is concrete too, or that
+// a user's own `enum Error` is special, and the impl side and the plain-function side would disagree about
+// what an error type IS, with no compile error anywhere to say so. This project's signature bug, in the exact
+// place A1s-throwsbox was written to remove one instance of it.
+//
+// The three boxes are exhaustive by construction, and each of the two conditions rules out a wrong answer the
+// other cannot:
+//
+//   • **`concreteError` — it names a declared enum/union**, asked of the registry the catch DECODE itself
+//     consults (`Parser.throwsTypeIsBoxedUnion` → `enumOf(name)`), so it is the only honest answer to "can
+//     this be discriminated?". Asking that rather than testing the literal name `Error` is what keeps a
+//     user's own `enum Error` — which the language accepts — from being read as abstract: for that program
+//     the clause IS concrete. `containsEnum` and not `enumOf`, because no caller here needs a layout and
+//     `enumOf` would box one to throw it away.
+//   • **`abstractInterface` — it names an INTERFACE.** "Decodes nothing" alone would have made a TYPO
+//     (`throws Bogus`, a name in no registry at all) indistinguishable from a deliberate abstract channel,
+//     and the author's mistake would read as a licence. Abstractness is something a clause DECLARES, not
+//     something it fails to be. `lookupInterface` answers for the synthesized `Error` and for a user
+//     interface alike, off the one door every other conformance question in this file already asks through.
+//   • **`undeclared` — neither**, which is a THIRD answer and not a shading of the second: a struct, a
+//     ranged alias, a generic type parameter, a stdlib type shv2 does not declare, or a typo.
+// The three — and only three — things a `throws` clause name can denote. See `classifyThrowsClauseName`.
+export enum ThrowsClauseKind
+	// A declared enum or union: the catch decode can discriminate its cases.
+	concreteError
+	// An interface: an abstract error channel, declaring no case to decode.
+	abstractInterface
+	// Neither — a struct, a ranged alias, a type parameter, a type shv2 does not declare, or a typo.
+	undeclared
+end 'ThrowsClauseKind'
+
+export function classifyThrowsClauseName(project Project, signatures ProgramSignatures, name String) returns ThrowsClauseKind
+	let key = name.toByteArray()
+	if signatures.containsEnum(key) 'namesAConcreteError'
+		return ThrowsClauseKind.concreteError
 	end 'namesAConcreteError'
 
-	return match lookupInterface(project.interfaces, name: requiredName) 'iface'
-		found gives true
-		notFound gives false
+	return match lookupInterface(project.interfaces, name: key) 'iface'
+		found gives ThrowsClauseKind.abstractInterface
+		notFound gives ThrowsClauseKind.undeclared
 	end 'iface'
-end 'throwsRequirementIsAbstract'
+end 'classifyThrowsClauseName'
 
 // The impl's error must reach the dispatch through the ABI an abstract requirement is CAUGHT with — the
 // scalar `ordinal + ErrorFlagOrdinalBias` flag. A payload-carrying union's flag is the heap box pointer
