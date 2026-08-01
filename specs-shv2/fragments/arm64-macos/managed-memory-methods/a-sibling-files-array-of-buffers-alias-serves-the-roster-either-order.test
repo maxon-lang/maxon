@@ -1,0 +1,120 @@
+// Test: a-sibling-files-array-of-buffers-alias-serves-the-roster-either-order
+// --- file: aaa-main.maxon
+type Holder
+	export var bufs as BufArray
+
+	export static function create() returns Holder
+		var a = BufArray.create()
+		a.push("hello".toByteArray())
+		return Self{bufs: a}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let m = try h.bufs.get(0) otherwise return 1
+	return (m.length() + seed(BufArray.create())) as ExitCode
+end 'main'
+
+// --- file: zzz-alias.maxon
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
+
+function seed(x BufArray) returns Int
+	return x.count() as Int
+end 'seed'
+---
+ExitCode: 5
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @seed {
+  entry:
+    arm64.prologue 16
+    arm64.bl __arr_count
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __arr_decref
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x20, __str_rec_1
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl __str_to_bytes
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __arr_push
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Holder.create
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.movImm x1, 0
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.bl __arr_count
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __arr_decref
+    arm64.bl __arr_create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x21
+    arm64.bl seed
+    arm64.add x20, x20, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -2759,6 +2759,164 @@ end 'main'
 5
 ```
 
+### A2m — the array-of-buffers alias across a FILE BOUNDARY, in BOTH orders
+
+⭐⭐ **THE ELEMENT BIT IS THE ONE SURFACE FACT THAT CONSULTS A REGISTRY, AND A REGISTRY HAS A FILLING
+ORDER — SO EVERY CASE HERE IS WRITTEN TWICE, WITH THE TWO FILES SWAPPED.** A single-file fragment cannot see
+this at all: a file's own `typealias` folds only when that file's sweep ENDS, so within one file the answer is
+always "not yet registered". The question only becomes askable — and only becomes ORDER-dependent — once the
+alias arrives from a SIBLING file.
+
+⚠ **MEASURED, REVIEW OF A2m** — before the fix below, the third case here COMPILED AND RAN while the fourth,
+the identical program with its two files renamed, was refused E2015. A member roster that depends on which
+file sorts first is a wrong answer in one of the two orders, whichever one it is, and no diagnostic reports
+which one you got.
+
+⚠ **THE ROOT AND A SLOT ANSWER DIFFERENTLY, AND THE FIRST TWO CASES ARE WHY THAT IS NOT AN INCONSISTENCY.**
+A ROOT position — `var bufs as BufArray` — is repaired at the read door: `ProgramSignatures.fieldSurfaceOf`
+ORs in `declaredElementIsBufferSurface`, which reads the alias NAME off a swept type that is still `named`,
+and a swept type is still `named` in exactly the order where the token test finds nothing (both conditions
+are `recordGenericAlias`'s ONE write). The two halves cover the two orders between them. A SLOT has no second
+half — a tuple's element types are canonical by the time anything could ask — so it must not read the
+registry at a sweep-fed door at all, and is refused in both orders instead of accepted in one.
+
+<!-- test: a-sibling-files-array-of-buffers-alias-serves-the-roster -->
+
+⭐ **THE ROOT, ALIAS FILE FIRST.** `Holder.bufs` is declared with an alias the OTHER file writes, so by the
+time this file is swept the alias is registered and the field type has already resolved to
+`genericInstance` — the read-door derivation cannot fire, and the declaration's own token bit is what carries
+it.
+```maxon
+// --- file: aaa-alias.maxon
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
+
+function seed(x BufArray) returns Int
+	return x.count() as Int
+end 'seed'
+
+// --- file: zzz-main.maxon
+type Holder
+	export var bufs as BufArray
+
+	export static function create() returns Holder
+		var a = BufArray.create()
+		a.push("hello".toByteArray())
+		return Self{bufs: a}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let m = try h.bufs.get(0) otherwise return 1
+	return (m.length() + seed(BufArray.create())) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-sibling-files-array-of-buffers-alias-serves-the-roster-either-order -->
+
+⭐ **THE ROOT, ALIAS FILE LAST — the identical program, the two files renamed.** Now the alias is NOT yet
+registered when the holder is swept, so the field type stays `named("BufArray")` and it is the read-door
+DERIVATION that carries the surface. Both halves are pinned because either one alone leaves one order wrong,
+and this pair is what caught a review fix that had suppressed the first half.
+```maxon
+// --- file: aaa-main.maxon
+type Holder
+	export var bufs as BufArray
+
+	export static function create() returns Holder
+		var a = BufArray.create()
+		a.push("hello".toByteArray())
+		return Self{bufs: a}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let m = try h.bufs.get(0) otherwise return 1
+	return (m.length() + seed(BufArray.create())) as ExitCode
+end 'main'
+
+// --- file: zzz-alias.maxon
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
+
+function seed(x BufArray) returns Int
+	return x.count() as Int
+end 'seed'
+```
+```exitcode
+5
+```
+
+<!-- test: error.a-sibling-files-alias-in-a-tuple-slot-is-refused-alias-file-first -->
+
+⭐⭐ **THE HEADLINE REGRESSION CASE. This program COMPILED AND RAN before the fix** — `make().0` served the
+buffer's roster purely because `aaa-alias.maxon` sorts ahead of `zzz-main.maxon`. A RETURN clause is read by
+the tolerant declaration SWEEP as well as by the real parse, and the sweep's copy is the one the whole-program
+index stores; asked there, a slot's element bit answers how far the sweep had got. It is refused now, in this
+order and in the next case's, which is the accepted gap (a tuple slot spelled with an array-of-buffers alias
+works at the PARAMETER door only) rather than a coin toss between the gap and the feature.
+```maxon
+// --- file: aaa-alias.maxon
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
+
+function seed(x BufArray) returns Int
+	return x.count() as Int
+end 'seed'
+
+// --- file: zzz-main.maxon
+function make() returns (BufArray, Int)
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	return (a, 7)
+end 'make'
+
+function main() returns ExitCode
+	let t = make()
+	let m = try t.0.get(0) otherwise return 0
+	return (m.length() + seed(BufArray.create())) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:20:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+<!-- test: error.a-sibling-files-alias-in-a-tuple-slot-is-refused-alias-file-last -->
+
+⚠ **THE OTHER ORDER — the identical program, the two files renamed.** It was already refused before the fix;
+it is kept because a pair is what makes "order-independent" a claim a test can fail, and half a pair is just
+the answer that happened to be right.
+```maxon
+// --- file: aaa-main.maxon
+function make() returns (BufArray, Int)
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	return (a, 7)
+end 'make'
+
+function main() returns ExitCode
+	let t = make()
+	let m = try t.0.get(0) otherwise return 0
+	return (m.length() + seed(BufArray.create())) as ExitCode
+end 'main'
+
+// --- file: zzz-alias.maxon
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
+
+function seed(x BufArray) returns Int
+	return x.count() as Int
+end 'seed'
+```
+```maxoncstderr
+error E2015: <fragment>:12:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
 ### A2m — probing the tree walk: depth, sibling order, and width
 
 The pre-order tree is read by skipping whole SUBTREES to reach a later sibling, which is where an off-by-one

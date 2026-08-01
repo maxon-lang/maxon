@@ -1,0 +1,24 @@
+// Test: error.a-sibling-files-alias-in-a-tuple-slot-is-refused-alias-file-last
+// --- file: aaa-main.maxon
+function make() returns (BufArray, Int)
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	return (a, 7)
+end 'make'
+
+function main() returns ExitCode
+	let t = make()
+	let m = try t.0.get(0) otherwise return 0
+	return (m.length() + seed(BufArray.create())) as ExitCode
+end 'main'
+
+// --- file: zzz-alias.maxon
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
+
+function seed(x BufArray) returns Int
+	return x.count() as Int
+end 'seed'
+---
+CompilerError:
+error E2015: <fragment>:12:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later

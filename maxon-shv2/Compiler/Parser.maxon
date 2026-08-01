@@ -3354,17 +3354,40 @@ end 'rosterDriftMessage'
 // which sentence answers — because a roster must answer for the type it is shown about: a reader handed the
 // `Array` list for a `__ManagedMemory` receiver is sent to the wrong question entirely.
 //
-// ⚠ Each surface supplies only the three things that genuinely differ — the TYPE it answers for, the
-// milestone that built the roster, and the trailing clause naming what is deliberately ABSENT. That trailing
-// clause is the one half of each sentence still hand-written, and it carries the obligation the two roster
-// functions above state: a rung that adds a member adds its line to the roster and strikes the name from the
-// tail HERE, in the same edit.
-function surfaceRosterRefusal(member ByteArray, roster ByteArrayArray, isManagedMemory bool) returns String
-	if isManagedMemory 'bufferSurface'
+// ⚠ Each surface supplies only the three things that genuinely differ — the TYPE it answers for, WHO
+// provides the roster, and the trailing clause naming what is deliberately ABSENT. That trailing clause is
+// the one half of each sentence still hand-written, and it carries the obligation the roster functions above
+// state: a rung that adds a member adds its line to the roster and strikes the name from the tail HERE, in
+// the same edit.
+//
+// ⚠⚠ **IT IS KEYED ON `MemberSurface`, WHICH IS THE POINT OF THAT ENUM AND WAS HALF-DONE (found in review,
+// A2q).** A2q introduced the enum as "the memo's key, the builder's selector and the refusal's subject at
+// once" and then wired only the first two: this function kept the `isManagedMemory bool` the enum was
+// introduced to REPLACE, and the three new surfaces spelled their refusals inline at their own gates — five
+// sentences in four homes, the shape `rosterList` and `rosterRefusalSentence` each exist to close one level
+// down. One home, one key, one `if`-chain that a sixth surface cannot silently fall through.
+function surfaceRosterRefusal(surface MemberSurface, member ByteArray, roster ByteArrayArray) returns String
+	if surface == MemberSurface.buffer 'bufferSurface'
 		return rosterRefusalSentence(ManagedMemoryTypeName, member: member, roster: roster, provider: "R4.4", absentClause: "`elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for")
 	end 'bufferSurface'
 
-	return rosterRefusalSentence(ArrayBuiltinBaseName, member: member, roster: roster, provider: "P1.7", absentClause: "`create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later")
+	if surface == MemberSurface.array 'arraySurface'
+		return rosterRefusalSentence(ArrayBuiltinBaseName, member: member, roster: roster, provider: "P1.7", absentClause: "`create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later")
+	end 'arraySurface'
+
+	if surface == MemberSurface.string 'stringSurface'
+		return rosterRefusalSentence(StringConformerName, member: member, roster: roster, provider: "shv2", absentClause: "`{String.from(StringAddressableBytesMethod)}` and `{String.from(StringByteAtOrPanicMethod)}` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet")
+	end 'stringSurface'
+
+	if surface == MemberSurface.character 'characterSurface'
+		return rosterRefusalSentence(CharacterConformerName, member: member, roster: roster, provider: "shv2", absentClause: "`asciiValue` is throwing and its `if try …` call form does not exist yet, and `codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus")
+	end 'characterSurface'
+
+	if surface == MemberSurface.stringIndex 'stringIndexSurface'
+		return rosterRefusalSentence(StringIndexTypeName, member: member, roster: roster, provider: "shv2", absentClause: "the reference's `equals`/`compare` are reached through `==`/`<` instead, and `String.charAt`/`indexAfter`/`indexBefore` (the other consumers of an index) need a BACKWARD UAX#29 segmenter")
+	end 'stringIndexSurface'
+
+	panic("surfaceRosterRefusal: no refusal sentence for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then refuse with another type's roster")
 end 'surfaceRosterRefusal'
 
 // ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the same immutable-receiver rule,
@@ -5486,10 +5509,22 @@ export type Parser
 	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
 	var bufferSurfaceSlots as ValueSlotSurfaceMap
 	// ⭐ **WHOSE ELEMENTS DENOTE THE BUFFER (A2m)** — an ARRAY value declared through an alias written
-	// `Array with __ManagedMemory`. A third fact and not a reserved slot index of the mask above: an array has
-	// ONE element type and a tuple has one type per position, so folding them into one word would make a
-	// reader ask "is this a tuple?" before it could read either. Read at `emitArrayElementAccessor`, the one
-	// door every element-yielding array member comes out of.
+	// `Array with __ManagedMemory`. Read at `emitArrayElementAccessor`, the one door every element-yielding
+	// array member comes out of.
+	//
+	// ⚠⚠ **WHY THESE ARE THREE CARRIERS AND NOT ONE `Map with (ValueId, DeclaredSurface)` — REVIEWED, A2m.**
+	// They are exactly the three fields of one `DeclaredSurfaceNode` (bit 0, bit 1, the slot count), so one
+	// keyed carrier COULD express all three, and the earlier reason recorded here — "a reserved slot index of
+	// the mask" — described the flat 62-bit MASK that A2m replaced, not the tree that shipped. The reason that
+	// actually holds is the WRITE side: two writers legitimately fire on ONE value, and across three carriers
+	// that is additive for free. `parseArraySlice` calls `markBufferSurface(sliced)` and then
+	// `inheritArrayElementSurface(sliced, …)`; `emitFieldLoad` calls `markDeclaredSurface` twice on one
+	// result, once for the struct field's own declaration and once for the tuple slot's. Merged, an `upsert`
+	// would silently overwrite the first — so a merge needs a COMBINE rule, whose "both trees carry slots"
+	// arm is a panic on a path nothing reaches, on the parser's hot path, to save five save/restore lines.
+	// ⇒ Three carriers, and the obligation instead: **they describe ONE value space, so every site that
+	// resets, saves or restores one resets, saves and restores all three** — `parseFunction`'s per-function
+	// reset and `parseClosure`'s save/swap/restore are the two, and both do.
 	//
 	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
 	var bufferSurfaceElements as ValueMarkSet
@@ -8819,10 +8854,11 @@ export type Parser
 		// reader, so the tolerant sweep's layout — the whole-program one every read door consults — and the
 		// real parse's carry the identical word, for the reason this reader is shared at all.
 		//
-		// ⚠ Its ELEMENT bit is necessarily clear here: the SWEEP runs while the alias table is still being
-		// built, so `var bufs as BufArray` cannot be asked whether `BufArray` holds buffers at this moment. It
-		// is derived instead where every file is folded — see `ProgramSignatures.fieldSurfaceOf`.
-		let declaredSurface = self.declaredSurfaceAt(self.pos)
+		// ⚠ A tuple SLOT's element bit is held clear here — `slotElementsFromAliases: false` — because the
+		// SWEEP also fills this column while the alias table is still being built, so `var t as (BufArray,
+		// Int)` asked there answers *how far the sweep had got*. The field's ROOT keeps asking, because
+		// `ProgramSignatures.fieldSurfaceOf` ORs in the complementary derivation; see `declaredSurfaceAt`.
+		let declaredSurface = self.declaredSurfaceAt(self.pos, slotElementsFromAliases: false)
 		let fieldType = try self.parseTypeReference()
 
 		if not self.at(TokenKind.equals) 'noDefault'
@@ -11526,8 +11562,11 @@ export type Parser
 			let nameTok = try self.consumeNameToken(NamePosition.declaration)
 			try self.requireUnreservedName(nameTok)
 			// Asked at the cursor, which sits on the type's first token — the last instant the spelling
-			// `__ManagedMemory` still exists, at any depth (`declaredSurfaceAt`).
-			let declaredSurface = self.declaredSurfaceAt(self.pos)
+			// `__ManagedMemory` still exists, at any depth (`declaredSurfaceAt`). `slotElementsFromAliases:
+			// true`: the tolerant sweep skips a parameter list wholesale (`skipBalancedParens`), so this door
+			// is the REAL parse's alone, the whole-program alias registry is complete, and the answer is
+			// consumed by `bindParameters` in this same pass rather than stored for another one.
+			let declaredSurface = self.declaredSurfaceAt(self.pos, slotElementsFromAliases: true)
 			let paramType = try self.parseTypeReference()
 
 			// ⭐ **A DEFAULT VALUE IS CAPTURED, NOT PARSED HERE (BATCH2 slice 4)** — its expression becomes the
@@ -26378,10 +26417,7 @@ export type Parser
 		// and is not yours to call" are different statements, and the gate must not turn the second into the
 		// first. `stdlib-only-string-methods.md` pins both directions — the two real names get the visibility
 		// refusal, a near miss of one of them gets this roster.
-		let roster = self.surfaceMemberNames(MemberSurface.string)
-		if not rosterHasMember(methodTok.value, roster: roster) 'notAStringMember'
-			throw ParseError.unsupported(rosterRefusalSentence(StringConformerName, member: methodTok.value, roster: roster, provider: "shv2", absentClause: "`{String.from(StringAddressableBytesMethod)}` and `{String.from(StringByteAtOrPanicMethod)}` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet"), line: methodTok.line, column: methodTok.column)
-		end 'notAStringMember'
+		let roster = try self.requireSurfaceMember(MemberSurface.string, methodTok: methodTok)
 
 		if methodTok.value.equals(AppendMethod) 'append'
 			return try self.parseStringAppend(func, recv: recv, methodTok: methodTok, resultUsed: resultUsed)
@@ -26782,10 +26818,7 @@ export type Parser
 		let range = SourceRange.between(recv.anchor, last: methodTok)
 
 		// The roster gate, `dispatchStringMethod`'s twin — see there for why it is asked ahead of every arm.
-		let roster = self.surfaceMemberNames(MemberSurface.character)
-		if not rosterHasMember(methodTok.value, roster: roster) 'notACharacterMember'
-			throw ParseError.unsupported(rosterRefusalSentence(CharacterConformerName, member: methodTok.value, roster: roster, provider: "shv2", absentClause: "`asciiValue` is throwing and its `if try …` call form does not exist yet, and `codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus"), line: methodTok.line, column: methodTok.column)
-		end 'notACharacterMember'
+		let roster = try self.requireSurfaceMember(MemberSurface.character, methodTok: methodTok)
 
 		if methodTok.value.equals(ByteViewMethod) 'bytes'
 			return try self.parseByteView(recv.value, range: range)
@@ -27131,7 +27164,14 @@ export type Parser
 			return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(managed), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 		end 'initStatic'
 
-		throw ParseError.unsupported("`{String.from(StringConformerName)}` static '{String.from(methodTok.value)}' — the reference exports two, `from(bytes)` and `init(managed)`, and `fromOwnedBytes` is deliberately not exported", line: methodTok.line, column: methodTok.column)
+		// ⚠ **HALF OF THIS SENTENCE IS RENDERED AND HALF CANNOT BE, WHICH IS WHY IT IS NOT A ROSTER (review,
+		// A2q).** `init(managed)` IS matched on constants — `StringInitMethod` and `StringInitManagedParamName`
+		// — so it is rendered from them, `dispatchCharacterSetMethod`'s and `parseManagedMemoryStaticCall`'s
+		// discipline one door over. `from` genuinely has none: it is matched by TOKEN KIND (`TokenKind.from` is
+		// a keyword, see this function's header), so there is no constant to derive it from and no rename that
+		// could move it out from under this text. Two arms and no list is the right shape here; deriving the
+		// half that can be derived is what stops a rename of the OTHER half going unnoticed.
+		throw ParseError.unsupported("`{String.from(StringConformerName)}` static '{String.from(methodTok.value)}' — the reference exports two, `from(bytes)` and `{String.from(StringInitMethod)}({String.from(StringInitManagedParamName)})`, and `fromOwnedBytes` is deliberately not exported", line: methodTok.line, column: methodTok.column)
 	end 'parseStringStaticCall'
 
 	// ⭐ **`__ManagedMemory.create(count, elementSize)` — THE ONE `__ManagedMemory` STATIC.** It yields an OWNED
@@ -27451,10 +27491,7 @@ export type Parser
 		let range = SourceRange.between(recv.anchor, last: methodTok)
 
 		// The roster gate, `dispatchStringMethod`'s twin — see there for why it is asked ahead of every arm.
-		let roster = self.surfaceMemberNames(MemberSurface.stringIndex)
-		if not rosterHasMember(methodTok.value, roster: roster) 'notAStringIndexMember'
-			throw ParseError.unsupported(rosterRefusalSentence(StringIndexTypeName, member: methodTok.value, roster: roster, provider: "shv2", absentClause: "the reference's `equals`/`compare` are reached through `==`/`<` instead, and `String.charAt`/`indexAfter`/`indexBefore` (the other consumers of an index) need a BACKWARD UAX#29 segmenter"), line: methodTok.line, column: methodTok.column)
-		end 'notAStringIndexMember'
+		let roster = try self.requireSurfaceMember(MemberSurface.stringIndex, methodTok: methodTok)
 
 		if methodTok.value.equals(StringIndexCharIndexMethod) 'charIndex'
 			try self.consumeEmptyArgList()
@@ -28984,6 +29021,26 @@ export type Parser
 		panic("surfaceMemberNames: no roster for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then answer for by falling through")
 	end 'surfaceMemberNames'
 
+	// ⭐⭐ **THE ROSTER GATE ITSELF — ONE HOME FOR ALL FOUR DISPATCHES (found in review, A2q).** "Does this
+	// receiver's surface have this member?" is asked ahead of every arm of `dispatchArrayMethod`,
+	// `dispatchStringMethod`, `dispatchCharacterMethod` and `dispatchStringIndexMethod`, because it is the
+	// question every other refusal about the call presupposes — see `dispatchArrayMethod` for the two measured
+	// spellings that made the ORDER matter as much as the test.
+	//
+	// ⚠ It was written out four times: fetch, `rosterHasMember`, `throw ParseError.unsupported(…)` with the
+	// surface's sentence inline. Four copies of one rule, differing only in the enum value — and one of them
+	// (`dispatchArrayMethod`'s) was already routing through `surfaceRosterRefusal` while the other three were
+	// not, which is exactly the asymmetry a fifth surface would copy from whichever neighbour it happened to
+	// read. The roster comes back so the caller's drift panic names the same list this gate admitted from.
+	function requireSurfaceMember(surface MemberSurface, methodTok Token) returns ByteArrayArray throws ParseError
+		let roster = self.surfaceMemberNames(surface)
+		if not rosterHasMember(methodTok.value, roster: roster) 'notASurfaceMember'
+			throw ParseError.unsupported(surfaceRosterRefusal(surface, member: methodTok.value, roster: roster), line: methodTok.line, column: methodTok.column)
+		end 'notASurfaceMember'
+
+		return roster
+	end 'requireSurfaceMember'
+
 	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
 	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`). An OPAQUE-`T` array
 	// (`self.items.push(x)` in a generic body, P1.7 slice 3b) dispatches here too, and the shared body treats the
@@ -29044,10 +29101,7 @@ export type Parser
 		// every name off the `Array` roster reached the fall-through refusal before and is refused here now,
 		// with the same E2015 at the same token — only the sentence moved. Nothing on the roster can be
 		// refused, because every entry matches an arm (the panic at the end of this function is what says so).
-		let roster = self.surfaceMemberNames(MemberSurface.buffer if isManagedMemory else MemberSurface.array)
-		if not rosterHasMember(methodTok.value, roster: roster) 'notASurfaceMember'
-			throw ParseError.unsupported(surfaceRosterRefusal(methodTok.value, roster: roster, isManagedMemory: isManagedMemory), line: methodTok.line, column: methodTok.column)
-		end 'notASurfaceMember'
+		let roster = try self.requireSurfaceMember(MemberSurface.buffer if isManagedMemory else MemberSurface.array, methodTok: methodTok)
 
 		// ⚠ **THE BUFFER-ONLY MEMBERS ARE GATED ON THAT ANSWER HERE TOO, or the E3019 rule names methods the
 		// receiver does not have** (found in review, R4.2). Ungated, `let a = IntArray.create()` followed by
@@ -32125,38 +32179,71 @@ export type Parser
 	// shared empty tree, so the overwhelming majority of declared positions in any program cost one token
 	// test and one `Set.contains` on an empty set. Only a position that actually names the buffer builds.
 	//
-	// ⚠ **THE ELEMENT BIT IS THE ONE ARM THAT CONSULTS A REGISTRY, AND ITS ASKERS ARE THEREFORE THE REAL-PARSE
-	// DOORS ONLY** (a parameter, an array static). The sweep would answer it from a half-built alias table —
-	// an answer about how far the sweep had got — so the two doors the sweep DOES feed (a struct field, a
-	// return type) have their ROOT's element bit derived instead, where every file is folded
-	// (`ProgramSignatures.declaredElementIsBufferSurface`). ⚠⚠ A SLOT's element bit has no such derivation:
-	// a tuple's element types are CANONICAL by the time anything could ask, so the alias name is gone. See
-	// the A2m spec block; that shape is answerable at a parameter and not at a field or a return.
-	function declaredSurfaceAt(index TokenIndex) returns DeclaredSurface
-		if not self.spellingNamesBufferAt(index) 'namesTheBufferNowhere'
+	// ⚠⚠ **THE ELEMENT BIT IS THE ONE ARM THAT CONSULTS A REGISTRY, AND AT A TUPLE SLOT THAT REGISTRY MAY BE
+	// HALF-BUILT — WHICH IS WHAT `slotElementsFromAliases` IS FOR.** The tolerant declaration SWEEP reads this
+	// while `bufferElementAliases` is still filling, so a slot's element bit read there is not a fact about
+	// the program, it is *how far the sweep had got*; and the sweep's copy is the one the whole-program index
+	// stores. ⇒ A door the sweep also feeds (a struct FIELD, a RETURN clause) passes `false`; a door only the
+	// REAL parse reaches (a parameter — the sweep skips a parameter list wholesale through
+	// `skipBalancedParens`) passes `true`, where the index is complete and `bindParameters` consumes the
+	// answer in the same pass.
+	//
+	// ⚠ **MEASURED, REVIEW OF A2m** — the identical TWO-FILE program compiled when the file declaring
+	// `typealias BufArray = Array with __ManagedMemory` sorted FIRST and was refused E2015 when it sorted
+	// LAST: `function make() returns (BufArray, Int)` with `make().0.get(0).length()`. A member roster that
+	// depends on file order is a wrong answer in one of the two orders, whichever one that is.
+	//
+	// ⚠⚠ **AND THE ROOT IS THE EXACT OPPOSITE CASE — IT ALWAYS ASKS, BECAUSE ITS ANSWER IS REPAIRED AT EVERY
+	// READ DOOR BY A DERIVATION THAT IS COMPLEMENTARY BY CONSTRUCTION.** `ProgramSignatures.fieldSurfaceOf`
+	// and `declaredReturnSurface` both OR in `declaredElementIsBufferSurface`, which reads the alias NAME off
+	// a swept type that is still `named` — and a swept type is still `named` EXACTLY when
+	// `parseTypeReference`'s generic-alias arm found no alias, i.e. exactly when this token test finds none
+	// either. Both conditions are `recordGenericAlias`'s one write (`genericAliases` and
+	// `bufferElementAliases`, adjacent lines), so the two halves cover the two orders between them and their
+	// UNION is order-independent. ⚠ Suppressing the root here — which this review did, briefly — breaks that
+	// pair and makes `var bufs as BufArray` / `returns BufArray` themselves order-dependent; measured, the
+	// same two-file program then flipped the other way. A SLOT has no such second half, which is the whole of
+	// why the two positions answer differently.
+	function declaredSurfaceAt(index TokenIndex, slotElementsFromAliases bool) returns DeclaredSurface
+		if self.kindAt(index) != TokenKind.leftParen 'notATuple'
+			return self.rootLeafSurfaceAt(index)
+		end 'notATuple'
+
+		if not self.tupleNamesBufferAt(index, slotElementsFromAliases: slotElementsFromAliases) 'namesTheBufferNowhere'
 			return sharedEmptyDeclaredSurface
 		end 'namesTheBufferNowhere'
 
 		var surface = DeclaredSurface.create()
-		self.appendSurfaceNodesAt(surface, index: index)
+		self.appendSurfaceNodesAt(surface, index: index, slotElementsFromAliases: slotElementsFromAliases)
 		return surface
 	end 'declaredSurfaceAt'
 
-	// Does the type written at `index` name the buffer ANYWHERE inside it? The cheap gate that keeps a plain
-	// declaration allocation-free, and it is EXACT rather than an over-approximation: `__ManagedMemory` and an
-	// array-of-buffers alias are type names, and a type position admits nothing but types — so a token inside
-	// the type that spells one IS a surface bit somewhere in its tree, and no bit exists without such a token.
-	//
-	// For a tuple it scans the whole balanced parenthesized range at once rather than walking element
-	// boundaries: the question is "anywhere", so where the boundaries fall does not matter and the scan needs
-	// no bookkeeping and no allocation.
-	function spellingNamesBufferAt(index TokenIndex) returns bool
-		if self.kindAt(index) != TokenKind.leftParen 'notATuple'
-			return self.spellingAtNamesBuffer(index)
-		end 'notATuple'
+	// The whole surface of a NON-TUPLE declared position: one node, or the shared empty tree when it names the
+	// buffer nowhere. It always reads the alias registry — see `declaredSurfaceAt`'s ⚠⚠ block for why the ROOT
+	// may and a SLOT may not.
+	function rootLeafSurfaceAt(index TokenIndex) returns DeclaredSurface
+		let node = self.leafSurfaceNodeAt(index, elementFromAliases: true)
+		if node == 0 'namesTheBufferNowhere'
+			return sharedEmptyDeclaredSurface
+		end 'namesTheBufferNowhere'
 
+		var surface = DeclaredSurface.create()
+		surface.push(node)
+		return surface
+	end 'rootLeafSurfaceAt'
+
+	// Does the TUPLE type written at `open` name the buffer anywhere inside it? The cheap gate that keeps a
+	// plain declaration allocation-free, and it is EXACT rather than an over-approximation — it asks the very
+	// leaf test the builder below asks, under the very same `slotElementsFromAliases`, so a tree of all-clear
+	// nodes can never be built and stored as a non-plain surface (which would spuriously refuse an overload
+	// set through `requireOverloadableName`).
+	//
+	// It scans the whole balanced parenthesized range at once rather than walking element boundaries: the
+	// question is "anywhere", so where the boundaries fall does not matter and the scan needs no bookkeeping
+	// and no allocation.
+	function tupleNamesBufferAt(open TokenIndex, slotElementsFromAliases bool) returns bool
 		var depth = 0
-		var at = index
+		var at = open
 		while at < self.tokens.count() 'scanTuple'
 			let kind = self.kindAt(at)
 			if kind == TokenKind.leftParen 'openNested'
@@ -32170,7 +32257,7 @@ export type Parser
 				end 'endOfThisTuple'
 			end 'closeNested'
 
-			if self.spellingAtNamesBuffer(at) 'namesIt'
+			if self.leafSurfaceNodeAt(at, elementFromAliases: slotElementsFromAliases) != 0 'namesIt'
 				return true
 			end 'namesIt'
 
@@ -32178,39 +32265,49 @@ export type Parser
 		end 'scanTuple'
 
 		return false
-	end 'spellingNamesBufferAt'
+	end 'tupleNamesBufferAt'
 
-	// The LEAF test: does the single token at `index` name the buffer, outright or as an array-of-buffers
-	// alias? THE one place the two spellings are asked together, so the cheap gate above and the builder
-	// below cannot come to disagree about what counts.
-	function spellingAtNamesBuffer(index TokenIndex) returns bool
-		return self.typeSpellingAtDenotesBuffer(index) or self.signatures.aliasElementIsBufferSurface(self.identifierNameAt(index))
-	end 'spellingAtNamesBuffer'
+	// Does the token at `index` name an array-of-buffers alias, AND is this a position that may ask? THE one
+	// consultation of `bufferElementAliases` from a declared spelling, so the gate and the leaf builder cannot
+	// come to hold different opinions about a position's right to the registry — which is exactly the shape
+	// that made a slot's answer file-order dependent (see `declaredSurfaceAt`).
+	function spellingAtNamesBufferElements(index TokenIndex, elementFromAliases bool) returns bool
+		if not elementFromAliases 'sweepFedSlot'
+			return false
+		end 'sweepFedSlot'
+
+		return self.signatures.aliasElementIsBufferSurface(self.identifierNameAt(index))
+	end 'spellingAtNamesBufferElements'
 
 	// Append the pre-order nodes of the type written at `index` to `out`. A tuple pushes its own node — whose
 	// payload is only its SLOT COUNT, since a tuple record denotes nothing itself — and then each element's
 	// whole subtree, in order. Everything else is one leaf node carrying the two spelling bits.
-	function appendSurfaceNodesAt(out DeclaredSurface, index TokenIndex)
+	//
+	// Every leaf it reaches is a tuple SLOT — `declaredSurfaceAt` answers a non-tuple position without coming
+	// here at all — which is what makes `slotElementsFromAliases` the right question to carry down.
+	function appendSurfaceNodesAt(out DeclaredSurface, index TokenIndex, slotElementsFromAliases bool)
 		if self.kindAt(index) != TokenKind.leftParen 'leafType'
-			out.push(self.leafSurfaceNodeAt(index))
+			out.push(self.leafSurfaceNodeAt(index, elementFromAliases: slotElementsFromAliases))
 			return
 		end 'leafType'
 
 		let starts = self.tupleElementStartsAt(index)
 		out.push(tupleSurfaceNode(starts.count()))
 		for start in starts 'eachElement'
-			self.appendSurfaceNodesAt(out, index: start)
+			self.appendSurfaceNodesAt(out, index: start, slotElementsFromAliases: slotElementsFromAliases)
 		end 'eachElement'
 	end 'appendSurfaceNodesAt'
 
-	// The two spelling bits of a non-tuple type position, in one node.
-	function leafSurfaceNodeAt(index TokenIndex) returns DeclaredSurfaceNode
+	// The two spelling bits of a non-tuple type position, in one node. A node of 0 is "names the buffer
+	// nowhere", which is what both the gate above and `rootLeafSurfaceAt` test for — one decoder, so the gate
+	// and the builder cannot disagree about what counts.
+	function leafSurfaceNodeAt(index TokenIndex, elementFromAliases bool) returns DeclaredSurfaceNode
 		var node = 0 as DeclaredSurfaceNode
 		if self.typeSpellingAtDenotesBuffer(index) 'spelledTheAlias'
 			node = node or SurfaceBitIsBuffer
 		end 'spelledTheAlias'
 
-		if self.signatures.aliasElementIsBufferSurface(self.identifierNameAt(index)) 'namedAnArrayOfBuffers'
+		if self.spellingAtNamesBufferElements(index, elementFromAliases: elementFromAliases) 'namedAnArrayOfBuffers'
 			node = node or SurfaceBitElementIsBuffer
 		end 'namedAnArrayOfBuffers'
 
@@ -32262,7 +32359,11 @@ export type Parser
 			return sharedEmptyDeclaredSurface
 		end 'noReturnClause'
 
-		return self.declaredSurfaceAt((self.pos + 1) as TokenIndex)
+		// `slotElementsFromAliases: false` — BOTH passes ask this and the SWEEP's copy is the one the
+		// whole-program index stores, so a SLOT's element bit read here would be how far the sweep had got,
+		// and a call's member roster would depend on file order. The ROOT's is safe and is left asking; see
+		// `declaredSurfaceAt`'s two ⚠⚠ blocks for why the two positions differ.
+		return self.declaredSurfaceAt((self.pos + 1) as TokenIndex, slotElementsFromAliases: false)
 	end 'returnDeclaredSurface'
 
 	// ⭐ **THE ONE BRIDGE FROM A DECLARED SPELLING TO THE VALUE MARKS.** Three declaration sites carry the
