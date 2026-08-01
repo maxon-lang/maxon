@@ -42,33 +42,41 @@ demanded at the one moment it is still known: from you, now. See
 
 ## `minted at` — why a row records where it was measured, and what it costs you
 
-**A row's BYTE columns are only comparable with another row minted at the same path.** The `minted at`
-cell is the absolute path of the compiler that produced the row, and `scale-test` compares it before it
-subtracts anything.
+**A row's BYTE columns are only comparable with another row minted in the same place.** The `minted at`
+cell names the two paths that reach a compile's byte volume — the absolute path of the compiler that
+produced the row, and the working directory it compiled the corpus from — and `scale-test` compares the
+pair before it subtracts anything.
 
-The mechanism is one line of the instrument's own design meeting one it missed. A compile allocates a
-`String` for the compiler's own executable path and derives the absolute path of every stdlib source
-file from it, so the byte volume of a compile carries a term proportional to the **length** of that
-path. (The generated corpus is handed a *relative* path for exactly this reason — see
-`CorpusRelativeRoot` — which closes the same door on the rung sources and left this one open.)
+**A compile allocates the path strings it works with**, so its byte volume carries a term proportional to
+the **length** of each. There are two, and they arrive by different routes:
 
-**MEASURED**, one binary, two real checkouts 47 characters apart, six rungs:
+1. **The compiler's own executable path.** `locateStdlibDir` walks up from it and every stdlib source
+   path is derived from what it finds.
+2. **The working directory.** The generated corpus is deliberately handed a *relative* path (see
+   `CorpusRelativeRoot`) — and that does **not** keep the checkout out of the byte column, because the
+   compiler resolves each source path against `Directory.currentPath()` itself, per file, per compile
+   (`Queries.isStdlibSourceFile`). That comment claimed otherwise until it was measured.
+
+**MEASURED**, one binary, six rungs, each row varying exactly one of the two:
 
 | | rung 0 | rung 1 | rung 2 | rung 3 | rung 4 | rung 5 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| bytes | +98,888 | +109,745 | +131,459 | +174,887 | +261,743 | +435,455 |
-| allocations | 0 | 0 | 0 | 0 | 0 | 0 |
+| bytes, two checkouts 44 characters apart | +92,576 | +102,740 | +123,068 | +163,724 | +245,036 | +407,660 |
+| bytes, one exe, two working directories 44 apart | +34,515 | +39,960 | +50,850 | +72,630 | +116,190 | +203,310 |
+| allocations, either experiment | 0 | 0 | 0 | 0 | 0 | 0 |
 
 So the two columns are **not the same kind of number** across checkouts, and that is the whole rule:
 
-- **Allocations are path-independent** — exactly, at every rung. A longer path makes the same `String`s
-  *bigger*; it does not make more of them. A delta in that column is always the compiler, and
-  `scale-test` always prints it.
+- **Allocations are path-independent** — at every rung, in both experiments. A longer path makes the same
+  `String`s *bigger*; it does not make more of them. A delta in that column is the compiler, and
+  `scale-test` always prints it. ⚠ This is an **empirical** result about today's compiler, re-measured
+  four times, and not a law: a path built through a doubling `StringBuilder` would cross a capacity
+  boundary and add one.
 - **Bytes are not.** The term sits in `phase:load` (flat), `phase:signatures` and `phase:parse` (both
-  rising with the program), so it is **not a constant offset a reader could subtract** — at 47
-  characters it ran from ~2,100 bytes per character at rung 0 to ~9,300 at rung 5. When the paths differ,
-  `scale-test` prints `not comparable` in that column and says why. **Nothing is normalised**: the counts
-  stay exactly what was measured, and the one subtraction that cannot be honest is not performed.
+  rising with the program), so it is **not a constant offset a reader could subtract** — it ran from
+  ~2,100 bytes per character at rung 0 to ~9,300 at rung 5. When the pair differs, `scale-test` prints
+  `withheld` in that column and says why. **Nothing is normalised**: the counts stay exactly what was
+  measured, and the one subtraction that cannot be honest is not performed.
 
 ⚠ **Every row below dated 2026-07-31 or earlier reads `*(unrecorded)*`** — they predate the column, so
 their own minting paths are lost. Their **allocation** columns are as comparable as they ever were; a
@@ -77,7 +85,7 @@ trend is unbroken: what is gone is only the licence to subtract two byte cells m
 
 ⚠ **A symlink or junction is not a different path.** Windows resolves one before a process sees its own
 executable path, so an A/B run through two junctions of different lengths pointing at one tree measures
-**nothing** and reads as proof of path-independence. Both readings above come from real directories.
+**nothing** and reads as proof of path-independence. Every reading above comes from real directories.
 
 *(This cost four sightings by two agents in one session before it was measured — once as a sign
 reversal, and once written down with the allocation column wrongly blamed alongside the byte one.)*

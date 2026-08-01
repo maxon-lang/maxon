@@ -120,10 +120,17 @@ export let OutputFlagName = "-o"
 // The byte counters count every String the compiler allocates, and a source file's PATH is one of
 // them. An absolute path is as long as wherever the repo happens to live, so the same rung compiled
 // from `C:/dev/maxon` and from `/home/e/src/maxon-checkout` would allocate a different number of
-// BYTES — and the byte column of the trend log, which is a fact about the compiler and not about the
-// checkout, would read differently for every developer. A relative path is the same string on every
-// machine. The subprocess inherits this process's working directory, which is the repo root (see
-// Main.resolveSpecDir, which relies on the same).
+// BYTES. A relative path is the same string on every machine. The subprocess inherits this process's
+// working directory, which is the repo root (see Main.resolveSpecDir, which relies on the same).
+//
+// ⚠ AND IT DOES NOT KEEP THE CHECKOUT OUT OF THE BYTE COLUMN, which this comment claimed until it was
+// measured. The COMPILER resolves each source path against `Directory.currentPath()` itself — per file,
+// per compile, in `Queries.isStdlibSourceFile` — so the working directory's length lands in the byte
+// column whatever this side hands it. MEASURED: one binary at one executable path, two working
+// directories 44 characters apart, +34,515 bytes at rung 0 rising to +203,310 at rung 5, against exactly
+// 0 allocations. Keeping this relative still removes the ARGV copy of it and is still right; the trend
+// log's byte column is comparable across two runs only when the working directory matches too, which is
+// why `mintedAtCell` records both.
 export let CorpusRelativeRoot = ".scale-tmp"
 
 // Everything in the scale suite that can go wrong at RUN time: a rung that would not compile, a
@@ -348,14 +355,27 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 		return 1
 	end 'noGoldens'
 
-	// The compiler's own path is resolved FIRST, because it is two things at once: what each rung is
-	// compiled BY, and the provenance every recorded row carries. A compile derives the absolute path of
-	// every stdlib source from it, so the BYTE column of this run is only comparable with a logged row
-	// minted at the same path — see ScaleHistory's header for the measurement.
+	// WHERE THIS RUN IS MEASURED is resolved FIRST, because it is two things at once: what each rung is
+	// compiled BY and FROM, and the provenance every recorded row carries.
+	//
+	// BOTH PATHS, and neither is optional. A compile derives every stdlib source path from the compiler's
+	// own executable path, and it resolves every RUNG source path against the working directory
+	// (`Queries.isStdlibSourceFile`, per file) — so the BYTE column of this run is comparable only with a
+	// logged row that had the same two. Keyed on the executable alone, one binary run from a second
+	// directory read `comparable` and printed a +203,310-byte fiction at rung 5. See ScaleHistory's header
+	// for both measurements.
 	let compilerExe = try Process.executablePath() otherwise 'noExe'
 		return brokenRun("the running compiler's own path could not be determined", detail: "Process.executablePath() failed")
 	end 'noExe'
-	let mintedAt = compilerExe.toString()
+
+	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
+		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
+	end 'badCorpus'
+
+	// Resolved to an absolute path for the comparison's sake, not for the compiler's: the compiler is
+	// still handed the RELATIVE rung path (see `CorpusRelativeRoot`), and this is the string that says
+	// which directory that relative path was relative TO.
+	let mintedAt = mintedAtCell(compilerExe.toString(), corpusRoot: corpusRoot.resolve(Directory.currentPath()).toString())
 
 	// The trend is read next, before a single rung is compiled. It is what this run's numbers are
 	// reported against, and if a `--note` cannot honestly be recorded in it, saying so after thirty
@@ -374,10 +394,6 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	// to every consumer of the comparison — the human report and `--result-json` alike — so the two
 	// cannot come to different conclusions about the same pair of rows.
 	let bytesComparable = byteComparability(trend, mintedAt: mintedAt)
-
-	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
-		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
-	end 'badCorpus'
 
 	print("scale-test: generating {args.rungs} rung(s) under {corpusRoot.toString()}, compiling each {args.repeat} time(s)\n")
 	let ladder = try generateCorpus(corpusRoot, rungs: args.rungs) otherwise (error) 'genErr'
@@ -429,7 +445,13 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	printPhaseTable(results, measure: ScaleMeasure.allocations, repeat: args.repeat)
 	printPhaseTable(results, measure: ScaleMeasure.bytes, repeat: args.repeat)
 	printPhaseTable(results, measure: ScaleMeasure.cpuTicks, repeat: args.repeat)
-	printMemoryTrend(results, trend: trend, mintedAt: mintedAt, bytes: bytesComparable)
+
+	// DID ANYTHING MOVE — decided ONCE, like the comparability above it, and for the same reason: the
+	// report's closing sentence and the recording sentence are two statements of one fact, and two
+	// answers to one question is how they come to contradict each other in the output of one run.
+	let memoryMoved = anyMemoryMoved(trend, results: results, bytes: bytesComparable)
+
+	printMemoryTrend(results, trend: trend, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
 	printCorpusGrowth(results)
 
 	if not args.resultJson.isEmpty() 'json'
@@ -439,7 +461,7 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	end 'json'
 
 	if not args.note.isEmpty() 'record'
-		let recorded = recordRun(trend, results: results, note: args.note, mintedAt: mintedAt, bytes: bytesComparable)
+		let recorded = recordRun(results, note: args.note, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
 		if recorded != 0 'recordFailed'
 			return recorded
 		end 'recordFailed'
@@ -483,8 +505,8 @@ end 'brokenRun'
 // (Every guard that protects the log's INTEGRITY still refuses: a note carrying a `|` or a forged
 // marker, a duplicate marker, a ladder of the wrong width, a curve set that is not this compiler's.
 // Those reject BAD INPUT, which is a different thing entirely from overruling a valid one.)
-function recordRun(trend LoggedMemory, results RungResultArray, note String, mintedAt String, bytes ByteDelta) returns ExitCode
-	if not anyMemoryMoved(trend, results: results, bytes: bytes) 'unchanged'
+function recordRun(results RungResultArray, note String, mintedAt String, bytes ByteDelta, moved bool) returns ExitCode
+	if not moved 'unchanged'
 		print("\nscale-test: {unchangedColumnsText(bytes)} since the last logged run — recording anyway, because --note was given.\n")
 	end 'unchanged'
 
@@ -938,14 +960,15 @@ end 'topRungGrowth'
 //
 // ⚠ AND THE TWO COLUMNS ARE NOT EQUALLY COMPARABLE ACROSS CHECKOUTS, which is the one asymmetry this
 // report has to carry. Allocations are path-independent — measured, exactly zero difference at all six
-// rungs across two checkouts 47 characters apart. Bytes carry a term proportional to the compiler's own
-// path length, so against a row minted elsewhere the byte delta is WITHHELD rather than printed. See
-// ScaleHistory's header for both readings.
-function printMemoryTrend(results RungResultArray, trend LoggedMemory, mintedAt String, bytes ByteDelta)
+// rungs across two checkouts 44 characters apart, and again across two working directories. Bytes carry a
+// term proportional to the length of BOTH the compiler's own path and the working directory, so against a
+// row minted elsewhere the byte delta is WITHHELD rather than printed. See ScaleHistory's header for
+// every reading.
+function printMemoryTrend(results RungResultArray, trend LoggedMemory, mintedAt String, bytes ByteDelta, moved bool)
 	print("\n")
 	match trend 'm'
 		absent then printNoPreviousRun()
-		present(date, _, note, allocs, loggedBytes) then printMemoryDelta(results, date: date, note: note, loggedAllocs: allocs, loggedBytes: loggedBytes, mintedAt: mintedAt, bytes: bytes)
+		present(date, _, note, allocs, loggedBytes) then printMemoryDelta(results, date: date, note: note, loggedAllocs: allocs, loggedBytes: loggedBytes, mintedAt: mintedAt, bytes: bytes, moved: moved)
 	end 'm'
 end 'printMemoryTrend'
 
@@ -958,12 +981,14 @@ let TrendRungColumnWidth = 8 as ColumnWidth
 let TrendCountColumnWidth = 16 as ColumnWidth
 let TrendDeltaColumnWidth = 14 as ColumnWidth
 
-function printMemoryDelta(results RungResultArray, date String, note String, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, mintedAt String, bytes ByteDelta)
+// `moved` is a PARAMETER, not a local: it is `anyMemoryMoved`'s answer, which the recording sentence also
+// reads. This function used to accumulate its own, which made "did the memory move" — including the rule
+// that a withheld column has not — a decision written twice in two files.
+function printMemoryDelta(results RungResultArray, date String, note String, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, mintedAt String, bytes ByteDelta, moved bool)
 	print("  vs the last row of {OptimizationLogRelativePath} — {date}, \"{note}\"\n")
 	print("\n")
 	print("{padRight("  rung", width: TrendRungColumnWidth)}{padLeft("allocs", width: TrendCountColumnWidth)}{padLeft("delta", width: TrendDeltaColumnWidth)}{padLeft("bytes", width: TrendCountColumnWidth)}{padLeft("delta", width: TrendDeltaColumnWidth)}\n")
 
-	var moved = false
 	for i in 0 upto results.count() 'eachRung'
 		let result = try results.get(i) otherwise panic("printMemoryDelta: i < count but results.get({i}) failed")
 
@@ -974,16 +999,14 @@ function printMemoryDelta(results RungResultArray, date String, note String, log
 		line.append(padLeft(groupDigits(result.total.bytes as Delta), width: TrendCountColumnWidth))
 		line.append(padLeft(byteDeltaText(result.total.bytes, logged: loggedBytes, rung: i, bytes: bytes), width: TrendDeltaColumnWidth))
 		print("{line.build()}\n")
-
-		if countMoved(result.total.allocs, logged: loggedAllocs, rung: i) or byteColumnMoved(result.total.bytes, logged: loggedBytes, rung: i, bytes: bytes) 'changed'
-			moved = true
-		end 'changed'
 	end 'eachRung'
 
 	printWithheldBytes(bytes, mintedAt: mintedAt)
 
 	if not moved 'unchanged'
-		print("\n  {unchangedColumnsText(bytes)} — every rung matches the last logged run exactly.\n")
+		// "every rung COMPARED", because a rung the logged row never climbed prints `-` above and was not
+		// compared at all — claiming it matches would be the withheld column's mistake in the other column.
+		print("\n  {unchangedColumnsText(bytes)} — every rung compared against the last logged run matches it exactly.\n")
 		return
 	end 'unchanged'
 
@@ -1006,14 +1029,15 @@ end 'printWithheldBytes'
 
 function printWithheldBytesReason(why String, mintedAt String)
 	print("\n  ⚠ The BYTE delta is WITHHELD, not zero: {why}.\n")
-	print("    A compile allocates the compiler's own path and derives every stdlib source path from it, so\n")
-	print("    the byte column carries a term proportional to that path's LENGTH — measured at ~2,100 bytes\n")
+	print("    A compile allocates the path strings it works with: it derives every stdlib source path from\n")
+	print("    the COMPILER's own path, and resolves every rung source path against the WORKING DIRECTORY. So\n")
+	print("    the byte column carries a term proportional to each of their LENGTHS — measured at ~2,100 bytes\n")
 	print("    per character at rung 0 rising to ~9,300 at rung 5, which is not a constant a reader could\n")
 	print("    subtract. Nothing is normalised here: the counts are exactly what was measured, and the one\n")
 	print("    subtraction that cannot be honest is not performed.\n")
-	print("    The ALLOCATION delta above is unaffected — it is path-independent, measured.\n")
-	print("    To compare bytes, measure both binaries at ONE path. This run was minted at\n")
-	print("    `{mintedAt}`.\n")
+	print("    The ALLOCATION delta above is unaffected — path-independent in every A/B measured so far.\n")
+	print("    To compare bytes, run both binaries from ONE directory, swapped into one location. This run\n")
+	print("    was minted at `{mintedAt}`.\n")
 end 'printWithheldBytesReason'
 
 // A rung this run climbed that the logged row did not have is not a delta of zero; it is not a delta
@@ -1026,13 +1050,6 @@ function countDeltaText(current AllocCount, logged AllocCountArray, rung LadderI
 	return signedDeltaText(current as Delta, before: before)
 end 'countDeltaText'
 
-function countMoved(current AllocCount, logged AllocCountArray, rung LadderIndex) returns bool
-	let before = try logged.get(rung) otherwise 'notLogged'
-		return true
-	end 'notLogged'
-	return current != before
-end 'countMoved'
-
 // The byte column's delta cell, which is the ONE cell of this table that can be refused.
 //
 // `WithheldDeltaText` rather than `NoBaselineText`, and they must not look alike: "the logged run never
@@ -1044,15 +1061,6 @@ function byteDeltaText(current ByteCount, logged ByteCountArray, rung LadderInde
 		comparable gives countDeltaText(current, logged: logged, rung: rung)
 	end 'b'
 end 'byteDeltaText'
-
-// A withheld column cannot have MOVED — nothing compared it. Reporting it as movement would put the
-// path artifact back into the report under a different name.
-function byteColumnMoved(current ByteCount, logged ByteCountArray, rung LadderIndex, bytes ByteDelta) returns bool
-	return match bytes 'b'
-		withheld gives false
-		comparable gives countMoved(current, logged: logged, rung: rung)
-	end 'b'
-end 'byteColumnMoved'
 
 // Short enough that `padLeft` still puts space in front of it at `TrendDeltaColumnWidth` — a cell that
 // exactly fills its column runs into the one beside it and the table stops being a table. The ⚠ block

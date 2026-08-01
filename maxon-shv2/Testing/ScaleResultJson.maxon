@@ -36,17 +36,19 @@
 // min-of-three, and that is the difference between a CPU number worth acting on and one that is not.
 //
 // AND `mintedAt` IS HERE FOR THE SAME REASON `repeat` IS: it says which numbers may be subtracted from
-// which. The compiler's own absolute path reaches the BYTE volume of every compile (it derives each
-// stdlib source path from it), so a byte delta between two documents minted at different paths is a
-// confident fiction — measured at +98,888 to +435,455 bytes across two checkouts 47 characters apart,
-// against exactly ZERO allocations. `bytesDelta` is therefore ABSENT when the logged row this run was
-// differenced against was minted elsewhere, while `allocsDelta` is always present: the allocation column
-// is path-independent. See ScaleHistory's header.
+// which. TWO absolute paths reach the BYTE volume of every compile — the compiler's own (every stdlib
+// source path is derived from it) and the working directory (every rung source path is resolved against
+// it) — so a byte delta between two documents minted at different paths is a confident fiction, measured
+// at +92,576…+407,660 bytes across two checkouts and +34,515…+203,310 across two working directories,
+// against exactly ZERO allocations either way. `mintedAt` is the pair, rendered by `mintedAtCell` so that
+// what is written and what is compared are one string. `bytesDelta` is therefore ABSENT when the logged
+// row this run was differenced against was minted elsewhere, while `allocsDelta` is always present: the
+// allocation column is path-independent in every A/B measured. See ScaleHistory's header.
 //
 // Shape:
 //   {
 //     "repeat": 3,                                    // compiles per rung; ABSENT if not stated
-//     "mintedAt": "<compiler path>",                  // what this run's bytes are comparable WITH
+//     "mintedAt": "<compiler path> (corpus <dir>)",   // what this run's bytes are comparable WITH
 //     "rungs":  [ { rung, sourceBytes, codeBytes, allocs, frees, bytes, cpuTicks,
 //                   allocsDelta?, bytesDelta?,        // vs the last logged run; ABSENT if there is none
 //                                                     // bytesDelta also ABSENT across minting paths
