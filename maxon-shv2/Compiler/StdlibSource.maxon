@@ -267,14 +267,16 @@ function markReachable(name ByteArray, project Project, byName FuncIndexByName, 
 	// bare name marked above is the FIRST member's registration name and is already covered; the rest are
 	// these.
 	//
-	// ⚠⚠ **`contains` BEFORE `get`, AND THAT IS NOT A MICRO-OPTIMIZATION — IT IS THE DIFFERENCE BETWEEN A
-	// CONSTANT AND A LINEAR TERM.** This runs once per CALL EDGE in the reachable program, and a
-	// `try map.get(k) otherwise …` on a MISS constructs the error value — **a payload-free union case still
-	// heap-allocates** (`Parser.parseCallNamed` measured exactly this and reverted a resolver union for it).
-	// A miss is what nearly every edge is: almost no program overloads anything. MEASURED on the scale
-	// ladder, the `get`-first spelling billed **+0.101 allocations per source byte** — a term growing with
-	// the user's program forever, 1.4% of the whole compile — on top of this rung's genuine per-compile
-	// constant. `contains` answers the same question and allocates nothing.
+	// ⚠ **`contains` BEFORE `get`, AND THE HONEST STATUS OF THAT IS: NOT MEASURED TO MATTER HERE.** The
+	// reasoning is that this runs once per CALL EDGE and a miss is what nearly every edge is, so a
+	// `try map.get(k) otherwise return` would be an error construction per edge on the common path. That
+	// reasoning is why it is spelled this way. **It is NOT why the ladder moved**: it was this rung's first
+	// hypothesis for a measured +0.101 allocations per source byte, it was built, and re-running the ladder
+	// showed **not one allocation changed at any of the six rungs** — the real term was
+	// `SemanticCheck.resolveOverloadedCalls` (see `maxonOpCalleeKind`). Kept because a `contains`/`get` pair
+	// cannot be worse than a throwing `get` and it lets the miss be a `panic` rather than a silent `return`;
+	// recorded this way because a comment claiming a measurement its own instrument refuted is exactly the
+	// false prose this project keeps finding.
 	if not project.overloadSets.contains(name) 'notAnOverloadSet'
 		return
 	end 'notAnOverloadSet'

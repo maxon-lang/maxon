@@ -22392,8 +22392,12 @@ export type Parser
 		end 'op'
 	end 'emitStructEqualityCall'
 
-	// Is this comparison an EQUALITY one (`==`/`!=`) rather than an ordering one? Asked where the two families
-	// need different machinery — a struct's `equals` dispatch has no ordering reading.
+	// ⭐ **IS THIS COMPARISON AN EQUALITY ONE (`==`/`!=`) RATHER THAN AN ORDERING ONE?** — the ONE place the
+	// operator families are split, because both readers derive the same consequence from it: a struct's own
+	// `equals` dispatch has no ordering reading (`structEqualityOperands`), and the witness dispatch picks
+	// `Equatable` here and `Comparable` there (`requireOperatorWitness`). That second site spelled it
+	// `op == MaxonCmpOp.eq or op == MaxonCmpOp.ne` inline; two spellings of one partition of six operators is
+	// the shape where a seventh operator gets taught to one and not the other.
 	function comparisonIsEquality(op MaxonCmpOp) returns bool
 		return match op 'op'
 			eq gives true
@@ -22519,8 +22523,7 @@ export type Parser
 	// into parallel `want*` arguments, so this function names ONE fact (which protocol the operator belongs
 	// to) instead of several parallel spellings of it.
 	function requireOperatorWitness(paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
-		let isEquality = op == MaxonCmpOp.eq or op == MaxonCmpOp.ne
-		let protocol = requireBuiltinInterface(EquatableInterfaceName if isEquality else ComparableInterfaceName)
+		let protocol = requireBuiltinInterface(EquatableInterfaceName if comparisonIsEquality(op) else ComparableInterfaceName)
 		let method = try protocol.methods.get(0) otherwise panic("requireOperatorWitness: the synthesized protocol '{String.from(protocol.name)}' declares no method — a comparison operator dispatches its SOLE method (`singleMethodInterface`), so `builtinInterface` must give it exactly one")
 
 		// The search itself runs by METHOD (the shared core the `.equals()`/`.compare()` dispatch uses), so a hit
