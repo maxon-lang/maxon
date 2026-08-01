@@ -1285,17 +1285,20 @@ public static class StdlibLoader {
       // second target parsed on a second thread starts them at zero. Uniqueness across modules is
       // also not needed: exactly one target's module takes part in any one compile.
       //
-      // The reason is that the panic-label cache must stay a SUPERSET of the label->message mapping
-      // of every module a given thread might go on to compile. A cloned stdlib panic op re-mints its
-      // label from that cache (FunctionCloner, MonomorphizationPass), so if the cache were reset per
-      // parse it would end up describing only the LAST target parsed, and a later compile for an
-      // EARLIER target would re-mint labels that collide with that module's parse-time ones — one
-      // label, two messages, and whichever reaches symdata first decides what the panic prints.
+      // They no longer need resetting either, because nothing downstream of this parse reads them.
+      // Closure names are minted only by the parser, and a cloned panic op now CARRIES the label it
+      // was given (MaxonPanicOp.CloneKeepingLabel) instead of re-deriving it from a thread-local
+      // cache. Each parse therefore mints against a dictionary only it is adding to, so the names in
+      // any one module are unique within that module — which is all that is required.
       //
-      // (The cache being ThreadStatic while the modules are process-global is a real pre-existing
-      // hazard in its own right, for the same reason read the other way round. It predates the
-      // per-target cache and is not made reachable by it: before, a worker thread already cloned a
-      // module some other thread had parsed. Filed for its own rung.)
+      // ⚠ This paragraph used to say the opposite: that the cache had to stay a SUPERSET of every
+      // module a thread might go on to compile, because the cloners re-minted from it. That was true,
+      // and the hazard it described — one label, two messages, whichever reaches symdata first decides
+      // what the panic prints — was REAL and is now FIXED (row A1m). It was reproduced before the fix:
+      // a panic in Array.resize printed `utf16.maxon:59: value outside typealias 'CodeUnit16'`,
+      // because Array.resize re-minted as __stdlib_panic_msg_98, which on the parse thread was utf16's.
+      // The comment is rewritten rather than deleted so the next reader learns the trap, not just the
+      // rule: this file's own text was the best surviving description of a bug nobody had reproduced.
       var stdlibErrors = Compiler.CompileSources(module, sources, true, target);
       if (stdlibErrors.Count > 0) throw stdlibErrors[0];
       foreach (var func in module.Functions) {
