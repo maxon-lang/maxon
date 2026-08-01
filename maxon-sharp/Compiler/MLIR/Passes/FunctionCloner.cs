@@ -399,7 +399,7 @@ internal class FunctionCloner {
       case MaxonSwitchOp sw: return new MaxonSwitchOp(sw.ScrutineeVarName, [.. sw.Intervals], sw.DefaultBlock, sw.DispatchLabelPrefix);
       case MaxonReturnOp ret: return new MaxonReturnOp(ret.Value != null ? MapValue(ret.Value) : null, ret.IsErrorPropagation);
       case MaxonThrowOp th: return new MaxonThrowOp(MapValue(th.ErrorValue), th.ErrorTypeName) { IsOwnedLocalTransfer = th.IsOwnedLocalTransfer };
-      case MaxonPanicOp p: return new MaxonPanicOp(p.Message, p.IsStdlib);
+      case MaxonPanicOp p: return p.CloneKeepingLabel();
       case MaxonPanicDynamicOp pd: return new MaxonPanicDynamicOp((MaxonStruct)MapValue(pd.MessageStruct));
       case MaxonRefEqOp req: { var c = new MaxonRefEqOp(MapValue(req.Lhs), MapValue(req.Rhs), req.Negate); RegisterResult(req.Result, c.Result); return c; }
       // Variable names reference, not values — copy as-is

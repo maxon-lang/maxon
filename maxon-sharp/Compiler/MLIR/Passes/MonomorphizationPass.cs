@@ -2394,7 +2394,7 @@ public static class MonomorphizationPass {
       case MaxonSwitchOp sw:
         return new MaxonSwitchOp(sw.ScrutineeVarName, [.. sw.Intervals], sw.DefaultBlock, sw.DispatchLabelPrefix);
       case MaxonPanicOp p:
-        return new MaxonPanicOp(p.Message, p.IsStdlib);
+        return p.CloneKeepingLabel();
       case MaxonPanicDynamicOp pd:
         return new MaxonPanicDynamicOp((MaxonStruct)mapValue(pd.MessageStruct));
       case MaxonRefEqOp req: {

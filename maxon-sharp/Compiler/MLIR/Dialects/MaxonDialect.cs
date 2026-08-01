@@ -1867,18 +1867,48 @@ public sealed class MaxonManagedWriteStderrOp(MaxonValue managed) : MaxonOp {
 // resets each compile. A user-code panic and a stdlib-code panic could
 // otherwise both get `__panic_msg_10`, and only one wins in symdata —
 // the other prints the wrong message at runtime.
-public sealed class MaxonPanicOp(string message, bool isStdlib) : MaxonOp {
+public sealed class MaxonPanicOp : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.Panic;
   [ThreadStatic] private static Dictionary<string, string>? _userPanicLabelCache;
+  // Written and read ONLY while a stdlib module is being parsed, which is one thread's work from
+  // start to finish — so the labels in any one stdlib module were all minted against one state of
+  // this dictionary, and each message therefore holds a label no other message holds. Nothing
+  // downstream of the parse consults it (see CloneKeepingLabel), which is what makes that true on a
+  // thread that clones a stdlib module it did not parse.
   [ThreadStatic] private static Dictionary<string, string>? _stdlibPanicLabelCache;
   // Resets the user-code cache. Stdlib labels live in the cached stdlib
   // module and are not re-assigned across user compiles, so the stdlib cache
   // is left alone.
   public static void ResetPanicLabels() => _userPanicLabelCache = null;
   public override string Mnemonic => $"maxon.panic \"{Message}\"";
-  public string Message { get; } = message;
-  public bool IsStdlib { get; } = isStdlib;
-  public string SymdataLabel { get; } = GetOrCreateLabel(message, isStdlib);
+  public string Message { get; }
+  public bool IsStdlib { get; }
+  public string SymdataLabel { get; }
+
+  /// A panic the PARSER read out of source text. Its message is being written down for the first
+  /// time, so this is where the label for it is decided.
+  public MaxonPanicOp(string message, bool isStdlib)
+    : this(message, isStdlib, GetOrCreateLabel(message, isStdlib)) { }
+
+  private MaxonPanicOp(string message, bool isStdlib, string symdataLabel) {
+    Message = message;
+    IsStdlib = isStdlib;
+    SymdataLabel = symdataLabel;
+  }
+
+  /// A copy of this panic, carrying the label this one was given — THE way a clone of this op is
+  /// assembled, for FunctionCloner and MonomorphizationPass alike.
+  ///
+  /// It CARRIES the label rather than re-deriving it, because the two derivations answer to
+  /// different state. <see cref="GetOrCreateLabel"/> reads a [ThreadStatic] cache, while the module
+  /// being specialized is process-global: the stdlib is parsed once, on whichever thread asked
+  /// first, and every other thread then clones a module whose labels it never minted. Re-deriving
+  /// on such a thread numbers the copy from an unrelated count, so a specialized panic could take a
+  /// label a CONCRETE panic in the same module already held — and symdata keeps only the first
+  /// message written under a label, so the other one prints text from a function it never called.
+  /// (Measured: `Array.resize`'s panic reporting `utf16.maxon:59` — see specs/panic-label-identity.)
+  public MaxonPanicOp CloneKeepingLabel() => new(Message, IsStdlib, SymdataLabel);
+
   private static string GetOrCreateLabel(string message, bool isStdlib) {
     if (isStdlib) {
       _stdlibPanicLabelCache ??= [];
