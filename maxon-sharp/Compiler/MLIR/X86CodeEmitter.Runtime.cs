@@ -2919,10 +2919,7 @@ public partial class X86CodeEmitter {
 
     // --- Async yield: ConnectEx returned IO_PENDING ---
     DefineLabel("rt_ntc_yield");
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitLeaMainThreadInline(X86Register.Rdx);
-    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
-    EmitJcc("e", "rt_ntc_mainthread_loop");
+    EmitJumpIfMainThread("rt_ntc_mainthread_loop");
 
     // Non-mainThread: commit the park (Go's netpollblockcommit), then switch to P->mainThread. A
     // failed commit means a completer claimed the wakeup while we were getting here, so we must NOT
@@ -2947,10 +2944,7 @@ public partial class X86CodeEmitter {
     // It is time-gated to once per 10 ms inside itself, so a loop that spins costs nothing.
     EmitCallRuntimeLabel("__netpoll_recover");
     EmitCallRuntimeLabel("__io_check_completions");
-    EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
-    EmitCmpRegImm(X86Register.Rax, GtStatusWaiting);
-    EmitJcc("ne", "rt_ntc_resume");
+    EmitJumpIfNetpollWoken("rt_ntc_resume");
     // Try dequeue a runnable GT
     EmitCallRuntimeLabel("__gt_dequeue");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
@@ -3237,10 +3231,7 @@ public partial class X86CodeEmitter {
 
     // Async yield: I/O is pending. Check if current GT is the mainThread.
     DefineLabel($"{labelPrefix}_yield");
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitLeaMainThreadInline(X86Register.Rdx);
-    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
-    EmitJcc("e", $"{labelPrefix}_mainthread_loop");
+    EmitJumpIfMainThread($"{labelPrefix}_mainthread_loop");
 
     // Non-mainThread: switch to P->mainThread (worker loop handles scheduling).
     // Clear ioYielded flag BEFORE context switch so __io_complete_gt knows to
@@ -3267,10 +3258,7 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     EmitCallRuntimeLabel("__netpoll_recover");
     EmitCallRuntimeLabel("__io_check_completions");
-    EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
-    EmitCmpRegImm(X86Register.Rax, GtStatusWaiting);
-    EmitJcc("ne", $"{labelPrefix}_resume");
+    EmitJumpIfNetpollWoken($"{labelPrefix}_resume");
     // Try dequeue a runnable GT
     EmitCallRuntimeLabel("__gt_dequeue");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
@@ -3612,10 +3600,7 @@ public partial class X86CodeEmitter {
 
     // Async yield: I/O is pending. Check if current GT is the mainThread.
     DefineLabel($"{labelPrefix}_yield");
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitLeaMainThreadInline(X86Register.Rdx);
-    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
-    EmitJcc("e", $"{labelPrefix}_mainthread_loop");
+    EmitJumpIfMainThread($"{labelPrefix}_mainthread_loop");
 
     // Non-mainThread: switch to P->mainThread (worker loop handles scheduling).
     // CRITICAL: Do NOT overwrite mainThread's status — if mainGT is the
@@ -3644,10 +3629,7 @@ public partial class X86CodeEmitter {
     DefineLabel($"{labelPrefix}_mainthread_loop");
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     EmitCallRuntimeLabel("__netpoll_recover");
-    EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
-    EmitCmpRegImm(X86Register.Rax, GtStatusWaiting);
-    EmitJcc("ne", $"{labelPrefix}_resume");
+    EmitJumpIfNetpollWoken($"{labelPrefix}_resume");
     EmitCallRuntimeLabel("__gt_dequeue");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
     EmitJcc("z", $"{labelPrefix}_mainthread_park");
@@ -3990,11 +3972,11 @@ public partial class X86CodeEmitter {
       EmitAtTraceUnlock();
     }
 
-    // Check if current GT is the mainThread
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitLeaMainThreadInline(X86Register.Rdx);
-    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
-    EmitJcc("e", "__sleep_mainthread_loop");
+    // Check if current GT is the mainThread. maxon_sleep has NO park word — it parks on the timer
+    // heap, not on an I/O registration, so nothing ever calls __netpoll_arm for it and its exit test
+    // below stays the `status` read. This is the one caller of EmitJumpIfMainThread that is purely
+    // about "can I switch away", with no commit anywhere near it.
+    EmitJumpIfMainThread("__sleep_mainthread_loop");
 
     // Non-mainThread path: switch to P->mainThread (worker loop handles scheduling)
     EmitMovRegImm(X86Register.Rax, GtStatusRunning);
@@ -7590,9 +7572,9 @@ public partial class X86CodeEmitter {
     // change: arm64's __gt_context_switch sets from.ioYielded = 1 itself, while x86's relies on the
     // RESUMER setting it once the switch returns. So x86 publishes "parked" strictly later. The
     // spin inside __netpoll_unblock is bounded on both — on x86 by the handful of instructions the
-    // switched-to scheduler loop runs before it stamps the flag, which is exactly the bound
-    // __io_complete_gt_spin has always relied on — but it is a LONGER bound here, and anyone
-    // touching either backend's switch must keep that stamp on the immediate resume path.
+    // switched-to scheduler loop runs before it stamps the flag, which is the bound the pre-netpoll
+    // ioYielded spin-gate in __io_complete_gt always relied on — but it is a LONGER bound here, and
+    // anyone touching either backend's switch must keep that stamp on the immediate resume path.
     EmitCallRuntimeLabel("__netpoll_unblock");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
     EmitJcc("z", "__io_check_comp_skip_enqueue");
@@ -7679,10 +7661,7 @@ public partial class X86CodeEmitter {
     }
 
     // Check if current GT is the mainThread (self-switch would be a no-op)
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitLeaMainThreadInline(X86Register.Rdx);
-    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
-    EmitJcc("e", "__io_submit_sync_mainthread_loop");
+    EmitJumpIfMainThread("__io_submit_sync_mainthread_loop");
 
     // Non-mainThread path: commit the park, then switch to P->mainThread (worker loop handles
     // scheduling). (ioYielded already cleared above before enqueueing.) A failed commit means the
@@ -7703,11 +7682,10 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__io_check_completions");
     EmitCallRuntimeLabel("__gt_timer_check");
     EmitCallRuntimeLabel("__netpoll_recover");
-    // Check if our status changed from "waiting" (sync worker completed our request)
-    EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
-    EmitCmpRegImm(X86Register.Rax, GtStatusWaiting);
-    EmitJcc("ne", "__io_submit_sync_resume"); // I/O done, proceed to resume
+    // Ask the park word whether the sync worker has claimed our wakeup. It completes through
+    // __io_complete_gt, which claims; finding `Wait` (we never commit here) it declines the enqueue
+    // and leaves the resume to us — which is exactly what this test is for.
+    EmitJumpIfNetpollWoken("__io_submit_sync_resume"); // I/O done, proceed to resume
     // Try dequeue a runnable GT and run it while we wait
     EmitCallRuntimeLabel("__gt_dequeue");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
@@ -7935,6 +7913,58 @@ public partial class X86CodeEmitter {
     EmitJcc("z", abortLabel);
   }
 
+  /// <summary>
+  /// netpoll: jump to <paramref name="wokenLabel"/> when a completer has CLAIMED the current GT's
+  /// wakeup. This is the ONLY question a waiter that armed the park word is allowed to ask — see
+  /// the release rule in RuntimeEmitter.Netpoll.cs.
+  ///
+  /// ⚠ THE FIVE MAIN-THREAD PARK LOOPS USED TO ASK <c>gt-&gt;status != waiting</c> INSTEAD, AND THAT
+  /// WAS A SECOND CHANNEL THE PROTOCOL COULD NOT AFFORD. A completer publishes status and
+  /// io_result_val BEFORE it claims, so inside that window `status` says "done" while the word is
+  /// still `Wait`; a waiter that left the park there ran __netpoll_park_done, released a word its
+  /// completer was still in flight toward, and handed the late claim to its NEXT park — whose
+  /// commit then failed against a completion that never happened.
+  ///
+  /// ⭐ IT ALSO RETIRES A SECOND, OLDER HAZARD ON THIS BACKEND. Three of the five submit families
+  /// stamp <c>mainThread.status = running</c> on their way into <c>__gt_context_switch</c>, and two
+  /// carry a CRITICAL comment saying why they must NOT ("forcing its status back to running makes
+  /// mainthread_loop's exit-when-not-waiting check spuriously fire and return the stale
+  /// io_result_val of mainGT's previous op"). The park word is not a scheduler field and no context
+  /// switch stamps it, so that class of spurious exit cannot reach this test at all.
+  ///
+  /// Clobbers the call-clobbered set. Every one of the five call sites already sits immediately
+  /// after a call, so nothing is live across it.
+  /// </summary>
+  private void EmitJumpIfNetpollWoken(string wokenLabel) {
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitCallRuntimeLabel("__netpoll_woken");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("nz", wokenLabel);
+  }
+
+  /// <summary>
+  /// Jump to <paramref name="mainThreadLabel"/> when the current GT IS this P's inline mainThread,
+  /// i.e. when switching to <c>&amp;P-&gt;mainThread</c> would be a self-switch and the caller must
+  /// take its inline scheduling loop instead. Six park/sleep sites spelled these four instructions
+  /// verbatim.
+  ///
+  /// ⚠ THIS IS NOT THE COMMIT RULE, THOUGH IT IS THE SAME PREDICATE. "Does this GT have a
+  /// schedulable stack" decides BOTH "may it commit a park" and "can it context-switch away", and
+  /// the first of those now lives once, inside <c>__netpoll_commit</c> (which spells it
+  /// <c>stackBase == 0</c>, as <c>__gt_process_pending_waiter</c> always has). What is left here is
+  /// only the second question, which no callee can answer for its caller because the answer decides
+  /// which code path the CALLER takes — and it must be asked BEFORE the commit, not after.
+  ///
+  /// Leaves RCX = current GT and RDX = &amp;P-&gt;mainThread, which the fall-through path wants as
+  /// <c>__gt_context_switch</c>'s (from, to).
+  /// </summary>
+  private void EmitJumpIfMainThread(string mainThreadLabel) {
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitLeaMainThreadInline(X86Register.Rdx);
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
+    EmitJcc("e", mainThreadLabel);
+  }
+
   private void EmitIoSubmitOverlappedCore(string ioFuncName, string labelPrefix) {
     // Check cancel flag
     EmitLoadCurrentGtInline(X86Register.R10);
@@ -8041,10 +8071,7 @@ public partial class X86CodeEmitter {
 
     // Async yield: I/O is pending. Check if current GT is the mainThread.
     DefineLabel($"{labelPrefix}_yield");
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitLeaMainThreadInline(X86Register.Rdx);
-    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
-    EmitJcc("e", $"{labelPrefix}_mainthread_loop");
+    EmitJumpIfMainThread($"{labelPrefix}_mainthread_loop");
 
     // Non-mainThread: commit the park (Go's netpollblockcommit), then switch to P->mainThread.
     // A failed commit means a completer claimed the wakeup while we were getting here, so we must
@@ -8069,10 +8096,7 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     EmitCallRuntimeLabel("__netpoll_recover");
     EmitCallRuntimeLabel("__io_check_completions");
-    EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
-    EmitCmpRegImm(X86Register.Rax, GtStatusWaiting);
-    EmitJcc("ne", $"{labelPrefix}_resume");
+    EmitJumpIfNetpollWoken($"{labelPrefix}_resume");
     // Try dequeue a runnable GT
     EmitCallRuntimeLabel("__gt_dequeue");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX

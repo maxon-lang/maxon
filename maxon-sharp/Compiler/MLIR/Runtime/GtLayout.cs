@@ -137,17 +137,28 @@ public static class GtLayout {
   // ---- Async-I/O park state (GtOffParkState) — a port of Go's netpoll pd.rg/pd.wg ----
   //
   // WHO OWNS THE WAKEUP. `status` says an I/O finished and `ioYielded` says a context has been
-  // saved; NEITHER says whether the completer or the waiter is responsible for resuming it, and a
-  // waiter that armed a readiness registration BEFORE parking can still be talked out of parking by
-  // reading `status` itself. Deciding that from two independent words is a race whatever order they
-  // are written in — the completer reads "still running, it will self-detect" in the same instant
-  // the waiter reads "still waiting, I may park", and the wakeup is lost. This word settles it with
-  // ONE atomic operation per side, so exactly one of them acts.
+  // saved; NEITHER says whether the completer or the waiter is responsible for resuming it.
+  // Deciding that from two independent words is a race whatever order they are written in — the
+  // completer reads "still running, it will self-detect" in the same instant the waiter reads
+  // "still waiting, I may park", and the wakeup is lost. This word settles it with ONE atomic
+  // operation per side, so exactly one of them acts.
   //
-  // ⚠ IT DOES NOT REPLACE `status` OR `ioYielded`, AND MUST NOT. Go keeps `g.atomicstatus` separate
-  // from `pd.rg` because they answer different questions — WHAT IS THIS THREAD DOING versus WHO OWNS
-  // THIS WAKEUP — and so do we: `status` still carries readiness (with `io_result_val` behind its
-  // release fence) and `ioYielded` still says whether the register context has been saved.
+  // ⚠⚠ ONCE A WAITER HAS ARMED THIS WORD, THIS WORD IS THE ONLY THING IT MAY ASK. Not `status`,
+  // not `io_result_val` — nothing a completer publishes BEFORE it claims. Every completer here
+  // publishes readiness and then claims, so for the instructions in between, `status` says "done"
+  // while the word is still unclaimed; a waiter that left the park there ran __netpoll_park_done,
+  // which accepts `Wait` and swaps to `Nil`, RELEASING a word its completer was still in flight
+  // toward. The late claim then landed on the waiter's NEXT park and that park's commit failed
+  // against a completion that never happened. `__netpoll_woken` exists so the question has exactly
+  // one form; see RuntimeEmitter.Netpoll.cs. (Reproduced: MAXON_GT_CLAIM_DELAY_MS=5 took the park
+  // driver from 5/5 clean to 0/5, every failure leaking.)
+  //
+  // ⚠ IT DOES NOT REPLACE `status` OR `ioYielded`, AND MUST NOT — it narrows who may READ them, not
+  // what they mean. Go keeps `g.atomicstatus` separate from `pd.rg` because they answer different
+  // questions — WHAT IS THIS THREAD DOING versus WHO OWNS THIS WAKEUP — and so do we: `status` still
+  // carries readiness (with `io_result_val` behind its release fence) for every reader that is not a
+  // waiter deciding whether to leave a park, and `ioYielded` still says whether the register context
+  // has been saved.
   //
   // The names and the ORDER are Go's, so `old > NetpollWait` reads the same here as there:
   //
@@ -156,13 +167,16 @@ public static class GtLayout {
   //           or left the GT to self-detect (claimed from Wait).
   //   Wait    the GT has armed a registration and MAY park; it is still running and can still
   //           abort. A completer that claims this does NOT enqueue — the waiter's own commit CAS
-  //           will fail and it will self-detect.
+  //           will fail, or its next __netpoll_woken will return 1, and it resumes itself. This is
+  //           also the terminal state of a GT that has no schedulable stack: __netpoll_commit
+  //           refuses to move the word for a stackBase==0 GT, so the main OS thread is `Wait` for
+  //           its whole park and every completer correctly declines to enqueue it.
   //   Parked  the GT has COMMITTED to park (the commit CAS Wait -> Parked won) and is executing
   //           straight-line code into __gt_context_switch. A completer that claims this owns the
   //           enqueue, and may safely spin for ioYielded==1 because nothing on that path can turn
-  //           the waiter around — the termination argument __io_complete_gt_spin and __gt_ppw_spin
-  //           each already make for their own parker, and the one the I/O park path could not make
-  //           until this word existed, because its parker COULD turn around.
+  //           the waiter around — the termination argument __gt_ppw_spin already makes for its own
+  //           parker, and the one the I/O park path could not make until this word existed, because
+  //           its parker COULD turn around.
   //
   // ⭐ Parked is a CONSTANT where Go stores a `*g`. Go's word lives in a per-fd pollDesc, so it has
   // to name WHICH goroutine parked; ours lives in the GT itself, so "which" is the word's own

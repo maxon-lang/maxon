@@ -25,6 +25,14 @@
 # returns non-zero when they differ; this script also greps the output, so neither half can rot
 # without the other noticing.
 #
+# ⚠⚠ AND THE THIRD ARM: A RESCUED RUN IS A FAILED RUN. __netpoll_recover is a REGRESSION DETECTOR
+# that happens to also rescue the run — under a correct protocol its counter is exactly 0, so its
+# warning line is a bug report, not a note. This script used to ignore it, and the only reason that
+# never produced a false green is that the runs which tripped the net ALSO leaked: in the arm that
+# opened this slice, 4 of 5 runs printed the warning and all 5 exited 101, so the leak check caught
+# what this check missed. A future regression the net rescues CLEANLY would have been reported `ok`
+# — a harness that reports green while the runtime is printing "the park protocol lost one".
+#
 # Usage: run.sh [iterations] [timeout-seconds]
 #   Environment: set either injection knob before invoking; both are honoured and both are logged.
 #
@@ -88,6 +96,11 @@ for i in $(seq 1 "$iterations"); do
 		# Belt and braces: the driver already returns non-zero on a mismatch, so reaching here
 		# means the two halves of the verdict disagree, which is itself a finding.
 		verdict="WRONG ANSWER (count mismatch slipped past the driver's own check)"
+		failures=$((failures + 1))
+	elif echo "$line" | /usr/bin/grep -q 'netpoll safety net'; then
+		# The right answer, arrived at the wrong way. See the header: the net's own message says
+		# the protocol lost a wakeup, and that is the thing under test.
+		verdict="RESCUED (recovery net fired — the protocol lost a wakeup)"
 		failures=$((failures + 1))
 	else
 		verdict="ok"
