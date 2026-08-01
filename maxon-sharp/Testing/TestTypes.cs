@@ -124,10 +124,14 @@ public class Fragment {
   /// <summary>
   /// Raw IR captured from the compiler at fragment-generation time, parsed from
   /// section 3 of the fragment file (the block following the "// CompiledIR" header).
-  /// This is a snapshot of the compiler's actual output — NOT an assertion. The test
-  /// runner does not verify it during runs; it exists only so compiler output drift
-  /// is diff-reviewable in git. For verified IR expectations, see
-  /// <see cref="SuccessExpectation.RequiredIR"/>.
+  ///
+  /// This is a snapshot of the compiler's actual output rather than a hand-authored expectation, but
+  /// it is NOT unverified: the whole fragment — this section included — is compared byte-for-byte
+  /// against the committed golden by <c>TestRunner.CheckFragmentGolden</c>, and a difference fails the
+  /// test. The distinction from <see cref="SuccessExpectation.RequiredIR"/> is what is being asserted,
+  /// not whether: RequiredIR pins a hand-written EXCERPT of the pre-target IR that a spec author chose
+  /// as the point of the test, while this pins the WHOLE post-register-allocation function so that no
+  /// change to the emitted code can pass unremarked.
   /// </summary>
   public string? GeneratedIR { get; init; }
   /// <summary>

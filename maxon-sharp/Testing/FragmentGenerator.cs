@@ -317,12 +317,29 @@ public static partial class FragmentGenerator {
   }
 
   /// <summary>
+  /// A finished fragment's TEXT, with newlines normalized to LF.
+  ///
+  /// The fragment's bytes are its identity — the committed golden is compared to this string
+  /// byte-for-byte (<c>TestRunner.CheckFragmentGolden</c>) — and <see cref="StringBuilder.AppendLine"/>
+  /// emits the PLATFORM newline, so a fragment built on Windows and one built on macOS would differ in
+  /// every line for a reason that has nothing to do with the compiler. Normalizing HERE, at the one
+  /// point where every fragment is finished, is what makes the goldens portable; it used to be done at
+  /// each WRITE site, where the next caller to forget would mint a CRLF golden that fails on every
+  /// other host.
+  /// </summary>
+  private static string FinishFragment(StringBuilder sb) =>
+    sb.ToString().Replace("\r\n", "\n").Replace("\r", "\n");
+
+  /// <summary>
   /// Build a complete fragment file using a pre-extracted IR snippet (e.g. one
   /// produced by `SplitBatchedIr`). Used by the batched-compile path so we
   /// don't recompile each test individually just to fill in the
-  /// `// CompiledIR` section. The IR is for inspection only — it may differ
-  /// from a per-fragment compile because batched optimization decisions are
-  /// not identical.
+  /// `// CompiledIR` section.
+  ///
+  /// The IR here comes from the BATCHED compile, which is what makes an unfiltered, batched run the
+  /// only one whose fragments the goldens can pin: the literal pool is shared across the batch, so
+  /// which other tests were selected decides this test's <c>__str_N</c> indices. See
+  /// <c>TestRunner.FragmentGoldensAreAuthoritative</c>.
   /// </summary>
   public static string GenerateFragmentContentWithIr(TestCase test, string? compiledIr) {
     var sb = BuildFragmentPrelude(test);
@@ -332,7 +349,7 @@ public static partial class FragmentGenerator {
       sb.AppendLine();
     }
     sb.AppendLine("---");
-    return sb.ToString();
+    return FinishFragment(sb);
   }
 
   public static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath, Compiler.CompileTarget? target = null) {
@@ -395,18 +412,20 @@ public static partial class FragmentGenerator {
 
     sb.AppendLine("---");
 
-    return (sb.ToString(), error);
+    return (FinishFragment(sb), error);
   }
 
   /// <summary>
-  /// Parse a fragment file.
+  /// Parse fragment TEXT, attributing it to <paramref name="fragmentPath"/> for reporting.
+  ///
+  /// It takes the text rather than the path because what the runner executes must be the fragment it
+  /// just GENERATED, not whatever happens to be on disk under that name. While every run
+  /// unconditionally rewrote the file the two were the same thing; now that the committed golden is a
+  /// GATE the runner does not write it, and re-reading the test from disk would run the COMMITTED
+  /// source against the current compiler — a stale golden would then be reported as a wrong answer
+  /// instead of as the codegen change it is.
   /// </summary>
-  public static Fragment? ParseFragment(string fragmentPath) {
-    if (!File.Exists(fragmentPath)) {
-      return null;
-    }
-
-    var content = File.ReadAllText(fragmentPath);
+  public static Fragment? ParseFragmentContent(string content, string fragmentPath) {
     var lines = content.Split('\n');
 
     // Extract test name from first line

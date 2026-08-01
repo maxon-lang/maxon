@@ -31,6 +31,58 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private static long _totalCompileMs;
 
   /// <summary>
+  /// Whether THIS RUN's fragments are the ones the committed goldens pin.
+  ///
+  /// A fragment's `// CompiledIR` section comes from a compile whose shape both flags change, so under
+  /// either of them the goldens are neither compared nor written — the fragments this run produced are
+  /// simply not the same artifact:
+  /// <list type="bullet">
+  /// <item><c>--filter</c>: a spec's batchable tests compile as ONE module with ONE literal pool, so
+  ///   which tests were selected decides every survivor's <c>__str_N</c> indices.</item>
+  /// <item><c>--no-batch</c>: a batchable test then compiles ALONE, which is a different compile from
+  ///   the batched one its golden was minted from.</item>
+  /// </list>
+  /// Refusing to WRITE matters as much as refusing to compare, and is the older half of the bug: a
+  /// filtered or unbatched run used to overwrite goldens with content only that run could reproduce,
+  /// so the next full run overwrote them back — flip-flop churn in <c>git status</c> that hid real
+  /// codegen diffs in the noise.
+  ///
+  /// The consequence, stated because it is a real cost and not an oversight: fragment goldens can only
+  /// be minted by a FULL <c>--update-required</c> run. Letting a filtered one mint the tests it does
+  /// cover would mean writing a golden for a batchable test from a batch it was never in.
+  /// </summary>
+  private bool FragmentGoldensAreAuthoritative => _filter == null && !_noBatch;
+
+  /// <summary>
+  /// What this run did to the committed fragment goldens, plus anything that went wrong producing one.
+  ///
+  /// One object rather than a <c>ref int</c> and a bag threaded side by side through six frames: they
+  /// are the same story, every worker thread touches both, and a <c>ref</c> counter cannot be handed
+  /// to a lambda at all.
+  /// </summary>
+  private sealed class FragmentTally {
+    private int _written;
+    private int _verified;
+
+    /// <summary>Goldens this run created or regenerated (a new test, or <c>--update-required</c>).</summary>
+    public int Written => _written;
+
+    /// <summary>Goldens this run compared against fresh compiler output and found identical.</summary>
+    public int Verified => _verified;
+
+    /// <summary>
+    /// Goldens that could be neither compared nor written, because the fragment itself could not be
+    /// produced. Reported and made a non-zero exit by <c>Program.SpecTest</c> — a gate that could not
+    /// run is not a gate that passed.
+    /// </summary>
+    public ConcurrentBag<string> Errors { get; } = [];
+
+    public void CountWritten() => Interlocked.Increment(ref _written);
+
+    public void CountVerified() => Interlocked.Increment(ref _verified);
+  }
+
+  /// <summary>
   /// Run all tests and return summary.
   /// Uses Zig-style worker threads with atomic work-stealing for maximum parallelism.
   /// Each worker handles the full pipeline: regenerate fragment → compile → run → check.
@@ -85,9 +137,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // For Single, that's one result; for Batch, one per batched test.
     var results = new TestResult[workItems.Length][];
     var nextIndex = 0;
-    var generatedCount = 0;
+    var tally = new FragmentTally();
     _totalCompileMs = 0;
-    var generationErrors = new ConcurrentBag<string>();
     var printLock = new object();
     var compilationFailed = 0; // 1 = a compilation error occurred, stop all workers
     string? firstCompilationError = null;
@@ -121,8 +172,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           var item = workItems[index];
           var itemSw = _verbose ? System.Diagnostics.Stopwatch.StartNew() : null;
           var itemResults = item switch {
-            AnyWorkItem.Single s => [ProcessWorkItem(s.Item, ref generatedCount, generationErrors)],
-            AnyWorkItem.Batch b => ProcessSpecBatch(b.Item, ref generatedCount, generationErrors),
+            AnyWorkItem.Single s => [ProcessWorkItem(s.Item, tally)],
+            AnyWorkItem.Batch b => ProcessSpecBatch(b.Item, tally),
             _ => throw new InvalidOperationException("unknown work item kind"),
           };
           results[index] = itemResults;
@@ -183,7 +234,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Logger.Error(LogCategory.Testing, firstCompilationError);
     }
 
-    foreach (var error in generationErrors) {
+    foreach (var error in tally.Errors) {
       Logger.Error(LogCategory.Testing, error);
     }
 
@@ -191,8 +242,16 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Logger.Info(LogCategory.Testing, $"Total compile time: {_totalCompileMs}ms (across {_workerCount} workers)");
     }
 
-    if (generatedCount > 0) {
-      Logger.Info(LogCategory.Testing, $"Generated {generatedCount} fragment(s)");
+    // Said on EVERY run, including the skipped case. A run that quietly checked nothing reads exactly
+    // like one that checked everything and found nothing wrong, and the whole point of the goldens is
+    // that somebody can tell those two apart.
+    if (FragmentGoldensAreAuthoritative) {
+      Logger.Info(LogCategory.Testing, $"Fragment goldens: {tally.Verified} verified, {tally.Written} written");
+    } else {
+      var reason = _filter != null ? "--filter" : "--no-batch";
+      Logger.Info(LogCategory.Testing,
+        $"Fragment goldens: NOT checked — {reason} changes what a fragment contains, "
+        + "so only an unfiltered batched run is authoritative");
     }
 
     CleanupExecutables(_tempDir);
@@ -207,7 +266,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Failed = failed,
       Total = resultList.Count,
       TotalDuration = sw.Elapsed,
-      FragmentGenerationErrors = generationErrors.Count,
+      FragmentGenerationErrors = tally.Errors.Count,
     };
   }
 
@@ -225,21 +284,129 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     _ => throw new InvalidOperationException(),
   };
 
+  // ----- the committed fragment goldens -----
+
   /// <summary>
-  /// Process a single work item: regenerate fragment → compile → run → check.
+  /// Fold the committed golden's verdict into a test's result.
+  ///
+  /// A PASSING test whose golden moved becomes a FAILING one, because that is the only report anybody
+  /// acts on. The whole defect this closes was that the fragment was written unconditionally on every
+  /// run, pass or fail, and compared nowhere: 141 committed goldens under
+  /// <c>specs/fragments-x64-windows/</c> were silently rewritten by every full suite run while the
+  /// summary said "3198 passed". A golden the suite regenerates cannot gate anything — a codegen
+  /// regression would have been absorbed into the working tree, not reported.
+  ///
+  /// A test that ALREADY FAILED is left alone in both directions: its golden is neither compared (the
+  /// real failure is the report, and a derived second one buries it) nor written (a fragment from a
+  /// broken compile is not a golden anybody should keep).
+  ///
+  /// ⚠ EVERY OTHER PASSING TEST IS GATED, including one re-run through the per-fragment path after its
+  /// batch fell back — even though that content differs from a batched compile's. Exempting the
+  /// fallback was tried and MEASURED: it left 128 tests (4% of the suite) permanently ungated, because
+  /// four specs fall back on every single run for reasons that are properties of the BATCH and not of
+  /// any test in it (<c>async-await</c>: the batched binary trips the process-global leak check;
+  /// <c>ownership-edge-cases</c>: it exits non-zero; <c>parameter-labels</c>: the batched source does
+  /// not compile, E3010; <c>refcount-shared-borrow-root-phi-args</c>: the rewriter rejects its only
+  /// test). Those fallbacks are deterministic, so the single-compile fragment IS what every default run
+  /// produces for those tests and IS what their golden should pin. The cost of gating them is that a
+  /// future regression which knocks a batch over reports its siblings' goldens as moved alongside the
+  /// real failure — noise, but loud and true, and this gate exists precisely because the silent
+  /// alternative is the more expensive one.
   /// </summary>
-  private TestResult ProcessWorkItem(TestWorkItem item, ref int generatedCount, ConcurrentBag<string> generationErrors) {
+  private TestResult ApplyFragmentGolden(TestResult result, string fragmentPath, string content, FragmentTally tally) {
+    if (!result.Passed) return result;
+    if (!FragmentGoldensAreAuthoritative) return result;
+
+    var mismatch = CheckFragmentGolden(fragmentPath, content, tally);
+    if (mismatch == null) return result;
+
+    return new TestResult {
+      TestName = result.TestName,
+      Passed = false,
+      ErrorMessage = mismatch,
+      Duration = result.Duration,
+      FilePath = result.FilePath,
+    };
+  }
+
+  /// <summary>
+  /// Compare one test's committed <c>.test</c> golden with the fragment this run produced, or write it
+  /// through one of the two doors that are allowed to. Returns null when the golden is satisfied, and
+  /// the failure message otherwise.
+  ///
+  /// WHY THE GOLDENS ARE COMMITTED AT ALL. Running the test proves the generated code is CORRECT — a
+  /// value in the wrong register computes the wrong answer and the exit-code assertion fails. It
+  /// cannot prove the code is still GOOD: an extra spill, a lost coalesce, a released reference the
+  /// slot never held all still compute the right answer, and a suite that only runs the program
+  /// reports green while the emitted code silently gets worse. Pinning the IR turns every such change
+  /// into a failing test that has to be looked at and justified or fixed. It also reaches where the
+  /// run cannot: a test executes ONE path, so a bad allocation in a block it never enters is invisible
+  /// to the exit code, while the fragment pins the whole function.
+  ///
+  /// THE TWO WRITING DOORS, and why they are the only two:
+  /// <list type="bullet">
+  /// <item>NO GOLDEN ON DISK — a brand-new test. There is nothing to compare against, and failing a
+  ///   first run for want of a file it cannot yet have would be a rite, not a gate.</item>
+  /// <item><c>--update-required</c> — the one door a change comes through, and deliberately one you
+  ///   have to open, because the diff IS the review.</item>
+  /// </list>
+  /// </summary>
+  private string? CheckFragmentGolden(string fragmentPath, string content, FragmentTally tally) {
+    if (!File.Exists(fragmentPath) || _updateRequired) {
+      File.WriteAllText(fragmentPath, content);
+      tally.CountWritten();
+      return null;
+    }
+
+    // Both sides normalized, so the comparison is about CONTENT. The goldens are committed LF
+    // (`.gitattributes`), but a checkout with `core.autocrlf=true` would otherwise fail every fragment
+    // in the suite for a reason that is not codegen and that no diff would show.
+    var committed = File.ReadAllText(fragmentPath).Replace("\r\n", "\n").Replace("\r", "\n");
+    if (committed == content) {
+      tally.CountVerified();
+      return null;
+    }
+
+    return "codegen changed — golden fragment mismatch\n"
+      + FirstDifference(committed, content) + "\n"
+      + "  If the new output is INTENDED, re-run the FULL suite with --update-required and REVIEW the diff:\n"
+      + $"  {fragmentPath}";
+  }
+
+  /// <summary>
+  /// The first line at which the committed golden and the fresh fragment diverge. A whole-fragment
+  /// dump would bury the one line that matters under a hundred that did not move.
+  /// </summary>
+  private static string FirstDifference(string committed, string actual) {
+    var oldLines = committed.Split('\n');
+    var newLines = actual.Split('\n');
+    var shared = Math.Min(oldLines.Length, newLines.Length);
+
+    for (int i = 0; i < shared; i++) {
+      if (oldLines[i] != newLines[i]) {
+        return $"  line {i + 1}:\n    golden: {oldLines[i]}\n    actual: {newLines[i]}";
+      }
+    }
+
+    return $"  golden has {oldLines.Length} lines, actual has {newLines.Length} — one is a prefix of the other";
+  }
+
+  /// <summary>
+  /// Process a single work item: generate fragment → compile → run → check the test → check its
+  /// committed golden.
+  /// </summary>
+  private TestResult ProcessWorkItem(TestWorkItem item, FragmentTally tally) {
     var testSw = Stopwatch.StartNew();
 
     try {
-      // Step 1: Regenerate the fragment file. Always regenerated — no cache.
+      // Step 1: Generate the fragment content. Always regenerated — no cache.
       // Fragment content (IR snapshot) is captured untraced; only the real
       // test-run compile enables tracing.
       SetCompileFlags();
       var absolutePath = Path.GetFullPath(item.FragmentPath);
       var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath, _target);
       if (genError != null) {
-        generationErrors.Add($"Error compiling 'specs/fragments/{item.SpecName}/{item.TestName}.test':\n{genError}");
+        tally.Errors.Add($"Error compiling 'specs/fragments/{item.SpecName}/{item.TestName}.test':\n{genError}");
         return new TestResult {
           TestName = item.TestName,
           Passed = false,
@@ -248,23 +415,25 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           FilePath = item.FragmentPath
         };
       }
-      File.WriteAllText(item.FragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
-      Interlocked.Increment(ref generatedCount);
 
-      // Step 2: Parse the fragment we just wrote.
-      var fragment = FragmentGenerator.ParseFragment(item.FragmentPath);
+      // Step 2: Parse what we just generated — NOT the file on disk, which is now the committed
+      // golden and may legitimately differ (that difference is what step 4 reports).
+      var fragment = FragmentGenerator.ParseFragmentContent(content, item.FragmentPath);
       if (fragment == null) {
         return new TestResult {
           TestName = item.TestName,
           Passed = false,
-          ErrorMessage = "Failed to parse fragment file",
+          ErrorMessage = "Failed to parse generated fragment content",
           Duration = testSw.Elapsed,
           FilePath = item.FragmentPath
         };
       }
 
       // Step 3: Run the test (compile + execute + check expectations)
-      return RunTest(fragment, item);
+      var result = RunTest(fragment, item);
+
+      // Step 4: Gate the committed golden against what the compiler just produced.
+      return ApplyFragmentGolden(result, item.FragmentPath, content, tally);
     } catch (Exception ex) {
       return new TestResult {
         TestName = item.TestName,
@@ -290,7 +459,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// batches still produce per-test slice mismatches (Stdout / exit code) that
   /// are indistinguishable from single-test failures.
   /// </summary>
-  private TestResult[] ProcessSpecBatch(SpecBatchWorkItem item, ref int generatedCount, ConcurrentBag<string> generationErrors) {
+  private TestResult[] ProcessSpecBatch(SpecBatchWorkItem item, FragmentTally tally) {
     // Step 1: build the batched source. All rewritten fragments + the
     // dispatcher's `main` go into one file. The rewriter mangles every
     // top-level decl (functions, types, typealiases, enums, lets, vars,
@@ -300,7 +469,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Logger.Debug(LogCategory.Testing, $"[BATCH SKIP] {s}");
     }
     if (source == null) {
-      return FallbackBatchToSingles(item, "rewriter rejected all tests", ref generatedCount, generationErrors);
+      return FallbackBatchToSingles(item, "rewriter rejected all tests", tally);
     }
 
     SetCompileFlags();
@@ -325,13 +494,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
       if (!result.Success) {
         var compileError = string.Join("\n", result.Errors.Select(e => e.Format()));
-        return FallbackBatchToSingles(item, $"batch compile failed: {compileError}", ref generatedCount, generationErrors);
+        return FallbackBatchToSingles(item, $"batch compile failed: {compileError}", tally);
       }
       batchedArchIr = result.ArchIr;
     } catch (Exception ex) {
       compileSw.Stop();
       Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
-      return FallbackBatchToSingles(item, $"batch compile threw: {ex.Message}", ref generatedCount, generationErrors);
+      return FallbackBatchToSingles(item, $"batch compile threw: {ex.Message}", tally);
     }
 
     // Step 2: Run the batched binary ONCE. The dispatcher runs every
@@ -384,7 +553,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       var test = item.Tests[i];
       var rewrite = BatchRewriter.Rewrite(test.Name, test.Source);
       if (!rewrite.Batchable) {
-        results[i] = RunOneAsSingle(item.SpecName, test, item.SpecFile, ref generatedCount, generationErrors);
+        // The rewriter rejected it, so `BuildBatchSource` left it out of the batched module too:
+        // compiling it alone is what every run does for it.
+        results[i] = RunOneAsSingle(item.SpecName, test, item.SpecFile, tally);
         continue;
       }
       batchableIdx.Add(i);
@@ -399,14 +570,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       foreach (var i in batchableIdx) {
         results[i] = batchedResults[i]!;
       }
-      // Write per-test fragment files using IR sliced out of the batched
-      // compile. Inspection aid only: the IR may differ from a per-fragment
-      // compile because batched optimization decisions aren't identical.
-      WritePerTestFragmentsFromBatch(item, batchableIdx, batchedArchIr, ref generatedCount, generationErrors);
+      // Gate each batchable test's committed golden against IR sliced out of the batched compile —
+      // which IS the canonical fragment for these tests, because that is the compile an unfiltered
+      // batched run performs for them.
+      CheckBatchFragments(item, batchableIdx, batchedArchIr, results, tally);
     } else {
       Logger.Debug(LogCategory.Testing, $"[BATCH FALLBACK] {item.SpecName}: re-running batchable tests individually after batch failure");
       foreach (var i in batchableIdx) {
-        results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, ref generatedCount, generationErrors);
+        results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, tally);
       }
     }
 
@@ -414,31 +585,39 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   /// <summary>
-  /// After a successful batched compile, slice the batched IR text into per-test
-  /// snippets and write a fragment file for each batchable test. Skipped if the
-  /// compile didn't return IR (returnIr was off or the result was empty).
+  /// After a successful batched compile, slice the batched IR text into per-test snippets and gate
+  /// each batchable test's committed golden against its slice, downgrading <paramref name="results"/>
+  /// where one moved.
   /// </summary>
-  private void WritePerTestFragmentsFromBatch(SpecBatchWorkItem item, List<int> batchableIdx, string? batchedArchIr, ref int generatedCount, ConcurrentBag<string> generationErrors) {
-    if (batchedArchIr == null) return;
+  private void CheckBatchFragments(SpecBatchWorkItem item, List<int> batchableIdx, string? batchedArchIr, TestResult[] results, FragmentTally tally) {
+    // `returnIr: true` is passed unconditionally above, so a batched compile that SUCCEEDED and
+    // returned nothing is the runner and the compiler disagreeing — not a condition to skip a gate
+    // over silently, which is how the goldens stopped gating anything in the first place.
+    if (batchedArchIr == null) {
+      tally.Errors.Add($"[BATCH IR] {item.SpecName}: batched compile succeeded but returned no IR, "
+        + "so no fragment golden could be checked");
+      return;
+    }
+
     var batchableTests = batchableIdx.Select(i => item.Tests[i]).ToList();
     Dictionary<string, string> perTestIr;
     try {
       perTestIr = FragmentGenerator.SplitBatchedIr(batchedArchIr, batchableTests);
     } catch (Exception ex) {
-      generationErrors.Add($"[BATCH IR SPLIT] {item.SpecName}: {ex.Message}");
+      tally.Errors.Add($"[BATCH IR SPLIT] {item.SpecName}: {ex.Message}");
       return;
     }
+
     var specFragmentDir = Path.Combine(_fragmentDir, item.SpecName);
-    Directory.CreateDirectory(specFragmentDir);
-    foreach (var test in batchableTests) {
+    foreach (var i in batchableIdx) {
+      var test = item.Tests[i];
       perTestIr.TryGetValue(test.Name, out var ir);
       var content = FragmentGenerator.GenerateFragmentContentWithIr(test, ir);
       var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
       try {
-        File.WriteAllText(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
-        Interlocked.Increment(ref generatedCount);
+        results[i] = ApplyFragmentGolden(results[i], fragmentPath, content, tally);
       } catch (Exception ex) {
-        generationErrors.Add($"[BATCH FRAGMENT WRITE] {fragmentPath}: {ex.Message}");
+        tally.Errors.Add($"[BATCH FRAGMENT] {fragmentPath}: {ex.Message}");
       }
     }
   }
@@ -574,11 +753,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// for the whole batch when batching fails (compile error or any per-test
   /// slice mismatch) — the user always sees real per-test pass/fail.
   /// </summary>
-  private TestResult RunOneAsSingle(string specName, TestCase test, FileInfo specFile, ref int generatedCount, ConcurrentBag<string> generationErrors) {
+  private TestResult RunOneAsSingle(string specName, TestCase test, FileInfo specFile, FragmentTally tally) {
     var fragmentPath = Path.Combine(_fragmentDir, specName, $"{test.Name}.test");
     var irExePath = Path.Combine(_fragmentDir, specName, $"{test.Name}.ir_exe");
     var single = new TestWorkItem(fragmentPath, irExePath, specName, test.Name, test, specFile);
-    return ProcessWorkItem(single, ref generatedCount, generationErrors);
+    return ProcessWorkItem(single, tally);
   }
 
   /// <summary>
@@ -589,11 +768,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// a generic batch-flavored failure message. Tests the rewriter rejected
   /// already fall through to the per-fragment path naturally.
   /// </summary>
-  private TestResult[] FallbackBatchToSingles(SpecBatchWorkItem item, string reason, ref int generatedCount, ConcurrentBag<string> generationErrors) {
+  private TestResult[] FallbackBatchToSingles(SpecBatchWorkItem item, string reason, FragmentTally tally) {
     Logger.Debug(LogCategory.Testing, $"[BATCH FALLBACK] {item.SpecName}: {reason}");
     var results = new TestResult[item.Tests.Length];
     for (int i = 0; i < item.Tests.Length; i++) {
-      results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, ref generatedCount, generationErrors);
+      results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, tally);
     }
     return results;
   }
