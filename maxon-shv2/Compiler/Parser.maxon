@@ -22187,13 +22187,13 @@ export type Parser
 	// — which is what makes `equalTo` satisfy both without a second compare, and is the bootstrap's mapping
 	// (`2-Parser.cs:22293-22302`, the correct 3-valued reading).
 	//
-	// Every tag is read OFF the `Ordering` layout (`orderingTagOf`), never written as a literal; the layout is
+	// Every tag is read OFF the `Ordering` layout (`EnumLayout.tagOfCase`), never written as a literal; the layout is
 	// fetched ONCE here rather than per arm. The compare itself is `emitDispatchCompare`, the SAME tag compare
 	// an enum `match` arm emits — so `a < b` and a hand-written `match a.compare(b)` agree by construction.
 	function emitOrderingVerdict(orderingResult ValueId, op MaxonCmpOp, opTok Token) returns ValueId
 		let ordering = builtinOrderingEnum()
-		let lessThanTag = orderingTagOf(ordering, caseName: OrderingLessThanCaseName)
-		let greaterThanTag = orderingTagOf(ordering, caseName: OrderingGreaterThanCaseName)
+		let lessThanTag = ordering.tagOfCase(OrderingLessThanCaseName)
+		let greaterThanTag = ordering.tagOfCase(OrderingGreaterThanCaseName)
 
 		match op 'ordinal'
 			eq to ne then panic("emitOrderingVerdict: `==`/`!=` are the equality verdict, handled by emitTypeParamComparison before it routes an ORDERING operator here")

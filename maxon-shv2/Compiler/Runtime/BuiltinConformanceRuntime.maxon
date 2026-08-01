@@ -551,13 +551,13 @@ end 'emitOrderingTest'
 
 // ⭐ A block that RETURNS one `Ordering` case's tag — the exit every compare impl's verdict paths land on.
 //
-// ⭐ The tag comes from `orderingTagOf` — read OFF the `Ordering` layout, so reordering the transcription in
+// ⭐ The tag comes from `EnumLayout.tagOfCase` — read OFF the `Ordering` layout, so reordering the transcription in
 // `Project.builtinOrderingEnum` moves these bodies and the `<`/`>`/`<=`/`>=` lowering's tag tests together.
 // The bootstrap writes them as literals at its consumer sites with nothing tying them back to the
 // declaration; that is a latent coupling shv2 deliberately does not copy. Naming the CASE here rather than
 // passing a number is what keeps that derivation at one call per verdict, across both compare impls.
 function emitOrderingVerdict(module StdModule, block IrBlock, ordering EnumLayout, caseName ByteArray, ids ValueMinter)
-	let tag = emitConst(module, block: block, value: orderingTagOf(ordering, caseName: caseName), ids: ids)
+	let tag = emitConst(module, block: block, value: ordering.tagOfCase(caseName), ids: ids)
 	module.setTerminator(block, op: StdOp.ret(tag))
 end 'emitOrderingVerdict'
 
