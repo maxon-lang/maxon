@@ -19,10 +19,29 @@
 //   * `>= 0` — YES. `buffer@0` is a SEPARATE allocation this record owns; it may be written in place
 //     within `capacity` elements, and the record owes it a release when it dies or detaches.
 //   * `< 0` — NO. The record must copy its bytes somewhere private before any in-place write, and must
-//     not release `buffer@0`. WHICH negative value says only where the buffer came from (below); no
-//     COMPILER-SIDE reader compares against a specific one, and that is deliberate — a further
+//     not release `buffer@0`. WHICH negative value says only where the buffer came from (below); almost
+//     no COMPILER-SIDE reader compares against a specific one, and that is deliberate — a further
 //     non-owned-buffer kind then arrives as one more value rather than as a new test at every reader,
 //     which is exactly how the zero-copy view arrived after the rdata literal.
+//
+// ⚠⚠ **THERE IS EXACTLY ONE EXCEPTION AND A FOURTH PROVENANCE MUST BE TAUGHT ABOUT IT BY HAND:
+// `StringRuntime.emitStringBytesAllocation` (BATCH2 slice 1) COMPARES AGAINST `RdataBufferCapacity`.**
+// It answers a question the two arms above cannot — not *"which allocation do I owe a release to?"* but
+// *"which allocation must stay alive for these bytes to be readable?"* — and those part company for an
+// INLINE String, whose bytes sit in its OWN payload and which therefore owes nothing while its record is
+// very much the allocation to count. Distinguishing "immortal `.rdata`" from "inline" is NOT derivable
+// from the other slots (both answer `NoOwedAllocation` at `parent@32`, and comparing `buffer@0` against
+// `record + StringRecordBytes` would misread an rdata blob the linker happened to pack right after its
+// record — an `__mm_incref` of read-only memory). So it tests the value, and its LAST arm is
+// *"otherwise, INLINE"*.
+//
+// ⇒ **ADD A FOURTH `NotOwnedBufferCapacity` HERE AND THAT ARM SILENTLY CLASSIFIES IT AS INLINE**, handing
+// out a byte view that counts the record instead of wherever the bytes really are: a dangling pointer or
+// a leak, with nothing to catch it — no compile error, and the suite structurally cannot reach the door
+// (`addressableBytes` is stdlib-only and the spec runner stages its sources outside `stdlib/`). This note
+// is the obligation, written at the declaration because that is where the fourth value will be added.
+// The runtime does NOT guard it with an abort arm, for this file's own stated reason: it refuses to emit
+// a branch no input reaches (see `emitBufferCannotHold`).
 //
 // ⚠ **THE VALUES ARE NOT PRIVATE, THOUGH: `__arr_capacity` HANDS `capacity@16` STRAIGHT TO USER CODE**,
 // so a Maxon program can read one, and `arrays.md:slice-capacity-is-a-view-until-written` pins
@@ -41,7 +60,8 @@
 // A view windows another allocation's bytes; an rdata literal points at an immortal `.rdata` blob; an
 // INLINE String's bytes sit inside the record's OWN `__mm_alloc` payload, at `record + StringRecordBytes`,
 // so its own free reclaims them and there is no separate allocation to release. All three are simply
-// NEGATIVE, which is the whole of what any reader inside the compiler asks — the specific value is there
+// NEGATIVE, which is the whole of what every reader inside the compiler asks BUT ONE — see the exception
+// note above, which a fourth provenance must be read against — and otherwise the specific value is there
 // for whoever reads a hexdump, or a `capacity()` a program printed (see the note above).
 //
 // ⚠ **`InlineBufferCapacity` IS WHY THE ENCODING NEEDED NO EXCEPTION FOR STRING.** An inline String's

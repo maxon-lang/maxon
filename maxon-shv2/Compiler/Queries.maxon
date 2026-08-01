@@ -192,7 +192,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// reader below (and every `Parser.create` in every later query) sees the answer rather than the seeded
 	// `false`. It is what lets `livesUnderStdlibDirectory` be a derivation instead of a per-file path probe;
 	// see that function for the proof and for the ladder measurement that rejected the per-file version.
-	signatures.rootIsUnderStdlibDirectory = rootIsUnderStdlibDirectory(project)
+	signatures.rootIsUnderStdlibDirectory = rootIsUnderStdlibDirectory(project, cwd: Directory.currentPath())
 
 	// ⭐⭐ **THE SWEEP IS PARTITIONED BY PROVENANCE — USER FILES FIRST, STDLIB FILES SECOND (A1s wave 2).**
 	// The shadow contest is decided BETWEEN the two halves, and that placement is the whole reason the
@@ -711,14 +711,16 @@ end 'probeRebuildCacheHits'
 // The root-inside-`stdlib/` arm is that same function's ruling, restated where this door can act on
 // it: a project ROOTED under `stdlib/` keeps its own files as the user's, so only what the loader
 // pulled in from OUTSIDE that root is stdlib. It stays a directory test rather than a membership
-// test over `project.stdlibSourcePaths` for the reason given above.
+// test over `project.stdlibSourcePaths` for the reason given above — and it ASKS
+// `Project.rootIsUnderStdlibDirectory` rather than spelling the test out, because
+// `livesUnderStdlibDirectory` below is derived from the same predicate and its proof is a claim about
+// THIS arm. Two spellings would be two things free to drift while the proof read as if it held.
 function isStdlibSourceFile(project Project, path FilePath) returns bool
 	let cwd = Directory.currentPath()
 	let resolvedPath = path.resolve(cwd)
-	let resolvedRoot = project.rootPath.resolve(cwd)
 
-	if resolvedRoot.isInside(project.stdlibDir) 'rootInsideStdlib'
-		return not resolvedPath.isInside(resolvedRoot)
+	if rootIsUnderStdlibDirectory(project, cwd: cwd) 'rootInsideStdlib'
+		return not resolvedPath.isInside(project.rootPath.resolve(cwd))
 	end 'rootInsideStdlib'
 
 	return resolvedPath.isInside(project.stdlibDir)
@@ -750,6 +752,11 @@ end 'isStdlibSourceFile'
 // and the right-hand term is asked ONCE PER COMPILE (`ProgramSignatures.rootIsUnderStdlibDirectory`,
 // set in `queryProgramSignatures`), never per file.
 //
+// ⚠ **THE PROOF ABOVE IS A CLAIM ABOUT `isStdlibSourceFile`'s ROOT ARM, so both must be the SAME
+// PREDICATE and not two spellings of it** — `Project.rootIsUnderStdlibDirectory` is that one home, and
+// `StdlibLoader.registeredPathsWhenTheRootIsInsideStdlib`, the third rule turning on the same fact,
+// reads it too. See its header.
+//
 // ⚠ **MEASURED, because the obvious version — a second `resolve` + `isInside` per file — is the shape
 // `isStdlibSourceFile`'s own header rules out ("asking it twice per file would not be [affordable]").**
 // Shipped that way for one build, the scale ladder read **+2,438 allocations at rung 0 rising to +13,350
@@ -759,15 +766,6 @@ end 'isStdlibSourceFile'
 function livesUnderStdlibDirectory(signatures ProgramSignatures, isStdlibSource bool) returns bool
 	return isStdlibSource or signatures.rootIsUnderStdlibDirectory
 end 'livesUnderStdlibDirectory'
-
-// ⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/`?** The per-compile half of the derivation above, probed
-// once and stored on the signatures index (which is built once per compile and threaded to every
-// `Parser.create`). Resolved before comparing, for the reason `isStdlibSourceFile` states in full:
-// `isInside` compares SPELLINGS, so a relative `stdlib/URL.maxon` and an absolute one would otherwise be
-// two different answers about one file — the bug this door exists to not have.
-function rootIsUnderStdlibDirectory(project Project) returns bool
-	return project.rootPath.resolve(Directory.currentPath()).isInside(project.stdlibDir)
-end 'rootIsUnderStdlibDirectory'
 
 // The one module whose declarations MAY carry the reserved `__` prefix — `stdlib/Builtins.maxon`, the
 // type-system bridge to the compiler's intrinsics (the error enums a builtin throws, the parse helpers

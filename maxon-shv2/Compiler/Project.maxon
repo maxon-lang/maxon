@@ -2696,6 +2696,35 @@ export function createProject(rootPath FilePath, target Target, stdlibDir FilePa
 	return Project.create(QueryDatabase.create(), rootPath: rootPath, target: target, stdlibDir: stdlibDir)
 end 'createProject'
 
+// ⭐⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/`? — ONE HOME, BECAUSE THREE RULES REST ON IT AND TWO
+// OF THEM ARE EACH OTHER'S PROOF.** The question is `maxon-shv2 build stdlib/URL.maxon`: the user named
+// a file inside the toolchain's own `stdlib/` as their project. Three separate rules turn on it, and
+// each one used to spell it out for itself:
+//
+//   * `StdlibLoader.registeredPathsWhenTheRootIsInsideStdlib` — do not load a file the project already
+//     registered, or every function in it collides with itself.
+//   * `Queries.isStdlibSourceFile` — such a project keeps its OWN files as the USER's (A1t bar 2), so
+//     only what the loader pulled in from outside the root is stdlib for VISIBILITY.
+//   * `Queries.livesUnderStdlibDirectory` — but for the two `module`-visible `String` methods those same
+//     files ARE under `stdlib/`, which is a fact about the PATH and not about visibility.
+//
+// ⚠ **THE THIRD ONE'S SOUNDNESS IS A CLAIM ABOUT THE SECOND, so a drift between their two spellings is
+// not a style problem — it is a wrong answer with nothing to catch it.** `livesUnderStdlibDirectory` is
+// derived (`isStdlibSource OR rootIsUnderStdlibDirectory`) and its proof is *"the two differ in exactly
+// ONE situation: when the root is under `stdlib/`"* — i.e. exactly when THIS predicate is true. Written
+// twice, one of them could be taught about symlinks, or case, or a trailing separator, and the proof
+// would go on reading as if it held while the stdlib-only gate quietly refused `stdlib/URL.maxon` (or,
+// the other way, opened for a user file). Written once, the proof is about one function.
+//
+// ⚠ `cwd` is passed IN, never probed here. `isStdlibSourceFile` already resolves the PATH against it and
+// runs per file inside two O(files) loops, so probing again would put a second `Directory.currentPath()`
+// on the per-file path — the shape `isStdlibSourceFile`'s own header rules out. Resolving at all is not
+// optional: `isInside` compares SPELLINGS, so a relative `stdlib/URL.maxon` and an absolute one would
+// otherwise be two different answers about one file.
+export function rootIsUnderStdlibDirectory(project Project, cwd FilePath) returns bool
+	return project.rootPath.resolve(cwd).isInside(project.stdlibDir)
+end 'rootIsUnderStdlibDirectory'
+
 // Append a diagnostic to the project's sink. The single funnel every reporting
 // pass routes through, so diagnostic bookkeeping lives in one place.
 export function reportDiagnostic(project Project, diagnostic Diagnostic)

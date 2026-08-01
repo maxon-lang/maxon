@@ -30393,13 +30393,18 @@ export type Parser
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
 	// identical copy-on-write reason, through the same one home for it (`privateValueMarkSet`).
 	//
-	// Its callers are the producers of a buffer VALUE: `__ManagedMemory.create` (`parseManagedMemoryStaticCall`),
-	// a `slice` taken THROUGH the buffer surface (`parseArraySlice`), `__ManagedDirectory.filename`/`currentPath`
-	// (`emitOwnedManagedMemoryResult`, R4.3), and — through `markDeclaredBufferSurface` below — the three sites
-	// that bind a value whose DECLARED type spelled the alias (A2j). ⚠ It had said TWO, omitting the third,
-	// while D11b's own measurement enumerated four producers — the fourth being `.managed`, which mints NO
-	// value to mark: it is an identity read, so it passes the surface along the dispatch instead (see
-	// `dispatchArrayMethod`).
+	// Its FIVE call sites, DERIVED by grepping them rather than remembered: the four producers of a buffer
+	// VALUE that mint one — `__ManagedMemory.create` (`parseManagedMemoryStaticCall`), a `slice` taken
+	// THROUGH the buffer surface (`parseArraySlice`), `__ManagedDirectory.filename`/`currentPath`
+	// (`emitOwnedManagedMemoryResult`, R4.3) and `String.addressableBytes()` (`dispatchStringMethod`,
+	// BATCH2 slice 1) — plus `markDeclaredBufferSurface` below, which A2j reaches from the three sites that
+	// bind a value whose DECLARED type spelled the alias.
+	// ⚠⚠ **THIS COUNT HAS NOW BEEN WRONG THREE TIMES** — it said TWO while there were three, THREE while
+	// there were four, and the two independent corrections (A2j's and BATCH2's) each restated it without
+	// the other's caller, so a clean textual rebase would have landed a fourth wrong count. **Count them,
+	// do not copy this sentence.**
+	// ⚠ D11b's own measurement enumerated a further producer that mints NO value to mark: `.managed`, an
+	// identity read, which passes the surface along the dispatch instead (see `dispatchArrayMethod`).
 	//
 	// ⚠⚠ **THE MARK IS A FACT ABOUT A `ValueId`, SO IT DOES NOT SURVIVE TYPE ERASURE — AND A *DECLARED*
 	// SPELLING IS THEREFORE AN ENTRANCE A SWEEP OVER VALUE PRODUCERS STRUCTURALLY CANNOT SEE.** That is the

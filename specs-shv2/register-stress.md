@@ -28,13 +28,21 @@ not the loop touches it.
 survived, on the reasoning that a phi carrying an unchanging value costs nothing, since biased
 coloring coalesces it with its incoming value into one register.
 
-That is true of the register COUNT and false of everything else, because **a phi is exactly what
-the cold-spill splitter may not spill.** `isColdSpillable` requires a value that is not a phi and
-not edge-passed, since a cold store goes in the PREHEADER and a phi's def is the header itself.
-So an idle `var` was PINNED in a register across a loop that never touched it, while an idle
-`let` — an ordinary value — was spilled around that loop for free. Fifteen of them and the
+That is true of the register COUNT and false of everything else, because **a phi used to be exactly
+what the cold-spill splitter may not spill.** `isColdSpillable` refused any phi and any edge-passed
+value outright, so an idle `var` was PINNED in a register across a loop that never touched it, while
+an idle `let` — an ordinary value — was spilled around that loop for free. Fifteen of them and the
 compiler refused a program whose real working set was two, ranking values it could have spilled
 among the ones the user should delete.
+
+⚠ **Those two blanket bars are GONE (BATCH2), and this section is kept because it is why the FOLD
+below exists — not because the bars still stand.** They were over-approximations of "touches a loop"
+made while no loop depth was recorded for a phi's block or for an edge use, and each was in turn a
+false-E5001 generator in its own right (measured on `stdlib/URL.maxon`'s `URL.parse`). `isColdSpillable`
+now asks ONE question — is the value's def, and every use of it, at loop depth 0? — with a phi's block
+entry and a branch-edge arg carrying a depth like any op does. A loop-header phi and a loop-carried
+edge arg are still refused, by that depth. The tests below are unchanged and still pass: the fold is
+the better answer for an IDLE var either way, because a folded phi costs no slot and no reload at all.
 
 `elimTrivialBlockArgs` folds away a phi whose every incoming value, self-references discounted,
 is the same value: `phi = φ(v, phi)` IS `v`. `idle-vars-across-a-loop` below is the program that

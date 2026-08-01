@@ -209,8 +209,11 @@ end 'loadStdlibSources'
 function registeredPathsWhenTheRootIsInsideStdlib(project Project) returns MaxonSourcePathSet
 	var registered = MaxonSourcePathSet.create()
 
+	// ⚠ `Project.rootIsUnderStdlibDirectory`, not a fourth spelling of the same `resolve` + `isInside`:
+	// `Queries.livesUnderStdlibDirectory`'s soundness proof is a claim about this exact predicate holding
+	// the same way here and in `isStdlibSourceFile`, so it is asked in ONE place. See its header.
 	let cwd = Directory.currentPath()
-	if not project.rootPath.resolve(cwd).isInside(project.stdlibDir) 'rootIsElsewhere'
+	if not rootIsUnderStdlibDirectory(project, cwd: cwd) 'rootIsElsewhere'
 		return registered
 	end 'rootIsElsewhere'
 

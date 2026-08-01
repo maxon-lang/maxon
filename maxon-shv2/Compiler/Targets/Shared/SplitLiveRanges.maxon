@@ -3904,8 +3904,13 @@ end 'isRematVictim'
 //                          confined-only) — a false E5001 on a program that compiles today. Tier 2
 //                          relieves them correctly: `spillOneValue` skips the store for anything
 //                          resident, so the emitted code is the reloads-only bracket either way.
-//  2. `isSpillable`      — its shape suits the peak's PLACEMENT (cold needs a depth-0, non-phi,
-//                          non-edge-passed value; forced needs only a store anchor).
+//  2. `isSpillable`      — its shape suits the peak's PLACEMENT (cold needs a value whose def and
+//                          every use — op operand, PHI block entry and branch-edge arg alike — are at
+//                          loop depth 0; forced needs only a store anchor). ⚠ It said "non-phi,
+//                          non-edge-passed" until BATCH2 removed those two blanket bars: both were
+//                          over-approximations of "inside a loop" made while no depth was recorded for
+//                          a phi or an edge, and both were FALSE-E5001 generators. The fact is a
+//                          DEPTH — see `isColdSpillable`.
 //  3. `storeFitsPool`    — its store has a register-free anchor point.
 //  4. `killsValueAtPeak` — the eviction-point split actually makes it DEAD at the peak. Without this
 //                          the splitter emits stores that relieve nothing (see `killsValueAtPeak`).
@@ -5363,7 +5368,7 @@ function verifyUseIndex(index UseIndex, fresh UseIndex, name String, iterations 
 			panic("verifyIncremental ('{name}', after split {iterations}): value {v} disagrees with a full rebuild about being a phi")
 		end 'isPhi'
 		if index.isEdgePassed(v) != fresh.isEdgePassed(v) 'edgePassed'
-			panic("verifyIncremental ('{name}', after split {iterations}): value {v} disagrees with a full rebuild about being edge-passed — `isColdSpillable` reads it")
+			panic("verifyIncremental ('{name}', after split {iterations}): value {v} disagrees with a full rebuild about being edge-passed — `isRematerializable` reads it")
 		end 'edgePassed'
 		if index.hasSpillStore(v) != fresh.hasSpillStore(v) 'spillStored'
 			panic("verifyIncremental ('{name}', after split {iterations}): value {v} disagrees with a full rebuild about already having a spill store")
