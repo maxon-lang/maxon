@@ -1,0 +1,32 @@
+// Test: an-unemitted-lookalike-name-is-legal
+typealias Integer = int(i64.min to i64.max)
+
+function mrt_not_a_chunk() returns Integer
+	return 7
+end 'mrt_not_a_chunk'
+
+function main() returns ExitCode
+	return mrt_not_a_chunk() as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+func @mrt_not_a_chunk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect mrt_not_a_chunk
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
