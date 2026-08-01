@@ -1,0 +1,17 @@
+// Test: error-default-on-a-name-declared-twice
+typealias Integer = int(i64.min to i64.max)
+
+function f(a Integer = 1) returns Integer
+	return a
+end 'f'
+
+function f(x Integer, y Integer = 2) returns Integer
+	return x + y
+end 'f'
+
+function main() returns ExitCode
+	return f()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:4:22: Unsupported: a default value on parameter 'a' of 'f' — that name is declared more than once in this program, each declaration with its own parameter defaults, and the whole-program declaration sweep publishes defaults under the name the source wrote, so a call that omits an argument cannot be told which declaration's default to supply. Remove the duplicate declaration, or drop the default

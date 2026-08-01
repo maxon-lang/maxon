@@ -1,0 +1,76 @@
+// Test: default-values.bool-default-omitted
+typealias Integer = int(i64.min to i64.max)
+
+function choose(flag bool = true, a Integer = 40, b Integer = 10) returns Integer
+	if flag 'check'
+		return a + 2
+	end 'check' else 'other'
+		return b
+	end 'other'
+end 'choose'
+
+function main() returns ExitCode
+	return choose()
+end 'main'
+---
+ExitCode: 42
+---
+func @choose {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, check
+    arm64.b ifelse
+  check:
+    arm64.add x0, x1, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.movRegReg x0, x2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __paramDefault#choose#0
+    arm64.movRegReg x19, x0
+    arm64.bl __paramDefault#choose#1
+    arm64.movRegReg x20, x0
+    arm64.bl __paramDefault#choose#2
+    arm64.movRegReg x2, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl choose
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @__paramDefault#choose#0 {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @__paramDefault#choose#1 {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 40
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @__paramDefault#choose#2 {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 10
+    arm64.epilogue 16
+    arm64.ret
+}
