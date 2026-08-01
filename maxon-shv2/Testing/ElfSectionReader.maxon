@@ -26,11 +26,23 @@
 // which quietly made the `RequiredData` gate weaker on this target than on the two whose readers
 // report the true extent (Mach-O's `size`, PE's virtual size).
 
-// The section a top-level `var`'s image lives in — the ELF spelling, which happens to match PE's.
-// Named here rather than shared with `PeSectionReader.DataSectionName` because it is a contract with
-// `ElfWriter`'s own `.shstrtab` entry: the two formats agreeing on a name today is a coincidence of
-// convention, not a fact either writer promises the other.
-export let ElfDataSectionName = ".data"
+// What an ELF calls each section a spec can pin. The globals spelling happens to match PE's and the
+// read-only one deliberately does not; both are named here rather than shared with
+// `PeSectionReader`'s because they are a contract with `ElfWriter`'s own `.shstrtab` entries — two
+// formats agreeing on a name is a coincidence of convention, not a fact either writer promises the
+// other.
+let ElfDataSectionName = ".data"
+let ElfRodataSectionName = ".rodata"
+
+// The ELF spelling of a `LinkedSectionKind` — this format's half of the one name table
+// `LinkedSection.linkedSectionName` reads. Exhaustive, so a third section cannot be added to the
+// kind without an ELF name for it.
+export function elfSectionName(section LinkedSectionKind) returns String
+	return match section 'k'
+		globals gives ElfDataSectionName
+		readOnly gives ElfRodataSectionName
+	end 'k'
+end 'elfSectionName'
 
 // --- ELF64 structural constants (the reader's own; see the header on why they are not shared) ---
 

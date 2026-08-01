@@ -10,7 +10,7 @@
 // diagnostics (the `maxoncstderr` spec contract).
 //
 // CLI (documented):
-//   maxon-shv2 build <file|directory> [-o <output>] [--emit-ir] [--target=<cpu>-<os>]
+//   maxon-shv2 build <file|directory> [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,…] [--target=<cpu>-<os>]
 //   maxon-shv2 verify-warm-rebuild <file>
 //   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--workers=<n>] [--target=<cpu>-<os>] [--compiler=<path>]
 
@@ -43,6 +43,23 @@ export let CompilerFlagPrefix = "--compiler="
 // parser below reads it back through this same constant, so the two halves cannot drift.
 export let TargetFlagPrefix = "--target="
 let WorkersFlagPrefix = "--workers="
+
+// ⭐ **THE TWO IR-SIDECAR SPELLINGS, EXPORTED BECAUSE THE SPEC RUNNER EMITS THEM** on the command
+// line it spawns each fragment build with (`SpecTestRunner.runStagedTest`) — the same reason the
+// worker-pool flags above are exported, and named here where the parser that reads them back lives.
+//
+// `--emit-ir` writes the lowered Target IR beside the exe. `--emit-ir-runtime=<name>,<name>` says
+// which compiler-EMITTED functions that IR must ALSO render: a golden fragment otherwise shows only
+// functions parsed from source, so `mrt_start`, the allocator and the `__str_*`/`__arr_*` families
+// carry no golden at all (see `TargetPrinter.printTargetModule`). Naming them is per-BUILD and
+// opt-in, so every fragment that does not ask is byte-for-byte what it was before the flag existed.
+export let EmitIrFlag = "--emit-ir"
+export let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
+
+// Comma, matching every other list-valued flag and directive this project reads (`--target`s in a
+// `<!-- targets: … -->` marker, the reference's own `TargetsDirectiveRegex`). One separator, so a
+// reader never has to ask which list is spelled which way.
+export let RuntimeNameSeparator = ","
 
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
@@ -108,7 +125,7 @@ end 'reportUnknownTarget'
 
 function runBuild(args MaxonArgs) returns ExitCode
 	if args.path.isEmpty() 'noPath'
-		printError("Usage: maxon-shv2 build <file|directory> [-o <output>] [--emit-ir] [--target=<cpu>-<os>]\n")
+		printError("Usage: maxon-shv2 build <file|directory> [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
 		return 1
 	end 'noPath'
 
@@ -122,7 +139,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 		resolved(t) then target = t
 		unrecognized(spec) then return reportUnknownTarget(spec)
 	end 'targetSel'
-	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath) otherwise (e) 'compileErr'
+	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
 	end 'compileErr'
@@ -414,6 +431,7 @@ function printUsage()
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
 	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
+	print("  --emit-ir-runtime=<a>,<b>     Render these compiler-emitted functions in that IR too (implies --emit-ir)\n")
 	print("  --target=<cpu>-<os>           (build, spec-test) Use this target instead of the host, e.g.\n")
 	print("                                x64-windows, x64-linux, arm64-macos or wasm32-wasi (default: the host\n")
 	print("                                target). For spec-test a cross target cross-compiles each\n")
@@ -485,6 +503,11 @@ export type MaxonArgs
 	export let path as String
 	export let outputOverride as String
 	export let emitIr as bool
+	// `--emit-ir-runtime=<name>,<name>` (build only): the compiler-EMITTED functions the IR sidecar
+	// must ALSO render. EMPTY is the ordinary build and is the literal count of names given, not a
+	// sentinel. It IMPLIES `--emit-ir` (see `parse`), because a list of functions to print is a
+	// request for the printing.
+	export let runtimeIrNames as RuntimeFunctionNameArray
 	// `--filter=<pattern>` (spec-test only): run only the tests whose `<spec>/<test>` label
 	// contains <pattern>. Empty selects the whole suite.
 	export let filter as String
@@ -573,6 +596,7 @@ export type MaxonArgs
 		var path = ""
 		var outputOverride = ""
 		var emitIr = false
+		var runtimeIrNames = RuntimeFunctionNameArray.create()
 		var filter = ""
 		var updateRequired = false
 		var workers = DefaultWorkerCount
@@ -605,9 +629,27 @@ export type MaxonArgs
 				outputOverride = try args.get(i) otherwise ""
 			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'
 				outputOverride = try CommandLine.optionValue(arg) otherwise ""
-			end 'longOutput' else if arg == "--emit-ir" 'emitIrFlag'
+			end 'longOutput' else if arg == EmitIrFlag 'emitIrFlag'
 				emitIr = true
-			end 'emitIrFlag' else if arg.startsWith(FilterFlagPrefix) 'filterFlag'
+			end 'emitIrFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
+				// ⚠ It cannot be swallowed by the arm above even though it shares its prefix: that one
+				// tests `==`, and this one is the only arm that tests this prefix.
+				let named = try CommandLine.optionValue(arg) otherwise ""
+				// A VALUELESS `--emit-ir-runtime=` is a BAD OPTION, not an empty list — the same door
+				// `--compiler=` refuses through. Empty is how this field spells "the caller named no
+				// runtime function", so letting an empty VALUE reach it would render a sidecar with no
+				// runtime body under a command line that asked for one, and the golden built from it
+				// would pin exactly what it pinned before while claiming otherwise.
+				if named.isEmpty() 'noRuntimeNames'
+					badOption = firstBadOption(badOption, arg: arg)
+				end 'noRuntimeNames' else 'hasRuntimeNames'
+					runtimeIrNames = splitRuntimeNames(named)
+					// A list of functions to PRINT is a request for the printing. Without this the flag
+					// would be silently inert whenever `--emit-ir` was forgotten — a no-op that looks like
+					// a rendering, which is the one outcome the printer's own refusals exist to prevent.
+					emitIr = true
+				end 'hasRuntimeNames'
+			end 'emitIrRuntimeFlag' else if arg.startsWith(FilterFlagPrefix) 'filterFlag'
 				filter = try CommandLine.optionValue(arg) otherwise ""
 			end 'filterFlag' else if arg == UpdateRequiredFlag 'updateRequiredFlag'
 				updateRequired = true
@@ -688,6 +730,21 @@ export type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, compilerPath: compilerPath, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, runtimeIrNames: runtimeIrNames, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, compilerPath: compilerPath, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'
+
+// The function names an `--emit-ir-runtime=` value lists — split on the shared separator, each part
+// trimmed, empties dropped. The same shape `parseTargetKeys` gives a `<!-- targets: … -->` value,
+// because they are the same kind of list and a second spelling of "comma-separated" would be one
+// more thing a reader has to check.
+function splitRuntimeNames(value String) returns RuntimeFunctionNameArray
+	var names = RuntimeFunctionNameArray.create()
+	for part in value.split(RuntimeNameSeparator) 'eachName'
+		let trimmed = part.trim()
+		if not trimmed.isEmpty() 'nonEmpty'
+			names.push(trimmed)
+		end 'nonEmpty'
+	end 'eachName'
+	return names
+end 'splitRuntimeNames'

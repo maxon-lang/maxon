@@ -44,10 +44,12 @@ let DraftStatus = "draft"
 let BuildSubcommand = "build"
 let OutputFlag = "-o"
 
-// `--emit-ir` makes the subprocess build write a Target-IR sidecar next to the
-// exe (`<exeBase>.ir`); the runner reads it back to embed in a codegen fragment.
-// The extension must match the driver's `IrFileExtension` (Compiler.maxon).
-let EmitIrFlag = "--emit-ir"
+// `--emit-ir` (and, for a ```RequiredRuntime case, `--emit-ir-runtime=<name>,<name>`) make the
+// subprocess build write a Target-IR sidecar next to the exe (`<exeBase>.ir`); the runner reads it
+// back to embed in a codegen fragment. Both spellings are the DRIVER's constants (`Main.maxon`),
+// named where the parser that reads them back lives — this file only emits them, and a second copy
+// here would be a flag the two halves could come to disagree about. The extension must match the
+// driver's `IrFileExtension` (Compiler.maxon).
 let IrFileExtension = ".ir"
 
 // Committed-fragment layout: `<specDir>/fragments/<target>/<specName>/<testName>.test`.
@@ -593,6 +595,11 @@ function runStagedTest(compilerExe FilePath, test SpecTest, specName String, sta
 	compileArgv.push("{TargetFlagPrefix}{targetToString(effectiveTarget)}")
 	if pinnable 'emitGolden'
 		compileArgv.push(EmitIrFlag)
+		// A ```RequiredRuntime block only means anything where there IS a golden, so it rides inside
+		// the same gate: under wasm32 there is no sidecar to name functions in.
+		if test.runtimeNames.count() > 0 'namesRuntime'
+			compileArgv.push("{EmitIrRuntimeFlagPrefix}{joinRuntimeNames(test.runtimeNames)}")
+		end 'namesRuntime'
 	end 'emitGolden'
 
 	let compile = try runProcess(Executable.path(compilerExe), argv: compileArgv) otherwise (e) 'compileSpawnFailed'
@@ -622,6 +629,20 @@ function runStagedTest(compilerExe FilePath, test SpecTest, specName String, sta
 	cleanup(staged, exePath: exePath, irPath: irPath)
 	return fragmentOutcome
 end 'runStagedTest'
+
+// The `--emit-ir-runtime=` value for a case's ```RequiredRuntime names. A `StringBuilder` rather than
+// repeated `String` concatenation for the reason every accumulator in this file gives: a `String`
+// owns exactly the bytes it holds and its `append` recopies all of them.
+function joinRuntimeNames(names RuntimeFunctionNameArray) returns String
+	var out = StringBuilder.create()
+	for (iter, name) in names.withIterator() 'each'
+		if iter.index() > 0 'separator'
+			out.append(RuntimeNameSeparator)
+		end 'separator'
+		out.append(name)
+	end 'each'
+	return out.build()
+end 'joinRuntimeNames'
 
 // Write `test`'s source to disk and describe how the compiler's diagnostics map back onto the
 // merged fragment. THE one place a test's source reaches the filesystem.
@@ -866,7 +887,7 @@ end 'buildErrorFragment'
 
 function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	return match test.expectation 'e'
-		run(expected, stderr, stdout, requiredData) gives checkRun(expected, stderr: stderr, stdout: stdout, requiredData: requiredData, compile: compile, exePath: exePath, effectiveTarget: effectiveTarget)
+		run(expected, stderr, stdout, sectionPins) gives checkRun(expected, stderr: stderr, stdout: stdout, sectionPins: sectionPins, compile: compile, exePath: exePath, effectiveTarget: effectiveTarget)
 		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged)
 	end 'e'
 end 'checkExpectation'
@@ -1164,27 +1185,28 @@ function requireWslAvailable(effectiveTarget Target)
 end 'requireWslAvailable'
 
 // A RUN test (whatever result blocks the case carried — an ```exitcode, a ```stdout, a ```stderr, a
-// ```RequiredData, in any combination): the compile MUST succeed, then the produced exe is spawned and
-// EVERY half the spec pinned is checked against that one execution.
-function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData, compile ProcessCapture, exePath FilePath, effectiveTarget Target) returns TestOutcome
+// ```RequiredData, a ```RequiredRdata, in any combination): the compile MUST succeed, then the produced
+// exe is spawned and EVERY half the spec pinned is checked against that one execution.
+function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile ProcessCapture, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	if compile.exitCode != 0 'compileFailed'
 		return TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}")
 	end 'compileFailed'
 
-	// The `.data` gate reads the BINARY, so it runs before the program does — it is a property of
+	// The section gates read the BINARY, so they run before the program does — they are properties of
 	// what was linked, not of what executing it happened to touch. A layout failure reported here
 	// rather than after the run also names the actual defect: a program whose globals are laid out
 	// wrong usually still exits with some number, and "exit code mismatch" would send the reader
-	// looking in the wrong place entirely. It is a NATIVE-binary property; a wasm test never pins it
-	// (the scalar slice has no `.data`), so `unpinned` short-circuits this to a pass under wasm.
+	// looking in the wrong place entirely. They are NATIVE-binary properties; a wasm test never pins
+	// one (the scalar slice has no data sections), so an empty pin list short-circuits this to a pass
+	// under wasm.
 	//
 	// The EFFECTIVE target selects which executable format to parse — the file on disk is an ELF
 	// under `--target=arm64-linux` however macOS-shaped the host is.
-	let dataOutcome = checkRequiredData(requiredData, exePath: exePath, effectiveTarget: effectiveTarget)
-	match dataOutcome 'data'
-		pass then break 'data'
-		fail then return dataOutcome
-	end 'data'
+	let sectionOutcome = checkRequiredSections(sectionPins, exePath: exePath, effectiveTarget: effectiveTarget)
+	match sectionOutcome 'sections'
+		pass then break 'sections'
+		fail then return sectionOutcome
+	end 'sections'
 
 	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned
 	// by the host, so it is run through the vendored wasmtime instead — everything checked against
@@ -1217,33 +1239,46 @@ function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, r
 	return checkRunStderr(stderr, actual: run.stderr)
 end 'checkRun'
 
-// ⭐ **THE `.data` GATE — a top-level `var`'s STORAGE, checked against the LINKED BINARY.**
+// ⭐ **THE SECTION GATES — a linked binary's own bytes, for every section the case pinned.**
 //
-// ⚠ This block was SILENTLY IGNORED before P1.0d.5b (see `SpecParser.RequiredDataFence`): six
-// `specs/static-variables.md` cases carried one, the parser dropped it, and each would have passed
-// on its exit code alone while claiming to check its layout. A gate that cannot see its own
+// ⚠ A ```RequiredData block was SILENTLY IGNORED before P1.0d.5b (see `SpecParser.RequiredDataFence`):
+// six `specs/static-variables.md` cases carried one, the parser dropped it, and each would have
+// passed on its exit code alone while claiming to check its layout. A gate that cannot see its own
 // property must not report PASS.
 //
-// **IT READS THE PE, NOT THE COMPILER'S OPINION OF IT**, and that is the whole value. The IR
+// **IT READS THE IMAGE, NOT THE COMPILER'S OPINION OF IT**, and that is the whole value. The IR
 // fragment already pins what the compiler THINKS it laid out (`printDataSection`), and pinning that
 // twice would prove only that the compiler agrees with itself. Reading the section back out of the
 // executable catches the layer between: a section header with a wrong RVA, a raw pointer off by an
 // alignment, an image the writer padded instead of wrote. This is a faithful port of
 // `TestRunner.cs`'s `CheckRequiredData` → `CheckRequiredSection`, including the PREFIX rule below.
-function checkRequiredData(requiredData SpecRequiredData, exePath FilePath, effectiveTarget Target) returns TestOutcome
-	match requiredData 'pin'
-		unpinned then return TestOutcome.pass
-		pinned(text) then return compareDataSection(text, exePath: exePath, effectiveTarget: effectiveTarget)
-	end 'pin'
-end 'checkRequiredData'
+//
+// Every pin is checked, in the order the case wrote them, and the FIRST failure is reported: a case
+// pinning both sections is making two claims about one link, and reporting the second while the
+// first is wrong would name a consequence rather than a cause.
+function checkRequiredSections(sectionPins SpecSectionPinArray, exePath FilePath, effectiveTarget Target) returns TestOutcome
+	for pin in sectionPins 'eachPin'
+		let outcome = compareLinkedSection(pin, exePath: exePath, effectiveTarget: effectiveTarget)
+		match outcome 'pin'
+			pass then break 'pin'
+			fail then return outcome
+		end 'pin'
+	end 'eachPin'
 
-function compareDataSection(expectedText String, exePath FilePath, effectiveTarget Target) returns TestOutcome
-	let expected = try parseTypedSectionValues(expectedText) otherwise (e) 'badBlock'
-		return TestOutcome.fail("RequiredData block is malformed: {e.displayReason()}")
+	return TestOutcome.pass
+end 'checkRequiredSections'
+
+function compareLinkedSection(pin SpecSectionPin, exePath FilePath, effectiveTarget Target) returns TestOutcome
+	// The section's name in THIS target's format — `.rdata` in a PE, `.rodata` in an ELF — so every
+	// message below names the section that was actually read rather than one spelling of it.
+	let sectionName = linkedSectionName(pin.section, target: effectiveTarget)
+
+	let expected = try parseTypedSectionValues(pin.text) otherwise (e) 'badBlock'
+		return TestOutcome.fail("the {sectionName} pin is malformed: {e.displayReason()}")
 	end 'badBlock'
 
-	let actual = try readLinkedDataSection(exePath, target: effectiveTarget) otherwise (e) 'noSection'
-		return TestOutcome.fail("could not read the data section of {exePath.toString()}: {e.displayReason()}")
+	let actual = try readLinkedSection(exePath, target: effectiveTarget, section: pin.section) otherwise (e) 'noSection'
+		return TestOutcome.fail("could not read the {sectionName} section of {exePath.toString()}: {e.displayReason()}")
 	end 'noSection'
 
 	// ⚠ **A PREFIX, NOT AN EQUALITY**, and the reference draws the line in the same place and says
@@ -1251,21 +1286,23 @@ function compareDataSection(expectedText String, exePath FilePath, effectiveTarg
 	// state) after the user data". shv2's `.data` holds only user globals TODAY, so a prefix check
 	// and an equality check agree on every current case — but the runtime that grows into this
 	// section (P1.5's scheduler) would break equality on every one of these six specs at once,
-	// for a change that says nothing about the property they pin.
+	// for a change that says nothing about the property they pin. The read-only section makes the
+	// same argument twice over: a program's literals, jump tables and descriptors all land there,
+	// and a spec pins the payload it is about rather than everything that shares the section.
 	if actual.count() < expected.count() 'tooShort'
-		return TestOutcome.fail("`.data` is shorter than RequiredData claims\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
+		return TestOutcome.fail("{sectionName} is shorter than the pin claims\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
 	end 'tooShort'
 
 	for i in 0 upto expected.count() 'eachByte'
-		let e = try expected.get(i) otherwise panic("compareDataSection: expected.get OOB at {i} despite the upto bound")
-		let a = try actual.get(i) otherwise panic("compareDataSection: actual.get OOB at {i} — the length was checked above")
+		let e = try expected.get(i) otherwise panic("compareLinkedSection: expected.get OOB at {i} despite the upto bound")
+		let a = try actual.get(i) otherwise panic("compareLinkedSection: actual.get OOB at {i} — the length was checked above")
 		if e != a 'differs'
-			return TestOutcome.fail("`.data` mismatch at byte {i}: expected 0x{hexByte(e)}, got 0x{hexByte(a)}\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
+			return TestOutcome.fail("{sectionName} mismatch at byte {i}: expected 0x{hexByte(e)}, got 0x{hexByte(a)}\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
 		end 'differs'
 	end 'eachByte'
 
 	return TestOutcome.pass
-end 'compareDataSection'
+end 'compareLinkedSection'
 
 // The stderr half of a run expectation.
 //

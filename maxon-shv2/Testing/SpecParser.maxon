@@ -3,11 +3,13 @@
 // `<!-- test: NAME -->` marker, the ```maxon source block, and one expected
 // block (```exitcode or ```maxoncstderr), plus the `status:` frontmatter. Every
 // v1 feature the specs-shv2 corpus does not use — fragment caching, RequiredIR /
-// RequiredRdata / RequiredLowering, mm-trace,
+// RequiredLowering, mm-trace,
 // `Args`/`TimeoutMs` directives, doc-example extraction — is dropped; each
-// returns when a spec first needs it. **Per-target `Stdout:<target>` is the first
+// returns when a spec first needs it. **Per-target `Stdout:<target>` was the first
 // one to have come back** — BATCH2 slice 3, for `specs/filepath.md`, whose 26
-// separator-printing cases pin one answer per platform. See `TargetStdoutFencePrefix`.
+// separator-printing cases pin one answer per platform (see `TargetStdoutFencePrefix`) —
+// and **`RequiredRdata` is the second**, at BATCH8, where the read-only section became the
+// second thing no golden could see (see `RequiredRdataFence`).
 //
 // MULTI-FILE TESTS — `// --- file: <name>` (added for the cross-file signature rung).
 //
@@ -154,21 +156,57 @@ let StdoutFence = "```stdout"
 // bytes, so the case difference is a real difference.)
 let TargetStdoutFencePrefix = "```Stdout:"
 
-// ⭐ THE `.data` SECTION'S BYTES, as typed values — `i64 42` / `i8 1` / `f64 3.14`, one per line.
-// The gate on a top-level `var`'s STORAGE: not what the compiler thinks it laid out, but what the
-// linked binary actually contains, read back out of the PE (`SpecTestRunner.checkRequiredData`).
+// ⭐ A LINKED SECTION'S BYTES, as typed values — `i64 42` / `i8 1` / `f64 3.14`, one per line. Not
+// what the compiler thinks it laid out, but what the linked binary actually contains, read back out
+// of the image (`SpecTestRunner.checkRequiredSections`).
 //
-// ⚠ **IT WAS SILENTLY IGNORED UNTIL P1.0d.5b, AND THAT IS WHY IT IS HERE.** This parser dropped
-// every ```RequiredData block on the floor — the outer scan, finding no marker in it, walked over
-// it line by line — so the SIX cases in `specs/static-variables.md` that carry one would have
-// passed on their exit code alone while CLAIMING to check their layout. A gate that cannot see its
-// own property must not report PASS; that is this project's own rule, and `verify-warm-rebuild`
-// had just been caught breaking it. Implemented rather than refused, because the reference already
-// implements it (`TestRunner.cs:CheckRequiredData` → `CheckRequiredSection`) and porting it costs
-// less than explaining why shv2 would not.
+// ⚠ **```RequiredData WAS SILENTLY IGNORED UNTIL P1.0d.5b, AND THAT IS WHY IT IS HERE.** This parser
+// dropped every one on the floor — the outer scan, finding no marker in it, walked over it line by
+// line — so the SIX cases in `specs/static-variables.md` that carry one would have passed on their
+// exit code alone while CLAIMING to check their layout. A gate that cannot see its own property must
+// not report PASS; that is this project's own rule, and `verify-warm-rebuild` had just been caught
+// breaking it. Implemented rather than refused, because the reference already implements it
+// (`TestRunner.cs:CheckRequiredData` → `CheckRequiredSection`) and porting it costs less than
+// explaining why shv2 would not.
 //
-// It is order-independent of the other four fences (no prefix relation), like ```stderr.
+// ⭐⭐ **```RequiredRdata IS ITS TWIN, AND IT CLOSES THE SAME BLINDNESS ONE SECTION OVER.** A
+// `.rdata` payload registered under a STRUCTURAL label (`registerRdataConstantLabeled` — witness
+// tables, `__layout_*` descriptors, the UCD tables) does not advance `GlobalDataTable.nextStringId`,
+// so it shifts read-only OFFSETS without moving any label a golden fragment prints: the fragment
+// shows which label a `lea` names and nothing shows what is IN it. The name is not an invention —
+// this file's header lists `RequiredRdata` among the v1 features dropped until "a spec first needs
+// it", and BATCH8 is that moment.
+//
+// The two are ONE mechanism taking a `LinkedSectionKind` (see `LinkedSection.maxon`): one fence
+// table, one block parse, one prefix compare, one message, two section constants.
+//
+// ⚠ Neither is a prefix of the other ("```RequiredData" and "```RequiredRdata" first differ at the
+// `D`/`R`), and neither is a prefix relation with the other five fences — so, exactly as with
+// ```stderr, the order these are matched in is free and no arm can swallow another.
 let RequiredDataFence = "```RequiredData"
+let RequiredRdataFence = "```RequiredRdata"
+
+// ⭐⭐ **THE EMITTED RUNTIME FUNCTIONS THIS TEST'S GOLDEN RENDERS — one `__`/`mrt_`-prefixed name per
+// line, and the reason is that a compiler EMITS more than a program DECLARES.**
+//
+// A golden fragment shows only functions parsed from source (`TargetPrinter.isRuntimeFunction`), so
+// the entry stub, the allocator, and the whole `__str_*`/`__arr_*` family carry NO golden at all —
+// the one gate that could see them renders none of them, and the miss is measured rather than
+// feared: `__str_bytes_view`'s owed-base arm holds an incref whose loss is a use-after-free that
+// BALANCES (the matching release goes with it), so the exit code, the leak gate and every fragment
+// stayed green over it together.
+//
+// ⚠ **IT IS OPT-IN PER TEST, AND THAT IS THE WHOLE DESIGN.** Rendering the runtime everywhere would
+// inject thousands of identical lines into every one of the corpus's goldens and move all of them at
+// once on any runtime change; a test without this block renders byte-identically to one written
+// before the block existed.
+//
+// ⚠ It is NOT a result block: it says nothing about the RUN, so it does not satisfy
+// `pinsAnyResult` — a case carrying only this would compile, render a golden and check no behaviour.
+//
+// ⚠ It is in no prefix relation with either section fence either (`RequiredRuntime` and
+// `RequiredRdata` first differ at the `u`/`d`), so all three may be matched in any order.
+let RequiredRuntimeFence = "```RequiredRuntime"
 let FenceClose = "```"
 
 // The multi-file marker, and the ONE line the `// Test: <name>` fragment header adds above a
@@ -219,13 +257,30 @@ export union SpecStdout
 	pinned(text String)
 end 'SpecStdout'
 
-// What a spec pins about the emitted `.data` section — `SpecStderr`'s exact shape, and a union for
-// the identical reason: "this spec says nothing about `.data`" and "this spec says `.data` is
-// EMPTY" are different claims, and an empty String cannot tell them apart.
-export union SpecRequiredData
-	unpinned
-	pinned(text String)
-end 'SpecRequiredData'
+// ONE ```RequiredData / ```RequiredRdata block: which section it names, and the typed-value text it
+// claims for it.
+//
+// ⚠ **AN ARRAY OF THESE REPLACED A `SpecStderr`-SHAPED UNION, and the union's own argument is what
+// retired it.** `unpinned`/`pinned` existed to distinguish "says nothing about `.data`" from "says
+// `.data` is EMPTY", which an empty String cannot do — and an ARRAY draws exactly that distinction
+// with no arm at all: a case that says nothing contributes no ENTRY, and a case pinning an empty
+// section contributes an entry whose text is empty. The count is the literal number of blocks the
+// case wrote, so it is not a sentinel; and unlike a pair of union-valued fields it does not have to
+// grow a field per section.
+export type SpecSectionPin
+	export let section as LinkedSectionKind
+	export let text as String
+
+	export static function create(section LinkedSectionKind, text String) returns SpecSectionPin
+		return Self{section: section, text: text}
+	end 'create'
+end 'SpecSectionPin'
+
+export typealias SpecSectionPinArray = Array with SpecSectionPin
+
+// (The emitted-runtime names a ```RequiredRuntime block lists are carried in
+// `RuntimeFunctionNameArray`, declared by the printer that consumes them — `TargetPrinter.maxon`.
+// It is the same list all the way from the fence to the render, so it is named once.)
 
 // ⭐⭐ **WHAT A SPEC PINS ABOUT THE EXIT CODE — AND UNTIL BATCH2 slice 3 THERE WAS NO SUCH THING, WHICH
 // SILENTLY DROPPED WHOLE TEST CASES.** The exit code used to be the one half of a run expectation with no
@@ -255,9 +310,9 @@ end 'SpecExitCode'
 // program RAN, OR the compiler rejected the source with `text` (a ```maxoncstderr
 // block) — with no sentinel "unset" state.
 //
-// The `run` arm carries EVERY half of a run expectation (exit code, stderr, stdout, requiredData),
-// because they ACCOMPANY one another — a case may pin any subset, and most pin an exit code plus one
-// stream. `specs/safety.md` asserts that
+// The `run` arm carries EVERY half of a run expectation (exit code, stderr, stdout, the section
+// pins), because they ACCOMPANY one another — a case may pin any subset, and most pin an exit code
+// plus one stream. `specs/safety.md` asserts that
 // `100 / zero` exits 1 AND prints a panic to stderr; `specs/static-variables.md` asserts that
 // `data-section-i64-8byte` exits 0 AND lays down `i64 42`; `specs/string-type.md` asserts that
 // `print-literal` exits 0 AND writes `Hello, World!` to stdout. Each is one indivisible claim about
@@ -267,7 +322,7 @@ end 'SpecExitCode'
 // ExitCode/Stdout/Stderr/RequiredData, mutually exclusive with a compile-error expectation); this is
 // that shape with the "unset" states the reference leaves as `null` made unrepresentable.
 export union SpecExpectation
-	run(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData)
+	run(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray)
 	compilerError(text String)
 end 'SpecExpectation'
 
@@ -318,11 +373,16 @@ export type SpecTest
 	// omits the host target (`SpecTestRunner.selectedByTarget`) — the same treatment a draft or
 	// filtered-out test gets, never a failure.
 	export let targets as TargetKeyArray
+	// The emitted runtime functions this test's golden renders (a ```RequiredRuntime block). It rides
+	// on the TEST rather than on the expectation because it is not something the run is checked
+	// against: it changes what the COMPILE is asked to print, which is a property of how this test is
+	// built (like `targets`), not of what its execution must do.
+	export let runtimeNames as RuntimeFunctionNameArray
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray) returns SpecTest
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: splitSourceFiles(source), targets: targets}
+	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray) returns SpecTest
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: splitSourceFiles(source), targets: targets, runtimeNames: runtimeNames}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -529,8 +589,9 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// so "the qualified block wins" cannot be expressed by letting a later assignment overwrite an
 	// earlier one. Resolved once, below, where both are known.
 	var targetStdout = SpecStdout.unpinned
-	var requiredData = SpecRequiredData.unpinned
+	var sectionPins = SpecSectionPinArray.create()
 	var targets = TargetKeyArray.create()
+	var runtimeNames = RuntimeFunctionNameArray.create()
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -595,12 +656,25 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			continue
 		end 'targetStdout'
 
-		if line.startsWith(RequiredDataFence) 'requiredDataBlock'
+		// The two section pins differ in exactly one thing — WHICH section they name — so the block
+		// reading and the recording are written once and the difference is the argument. See
+		// `RequiredDataFence` for why the two fences cannot swallow one another.
+		if line.startsWith(RequiredDataFence) 'globalsPin'
+			i = pushSectionPin(lines, openIndex: i, section: LinkedSectionKind.globals, pins: sectionPins)
+			continue
+		end 'globalsPin'
+
+		if line.startsWith(RequiredRdataFence) 'readOnlyPin'
+			i = pushSectionPin(lines, openIndex: i, section: LinkedSectionKind.readOnly, pins: sectionPins)
+			continue
+		end 'readOnlyPin'
+
+		if line.startsWith(RequiredRuntimeFence) 'runtimeBlock'
 			let block = readFence(lines, openIndex: i)
-			requiredData = SpecRequiredData.pinned(block.text.trim())
+			runtimeNames = parseRuntimeNames(block.text)
 			i = block.nextIndex
 			continue
-		end 'requiredDataBlock'
+		end 'runtimeBlock'
 
 		if line.startsWith(ExitCodeFence) 'exitCodeBlock'
 			let block = readFence(lines, openIndex: i)
@@ -635,25 +709,47 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// and a spec carrying both is asserting the compile FAILS — which no exit code of the
 	// program it never produced could also be true of.
 	if haveCompilerError 'rejected'
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError), targets: targets))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError), targets: targets, runtimeNames: runtimeNames))
 		return i
 	end 'rejected'
 
 	// Whatever result blocks this case carried are ONE claim about ONE execution.
 	let resolvedStdout = resolveStdout(targetStdout, portable: stdout)
-	if not pinsAnyResult(exitCode, stderr: stderr, stdout: resolvedStdout, requiredData: requiredData) 'pinsNothing'
-		panic("SpecParser: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr or ```RequiredData block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at")
+	if not pinsAnyResult(exitCode, stderr: stderr, stdout: resolvedStdout, sectionPins: sectionPins) 'pinsNothing'
+		panic("SpecParser: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, stdout: resolvedStdout, requiredData: requiredData), targets: targets))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames))
 
 	return i
 end 'scanTestFromMarker'
 
+// Consume a section-pin fence opening at `openIndex` and record what it claims about `section`,
+// returning the line index to resume the block scan from. THE one place a pin is read, so the two
+// fences cannot come to disagree about how a block becomes a claim.
+function pushSectionPin(lines StringArray, openIndex LineIndex, section LinkedSectionKind, pins SpecSectionPinArray) returns LineIndex
+	let block = readFence(lines, openIndex: openIndex)
+	pins.push(SpecSectionPin.create(section, text: block.text.trim()))
+	return block.nextIndex
+end 'pushSectionPin'
+
+// The function names a ```RequiredRuntime block lists — one per line, blank lines skipped, exactly
+// as `parseTypedSectionValues` skips them in a section pin.
+function parseRuntimeNames(block String) returns RuntimeFunctionNameArray
+	var names = RuntimeFunctionNameArray.create()
+	for rawLine in block.split("\n") 'eachLine'
+		let name = rawLine.trim()
+		if not name.isEmpty() 'nonBlank'
+			names.push(name)
+		end 'nonBlank'
+	end 'eachLine'
+	return names
+end 'parseRuntimeNames'
+
 // Does this case assert ANYTHING about the run? The push condition, and the one place the four halves of
 // a run expectation are asked as a group — a fifth half added to `SpecExpectation.run` without a clause
 // here would be a result block that still counts as no result.
-function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData) returns bool
+function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray) returns bool
 	match exitCode 'exit'
 		unpinned then break 'exit'
 		pinned then return true
@@ -666,10 +762,7 @@ function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdo
 		unpinned then break 'out'
 		pinned then return true
 	end 'out'
-	return match requiredData 'data'
-		unpinned gives false
-		pinned gives true
-	end 'data'
+	return sectionPins.count() > 0
 end 'pinsAnyResult'
 
 // The run's expected stdout: the block naming THIS target when the spec wrote one, else the portable

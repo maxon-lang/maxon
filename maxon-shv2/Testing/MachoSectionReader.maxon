@@ -18,11 +18,29 @@
 // virtual/raw split), so the reader walks: mach_header_64 → the LC_SEGMENT_64 named `__DATA` →
 // its `__data` section header → the `size` bytes at `offset`.
 
-// The `__DATA,__data` pair a top-level `var`'s image lives in on macOS — the Mach-O analog of PE's
-// `.data`. Named here rather than inlined at the dispatch site because it is a contract with
-// `MachOWriter`'s `__data` section header, not a bare pair of strings.
+// The `__DATA` segment both pinnable sections live in on macOS, and their section names within it —
+// `__data` for a top-level `var`'s image, `__const` for the read-only constants. Named here rather
+// than inlined at the dispatch site because they are a contract with `MachOWriter`'s own section
+// headers, not bare strings. ⚠ `__const` sits in `__DATA` too, not in `__TEXT`, which is what makes
+// ONE segment name right for both kinds (`MachOWriter.maxon:817`).
 export let MachoDataSegmentName = "__DATA"
-export let MachoDataSectionName = "__data"
+let MachoDataSectionName = "__data"
+let MachoConstSectionName = "__const"
+
+// How a `segment,section` pair is written when a message names one. Mach-O is the only format whose
+// section identity is a PAIR, so this punctuation exists nowhere else.
+export let MachoSectionPairSeparator = ","
+
+// The Mach-O section name for a `LinkedSectionKind` — this format's half of the one name table
+// `LinkedSection.linkedSectionName` reads. Exhaustive, so a third section cannot be added to the
+// kind without a Mach-O name for it. The SEGMENT is not a function of the kind: both live in
+// `__DATA`.
+export function machoSectionName(section LinkedSectionKind) returns String
+	return match section 'k'
+		globals gives MachoDataSectionName
+		readOnly gives MachoConstSectionName
+	end 'k'
+end 'machoSectionName'
 
 // --- Mach-O structural constants (the reader's own; see the header on why they are not shared) ---
 
@@ -124,6 +142,6 @@ export function readMachoSectionData(path FilePath, segname String, sectname Str
 	throw MachoReadError.segmentMissing(path, segmentName: segname)
 end 'readMachoSectionData'
 
-// The format dispatch that used to sit here — `DataSectionReadError` and `readLinkedDataSection` —
-// now lives in `LinkedDataSection.maxon`. It reads THREE formats, so a home inside any one of them
+// The format dispatch that used to sit here — `DataSectionReadError` and `readLinkedSection` —
+// now lives in `LinkedSection.maxon`. It reads THREE formats, so a home inside any one of them
 // made the other two look subordinate to Mach-O; it belongs beside all three, not inside one.

@@ -20,9 +20,20 @@
 // See that file's header — three copies of "byte n+1 is the high half" cannot catch a writer bug one
 // copy would miss, they can only drift.
 
-// The section a top-level `var`'s image lives in. Named here rather than inlined at the call site
-// because it is a contract with `PeWriter.writeSectionHeader`, not a string.
-export let DataSectionName = ".data"
+// What a PE calls each section a spec can pin. Named here rather than inlined at the call site
+// because they are a contract with `PeWriter.writeSectionHeader`, not strings.
+let DataSectionName = ".data"
+let RdataSectionName = ".rdata"
+
+// The PE spelling of a `LinkedSectionKind` — this format's half of the one name table
+// `LinkedSection.linkedSectionName` reads. Exhaustive, so a third section cannot be added to the
+// kind without a PE name for it.
+export function peSectionName(section LinkedSectionKind) returns String
+	return match section 'k'
+		globals gives DataSectionName
+		readOnly gives RdataSectionName
+	end 'k'
+end 'peSectionName'
 
 // --- PE structural constants (the reader's own; see the header on why they are not shared) ---
 

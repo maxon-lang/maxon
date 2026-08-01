@@ -1,0 +1,112 @@
+// Testing/LinkedSection.maxon — read one of a linked test binary's data sections back out of it,
+// whichever executable format the TARGET produces.
+//
+// The section gates (`SpecTestRunner.checkRequiredSections`) ask one question — "what bytes did the
+// linker actually lay down here?" — of two sections, and three formats answer it. This file is the
+// seam between that one question and those three readers, and it holds nothing else: every byte of
+// format knowledge lives in `PeSectionReader` / `MachoSectionReader` / `ElfSectionReader`.
+//
+// ⚠ IT DISPATCHES ON THE TARGET, NOT THE HOST. It used to key off `detectHostTarget()`, which was
+// true only while the runner exclusively inspected binaries built for its own host. A cross-native
+// run (`--target=arm64-linux` from an arm64-macOS host) breaks that assumption outright: the file on
+// disk is an ELF and the host is macOS, so a host-keyed dispatch would parse an ELF as a Mach-O and
+// report `notAMachoFile` for a perfectly good image. The FORMAT is a property of what was BUILT.
+
+// ⭐ **WHICH SECTION A PIN NAMES — the one axis the two gates differ on.** `RequiredData` pins the
+// GLOBALS section (a top-level `var`'s storage), `RequiredRdata` the READ-ONLY one (string-literal
+// blobs and records, float constants, jump tables, witness tables, `__layout_*` descriptors).
+// Everything else about the two — the typed-value block, the prefix compare, the three format
+// readers, the failure message — is ONE path taking this as an argument, because a second copy of
+// "parse a fenced typed-value block, read a named section out of the linked binary, prefix-compare"
+// is a copy free to disagree with the first about any of it.
+//
+// It is a KIND rather than a section NAME because the name is a per-FORMAT fact: the read-only
+// section is `.rdata` in a PE, `.rodata` in an ELF and `__DATA,__const` in a Mach-O image, and a
+// spec author naming one of those would be writing a target into a portable claim.
+export enum LinkedSectionKind
+	globals
+	readOnly
+end 'LinkedSectionKind'
+
+// A read failure from whichever executable format the target produces, joined so the one section-gate
+// call site (`SpecTestRunner.compareLinkedSection`) catches a single type. It exists only to unify
+// three independent format readers under one `throws`; each arm delegates rendering to the reader
+// that raised it, so a failure reads the same way whichever format it came from.
+export union DataSectionReadError implements Error
+	pe(inner PeReadError)
+	macho(inner MachoReadError)
+	elf(inner ElfReadError)
+
+	export function displayReason() returns String
+		return match self 'k'
+			pe(inner) gives inner.displayReason()
+			macho(inner) gives inner.displayReason()
+			elf(inner) gives inner.displayReason()
+		end 'k'
+	end 'displayReason'
+end 'DataSectionReadError'
+
+// Read `section` out of the binary at `exePath`, as `target`'s format keeps it.
+//
+// EXHAUSTIVE over `Os`, with no bare `else`. The previous shape — `if macos … else <PE>` — quietly
+// made PE the answer for every os nobody had thought about, which is precisely how an ELF came to be
+// parsed as a PE. `wasi` panics rather than guessing: a wasm component has no native data sections
+// at all, so there is no reading to attempt, and the only way to reach it is a section-pin spec that
+// was allowed to run under wasm — a gating bug in the spec, which the panic names.
+export function readLinkedSection(exePath FilePath, target Target, section LinkedSectionKind) returns ByteArray throws DataSectionReadError
+	match target.os 'format'
+		windows then return try peSection(exePath, section: section)
+		macos then return try machoSection(exePath, section: section)
+		linux then return try elfSection(exePath, section: section)
+		wasi then panic("readLinkedSection: a wasm component has no native {linkedSectionLabel(section)} section, so a section pin cannot be checked under {targetToString(target)} — the spec carrying it must restrict itself to the targets that have one")
+	end 'format'
+end 'readLinkedSection'
+
+// ⭐ **THE NAME `target`'s FORMAT GIVES `section` — the ONE producer of that spelling**, read by the
+// three format readers below and by the mismatch message `compareLinkedSection` prints. A message
+// that named `.rdata` while an ELF run had just read `.rodata` would be a second opinion about what
+// was read, and it would be wrong on two of the three targets.
+export function linkedSectionName(section LinkedSectionKind, target Target) returns String
+	match target.os 'format'
+		windows then return peSectionName(section)
+		macos then return "{MachoDataSegmentName}{MachoSectionPairSeparator}{machoSectionName(section)}"
+		linux then return elfSectionName(section)
+		wasi then panic("linkedSectionName: a wasm component has no native {linkedSectionLabel(section)} section — see readLinkedSection")
+	end 'format'
+end 'linkedSectionName'
+
+// What a section is called when no target has been chosen yet: the panic paths above, which report a
+// spec-gating error and have no format to name. Deliberately NOT a section name — see
+// `LinkedSectionKind` for why a portable claim must not spell one.
+export function linkedSectionLabel(section LinkedSectionKind) returns String
+	return match section 'k'
+		globals gives "globals"
+		readOnly gives "read-only"
+	end 'k'
+end 'linkedSectionLabel'
+
+// --- One per format: where that format keeps each section, and how its failure joins the shared union ---
+//
+// Three functions rather than three arms of the match above, because a match arm may not BIND the
+// error it catches (`E2049`) and the bound error is the entire point — `displayReason()` is what
+// turns "the section gate could not read the binary" into "…is not an ELF64 image (bad magic or
+// EI_CLASS)". Each carries one fact its caller should not have to know: how that format names the
+// section, which is a contract with that format's WRITER.
+
+function peSection(exePath FilePath, section LinkedSectionKind) returns ByteArray throws DataSectionReadError
+	return try readPeSectionData(exePath, sectionName: peSectionName(section)) otherwise (e) 'peErr'
+		throw DataSectionReadError.pe(e)
+	end 'peErr'
+end 'peSection'
+
+function machoSection(exePath FilePath, section LinkedSectionKind) returns ByteArray throws DataSectionReadError
+	return try readMachoSectionData(exePath, segname: MachoDataSegmentName, sectname: machoSectionName(section)) otherwise (e) 'machoErr'
+		throw DataSectionReadError.macho(e)
+	end 'machoErr'
+end 'machoSection'
+
+function elfSection(exePath FilePath, section LinkedSectionKind) returns ByteArray throws DataSectionReadError
+	return try readElfSectionData(exePath, sectionName: elfSectionName(section)) otherwise (e) 'elfErr'
+		throw DataSectionReadError.elf(e)
+	end 'elfErr'
+end 'elfSection'

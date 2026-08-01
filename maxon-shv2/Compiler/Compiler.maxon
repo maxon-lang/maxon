@@ -13,7 +13,9 @@
 // Compile the file or directory `inputPath` for `target`, returning the path of
 // the produced executable. `outputOverride` (the `-o`/`--output` value, empty
 // when unset) wins over the derived output name. `emitIr` (the `--emit-ir` flag)
-// additionally writes the lowered Target IR beside the exe as `<output>.ir`.
+// additionally writes the lowered Target IR beside the exe as `<output>.ir`, and
+// `runtimeIrNames` (the `--emit-ir-runtime=` list) names the compiler-EMITTED
+// functions that IR must also render — empty for every build that names none.
 //
 // The pipeline-driving body lives in `compileToCodeResult` so that the
 // `verify-warm-rebuild` gate compiles through the EXACT same path — a determinism
@@ -31,7 +33,7 @@
 // Every phase timed below and in the passes/backend is a disjoint sub-interval of the
 // wall time measured here, so they sum to at most the total, and whatever they leave
 // over is printed as `unattributed` rather than absorbed — see CompileTimings.
-export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "") returns FilePath throws CompileError
+export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray) returns FilePath throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the input
 	// path — the same value `Project.create` derives from the root it is handed below — so the
 	// pre-project `load` bracket and everything after it agree on which compile they are.
@@ -53,7 +55,7 @@ export function compile(inputPath FilePath, target Target, outputOverride String
 	// `verifyWarmRebuild` drives `compileToCodeResult` directly and so does not pass through here. It needs
 	// no drain of its own for the reason this function's header already gives for the TOTAL: it is the only
 	// other whole-build entry, and a throw out of it ends the process with nothing left to mis-nest.
-	return try compileMeasured(inputPath, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, unit: unit) otherwise (e) 'compileFailed'
+	return try compileMeasured(inputPath, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, unit: unit) otherwise (e) 'compileFailed'
 		closeOpenPhaseSpans(unit)
 		throw e
 	end 'compileFailed'
@@ -62,7 +64,7 @@ end 'compile'
 // The build itself, from the whole-compile probe to the timing report — everything `compile` measures. It
 // is a separate function for the single reason its caller states: one failure path to hang the trace-span
 // drain on, rather than one per `try` in this body.
-function compileMeasured(inputPath FilePath, target Target, outputOverride String, emitIr bool, metricsPath String, unit TraceUnit) returns FilePath throws CompileError
+function compileMeasured(inputPath FilePath, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, unit TraceUnit) returns FilePath throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
@@ -84,7 +86,7 @@ function compileMeasured(inputPath FilePath, target Target, outputOverride Strin
 
 	if emitIr 'emitIr'
 		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
-		writeTargetIr(codeResult, outputPath: outputPath)
+		writeTargetIr(codeResult, outputPath: outputPath, runtimeIrNames: runtimeIrNames)
 		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
 	end 'emitIr'
 
@@ -200,13 +202,17 @@ end 'refuseCompile'
 // This is a diagnostic side output that runs ONLY on the opt-in flag, so a plain
 // `build` emits exactly what it did before. A write failure is logged and
 // swallowed — mirroring `writePe`, which treats the executable write the same way
-// — because the IR sidecar is diagnostic, never a build gate. `includeRuntime:
-// false` excludes the entry stub `mrt_start` (and the future emitted runtime): it
-// is invariant scaffolding, so both the fragment and `--emit-ir` show only the
-// program's own functions. A runtime-debugging view arrives with Workstream R.
-function writeTargetIr(codeResult CodeResult, outputPath FilePath)
+// — because the IR sidecar is diagnostic, never a build gate.
+//
+// The emitted runtime — the entry stub `mrt_start`, the allocator, the `__str_*`/
+// `__arr_*` families — is invariant scaffolding, so it is excluded and both the
+// fragment and `--emit-ir` show the program's own functions. `runtimeIrNames`
+// (`--emit-ir-runtime=`) is how a caller asks for a NAMED one of those bodies
+// anyway: it is the only route an emitted body has to a golden, and it is per-build
+// so no fragment that does not ask for one moves a byte. See `printTargetModule`.
+function writeTargetIr(codeResult CodeResult, outputPath FilePath, runtimeIrNames RuntimeFunctionNameArray)
 	let irPath = outputPath.changeExtension(IrFileExtension)
-	let irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, includeRuntime: false)
+	let irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames)
 
 	try File.writeText(irPath, content: irText) otherwise 'writeErr'
 		logError(LogCategory.binary, message: function() gives "Failed to write Target IR to {irPath}")

@@ -28,21 +28,13 @@ let X64OpPrefix = "x64."
 let Arm64OpPrefix = "arm64."
 let FuncHeaderPrefix = "func @"
 
-// Serialize a whole TargetModule: each function in module order (the entry stub
-// `mrt_start` first, then user functions in source order — a deterministic
-// order the register allocator and lowering preserve), separated by one blank
-// line, with no trailing blank line.
-//
-// `includeRuntime` gates the emitted-runtime/entry functions (`mrt_start`, and
-// later the `__slab_*`/`__mm_*`/`__destruct_*` runtime): the committed spec
-// fragments pass `false` so a fragment shows ONLY the program's own functions —
-// the shared runtime scaffolding never changes per-test and is pure noise there.
-// `build --emit-ir` passes `true` for the complete backend-debugging view.
-//
-// The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
-// owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
-// would make printing a module quadratic in its own output.
-// ⭐ THE `.data` SECTION IS PRINTED FIRST, and it is the reason `globalData` is a parameter here.
+// The emitted-runtime functions a rendering names — a `--emit-ir-runtime=` list, which a spec
+// case writes as a ```RequiredRuntime block. EMPTY is the ordinary case and is not a sentinel: it
+// is the literal count of names the caller gave.
+export typealias RuntimeFunctionNameArray = Array with String
+
+// The `.data` section a module carries, rendered first by `printTargetModule` — which is the reason
+// `globalData` is a parameter there.
 //
 // It gives the top-level `var` feature the SAME gate every other emitted thing has: the golden
 // fragment pins the layout, so a slot that moves, changes width, or changes its initial value is a
@@ -50,7 +42,7 @@ let FuncHeaderPrefix = "func @"
 // — which no exit code can see until the one path that reads that global happens to run.
 //
 // ⚠ It is NOT what a ```RequiredData block is checked against, and an earlier draft of this comment
-// said it was. `SpecTestRunner.checkRequiredData` parses that block into BYTES and compares them
+// said it was. `SpecTestRunner.checkRequiredSections` parses that block into BYTES and compares them
 // against the `.data` section read back out of the linked PE (`PeSectionReader`) — this text is
 // never consulted. That independence is deliberate and is the gate's whole value: a spec checked
 // against the printer would only ever prove the compiler agrees with itself, and could not catch a
@@ -76,7 +68,33 @@ export function printDataSection(globalData GlobalDataTable) returns String
 	return out.build()
 end 'printDataSection'
 
-export function printTargetModule(module TargetModule, globalData GlobalDataTable, includeRuntime bool) returns String
+// Serialize a whole TargetModule: each function in module order (the entry stub
+// `mrt_start` first, then user functions in source order — a deterministic
+// order the register allocator and lowering preserve), separated by one blank
+// line, with no trailing blank line.
+//
+// ⭐⭐ **`runtimeNames` IS THE ONLY WAY A COMPILER-EMITTED BODY REACHES A GOLDEN, AND IT IS OPT-IN
+// PER BUILD.** The emitted-runtime/entry functions (`mrt_start`, `__slab_*`/`__mm_*`/`__destruct_*`,
+// the `__str_*`/`__arr_*` families) are skipped by default because the shared scaffolding is
+// identical in every test and would be pure noise in all of them — and, until BATCH8, "by default"
+// meant "always": `Compiler.writeTargetIr` passed the old `includeRuntime: false` unconditionally
+// and nothing anywhere passed `true`, so those bodies carried **no golden at all**. The miss was
+// measured, not feared: `__str_bytes_view`'s owed-base arm holds an incref whose loss is a
+// use-after-free that BALANCES (the matching release disappears with it), and the exit codes, the
+// leak gate and every committed fragment stayed green over exactly that edit, together.
+//
+// So the axis is a NAME LIST rather than a boolean. A boolean has only a useless second state here —
+// "render all of it", into every fragment at once — while a list renders exactly the body a rung has
+// just written into exactly the test that is about it, and leaves all 3,198 other goldens byte-
+// identical. A name that matches nothing is REFUSED (`requireRuntimeNamesRenderable`), because a
+// misspelling that quietly rendered nothing would leave a test claiming a gate it does not have.
+//
+// The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
+// owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
+// would make printing a module quadratic in its own output.
+export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray) returns String
+	requireRuntimeNamesRenderable(module, runtimeNames: runtimeNames)
+
 	var body = StringBuilder.create()
 	let dataText = printDataSection(globalData)
 	body.append(dataText)
@@ -89,7 +107,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	let cpu = moduleTargetCpu(module)
 
 	for func in module.functions 'eachFunc'
-		if not includeRuntime and isRuntimeFunction(func) 'skipRuntime'
+		if isRuntimeFunction(func) and not namesFunction(runtimeNames, func: func) 'skipRuntime'
 			continue
 		end 'skipRuntime'
 
@@ -103,6 +121,57 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 
 	return body.build()
 end 'printTargetModule'
+
+// True when `runtimeNames` names this function. A linear scan over a list a spec author typed by
+// hand — one or two entries, never more — against a `ByteArray` compare, so no `String` is
+// materialized per function per name on the way.
+function namesFunction(runtimeNames RuntimeFunctionNameArray, func IrFunction) returns bool
+	for name in runtimeNames 'each'
+		if func.name.equals(name.toByteArray()) 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'namesFunction'
+
+// ⭐ **A NAME THAT RENDERS NOTHING IS REFUSED, because the alternative is a test that claims a gate
+// it does not have.** A ```RequiredRuntime block exists to put ONE body under a golden; a typo in it
+// would add nothing to the fragment, the golden would be recorded without the body, and the case
+// would pass for ever while pinning exactly what it pinned before — the "a gate that cannot see its
+// own property must not report PASS" rule, arriving through a spelling mistake.
+//
+// Two refusals, because there are two ways to name nothing:
+//   * NO function of that name — a misspelling, or a runtime family this program does not use (the
+//     emitted runtime is installed on DEMAND, so `__str_bytes_view` exists only in a program whose
+//     stdlib cone takes a String's bytes);
+//   * a function that is NOT compiler-emitted — it is already in the fragment, so naming it says
+//     nothing, and reading the block as if it had would be a reader's mistake this prevents.
+//
+// It panics rather than reporting a diagnostic: the list arrives on a `--emit-ir-runtime=` command
+// line, which is the spec runner's own instrument rather than a program's source, and a panic
+// carries the message into the runner's captured stderr where the failing test shows it.
+function requireRuntimeNamesRenderable(module TargetModule, runtimeNames RuntimeFunctionNameArray)
+	for name in runtimeNames 'eachName'
+		let wanted = name.toByteArray()
+		var found = false
+		for func in module.functions 'eachFunc'
+			if not func.name.equals(wanted) 'other'
+				continue
+			end 'other'
+
+			if not isRuntimeFunction(func) 'notEmitted'
+				panic("printTargetModule: '{name}' is not a compiler-emitted runtime function — it is parsed from {func.sourceFilePath} and the fragment already renders it, so naming it in a ```RequiredRuntime block pins nothing new")
+			end 'notEmitted'
+
+			found = true
+			break
+		end 'eachFunc'
+
+		if not found 'noSuchFunction'
+			panic("printTargetModule: this program emits no function named '{name}', so a ```RequiredRuntime block naming it would render nothing and the golden would pin nothing. Check the spelling, or pick a program whose runtime includes it — the emitted runtime is installed on demand")
+		end 'noSuchFunction'
+	end 'eachName'
+end 'requireRuntimeNamesRenderable'
 
 // True for the runtime/entry functions shv2's backend synthesizes (not from user source): the entry stub
 // `mrt_start`, the emitted `__`-prefixed runtime (`__slab_*`, `__mm_*`, `__destruct_*`, …), the
