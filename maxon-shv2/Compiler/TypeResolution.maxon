@@ -765,8 +765,39 @@ end 'resolveType'
 // by whichever write landed last: the wrong answer the seed is supposed to be undisplaceable against.
 // ⇒ The reservation is only over a DECLARATION. `throws ArrayError` is a type REFERENCE and stays legal —
 // which is the whole reason the name is bare — and the four committed cases that write it are unaffected.
+//
+// ⭐⭐ **`String` AND `Character` JOIN THE LIST AT BATCH2 SLICE 2, AND THEY JOIN FOR A REASON NONE OF THE
+// SEVEN ABOVE HAS: THEIR COLLISION IS OVER A *SYMBOL*, NOT OVER A TYPE.** Every name above collides because
+// two answers to *"what does this name denote?"* disagree. These two denote the builtin under every syntax
+// there is — `Parser.parseTypeReference` settles both SYNTACTICALLY, so a user `type String` can never be
+// named at a parameter, `String{…}` is E3076 and `String.create(…)` is `parseStringStaticCall`'s E2015 —
+// which made the declaration look harmless, and is exactly why the hole survived. What it captures is the
+// METHOD SYMBOL: `Parser.declaredMethodName` joins its `hash()` into `String.hash`, the very bytes
+// `qualifiedMethodName(StringConformerName, HashMethodName)` spells for the impl
+// `BuiltinConformanceRuntime` synthesizes — and that installer builds an impl only when the module does not
+// already DEFINE the name (`undefinedImplNames`), so the user's inert declaration does not collide with the
+// builtin, it silently REPLACES it.
+//
+// ⚠⚠ **TWO WRONG ANSWERS, BOTH MEASURED ON THE UNCHANGED TREE, NEITHER WITH ANY DIAGNOSTIC ANYWHERE:**
+//   • `Box uses T where T is Hashable`, `Box with String`, `.itemHash()` of `""` returned **7** — the user's
+//     `hash()` body — where djb2 answers **5381**. The `__witness_String.Hashable` slot was stamped with a
+//     `funcAbs64` reloc naming `String.hash`, and the user owned that symbol.
+//   • `Set with String` probes through the same two slots, so `insert("alice"); insert("bob");
+//     insert("alice")` counted **3** against a control's **2** — a duplicate key stored twice, because the
+//     user's `equals` answered `false`.
+// A third door — the direct `s.hash()` / `s.equals(t)` dispatch — opened in the same rung, which is what
+// forced the fact to be enforced rather than merely asserted: `StdlibLoader` already said in prose that
+// "`String` is compiler-owned" and that "`Character` is a name the compiler owns" (it is why neither
+// `stdlib/String.maxon` nor `stdlib/Character.maxon` can ever be whitelisted), while nothing checked it.
+// `IrInterface.isBuiltinConformanceImplName` now DEPENDS on this line: it declares every `String.`-qualified
+// callee to be the compiler's own, which is true only while no user declaration can mint one.
+//
+// ⚠ Neither name costs a program anything it could use. `Character` is the same case in every particular,
+// including the same two synthesized impls under `Character.hash`/`Character.equals`; it is reserved with
+// `String` rather than after the next measurement, because the two are one fact and finding out which of a
+// pair is enforced by measuring the other is how this list grew in the first place.
 export function isCompilerOwnedTypeName(name ByteArray) returns bool
-	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName)
+	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName) or name.equals(StringConformerName) or name.equals(CharacterConformerName)
 end 'isCompilerOwnedTypeName'
 
 // The name a `named` type denotes, ERASED to a concrete `MaxonType` — or `notDeclared` when it
