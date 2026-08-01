@@ -105,8 +105,15 @@ end 'semanticCheck'
 // not one overload set at all — a method is registered `Type.method`, so `Box.contains` and `Bag.contains`
 // never contend.
 function resolveOverloadedCalls(project Project, module MaxonModule)
-	// The overwhelming program declares no overload, and then there is nothing here to do and nothing to
-	// pay: no walk, and no per-op `MaxonOpCallee` union (see `maxonOpCallee`, which allocates one per ask).
+	// A program that declares no overload has nothing here to do and does not walk.
+	//
+	// ⚠⚠ **THAT GATE USED TO CARRY THE WHOLE COST ARGUMENT, AND IT NO LONGER CAN — `stdlib/FilePath.maxon`
+	// OVERLOADS `join`, so EVERY compile now has a non-empty `overloadSets` and takes this walk** (BATCH2
+	// slice 3; the measurement is at `maxonOpCalleeKind`, which was a per-op union box until this made it
+	// linear in every program). The gate is kept because it is still exactly right for a compile that loads
+	// no stdlib, but the walk below is now the common path and is written to cost nothing per op that is not
+	// a call: `maxonOpCalleeKind` is a scalar enum, and the NAME — the only part that ever allocated — is
+	// fetched for the two kinds that have one.
 	if project.overloadSets.count() == 0 'noOverloadInThisProgram'
 		return
 	end 'noOverloadInThisProgram'
@@ -114,10 +121,10 @@ function resolveOverloadedCalls(project Project, module MaxonModule)
 	for func in module.functions 'eachFunc'
 		for opIdx in module.liveOpIndices(func) 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCalls: opIdx {opIdx} from liveOpIndices is not in module.ops")
-			match maxonOpCallee(op) 'callee'
-				direct(callee) then resolveOneOverloadedCall(project, module: module, func: func, opIndex: opIdx, op: op, callee: callee)
-				functionValue(name) then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: name)
-				none then break 'callee'
+			match maxonOpCalleeKind(op) 'callee'
+				direct then resolveOneOverloadedCall(project, module: module, func: func, opIndex: opIdx, op: op, callee: maxonOpCalleeName(op))
+				functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
+				noCallee then break 'callee'
 			end 'callee'
 		end 'eachOp'
 	end 'eachFunc'
@@ -299,7 +306,7 @@ function overloadCandidateScore(project Project, func IrFunction, op MaxonOp, ca
 	let sig = try project.funcSignatures.get(candidate) otherwise panic("overloadCandidateScore: candidate '{String.from(candidate)}' is not in funcSignatures — `overloadCandidates` filtered on exactly that")
 	match overloadCallArgs(op) 'args'
 		supplied(args, argLabels) then return overloadSlottedFit(project, func: func, sig: sig, args: args, argLabels: argLabels)
-		default panic("overloadCandidateScore: asked of an op that supplies no argument list — `maxonOpCallee` answers `direct` for exactly the three ops `overloadCallArgs` covers")
+		default panic("overloadCandidateScore: asked of an op that supplies no argument list — `maxonOpCalleeKind` answers `direct` for exactly the three ops `overloadCallArgs` covers")
 	end 'args'
 end 'overloadCandidateScore'
 
@@ -531,7 +538,7 @@ function overloadResultValue(op MaxonOp) returns OverloadResultValue
 		call(result, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
 		tryCall(result, _, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
 		asyncCall(result, _, _, _, _, _) gives OverloadResultValue.defines(result)
-		default panic("overloadResultValue: asked of an op that binds no direct callee — `maxonOpCallee` answers `direct` for exactly these three")
+		default panic("overloadResultValue: asked of an op that binds no direct callee — `maxonOpCalleeKind` answers `direct` for exactly these three")
 	end 'op'
 end 'overloadResultValue'
 
@@ -569,7 +576,7 @@ function renderOverloadParams(project Project, sig FuncSignature) returns String
 end 'renderOverloadParams'
 
 // The argument list an overload-resolvable op supplies. A THIRD match over the same three variants would be
-// one too many, but this one asks a different question from `maxonOpCallee`'s and cannot be folded into it:
+// one too many, but this one asks a different question from `maxonOpCalleeKind`'s and cannot be folded into it:
 // that answer is built once per op, this one is read once per CANDIDATE.
 union OverloadCallArgs
 	supplied(args ValueIdArray, argLabels ByteArrayArray)
@@ -580,7 +587,7 @@ function overloadCallArgs(op MaxonOp) returns OverloadCallArgs
 		call(_, _, args, argLabels, _, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
 		tryCall(_, _, _, args, argLabels, _, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
 		asyncCall(_, _, args, argLabels, _, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels)
-		default panic("overloadCallArgs: asked of an op that supplies no argument list — `maxonOpCallee` answers `direct` for exactly these three")
+		default panic("overloadCallArgs: asked of an op that supplies no argument list — `maxonOpCalleeKind` answers `direct` for exactly these three")
 	end 'op'
 end 'overloadCallArgs'
 
