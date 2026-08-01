@@ -3333,6 +3333,10 @@ end 'rosterRefusalSentence'
 // The pairing it reports cannot be verified at install time — an arm is a CONTROL-FLOW POSITION, not an
 // entry a table can enumerate — so the check sits at the one moment it is observable, and names both
 // remedies rather than only the one the reader happens to be looking at.
+//
+// ⚠ **EVERY CALLER BINDS THE RESULT AND THEN PANICS ON THE BINDING, and that is not a style choice**: the
+// bootstrap requires `panic`'s argument to be a string LITERAL (E3005, "panic requires a string argument"),
+// so `panic(rosterDriftMessage(…))` does not compile. `panic("{drift}")` is the interpolation that does.
 function rosterDriftMessage(dispatchName String, member ByteArray, roster ByteArrayArray, rosterFuncs String) returns String
 	return "{dispatchName}: '{String.from(member)}' is on this receiver's roster ({rosterList(roster)}) and no arm served it. EITHER add the arm, or take the name back out of {rosterFuncs} — the gate at the top of that dispatch admits nothing else, so this line is unreachable while the two agree"
 end 'rosterDriftMessage'
