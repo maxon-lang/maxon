@@ -1,0 +1,21 @@
+// Test: where-clauses.error.static-requirement-wrong-arity-at-call
+typealias Code = int(0 to u32.max)
+
+interface Origin
+	static function origin(seed Code) returns Code
+end 'Origin'
+
+type Box uses T where T is Origin
+	export var item as T
+
+	export function go() returns Code
+		return self.item.origin()
+	end 'go'
+end 'Box'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3116: <fragment>:12:20: 'Origin.origin' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of type parameter 'T' cannot reach it. Call a `static` member on a concrete type
