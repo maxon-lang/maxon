@@ -42,6 +42,13 @@ let ChunkOffsetDigits = 4
 let ChunkOffsetSeparator = ": "
 let ChunkByteSeparator = " "
 
+// The block delimiters every rendering here opens and closes with. A `{` inside an interpolated string
+// is the interpolation's own opener, so writing one costs an escape — and each of the three renderings
+// (the data section, a function body, a chunk dump) had spelled that escape for itself, two of them
+// through a private local pair. One spelling, read by all three.
+let OpenBrace = "\{"
+let CloseBrace = "\}"
+
 // The emitted-runtime functions a rendering names — a `--emit-ir-runtime=` list, which a spec
 // case writes as a ```RequiredRuntime block. EMPTY is the ordinary case and is not a sentinel: it
 // is the literal count of names the caller gave.
@@ -74,11 +81,11 @@ export function printDataSection(globalData GlobalDataTable) returns String
 	end 'noGlobals'
 
 	var out = StringBuilder.create()
-	out.append("data \{\n")
+	out.append("data {OpenBrace}\n")
 	for entry in globalData.dataSection 'each'
 		out.append("  {entry.label}@{entry.offset} = {entry.valueType.name} {entry.value}\n")
 	end 'each'
-	out.append("}\n")
+	out.append("{CloseBrace}\n")
 	return out.build()
 end 'printDataSection'
 
@@ -232,10 +239,8 @@ end 'markNamedBy'
 // red on an unrelated edit to the test's own `main` — the same reason a printed IR body shows a branch
 // LABEL rather than a displacement. (`CodeResult.codeChunks` carries this decision on the other side.)
 function printChunkBytes(chunk FunctionCodeChunk) returns String
-	let openBrace = "\{"
-	let closeBrace = "\}"
 	var sb = StringBuilder.create()
-	sb.append("{ChunkHeaderPrefix}{String.from(chunk.funcName)} {openBrace}\n")
+	sb.append("{ChunkHeaderPrefix}{String.from(chunk.funcName)} {OpenBrace}\n")
 
 	let byteCount = chunk.code.count()
 	for (iter, b) in chunk.code.withIterator() 'eachByte'
@@ -257,7 +262,7 @@ function printChunkBytes(chunk FunctionCodeChunk) returns String
 		end 'closesALine'
 	end 'eachByte'
 
-	sb.append("{closeBrace}\n")
+	sb.append("{CloseBrace}\n")
 	return sb.build()
 end 'printChunkBytes'
 
@@ -276,7 +281,7 @@ function hexOffset(offset CodeOffset) returns String
 
 	var out = StringBuilder.create()
 	for i in 0 upto digits 'eachDigit'
-		out.append(hexDigit((offset shr ((digits - 1 - i) * BitsPerHexDigit)) and 0xF))
+		out.append(hexDigit((offset shr ((digits - 1 - i) * BitsPerHexDigit)) and HexDigitMask))
 	end 'eachDigit'
 	return out.build()
 end 'hexOffset'
@@ -294,8 +299,13 @@ end 'hexOffset'
 // `hexByte` splits a byte on. A literal `4` in both places is one fact written twice.
 let BitsPerHexDigit = 4
 
+// The low nibble those shifts then select — the SAME fact as `BitsPerHexDigit`, read as a mask instead
+// of a width, and it was written as a bare `0xF` at all three shift sites plus a fourth time in
+// `hexDigit`'s panic text. Widen one and the others silently index past the digit table.
+let HexDigitMask = 0xF
+
 export function hexByte(b MachineWord) returns String
-	return "{hexDigit((b shr BitsPerHexDigit) and 0xF)}{hexDigit(b and 0xF)}"
+	return "{hexDigit((b shr BitsPerHexDigit) and HexDigitMask)}{hexDigit(b and HexDigitMask)}"
 end 'hexByte'
 
 // One lowercase hex digit. A `ByteArray` lookup rather than a `String` index: the digits are ASCII
@@ -304,7 +314,7 @@ end 'hexByte'
 export function hexDigit(nibble MachineWord) returns String
 	let digits = b"0123456789abcdef"
 	var one = ByteArray.create()
-	one.push(try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with 0xF"))
+	one.push(try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with `HexDigitMask`"))
 	return String.from(one)
 end 'hexDigit'
 
@@ -381,10 +391,8 @@ end 'isRuntimeFunction'
 // Serialize one function: `func @<name> {`, then each block as `<label>:` followed
 // by its ops (and terminator) one per line, then the closing brace.
 function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch) returns String
-	let openBrace = "\{"
-	let closeBrace = "\}"
 	var sb = StringBuilder.create()
-	sb.append("{FuncHeaderPrefix}{String.from(func.name)} {openBrace}\n")
+	sb.append("{FuncHeaderPrefix}{String.from(func.name)} {OpenBrace}\n")
 
 	// The function's blocks in `blockRefs` order — the same public-API walk the
 	// backend's `emitFunctionChunk` uses. Collected once so branch targets can be
@@ -403,7 +411,7 @@ function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch) 
 		end 'hasTerm'
 	end 'eachBlock'
 
-	sb.append("{closeBrace}\n")
+	sb.append("{CloseBrace}\n")
 	return sb.build()
 end 'printTargetFunction'
 

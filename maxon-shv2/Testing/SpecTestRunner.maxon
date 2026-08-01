@@ -203,10 +203,11 @@ let WslRelativePrefix = "./"
 // can execute a binary. See `requireWslAvailable`.
 let WslProbeCommand = "/bin/true"
 
-// Exported because the harness self-test collects a fixture directory's spec files into one
-// (`HarnessSelfTest.fixtureSpecIn`). A second declaration of it there would be one fact written twice
-// — which the flat-namespace check refuses outright.
-export typealias FilePathArray = Array with FilePath
+// `FilePathArray` is NOT declared here. It is `QueryDatabase`'s export, and the top-level namespace is
+// FLAT — this file's own copy was file-private and invisible to the flat-namespace check only for as
+// long as it stayed unexported. Exporting it (so `HarnessSelfTest.fixtureSpecIn` could collect a
+// fixture directory's spec files) turned two harmless declarations into the very thing the check
+// refuses, and FAILED the bootstrap build. One declaration, read from wherever it is needed.
 
 // PASS, or FAIL carrying a human-readable reason. A union (not a `bool` + a
 // message field) so a passing result has no vestigial empty-string message.

@@ -36,13 +36,9 @@
 // Where the fixture corpus lives, relative to the repo root — anchored at the working directory for
 // the reason `LadderIndex` and `spec-test`'s own default spec directory are: the suite is invoked from
 // the repo root, and a run from anywhere else has already failed to find `specs-shv2`.
+// It is ALSO the recursion guard's one source: `isFixtureCaseDir` reads this path's last segment rather
+// than a second constant naming the same directory.
 let FixturesRelativeDir = "maxon-shv2/Testing/harness-fixtures"
-
-// The corpus root's own name, which is ALSO the recursion guard: a fixture case is driven by spawning
-// this harness at `<FixturesRelativeDir>/<case>`, and that sub-run must not run the self-test again.
-// Derived from the path the sub-run was GIVEN rather than signalled by a private flag, because a flag
-// is a second way of saying which directory this is and the directory already says it.
-let FixturesDirName = "harness-fixtures"
 
 let FixtureSpecExtension = ".md"
 
@@ -76,11 +72,12 @@ let ExpectRefusalMarker = "<!-- expect-refusal:"
 // refusal in the IR printer, which a target emitting no Target IR (wasm32) never runs at all. Under a
 // cross-target suite run, forwarding the target would turn those two into false reds about nothing.
 export function requireHarnessRefusalsFire(workerExe FilePath, compilerExe FilePath, specDir FilePath)
-	if isFixtureCaseDir(specDir) 'thisIsAFixtureSubRun'
+	let root = try FilePath.from(FixturesRelativeDir) otherwise panic("HarnessSelfTest: '{FixturesRelativeDir}' is not a valid path")
+
+	if isFixtureCaseDir(specDir, root: root) 'thisIsAFixtureSubRun'
 		return
 	end 'thisIsAFixtureSubRun'
 
-	let root = try FilePath.from(FixturesRelativeDir) otherwise panic("HarnessSelfTest: '{FixturesRelativeDir}' is not a valid path")
 	let cases = try Directory.list(root) otherwise panic("HarnessSelfTest: could not list {FixturesRelativeDir} — it holds the deliberately-malformed specs that prove the harness's own refusals still fire. Run the suite from the repo root.")
 
 	// EVERY fixture is run and every failure is reported TOGETHER, rather than stopping at the first.
@@ -138,12 +135,26 @@ function brokenRefusalReport(broken StringArray) returns String
 	return out.build()
 end 'brokenRefusalReport'
 
-// Is `specDir` one of the fixture case directories — i.e. is this process a fixture sub-run? See
-// `FixturesDirName`. A path with no parent (the filesystem root) is not one, which is the only thing
-// the failure arm can honestly say.
-function isFixtureCaseDir(specDir FilePath) returns bool
+// Is `specDir` one of the fixture case directories — i.e. is this process a fixture sub-run? A fixture
+// case is driven by spawning this harness at `<root>/<case>`, so the question is whether `specDir`'s
+// PARENT is the corpus root. Derived from the path the sub-run was GIVEN rather than signalled by a
+// private flag, because a flag is a second way of saying which directory this is and the directory
+// already says it. A path with no parent (the filesystem root) is not one, which is the only thing the
+// failure arm can honestly say.
+//
+// ⚠ **THE NAME IT COMPARES AGAINST COMES FROM `root`, NOT FROM A SECOND SPELLING OF IT.** This guard
+// held a `let FixturesDirName = "harness-fixtures"` beside `FixturesRelativeDir`'s
+// `".../harness-fixtures"` — the same directory written down twice, with nothing making the two agree.
+// Rename the corpus and update only the constant that names the PATH (the obvious edit, and the only
+// one anything reads for the listing) and this guard silently stops matching: every sub-run then fails
+// to recognise itself and re-runs the whole self-test, whose eight sub-runs each do the same. That is
+// an unbounded 8-ary process fan-out on every `spec-test` invocation, and no compile error anywhere.
+// (Measured before the fix: pointing a run at a case directory whose parent was spelled differently
+// took 0.575s against the guarded 0.061s — the self-test running inside what is structurally a
+// sub-run.)
+function isFixtureCaseDir(specDir FilePath, root FilePath) returns bool
 	let parent = try specDir.parent() otherwise return false
-	return parent.filename() == FixturesDirName
+	return parent.filename() == root.filename()
 end 'isFixtureCaseDir'
 
 // Run ONE fixture and require that the harness refused it, saying what the fixture says it will say.
