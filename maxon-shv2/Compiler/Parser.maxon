@@ -6847,7 +6847,10 @@ export type Parser
 				// its call site a value bearing the `Array` member roster instead of the buffer's: a wrong
 				// surface, which is a wrong answer rather than a compile error. Asked at `typeStart`, the one
 				// place the spelling is still readable, through the same door `parseFunctionParameters` uses.
-				entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart)))
+				// `slotElementsFromAliases: false` for `returnDeclaredSurface`'s reason, and it is the same
+				// reason: this helper is published by the SWEEP, whose copy is the one the whole-program index
+				// stores, so a SLOT's element bit read here would be how far the sweep had got.
+				entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart, slotElementsFromAliases: false)))
 			end 'hasDefault'
 
 			if self.kindAt(itemEnd) != TokenKind.comma 'endList'
@@ -11791,7 +11794,7 @@ export type Parser
 
 		try self.parseCheckedValueReturn(helper, block: entry, anchor: anchor)
 
-		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredSurface: PlainDeclaredSurface)
+		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
 		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create()), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(helperName)
 	end 'parseParamDefaultHelper'
