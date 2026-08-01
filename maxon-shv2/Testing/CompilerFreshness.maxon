@@ -1,0 +1,238 @@
+// CompilerFreshness — a harness command REFUSES to report on a binary older than the sources it was
+// built from.
+//
+// ⭐ **A VERDICT ABOUT CODE THAT IS NOT IN THE TREE IS WORSE THAN NO VERDICT**, and it is produced by
+// one keystroke: `build; suite` (a `;`, not a `&&`) runs the suite whatever the build did, and a
+// FAILED BUILD LEAVES THE PREVIOUS BINARY IN PLACE — which is precisely what `E6002`
+// (`Compiler.discardPreviousOutput`) exists to say out loud when it can. So the harness has to be able
+// to tell for itself, because the caller demonstrably cannot be relied on to.
+//
+// It goes both ways, and only one of the two directions ever gets noticed:
+//
+//   * a false RED — measured during rung A1, exactly 4 tests, and that oddly specific number is what
+//     identified it as staleness rather than a regression;
+//   * a false GREEN — the same lie, in the direction nobody re-checks.
+//
+// And it is not only the suite: the incident that filed this rung was a whole scaling LADDER read off
+// the previous binary after `maxon error-codes check` had failed the build. `scale-test` refuses on
+// exactly these terms for that reason.
+//
+// ============================================================================================
+// WHAT IT COMPARES, AND WHAT IT DELIBERATELY DOES NOT
+// ============================================================================================
+//
+// **The sources compiled INTO the binary — `<project>/**.maxon` — and nothing else.**
+//
+// ⚠ NOT `stdlib/`, although `cross-target-gate.sh`'s `--skip-build` guard does sweep it. That guard
+// is about a binary that is ABOUT to be trusted for a build; this one is about a suite, and a suite
+// compiles the whitelisted stdlib modules FROM SOURCE for every fragment it builds. An edited
+// `stdlib/*.maxon` is therefore already live in the verdicts — refusing over one would be a FALSE
+// REFUSAL, and a false refusal wedges the suite just as thoroughly as a stale binary lies to it.
+//
+// ⚠ NOT every `.maxon` file under the project root either — only the ones `maxon build` actually
+// compiles. `maxon-shv2/track0/` carries a `.maxonignore` and its program is not in the binary, so an
+// edit to it cannot change a single verdict. `collectMaxonSources` answers the first half of that
+// question (every `.maxon` under a directory except the build manifest) and is used here rather than
+// re-spelled; the clauses it does not carry — `.maxonignore`, `*.test.maxon` and the compiler's own
+// `.maxon/` output directory, the first two named as future growth in its own header — are applied on
+// top, HERE, because they are what separates "a source of this project" from "a source of THIS
+// BINARY". `SourceCollector.ExclusionFor` in the bootstrap is the authority for all three: the
+// bootstrap is what built this binary, so its answer is the one that decides what went in.
+//
+// ============================================================================================
+// TWO THINGS IT STRUCTURALLY CANNOT SEE. NEITHER IS CLAIMED IN THE MESSAGE.
+// ============================================================================================
+//
+// 1. **A CHANGE TO THIS CHECK ITSELF.** The check ships inside the binary it reports on, so a stale
+//    binary runs the OLD check. That is fine for the case that matters — edit a source, forget to
+//    rebuild, and the old check reads the new mtimes and refuses — and it is exactly why the message
+//    says "a source is newer than this binary" rather than anything about being up to date.
+// 2. **A DELETED SOURCE.** Nothing gets NEWER when a file goes away, so a build whose input set has
+//    SHRUNK reads clean. (The bootstrap's own build cache does record the input set —
+//    `<project>/.maxon/cache/build-manifest.json` lists every source path with its mtime — and could
+//    answer both questions exactly. Reading it would mean a second parser for a `maxon-sharp`-owned
+//    format, which is this project's signature bug wearing a fix's clothes, so it is not done here.)
+//
+// mtimes are also read at ONE-SECOND resolution (`File.info().modifiedTime` is Unix epoch seconds), so
+// an edit landing in the same second the binary was written ties, and a tie is not "newer". That
+// biases the check toward MISSING a staleness rather than inventing one, which is the safe direction:
+// a false refusal has no workaround, and a miss leaves things exactly as they were before this file.
+
+// The exit code a refusal returns. Distinct from 1 (a suite that RAN and had failures) and from 101
+// (a leak) on purpose: "nothing ran" and "something failed" are different facts, and a caller reading
+// only the exit code — a shell script, CI, the rung gate battery — must be able to tell them apart.
+// Same number and same meaning as `cross-target-gate.sh`'s own staleness refusal.
+let StaleBinaryExitCode = 2
+
+// `maxon build` writes a project's executable into `<project>/.maxon/`, so a binary whose parent
+// directory is NOT that one was not built in place and has no project above it to compare against.
+// It is also what a file the compiler WROTE lives under, at any depth, and such a file is not a
+// source to anybody — `collectMaxonSources` walks straight into it.
+let CompilerOutputDirName = ".maxon"
+
+// The directory whose presence in the project root says this is a DEVELOPMENT CHECKOUT rather than an
+// installed copy. Detected, never guessed from the path's spelling: a released binary's own path can
+// be anything at all, and the one fact that distinguishes it is whether its sources are there.
+let SourceRootMarkerDirName = "Compiler"
+
+// A directory holding this file — and everything beneath it — is not compiled. `MaxonIgnore.IsIgnored`
+// in the bootstrap is the rule this mirrors; the bootstrap is what built this binary, so its answer is
+// the one that decides what went in.
+let IgnoreMarkerName = ".maxonignore"
+
+// A `*.test.maxon` holds `test` declarations and is left out of a production build
+// (`SourceCollector.ExclusionFor`), so it is not in the binary either.
+let TestFileSuffix = ".test.maxon"
+
+// What one executable's freshness came out as.
+//
+// TWO arms, not three: "no source tree beside the binary" and "a source tree entirely older than it"
+// are genuinely different facts, but every caller does the same thing with both — proceed — and a
+// third arm nobody could act on differently would only invite a caller to invent a difference. Which
+// of the two it was is visible in `stalenessOf`'s own early returns, where it matters.
+union StalenessVerdict
+	mayProceed
+	stale(newerSource FilePath)
+end 'StalenessVerdict'
+
+// Refuse this command if `binary` is older than a source it was built from. Returns the exit code the
+// command should return: 0 to go ahead, `StaleBinaryExitCode` to stop.
+//
+// `role` names the executable in the message, because a `spec-test` run has TWO of them (see
+// `refuseIfSpecTestStale`) and "which binary is stale" is the first thing the reader needs.
+export function refuseIfStale(binary FilePath, role String) returns ExitCode
+	return match stalenessOf(binary) 'verdict'
+		mayProceed gives 0
+		stale(newerSource) gives reportStale(binary, role: role, newerSource: newerSource)
+	end 'verdict'
+end 'refuseIfStale'
+
+// The `spec-test` form: it runs TWO executables that need not be one file (see `Main.runSpecTest`) —
+// the harness this process IS, and the compiler under test. Both decide verdicts, so both are asked;
+// in-tree they are the same path and the second question is not worth asking twice.
+export function refuseIfSpecTestStale(workerExe FilePath, compilerExe FilePath) returns ExitCode
+	let harnessExit = refuseIfStale(workerExe, role: "the spec-test harness")
+	if harnessExit != 0 'staleHarness'
+		return harnessExit
+	end 'staleHarness'
+
+	if compilerExe.equals(workerExe) 'oneFile'
+		return 0
+	end 'oneFile'
+
+	return refuseIfStale(compilerExe, role: "the compiler under test (--compiler)")
+end 'refuseIfSpecTestStale'
+
+// Is any source compiled into `binary` newer than it?
+//
+// The scan stops at the FIRST one, for `cross-target-gate.sh`'s reason: the reader needs an example,
+// not an inventory, and the fix is the same however many there are.
+function stalenessOf(binary FilePath) returns StalenessVerdict
+	let outputDir = try binary.parent() otherwise return StalenessVerdict.mayProceed
+	if outputDir.filename() != CompilerOutputDirName 'notBuiltInPlace'
+		return StalenessVerdict.mayProceed
+	end 'notBuiltInPlace'
+
+	let sourceRoot = try outputDir.parent() otherwise return StalenessVerdict.mayProceed
+
+	// Bound to a local first: `join` is overloaded on String and FilePath, and a CALL in the argument
+	// position does not disambiguate them any more than an inline `try` expression does (E3007).
+	let marker = pathComponent(SourceRootMarkerDirName)
+	if not Directory.exists(sourceRoot.join(marker)) 'notACheckout'
+		return StalenessVerdict.mayProceed
+	end 'notACheckout'
+
+	let built = try File.info(binary) otherwise panic("CompilerFreshness: could not read the modification time of {binary.toString()}, a file this command is running from or has already proved exists")
+
+	var sources = MaxonSourcePathArray.create()
+	try collectMaxonSources(sourceRoot, into: sources) otherwise panic("CompilerFreshness: could not walk {sourceRoot.toString()} for sources, though its {SourceRootMarkerDirName}/ directory is right there")
+
+	for source in sources 'each'
+		let info = try File.info(source) otherwise panic("CompilerFreshness: could not read the modification time of {source.toString()}, a file the directory walk had just listed")
+
+		if info.modifiedTime <= built.modifiedTime 'notNewer'
+			continue
+		end 'notNewer'
+
+		// Asked ONLY of a file that is already newer, which is the rare case: the common path is one
+		// `File.info` per source and no ancestor walk at all.
+		if not isCompiledInto(source, sourceRoot: sourceRoot) 'notInTheBinary'
+			continue
+		end 'notInTheBinary'
+
+		return StalenessVerdict.stale(source)
+	end 'each'
+
+	return StalenessVerdict.mayProceed
+end 'stalenessOf'
+
+// Whether `maxon build` compiled `source` into the binary, given that `collectMaxonSources` has
+// already dropped the build manifest. See this file's header for why the remaining two clauses live
+// here rather than in that walk.
+function isCompiledInto(source FilePath, sourceRoot FilePath) returns bool
+	if source.filename().endsWith(TestFileSuffix) 'testFile'
+		return false
+	end 'testFile'
+
+	return not isUnderExcludedDirectory(source, sourceRoot: sourceRoot)
+end 'isCompiledInto'
+
+// Does `source` sit under a directory `maxon build` will not read — one carrying an `.maxonignore`,
+// or the compiler's own output directory?
+//
+// BOTH are questions about a file's ANCESTORS rather than about the file, so they are asked in one
+// upward walk. Two walks would be two places to get the stopping condition wrong.
+//
+// That walk stops at `sourceRoot`, where the bootstrap's own `MaxonIgnore.IsIgnored` continues to the
+// filesystem root. The difference is unreachable: a marker ABOVE the project root would exclude every
+// file in it, and a binary built from no sources at all is not a state this check can be reached in.
+function isUnderExcludedDirectory(source FilePath, sourceRoot FilePath) returns bool
+	let marker = pathComponent(IgnoreMarkerName)
+	var dir = try source.parent() otherwise panic("CompilerFreshness: {source.toString()} has no parent directory, though a directory walk found it inside one")
+
+	while true 'upwards'
+		if dir.filename() == CompilerOutputDirName 'compilerOutput'
+			return true
+		end 'compilerOutput'
+
+		if File.exists(dir.join(marker)) 'ignored'
+			return true
+		end 'ignored'
+
+		if dir.equals(sourceRoot) 'reachedRoot'
+			break
+		end 'reachedRoot'
+
+		// A path with no parent left is the filesystem root, which `sourceRoot` is not — so this arm
+		// is only reachable if the walk somehow started outside the project, and there is nothing
+		// above it that could be ignoring anything.
+		dir = try dir.parent() otherwise 'atFilesystemRoot'
+			break
+		end 'atFilesystemRoot'
+	end 'upwards'
+
+	return false
+end 'isUnderExcludedDirectory'
+
+// A constant path COMPONENT as a FilePath. `join` is overloaded on String and FilePath and a bare
+// String constant matches both (E3007), so every component joined in this file is bound to a FilePath
+// first — the same disambiguation `LadderIndex.indexedScriptNames` makes.
+function pathComponent(name String) returns FilePath
+	return try FilePath.from(name) otherwise panic("CompilerFreshness: '{name}' is not a valid path component")
+end 'pathComponent'
+
+// Say which binary, which source, and what to do — the three things `cross-target-gate.sh`'s
+// equivalent refusal prints, and for its reason: a refusal that says only "STALE" sends the reader off
+// to re-derive all three.
+//
+// It deliberately does NOT claim the binary is otherwise up to date. This check cannot see a change to
+// itself and cannot see a DELETED source (see the header), so the only thing it is entitled to report
+// is the one file it actually found.
+function reportStale(binary FilePath, role String, newerSource FilePath) returns ExitCode
+	printError("error: {role} is STALE — a source it was built from is newer than the binary.\n")
+	printError("  binary: {binary.toString()}\n")
+	printError("  newer:  {newerSource.toString()}\n")
+	printError("  Rebuild it (`maxon build maxon-shv2`) and re-run. Nothing was run: every verdict below\n")
+	printError("  this line would have been about code that is not in that binary.\n")
+	return StaleBinaryExitCode
+end 'reportStale'

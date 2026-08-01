@@ -218,6 +218,17 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return runPersistentWorker(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, effectiveTarget: effectiveTarget)
 	end 'isPoolWorker'
 
+	// Whether the binaries this run is ABOUT to draw conclusions from are older than the tree they
+	// were built from, asked before anything is selected. A stale binary reports a verdict about code
+	// that is not here — a false red, or the same lie as a false green — so the honest answer is to
+	// run nothing at all. Asked by the PARENT for `requireRunnerAvailable`'s reason, and asked AFTER
+	// the worker branch above so a worker never re-asks it: one fact, reported once, on the process
+	// whose stdout is a report rather than a wire.
+	let freshnessExit = refuseIfSpecTestStale(workerExe, compilerExe: compilerExe)
+	if freshnessExit != 0 'staleBinary'
+		return freshnessExit
+	end 'staleBinary'
+
 	// Whether this host can EXECUTE what it is about to build, asked once and by the PARENT. A
 	// cross-target run whose runner is missing fails identically for every test, so discovering it
 	// per test turns one fact into hundreds of failures — and inside a worker, into a dead pipe whose

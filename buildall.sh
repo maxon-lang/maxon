@@ -35,6 +35,17 @@ echo "=== Checking the output-lock refusal (E6002) ==="
 bash scripts/output-lock-gate.sh
 
 echo ""
+echo "=== Checking the stale-binary refusal ==="
+# Gates the OTHER half of the same hazard: `output-lock-gate.sh` proves a build that cannot replace
+# its output says so, and this proves the harness refuses to report a verdict off the binary such a
+# build leaves behind. Neither is spec-testable — no Maxon program can make the binary compiling it
+# older than the tree around it — and the property is worth exactly as much as the check nobody runs.
+#
+# Runs AFTER the shv2 build and suite because it drives that binary, and it ages a source's MTIME
+# forward and puts it back; no file's bytes are touched, so the working tree is unchanged either way.
+bash scripts/stale-binary-gate.sh
+
+echo ""
 echo "=== Building maxon-dev MCP Server ==="
 pkill -f maxon-dev-mcp 2>/dev/null || true
 bin/maxon build maxon-dev-mcp/mcp

@@ -368,6 +368,17 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 		return brokenRun("the running compiler's own path could not be determined", detail: "Process.executablePath() failed")
 	end 'noExe'
 
+	// ⚠ AND WHETHER THAT BINARY IS OLDER THAN THE TREE IT WAS BUILT FROM, before a rung is generated.
+	// A ladder read off the previous binary is what filed this check: a build failed `error-codes
+	// check`, its exit code went unread, and a whole run's numbers were attributed to a change that
+	// was not in the binary that produced them. A recorded row is permanent, so the wrong provenance
+	// outlives the session that made it — see ScaleHistory on why every row states where it was
+	// measured. This is the same question one level up: WHAT was measured.
+	let freshnessExit = refuseIfStale(compilerExe, role: "the scale-test compiler")
+	if freshnessExit != 0 'staleBinary'
+		return freshnessExit
+	end 'staleBinary'
+
 	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
 		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
 	end 'badCorpus'
