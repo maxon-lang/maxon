@@ -281,3 +281,52 @@ end 'main'
 ```maxoncstderr
 error E2048: specs/fragments/break/break.error-continue-own-label.test:6:12: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
 ```
+
+<!-- test: break.error-unreachable-after-break -->
+Error: `break` leaves the block unconditionally, so a statement after it in the
+same block is unreachable — the same rule `return`/`throw`/`panic` already carry.
+It is also what keeps the block well formed: `break` emits its branch and leaves
+the parser positioned on the block it just terminated, so a statement accepted
+here would append its ops AFTER a terminator, and the successor walk reads only
+the last op.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 5 'loop'
+		i = i + 1
+		if i == 2 'skip'
+			break
+			total = total + 100
+		end 'skip'
+		total = total + 1
+	end 'loop'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3071: specs/fragments/break/break.error-unreachable-after-break.test:9:4: unreachable code after 'break'
+```
+
+<!-- test: break.error-unreachable-after-continue -->
+Error: the same for `continue`, which branches to the loop header.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 5 'loop'
+		i = i + 1
+		if i == 2 'skip'
+			continue
+			total = total + 100
+		end 'skip'
+		total = total + 1
+	end 'loop'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3071: specs/fragments/break/break.error-unreachable-after-continue.test:9:4: unreachable code after 'continue'
+```

@@ -1171,7 +1171,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     EnsureManagedMemoryType();
     SeedFromModule(seedModule, targetModule);
     _isRescanningTypeAliases = rescan;
-    PreRegisterTopLevelTypeAliasNames();
+    PreRegisterTypeAliasPlaceholdersAtThisLevel();
 
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
       SkipNewlines();
@@ -1632,24 +1632,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// Token-level pre-pass to register top-level typealias names as placeholders
-  /// so forward and mutual references resolve during the actual typealias scan.
-  /// </summary>
-  private void PreRegisterTopLevelTypeAliasNames() {
-    int prePos = _pos;
-    int depth = 0;
-    while (prePos < _tokens.Count && _tokens[prePos].Type != TokenType.Eof) {
-      var t = _tokens[prePos];
-      if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.Identifier && t.Value == Lexer.ModuleKeyword && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
-        var aliasName = _tokens[prePos + 1].Value;
-        if (!_typeRegistry.ContainsKey(aliasName))
-          _typeRegistry[aliasName] = new IrPlaceholderType(aliasName);
-        prePos += 2;
-      } else { prePos++; }
-    }
-  }
-
-  /// <summary>
   /// Copies only typealias-related state to the module. Unlike CopyStateToModule,
   /// this avoids re-evaluating export status of non-typealias types.
   /// </summary>
@@ -2036,7 +2018,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var declaredTestNames = new Dictionary<string, string>();
     int savedPos = _pos;
 
-    PreRegisterTopLevelTypeAliasNames();
+    PreRegisterTypeAliasPlaceholdersAtThisLevel();
 
     // First pass: scan for top-level declarations (constants, vars, function signatures, type declarations)
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
@@ -3107,40 +3089,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
-  /// <summary>
-  /// Token-level forward scan to pre-register typealias names inside a type body
-  /// as placeholder struct types, so the conformance clause can reference them.
-  /// Does not advance the main position.
-  /// </summary>
-  private void PreRegisterTypeAliasNames() {
-    int savedPos = _pos;
-    int depth = 0;
-    while (_pos < _tokens.Count && _tokens[_pos].Type != TokenType.Eof) {
-      var t = _tokens[_pos];
-      if (t.Type == TokenType.End) {
-        if (depth == 0) break;
-        depth--;
-        _pos++;
-      } else if (t.Type == TokenType.Function || t.Type == TokenType.Type
-                 || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) {
-        // `function(` (no identifier between) is a function-type/literal, not a block opener.
-        bool isFunctionLiteral = t.Type == TokenType.Function
-          && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.LeftParen;
-        if (!isFunctionLiteral) depth++;
-        _pos++;
-      } else if (t.Type == TokenType.TypeAlias && _pos + 1 < _tokens.Count
-                 && _tokens[_pos + 1].Type == TokenType.Identifier) {
-        var aliasName = _tokens[_pos + 1].Value;
-        if (!_typeRegistry.ContainsKey(aliasName))
-          _typeRegistry[aliasName] = new IrPlaceholderType(aliasName);
-        _pos += 2;
-      } else {
-        _pos++;
-      }
-    }
-    _pos = savedPos;
-  }
-
   private void PreScanType(IrModule<MaxonOp> module, bool isExported = false, bool isModuleVisible = false) {
     Advance(); // consume 'type'
     var typeNameToken = Expect(TokenType.Identifier);
@@ -3156,7 +3104,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Pre-register typealias names inside the type body so the conformance
     // clause can reference them (e.g. `type Map is Iterable with Entry`
     // where `Entry` is a typealias defined inside Map)
-    PreRegisterTypeAliasNames();
+    PreRegisterTypeAliasPlaceholdersAtThisLevel();
 
     var associatedTypeNames = ParseUsesClause();
     var (conformingInterfaces, conformanceTypeParams) = ParseConformanceClause();
@@ -4514,64 +4462,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var typealiasPositions = new List<int>();
     var functionPositions = new List<int>();
 
-    // Scan to find top-level typealias and function positions within the block.
-    // Depth tracking must distinguish block-opener `if`/`else` from inline
-    // ternary (`x if cond else y`); otherwise an extension method whose body
-    // contains a postfix ternary inflates depth and hides every sibling
-    // declaration registered after it. Mirrors the rules in SkipToMatchingEnd.
-    int scanPos = _pos;
-    int depth = 1;
-    bool prevWasNewline = true; // first scanned token sits at statement start
-    var prevTokenType = TokenType.Newline;
-    while (scanPos < _tokens.Count && depth > 0) {
-      var tokenType = _tokens[scanPos].Type;
-      if (depth == 1) {
-        if (tokenType == TokenType.TypeAlias) {
-          typealiasPositions.Add(scanPos);
-        } else if (tokenType == TokenType.Function
-                   && (scanPos + 1 >= _tokens.Count || _tokens[scanPos + 1].Type != TokenType.LeftParen)) {
-          // Function declarations only — skip `function(` which is a type/literal.
-          functionPositions.Add(scanPos);
-        }
-      }
-      var next = scanPos + 1 < _tokens.Count ? _tokens[scanPos + 1].Type : TokenType.Eof;
-      if (tokenType == TokenType.Function || tokenType == TokenType.If
-          || tokenType == TokenType.While || tokenType == TokenType.For
-          || tokenType == TokenType.Match) {
-        // `function(` (no name between `function` and `(`) is a function-type
-        // or lambda literal, not a block-opening declaration — don't bump depth.
-        bool isCaseLabel = next is TokenType.Then or TokenType.Gives or TokenType.To or TokenType.Upto;
-        if (tokenType == TokenType.Function && next == TokenType.LeftParen)
-          isCaseLabel = true;
-        // Postfix ternary `if` is mid-expression; block `if` only appears at
-        // statement start (after a newline) or directly after `else`.
-        if (tokenType == TokenType.If && !prevWasNewline && prevTokenType != TokenType.Else)
-          isCaseLabel = true;
-        if (!isCaseLabel) depth++;
-      } else if (tokenType == TokenType.Else) {
-        if (next is TokenType.Then or TokenType.Gives or TokenType.To or TokenType.Upto) {
-          // Match case label — not a block opener.
-        } else if (next == TokenType.If) {
-          // `else if` — the upcoming `if` will bump depth.
-        } else if (prevTokenType != TokenType.CharacterLiteral) {
-          // Block `else` always follows `end 'label'`; otherwise this is the
-          // tail of an inline `<true> if <cond> else <false>` ternary.
-        } else {
-          depth++;
-        }
-      } else if (tokenType == TokenType.Otherwise && next is TokenType.CharacterLiteral or TokenType.LeftParen) {
-        depth++;
-      } else if (tokenType == TokenType.Try && next == TokenType.CharacterLiteral) {
-        depth++;
-      } else if (tokenType == TokenType.End) {
-        depth--;
-      }
-      prevWasNewline = tokenType == TokenType.Newline;
-      prevTokenType = tokenType;
-      scanPos++;
-    }
-    int endPos = scanPos;
-    if (endPos < _tokens.Count && _tokens[endPos].Type == TokenType.CharacterLiteral) endPos++;
+    // Collect the block's OWN typealias and function declarations. Each method body is stepped over
+    // whole, so nothing inside one can be mistaken for a sibling declaration and — the failure this
+    // walk used to have to restate the whole opener table to avoid — nothing inside one can
+    // desynchronize a depth count and hide every sibling declared after it.
+    int blockStart = _pos;
+
+    WalkOneDeclarationLevel(() => {
+      if (Check(TokenType.TypeAlias))
+        typealiasPositions.Add(_pos);
+      else if (Check(TokenType.Function) && PeekNext().Type != TokenType.LeftParen)
+        functionPositions.Add(_pos);
+    });
+
+    if (Check(TokenType.End)) Advance(); // the extension block's own terminator, and its label
+    if (Check(TokenType.CharacterLiteral)) Advance();
+    int endPos = _pos;
+    _pos = blockStart;
 
     // Primitive type extensions: process methods directly for the named type
     if (interfaceName is "int" or "float" or "bool" or "byte") {
@@ -5588,6 +5495,84 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
     // Skip end label if present
     if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  /// The declaration keywords that OPEN a body of their own — the ones a walk over ONE declaration
+  /// level must step OVER whole rather than walk into. `function(`, with no name between the
+  /// keyword and the paren, is a function TYPE or a lambda literal rather than a declaration, so it
+  /// opens nothing.
+  private bool IsDeclarationBodyOpener() =>
+    Check(TokenType.Type) || Check(TokenType.Union) || Check(TokenType.Enum)
+    || Check(TokenType.Interface) || Check(TokenType.Extension)
+    || (Check(TokenType.Function) && PeekNext().Type != TokenType.LeftParen)
+    || CheckTestKeyword();
+
+  /// <summary>
+  /// Walks ONE declaration level — the level the parser is positioned at — invoking
+  /// <paramref name="visit"/> on every token that sits AT that level and stepping over each nested
+  /// declaration's body WHOLE via <see cref="SkipToMatchingEnd"/>. Stops at this level's own `end`,
+  /// which it leaves UNCONSUMED so the caller decides what that terminator means, or at EOF.
+  ///
+  /// <paramref name="visit"/> observes only; the walk owns the parser position, and a caller that
+  /// needs its old one saves and restores it.
+  ///
+  /// The point is that "what opens a block, and what its `end` looks like" is asked of
+  /// <see cref="SkipToMatchingEnd"/> — the routine that owns the answer — instead of being restated
+  /// as a depth counter per walk. Three walks each kept their own and each had drifted differently:
+  /// none carried the enum/union case-list rule, so a `TokenKind`-shaped enum (whose cases are
+  /// literally spelled `end`, `type`, `union`, `enum`, `interface`) unbalanced the count and
+  /// stranded the walk inside the body; and the type-body walk counted EVERY `end` as its own, so
+  /// the first method containing an `if` ended it early. Neither can surface as a compile error —
+  /// a desynchronized skimmer simply stops seeing the declarations after it, which is the
+  /// order-dependent class <see cref="SkipToMatchingEnd"/> was made canonical to end.
+  /// </summary>
+  private void WalkOneDeclarationLevel(Action visit) {
+    while (!IsAtEnd() && !Check(TokenType.End)) {
+      visit();
+
+      if (IsDeclarationBodyOpener()) {
+        // SkipToMatchingEnd reads the body kind before the keyword and skips from after it.
+        var body = SkippedBodyAtDeclarationKeyword();
+        Advance();
+        SkipToMatchingEnd(body);
+        continue;
+      }
+
+      Advance();
+    }
+  }
+
+  /// A forward or mutual reference to a typealias has to resolve to SOMETHING before the
+  /// declaration itself is scanned, and the placeholder is that something — replaced by the real
+  /// type once the declaration is reached. An existing entry always wins: a placeholder must never
+  /// displace an already-resolved type.
+  private void RegisterTypeAliasPlaceholder(string aliasName) {
+    if (!_typeRegistry.ContainsKey(aliasName))
+      _typeRegistry[aliasName] = new IrPlaceholderType(aliasName);
+  }
+
+  /// <summary>
+  /// Token-level pre-pass registering the typealias names declared AT the parser's current
+  /// declaration level as placeholders, so forward and mutual references resolve when the real
+  /// typealias scan runs. Does not move the parser.
+  ///
+  /// ONE routine serves both levels that need it: a file's top level, and a type body whose
+  /// conformance clause names an alias declared inside it (`type Map ... implements Iterable with
+  /// (Entry, MapIterator)`, `Entry` being a typealias inside Map). They were two, with two
+  /// hand-rolled depth counters and two different opener sets, and the type-body one counted every
+  /// `end` as its own — so it stopped at the first method whose body held any block it had not
+  /// counted, and every alias declared after that method went unregistered. WHICH LEVEL a walk
+  /// starts at is the caller's position, not a rule of its own; nothing else about them differed.
+  /// </summary>
+  private void PreRegisterTypeAliasPlaceholdersAtThisLevel() {
+    int savedPos = _pos;
+
+    WalkOneDeclarationLevel(() => {
+      if (Check(TokenType.TypeAlias) && PeekNext().Type == TokenType.Identifier)
+        RegisterTypeAliasPlaceholder(PeekNext().Value);
+    });
+
+    _pos = savedPos;
   }
 
   // A file's visible top-level constant declarations, indexed two ways. Ordered keeps the
@@ -8068,10 +8053,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private bool ParseBodyUntilEnd() {
     bool wasDeadCode = false;
     bool parsedAny = false;
-    // The keyword of the previous statement if it was a function-terminating
-    // statement (`return`/`throw`/`panic`) in this same straight-line block;
-    // null otherwise. If the loop then finds another statement (rather than
+    // The keyword of the previous statement if it BRANCHED AWAY unconditionally in this same
+    // straight-line block; null otherwise. If the loop then finds another statement (rather than
     // `end`), that statement is unreachable dead code (E3071).
+    //
+    // `break`/`continue` belong here beside `return`/`throw`/`panic`: they leave via a `br` just as
+    // finally, and the reason to say so is not only the diagnostic. Each emits its terminator and
+    // leaves `_currentBlock` on the block it just terminated, so without this check the next
+    // statement's ops are appended AFTER a terminator — and `BlockEndsWithTerminator` and
+    // `GetMaxonSuccessors` both read the LAST op only, so that block silently stops looking like it
+    // branches anywhere. Rejecting the unreachable statement is what keeps the block well-formed.
     string? lastTerminatorKeyword = null;
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
@@ -8119,6 +8110,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       lastTerminatorKeyword = Check(TokenType.Return) ? "return"
         : Check(TokenType.Throw) ? "throw"
         : Check(TokenType.Panic) ? "panic"
+        : Check(TokenType.Break) ? "break"
+        : Check(TokenType.Continue) ? "continue"
         : null;
       ParseStatement();
       parsedAny = true;
@@ -8433,11 +8426,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             var methodToken = Advance(); // consume method name
             Advance(); // consume '('
             TrackBuiltinMutation(nameToken.Value, baseTypeName, methodFieldName);
-            MaxonValue structVal = resolved switch {
-              ResolvedVar.Local(var info) => info.Value,
-              ResolvedVar.Global(var info) => EmitGlobalLoad(nameToken.Value, info).Value,
-              _ => throw new InvalidOperationException()
-            };
+            var structVal = ResolveReceiverValue(nameToken.Value, resolved!);
             var builtinArgs = ParseBuiltinMethodArgs(methodToken, $"{structTypeName}.{methodFieldName}", structVal);
             _builtinReceiverVarName = nameToken.Value;
             var (handled, _) = TryEmitBuiltinTypeMethod(structTypeName, methodFieldName, builtinArgs, methodToken);
@@ -8513,11 +8502,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // after every method reading has failed, so a method of the same name still wins —
         // the same precedence the expression form applies.
         if (ResolveFunctionTypedField(structTypeName, _tokens[_pos + 2].Value) is { } fnField) {
-          var receiverValue = resolved switch {
-            ResolvedVar.Local(var info) => ResolveExprValue(new ExprResult.VarRef(nameToken.Value, info)),
-            ResolvedVar.Global(var info) => EmitGlobalLoad(nameToken.Value, info).Value,
-            _ => throw new InvalidOperationException($"Unhandled receiver kind for '{nameToken.Value}'")
-          };
+          var receiverValue = ResolveReceiverValue(nameToken.Value, resolved!);
           Advance(); // consume receiver name
           Advance(); // consume '.'
           var fnFieldToken = Advance(); // consume field name
@@ -8665,6 +8650,54 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       _ => throw new InvalidOperationException()
     };
   }
+
+  /// The receiver value for a `receiver.method(...)` call site, wherever that site is parsed.
+  ///
+  /// <see cref="VarInfo.Value"/> is the raw SSA value of the variable's LAST write, and this parser
+  /// has no phi nodes — so it is usable ONLY where it dominates the read. Once a branch arm has
+  /// written the variable, the value is defined IN THE ARM, which does not dominate the merge, and
+  /// the read has to be re-materialized as a named reference op that lowering resolves against the
+  /// variable's storage slot. <see cref="ResolveExprValue"/> is what mints one — and what re-derives
+  /// a stale self-field alias, and what routes a CAPTURED variable through its closure environment
+  /// instead of the enclosing frame's value.
+  ///
+  /// Every EXPRESSION-position receiver already asked it. The three STATEMENT-position method-call
+  /// paths each kept their own copy of the read and each omitted the dominance question entirely, so
+  /// a bare `receiver.method()` after an `if` merge was rejected with E9001 naming the arm block
+  /// while the identical receiver in expression position compiled. One routine, so the rule cannot
+  /// drift apart again.
+  ///
+  /// ⚠ The same-block case KEEPS THE RAW VALUE and must. <see cref="ResolveExprValue"/> mints a
+  /// fresh op for a struct even in its defining block, for an unrelated reason — every reference in
+  /// one EXPRESSION needs a distinct SSA id or they alias in `structVarNames`. A statement receiver
+  /// is a single reference, so that reason does not apply, and paying it anyway is not free: it puts
+  /// a `struct_var_ref` between a self-field alias and its `field_access`, which is exactly the
+  /// chain the mutation analysis walks to decide that a builtin call mutates the receiver's owner.
+  /// Measured — `List.clear`'s body is `chain.clear()`, and re-materializing `chain` in its own
+  /// block stopped `List.clear` being seen as mutating at all, which silently retired the E3070
+  /// borrow conflict in all three `list/memory.value-survives-clear*` cases. Emitting nothing where
+  /// nothing is needed also keeps the emitted code byte-identical everywhere the old raw read was
+  /// already correct.
+  ///
+  /// A GLOBAL has no SSA value that can go stale: its read IS a load, emitted here at the site.
+  private MaxonValue ResolveReceiverValue(string name, ResolvedVar resolved) => resolved switch {
+    ResolvedVar.Local(var info) when ReceiverValueDominatesThisRead(name, info) => info.Value,
+    ResolvedVar.Local(var info) => ResolveExprValue(new ExprResult.VarRef(name, info)),
+    ResolvedVar.Global(var info) => EmitGlobalLoad(name, info).Value,
+    _ => throw new InvalidOperationException($"Unhandled receiver kind for '{name}'")
+  };
+
+  /// Whether a local's cached <see cref="VarInfo.Value"/> is still the right value to read HERE.
+  ///
+  /// Being in the defining block answers dominance, but it is not the whole question: a capture and
+  /// a stale self-field alias both need re-deriving at the read site no matter which block that is,
+  /// and only <see cref="ResolveExprValue"/> does either. A capture is never same-block anyway — its
+  /// defining block belongs to the enclosing function — but stating it keeps the guard readable as
+  /// the one condition it is: "nothing has invalidated this value, and it reaches here".
+  private bool ReceiverValueDominatesThisRead(string name, VarInfo info) =>
+    info.DefinedInBlock == _currentBlock
+    && !(info.IsCaptured && _closureCaptures != null)
+    && !_staleSelfFields.Contains(name);
 
   private CompileError CreateUndefinedVariableError(string name, Token token,
       ErrorCode fallbackCode = ErrorCode.SemanticUndefinedVariable) {
@@ -12652,17 +12685,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var methodToken = Advance(); // consume method name
     Advance(); // consume '('
 
-    MaxonValue structVal = resolved switch {
-      ResolvedVar.Local(var info) => info.Value,
-      ResolvedVar.Global(var info) => EmitGlobalLoad(name, info).Value,
-      _ => throw new InvalidOperationException()
-    };
-    // Set self mutability and variable name for pass-by-reference tracking
-    _lastExprWasMutableVar = resolved switch {
-      ResolvedVar.Local(var info) => info.Mutable,
-      ResolvedVar.Global(var info) => info.Mutable,
-      _ => false
-    };
+    var structVal = ResolveReceiverValue(name, resolved);
+    // Set self mutability and variable name for pass-by-reference tracking. Written AFTER the
+    // receiver is resolved, not before: resolving a local sets both itself, and resolving a
+    // global sets neither — stating them here covers both without the two disagreeing.
+    _lastExprWasMutableVar = resolved.IsMutable;
     _lastExprVarName = name;
 
     var qualifiedToken = new Token(TokenType.Identifier, methodName, methodToken.Line, methodToken.Column);
@@ -12737,11 +12764,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var methodToken = Advance(); // consume method name
     Advance(); // consume '('
 
-    MaxonValue structVal = resolved switch {
-      ResolvedVar.Local(var info) => info.Value,
-      ResolvedVar.Global(var info) => EmitGlobalLoad(name, info).Value,
-      _ => throw new InvalidOperationException()
-    };
+    var structVal = ResolveReceiverValue(name, resolved);
 
     var qualifiedMethodName = $"{userTypeName}.{fieldName}";
     var args = new List<MaxonValue> { structVal };
