@@ -32,18 +32,28 @@ function reader(lines Count) returns Count
 	return n
 end 'reader'
 
+// ⚠ THE ASSERTION IS THE EXACT COUNT, NOT `> 0`. A lost wakeup HANGS, and a bare
+// liveness check finds that; but the same handshake can also deliver a wrong ANSWER —
+// an abort that resumes a park nobody completed reads the PREVIOUS completion's
+// `io_result_val`, and a reader that sees a failed read stops early. Both come back as
+// a short count and both pass `total > 0`. A driver whose verdict cannot tell 1600 from
+// 3 is only half an instrument.
+let readersPerRun = 4 as Count
+let linesPerReader = 400 as Count
+
 function main() returns ExitCode
-	let a = async reader(400)
-	let b = async reader(400)
-	let c = async reader(400)
-	let d = async reader(400)
+	let a = async reader(linesPerReader)
+	let b = async reader(linesPerReader)
+	let c = async reader(linesPerReader)
+	let d = async reader(linesPerReader)
 	let ra = await a
 	let rb = await b
 	let rc = await c
 	let rd = await d
 	let total = ra + rb + rc + rd
-	print("lines={total}\n")
-	if total > 0 'ok'
+	let expected = readersPerRun * linesPerReader
+	print("lines={total} expected={expected}\n")
+	if total == expected 'ok'
 		return 0
 	end 'ok'
 	return 1

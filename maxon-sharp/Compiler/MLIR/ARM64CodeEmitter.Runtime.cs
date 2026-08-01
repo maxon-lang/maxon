@@ -7275,10 +7275,15 @@ public partial class ARM64CodeEmitter {
   /// already in the right order. The fence forces it out before the SVC publishes the knote.
   ///
   /// It is NOT an acquire/release pair with anything: the completer never READS status, it
-  /// overwrites it. The fences in __io_poll_kqueue are a different mechanism for a different
-  /// hazard (its StoreLoad orders its own status store before its ioYielded load; its
-  /// StoreStore orders io_result_val before status). Three fences, three reasons — do not
-  /// collapse them into one story.
+  /// overwrites it. The fence left in __io_poll_kqueue is a different mechanism for a different
+  /// hazard — a StoreStore ordering io_result_val before the status that advertises it. Two
+  /// fences, two reasons; do not collapse them into one story.
+  ///
+  /// ⚠ THERE WERE THREE UNTIL THE NETPOLL PORT, and this comment said so for one rung after it
+  /// stopped being true. __io_poll_kqueue's StoreLoad existed to order its status store before its
+  /// own `ioYielded` LOAD, and that load no longer happens there: it moved inside
+  /// __netpoll_unblock, behind a claim whose LDAXR/STLXR supplies the same pairing. The fence went
+  /// with the load it was fencing.
   /// </summary>
   private void EmitMarkWaitingAndArmKevent(int keventSlot, string siteName) {
     // netpoll: take ownership of this GT's wakeup BEFORE the registration a completer can see.

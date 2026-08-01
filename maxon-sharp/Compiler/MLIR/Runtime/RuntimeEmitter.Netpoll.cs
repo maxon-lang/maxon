@@ -67,7 +67,8 @@ public partial class RuntimeEmitter {
   private const string NetpollSuspectLabel = "__netpoll_suspect";
 
   /// <summary>
-  /// FAULT INJECTION, in milliseconds; 0 = off. See <see cref="EmitNetpollInjectDelay"/>.
+  /// FAULT INJECTION on the PARKER's side, in milliseconds; 0 = off. Widens the gap between the
+  /// waiter's last self-detect and its commit CAS. See <see cref="EmitNetpollDelayFn"/>.
   /// </summary>
   private const string NetpollParkDelayMsLabel = "__netpoll_park_delay_ms";
 
@@ -78,6 +79,24 @@ public partial class RuntimeEmitter {
   /// in <c>scripts/</c> and the emitted code have to agree and nothing else would make them.
   /// </summary>
   public const string NetpollParkDelayEnvName = "MAXON_GT_PARK_DELAY_MS";
+
+  /// <summary>
+  /// FAULT INJECTION on the COMPLETER's side, in milliseconds; 0 = off.
+  ///
+  /// ⭐ WHY A SECOND KNOB EXISTS: A HANDSHAKE HAS TWO SIDES AND ONLY ONE OF THEM WAS INSTRUMENTED.
+  /// <see cref="NetpollParkDelayMsLabel"/> widens the parker's window; nothing widened the
+  /// COMPLETER's, which is the gap between "I published <c>status = ready</c>" and "I claimed the
+  /// park word". Every completer in this runtime has that gap — it is a handful of instructions, so
+  /// only a preemption lands in it — and a waiter that self-detects on <c>status</c> inside it runs
+  /// <c>__netpoll_park_done</c> on a word the completer has not claimed yet. An instrument that can
+  /// only stretch one side can only find bugs on one side.
+  /// </summary>
+  private const string NetpollClaimDelayMsLabel = "__netpoll_claim_delay_ms";
+
+  private const string NetpollClaimDelayEnvSymdata = "__netpoll_claim_delay_env";
+
+  /// <summary>Environment variable arming the completer-side injection. See above.</summary>
+  public const string NetpollClaimDelayEnvName = "MAXON_GT_CLAIM_DELAY_MS";
 
   /// <summary>
   /// Minimum gap between recovery scans. Go's sysmon re-polls the netpoller when it has not run for
@@ -108,9 +127,12 @@ public partial class RuntimeEmitter {
     _b.DefineGlobal(NetpollLastScanMsLabel, 8, 0);
     _b.DefineGlobal(NetpollSuspectLabel, 8, 0);
     _b.DefineGlobal(NetpollParkDelayMsLabel, 8, 0);
+    _b.DefineGlobal(NetpollClaimDelayMsLabel, 8, 0);
 
     _b.DefineSymdata(NetpollParkDelayEnvSymdata,
       System.Text.Encoding.UTF8.GetBytes(NetpollParkDelayEnvName + "\0"));
+    _b.DefineSymdata(NetpollClaimDelayEnvSymdata,
+      System.Text.Encoding.UTF8.GetBytes(NetpollClaimDelayEnvName + "\0"));
     _b.DefineSymdata(NetpollDoubleWaitMsg,
       System.Text.Encoding.UTF8.GetBytes("runtime: double wait\n\0"));
     _b.DefineSymdata(NetpollCorruptMsg,
@@ -139,7 +161,8 @@ public partial class RuntimeEmitter {
     EmitNetpollCommit();
     EmitNetpollParkDone();
     EmitNetpollUnblock();
-    EmitNetpollInjectDelay();
+    EmitNetpollDelayFn(NetpollParkDelayFn, NetpollParkDelayMsLabel);
+    EmitNetpollDelayFn(NetpollClaimDelayFn, NetpollClaimDelayMsLabel);
     EmitNetpollRecover();
     EmitNetpollInit();
   }
@@ -342,6 +365,11 @@ public partial class RuntimeEmitter {
     var enqueueLabel = UniqueLabel("netpoll_unblock_enqueue");
     var noneLabel = UniqueLabel("netpoll_unblock_none");
 
+    // Fault injection, the completer's half. It sits OUTSIDE the retry loop and before the first
+    // read, so what it widens is exactly the gap between our caller's `status = ready` store and
+    // this claim — the interval in which a waiter can self-detect on `status` alone.
+    _b.Call(NetpollClaimDelayFn);
+
     _b.DefineLabel(loopLabel);
     _b.LoadLocal(VReg.Scratch1, 0);              // gt
     _b.LoadAcquire(VReg.Scratch2, VReg.Scratch1, GtOffParkState);
@@ -393,29 +421,41 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// <c>__netpoll_inject_delay()</c> — FAULT INJECTION, and the only instrument that can discriminate
+  /// The two fault-injection entry points. Named here rather than spelled at their call sites
+  /// because the emitted label and the function that emits it are one fact.
+  /// </summary>
+  private const string NetpollParkDelayFn = "__netpoll_inject_delay";
+
+  private const string NetpollClaimDelayFn = "__netpoll_inject_claim_delay";
+
+  /// <summary>
+  /// <c>&lt;funcLabel&gt;()</c> — FAULT INJECTION, and the only instrument that can discriminate
   /// this protocol from the one it replaces.
   ///
   /// ⭐ WHY IT IS EMITTED CODE AND NOT AN ARGUMENT. The lost wakeup this protocol closes fires about
   /// once in 14,000 suite runs. At that rate a green suite is not evidence, five hundred clean runs
   /// are not evidence, and neither is a careful reading — the previous frequent bug in this same
   /// handshake was fixed by a method (reproduce, capture, probe) that is simply unavailable here.
-  /// So the window is not measured, it is made ENORMOUS on demand: called at the exact instruction
-  /// between the last self-detect and the commit CAS, a few milliseconds here turns "an admissible
-  /// interleaving" into "every run". The acceptance for this rung is that the OLD protocol wedges
-  /// under injection and the new one does not.
+  /// So the window is not measured, it is made ENORMOUS on demand: a few milliseconds at the exact
+  /// instruction the race needs turns "an admissible interleaving" into "every run". The acceptance
+  /// for this rung is that the OLD protocol wedges under injection and the new one does not.
   ///
-  /// It SHIPS rather than hiding behind a build flag, deliberately: unset, it costs one
-  /// predictable-not-taken load and branch per I/O park, and it is the only way a future change to
-  /// this handshake can be shown not to have reopened the window. A build flag would have cost the
-  /// same and been unavailable in the binary anyone actually runs.
+  /// ⚠ THERE ARE TWO SUCH INSTRUCTIONS, ONE PER SIDE, WHICH IS WHY THIS TAKES ITS GLOBAL AS A
+  /// PARAMETER. <see cref="NetpollParkDelayFn"/> sits between the parker's last self-detect and its
+  /// commit CAS; <see cref="NetpollClaimDelayFn"/> sits between the completer's <c>status = ready</c>
+  /// and its claim. Widening only the first can only ever falsify the parker's half of the protocol.
+  ///
+  /// It SHIPS rather than hiding behind a build flag, deliberately: unset, each costs one
+  /// predictable-not-taken load and branch, and it is the only way a future change to this handshake
+  /// can be shown not to have reopened the window. A build flag would have cost the same and been
+  /// unavailable in the binary anyone actually runs.
   /// </summary>
-  private void EmitNetpollInjectDelay() {
-    _b.FunctionStart("__netpoll_inject_delay", 0, 0x40);
+  private void EmitNetpollDelayFn(string funcLabel, string delayMsGlobal) {
+    _b.FunctionStart(funcLabel, 0, 0x40);
 
     var doneLabel = UniqueLabel("netpoll_inject_done");
 
-    _b.LoadGlobal(VReg.Scratch0, NetpollParkDelayMsLabel);
+    _b.LoadGlobal(VReg.Scratch0, delayMsGlobal);
     _b.JumpIfZero(VReg.Scratch0, doneLabel);
     _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
     _b.OsSleepMillis(VReg.Arg0);
@@ -425,16 +465,20 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// <c>__netpoll_init()</c> — read the injection delay out of the environment once, at scheduler
+  /// <c>__netpoll_init()</c> — read both injection delays out of the environment once, at scheduler
   /// init, so the hot path is a global load rather than a <c>getenv</c>.
   /// </summary>
   private void EmitNetpollInit() {
-    _b.FunctionStart("__netpoll_init", 0, 0x60);
+    _b.FunctionStart("__netpoll_init", 0, 0x80);
 
-    // Slots 4-5 are the env read's scratch buffer on Windows and unused on POSIX, matching the
-    // scratchSlot convention GetCurrentTimeMs and friends already use.
+    // Each ReadEnvUnsigned owns FOUR consecutive slots as its Windows value buffer (POSIX ignores
+    // them), so the two reads must not share a base — same scratchSlot convention GetCurrentTimeMs
+    // and friends use.
     _b.ReadEnvUnsigned(VReg.Scratch0, NetpollParkDelayEnvSymdata, 4);
     _b.StoreGlobal(NetpollParkDelayMsLabel, VReg.Scratch0);
+
+    _b.ReadEnvUnsigned(VReg.Scratch0, NetpollClaimDelayEnvSymdata, 8);
+    _b.StoreGlobal(NetpollClaimDelayMsLabel, VReg.Scratch0);
 
     _b.FunctionEnd();
   }
@@ -553,13 +597,19 @@ public partial class RuntimeEmitter {
     _b.AtomicCAS(VReg.Scratch1, GtOffParkState, VReg.Scratch2, VReg.Arg1);
     _b.JumpIfZero(VReg.Scratch3, retLabel);      // a real completer got there first: nothing to fix
 
-    _b.LoadGlobal(VReg.Scratch0, NetpollRecoveredLabel);
-    _b.AddRegImm(VReg.Scratch0, 1);
-    _b.StoreGlobal(NetpollRecoveredLabel, VReg.Scratch0);
+    // ⚠ ATOMIC, because EVERY M runs this scan and two of them can confirm the same GT in the same
+    // interval — the CAS above makes only one of them the claimer, but a load/add/store here would
+    // still let a second M's scan overwrite the increment of a first M that was rescheduled mid
+    // read-modify-write. An UNDERCOUNTING regression detector is worse than none: this number's
+    // whole job is to be exactly 0, and a count that can silently drop 1 to 0 cannot do it. Xadd
+    // rather than Inc because the "say so once" test below needs the value we replaced, and reading
+    // the counter back after an increment is the same race one level down.
+    _b.LeaGlobal(VReg.Scratch1, NetpollRecoveredLabel);
+    _b.MovRegImm(VReg.Scratch0, 1);
+    _b.AtomicXadd(VReg.Scratch1, 0, VReg.Scratch0);   // Scratch0 = the count BEFORE this rescue
 
-    // Say so, once, on the first rescue. See NetpollRecoveredMsg.
-    _b.CmpRegImm(VReg.Scratch0, 1);
-    _b.JumpIf(Condition.NotEqual, enqueueLabel);
+    // Say so, once, on the first rescue — the M that observed 0. See NetpollRecoveredMsg.
+    _b.JumpIfNonZero(VReg.Scratch0, enqueueLabel);
     _b.LeaSymdata(VReg.Arg0, NetpollRecoveredMsg);
     _b.Call(_b.WriteStderrLabel);
 
