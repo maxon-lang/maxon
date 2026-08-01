@@ -101,7 +101,7 @@ end 'main'
 ```
 
 <!-- disabled-test: closure-capture.map-with-capture -->
-<!-- `Array.map` — not in shv2's synthesized Array method roster, so `map(…)` is the roster refusal (E2015 "`Array` method 'map' — … the rest (map/contains/…) arrive later"). ⚠ This line used to claim E2004 "Function 'map' does not return a value", which was D11 — the void-result refusal sat ahead of the roster and caught every unknown name in value position — recorded here as though it were the design -->
+<!-- `Array.map` — not in shv2's synthesized Array method roster, so `map(…)` is the roster refusal (E2015 "`Array` member 'map' — … the rest (map/contains/…) arrive later"). ⚠ This line used to claim E2004 "Function 'map' does not return a value", which was D11 — the void-result refusal sat ahead of the roster and caught every unknown name in value position — recorded here as though it were the design -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

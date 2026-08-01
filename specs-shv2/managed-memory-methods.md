@@ -784,7 +784,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:8: Unsupported: `Array` method 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:4:8: Unsupported: `Array` member 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
 ```
 
 <!-- test: buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes -->
@@ -899,7 +899,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:8: Unsupported: `Array` method 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:7:8: Unsupported: `Array` member 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
 ```
 
 ### An element size shv2 has no element TYPE for is refused, not silently truncated
@@ -954,7 +954,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:12: Unsupported: `Array` method 'setByte' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:10:12: Unsupported: `Array` member 'setByte' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
 ```
 
 ### R4.6 — the buffer's `set` is bounded by CAPACITY, and the `Array`'s is not
@@ -1499,7 +1499,7 @@ surface — the roster exactly INVERTED. All three compiled, linked and RAN:
 function abuse(m __ManagedMemory) returns int      -- push/reserve/resize/insert/pop/first/last/
     m.push(7) … m.count()                          -- remove/clone/isEmpty/count all ACCEPTED, exit 13
 function useBuffer(m __ManagedMemory) returns int  -- while the roster's own first member is REFUSED:
-    return m.length()                              -- "`Array` method 'length' — … arrive later"
+    return m.length()                              -- "`Array` member 'length' — … arrive later"
 function make() returns __ManagedMemory            -- m.count() ACCEPTED, exit 5
 type Holder  var buf as __ManagedMemory            -- h.buf.count() ACCEPTED, exit 5
 ```
@@ -2043,5 +2043,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:13: Unsupported: `Array` method 'create' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:8:13: Unsupported: `Array` member 'create' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
 ```

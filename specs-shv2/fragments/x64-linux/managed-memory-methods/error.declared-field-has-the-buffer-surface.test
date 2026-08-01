@@ -1,0 +1,16 @@
+// Test: error.declared-field-has-the-buffer-surface
+type Holder
+	export var buf as __ManagedMemory
+
+	export static function create(buf __ManagedMemory) returns Self
+		return Self{buf: buf}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return h.buf.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:12:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for

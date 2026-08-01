@@ -3005,11 +3005,6 @@ end 'arraySurfaceMemberNames'
 // disables the memo silently, with no compile error and no wrong answer to find it by.
 let sharedEmptySurfaceRoster = ByteArrayArray.create()
 
-// ⭐ **WHICH ROSTER ANSWERS FOR THIS RECEIVER** — the ONE place the surface picks a member list, so the
-// gate in `dispatchArrayMethod`, the refusal it throws and the drift panic at the end of that dispatch all
-// read the same answer. One record, two surfaces (`SignatureIndex.ManagedMemoryTypeName`); the surface is
-// decided once, by `dispatchArrayMethod`, and this turns that answer into the list it implies.
-
 // The read side of a roster — asked ONCE per array-method call, ahead of every arm.
 function rosterHasMember(name ByteArray, roster ByteArrayArray) returns bool
 	for member in roster 'eachMember'
@@ -3037,14 +3032,37 @@ function rosterList(roster ByteArrayArray) returns String
 	return rendered
 end 'rosterList'
 
+// ⭐ **ONE SENTENCE SHAPE FOR BOTH SURFACES** — the argument `rosterList` makes about the `/`-join, one
+// level up, where it had not yet been made: two full templates side by side are two spellings of one
+// sentence, free to drift in punctuation, in noun, and in what they call the thing they refuse, while each
+// stays perfectly "derived". They HAD so drifted — see `surfaceRosterRefusal`.
+//
+// ⚠ **THE NOUN IS `member`, NOT `method`, AND THAT IS NOT A WORDING PREFERENCE (found in review, A2k).** The
+// `Array` roster is derived from the ARMS, and one of those arms serves `managed`, which is a FIELD:
+// `a.managed` reads it and `a.managed()` is not a call the grammar has (it reaches `Unsupported: ( statement`,
+// which names neither `managed` nor the mistake). A list introduced by the word "method" therefore sent a
+// reader to a parse error for the one entry on it that is not one — the same shape as naming `create` among
+// the members, which is the defect A2k exists to remove. `member` is true of all eighteen, and it is already
+// the noun the buffer's half uses, so the two halves now agree by construction rather than by review.
+function rosterRefusalSentence(typeName ByteArray, member ByteArray, roster ByteArrayArray, milestone String, absentClause String) returns String
+	return "`{String.from(typeName)}` member '{String.from(member)}' — {milestone} provides {rosterList(roster)}; {absentClause}"
+end 'rosterRefusalSentence'
+
 // The refusal for a member the receiver's surface does not have. ONE gate throws it, and the SURFACE picks
 // which sentence answers — because a roster must answer for the type it is shown about: a reader handed the
 // `Array` list for a `__ManagedMemory` receiver is sent to the wrong question entirely.
+//
+// ⚠ Each surface supplies only the three things that genuinely differ — the TYPE it answers for, the
+// milestone that built the roster, and the trailing clause naming what is deliberately ABSENT. That trailing
+// clause is the one half of each sentence still hand-written, and it carries the obligation the two roster
+// functions above state: a rung that adds a member adds its line to the roster and strikes the name from the
+// tail HERE, in the same edit.
 function surfaceRosterRefusal(member ByteArray, roster ByteArrayArray, isManagedMemory bool) returns String
 	if isManagedMemory 'bufferSurface'
-		return "`{String.from(ManagedMemoryTypeName)}` member '{String.from(member)}' — R4.4 provides {rosterList(roster)}; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for"
+		return rosterRefusalSentence(ManagedMemoryTypeName, member: member, roster: roster, milestone: "R4.4", absentClause: "`elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for")
 	end 'bufferSurface'
-	return "`Array` method '{String.from(member)}' — P1.7 provides {rosterList(roster)}; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later"
+
+	return rosterRefusalSentence(ArrayBuiltinBaseName, member: member, roster: roster, milestone: "P1.7", absentClause: "`create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later")
 end 'surfaceRosterRefusal'
 
 // ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the same immutable-receiver rule,
@@ -27286,19 +27304,12 @@ export type Parser
 		return try self.parsePostfix(func, value: try self.dispatchMethodOnReceiver(func, recv: self.valueReceiver(receiver, immutableName: self.iterationLockNameOf(subjectName), subjectName: subjectName), resultUsed: resultUsed), resultUsed: resultUsed)
 	end 'parseFieldChainCall'
 
-	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
-	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`). An OPAQUE-`T` array
-	// (`self.items.push(x)` in a generic body, P1.7 slice 3b) dispatches here too, and the shared body treats the
-	// opaque element as an 8-byte WORD — which is correct for MOVE-IN (`push`/`set`/`insert` move the word, and
-	// the call-site consume promotes a managed argument, P1.7 slice 3b-iii), for the metadata methods, for drop,
-	// for READING (`get`/`first`/`last` hand back a BORROW) and for MOVING OUT (`pop`/`remove` hand back an OWNED
-	// word dropped through the descriptor-gated `__drop_type_param`, P1.7 slice 3b-vi-a) — the word is only
-	// carried and dropped, never interpreted. A per-element COPY (`slice`/`clone`/`append`) is served too, through
-	// the descriptor `copyFunc@32` (P1.7 slice 3b-vi-b-β): `__arr_*_opaque` byte-blits a trivial element and
-	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
-	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
-	// `requireOpaqueArrayCopyable` rejects.
-	// The roster the surface implies, built on this file's FIRST array-method call and held after — see
+	// ⭐ **WHICH ROSTER ANSWERS FOR THIS RECEIVER** — the ONE place the surface picks a member list, so the
+	// gate in `dispatchArrayMethod`, the refusal it throws and the drift panic at the end of that dispatch all
+	// read the same answer. One record, two surfaces (`SignatureIndex.ManagedMemoryTypeName`); the surface is
+	// decided once, by `dispatchArrayMethod`, and this turns that answer into the list it implies.
+	//
+	// The roster is built on this file's FIRST array-method call and held after — see
 	// `sharedEmptySurfaceRoster` for why the memo is per Parser and why it is lazy.
 	function surfaceMemberNames(isManagedMemory bool) returns ByteArrayArray
 		if isManagedMemory 'bufferSurface'
@@ -27316,6 +27327,18 @@ export type Parser
 		return self.arraySurfaceRoster
 	end 'surfaceMemberNames'
 
+	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
+	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`). An OPAQUE-`T` array
+	// (`self.items.push(x)` in a generic body, P1.7 slice 3b) dispatches here too, and the shared body treats the
+	// opaque element as an 8-byte WORD — which is correct for MOVE-IN (`push`/`set`/`insert` move the word, and
+	// the call-site consume promotes a managed argument, P1.7 slice 3b-iii), for the metadata methods, for drop,
+	// for READING (`get`/`first`/`last` hand back a BORROW) and for MOVING OUT (`pop`/`remove` hand back an OWNED
+	// word dropped through the descriptor-gated `__drop_type_param`, P1.7 slice 3b-vi-a) — the word is only
+	// carried and dropped, never interpreted. A per-element COPY (`slice`/`clone`/`append`) is served too, through
+	// the descriptor `copyFunc@32` (P1.7 slice 3b-vi-b-β): `__arr_*_opaque` byte-blits a trivial element and
+	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
+	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
+	// `requireOpaqueArrayCopyable` rejects.
 	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask, receiverStorage MutatedParamMask, viaManagedField bool) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)

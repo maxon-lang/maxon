@@ -214,7 +214,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` method 'frobnicate' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
 ```
 
 <!-- test: error.unknown-set-method-in-value-position -->
@@ -264,7 +264,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` method 'grow' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
 ```
 
 <!-- test: error.array-void-mutator-in-value-position -->
