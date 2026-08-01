@@ -1,0 +1,265 @@
+// Test: where-clauses.shared-equatable-through-two-constraints
+typealias Code = int(0 to u32.max)
+
+interface EqL extends Equatable
+	function l() returns Code
+end 'EqL'
+
+interface EqR extends Equatable
+	function r() returns Code
+end 'EqR'
+
+type Widget implements EqL, EqR
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function l() returns Code
+		return 1
+	end 'l'
+
+	export function r() returns Code
+		return 2
+	end 'r'
+
+	export function equals(other Self) returns bool
+		return self.seed == other.seed
+	end 'equals'
+end 'Widget'
+
+type Pair uses T where T is EqL and EqR
+	export var a as T
+	export var b as T
+
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+
+	export function go() returns Code
+		return (1 if self.a == self.b else 0) * 100 + self.a.l() * 10 + self.b.r()
+	end 'go'
+end 'Pair'
+
+typealias WidgetPair = Pair with Widget
+
+function main() returns ExitCode
+	return WidgetPair.create(Widget.create(3), b: Widget.create(3)).go() as ExitCode
+end 'main'
+---
+ExitCode: 112
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Widget.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Widget.l {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Widget.r {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Widget.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.cmpRegReg rax, rcx
+    x64.setccReg equal, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.go {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.callMem [r12 + 32]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.imulRegRegImm32 r14, rax, 100
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callMem [r12 + 24]
+    x64.imulRegRegImm32 rax, r8, 10
+    x64.leaRegRegReg r12, r14, rax
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.callMem [r13 + 24]
+    x64.leaRegRegReg r8, r12, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 3
+    x64.callDirect Widget.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 3
+    x64.callDirect Widget.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Pair.create
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rdx, [rip + __witness_Widget.EqL]
+    x64.leaRegRdata rax, [rip + __witness_Widget.EqR]
+    x64.movRegReg rcx, r13
+    x64.callDirect Pair.go
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Pair_Widget
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

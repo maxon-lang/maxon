@@ -1085,7 +1085,7 @@ typealias WitnessSlotsByInterfaceMap = Map with (ByteArray, CollectedInterfaceMe
 // ⚠⚠ **THE SLOT LIST IS BUILT ONCE PER INTERFACE PER FILE, NOT ONCE PER DISPATCH SITE, AND THE DIFFERENCE
 // IS A MEASURED QUADRATIC.** `findWitnessDispatchCandidates` runs at EVERY method call on a constrained type
 // parameter and needs the slot NUMBERING to compile `[witnessAddr + 24 + 8*i]`; asking
-// `interfaceWitnessSlotsOf` there rebuilt the whole transitive list at each one, and a `CollectedInterfaceMethod`
+// `interfaceWitnessSlots` there rebuilt the whole transitive list at each one, and a `CollectedInterfaceMethod`
 // is a heap record, so the walk allocates one per requirement. That is O(dispatch sites x requirements) —
 // MEASURED on `Testing/ladders/genwitness.sh 1 <M> dispatch` as `1.02*M^2 + 19*M` extra allocations in
 // `phase:parse` (+200 at M=8 rising to +19,072 at M=128, a ratio approaching x4 per doubling), against a
@@ -27412,6 +27412,13 @@ export type Parser
 					continue
 				end 'otherMethod'
 
+				// A requirement an EARLIER constraint already supplied is the same requirement, not a rival —
+				// two constraints extending one parent reach the parent's requirements once each. See
+				// `witnessCandidateAlreadyCollected` for why either route binds the same function pointer.
+				if witnessCandidateAlreadyCollected(candidates, declaringInterfaceName: slot.sourceInterfaceName, methodName: methodName) 'reachedByAnEarlierConstraint'
+					continue
+				end 'reachedByAnEarlierConstraint'
+
 				candidates.push(WitnessDispatchTarget.create(i, methodIndex: slotIndex, returnTypeName: slot.method.returnTypeName, paramTypeNames: slot.method.paramTypeNames, throwsClause: slot.method.throwsClause, methodName: methodName, paramNames: slot.method.paramNames, declaringInterfaceName: slot.sourceInterfaceName, isStatic: slot.method.isStatic))
 			end 'eachSlot'
 		end 'eachConstraint'
@@ -27426,6 +27433,15 @@ export type Parser
 	// The list is a pure function of the interface DECLARATION INDEX, which `ProgramSignatures` fixes before
 	// any parse begins and no parse can move, so one answer serves the whole file — the same property that
 	// makes the numbering safe to bake into another file's emitted offsets in the first place.
+	// (`foldInterfaceDeclarations` is the only writer of that index and it runs to completion inside
+	// `queryProgramSignatures`, before the first body is parsed; the sweep itself parses no call, so no
+	// `Parser` can memoize a slot list off a half-filled index.)
+	//
+	// ⚠ **THE MAP IS ASKED THROUGH `interfaceMap()`, exactly as the parser's two other interface readers ask
+	// it** (`requireInterfaceForParse`, `conformanceUsesArity`). A `ProgramSignatures.interfaceWitnessSlotsOf`
+	// delegate stood here and was removed at the R10c review: it added nothing to
+	// `interfaceWitnessSlots(map, iface)` — which already owns the walk's accumulators — and a second door
+	// onto one store is what this rung spent its `interfaceOf` → `interfaceMap` widening removing.
 	function witnessSlotsOf(iface IrInterface) returns CollectedInterfaceMethodArray
 		if let existing = try self.witnessSlotsByInterface.get(iface.name) 'alreadyBuilt'
 			return existing
@@ -27436,7 +27452,7 @@ export type Parser
 			self.witnessSlotsByInterface = WitnessSlotsByInterfaceMap.create()
 		end 'firstDispatchInThisFile'
 
-		let slots = self.signatures.interfaceWitnessSlotsOf(iface)
+		let slots = interfaceWitnessSlots(self.signatures.interfaceMap(), iface: iface)
 		self.witnessSlotsByInterface.upsert(iface.name, value: slots)
 		return slots
 	end 'witnessSlotsOf'

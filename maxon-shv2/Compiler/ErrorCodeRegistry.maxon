@@ -588,8 +588,14 @@ export enum ErrorCode
 	// requirements its `where` constraints supply could be. An interface and its `extends` parents
 	// may each declare the name, and two constraints on one parameter may each declare it too --
 	// and those are DISTINCT requirements occupying DISTINCT witness-table slots, so "they are both
-	// called `label` and both take one argument" does not make them interchangeable: each slot holds
-	// a different address.
+	// called `label` and both take one argument" does not make them interchangeable: two same-named,
+	// same-arity requirements may differ in RESULT type, and are then met by two different members
+	// and two different addresses.
+	// DISTINCT means declared by two different interfaces. One requirement reached through two
+	// constraints -- `where T is Left and Right` where both `extends Root` -- is NOT this code: the
+	// accepted member is filed under (conformer, DECLARING interface, method name), so both routes
+	// stamp their slot from one filing and bind one address. Counting those two routes as two
+	// claimants was a false reject whose message named a requirement as its own rival.
 	// A witness dispatch compiles ONE slot offset into the calling function, so there is nothing to
 	// choose by and nothing a later pass could repair. Taking the first candidate is what the search
 	// did before this code existed, and it is a silent wrong function pointer rather than a

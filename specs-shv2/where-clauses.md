@@ -1592,6 +1592,145 @@ end 'main'
 194
 ```
 
+### The diamond split across TWO CONSTRAINTS: one requirement reached twice is still one requirement
+
+The case above closes the diamond inside ONE interface, where `interfaceWitnessSlots`' `visited` set sees
+both arrivals. `where T is Left and Right` splits the same diamond across two CONSTRAINTS, and no `visited`
+set spans them — the name search walks each constraint's own slot list and collects `Root.base()` once from
+each. ⚠ **Read as two claimants that was E3114 on a legal program, and the message named the requirement as
+its own rival: `'base' … is provided by both Root.base() returns Code and Root.base() returns Code`.** The
+two entries are two ROUTES to one requirement: `ConformanceCheck` files the accepted member under
+(conformer, DECLARING interface, method name), and both `__witness_Widget.Left` and `__witness_Widget.Right`
+stamp their `base` slot from that one filing — so either route binds the same function pointer, and the
+second entry is dropped rather than counted (`witnessCandidateAlreadyCollected`).
+
+⚠ **THE THREE RESULTS ARE POSITIONAL, NOT SUMMED.** `1 + 2 + 3` is `6` under every permutation, so a sum
+would pass on a compiler that merely stopped refusing — including one that bound `base` to `Left`'s slot 0
+and returned `left`'s answer for it. `123` is reached only when the inherited requirement AND both
+constraints' own requirements each read their own slot. Target-independent.
+
+<!-- test: where-clauses.shared-ancestor-through-two-constraints -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Root
+	function base() returns Code
+end 'Root'
+
+interface Left extends Root
+	function left() returns Code
+end 'Left'
+
+interface Right extends Root
+	function right() returns Code
+end 'Right'
+
+type Widget implements Left, Right
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function base() returns Code
+		return 1
+	end 'base'
+
+	export function left() returns Code
+		return 2
+	end 'left'
+
+	export function right() returns Code
+		return 3
+	end 'right'
+end 'Widget'
+
+type Box uses T where T is Left and Right
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function go() returns Code
+		return self.item.base() * 100 + self.item.left() * 10 + self.item.right()
+	end 'go'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	return WidgetBox.create(Widget.create(0)).go() as ExitCode
+end 'main'
+```
+```exitcode
+123
+```
+
+### The OPERATOR path: two constraints that each `extends Equatable` supply ONE `equals`
+
+The same shape on the operator path, which reaches it through a different filter — `witnessTargetIsProtocol`
+keeps every candidate shaped like `Equatable.equals`, and both routes to the inherited requirement are.
+⚠ **`Equatable.equals … and Equatable.equals` was the E3114 this produced**, one sentence naming one
+requirement twice. It must not be confused with `where-clauses.error.ambiguous-operator-witness` below,
+which is two DISTINCT declaring interfaces (`Equatable` and `AlsoEquatable`) and stays refused: that pair
+files under two impl keys and can hold two different members. Target-independent.
+
+<!-- test: where-clauses.shared-equatable-through-two-constraints -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface EqL extends Equatable
+	function l() returns Code
+end 'EqL'
+
+interface EqR extends Equatable
+	function r() returns Code
+end 'EqR'
+
+type Widget implements EqL, EqR
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function l() returns Code
+		return 1
+	end 'l'
+
+	export function r() returns Code
+		return 2
+	end 'r'
+
+	export function equals(other Self) returns bool
+		return self.seed == other.seed
+	end 'equals'
+end 'Widget'
+
+type Pair uses T where T is EqL and EqR
+	export var a as T
+	export var b as T
+
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+
+	export function go() returns Code
+		return (1 if self.a == self.b else 0) * 100 + self.a.l() * 10 + self.b.r()
+	end 'go'
+end 'Pair'
+
+typealias WidgetPair = Pair with Widget
+
+function main() returns ExitCode
+	return WidgetPair.create(Widget.create(3), b: Widget.create(3)).go() as ExitCode
+end 'main'
+```
+```exitcode
+112
+```
+
 ### The NEGATIVE control: a name no interface in the chain declares is still refused
 
 The transitive walk widens what a constraint provides; it must not make the refusal vacuous. `Derived`

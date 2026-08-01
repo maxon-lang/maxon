@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "491ecdb18ec9f005",
+  "sourceHash": "ab16f2d19fccf94d",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1288,7 +1288,7 @@
       "tag": "E3114",
       "name": "SemanticAmbiguousWitnessDispatch",
       "stage": "semantic",
-      "doc": "A method call on a constrained type parameter names something that MORE THAN ONE of the\nrequirements its `where` constraints supply could be. An interface and its `extends` parents\nmay each declare the name, and two constraints on one parameter may each declare it too --\nand those are DISTINCT requirements occupying DISTINCT witness-table slots, so \"they are both\ncalled `label` and both take one argument\" does not make them interchangeable: each slot holds\na different address.\nA witness dispatch compiles ONE slot offset into the calling function, so there is nothing to\nchoose by and nothing a later pass could repair. Taking the first candidate is what the search\ndid before this code existed, and it is a silent wrong function pointer rather than a\ndiagnostic -- which is why the ambiguity is refused rather than resolved by declaration order.\nThe message names BOTH claimants by their DECLARING interface, since that is the interface the\nauthor has to change; the cure is to rename one requirement or to drop one constraint.",
+      "doc": "A method call on a constrained type parameter names something that MORE THAN ONE of the\nrequirements its `where` constraints supply could be. An interface and its `extends` parents\nmay each declare the name, and two constraints on one parameter may each declare it too --\nand those are DISTINCT requirements occupying DISTINCT witness-table slots, so \"they are both\ncalled `label` and both take one argument\" does not make them interchangeable: two same-named,\nsame-arity requirements may differ in RESULT type, and are then met by two different members\nand two different addresses.\nDISTINCT means declared by two different interfaces. One requirement reached through two\nconstraints -- `where T is Left and Right` where both `extends Root` -- is NOT this code: the\naccepted member is filed under (conformer, DECLARING interface, method name), so both routes\nstamp their slot from one filing and bind one address. Counting those two routes as two\nclaimants was a false reject whose message named a requirement as its own rival.\nA witness dispatch compiles ONE slot offset into the calling function, so there is nothing to\nchoose by and nothing a later pass could repair. Taking the first candidate is what the search\ndid before this code existed, and it is a silent wrong function pointer rather than a\ndiagnostic -- which is why the ambiguity is refused rather than resolved by declaration order.\nThe message names BOTH claimants by their DECLARING interface, since that is the interface the\nauthor has to change; the cure is to rename one requirement or to drop one constraint.",
       "emittedBy": {"shv2": "semanticAmbiguousWitnessDispatch"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },

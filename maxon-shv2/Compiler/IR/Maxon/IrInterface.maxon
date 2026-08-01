@@ -545,6 +545,37 @@ export function pickSoleWitnessCandidate(candidates WitnessDispatchTargetArray) 
 	return WitnessCandidatePick.ambiguous(first, second: try candidates.get(1) otherwise panic("pickSoleWitnessCandidate: count is {candidates.count()} but get(1) failed"))
 end 'pickSoleWitnessCandidate'
 
+// ⭐⭐ **TWO CONSTRAINTS CAN REACH ONE REQUIREMENT, AND THAT IS NOT AN AMBIGUITY (R10c review).** `where T is
+// Left and Right` with `interface Left extends Root` and `interface Right extends Root` supplies `Root`'s
+// requirements through BOTH constraints, so a name search over the constraints collects each of them twice —
+// and `pickSoleWitnessCandidate` then read two entries as two claimants and refused a legal program with
+// E3114 naming ONE requirement as its own rival (**MEASURED: `'base' … provided by both Root.base() returns
+// Code and Root.base() returns Code`**, and the same sentence about `Equatable.equals` on the operator path
+// when two constraints each `extends Equatable`).
+//
+// ⚠ **THE TEST IS `witnessSlotImplKey`'S OWN KEY — the DECLARING interface and the method NAME — and that is
+// what makes dropping the second entry a fact rather than a preference.** `ConformanceCheck` files the
+// accepted member under exactly that pair (plus the conformer), and `ensureWitnessTable` stamps every slot
+// from that filing, so two slots sharing the key hold ONE function pointer at every instantiation: the two
+// entries are two ROUTES to one requirement, and either route binds the same code. The builtin-conformer
+// fallback (`qualifiedMethodName`) reads neither half beyond the method name, so it agrees too.
+//
+// A requirement cannot be collected twice from ONE constraint — `interfaceWitnessSlots`' `visited` set gives
+// each interface one run of slots, and `Parser.requireUnclaimedInterfaceRequirementName` forbids one
+// interface two requirements of a name — so every hit this discards came in through a LATER constraint, and
+// the entry kept is the earliest constraint's. Whichever is kept, the emitted `callMem` reads the same
+// address.
+export function witnessCandidateAlreadyCollected(candidates WitnessDispatchTargetArray, declaringInterfaceName ByteArray, methodName ByteArray) returns bool
+	for i in 0 upto candidates.count() 'eachCollected'
+		let collected = try candidates.get(i) otherwise panic("witnessCandidateAlreadyCollected: candidates.get OOB at {i} below count {candidates.count()}")
+		if collected.declaringInterfaceName.equals(declaringInterfaceName) and collected.methodName.equals(methodName) 'sameRequirement'
+			return true
+		end 'sameRequirement'
+	end 'eachCollected'
+
+	return false
+end 'witnessCandidateAlreadyCollected'
+
 // Do two interface methods declare the SAME formals — the same rendered types, in the same order (and so,
 // by construction, the same arity)? Both sides are `InterfaceMethodSig.paramTypeNames`, which are rendered
 // by ONE renderer (`Parser.renderInterfaceTypeName`) that spells the enclosing interface `Self` either way,
