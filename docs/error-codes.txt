@@ -1434,6 +1434,13 @@ E6002 BinaryOutputNotReplaceable
 	doc or read-only. Refused up front rather than at the write, because the write is logged and
 	doc swallowed: carrying on would print "Wrote N bytes" and exit 0 over an untouched STALE binary,
 	doc which is the exact confident-wrong-answer this deletion exists to prevent.
+	doc The message names the LIKELY cause as well as the mechanical one: in practice the holder is a
+	doc spec-test or a build of this same tree that has not exited yet, and the compiler cannot
+	doc identify it (that would need RestartManager/NtQuerySystemInformation, imported nowhere here).
+	doc It also states that the previous binary SURVIVED -- this is the one branch where a failed build
+	doc leaves an output behind, so a `;`-chained build-then-test runs the stale one. The wait-or-kill
+	doc deadline it quotes is `WedgeWatchdogMs` (maxon-shv2/Testing/SpecWorkerPool.maxon), read from
+	doc the constant so the message and the watchdog cannot disagree.
 
 E6003 BinaryOutputNotWritten
 	shv2 binaryOutputNotWritten

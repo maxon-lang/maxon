@@ -135,7 +135,25 @@ function discardPreviousOutput(project Project, outputPath FilePath) throws Comp
 	try File.delete(outputPath) otherwise ignore
 
 	if File.exists(outputPath) 'undeletable'
-		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotReplaceable, message: "could not remove the previous build output at {outputPath} — it is locked or read-only, so this build cannot replace it"))
+		// ⭐ **IT NAMES THE LIKELY CAUSE, BECAUSE THE MECHANICAL ONE IS NOT ACTIONABLE.** "Locked or
+		// read-only" is what the OS said and it is true; it is also indistinguishable, to whoever reads
+		// it, from a genuinely broken build. In this tree the cause is the same one every time — a
+		// `spec-test` or a `build` still running, holding its own image open — measured twice in one
+		// session, and both times the reader's first hypothesis was a compiler defect. The compiler
+		// cannot NAME the holder (that needs `RestartManager`/`NtQuerySystemInformation`, imported
+		// nowhere here), but it does not need to in order to say which way to look.
+		//
+		// ⚠ AND IT SAYS THE STALE BINARY SURVIVED, which is the one fact `File.exists` has just proved
+		// and the one the reader most needs: this function's whole contract is that a failed build
+		// leaves NOTHING at `outputPath`, and this is the single branch where that fails. A `;`-chained
+		// `build; suite` therefore runs the PREVIOUS binary and reports a false red — or a false green.
+		// Measured during A1: a false red of exactly four tests.
+		//
+		// The deadline is QUOTED from `WedgeWatchdogMs`, never re-spelled: it is the only bound on how
+		// long an abandoned run can hold the file, and a prose "~5 min" here would be a second copy of
+		// it, free to drift the moment the watchdog is retuned.
+		let likelyCause = "The likeliest cause is that it is still running — a spec-test or an earlier build in this tree that has not exited; end that process (one that has stopped making progress aborts itself after {formatSeconds(WedgeWatchdogMs)} and releases the file), or clear the read-only flag."
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotReplaceable, message: "could not remove the previous build output at {outputPath} — it is locked or read-only, so this build cannot replace it, and the PREVIOUS build's binary is still in place and will answer anything you run next. {likelyCause}"))
 		try refuseCompile(project)
 	end 'undeletable'
 end 'discardPreviousOutput'

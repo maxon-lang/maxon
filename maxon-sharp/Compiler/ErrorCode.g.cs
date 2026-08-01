@@ -790,6 +790,13 @@ public enum ErrorCode {
   /// or read-only. Refused up front rather than at the write, because the write is logged and
   /// swallowed: carrying on would print "Wrote N bytes" and exit 0 over an untouched STALE binary,
   /// which is the exact confident-wrong-answer this deletion exists to prevent.
+  /// The message names the LIKELY cause as well as the mechanical one: in practice the holder is a
+  /// spec-test or a build of this same tree that has not exited yet, and the compiler cannot
+  /// identify it (that would need RestartManager/NtQuerySystemInformation, imported nowhere here).
+  /// It also states that the previous binary SURVIVED -- this is the one branch where a failed build
+  /// leaves an output behind, so a `;`-chained build-then-test runs the stale one. The wait-or-kill
+  /// deadline it quotes is `WedgeWatchdogMs` (maxon-shv2/Testing/SpecWorkerPool.maxon), read from
+  /// the constant so the message and the watchdog cannot disagree.
   /// </summary>
   BinaryOutputNotReplaceable = 6002,
 

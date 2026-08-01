@@ -170,7 +170,12 @@ let WedgeWatchdogGraceMs = 180 * MillisPerSecond
 // green-thread runtime — and the case for a deadline on a poll loop is independent of them: a loop
 // that cannot deadlock can only fail by never finishing, and that failure has no symptom unless
 // something is counting.
-let WedgeWatchdogMs = SpecSpawnTimeoutMs + WedgeWatchdogGraceMs
+//
+// ⚠ EXPORTED BECAUSE IT IS ALSO THE ANSWER TO "HOW LONG CAN THIS TREE'S BINARY STAY LOCKED?" — it is
+// the only bound that exists on an abandoned run's lifetime, so it is the number `E6002` quotes when
+// it tells an operator whether to wait or to kill (see `Compiler.discardPreviousOutput`). Quoted, not
+// re-spelled: a prose "~5 min" in that message would be a second copy of this sum, free to drift.
+export let WedgeWatchdogMs = SpecSpawnTimeoutMs + WedgeWatchdogGraceMs
 
 // How long a worker gets to exit after it has been sent EXIT and had its stdin closed. By the time
 // `shutdownPool` runs, every worker has already printed its last WORKER_READY and is parked on a
@@ -894,8 +899,9 @@ end 'abortOnDeadWorker'
 
 // `1234` as `1.2 s`. The wedge report's numbers span three orders of magnitude — a slot re-dispatched
 // milliseconds ago sits beside one outstanding for two minutes — and a raw millisecond count buries
-// the only digit that separates them.
-function formatSeconds(ms DurationMs) returns String
+// the only digit that separates them. Exported for the same reason `WedgeWatchdogMs` is: `E6002`
+// quotes that deadline at an operator, and an operator-facing duration has exactly one spelling here.
+export function formatSeconds(ms DurationMs) returns String
 	let whole = ms / MillisPerSecond
 	// Scaled by the tenths-per-second BEFORE the divide, so the one divisor in this function is
 	// `MillisPerSecond` twice over rather than a second constant derived from it.
