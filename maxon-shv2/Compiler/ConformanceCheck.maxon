@@ -28,21 +28,6 @@
 // `formatInterfaceMethodSignature` do no binding of their own. See that function's header for why this is
 // v1's shape and not the bootstrap's two.
 
-// One interface method paired with the interface it was DECLARED on — the source interface, so a method
-// inherited via `extends` can be tagged `(from BaseInterface)` in a missing-method report.
-type CollectedInterfaceMethod
-	export let method as InterfaceMethodSig
-	export let sourceInterfaceName as ByteArray
-
-	export static function create(method InterfaceMethodSig, sourceInterfaceName ByteArray) returns CollectedInterfaceMethod
-		return Self{method: method, sourceInterfaceName: sourceInterfaceName}
-	end 'create'
-end 'CollectedInterfaceMethod'
-
-typealias CollectedInterfaceMethodArray = Array with CollectedInterfaceMethod
-
-typealias InterfaceNameSet = Set with ByteArray
-
 // Validate every `type X implements …` conformance whole-program (P1.7a slice 1). Records E3015 (unknown
 // interface) / E3016 (partial or wrong-signature implementation); the pipeline's error gate stops the
 // build. A conformance-free program short-circuits before building the function index — the same
@@ -297,9 +282,7 @@ end 'checkOneInterfaceConformance'
 // INSTANCE method) and wrong about how far that reaches: the fix is to make the lookup receiver-aware
 // (`signatureMatches`' staticness test), not to stop asking.
 function checkInterfaceMethods(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray, signatures ProgramSignatures)
-	var collected = CollectedInterfaceMethodArray.create()
-	var visited = InterfaceNameSet.create()
-	collectInterfaceMethods(project, iface: iface, ifaceName: entry.interfaceName, associatedTypeNames: iface.associatedTypeNames, boundTypeNames: entry.withArgs, out: collected, visited: visited)
+	let collected = collectInterfaceMethods(project, iface: iface, associatedTypeNames: iface.associatedTypeNames, boundTypeNames: entry.withArgs)
 
 	var missing = StringArray.create()
 	var wrongSignature = StringArray.create()
@@ -318,12 +301,17 @@ function checkInterfaceMethods(project Project, functionsByName FunctionNameInde
 	end 'hasWrongSignature'
 end 'checkInterfaceMethods'
 
-// Collect an interface's methods and, recursively, its `extends` parents' — each tagged with the interface
-// it was DECLARED on (so a missing inherited method reports `(from Parent)`). `visited` guards against a
-// cyclic `extends` chain (a parent already seen contributes nothing). Own methods precede inherited ones,
-// matching the oracle's `CollectInterfaceMethods` order.
+// The interface's requirements, transitively through `extends`, each SUBSTITUTED under this conformance's
+// associated-type bindings.
 //
-// ⭐⭐ **THIS IS WHERE ASSOCIATED TYPES ARE SUBSTITUTED, AND IT IS THE ONLY PLACE THEY ARE (R5).** A
+// ⭐⭐ **THE WALK ITSELF IS `IrInterface.interfaceWitnessSlots` AND IS NO LONGER WRITTEN HERE (R10c).** It
+// answers "which requirement is slot `i` of this interface?", and the witness-table BUILDER and the
+// dispatch RESOLVER ask the identical question — so the requirement list a conformance is checked against
+// and the slot list a table is laid out by are ONE answer. They were not: this walk had the `extends` chain
+// and the other two did not, which is the whole of R10c. Order, the diamond rule and the cyclic-chain guard
+// are stated there, once.
+//
+// ⭐⭐ **WHAT STAYS HERE IS THE SUBSTITUTION, AND IT IS THE ONLY PLACE ASSOCIATED TYPES ARE SUBSTITUTED (R5).** A
 // collected requirement is ALREADY substituted, so the two things that read one — `signatureMatches`, which
 // decides the verdict, and `formatInterfaceMethodSignature`, which writes the sentence — are reading one
 // string rather than each deriving their own. That is v1's shape (`substituteMethodSig` builds
@@ -338,37 +326,31 @@ end 'checkInterfaceMethods'
 // vocabulary the two interfaces share), and a parent declaring a name of its own is left denoting itself —
 // exactly as before this rung. `boundTypeNames` is indexable at every position `associatedTypeNames` has,
 // because `checkOneInterfaceConformance` returned early otherwise.
-function collectInterfaceMethods(project Project, iface IrInterface, ifaceName ByteArray, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray, out CollectedInterfaceMethodArray, visited InterfaceNameSet)
-	if visited.contains(ifaceName) 'alreadySeen'
-		return
-	end 'alreadySeen'
-	visited.insert(ifaceName)
+//
+// An interface declaring no associated type — every conformance in the corpus outside
+// `specs-shv2/associated-types.md` — hands the slot list straight back, so the common path allocates
+// nothing beyond the walk's own list. That guard sits HERE rather than inside `substituteAssociatedTypes`
+// (where it used to, and where it is now unreachable) because only here can it also skip rebuilding the
+// ARRAY, which is the larger of the two allocations it saves.
+function collectInterfaceMethods(project Project, iface IrInterface, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns CollectedInterfaceMethodArray
+	let slots = interfaceWitnessSlots(project.interfaces, iface: iface)
+	if associatedTypeNames.count() == 0 'noAssociatedTypes'
+		return slots
+	end 'noAssociatedTypes'
 
-	for i in 0 upto iface.methods.count() 'eachMethod'
-		let declared = try iface.methods.get(i) otherwise panic("collectInterfaceMethods: methods.get OOB at {i}")
-		out.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(declared, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames), sourceInterfaceName: ifaceName))
-	end 'eachMethod'
+	var substituted = CollectedInterfaceMethodArray.create()
+	for i in 0 upto slots.count() 'eachSlot'
+		let slot = try slots.get(i) otherwise panic("collectInterfaceMethods: slots.get OOB at {i} below count {slots.count()}")
+		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames), sourceInterfaceName: slot.sourceInterfaceName))
+	end 'eachSlot'
 
-	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'
-		let parentName = try iface.extendsInterfaces.get(j) otherwise panic("collectInterfaceMethods: extendsInterfaces.get OOB at {j}")
-		match lookupInterface(project.interfaces, name: parentName) 'parent'
-			found(parentIface) then collectInterfaceMethods(project, iface: parentIface, ifaceName: parentName, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames, out: out, visited: visited)
-			// A parent named by `extends` that does not resolve is not diagnosed here (slice 1 does not
-			// report a bad `extends` target); its methods simply cannot be projected.
-			notFound then break 'parent'
-		end 'parent'
-	end 'eachParent'
+	return substituted
 end 'collectInterfaceMethods'
 
 // One requirement with every associated type replaced by what the conformance bound it to (R5) — the
-// substitution the header above says happens exactly once. An interface that declares no associated type
-// (every conformance in the corpus outside `specs-shv2/associated-types.md`) hands its own signature
-// straight back, so the common path allocates nothing at all.
+// substitution the header above says happens exactly once. Reached only when the interface declares at
+// least one associated type; the "declares none" fast path is its caller's (see there for why).
 function substituteAssociatedTypes(method InterfaceMethodSig, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns InterfaceMethodSig
-	if associatedTypeNames.count() == 0 'noAssociatedTypes'
-		return method
-	end 'noAssociatedTypes'
-
 	var paramTypeNames = ByteArrayArray.create()
 	for i in 0 upto method.paramTypeNames.count() 'eachParam'
 		paramTypeNames.push(boundTypeName(try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i}"), associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames))
@@ -955,27 +937,6 @@ function formatInterfaceMethodSignature(method InterfaceMethodSig) returns Strin
 	return assembleMethodSignature(method.name, paramNames: method.paramNames, paramTypes: method.paramTypeNames, returnType: method.returnTypeName, isStatic: method.isStatic)
 end 'formatInterfaceMethodSignature'
 
-// ⭐ **THE ONE `[static ]name(p0 t0, p1 t1) returns ret` SPELLING**, shared by the interface (expected) and
-// impl (actual) renderers so the two halves of a wrong-signature message cannot drift in format.
-// `paramNames` and `paramTypes` are parallel source-string columns.
-//
-// The `static ` prefix is what makes a RECEIVER-KIND disagreement readable (R9): without it a static
-// requirement met by an instance method of the same shape renders `tag() returns Code (expected tag()
-// returns Code)` — a rejection whose two halves are the identical string, telling the author to change
-// something that already looks right. It costs nothing on every other message, because until R9 no static
-// requirement could reach a diagnostic at all.
-function assembleMethodSignature(name ByteArray, paramNames ByteArrayArray, paramTypes ByteArrayArray, returnType ByteArray, isStatic bool) returns String
-	var rendered = "static {String.from(name)}(" if isStatic else "{String.from(name)}("
-	for i in 0 upto paramNames.count() 'eachParam'
-		if i > 0 'separator'
-			rendered = "{rendered}, "
-		end 'separator'
-		let paramName = try paramNames.get(i) otherwise panic("assembleMethodSignature: paramNames.get OOB at {i}")
-		let paramType = try paramTypes.get(i) otherwise panic("assembleMethodSignature: paramTypes.get OOB at {i}")
-		rendered = "{rendered}{String.from(paramName)} {String.from(paramType)}"
-	end 'eachParam'
-	return "{rendered}) returns {String.from(returnType)}"
-end 'assembleMethodSignature'
 
 // Render an impl method's RETURN as a source string — `void` for a void return, else the type through the
 // shared renderer. Returns a ByteArray so it feeds BOTH the string comparison in `signatureMatches` and

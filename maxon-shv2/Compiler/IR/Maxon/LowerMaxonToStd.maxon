@@ -1214,8 +1214,13 @@ type MaxonToStdLowering
 		end 'cached'
 		self.emittedWitnessTables.insert(label)
 
+		// ⭐ **THE SLOT LIST IS THE INTERFACE'S TRANSITIVE REQUIREMENT SET, not `iface.methods` (R10c)** — the
+		// SAME list `Parser.findWitnessDispatchCandidates` numbers its `methodIndex` against, so the slot this
+		// pass stamps and the offset the caller compiles are one answer. Reading `iface.methods` here left an
+		// `extends`-inherited requirement with no slot at all.
 		let iface = self.resolveWitnessInterface(interfaceName)
-		let methodCount = iface.methods.count()
+		let slots = interfaceWitnessSlots(self.interfaces, iface: iface)
+		let methodCount = slots.count()
 
 		// `methodCount@0`, then zero-fill through the header (`parentTablePtr@8`, `flags@16`) and every method
 		// slot — the writer patches the slots via the relocations below. `scalarImage` is the SAME little-endian
@@ -1227,8 +1232,11 @@ type MaxonToStdLowering
 		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob)
 
 		for i in 0 upto methodCount 'eachMethod'
-			let method = try iface.methods.get(i) otherwise panic("ensureWitnessTable: methods.get OOB at {i} below count {methodCount}")
-			self.globalData.recordFuncAbs64InRdata(self.witnessSlotImpl(typeName, interfaceName: interfaceName, method: method), rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
+			let slot = try slots.get(i) otherwise panic("ensureWitnessTable: slots.get OOB at {i} below count {methodCount}")
+			// The DECLARING interface, never this table's — `ConformanceCheck.recordWitnessSlotImpl` files its
+			// selection under the interface the requirement was declared on, so an inherited slot's key is the
+			// PARENT's. Passing `interfaceName` here would miss every projected slot's selection and panic.
+			self.globalData.recordFuncAbs64InRdata(self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method), rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
 		end 'eachMethod'
 
 		return label
@@ -1269,7 +1277,7 @@ type MaxonToStdLowering
 	// local is the MISS: a witness table is only built for a constraint whose interface the parser already
 	// resolved, so an unresolved name here is an internal invariant break, not a user error.
 	// ⚠ **"same-file" WAS the rule and R8 DELETED IT**: the parser now resolves a constraint's interface
-	// against the whole-program declaration index (`lookupInterfaceForParse` → `signatures.interfaceOf`), so it
+	// against the whole-program declaration index (`lookupInterface` over `signatures.interfaceMap()`), so it
 	// resolves an interface declared below its use or in any other file. That widens what reaches here and does
 	// NOT weaken the invariant — this store (`project.interfaces`, merged after every file parses) is a superset
 	// of what the parse-time index could answer, so a name the parser resolved is necessarily present here.

@@ -584,6 +584,32 @@ export enum ErrorCode
 	// whose `throws` names an interface is the abstract error channel `Error` exists for, is dispatched
 	// through the witness ABI, and is guarded separately by E3016.
 	throwsTypeNotAnErrorEnum = "E3113"
+	// A method call on a constrained type parameter names something that MORE THAN ONE of the
+	// requirements its `where` constraints supply could be. An interface and its `extends` parents
+	// may each declare the name, and two constraints on one parameter may each declare it too --
+	// and those are DISTINCT requirements occupying DISTINCT witness-table slots, so "they are both
+	// called `label` and both take one argument" does not make them interchangeable: each slot holds
+	// a different address.
+	// A witness dispatch compiles ONE slot offset into the calling function, so there is nothing to
+	// choose by and nothing a later pass could repair. Taking the first candidate is what the search
+	// did before this code existed, and it is a silent wrong function pointer rather than a
+	// diagnostic -- which is why the ambiguity is refused rather than resolved by declaration order.
+	// The message names BOTH claimants by their DECLARING interface, since that is the interface the
+	// author has to change; the cure is to rename one requirement or to drop one constraint.
+	semanticAmbiguousWitnessDispatch = "E3114"
+	// A method call on a constrained type parameter names a method that the parameter's `where`
+	// constraints supply SEVERAL requirements for, and the call's argument count matches none of
+	// them.
+	// It is E3036's case (an arity mismatch) at a call site where E3036 cannot be written: that code
+	// names ONE callee and ONE expected count, and here there are several, none of which is the one
+	// the author meant. Blaming an arbitrary candidate would print a true sentence about the wrong
+	// requirement -- the exact failure `interface Derived extends Base` produced before the
+	// requirement list became transitive, when `Derived.label` was reported to expect one argument
+	// on a call to an inherited zero-argument `label()`.
+	// With exactly ONE requirement of the name there is nothing to select between and the arity is
+	// reported by E3036 as it always was, so this code is reached only where a choice genuinely
+	// existed.
+	semanticNoWitnessRequirementForArgCount = "E3115"
 
 	// a declaration in the source took a function name that belongs to the compiler.
 	// Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations may

@@ -212,6 +212,16 @@ export union ParseError implements Error
 	witnessArgCountMismatch(callee String, expected ParamCount, got ParamCount, line LineNumber, column ColumnNumber)
 	witnessUnknownArgLabel(callee String, label String, line LineNumber, column ColumnNumber)
 	witnessDuplicateArg(callee String, paramName String, line LineNumber, column ColumnNumber)
+	// ⭐⭐ **THE TWO WAYS A DISPATCH FAILS TO NAME EXACTLY ONE REQUIREMENT (R10c).** A type parameter's
+	// constraints can now supply several requirements under one name — `interface Derived extends Base` where
+	// both declare `label` is the ordinary spelling of it, and two unrelated constraints declaring one name is
+	// the other — so "which requirement?" became a real question with three possible answers. `ambiguous`
+	// names both claimants because a witness dispatch binds ONE table slot and there is nothing to choose by;
+	// `noRequirementOfArity` lists them all because no single one of them is what the author meant, so naming
+	// one would be a true sentence about the wrong requirement. Both render off `renderWitnessRequirement`, so
+	// the two messages describe a requirement the same way.
+	ambiguousWitnessDispatch(method String, typeParamName String, argCount ParamCount, first String, second String, line LineNumber, column ColumnNumber)
+	noWitnessRequirementOfArity(method String, typeParamName String, argCount ParamCount, available String, line LineNumber, column ColumnNumber)
 	// A VALUE-returning function whose body can fall off its end without returning.
 	// Renders as E3013, positioned at the function's name. Detected here, not in a
 	// later pass, because the parser is what knows the block its last statement left
@@ -1828,31 +1838,34 @@ function overloadBlockingConsume(consume CalleeConsume) returns bool
 	end 'c'
 end 'overloadBlockingConsume'
 
-// ⭐⭐ **AN `interface` MAY NOT DECLARE TWO REQUIREMENTS OF ONE NAME (R10) — because a witness dispatch
-// resolves a method to its TABLE SLOT BY NAME.** `IrInterface.interfaceMethodIndex` scans the interface's
-// methods for the first one so named, so a second requirement of that name owns a slot no call site can
-// reach; the call that meant it is slotted against the FIRST one's formals and told
-// `'Iface.m' expects 0 argument(s) but 1 were provided` — a sentence that is FALSE about an interface which
-// declares exactly that member. A declaration nothing can dispatch is refused where it is written.
+// ⭐⭐ **ONE `interface` MAY NOT DECLARE TWO REQUIREMENTS OF ONE NAME (R10) — because `witnessSlotImplKey`
+// CARRIES NO ARITY, so two such requirements are two SLOTS under ONE key.** `ConformanceCheck` files the
+// member it accepted for a requirement under `(conformer, declaring interface, method NAME)`
+// (`recordWitnessSlotImpl`) and `LowerMaxonToStd.ensureWitnessTable` stamps each slot's relocation from that
+// filing. Two same-named requirements of one interface collide there: the first selection is filed, the
+// second either reports a spurious E3111 or leaves BOTH slots stamped from one member. This refusal is what
+// keeps that key injective over slots.
+//
+// ⚠⚠ **THE REASON USED TO BE "a dispatch resolves by NAME alone", AND R10c FALSIFIED IT.**
+// `findWitnessDispatchCandidates` now collects every requirement of the name and `pickWitnessDispatchByArity`
+// selects among them, so a second same-named requirement is perfectly reachable — which is exactly what
+// `where-clauses.inherited-overload-dispatch` pins ACROSS an `extends` edge, where the declaring-interface
+// half of the key differs and the collision does not arise. So the two spellings of the same pair now get
+// OPPOSITE verdicts, decided by which interface the author wrote each in. That split is real, it is not
+// defensible on its own terms, and closing it means widening the impl key to carry the requirement's arity
+// — which moves R10's conflicting-conformance detection with it. It is a rung, and it is NOT this one.
 //
 // ⚠ **R10 IS WHAT MADE THE SHAPE REACHABLE, WHICH IS WHY THE REFUSAL BELONGS TO IT.** Before R10 conformance
 // resolved a requirement by the bare `Type.method` key, which under D7 only the FIRST-declared member of an
 // overload set holds — so at most ONE of two same-named requirements could ever be satisfied and the program
 // was rejected anyway, as a wrong-signature E3016 about the other. Matching a requirement against the whole
-// overload set makes such a type CONFORM, and the false arity message would then be all an author ever saw.
-// So this changes no program's verdict; it replaces a misleading reason with the true one.
+// overload set makes such a type CONFORM, so without this the collision above would be all that was left.
 //
-// ⚠ It is a REFUSAL and not a widening of the dispatch on purpose: picking the right slot by arity and
-// argument types is overload resolution at a witness call, which needs a candidate list the parse-time
-// dispatch does not have (`findWitnessDispatch` runs while the call's arguments are still tokens) — its own
-// rung, not a line here.
-//
-// Only the NAME is compared, never the formals: two requirements that differ in shape are exactly the case
-// that cannot be dispatched, so a signature test would admit the broken half.
+// Only the NAME is compared, never the formals — because the NAME is the whole of what the impl key holds.
 function requireUnclaimedInterfaceRequirementName(nameTok Token, interfaceName ByteArray, declaredSoFar InterfaceMethodSigArray) throws ParseError
 	for declared in declaredSoFar 'eachDeclared'
 		if declared.name.equals(nameTok.value) 'duplicate'
-			throw ParseError.unsupported("interface '{String.from(interfaceName)}' declares two requirements named '{String.from(nameTok.value)}' — a witness dispatch resolves an interface method to its table slot by NAME alone, so the second could never be reached. Give the requirements distinct names", line: nameTok.line, column: nameTok.column)
+			throw ParseError.unsupported("interface '{String.from(interfaceName)}' declares two requirements named '{String.from(nameTok.value)}' — one conforming type files ONE accepted member per (interface, method NAME), so the two would contend for one witness-table entry. Give the requirements distinct names, or declare one of them on an interface this one `extends`", line: nameTok.line, column: nameTok.column)
 		end 'duplicate'
 	end 'eachDeclared'
 end 'requireUnclaimedInterfaceRequirementName'
@@ -2780,6 +2793,30 @@ end 'withWitnessReceiver'
 export function witnessArgAnchor(argRanges SourceRangeArray, argIndex ParamCount) returns SourceRange
 	return try argRanges.get(argIndex) otherwise panic("witnessArgAnchor: argRanges.get OOB at {argIndex} below count {argRanges.count()} — the columns `parseCallArgs` fills are parallel by construction")
 end 'witnessArgAnchor'
+
+// ⭐ **ONE CANDIDATE REQUIREMENT, AS THE AUTHOR WOULD RECOGNIZE IT (R10c)** — its DECLARING interface (under
+// `where T is Derived` an inherited requirement is `Base.label()`, and naming `Derived` would be the very
+// falsehood R10c removed) joined to `assembleMethodSignature`, the ONE `name(p t) returns r` spelling the
+// conformance diagnostics already print a requirement with. A second format here would mean the same
+// requirement described two ways depending on which pass complained about it. Both callers are FAILURE
+// paths, so the interpolations cost a compiling program nothing.
+function renderWitnessRequirement(target WitnessDispatchTarget) returns String
+	return "{String.from(target.declaringInterfaceName)}.{assembleMethodSignature(target.methodName, paramNames: target.paramNames, paramTypes: target.paramTypeNames, returnType: target.returnTypeName, isStatic: target.isStatic)}"
+end 'renderWitnessRequirement'
+
+// Every candidate, rendered and joined through `appendCommaSeparated` — the ONE `", "` a diagnostic's list
+// is punctuated with — for the "no requirement of that name takes N arguments" reject, which offers the menu
+// instead of blaming one of them (R10c). A rendered requirement always carries at least `name() returns T`,
+// so it meets that joiner's non-empty-item requirement.
+function renderWitnessRequirements(candidates WitnessDispatchTargetArray) returns String
+	var rendered = ""
+	for i in 0 upto candidates.count() 'eachCandidate'
+		let candidate = try candidates.get(i) otherwise panic("renderWitnessRequirements: candidates.get OOB at {i} below count {candidates.count()}")
+		rendered = appendCommaSeparated(rendered, item: renderWitnessRequirement(candidate))
+	end 'eachCandidate'
+
+	return rendered
+end 'renderWitnessRequirements'
 
 // A three-element call argument list — `__arr_set(arr, index, value)`'s triple. `pairArgs`' sibling.
 function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
@@ -9895,19 +9932,21 @@ export type Parser
 	end 'checkConformanceArgsAgainstArity'
 
 	// ⭐ **THE ONE PLACE THE NUMBER COMES FROM (R6)** — how many associated types conforming to
-	// `interfaceName` binds, off the ONE parse-time interface door (`lookupInterfaceForParse`). Its two
+	// `interfaceName` binds, off the ONE interface-lookup rule (`IrInterface.lookupInterface`, asked of this
+	// phase's store — `signatures.interfaceMap()`). Its two
 	// readers ask the same question and need different things from the miss, so the miss is a CASE and
 	// not a default: see `ConformanceUsesArity` for why folding them into one count is precisely the
 	// shape that hides a false reject.
 	//
-	// ⚠ **IT COUNTS THE INTERFACE'S OWN `uses` NAMES AND DELIBERATELY NOT ITS `extends`-INHERITED ONES,
-	// AND THAT IS AN INCREMENTALITY CONSTRAINT RATHER THAN A PREFERENCE.** `associatedTypeNames.count()`
-	// is a fact that RIDES the signature index's hash (`recordInterfaceDeclaration`), which is what keys
-	// every parse memo; `extendsInterfaces` deliberately does NOT ride it, because nothing in a parse
-	// reads it. Walking the `extends` chain here would make a parse's answer depend on an unhashed fact,
-	// so adding `extends Base` to an interface would change what another file's conformance is told
-	// while that file never re-parsed. Widening this to the transitive count is therefore not a local
-	// change — it needs `extendsInterfaces` to ride the hash first, in `SignatureIndex`.
+	// ⚠ **IT COUNTS THE INTERFACE'S OWN `uses` NAMES AND NOT ITS `extends`-INHERITED ONES — a SCOPE
+	// statement, and no longer an incrementality one (R10c).** It used to be both: the count RIDES the
+	// signature index's hash (`recordInterfaceDeclaration`), which keys every parse memo, and
+	// `extendsInterfaces` did not ride it — so walking the chain here would have made a parse's answer
+	// depend on an unhashed fact, and adding `extends Base` to an interface would change what another
+	// file's conformance is told while that file never re-parsed. **`extendsInterfaces` rides the hash
+	// now** (R10c needed it for the witness slot list), so that objection is discharged and what remains
+	// is only that shv2 does not inherit associated-type BINDINGS at all — see below. Widening the count
+	// without also inheriting the binding would accept an argument nothing then substitutes.
 	//
 	// The consequence today is bounded and is a MESSAGE change, never an accept becoming a reject:
 	// `interface Sub extends Base` (where `Base uses Element`) leaves `Sub` with an empty own list, so
@@ -9916,7 +9955,7 @@ export type Parser
 	// (`ConformanceCheck.checkOneInterfaceConformance`). The day inherited bindings land, this count and
 	// that hash move together.
 	function conformanceUsesArity(interfaceName ByteArray) returns ConformanceUsesArity
-		match self.lookupInterfaceForParse(interfaceName) 'lookup'
+		match lookupInterface(self.signatures.interfaceMap(), name: interfaceName) 'lookup'
 			found(iface) then return ConformanceUsesArity.declared(iface.associatedTypeNames.count())
 			notFound then return ConformanceUsesArity.unresolvable
 		end 'lookup'
@@ -22179,16 +22218,37 @@ export type Parser
 		let protocol = requireBuiltinInterface(EquatableInterfaceName if isEquality else ComparableInterfaceName)
 		let method = try protocol.methods.get(0) otherwise panic("requireOperatorWitness: the synthesized protocol '{String.from(protocol.name)}' declares no method — a comparison operator dispatches its SOLE method (`singleMethodInterface`), so `builtinInterface` must give it exactly one")
 
-		// The search itself runs by METHOD (the shared core `.equals()`/`.compare()` dispatch uses), so the hit
-		// still has to be PROVED to be the protocol's — see `requireProtocolShape`.
-		match try self.findWitnessDispatch(paramPos, methodName: method.name, errorTok: opTok) 'lookup'
-			found(target) then return try self.requireProtocolShape(target, protocolName: protocol.name, want: method, paramPos: paramPos, op: op, opTok: opTok)
-			notFound then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(protocol.name), line: opTok.line, column: opTok.column)
-		end 'lookup'
+		// The search itself runs by METHOD (the shared core the `.equals()`/`.compare()` dispatch uses), so a hit
+		// still has to be PROVED to be the protocol's — see `witnessTargetIsProtocol`. It is now the FILTER
+		// rather than a check applied to whichever candidate came first, which is strictly stronger: a
+		// constraint declaring a non-protocol `equals` used to MASK a genuinely `Equatable` constraint written
+		// after it, since the search stopped at the first name match and then rejected it.
+		var protocolShaped = WitnessDispatchTargetArray.create()
+		let candidates = try self.findWitnessDispatchCandidates(paramPos, methodName: method.name, errorTok: opTok)
+		for i in 0 upto candidates.count() 'eachCandidate'
+			let candidate = try candidates.get(i) otherwise panic("requireOperatorWitness: candidates.get OOB at {i} below count {candidates.count()}")
+			if witnessTargetIsProtocol(candidate, want: method) 'isTheProtocol'
+				protocolShaped.push(candidate)
+			end 'isTheProtocol'
+		end 'eachCandidate'
+
+		match pickSoleWitnessCandidate(protocolShaped) 'pick'
+			one(target) then return target
+			// A near-miss reports the SAME E3005 as no constraint at all, because the author's cure is the same
+			// sentence: constrain the parameter with the protocol. (Constructed inline rather than through a
+			// shared factory — `throw self.helperReturningAParseError(…)` leaks the boxed union under the
+			// bootstrap's refcounting; see `nestedUnionPayloadMessage`.)
+			none then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(protocol.name), line: opTok.line, column: opTok.column)
+			// TWO constraints genuinely shaped like the protocol. They are two DISTINCT witness slots holding
+			// two DISTINCT conformers' impls, so "they are both `Equatable`" does not make them interchangeable
+			// — the operator would silently take whichever was written first. Same reject as the `.method()`
+			// form's, for the same reason.
+			ambiguous(first, second) then throw ParseError.ambiguousWitnessDispatch(String.from(method.name), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), argCount: method.paramTypeNames.count(), first: renderWitnessRequirement(first), second: renderWitnessRequirement(second), line: opTok.line, column: opTok.column)
+		end 'pick'
 	end 'requireOperatorWitness'
 
 	// ⭐ **A CONSTRAINT DECLARING A METHOD OF THE PROTOCOL'S NAME IS NOT THE PROTOCOL** — and the verdict below
-	// reads the dispatch result as if it were. `findWitnessDispatch` matches by METHOD NAME because the
+	// reads the dispatch result as if it were. `findWitnessDispatchCandidates` matches by METHOD NAME because the
 	// `.method()` dispatch it is shared with must, so a USER interface with its own `compare`/`equals` satisfies
 	// it: **MEASURED — an `interface Weird` declaring `function compare(other Self) returns Integer` made
 	// `a < b` mean `a.compare(b) == 0`, i.e. "less than" whenever the author's `compare` said EQUAL; the twin
@@ -22231,13 +22291,14 @@ export type Parser
 	// The `.method()` form reaches neither: `slottedWitnessArgs` checks its arity against the interface, and
 	// its `Self` formals really are `Self`. The operator form was the last door left open, and closing the
 	// arity half is what makes `requireGenuineSelfArgs`' missing-actual case unrepresentable.
-	function requireProtocolShape(target WitnessDispatchTarget, protocolName ByteArray, want InterfaceMethodSig, paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
-		if not target.returnTypeName.equals(want.returnTypeName) or throwsClauseIsThrowing(target.throwsClause) or not interfaceFormalsMatch(target.paramTypeNames, b: want.paramTypeNames) 'notTheProtocol'
-			throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(protocolName), line: opTok.line, column: opTok.column)
-		end 'notTheProtocol'
-
-		return target
-	end 'requireProtocolShape'
+	//
+	// ⚠ **IT IS A PREDICATE AND NOT A REJECT, AND IT LIVES IN `IrInterface` (R10c).** It used to throw E3005
+	// at the single candidate the name search had already committed to; it is now the FILTER that search
+	// feeds, so a program constraining a parameter by BOTH a real protocol and a look-alike picks the real one
+	// instead of being refused by whichever the author wrote first. The reject stays here, in
+	// `requireOperatorWitness`'s empty arm, where "nothing here is the protocol" is the same fact as "no
+	// constraint declares it"; the shape TEST went to `IrInterface.witnessTargetIsProtocol`, beside
+	// `interfaceFormalsMatch`, because it reads no `self`.
 
 	// ⭐ **REJECT ANY NON-`Self` VALUE SUPPLIED FOR A `Self`-TYPED WITNESS-METHOD ARGUMENT (P1.7a slice 2b).** A
 	// witness-dispatched method whose formal is `Self` (`Equatable.equals`'s and `Comparable.compare`'s `other
@@ -22254,7 +22315,7 @@ export type Parser
 	// 2b-vi).** It used to skip a formal with no actual, "an arity concern left to the caller" — and no caller
 	// had it: the `.method()` form performed no arity check at all, and the operator form supplies one actual
 	// to whatever arity the constraint's method declares. Both holes are closed (`slottedWitnessArgs` slots
-	// against the interface's `paramNames`; `requireProtocolShape` requires the protocol's own formals), so a
+	// against the interface's `paramNames`; `witnessTargetIsProtocol` requires the protocol's own formals), so a
 	// missing actual is a compiler defect rather than a program's, and it panics instead of quietly passing an
 	// under-supplied dispatch through to the emit.
 	function requireGenuineSelfArgs(target WitnessDispatchTarget, args ValueIdArray, what String, receiverParamPos TypeParamId, errorTok Token) throws ParseError
@@ -27102,7 +27163,12 @@ export type Parser
 	function dispatchWitnessMethod(func IrFunction, receiver ValueId, resultUsed bool) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let receiverParamPos = self.valueNameId(receiver)
-		let target = try self.resolveWitnessDispatch(receiverParamPos, methodTok: methodTok)
+		// ⭐ **THE CANDIDATES ARE FOUND BEFORE THE ARGUMENTS AND SELECTED AFTER THEM (R10c).** "Do the
+		// constraints provide this name at all?" is answerable without reading a single argument, so it is
+		// still asked first and still reports before an argument expression can raise anything of its own —
+		// which is what keeps this rung from moving any existing diagnostic. "Which of them did you mean?"
+		// cannot be answered until the argument COUNT is known, so it waits.
+		let candidates = try self.requireWitnessDispatchCandidates(receiverParamPos, methodTok: methodTok)
 
 		try self.consume(TokenKind.leftParen)
 		// FRESH columns holding the USER's arguments only — the borrowed receiver is prepended after
@@ -27126,6 +27192,7 @@ export type Parser
 		// than letting the summary lookup miss — see there.
 		try self.parseCallArgs(func, callee: EmptySourceText, anchor: methodTok, args: userArgs, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: true)
 		let rparenTok = try self.consume(TokenKind.rightParen)
+		let target = try self.pickWitnessDispatchByArity(candidates, argCount: userArgs.count(), receiverParamPos: receiverParamPos, methodTok: methodTok)
 		let args = try self.slottedWitnessArgs(target, receiver: receiver, userArgs: userArgs, argLabels: argLabels, argRanges: argRanges, methodTok: methodTok)
 
 		// A `Self`-typed formal (`equals(other Self)`) requires an argument that is a value of `T` — a concrete
@@ -27169,12 +27236,16 @@ export type Parser
 	// What a witness dispatch's argument diagnostics BLAME: `<Interface>.<method>`, which is what the call
 	// actually binds against. A direct call names its callee; a dispatch has no callee name to name — the
 	// concrete impl is not known in the shared body, and naming one conformer's would be a lie at every
-	// other instantiation. The interface comes from the constraint the method was resolved through
-	// (`findWitnessDispatch` stored its index), so it is derived on the COLD path and costs a dispatch that
-	// compiles nothing.
+	// other instantiation.
+	//
+	// ⚠ **THE DECLARING INTERFACE, NOT THE CONSTRAINT'S (R10c).** It used to read the constraint's name out of
+	// `enclosingWhereConstraints`, which is the same name for every requirement an interface supplies —
+	// including the ones it merely INHERITS. Under `where T is Derived` with `interface Derived extends Base`
+	// that made `Base`'s `label()` report as `Derived.label`, which is a requirement `Derived` does not
+	// declare. The name now travels ON the resolved target, so the interface a message names is the interface
+	// the message's arity, formals and labels were all read off.
 	function witnessCalleeName(target WitnessDispatchTarget) returns String
-		let constraint = try self.enclosingWhereConstraints.get(target.constraintIndex) otherwise panic("witnessCalleeName: enclosingWhereConstraints.get OOB at {target.constraintIndex} — the index came from `findWitnessDispatch`'s own walk of this array")
-		return "{String.from(constraint.interfaceName)}.{String.from(target.methodName)}"
+		return "{String.from(target.declaringInterfaceName)}.{String.from(target.methodName)}"
 	end 'witnessCalleeName'
 
 	// ⭐ **THE ONE DOOR A `witnessDispatch` IS EMITTED THROUGH** — the `.method()` form and the comparison-
@@ -27266,73 +27337,92 @@ export type Parser
 		return (try target.paramTypeNames.get(formalIndex) otherwise panic("witnessFormalIsFloat: paramTypeNames.get OOB at {formalIndex} below count {target.paramTypeNames.count()} — a dispatch reaching here has one actual per formal")).equals(FloatConformerName)
 	end 'witnessFormalIsFloat'
 
-	// Resolve `<receiver>.<method>()` against the enclosing type's `where` constraints (P1.7a slice 2a): find the
-	// constraint on the receiver's type parameter whose interface declares `method`, returning its slot index,
-	// the method's decl-order index, and its return type. The interface is resolved SAME-FILE (declared before
-	// its constrained use), so a forward/cross-file interface is a clean reject rather than a silent miss.
-	function resolveWitnessDispatch(receiverParamPos TypeParamId, methodTok Token) returns WitnessDispatchTarget throws ParseError
-		match try self.findWitnessDispatch(receiverParamPos, methodName: methodTok.value, errorTok: methodTok) 'lookup'
-			found(target) then return target
-			notFound then throw ParseError.unsupported("no `where` constraint on this type parameter declares a method '{String.from(methodTok.value)}' — a method call on a constrained type parameter must be provided by one of its interfaces", line: methodTok.line, column: methodTok.column)
-		end 'lookup'
-	end 'resolveWitnessDispatch'
+	// The requirements `<receiver>.<method>(…)` could bind, or the "no constraint provides it" reject when the
+	// constraints supply none. The reject is the `.method()` form's own; the OPERATOR form asks
+	// `findWitnessDispatchCandidates` directly because its miss is E3005 (see `requireOperatorWitness`).
+	function requireWitnessDispatchCandidates(receiverParamPos TypeParamId, methodTok Token) returns WitnessDispatchTargetArray throws ParseError
+		let candidates = try self.findWitnessDispatchCandidates(receiverParamPos, methodName: methodTok.value, errorTok: methodTok)
+		if candidates.count() == 0 'noneProvideIt'
+			throw ParseError.unsupported("no `where` constraint on this type parameter declares a method '{String.from(methodTok.value)}' — a method call on a constrained type parameter must be provided by one of its interfaces", line: methodTok.line, column: methodTok.column)
+		end 'noneProvideIt'
 
-	// The non-throwing CORE of witness-dispatch resolution (P1.7a slice 2b): find the constraint on
-	// `receiverParamPos`'s type parameter whose interface declares `methodName`, returning its slot index, the
-	// method's decl-order index, and its return type — or `notFound` when none does. Shared by the `.method()`
-	// dispatch (`resolveWitnessDispatch`, which rejects a miss as "no constraint provides this method") and the
-	// COMPARISON-OPERATOR lowering (`requireOperatorWitness`, which rejects a miss as E3005 — for `equals` and
-	// for `compare` alike), so the constraint search is written once and each caller owns its own diagnostic for
-	// the miss. `errorTok` positions `requireInterfaceForParse`'s
-	// undeclared-interface reject.
-	function findWitnessDispatch(receiverParamPos TypeParamId, methodName ByteArray, errorTok Token) returns WitnessDispatchLookup throws ParseError
+		return candidates
+	end 'requireWitnessDispatchCandidates'
+
+	// ⭐⭐ **EVERY REQUIREMENT THE CONSTRAINTS ON `receiverParamPos` SUPPLY UNDER `methodName` (P1.7a slice 2b;
+	// made a LIST, and made TRANSITIVE, by R10c).** Each carries the constraint whose witness parameter
+	// supplies it, its SLOT in that constraint's interface, and the requirement's own signature.
+	//
+	// ⚠ **IT USED TO RETURN ON THE FIRST HIT, AND THAT WAS TWO SILENT PICKS IN ONE LOOP.** It stopped at the
+	// first CONSTRAINT declaring the name (so a later constraint declaring it too was never consulted) and it
+	// matched by NAME ALONE with no arity test (so the first requirement of that name took every call).
+	// Neither could produce a diagnostic; both produce a bound slot. Which of the candidates is meant is
+	// therefore decided by the CALLER, which is the only party that knows what it can discriminate on — an
+	// argument COUNT for `.method()`, the protocol's own SHAPE for an operator — and both go through
+	// `pickSoleWitnessCandidate`, so neither can silently take the first of two.
+	//
+	// ⭐ **THE SLOT NUMBERING IS `interfaceWitnessSlots`', asked of the DECLARATION INDEX** — the same walk
+	// `LowerMaxonToStd.ensureWitnessTable` lays the table out by, so `methodIndex` names the slot the emitted
+	// blob actually fills. `errorTok` positions `requireInterfaceForParse`'s undeclared-interface reject.
+	function findWitnessDispatchCandidates(receiverParamPos TypeParamId, methodName ByteArray, errorTok Token) returns WitnessDispatchTargetArray throws ParseError
+		var candidates = WitnessDispatchTargetArray.create()
 		for i in 0 upto self.enclosingWhereConstraints.count() 'eachConstraint'
-			let constraint = try self.enclosingWhereConstraints.get(i) otherwise panic("findWitnessDispatch: enclosingWhereConstraints.get OOB at {i}")
+			let constraint = try self.enclosingWhereConstraints.get(i) otherwise panic("findWitnessDispatchCandidates: enclosingWhereConstraints.get OOB at {i}")
 			if constraint.typeParamIndex != receiverParamPos 'otherParam'
 				continue
 			end 'otherParam'
 
 			let iface = try self.requireInterfaceForParse(constraint.interfaceName, methodTok: errorTok)
-			let methodIndex = interfaceMethodIndex(iface, methodName: methodName)
-			if methodIndex < iface.methods.count() 'declaresMethod'
-				let method = try iface.methods.get(methodIndex) otherwise panic("findWitnessDispatch: methods.get OOB at {methodIndex} below count {iface.methods.count()}")
-				return WitnessDispatchLookup.found(WitnessDispatchTarget.create(i, methodIndex: methodIndex, returnTypeName: method.returnTypeName, paramTypeNames: method.paramTypeNames, throwsClause: method.throwsClause, methodName: methodName, paramNames: method.paramNames))
-			end 'declaresMethod'
+			let slots = self.signatures.interfaceWitnessSlotsOf(iface)
+			for slotIndex in 0 upto slots.count() 'eachSlot'
+				let slot = try slots.get(slotIndex) otherwise panic("findWitnessDispatchCandidates: slots.get OOB at {slotIndex} below count {slots.count()}")
+				if not slot.method.name.equals(methodName) 'otherMethod'
+					continue
+				end 'otherMethod'
+
+				candidates.push(WitnessDispatchTarget.create(i, methodIndex: slotIndex, returnTypeName: slot.method.returnTypeName, paramTypeNames: slot.method.paramTypeNames, throwsClause: slot.method.throwsClause, methodName: methodName, paramNames: slot.method.paramNames, declaringInterfaceName: slot.sourceInterfaceName, isStatic: slot.method.isStatic))
+			end 'eachSlot'
 		end 'eachConstraint'
 
-		return WitnessDispatchLookup.notFound
-	end 'findWitnessDispatch'
+		return candidates
+	end 'findWitnessDispatchCandidates'
 
-	// ⭐⭐ **WHICH INTERFACE DOES `name` DENOTE, ASKED FROM INSIDE A PARSE (R8)** — a synthesized protocol FIRST
-	// (matching `ConformanceCheck.resolveInterface`, and every one of them declares no associated type), then
-	// the WHOLE-PROGRAM declaration index. THE parse-time door, and the reason it is one function is that it
-	// was two: `requireInterfaceForParse` answered from THIS FILE's `artifact.interfaces` while
-	// `interfaceUsesArity` answered whole-program, so one name had two scopes and a `where` constraint's
-	// interface had to be written above its use — `E2015 … not declared before its constrained use` on a
-	// program that compiles with the two declarations swapped, and on every cross-file spelling of it.
+	// ⭐ **WHICH CANDIDATE A `.method(…)` CALL MEANS: THE ONE TAKING THIS MANY ARGUMENTS (R10c).** An interface
+	// and its `extends` parents may each declare the name — `Base.label()` beside `Derived.label(width)` is
+	// the ordinary spelling — and those are two DISTINCT requirements in two DISTINCT slots, so the argument
+	// count is what tells them apart. Selecting by name alone bound the call to whichever came first and then
+	// reported the OTHER one's arity against it: `'Derived.label' expects 1 argument(s) but 0 were provided`,
+	// a false sentence about an interface that inherits a zero-argument `label()`.
 	//
-	// ⚠ **THE FILE-LOCAL SCAN IS DELETED, NOT KEPT AS A FALLBACK.** `artifact.interfaces` fills as the linear
-	// parse REACHES each declaration, so it is a strict subset of what the index holds and a fallback could
-	// only ever answer where the index already has — two sources of one fact, which is R7's own precedent. It
-	// was also the linear scan whose cost is O(interfaces × witness-dispatch-sites) in the parsing file, and
-	// deleting it is what removes that.
-	//
-	// ⚠ **`ConformanceCheck.resolveInterface` STAYS A SECOND READER, and legitimately.** It runs AFTER every
-	// artifact has merged and reads `project.interfaces`, so it is asking at a different PHASE about a
-	// different store — the post-merge registry, which is also where `isStatic` and `extendsInterfaces` are
-	// read from and which this index deliberately does not hash (see `recordInterfaceDeclaration`). What the
-	// two share is the builtin-wins RULE, and sharing it would mean either handing the parser a `Project` (it
-	// takes none, by invariant) or handing the checker a `ProgramSignatures` it has no other use for. Two
-	// phase-appropriate readers, one rule stated at each end; what may NOT stand is two readers in the SAME
-	// phase, which is exactly what this function collapsed.
-	function lookupInterfaceForParse(name ByteArray) returns InterfaceLookup
-		match builtinInterface(name) 'builtin'
-			found(iface) then return InterfaceLookup.found(iface)
-			notFound then break 'builtin'
-		end 'builtin'
+	// The count is compared against the interface's FORMALS, which is the same list `slotCallArgs` then slots
+	// the labelled arguments into — so a call that survives this cannot fail arity there, and one that does
+	// not survive it is still reported by `slotCallArgs` whenever there is a single candidate to report
+	// against (see below). The label rules stay entirely that function's.
+	function pickWitnessDispatchByArity(candidates WitnessDispatchTargetArray, argCount ParamCount, receiverParamPos TypeParamId, methodTok Token) returns WitnessDispatchTarget throws ParseError
+		var matching = WitnessDispatchTargetArray.create()
+		for i in 0 upto candidates.count() 'eachCandidate'
+			let candidate = try candidates.get(i) otherwise panic("pickWitnessDispatchByArity: candidates.get OOB at {i} below count {candidates.count()}")
+			if candidate.paramTypeNames.count() == argCount 'takesThisMany'
+				matching.push(candidate)
+			end 'takesThisMany'
+		end 'eachCandidate'
 
-		return self.signatures.interfaceOf(name)
-	end 'lookupInterfaceForParse'
+		match pickSoleWitnessCandidate(matching) 'pick'
+			one(target) then return target
+			ambiguous(first, second) then throw ParseError.ambiguousWitnessDispatch(String.from(methodTok.value), typeParamName: String.from(self.enclosingTypeParamName(receiverParamPos)), argCount: argCount, first: renderWitnessRequirement(first), second: renderWitnessRequirement(second), line: methodTok.line, column: methodTok.column)
+			none then break 'pick'
+		end 'pick'
+
+		// Nothing of that name takes this many arguments. With exactly ONE candidate there is nothing to select
+		// between, and the arity is `slotCallArgs`' to report — the ONE home of the label→position mapping,
+		// whose E3036 already names the interface and both counts. With several, no single one of them is what
+		// the author meant, so the reject lists them all rather than blaming an arbitrary one.
+		if candidates.count() == 1 'soleCandidate'
+			return try candidates.get(0) otherwise panic("pickWitnessDispatchByArity: candidates.count() is 1 but get(0) failed")
+		end 'soleCandidate'
+
+		throw ParseError.noWitnessRequirementOfArity(String.from(methodTok.value), typeParamName: String.from(self.enclosingTypeParamName(receiverParamPos)), argCount: argCount, available: renderWitnessRequirements(candidates), line: methodTok.line, column: methodTok.column)
+	end 'pickWitnessDispatchByArity'
 
 	// The throwing form for the witness-dispatch caller, which cannot proceed without the declaration. The
 	// miss is a clean positioned reject naming the constraint's interface.
@@ -27351,7 +27441,7 @@ export type Parser
 	// read" instead would buy a sharper sentence for a SECOND store of the interface name, which is the one
 	// thing this rung deleted (see `InterfaceDeclSite`); a diagnostic is not worth re-minting the duplication.
 	function requireInterfaceForParse(name ByteArray, methodTok Token) returns IrInterface throws ParseError
-		match self.lookupInterfaceForParse(name) 'lookup'
+		match lookupInterface(self.signatures.interfaceMap(), name: name) 'lookup'
 			found(iface) then return iface
 			notFound then throw ParseError.unsupported("the `where` constraint interface '{String.from(name)}' does not resolve — no file in this program declares a readable `interface` of that name, so it is either misspelled or an `interface` whose own declaration fails to parse", line: methodTok.line, column: methodTok.column)
 		end 'lookup'

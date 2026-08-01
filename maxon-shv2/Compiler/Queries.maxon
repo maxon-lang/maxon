@@ -832,6 +832,11 @@ function resetMergeTargets(project Project)
 	// consistency so a queryAllModule miss re-derives both from the artifacts cleanly.
 	project.conformances = ConformanceDeclArray.create()
 	project.interfaces = IrInterfaceMap.create()
+	// The accepted-member filing is DERIVED from those two and is FIRST-WINS, not an upsert
+	// (`recordWitnessSlotImpl` returns early on a key it already holds, because two routes to one slot must
+	// agree). Carried across a re-merge, a previous fold's selection would beat the new one — see
+	// `WitnessSlotImplMap`, whose header claimed the opposite until R10c.
+	project.witnessSlotImpls = WitnessSlotImplMap.create()
 	project.typeAliases = RangedAliasRegistry.create()
 	// FIRST-WINS, so it must reset: a warm rebuild that re-merged the same files would find every
 	// name already claimed by its own declaration and report the whole program as duplicates.
@@ -963,6 +968,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		witnessArgCountMismatch(callee, expected, got, line, column) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(callee, expected: expected, got: got), line: line, column: column, filePath: path)
 		witnessUnknownArgLabel(callee, label, line, column) then reportPositioned(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(callee, label: label), line: line, column: column, filePath: path)
 		witnessDuplicateArg(callee, paramName, line, column) then reportPositioned(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(callee, paramName: paramName), line: line, column: column, filePath: path)
+		// R10c. Both name the DECLARING interface of every requirement they mention, which is the interface
+		// the author has to edit — `renderWitnessRequirement` is the one place a requirement is spelled.
+		ambiguousWitnessDispatch(method, typeParamName, argCount, first, second, line, column) then reportPositioned(project, code: ErrorCode.semanticAmbiguousWitnessDispatch, message: "'{method}' taking {argCount} argument(s) is provided by both {first} and {second} through the constraints on type parameter '{typeParamName}' — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints", line: line, column: column, filePath: path)
+		noWitnessRequirementOfArity(method, typeParamName, argCount, available, line, column) then reportPositioned(project, code: ErrorCode.semanticNoWitnessRequirementForArgCount, message: "no requirement named '{method}' provided by the constraints on type parameter '{typeParamName}' takes {argCount} argument(s); they provide {available}", line: line, column: column, filePath: path)
 		operandTypeMismatch(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type (both bool or both int)", line: line, column: column, filePath: path)
 		nonNumericOperands(left, right, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot operate on {left} and {right}", line: line, column: column, filePath: path)
 		nonNumericNegation(operand, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot negate {operand}", line: line, column: column, filePath: path)

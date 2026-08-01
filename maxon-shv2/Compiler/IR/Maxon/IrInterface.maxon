@@ -44,17 +44,25 @@ export let ToStringMethodName = b"toString"
 // constraints (each costs an ABI register), so a 16-bit index is ample.
 export typealias WitnessSlotIndex = int(0 to u16.max)
 
-// The DECL-ORDER index of a method within an interface (P1.7a slice 2a) — slot `i` of the witness table
-// holds interface method `i`. An interface declares a handful of methods, so 16 bits is ample.
+// The index of a requirement within an interface's TRANSITIVE requirement list (P1.7a slice 2a; made
+// transitive by R10c) — slot `i` of the witness table holds `interfaceWitnessSlots(…)[i]`. An interface
+// declares a handful of methods, so 16 bits is ample.
 export typealias WitnessMethodIndex = int(0 to u16.max)
 
 // ⭐ **WITNESS-TABLE BYTE LAYOUT** (P1.7a slice 2a), matching v1's `WitnessTable`: a header of
-// `methodCount@0`, `parentTablePtr@8` (always 0 — parent-interface methods are projected INTO the child
-// table at decl order, so no runtime chain), `flags@16` (0), then `methods[N]@24` — one 8-byte function
-// pointer per interface method, in decl order, each stamped by a `funcAbs64InRdata` relocation. The fused
+// `methodCount@0`, `parentTablePtr@8` (always 0 — parent-interface requirements are PROJECTED INTO the
+// child table by `interfaceWitnessSlots`, so there is no runtime chain to follow), `flags@16` (0), then
+// `methods[N]@24` — one 8-byte function pointer per requirement of the interface's TRANSITIVE list, each
+// stamped by a `funcAbs64InRdata` relocation. The fused
 // `witnessCall` reads method `i` from `[witnessAddr + WitnessTableHeaderBytes + WitnessSlotBytes*i]`, so
 // the emitter (the blob) and every reader (the x64, arm64 and wasm lowerings) must share these two
 // constants — which is why they are stated once, here, rather than per backend.
+//
+// ⚠ **THE PROJECTION IS WHAT MAKES THE ZERO TRUE, and until R10c it was a DESIGN THE CODE DID NOT
+// IMPLEMENT.** `ensureWitnessTable` built its slots from `iface.methods` alone while this comment claimed
+// the parents were projected in, so `parentTablePtr` was 0 with nothing standing in for it: an
+// `extends`-inherited requirement had no slot in any table, and the resolver that looks one up refused the
+// call outright (`E2015 … no `where` constraint on this type parameter declares a method 'label'`).
 export let WitnessTableHeaderBytes = 24 as ByteOffset
 export let WitnessSlotBytes = 8 as ByteOffset
 
@@ -305,6 +313,35 @@ end 'InterfaceMethodSig'
 
 export typealias InterfaceMethodSigArray = Array with InterfaceMethodSig
 
+// ⭐ **THE ONE `[static ]name(p0 t0, p1 t1) returns ret` SPELLING**, shared by the interface (expected) and
+// impl (actual) renderers so the two halves of a wrong-signature message cannot drift in format.
+// `paramNames` and `paramTypes` are parallel source-string columns.
+//
+// The `static ` prefix is what makes a RECEIVER-KIND disagreement readable (R9): without it a static
+// requirement met by an instance method of the same shape renders `tag() returns Code (expected tag()
+// returns Code)` — a rejection whose two halves are the identical string, telling the author to change
+// something that already looks right. It costs nothing on every other message, because until R9 no static
+// requirement could reach a diagnostic at all.
+//
+// ⚠ **IT LIVES BESIDE `InterfaceMethodSig` RATHER THAN IN `ConformanceCheck`, AND THE THIRD READER IS WHY
+// (R10c).** A witness dispatch's ambiguity and arity rejects have to spell a REQUIREMENT too, and they are
+// raised by the PARSER — so a renderer private to the conformance pass meant either a second format or a
+// diagnostic in one phase describing a requirement differently from a diagnostic in the other. The columns
+// stay four PARAMETERS and not one `InterfaceMethodSig`, because `formatActualSignature`'s caller renders an
+// IMPL, which has no `InterfaceMethodSig` to hand it.
+export function assembleMethodSignature(name ByteArray, paramNames ByteArrayArray, paramTypes ByteArrayArray, returnType ByteArray, isStatic bool) returns String
+	var rendered = "static {String.from(name)}(" if isStatic else "{String.from(name)}("
+	for i in 0 upto paramNames.count() 'eachParam'
+		if i > 0 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+		let paramName = try paramNames.get(i) otherwise panic("assembleMethodSignature: paramNames.get OOB at {i}")
+		let paramType = try paramTypes.get(i) otherwise panic("assembleMethodSignature: paramTypes.get OOB at {i}")
+		rendered = "{rendered}{String.from(paramName)} {String.from(paramType)}"
+	end 'eachParam'
+	return "{rendered}) returns {String.from(returnType)}"
+end 'assembleMethodSignature'
+
 // ⭐⭐ **THE ONE RENDERER OF A DECLARED TYPE TO THE SOURCE STRING A CONFORMANCE COMPARES AND PRINTS.**
 // BOTH sides of the conformance relation come through here — the INTERFACE side at parse time
 // (`Parser.renderInterfaceTypeName`, which adds only the `Self` arm on top of it) and the IMPL side at
@@ -457,24 +494,57 @@ export type WitnessDispatchTarget
 	// The method NAME, for the E3055/E3057/E3059 diagnostics a witness `try` target reports. A direct call
 	// blames its callee name; a witness dispatch blames the interface method the user actually wrote.
 	export let methodName as ByteArray
+	// ⭐ **THE INTERFACE THAT DECLARED THE REQUIREMENT, WHICH IS NOT ALWAYS THE CONSTRAINT'S (R10c).** Under
+	// `where T is Derived` with `interface Derived extends Base`, a dispatch of `Base`'s `label()` reads a slot
+	// of `Derived`'s table while the requirement it binds against is `Base`'s. Every message about this
+	// dispatch names THIS interface — telling an author that `Derived.label` expects one argument is false of
+	// an interface that inherits a zero-argument `label()`, and the falsehood is exactly what the missing
+	// projection used to produce.
+	export let declaringInterfaceName as ByteArray
+	// The requirement's `static`ness, carried for ONE reason: `assembleMethodSignature` — the one spelling of
+	// a requirement, shared with the conformance diagnostics — prints it, and a target that answered `false`
+	// for every requirement would describe a `static` one as something the interface does not declare. It is
+	// the last field of the requirement the two R10c rejects need and the only one nothing else reads.
+	export let isStatic as bool
 
-	export static function create(constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray) returns WitnessDispatchTarget
-		return Self{constraintIndex: constraintIndex, methodIndex: methodIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames}
+	export static function create(constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
+		return Self{constraintIndex: constraintIndex, methodIndex: methodIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames, declaringInterfaceName: declaringInterfaceName, isStatic: isStatic}
 	end 'create'
 end 'WitnessDispatchTarget'
 
-// The outcome of searching a type parameter's `where` constraints for one whose interface declares a given
-// method (P1.7a slice 2b) — `found` when a constraint supplies it, `notFound` when none does. The non-throwing
-// core shared by the `.method()` dispatch (which turns `notFound` into its "no constraint provides this method"
-// reject) and the `==`/`!=`-on-a-type-parameter lowering (which turns it into E3005 "requires `where T is
-// Equatable`"): the search runs in ONE place, and each caller owns its own diagnostic for the miss.
-export union WitnessDispatchLookup
-	found(target WitnessDispatchTarget)
-	notFound
-end 'WitnessDispatchLookup'
+export typealias WitnessDispatchTargetArray = Array with WitnessDispatchTarget
 
-// The decl-order index of the method named `methodName` in `iface` (P1.7a slice 2a), or `methods.count()`
-// (the "not declared by this interface" sentinel) when absent — the witness-table slot the dispatch reads.
+// ⭐⭐ **WHICH ONE OF THE CANDIDATE REQUIREMENTS A DISPATCH BINDS (R10c)** — the answer to the question both
+// witness-dispatch forms ask once they have filtered the constraints' requirements down to the ones they
+// could mean. It is a THREE-way answer and not a `found`/`notFound` pair, because the third arm is the one
+// that used to be missing: a search that returns on its FIRST hit reports `found` for a set of two, and a
+// silent pick between two witness slots is a wrong function pointer rather than a diagnostic.
+//
+// `ambiguous` carries BOTH claimants so the message can name them; the two arms' misses stay the CALLERS'
+// (a `.method()` miss is "no constraint provides this method", an operator's is E3005), exactly as the
+// `found`/`notFound` pair this replaced kept them.
+export union WitnessCandidatePick
+	one(target WitnessDispatchTarget)
+	none
+	ambiguous(first WitnessDispatchTarget, second WitnessDispatchTarget)
+end 'WitnessCandidatePick'
+
+// The sole surviving candidate, or why there is not exactly one. The list is already filtered by whatever
+// the caller can discriminate on (an argument COUNT for the `.method()` form, the protocol's own SHAPE for
+// an operator), so everything left is something the dispatch could equally well mean.
+export function pickSoleWitnessCandidate(candidates WitnessDispatchTargetArray) returns WitnessCandidatePick
+	if candidates.count() == 0 'noneSurvive'
+		return WitnessCandidatePick.none
+	end 'noneSurvive'
+
+	let first = try candidates.get(0) otherwise panic("pickSoleWitnessCandidate: count is {candidates.count()} but get(0) failed")
+	if candidates.count() == 1 'exactlyOne'
+		return WitnessCandidatePick.one(first)
+	end 'exactlyOne'
+
+	return WitnessCandidatePick.ambiguous(first, second: try candidates.get(1) otherwise panic("pickSoleWitnessCandidate: count is {candidates.count()} but get(1) failed"))
+end 'pickSoleWitnessCandidate'
+
 // Do two interface methods declare the SAME formals — the same rendered types, in the same order (and so,
 // by construction, the same arity)? Both sides are `InterfaceMethodSig.paramTypeNames`, which are rendered
 // by ONE renderer (`Parser.renderInterfaceTypeName`) that spells the enclosing interface `Self` either way,
@@ -500,15 +570,96 @@ export function interfaceFormalsMatch(a ByteArrayArray, b ByteArrayArray) return
 	return true
 end 'interfaceFormalsMatch'
 
-export function interfaceMethodIndex(iface IrInterface, methodName ByteArray) returns WitnessMethodIndex
-	for i in 0 upto iface.methods.count() 'each'
-		let method = try iface.methods.get(i) otherwise panic("interfaceMethodIndex: methods.get OOB at {i} below count {iface.methods.count()}")
-		if method.name.equals(methodName) 'hit'
-			return i
-		end 'hit'
-	end 'each'
-	return iface.methods.count()
-end 'interfaceMethodIndex'
+// One requirement of an interface paired with the interface that DECLARED it — the source interface, so a
+// method inherited via `extends` can be tagged `(from BaseInterface)` in a missing-method report and so a
+// witness slot's relocation names the member filed under THAT interface's key
+// (`witnessSlotImplKey`, which is keyed by the declaring interface and not by the table's).
+export type CollectedInterfaceMethod
+	export let method as InterfaceMethodSig
+	export let sourceInterfaceName as ByteArray
+
+	export static function create(method InterfaceMethodSig, sourceInterfaceName ByteArray) returns CollectedInterfaceMethod
+		return Self{method: method, sourceInterfaceName: sourceInterfaceName}
+	end 'create'
+end 'CollectedInterfaceMethod'
+
+export typealias CollectedInterfaceMethodArray = Array with CollectedInterfaceMethod
+
+export typealias InterfaceNameSet = Set with ByteArray
+
+// ⭐⭐ **THE SLOT LIST OF AN INTERFACE — ITS TRANSITIVE REQUIREMENT SET, COMPUTED IN ONE PLACE (R10c).**
+// Slot `i` of `__witness_<Type>.<Iface>` holds requirement `i` of this list, and THREE readers depend on
+// that being ONE answer:
+//
+//   • `LowerMaxonToStd.ensureWitnessTable` — which stamps slot `i`'s relocation;
+//   • `Parser.findWitnessDispatchCandidates` — which compiles `[witnessAddr + 24 + 8*i]` into the CALLER;
+//   • `ConformanceCheck.checkInterfaceMethods` — which decides that a conformer supplies requirement `i`
+//     at all, and files the member each slot's relocation is then stamped from.
+//
+// ⚠ **THEY DISAGREED, AND ONLY ONE OF THE THREE HAD THE `extends` CHAIN.** The conformance check walked it
+// (so a conformer was REQUIRED to supply a parent's methods) while the builder and the resolver read
+// `iface.methods` alone (so no slot existed to hold one, and the resolver refused the call). The visible
+// half was a clean reject; the invisible half is the one that made this a single function rather than a
+// third walk: two spellings of "which slot is requirement M of interface I" cannot be caught by any
+// diagnostic — a disagreement binds a call to the WRONG FUNCTION POINTER and returns a wrong answer.
+//
+// ⭐ **ORDER: OWN REQUIREMENTS FIRST, THEN EACH PARENT DEPTH-FIRST IN `extends` DECLARATION ORDER.** It is
+// the order `ConformanceCheck` already collected in (and so the order a missing-method report already
+// lists), which is why adopting it moves no existing message and no existing golden.
+//
+// ⭐ **A DIAMOND GETS ONE SLOT, BY THE `visited` SET AND NOT BY A SECOND RULE.** `D extends B, C` where both
+// `B` and `C` extend `A` reaches `A` twice; the second arrival contributes nothing, so `A`'s requirements
+// occupy exactly one run of slots. The set is keyed by interface NAME — the same key the registry is — so
+// a cyclic `extends` chain terminates on the same test.
+// ⚠ **IT TAKES NO SEPARATE `ifaceName`, AND THAT IS A HAZARD REMOVED RATHER THAN AN ARGUMENT SAVED.** An
+// `IrInterface` carries its own `name`, every store keys it BY that name, and `extendsInterfaces` holds the
+// parent's declared spelling — so a name parameter would be one fact written twice with two consumers that
+// must not disagree: `visited` (which decides the diamond) and `sourceInterfaceName` (which becomes the
+// interface half of `witnessSlotImplKey`, and so which member a slot's relocation names).
+export function interfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterface) returns CollectedInterfaceMethodArray
+	var slots = CollectedInterfaceMethodArray.create()
+	var visited = InterfaceNameSet.create()
+	appendInterfaceWitnessSlots(interfaces, iface: iface, slots: slots, visited: visited)
+	return slots
+end 'interfaceWitnessSlots'
+
+// The recursion `interfaceWitnessSlots` seeds. Separate only because the accumulator and the `visited` set
+// are the walk's own bookkeeping and no caller should have to supply them — the shape
+// `ConformanceCheck.checkInterfaceMethods` used to spell at its one call site.
+function appendInterfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterface, slots CollectedInterfaceMethodArray, visited InterfaceNameSet)
+	if visited.contains(iface.name) 'alreadySeen'
+		return
+	end 'alreadySeen'
+	visited.insert(iface.name)
+
+	for i in 0 upto iface.methods.count() 'eachOwn'
+		slots.push(CollectedInterfaceMethod.create(try iface.methods.get(i) otherwise panic("appendInterfaceWitnessSlots: methods.get OOB at {i} below count {iface.methods.count()}"), sourceInterfaceName: iface.name))
+	end 'eachOwn'
+
+	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'
+		let parentName = try iface.extendsInterfaces.get(j) otherwise panic("appendInterfaceWitnessSlots: extendsInterfaces.get OOB at {j} below count {iface.extendsInterfaces.count()}")
+		match lookupInterface(interfaces, name: parentName) 'parent'
+			found(parentIface) then appendInterfaceWitnessSlots(interfaces, iface: parentIface, slots: slots, visited: visited)
+			// A parent named by `extends` that does not resolve is not diagnosed here (no slice reports a bad
+			// `extends` target); its requirements simply cannot be projected, and every reader of this list
+			// then agrees that they are absent — which is the property that matters.
+			notFound then break 'parent'
+		end 'parent'
+	end 'eachParent'
+end 'appendInterfaceWitnessSlots'
+
+// ⭐ **IS THIS RESOLVED DISPATCH TARGET THE PROTOCOL `want` DECLARES? (P1.7a slice 2b-ii; a PREDICATE since
+// R10c.)** A constraint declaring a method of the protocol's NAME is not the protocol — its RESULT, its
+// `throws` and its FORMALS have to agree too, and each of the three was a MEASURED silent wrong answer
+// before it was asked (see `Parser.requireOperatorWitness`, which owns the E3005 a miss becomes).
+//
+// It lives beside `interfaceFormalsMatch`, the comparison it is mostly made of, and takes no `self` — it was
+// a `Parser` member (`requireProtocolShape`) that both tested the shape and threw the reject, and splitting
+// the two is what let the test become the FILTER a candidate list is narrowed by, rather than a verdict on
+// whichever candidate a name search happened to reach first.
+export function witnessTargetIsProtocol(target WitnessDispatchTarget, want InterfaceMethodSig) returns bool
+	return target.returnTypeName.equals(want.returnTypeName) and not throwsClauseIsThrowing(target.throwsClause) and interfaceFormalsMatch(target.paramTypeNames, b: want.paramTypeNames)
+end 'witnessTargetIsProtocol'
 
 // A nullary interface method (`hash()`, `toString()`, `clone()`). Every SYNTHESIZED protocol method is
 // non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
@@ -621,10 +772,18 @@ end 'builtinInterface'
 // MEANS (a user's typo'd interface name is `E3015`; a witness table naming an unresolvable interface is an
 // internal invariant break), so the miss stays theirs and only the lookup is shared.
 //
-// ⚠ This is deliberately NOT merged with `Parser.lookupInterfaceForParse`, which R8 put over the
-// declaration INDEX: that one answers mid-parse, before any file has merged, and the split is the same
-// parse-time/check-time one R8's header defends. What was genuine duplication is these two, which read one
-// store in one phase.
+// ⚠⚠ **THE PARSER ASKS THIS SAME FUNCTION, OF A DIFFERENT MAP (R10c).** It used to keep its own spelling of
+// the rule (`Parser.lookupInterfaceForParse`, over `ProgramSignatures.interfaceOf`), defended as a phase
+// split — and R10c turned that latent duplication into a live one, because a witness dispatch now resolves
+// its CONSTRAINT's interface through the parser's spelling and every `extends` PARENT through this one, a
+// single call apart. Two rules that agree today and would diverge silently: a parent that resolves for the
+// slot walk but not for the constraint is a wrong slot COUNT, and a wrong count is a wrong function pointer
+// rather than a diagnostic.
+//
+// **The PHASE distinction R8 defended is real and survives intact — it is carried by WHICH MAP the caller
+// holds** (`ProgramSignatures.interfaceMap` mid-parse, before any file has merged; `project.interfaces`
+// after), which is where it belongs, because the map IS the phase. What may not stand is two statements of
+// the RULE, and there is now one.
 export function lookupInterface(interfaces IrInterfaceMap, name ByteArray) returns InterfaceLookup
 	match builtinInterface(name) 'builtin'
 		found(iface) then return InterfaceLookup.found(iface)
@@ -983,11 +1142,17 @@ export function builtinConformerMethod(typeName ByteArray, methodName ByteArray)
 			continue
 		end 'doesNotConform'
 
+		// A DIRECT scan of the protocol's own methods, and deliberately not `interfaceWitnessSlots`: a
+		// synthesized protocol declares no `extends` (`singleMethodInterface`/`markerInterface` build them all
+		// with an empty list), so there is no chain to walk — and this dispatch wants the SIGNATURE, never a
+		// table slot, so it has nothing to keep in step with a witness table's numbering.
 		let iface = requireBuiltinInterface(protocolName)
-		let methodIndex = interfaceMethodIndex(iface, methodName: methodName)
-		if methodIndex < iface.methods.count() 'declaresMethod'
-			return BuiltinConformerMethodLookup.supplied(try iface.methods.get(methodIndex) otherwise panic("builtinConformerMethod: methods.get OOB at {methodIndex} below count {iface.methods.count()} for protocol '{String.from(protocolName)}'"))
-		end 'declaresMethod'
+		for i in 0 upto iface.methods.count() 'eachMethod'
+			let method = try iface.methods.get(i) otherwise panic("builtinConformerMethod: methods.get OOB at {i} below count {iface.methods.count()} for protocol '{String.from(protocolName)}'")
+			if method.name.equals(methodName) 'declaresMethod'
+				return BuiltinConformerMethodLookup.supplied(method)
+			end 'declaresMethod'
+		end 'eachMethod'
 	end 'eachProtocol'
 
 	return BuiltinConformerMethodLookup.notSupplied

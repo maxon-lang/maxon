@@ -1412,10 +1412,14 @@ end 'main'
 
 ### ⚖ An `extends`-INHERITED `uses` name does NOT count toward the arity, and the sentence changes here
 
-`conformanceUsesArity` counts the interface's OWN `uses` names and not its `extends`-inherited ones,
-which is an incrementality constraint rather than a preference: `associatedTypeNames.count()` rides the
-signature index's hash and `extendsInterfaces` deliberately does not, so walking the chain would make a
-parse's answer depend on an unhashed fact (its header carries the argument in full).
+`conformanceUsesArity` counts the interface's OWN `uses` names and not its `extends`-inherited ones.
+That used to be an incrementality constraint as well as a scope one — `associatedTypeNames.count()` rides
+the signature index's hash while `extendsInterfaces` did not, so walking the chain would have made a
+parse's answer depend on an unhashed fact. **R10c made `extendsInterfaces` ride that hash** (a witness
+dispatch now numbers its slot against the interface's transitive requirement list), so the incrementality
+half is discharged and what is left is that shv2 does not inherit associated-type BINDINGS at all:
+widening the count without also inheriting the binding would accept an argument nothing then substitutes
+(the function's header carries the argument in full).
 
 ⚠ **This case is here to record that R6 changed the SENTENCE and not the VERDICT, so that the day
 inherited bindings land it turns red and forces the decision rather than quietly widening.** shv2 does

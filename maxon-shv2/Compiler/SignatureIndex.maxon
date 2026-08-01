@@ -260,10 +260,18 @@ let DeclShapeInterface = 51 as ContentHash
 
 // One interface METHOD's shape discriminator (R8) — `DeclShapeInterface`'s per-requirement twin, and its own
 // so that moving a requirement between two interfaces moves the hash. A witness dispatch in any file reads
-// this method's slot index, result type, formals and ABI (`Parser.findWitnessDispatch`) and bakes all of them
+// this method's slot index, result type, formals and ABI (`Parser.findWitnessDispatchCandidates`) and bakes all of them
 // into its own emitted code, so a change here has to re-parse every reader. See `recordInterfaceDeclaration`
 // for which fields ride and which deliberately do not.
 let DeclShapeInterfaceMethod = 52 as ContentHash
+
+// One `extends` PARENT NAME's shape discriminator (R10c) — `DeclShapeInterfaceMethod`'s twin, and its own
+// for that twin's reason: a witness dispatch numbers its slot against the interface's TRANSITIVE requirement
+// list (`interfaceWitnessSlots`), so gaining, losing or REORDERING a parent moves a slot index that another
+// file has already baked into its emitted code. Only the NAME is mixed — the parent's own requirements reach
+// this hash through the parent's own `recordInterfaceDeclaration`, one hash being folded over every
+// declaration in the program.
+let DeclShapeInterfaceParent = 60 as ContentHash
 
 // A `throws` clause's PRESENCE discriminators (R8) — the two arms of `ThrowsClause`, so `none` and
 // `throwing(E)` cannot hash alike in a position where both are possible. `mixThrowsClause` is the one place a
@@ -2767,14 +2775,14 @@ export type ProgramSignatures
 	//   • `Parser.interfaceUsesArity` — `associatedTypeNames.count()`, how many arguments an unparenthesized
 	//     `implements Duo with A, B` binds (R7 moved this one and stopped there);
 	//   • `Parser.requireInterfaceForParse` — the METHOD SIGNATURES a witness dispatch resolves against
-	//     (`findWitnessDispatch` reads a method's name, return type, formal types, formal names and `throws`).
+	//     (`findWitnessDispatchCandidates` reads a method's name, return type, formal types, formal names and `throws`).
 	//     It scanned the PARSING FILE's `artifact.interfaces`, which fills as the linear parse reaches each
 	//     declaration — so `type Box uses T where T is Digest` with `interface Digest` written below it was
 	//     `E2015 … not declared before its constrained use` on a program that compiles with the two lines
 	//     swapped, and every cross-file spelling was the same reject.
 	//
 	// ⚠ **THE WHOLE `IrInterface`, NOT THE FIVE FIELDS THE DISPATCH READS, AND THAT IS THE LESS DUPLICATIVE
-	// CHOICE.** A bespoke record holding exactly what `findWitnessDispatch` consumes would need its own
+	// CHOICE.** A bespoke record holding exactly what `findWitnessDispatchCandidates` consumes would need its own
 	// builder, and a SECOND builder of an interface signature is precisely what drifts from the real parse's —
 	// the standing hazard of having a pre-scan at all. `foldInterfaceDeclarations` runs the parser's OWN
 	// `readInterfaceDeclaration`, the same function `parseInterfaceDeclaration` calls, so what lands here is
@@ -3405,18 +3413,29 @@ export type ProgramSignatures
 	//     PARSES — a reader that did not re-parse would go on binding the old count.
 	//   • Each method's NAME, RETURN TYPE, FORMAL TYPES, FORMAL NAMES and `throws` ride: a witness dispatch in
 	//     any file picks its table SLOT, its result type, its `Self`-formal rejection, its `name:` label
-	//     vocabulary and its calling ABI off exactly those five (`Parser.findWitnessDispatch`), and every one
+	//     vocabulary and its calling ABI off exactly those five (`Parser.findWitnessDispatchCandidates`), and every one
 	//     of them is baked into that file's emitted code. A dispatch compiled against the previous `throws`
 	//     reads a flag register the callee never writes.
-	//   • `isStatic` and `extendsInterfaces` do NOT ride, and that is a statement rather than an omission:
-	//     nothing in a PARSE reads either. `ConformanceCheck` reads both, but off `project.interfaces` — which
-	//     is rebuilt from the DECLARING file's artifact, and that file re-parses on its own content hash.
-	//     Mixing them would re-parse the whole program for an edit no other file can observe, which is the
-	//     "sound, and useless" key the `var`-payload note in ARCHITECTURE.md warns about.
+	//   • **`extendsInterfaces` RIDES, and it did NOT until R10c — which is a fact about the PARSE changing, not
+	//     a correction.** The claim it used to carry ("nothing in a PARSE reads it") was true while a witness
+	//     dispatch resolved against `iface.methods` alone. It stopped being true the moment the dispatch began
+	//     numbering its slot against the interface's TRANSITIVE requirement list: adding `extends Base` to an
+	//     interface now moves every slot index a `where T is Derived` dispatch compiles into ANOTHER file,
+	//     while that file's own bytes stay put — the exact test this rule states. Only the parent NAMES ride;
+	//     the parents' own methods reach the hash through their own entries, since one hash is folded over
+	//     every declaration in the program.
+	//   • `isStatic` does NOT ride, and that is a statement rather than an omission: nothing in a PARSE reads
+	//     it. `ConformanceCheck` does, but off `project.interfaces` — which is rebuilt from the DECLARING
+	//     file's artifact, and that file re-parses on its own content hash. Mixing it would re-parse the whole
+	//     program for an edit no other file can observe, which is the "sound, and useless" key the
+	//     `var`-payload note in ARCHITECTURE.md warns about.
 	export function recordInterfaceDeclaration(iface IrInterface)
 		self.interfaces.upsert(iface.name, value: iface)
 
 		self.hash = mix(mixBytes(mix(self.hash, value: DeclShapeInterface), bytes: iface.name), value: iface.associatedTypeNames.count())
+		for parentName in iface.extendsInterfaces 'eachParent'
+			self.hash = mixBytes(mix(self.hash, value: DeclShapeInterfaceParent), bytes: parentName)
+		end 'eachParent'
 		for method in iface.methods 'eachMethod'
 			self.hash = mixBytes(mixBytes(mix(self.hash, value: DeclShapeInterfaceMethod), bytes: method.name), bytes: method.returnTypeName)
 			self.hash = mixInterfaceFormals(self.hash, names: method.paramNames, types: method.paramTypeNames)
@@ -3424,15 +3443,31 @@ export type ProgramSignatures
 		end 'eachMethod'
 	end 'recordInterfaceDeclaration'
 
-	// ⭐ **WHICH INTERFACE DOES `name` DENOTE, ANYWHERE IN THE PROGRAM (R8)** — `structOf`'s twin, and the ONE
-	// whole-program half of the parse-time answer. `notFound` is a real answer and its own case, exactly as
-	// `DeclaredStruct.undeclared` is: `Parser.lookupInterfaceForParse` — the single door that puts the
-	// synthesized protocols first and asks this second — is what turns it into a positioned reject at a
-	// witness dispatch and into the unresolvable `with`-arity default at a conformance.
-	export function interfaceOf(name ByteArray) returns InterfaceLookup
-		let iface = try self.interfaces.get(name) otherwise return InterfaceLookup.notFound
-		return InterfaceLookup.found(iface)
-	end 'interfaceOf'
+	// ⭐⭐ **THE DECLARED-INTERFACE STORE A *PARSE* MAY ASK, HANDED OUT WHOLE (R8; widened to the map by
+	// R10c)** — the whole-program half of the parse-time answer, `structOf`'s twin. `project.interfaces` is not
+	// merged until every file has parsed, so this map is the only interface store that exists mid-parse.
+	//
+	// ⚠ **IT REPLACED AN `interfaceOf(name)` LOOKUP, AND THE REASON IS THIS RUNG'S OWN THESIS.** That
+	// accessor answered for ONE name, so its caller (`Parser.lookupInterfaceForParse`) had to spell the
+	// "synthesized protocol FIRST, then the store" rule for itself — a second spelling of
+	// `IrInterface.lookupInterface`, which the header of the one it collapsed forbids in so many words:
+	// *"what may NOT stand is two readers in the SAME phase"*. R10c made that live rather than latent: a
+	// witness dispatch resolves its CONSTRAINT's interface through the parser's spelling and every `extends`
+	// PARENT through `lookupInterface`, one call apart. Two rules that agree today and would diverge silently
+	// — a parent that resolves for the slot walk but not for the constraint is a wrong slot COUNT, with no
+	// diagnostic. Handing out the store instead of an answer leaves exactly one statement of the rule.
+	export function interfaceMap() returns IrInterfaceMap
+		return self.interfaces
+	end 'interfaceMap'
+
+	// ⭐ **THE WITNESS SLOT LIST OF `iface`, RESOLVED AGAINST THIS INDEX (R10c)** — `interfaceMap`'s twin.
+	// The ordering rule, the diamond rule and the cyclic-chain guard live in `interfaceWitnessSlots`, once, so
+	// the parse-time and post-merge readers cannot come to number one interface's slots differently. It is a
+	// second door onto the same store rather than a call through `interfaceMap` at the parser, because the
+	// accumulators are the walk's and not a caller's — see `interfaceWitnessSlots`.
+	export function interfaceWitnessSlotsOf(iface IrInterface) returns CollectedInterfaceMethodArray
+		return interfaceWitnessSlots(self.interfaces, iface: iface)
+	end 'interfaceWitnessSlotsOf'
 
 	// Add one declared struct type to the index AND fold it into the hash. The one write, for
 	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree

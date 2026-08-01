@@ -1384,14 +1384,24 @@ error E3016: <fragment>:9:6: Partial interface implementation: type 'Tag' has 1 
 ```
 
 <!-- test: error.interface-declares-two-requirements-of-one-name -->
-⭐⭐ **AN INTERFACE MAY NOT DECLARE TWO REQUIREMENTS OF ONE NAME, and this refusal is R10's own — it exists
-because R10 would otherwise have made the shape REACHABLE.** A witness dispatch resolves a method to its
-slot by NAME (`IrInterface.interfaceMethodIndex`), so a second requirement of that name owns a slot no
-call can reach: `self.item.label(1)` would be told `'Labeled.label' expects 0 argument(s) but 1 were
-provided` — a false statement about an interface that declares exactly that member. Before R10 the program
-was rejected anyway (the bare key could satisfy only one of the two requirements, so the other reported a
-wrong signature), which is why the refusal changes no accepted program: it replaces a misleading E3016
-with the true reason.
+⭐⭐ **ONE INTERFACE MAY NOT DECLARE TWO REQUIREMENTS OF ONE NAME — because the accepted-member filing is
+keyed by `(conformer, declaring interface, method NAME)` and carries NO ARITY.** `ConformanceCheck` files
+the member it accepted for each requirement under that key and `ensureWitnessTable` stamps every slot's
+relocation from the filing, so two same-named requirements of ONE interface are two slots contending for
+one entry: the first is filed and the second either contradicts it or leaves its slot pointing at the
+first's member. The refusal is what keeps the key injective over slots. Before R10 the program was rejected
+anyway (the bare `Type.method` key could satisfy only one of the two requirements, so the other reported a
+wrong signature), which is why it changes no accepted program.
+
+⚠⚠ **THE REASON USED TO BE "a dispatch resolves by NAME alone", AND R10c FALSIFIED IT — both here and in
+the message.** `findWitnessDispatchCandidates` now collects every requirement of the name and selects by
+ARITY, so a second same-named requirement is perfectly dispatchable: `where-clauses.inherited-overload-dispatch`
+pins exactly this pair (`label()` and `label(width Code)`) WORKING, across an `extends` edge, where the
+declaring-interface half of the key differs and the collision does not arise. So the same two requirements
+are accepted or refused according to which interface the author wrote each in. That split is real and is
+not defensible on its own terms; closing it means widening the impl key to carry a requirement's arity,
+which moves R10's conflicting-conformance detection (E3111) with it. It is its own rung. This case pins
+the refusal AND its true reason so that the day the key is widened, it turns red and forces the decision.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -1422,7 +1432,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:11: Unsupported: interface 'Labeled' declares two requirements named 'label' — a witness dispatch resolves an interface method to its table slot by NAME alone, so the second could never be reached. Give the requirements distinct names
+error E2015: <fragment>:6:11: Unsupported: interface 'Labeled' declares two requirements named 'label' — one conforming type files ONE accepted member per (interface, method NAME), so the two would contend for one witness-table entry. Give the requirements distinct names, or declare one of them on an interface this one `extends`
 ```
 
 <!-- test: error.one-interface-bound-two-ways -->

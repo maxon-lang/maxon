@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "c56c2e242885d6fd",
+  "sourceHash": "491ecdb18ec9f005",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1284,6 +1284,24 @@
       "notEmittedBy": ["selfhosted"]
     },
     {
+      "code": 3114,
+      "tag": "E3114",
+      "name": "SemanticAmbiguousWitnessDispatch",
+      "stage": "semantic",
+      "doc": "A method call on a constrained type parameter names something that MORE THAN ONE of the\nrequirements its `where` constraints supply could be. An interface and its `extends` parents\nmay each declare the name, and two constraints on one parameter may each declare it too --\nand those are DISTINCT requirements occupying DISTINCT witness-table slots, so \"they are both\ncalled `label` and both take one argument\" does not make them interchangeable: each slot holds\na different address.\nA witness dispatch compiles ONE slot offset into the calling function, so there is nothing to\nchoose by and nothing a later pass could repair. Taking the first candidate is what the search\ndid before this code existed, and it is a silent wrong function pointer rather than a\ndiagnostic -- which is why the ambiguity is refused rather than resolved by declaration order.\nThe message names BOTH claimants by their DECLARING interface, since that is the interface the\nauthor has to change; the cure is to rename one requirement or to drop one constraint.",
+      "emittedBy": {"shv2": "semanticAmbiguousWitnessDispatch"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3115,
+      "tag": "E3115",
+      "name": "SemanticNoWitnessRequirementForArgCount",
+      "stage": "semantic",
+      "doc": "A method call on a constrained type parameter names a method that the parameter's `where`\nconstraints supply SEVERAL requirements for, and the call's argument count matches none of\nthem.\nIt is E3036's case (an arity mismatch) at a call site where E3036 cannot be written: that code\nnames ONE callee and ONE expected count, and here there are several, none of which is the one\nthe author meant. Blaming an arbitrary candidate would print a true sentence about the wrong\nrequirement -- the exact failure `interface Derived extends Base` produced before the\nrequirement list became transitive, when `Derived.label` was reported to expect one argument\non a call to an inherited zero-argument `label()`.\nWith exactly ONE requirement of the name there is nothing to select between and the arity is\nreported by E3036 as it always was, so this code is reached only where a choice genuinely\nexisted.",
+      "emittedBy": {"shv2": "semanticNoWitnessRequirementForArgCount"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
       "code": 4001,
       "tag": "E4001",
       "name": "IrUnsupportedExpression",
@@ -1439,7 +1457,7 @@
       "tag": "E6002",
       "name": "BinaryOutputNotReplaceable",
       "stage": "pewriter",
-      "doc": "The previous build output at this path could not be removed before the build began, so this\nbuild cannot replace it -- it is locked (on Windows a RUNNING executable cannot be deleted)\nor read-only. Refused up front rather than at the write, because the write is logged and\nswallowed: carrying on would print \"Wrote N bytes\" and exit 0 over an untouched STALE binary,\nwhich is the exact confident-wrong-answer this deletion exists to prevent.\nThe message names the LIKELY cause as well as the mechanical one: in practice the holder is a\nspec-test or a build of this same tree that has not exited yet, and the compiler cannot\nidentify it (that would need RestartManager/NtQuerySystemInformation, imported nowhere here).\nIt also states that the previous binary SURVIVED -- this is the one branch where a failed build\nleaves an output behind, so a `;`-chained build-then-test runs the stale one. The wait-or-kill\ndeadline it quotes is `WedgeWatchdogMs` (maxon-shv2/Testing/SpecWorkerPool.maxon), read from\nthe constant so the message and the watchdog cannot disagree.",
+      "doc": "The previous build output at this path could not be removed before the build began, so this\nbuild cannot replace it -- it is locked (on Windows a RUNNING executable cannot be deleted)\nor read-only. Refused up front rather than at the write, because the write is logged and\nswallowed: carrying on would print \"Wrote N bytes\" and exit 0 over an untouched STALE binary,\nwhich is the exact confident-wrong-answer this deletion exists to prevent.",
       "emittedBy": {"csharp": "BinaryOutputNotReplaceable", "shv2": "binaryOutputNotReplaceable"},
       "notEmittedBy": ["selfhosted"]
     },

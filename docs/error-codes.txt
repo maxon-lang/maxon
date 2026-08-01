@@ -1319,6 +1319,36 @@ E3113 SemanticThrowsTypeNotAnErrorEnum
 	doc whose `throws` names an interface is the abstract error channel `Error` exists for, is dispatched
 	doc through the witness ABI, and is guarded separately by E3016.
 
+E3114 SemanticAmbiguousWitnessDispatch
+	shv2 semanticAmbiguousWitnessDispatch
+	doc A method call on a constrained type parameter names something that MORE THAN ONE of the
+	doc requirements its `where` constraints supply could be. An interface and its `extends` parents
+	doc may each declare the name, and two constraints on one parameter may each declare it too --
+	doc and those are DISTINCT requirements occupying DISTINCT witness-table slots, so "they are both
+	doc called `label` and both take one argument" does not make them interchangeable: each slot holds
+	doc a different address.
+	doc A witness dispatch compiles ONE slot offset into the calling function, so there is nothing to
+	doc choose by and nothing a later pass could repair. Taking the first candidate is what the search
+	doc did before this code existed, and it is a silent wrong function pointer rather than a
+	doc diagnostic -- which is why the ambiguity is refused rather than resolved by declaration order.
+	doc The message names BOTH claimants by their DECLARING interface, since that is the interface the
+	doc author has to change; the cure is to rename one requirement or to drop one constraint.
+
+E3115 SemanticNoWitnessRequirementForArgCount
+	shv2 semanticNoWitnessRequirementForArgCount
+	doc A method call on a constrained type parameter names a method that the parameter's `where`
+	doc constraints supply SEVERAL requirements for, and the call's argument count matches none of
+	doc them.
+	doc It is E3036's case (an arity mismatch) at a call site where E3036 cannot be written: that code
+	doc names ONE callee and ONE expected count, and here there are several, none of which is the one
+	doc the author meant. Blaming an arbitrary candidate would print a true sentence about the wrong
+	doc requirement -- the exact failure `interface Derived extends Base` produced before the
+	doc requirement list became transitive, when `Derived.label` was reported to expect one argument
+	doc on a call to an inherited zero-argument `label()`.
+	doc With exactly ONE requirement of the name there is nothing to select between and the arity is
+	doc reported by E3036 as it always was, so this code is reached only where a choice genuinely
+	doc existed.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

@@ -1,0 +1,43 @@
+// Test: where-clauses.error.ambiguous-inherited-requirement
+typealias Code = int(0 to u32.max)
+
+interface Base
+	function label() returns Code
+end 'Base'
+
+interface Derived extends Base
+	function label() returns Code
+end 'Derived'
+
+type Widget implements Derived
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function label() returns Code
+		return self.seed
+	end 'label'
+end 'Widget'
+
+type Box uses T where T is Derived
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function go() returns Code
+		return self.item.label()
+	end 'go'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	return WidgetBox.create(Widget.create(7)).go() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3114: <fragment>:32:20: 'label' taking 0 argument(s) is provided by both Derived.label() returns Code and Base.label() returns Code through the constraints on type parameter 'T' — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints

@@ -1373,6 +1373,447 @@ end 'main'
 error E2015: specs/fragments/where-clauses/where-clauses.error.constraint-interface-unreadable.test:20:20: Unsupported: the `where` constraint interface 'Digest' does not resolve — no file in this program declares a readable `interface` of that name, so it is either misspelled or an `interface` whose own declaration fails to parse
 ```
 
+### An `extends`-inherited requirement is dispatchable through the constraint that inherits it
+
+A `where` constraint names ONE interface, but the requirements it supplies are that interface's TRANSITIVE
+set — its own and its `extends` parents'. `interfaceWitnessSlots` computes that list once, and both the
+witness-table BUILDER and the dispatch RESOLVER read it, so the slot a call compiles is the slot the blob
+fills. ⚠ **Before R10c only the CONFORMANCE CHECK walked the chain**: a conformer was required to supply
+`Base.label()` and there was no slot in any table to put it in, so calling it was refused outright with
+`E2015 … no `where` constraint on this type parameter declares a method 'label'` — a refusal of a legal
+program, on a constraint that does declare it.
+
+⚠ **THE TWO RESULTS ARE COMBINED POSITIONALLY (`* 10 +`) AND NOT SUMMED, WHICH IS THE WHOLE ASSERTION.**
+`7 + 1` is `8` whichever slot each call reads, so a summed expectation would be satisfied by a compiler that
+resolved both requirements and numbered their slots the wrong way round — the silent wrong-function-pointer
+this rung exists to make unrepresentable, passing green. `71` is reached only by the correct pairing; the
+swap reads `17`. Target-independent.
+
+<!-- test: where-clauses.inherited-requirement-dispatch -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Base
+	function label() returns Code
+end 'Base'
+
+interface Derived extends Base
+	function extra() returns Code
+end 'Derived'
+
+type Widget implements Derived
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function label() returns Code
+		return self.seed
+	end 'label'
+
+	export function extra() returns Code
+		return 1
+	end 'extra'
+end 'Widget'
+
+type Box uses T where T is Derived
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function callInherited() returns Code
+		return self.item.label()
+	end 'callInherited'
+
+	export function callOwn() returns Code
+		return self.item.extra()
+	end 'callOwn'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	let w = Widget.create(7)
+	let b = WidgetBox.create(w)
+	return (b.callInherited() * 10 + b.callOwn()) as ExitCode
+end 'main'
+```
+```exitcode
+71
+```
+
+### A child interface OVERLOADING an inherited name: two requirements, two slots, two impls
+
+`Base.label()` and `Derived.label(width)` are DISTINCT requirements and take DISTINCT witness slots, so the
+argument COUNT is what tells a dispatch which one it means. ⚠ **A resolver that matched by NAME alone bound
+both calls to whichever requirement it reached first and then reported the OTHER one's arity against the
+call: `E3036 'Derived.label' expects 1 argument(s) but 0 were provided`** — a sentence that is false about an
+interface inheriting a zero-argument `label()`. The two calls below must reach DIFFERENT impls, which is what
+`7` and `21` prove: a single slot serving both would return one of them twice. Target-independent.
+
+<!-- test: where-clauses.inherited-overload-dispatch -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Base
+	function label() returns Code
+end 'Base'
+
+interface Derived extends Base
+	function label(width Code) returns Code
+end 'Derived'
+
+type Widget implements Derived
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function label() returns Code
+		return self.seed
+	end 'label'
+
+	export function label(width Code) returns Code
+		return self.seed * width
+	end 'label'
+end 'Widget'
+
+type Box uses T where T is Derived
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function zeroArg() returns Code
+		return self.item.label()
+	end 'zeroArg'
+
+	export function oneArg() returns Code
+		return self.item.label(3)
+	end 'oneArg'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	let b = WidgetBox.create(Widget.create(7))
+	return (b.zeroArg() + b.oneArg()) as ExitCode
+end 'main'
+```
+```exitcode
+28
+```
+
+### A DIAMOND gives the shared ancestor ONE slot, not two
+
+`Both extends Left, Right` where `Left` and `Right` each extend `Root` reaches `Root` twice. The walk's
+`visited` set — keyed by interface NAME, the same key the registry is — makes the second arrival contribute
+nothing, so `Root.base()` occupies exactly one slot and the table has four rather than five. Two slots for
+one requirement would not be a wasted word: every slot after the duplicate shifts, and the resolver and the
+builder would have to agree on the same duplication to stay in step.
+
+⚠ **THE FOUR RESULTS ARE A BASE-5 NUMERAL, NOT A SUM, AND THAT IS THE ASSERTION.** Any sum of the four is
+invariant under all 24 permutations of the slots, so it pins only that every requirement RESOLVES — never
+which slot each call reads, which is the failure this rung exists to prevent. As digits `1 2 3 4` of a
+positional numeral the answer is `194` for the correct numbering and a different value for every one of the
+other 23. Target-independent.
+
+<!-- test: where-clauses.diamond-inherited-requirement -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+let SlotRadix = 5
+
+interface Root
+	function base() returns Code
+end 'Root'
+
+interface Left extends Root
+	function left() returns Code
+end 'Left'
+
+interface Right extends Root
+	function right() returns Code
+end 'Right'
+
+interface Both extends Left, Right
+	function both() returns Code
+end 'Both'
+
+type Widget implements Both
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function base() returns Code
+		return 1
+	end 'base'
+
+	export function left() returns Code
+		return 2
+	end 'left'
+
+	export function right() returns Code
+		return 3
+	end 'right'
+
+	export function both() returns Code
+		return 4
+	end 'both'
+end 'Widget'
+
+type Box uses T where T is Both
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function digits() returns Code
+		return ((self.item.base() * SlotRadix + self.item.left()) * SlotRadix + self.item.right()) * SlotRadix + self.item.both()
+	end 'digits'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	let b = WidgetBox.create(Widget.create(0))
+	return b.digits() as ExitCode
+end 'main'
+```
+```exitcode
+194
+```
+
+### The NEGATIVE control: a name no interface in the chain declares is still refused
+
+The transitive walk widens what a constraint provides; it must not make the refusal vacuous. `Derived`
+inherits `label` from `Base` and declares `extra` itself, and neither is `missing` — so the call is refused,
+and the sentence is TRUE of every interface in the chain. Without this the two cases above would be
+satisfied by a resolver that had simply stopped refusing anything. Target-independent.
+
+<!-- test: where-clauses.error.no-constraint-declares-method -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Base
+	function label() returns Code
+end 'Base'
+
+interface Derived extends Base
+	function extra() returns Code
+end 'Derived'
+
+type Widget implements Derived
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function label() returns Code
+		return self.seed
+	end 'label'
+
+	export function extra() returns Code
+		return 1
+	end 'extra'
+end 'Widget'
+
+type Box uses T where T is Derived
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function go() returns Code
+		return self.item.missing()
+	end 'go'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	return WidgetBox.create(Widget.create(7)).go() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:36:20: Unsupported: no `where` constraint on this type parameter declares a method 'missing' — a method call on a constrained type parameter must be provided by one of its interfaces
+```
+
+### Two requirements of one name and one arity are AMBIGUOUS, not a first-wins pick
+
+`Derived extends Base` where BOTH declare `label()` leaves two requirements the call could equally mean, in
+two distinct slots. They resolve to the same member here, but the slots are still two and a dispatch
+compiles exactly one offset — so there is nothing to choose by, and choosing the first is a silent wrong
+function pointer the moment the two slots differ. E3114 names both claimants by their DECLARING interface,
+which is the interface the author has to edit, and spells each through `assembleMethodSignature` — the same
+`name(p t) returns r` the conformance diagnostics already print a requirement with. Target-independent.
+
+<!-- test: where-clauses.error.ambiguous-inherited-requirement -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Base
+	function label() returns Code
+end 'Base'
+
+interface Derived extends Base
+	function label() returns Code
+end 'Derived'
+
+type Widget implements Derived
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function label() returns Code
+		return self.seed
+	end 'label'
+end 'Widget'
+
+type Box uses T where T is Derived
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function go() returns Code
+		return self.item.label()
+	end 'go'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	return WidgetBox.create(Widget.create(7)).go() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3114: <fragment>:32:20: 'label' taking 0 argument(s) is provided by both Derived.label() returns Code and Base.label() returns Code through the constraints on type parameter 'T' — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints
+```
+
+### Several requirements of one name and NONE of the call's arity
+
+E3036 names ONE callee and ONE expected count, which cannot be written when several requirements of the name
+exist and the call matches none: blaming an arbitrary one prints a true sentence about the wrong
+requirement, which is exactly what the pre-R10c resolver did. E3115 lists them all instead. ⚠ With a SINGLE
+requirement of the name there is nothing to select between and the arity is still E3036's to report — that
+is what `where-clauses.error.witness-too-few-args` above pins, and it is unmoved. Target-independent.
+
+<!-- test: where-clauses.error.no-witness-requirement-of-that-arity -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Base
+	function label() returns Code
+end 'Base'
+
+interface Derived extends Base
+	function label(a Code, b Code) returns Code
+end 'Derived'
+
+type Widget implements Derived
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function label() returns Code
+		return self.seed
+	end 'label'
+
+	export function label(a Code, b Code) returns Code
+		return a + b
+	end 'label'
+end 'Widget'
+
+type Box uses T where T is Derived
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function go() returns Code
+		return self.item.label(1)
+	end 'go'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	return WidgetBox.create(Widget.create(7)).go() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3115: <fragment>:36:20: no requirement named 'label' provided by the constraints on type parameter 'T' takes 1 argument(s); they provide Derived.label(a Code, b Code) returns Code, Base.label() returns Code
+```
+
+### The OPERATOR path refuses an ambiguity too, and for the same reason
+
+`==` searches the constraints for `equals` and then requires the hit to BE `Equatable` — result, `throws`
+and formals. That test is now a FILTER over every candidate rather than a verdict on the first name match,
+which is what lets a look-alike constraint stop MASKING a real one. Two constraints that are both genuinely
+protocol-shaped are the other half of the same change: they are two distinct witness slots holding two
+distinct conformers' impls, so "both are `Equatable`" does not make them interchangeable, and the operator
+would silently take whichever was written first. Same E3114 as the `.method()` form. Target-independent.
+
+<!-- test: where-clauses.error.ambiguous-operator-witness -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface AlsoEquatable
+	function equals(other Self) returns bool
+end 'AlsoEquatable'
+
+type Widget implements Equatable, AlsoEquatable
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function equals(other Self) returns bool
+		return self.seed == other.seed
+	end 'equals'
+end 'Widget'
+
+type Pair uses T where T is Equatable and AlsoEquatable
+	export var a as T
+	export var b as T
+
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+
+	export function same() returns bool
+		return self.a == self.b
+	end 'same'
+end 'Pair'
+
+typealias WidgetPair = Pair with Widget
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3114: <fragment>:29:17: 'equals' taking 1 argument(s) is provided by both Equatable.equals(other Self) returns bool and AlsoEquatable.equals(other Self) returns bool through the constraints on type parameter 'T' — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints
+```
+
 ### Basic where clause with Map
 
 Map requires `Key is Hashable`. String implements Hashable, so this should work:
