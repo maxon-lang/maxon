@@ -24084,16 +24084,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (TryFoldIntConst(divisor) is { } folded)
       return folded.Value == OverflowingDivisorPattern;
 
-    var rangedName = DivisorRangedTypeName(divisorExpr, divisor);
-    if (rangedName != null && _typeRegistry.TryGetValue(rangedName, out var rangedType)
-        && rangedType is IrRangedPrimitiveType rpt && !rpt.IsFloatBased) {
-      var effectiveUpper = rpt.UpperInclusive ? rpt.IntUpper : rpt.IntUpper - 1;
-
+    if (DivisorIntRange(divisorExpr, divisor) is { } range) {
       // A NON-NEGATIVE low bound makes the range unsigned, and a stored upper below 0 is then the
       // wrapped `u64.max` region — which admits the `-1` BIT PATTERN even though no value it
       // describes is negative. Only a real (non-wrapped) upper lets such a range clear the hazard.
       // A NEGATIVE low bound reads signed throughout: the range clears `-1` iff it stops below it.
-      return rpt.IntLower >= 0 ? effectiveUpper < 0 : effectiveUpper >= OverflowingDivisorPattern;
+      return range.Low >= 0
+        ? range.InclusiveUpper < 0
+        : range.InclusiveUpper >= OverflowingDivisorPattern;
     }
 
     return true;
@@ -24177,15 +24175,35 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (TryFoldIntConst(divisor) is { } folded)
       return folded.Value != 0;
 
-    var rangedName = DivisorRangedTypeName(divisorExpr, divisor);
-    if (rangedName != null && _typeRegistry.TryGetValue(rangedName, out var rangedType)
-        && rangedType is IrRangedPrimitiveType rpt && !rpt.IsFloatBased) {
-      var lo = rpt.IntLower;
-      var effectiveUpper = rpt.UpperInclusive ? rpt.IntUpper : rpt.IntUpper - 1;
-      return lo > 0 || (lo < 0 && effectiveUpper < 0);
-    }
+    if (DivisorIntRange(divisorExpr, divisor) is { } range)
+      return range.Low > 0 || (range.Low < 0 && range.InclusiveUpper < 0);
 
     return false;
+  }
+
+  /// <summary>
+  /// The divisor's declared INTEGER range as (low, INCLUSIVE upper), or null when the compiler
+  /// cannot see one — a value with no ranged typealias, or a float one.
+  ///
+  /// ⭐ ONE DECODE, TWO HAZARDS. `idiv` faults for two unrelated reasons and each has its own proof —
+  /// <see cref="DivisorIsProvablyNonZero"/> asks whether 0 is admitted,
+  /// <see cref="DivisorMayBeNegativeOne"/> whether -1 is. Those two CONCLUSIONS genuinely differ
+  /// (`int(1 to 100)` clears -1 and not 0's cousin; `int(i64.min to -2)` clears -1 while admitting
+  /// no zero either), which is why they stay two named questions rather than shv2's single
+  /// `divisorProof` returning both facts. What must NOT be two is the fact they are both reading:
+  /// how to turn a declared range into the largest value it ADMITS.
+  ///
+  /// ⚠ `upto`'s exclusive upper is that fact, and it was written once per hazard. Nothing made the
+  /// two agree — and a change reaching one and not the other is a divisor wrongly cleared of a
+  /// hazard it has, which is a fault or a masked dividend at run time and a compile error nowhere.
+  /// </summary>
+  private (long Low, long InclusiveUpper)? DivisorIntRange(ExprResult divisorExpr, MaxonValue divisor) {
+    var rangedName = DivisorRangedTypeName(divisorExpr, divisor);
+    if (rangedName == null || !_typeRegistry.TryGetValue(rangedName, out var rangedType)
+        || rangedType is not IrRangedPrimitiveType rpt || rpt.IsFloatBased)
+      return null;
+
+    return (rpt.IntLower, rpt.UpperInclusive ? rpt.IntUpper : rpt.IntUpper - 1);
   }
 
   /// True for the numeric kinds a float `/` produces — the ones whose divide-by-zero proof reads
