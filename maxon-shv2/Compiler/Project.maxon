@@ -1375,8 +1375,8 @@ export type StructLayout
 	//
 	// ⚠ **THE COLUMNS ARE NEVER APPENDED TO DIRECTLY — `addField` IS THE ONE WRITER**, and that is
 	// what makes "the columns fell out of lockstep" unrepresentable rather than merely asserted. A
-	// reader indexes all four by one `FieldIndex`, so a caller that pushed a name and forgot a
-	// default would shift every later field's default onto the wrong field: a silent wrong answer
+	// reader indexes every one of them by one `FieldIndex`, so a caller that pushed a name and forgot
+	// a default would shift every later field's default onto the wrong field: a silent wrong answer
 	// with no crash to find it by.
 	export var fieldNames as ByteArrayArray
 	export var fieldTypes as MaxonTypeArray
@@ -1387,6 +1387,14 @@ export type StructLayout
 	// decodes it for one `FieldIndex`.
 	export var fieldExported as BoolArray
 	export var fieldDefaults as FieldDefaultArray
+	// ⭐ **THE FIELD's PRE-ERASURE SPELLING (A2j): was it declared `__ManagedMemory`?** It is a column and
+	// not a property of `fieldTypes[i]` because `parseTypeReference` folds that spelling into the SAME
+	// `genericInstance(Array with Byte)` a `ByteArray` field resolves to — so by the time the type exists
+	// there is nothing left to ask. A read of a field declared the alias denotes the BUFFER and gets the
+	// buffer's member roster (`Parser.markDeclaredBufferSurface`); one declared `ByteArray` denotes the
+	// `Array`. The two are the same record and different surfaces, and this column is what still tells
+	// them apart. Off for every compiler-synthesized layout — none is written in source at all.
+	export var fieldBufferSurface as BoolArray
 	// The GENERIC TYPE PARAMETERS this type declares (P1.6-A): `uses T` ⇒ `[T]`, `uses A, B` ⇒
 	// `[A, B]`, empty for a non-generic type. Recorded IN DECLARATION ORDER — a `T` in a field/method
 	// type is `typeParameter(POSITION)`, so the order IS the identity, and `Box with X` binds arg 0 to
@@ -1404,7 +1412,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldExported: BoolArray.create(), fieldDefaults: FieldDefaultArray.create(), typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldExported: BoolArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldBufferSurface: BoolArray.create(), typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints}
 	end 'create'
 
 	// Record the type's `uses` parameter names, in declaration order (P1.6-A). Replaces the column
@@ -1435,12 +1443,13 @@ export type StructLayout
 
 	// Append one declared field. THE one writer of the columns — every column, one push, so they
 	// cannot drift.
-	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, exported bool, defaultValue FieldDefault)
+	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, exported bool, defaultValue FieldDefault, declaredBufferSurface bool)
 		self.fieldNames.push(fieldName)
 		self.fieldTypes.push(declaredType)
 		self.fieldMutable.push(mutable)
 		self.fieldExported.push(exported)
 		self.fieldDefaults.push(defaultValue)
+		self.fieldBufferSurface.push(declaredBufferSurface)
 	end 'addField'
 
 	// ⚠ **THE OOB PANIC SENTENCE BELOW IS REPEATED PER COLUMN, AND THE COPY IS FORCED BY THE
@@ -1468,6 +1477,13 @@ export type StructLayout
 	export function fieldDefault(index FieldIndex) returns FieldDefault
 		return try self.fieldDefaults.get(index) otherwise panic("StructLayout.fieldDefault: fieldDefaults.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
 	end 'fieldDefault'
+
+	// Was field `index` declared `__ManagedMemory` (A2j)? `fieldIsMutable`'s twin in every respect — one
+	// bit per field, off the declared SPELLING, written only by `addField`, read only through here for one
+	// `FieldIndex` — and read at the ONE site a field read mints its value (`Parser.emitFieldLoad`).
+	export function fieldIsBufferSurface(index FieldIndex) returns bool
+		return try self.fieldBufferSurface.get(index) otherwise panic("StructLayout.fieldIsBufferSurface: fieldBufferSurface.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
+	end 'fieldIsBufferSurface'
 
 	export function fieldCount() returns FieldIndex
 		return self.fieldNames.count()

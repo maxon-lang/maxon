@@ -39,6 +39,7 @@ let sharedEmptyInterfaces = IrInterfaceArray.create()
 let sharedEmptyConformances = ConformanceDeclArray.create()
 let sharedEmptyTypeNameDecls = TypeNameDeclArray.create()
 let sharedEmptyFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
+
 // Overloading a name is rare, so the overwhelming file contributes NO overload set. It is shared for
 // `typeNameDecls`' stronger reason too: only the real parse can fill it, and the tolerant declaration
 // sweep builds an artifact per file that would otherwise pay for an empty map each.
@@ -47,12 +48,21 @@ let sharedEmptyOverloadSets = OverloadSetMap.create()
 // One `funcReturnTypes` registry contribution: a function's name and its
 // declared return type, recorded by the parser. Ordered in an array so the
 // merge order is the declaration order.
+//
+// ⭐ **`declaredBufferSurface` IS THE PRE-ERASURE SPELLING OF THAT RETURN TYPE (A2j)** — true iff the
+// source wrote `__ManagedMemory`, which `parseTypeReference` folds into `genericInstance(Array with Byte)`
+// before a `MaxonReturnType` exists. It rides THIS record rather than a column of its own for one reason:
+// the two facts must never disagree about the same declaration, and they cannot when they are written,
+// remapped and folded as one entry. `ProgramSignatures.record` applies them together, with identical
+// last-wins semantics, so the buffer bit is exactly as accurate as the return type it accompanies —
+// including for an overload set, where the sweep publishes ONE answer per bare name for both.
 export type FuncReturnTypeEntry
 	export var name as ByteArray
 	export var returnType as MaxonReturnType
+	export var declaredBufferSurface as bool
 
-	export static function create(name ByteArray, returnType MaxonReturnType) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType}
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredBufferSurface bool) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredBufferSurface: declaredBufferSurface}
 	end 'create'
 end 'FuncReturnTypeEntry'
 
@@ -305,8 +315,8 @@ export type FileParseArtifact
 	// Record a function's return type as this file's contribution to the
 	// project-wide `funcReturnTypes` registry. Called by the parser after it
 	// builds a function — NEVER touching `Project`.
-	export function recordFuncReturnType(name ByteArray, returnType MaxonReturnType)
-		self.funcReturnTypes.push(FuncReturnTypeEntry.create(name, returnType: returnType))
+	export function recordFuncReturnType(name ByteArray, returnType MaxonReturnType, declaredBufferSurface bool)
+		self.funcReturnTypes.push(FuncReturnTypeEntry.create(name, returnType: returnType, declaredBufferSurface: declaredBufferSurface))
 	end 'recordFuncReturnType'
 
 	// Record a function's parameter signature as this file's contribution to the

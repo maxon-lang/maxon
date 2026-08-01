@@ -1514,6 +1514,7 @@ end 'discardBindingList'
 typealias FieldHopCount = int(0 to 255)
 
 let ChainMethodMinHops = 2 as FieldHopCount
+
 // A field STORE needs one hop and no more (`p.x = 1`, `o.inner.x = 1`) — the zero-hop `x = 1` is a
 // BINDING assignment, which `assignsAt` owns and `fieldAssignsAt` must not claim.
 let FieldStoreMinHops = 1 as FieldHopCount
@@ -2895,7 +2896,7 @@ end 'arrayMethodMutatesReceiver'
 // D11, D12, R10 and D11c all landed on.
 //
 // ⚠ **THE ORDER IS THE MESSAGE'S ORDER, BECAUSE THE MESSAGE IS JOINED FROM THIS LIST**
-// (`bufferSurfaceRosterList`). And the entries are the very constants the arms match on, so the sentence
+// (`rosterList`). And the entries are the very constants the arms match on, so the sentence
 // cannot spell a member differently from the dispatch that serves it — the residual a hand-written list of
 // `b"…"` literals beside these would have left.
 //
@@ -2934,31 +2935,117 @@ function bufferSurfaceMemberNames() returns ByteArrayArray
 	return names
 end 'bufferSurfaceMemberNames'
 
-// The read side of the roster — asked ONCE per buffer-surface method call, ahead of every arm, and never
-// for an `Array` receiver (`Set.contains`'s "a program that never names `__ManagedMemory` does not pay to
-// ask" applies here too: the question is behind `isManagedMemory`).
-function bufferSurfaceHasMember(name ByteArray) returns bool
-	for member in bufferSurfaceMemberNames() 'eachMember'
+// ⭐⭐ **WHICH MEMBERS THE `Array` SURFACE HAS — the buffer roster's twin, one surface over (A2k).** It
+// exists for the identical reason and carries the identical obligations: the entries are the very
+// constants `dispatchArrayMethod`'s arms match on, the ORDER is the message's order because the message is
+// joined from this list, and the fall-through is a PANIC naming it.
+//
+// ⚠ **BEFORE THIS LIST THE `Array` REFUSAL WAS A HAND-WRITTEN LITERAL, AND IT WAS FALSE IN BOTH
+// DIRECTIONS AT ONCE** — the same shape D11b found on the buffer, which is why the two are one rung. It
+// named `create`, which the dispatch has never served as a MEMBER (it is a static factory, `Array.create(…)`
+// — proven by the drift panic below having no arm to reach), and it omitted `managed`, which the dispatch
+// DOES serve (the `managedField` arm). So it denied something real and advertised something absent.
+//
+// ⚠ **`create` IS NOT MISSING FROM THIS LIST, IT IS NOT A MEMBER.** The refusal says so in its own clause
+// rather than by leaving the name out silently — a reader who wrote `arr.create()` needs to be told where
+// `create` actually lives, and a reader who wrote `Array.create(…)` must not be told it is unsupported.
+//
+// ⚠ **THE BUFFER-ONLY NAMES ARE ABSENT ON PURPOSE**: `length`, `byteAt`, `setLength`, `setByte` and `grow`
+// are `__ManagedMemory`'s alone (their arms are gated on the surface), so an `Array` receiver asking for one
+// is refused with THIS roster — `setLength` is not missing from `Array`, it is not an `Array` method at all.
+// `count` is the `Array`'s spelling of what the buffer calls `length`; the two share an emission and NEVER
+// a surface.
+//
+// ⚠ **AND THE NAMES NEITHER SURFACE HAS** — `map`/`contains`/… — are the refusal's "arrive later" tail. A
+// rung that builds one adds its line HERE and strikes it from that tail in the same edit, which is the
+// obligation `bufferSurfaceMemberNames`'s own `are not built` clause carries.
+function arraySurfaceMemberNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(ManagedMemoryFieldName)
+	names.push(ArrayGetMethod)
+	names.push(ArraySetMethod)
+	names.push(ArrayFirstMethod)
+	names.push(ArrayLastMethod)
+	names.push(ArrayPopMethod)
+	names.push(RemoveMethod)
+	names.push(SliceMethod)
+	names.push(CountMethod)
+	names.push(ArrayCapacityMethod)
+	names.push(IsEmptyMethod)
+	names.push(CloneMethod)
+	names.push(ArrayPushMethod)
+	names.push(ArrayReserveMethod)
+	names.push(ArrayResizeMethod)
+	names.push(ArrayClearMethod)
+	names.push(InsertMethod)
+	names.push(AppendMethod)
+	return names
+end 'arraySurfaceMemberNames'
+
+// ⚠⚠ **A ROSTER IS BUILT ONCE PER FILE THAT ASKS FOR IT, NOT ONCE PER CALL SITE, AND THE DIFFERENCE IS
+// MEASURED.** Both lists are CONSTANTS — the two functions above only push, and nothing mutates what they
+// return — so `dispatchArrayMethod` can hold a reference instead of rebuilding one. Rebuilt per dispatch
+// they cost the array record plus its doubling reallocations at EVERY array-method call in the program:
+// measured on the scale ladder at **+1,023 allocations in `phase:parse` at rung 0 rising to +26,009 at rung
+// 5**, linear in call sites and 93% of this rung's whole allocation delta. Memoized per Parser that number
+// becomes ~7 per file that calls an array method at all, and the BUFFER roster stops paying it too — it
+// had been per-call since D11b.
+//
+// ⚠ **THEY ARE MEMOIZED ON THE PARSER RATHER THAN AT MODULE SCOPE, AND NOT BY PREFERENCE**: the bootstrap
+// refuses a function call in a global initializer (E2045), so `let roster = arraySurfaceMemberNames()`
+// beside the shared empties below does not compile. That is also the safer shape here — a module-level
+// array is shared across the per-file parse fan-out, where a per-Parser one is private by construction.
+//
+// ⚠ **LAZILY, off a shared empty anchor** — `sharedEmptyDeclaredFuncNames`' discipline, and load-bearing
+// for its reason: `Parser.create` runs once per FILE **and once per top-level constant**
+// (`walkConstInitializer`), so building these eagerly would bill two arrays to every constant in the
+// program for a structure most Parsers never read. The identity test is what keeps that at one pointer.
+// ⚠ ONE anchor for BOTH memos, not one each: it is only ever compared for identity, never read or written,
+// so a second would add nothing but a chance to test a field against the wrong one — a copy-paste that
+// disables the memo silently, with no compile error and no wrong answer to find it by.
+let sharedEmptySurfaceRoster = ByteArrayArray.create()
+
+// ⭐ **WHICH ROSTER ANSWERS FOR THIS RECEIVER** — the ONE place the surface picks a member list, so the
+// gate in `dispatchArrayMethod`, the refusal it throws and the drift panic at the end of that dispatch all
+// read the same answer. One record, two surfaces (`SignatureIndex.ManagedMemoryTypeName`); the surface is
+// decided once, by `dispatchArrayMethod`, and this turns that answer into the list it implies.
+
+// The read side of a roster — asked ONCE per array-method call, ahead of every arm.
+function rosterHasMember(name ByteArray, roster ByteArrayArray) returns bool
+	for member in roster 'eachMember'
 		if name.equals(member) 'isMember'
 			return true
 		end 'isMember'
 	end 'eachMember'
 	return false
-end 'bufferSurfaceHasMember'
+end 'rosterHasMember'
 
-// The roster as the refusal prints it — `length/capacity/get/…`, joined from the list above rather than
-// transcribed beside it. `IrInterface.builtinConformerMethodNames` renders a diagnostic's method list off
-// its own dispatch walk for the identical reason.
-function bufferSurfaceRosterList() returns String
+// A roster as a refusal prints it — `length/capacity/get/…`, joined from the list the dispatch consults
+// rather than transcribed beside it. `IrInterface.builtinConformerMethodNames` renders a diagnostic's
+// method list off its own dispatch walk for the identical reason.
+//
+// ⚠ ONE renderer for BOTH surfaces: a second `/`-join would be the very duplication these lists exist to
+// remove — two spellings of one sentence's shape, free to drift in punctuation while each stays "derived".
+function rosterList(roster ByteArrayArray) returns String
 	var rendered = ""
-	for member in bufferSurfaceMemberNames() 'eachMember'
+	for member in roster 'eachMember'
 		if not rendered.isEmpty() 'separator'
 			rendered = "{rendered}/"
 		end 'separator'
 		rendered = "{rendered}{String.from(member)}"
 	end 'eachMember'
 	return rendered
-end 'bufferSurfaceRosterList'
+end 'rosterList'
+
+// The refusal for a member the receiver's surface does not have. ONE gate throws it, and the SURFACE picks
+// which sentence answers — because a roster must answer for the type it is shown about: a reader handed the
+// `Array` list for a `__ManagedMemory` receiver is sent to the wrong question entirely.
+function surfaceRosterRefusal(member ByteArray, roster ByteArrayArray, isManagedMemory bool) returns String
+	if isManagedMemory 'bufferSurface'
+		return "`{String.from(ManagedMemoryTypeName)}` member '{String.from(member)}' — R4.4 provides {rosterList(roster)}; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for"
+	end 'bufferSurface'
+	return "`Array` method '{String.from(member)}' — P1.7 provides {rosterList(roster)}; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later"
+end 'surfaceRosterRefusal'
 
 // ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the same immutable-receiver rule,
 // beside the `Array` half above rather than in `SetRuntime.maxon`, where it used to sit holding the five
@@ -5274,6 +5361,10 @@ export type Parser
 	// allocation-neutral against the shared empty — until a name is actually declared twice.
 	var declaredFuncNames as DeclaredFuncNameSet
 	var overloadMembers as OverloadMemberMap
+	// ⭐ The two MEMBER ROSTERS `dispatchArrayMethod` gates on, memoized per file off their shared empty
+	// anchors — see `sharedEmptySurfaceRoster` for the measurement that put them here.
+	var arraySurfaceRoster as ByteArrayArray
+	var bufferSurfaceRoster as ByteArrayArray
 
 	// ⭐⭐ **THE STDLIB/USER SHADOW RENAME IS APPLIED HERE, TO THE TOKENS, AND THAT PLACEMENT IS THE WHOLE
 	// DESIGN (A1s wave 2).**
@@ -5403,7 +5494,9 @@ export type Parser
 			collectsTypeNameUses: false,
 			declaredTypeAliases: sharedEmptyDeferredNameDiagnostics,
 			declaredFuncNames: sharedEmptyDeclaredFuncNames,
-			overloadMembers: sharedEmptyOverloadMembers
+			overloadMembers: sharedEmptyOverloadMembers,
+			arraySurfaceRoster: sharedEmptySurfaceRoster,
+			bufferSurfaceRoster: sharedEmptySurfaceRoster
 		}
 	end 'create'
 
@@ -6061,9 +6154,14 @@ export type Parser
 		if not self.skipBalancedParens() 'malformedParams'
 			return
 		end 'malformedParams'
+		// ⭐ **THE RETURN TYPE's PRE-ERASURE SPELLING (A2j)** — read before `parseOptionalReturnType` on the
+		// next line destroys it. This is the SWEEP's copy, and it is the one a call site reads
+		// (`ProgramSignatures.returnsBufferSurface`): the callee may be in another file, so only the
+		// whole-program index can answer for it.
+		let declaredBufferSurface = self.returnSpellingDenotesBuffer()
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		let funcName = self.declaredMethodName(nameTok)
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType))
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredBufferSurface: declaredBufferSurface))
 		// The `throws E` clause follows the return type; parsed BEFORE the consume-scan so the cursor lands
 		// past it. Only a THROWING function gets an entry (its absence is "does not throw"), mirroring
 		// `paramConsumes` recording only consuming functions. Gated on the `throws` KEYWORD being present so
@@ -7374,6 +7472,10 @@ export type Parser
 		if throwsClauseIsThrowing(self.signatures.throwsOf(base)) 'throwingOverload'
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations `throws`, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told which overload's error type it recovers. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'throwingOverload'
+
+		if self.signatures.returnsBufferSurface(base) 'bufferReturningOverload'
+			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations returns `{String.from(ManagedMemoryTypeName)}`, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
+		end 'bufferReturningOverload'
 	end 'requireOverloadableName'
 
 	// Does this signature declare a parameter whose OWNERSHIP a call can transfer — a managed value (String,
@@ -7979,15 +8081,23 @@ export type Parser
 			// the whole of the type inference — see `readFieldDefaultLiteral`.
 			try self.consume(TokenKind.equals)
 			let inferred = try self.readFieldDefaultLiteral()
-			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag))
+			// Shape 2 has no annotation at all, so no spelling can name the buffer alias (A2j); the type
+			// comes from a LITERAL, and no literal produces a `__ManagedMemory`.
+			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag), declaredBufferSurface: false)
 			return
 		end 'typeFromLiteral'
 
 		try self.consume(TokenKind.as)
+		// ⭐ **THE FIELD's PRE-ERASURE SPELLING (A2j)** — asked at the cursor, which now sits on the
+		// annotation's first token, because `parseTypeReference` on the next line folds `__ManagedMemory`
+		// into the very `genericInstance` a `ByteArray` field resolves to. Captured in the ONE shared field
+		// reader, so the tolerant sweep's layout — the whole-program one every read door consults — and the
+		// real parse's carry the identical bit, for the reason this reader is shared at all.
+		let declaresBufferSurface = self.typeSpellingAtDenotesBuffer(self.pos)
 		let fieldType = try self.parseTypeReference()
 
 		if not self.at(TokenKind.equals) 'noDefault'
-			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.none)
+			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.none, declaredBufferSurface: declaresBufferSurface)
 			return
 		end 'noDefault'
 
@@ -8004,7 +8114,7 @@ export type Parser
 		try self.consume(TokenKind.equals)
 		let given = try self.readFieldDefaultLiteral()
 		try self.requireFieldDefaultType(nameTok, fieldType: fieldType, given: given)
-		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(given.payload, tag: given.tag))
+		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(given.payload, tag: given.tag), declaredBufferSurface: declaresBufferSurface)
 	end 'readStructFieldInto'
 
 	// ⭐ **THE VERDICT ON A FIELD'S LITERAL DEFAULT, ASKED ONLY WHERE IT CAN BE ANSWERED.** `as Integer =
@@ -9501,8 +9611,13 @@ export type Parser
 		var paramNames = ByteArrayArray.create()
 		var paramTypes = MaxonTypeArray.create()
 		var paramRanges = SourceRangeArray.create()
+		// An interface REQUIREMENT binds no value — it declares a signature and has no body — so the
+		// declared-buffer-alias column (A2j) is filled and dropped here. It is not omitted from the call,
+		// because `parseFunctionParameters` fills every column in lockstep and a caller that could opt out
+		// would be a second way for the columns to come apart.
+		var paramBufferSurfaces = BoolArray.create()
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces)
 		try self.consume(TokenKind.rightParen)
 
 		let returnType = try self.parseOptionalReturnType()
@@ -10187,6 +10302,9 @@ export type Parser
 		// record a ValueOrigin at the DECLARATION for parameter `i` — the source site the
 		// E5001 diagnostic points at when a parameter is in a register-pressure blocking set.
 		var paramRanges = SourceRangeArray.create()
+		// Parallel to `paramNames` too: whether the parameter's DECLARED TYPE spelled `__ManagedMemory`
+		// (A2j) — the fact `parseTypeReference` is about to erase, read by `bindParameters` below.
+		var paramBufferSurfaces = BoolArray.create()
 
 		// ⭐ **THE RECEIVER IS AN ORDINARY PARAMETER, PUSHED FIRST.** That is the entire mechanism:
 		// it occupies position 0, so it is ValueId 0 by the same Std-ABI seeding every parameter
@@ -10209,10 +10327,13 @@ export type Parser
 			paramNames.push(SelfParamName)
 			paramTypes.push(try self.enclosingSelfType(nameTok))
 			paramRanges.push(SourceRange.ofToken(nameTok))
+			// The receiver is typed by `enclosingSelfType`, never by a source spelling, so it can never be
+			// the buffer alias — but it occupies position 0 and every column here is indexed by position.
+			paramBufferSurfaces.push(false)
 		end 'receiverParam'
 
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces)
 		try self.consume(TokenKind.rightParen)
 
 		// ⭐ **A STRUCT PARAMETER OR RETURN TYPE IS RE-TAGGED `structRef` HERE**, in the real parse where
@@ -10221,6 +10342,10 @@ export type Parser
 		// them: the value-tag seeding below, `bindParameters`, `func.maxonParamTypes`, the recorded
 		// signature, and `parseReturnStatement`'s declared-type check all then see a struct as a struct.
 		paramTypes = self.resolveNamedStructAll(paramTypes)
+		// The return type's pre-erasure spelling (A2j), read through the same one reader the SWEEP reads it
+		// through, so the two passes cannot form two opinions of what `returns __ManagedMemory` means — the
+		// property `parseOptionalReturnType` is shared for. This copy reaches `project.funcReturnTypes`.
+		let returnsBufferSurface = self.returnSpellingDenotesBuffer()
 		let returnType = self.resolveNamedStructReturn(try self.parseOptionalReturnType())
 		// The `throws E` clause (P1.4b) — stamped onto the function so the body parse (`throw`/propagate)
 		// and the lowering (`ret` → `errorReturn` inside a throwing function) can read it off `func`.
@@ -10430,7 +10555,7 @@ export type Parser
 		// overload's mangled registration name. `overloadRegistrationNameFor` refuses an overload set whose
 		// name has consume facts at all, precisely so that this per-name answer cannot be one sibling's read
 		// as another's.
-		try self.bindParameters(sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		try self.bindParameters(sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces)
 
 		self.skipNewlines()
 		// parseStatements threads a "current block" that control-flow statements can
@@ -10442,7 +10567,7 @@ export type Parser
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 
-		self.artifact.recordFuncReturnType(name, returnType: returnType)
+		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredBufferSurface: returnsBufferSurface)
 		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(name)
@@ -10631,7 +10756,13 @@ export type Parser
 	// `= <default>` after the type is a later milestone, so it is rejected here with
 	// a positioned `unsupported` rather than silently dropped. The caller has already
 	// consumed the `(` and consumes the closing `)`.
-	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
+	//
+	// ⭐ **`paramBufferSurfaces` IS THE PRE-ERASURE SPELLING COLUMN (A2j)**, the shape
+	// `FuncSignature.paramAggregateNames` already established for a union parameter's name: a fact the
+	// declaration holds and `parseTypeReference` is about to destroy, captured at the last moment it is
+	// readable and carried alongside the columns it describes. It needs no signature-index entry, because the
+	// only reader is `bindParameters` — and both live inside one `parseFunction`.
+	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramBufferSurfaces BoolArray) throws ParseError
 		if self.at(TokenKind.rightParen) 'noParams'
 			return
 		end 'noParams'
@@ -10643,6 +10774,9 @@ export type Parser
 			// scans, or a `function f(end Integer)` would read as a block CLOSE that never opened.
 			let nameTok = try self.consumeNameToken(NamePosition.declaration)
 			try self.requireUnreservedName(nameTok)
+			// Asked at the cursor, which sits on the type's first token — the last instant the spelling
+			// `__ManagedMemory` still exists (`typeSpellingAtDenotesBuffer`).
+			let declaresBufferSurface = self.typeSpellingAtDenotesBuffer(self.pos)
 			let paramType = try self.parseTypeReference()
 
 			if self.at(TokenKind.equals) 'hasDefault'
@@ -10657,6 +10791,7 @@ export type Parser
 			paramNames.push(nameTok.value)
 			paramTypes.push(paramType)
 			paramRanges.push(SourceRange.ofToken(nameTok))
+			paramBufferSurfaces.push(declaresBufferSurface)
 
 			// ⚠ NO COUNT CHECK HERE. There used to be one, testing `paramNames.count()` against the old
 			// register cap — a SECOND, and WEAKER, spelling of the ceiling: it counted only the parameters the
@@ -10683,7 +10818,7 @@ export type Parser
 	// is where that refusal becomes E3006, anchored on the PARAMETER's own name token, which is
 	// the declaration that has to change. The bootstrap reports the identical program at the
 	// identical token.
-	function bindParameters(funcName ByteArray, paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
+	function bindParameters(funcName ByteArray, paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramBufferSurfaces BoolArray) throws ParseError
 		// ⭐ **ONLY AN INSTANCE METHOD's feed is an OPAQUE-ARRAY feed** (P1.7 slice 3b-v). A feed can be an ARRAY
 		// feed (`self.items.push(item)` / a sibling forward — marked for instance methods) OR a P1.6-B2 STRUCT-
 		// FIELD feed (`Self{value: v}` — marked ONLY for a receiverless function, `scanConsumeBits`'s
@@ -10724,6 +10859,11 @@ export type Parser
 			end 'writesThisScanCannotSee'
 
 			let binding = try self.scope.declareParameterBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
+			// ⭐ **A PARAMETER DECLARED `__ManagedMemory` DENOTES THE BUFFER (A2j)** — the spelling was read at
+			// the declaration (`parseFunctionParameters`) and this is the site that BINDS the value it named,
+			// so this is where the fact becomes the mark `dispatchArrayMethod` already reads. Parameter `i`
+			// owns ValueId `i`, which is what makes the column's index the value's.
+			self.markDeclaredBufferSurface(i as ValueId, declaredAsBuffer: try paramBufferSurfaces.get(i) otherwise panic("bindParameters: paramBufferSurfaces.get OOB at {i} — a parameter's columns are built in lockstep"))
 			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
 			// diagnostic can resolve the parameter to source (it is minted by no op — see
 			// ParamOriginTable — so it has no `emitOp` origin).
@@ -27158,6 +27298,24 @@ export type Parser
 	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
 	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
 	// `requireOpaqueArrayCopyable` rejects.
+	// The roster the surface implies, built on this file's FIRST array-method call and held after — see
+	// `sharedEmptySurfaceRoster` for why the memo is per Parser and why it is lazy.
+	function surfaceMemberNames(isManagedMemory bool) returns ByteArrayArray
+		if isManagedMemory 'bufferSurface'
+			if self.bufferSurfaceRoster is sharedEmptySurfaceRoster 'firstBufferCallInThisFile'
+				self.bufferSurfaceRoster = bufferSurfaceMemberNames()
+			end 'firstBufferCallInThisFile'
+
+			return self.bufferSurfaceRoster
+		end 'bufferSurface'
+
+		if self.arraySurfaceRoster is sharedEmptySurfaceRoster 'firstArrayCallInThisFile'
+			self.arraySurfaceRoster = arraySurfaceMemberNames()
+		end 'firstArrayCallInThisFile'
+
+		return self.arraySurfaceRoster
+	end 'surfaceMemberNames'
+
 	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask, receiverStorage MutatedParamMask, viaManagedField bool) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
@@ -27195,9 +27353,21 @@ export type Parser
 		// (the next line): a rule about HOW a member may be used must not speak for a member the receiver
 		// does not have. That fix covered the buffer's own four; this covers the twelve the shared `Array`
 		// dispatch brought with it.
-		if isManagedMemory and not bufferSurfaceHasMember(methodTok.value) 'notABufferMember'
-			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` member '{String.from(methodTok.value)}' — R4.4 provides {bufferSurfaceRosterList()}; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for", line: methodTok.line, column: methodTok.column)
-		end 'notABufferMember'
+		//
+		// ⭐⭐ **BOTH SURFACES COME THROUGH THIS ONE GATE (A2k).** D11b gated the buffer alone and left the
+		// `Array` path falling through to a hand-written literal at the end of the function — which was false
+		// in both directions (see `arraySurfaceMemberNames`). Two gates would have been two spellings of one
+		// rule; the surface picks the roster (`surfaceMemberNames`) and the roster answers for the type it is
+		// shown about (`surfaceRosterRefusal`).
+		//
+		// ⚠ **IT IS BEHAVIOUR-NEUTRAL FOR AN `Array` RECEIVER, and that is what the derived list guarantees**:
+		// every name off the `Array` roster reached the fall-through refusal before and is refused here now,
+		// with the same E2015 at the same token — only the sentence moved. Nothing on the roster can be
+		// refused, because every entry matches an arm (the panic at the end of this function is what says so).
+		let roster = self.surfaceMemberNames(isManagedMemory)
+		if not rosterHasMember(methodTok.value, roster: roster) 'notASurfaceMember'
+			throw ParseError.unsupported(surfaceRosterRefusal(methodTok.value, roster: roster, isManagedMemory: isManagedMemory), line: methodTok.line, column: methodTok.column)
+		end 'notASurfaceMember'
 
 		// ⚠ **THE BUFFER-ONLY MEMBERS ARE GATED ON THAT ANSWER HERE TOO, or the E3019 rule names methods the
 		// receiver does not have** (found in review, R4.2). Ungated, `let a = IntArray.create()` followed by
@@ -27488,25 +27658,20 @@ export type Parser
 			return self.emitRuntimeCall(ArrMemGrowName, args: pairArgs(arr, second: newCapacity), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'grow'
 
-		// ⚠⚠ **A BUFFER RECEIVER CANNOT REACH HERE, AND THIS IS THE CHECK THAT SAYS SO (D11b).** The roster
-		// gate above admitted only the names `bufferSurfaceMemberNames` lists, and each of those matches an arm
-		// on its own spelling and at most on the surface this line has already established — so a buffer
-		// arriving here means the roster gained a member and the dispatch did not. That is D11's defect one
-		// level up, and the wrong answer it would otherwise give is unusually convincing: the reader would be
-		// handed the roster refusal for a member the roster PROVIDES. It cannot be caught earlier than the call
-		// that reveals it (an arm is a control-flow position, not an entry a table can enumerate at install
-		// time), so it is caught here, loudly, rather than described in a comment nobody re-reads.
-		// ⭐ **VERIFIED RED in review (D11b)**: pushing `ManagedMemoryCreateMethod` onto the roster and writing
-		// `mm.create()` reaches this panic, naming `create` and both remedies — not the roster refusal.
-		//
-		// ⚠ **THE REFUSAL BELOW THEREFORE NAMES THE `Array` SURFACE, AND ONLY IT** — the two rosters differ
-		// and a message listing the other one sends the reader to the wrong question: `setLength` is not
-		// missing from `Array`, it is not an `Array` method at all.
-		if isManagedMemory 'rosterNamesAMemberNoArmServes'
-			panic("dispatchArrayMethod: '{String.from(methodTok.value)}' is on the `{String.from(ManagedMemoryTypeName)}` roster (`bufferSurfaceMemberNames`) and no arm served it. EITHER add the arm, or take the name back out of the roster — the gate at the top of this function admits nothing else, so this line is unreachable while the two agree")
-		end 'rosterNamesAMemberNoArmServes'
-
-		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
+		// ⚠⚠ **NO RECEIVER OF EITHER SURFACE CAN REACH HERE, AND THIS IS THE CHECK THAT SAYS SO** (D11b for
+		// the buffer, A2k for the `Array`). The roster gate at the top admitted only the names
+		// `surfaceMemberNames` lists, and each of those matches an arm on its own spelling and at most on the
+		// surface that gate had already established — so arriving here means a roster gained a member and the
+		// dispatch did not. That is D11's defect one level up, and the wrong answer it would otherwise give is
+		// unusually convincing: the reader would be handed the roster refusal for a member the roster
+		// PROVIDES. It cannot be caught earlier than the call that reveals it (an arm is a control-flow
+		// position, not an entry a table can enumerate at install time), so it is caught here, loudly, rather
+		// than described in a comment nobody re-reads.
+		// ⭐ **VERIFIED RED, once per roster**: pushing `ManagedMemoryCreateMethod` onto the buffer roster and
+		// writing `mm.create()` reached this panic in D11b's review; pushing a bogus name onto
+		// `arraySurfaceMemberNames` and calling it reached it in A2k's — each naming the member and both
+		// remedies, not the roster refusal.
+		panic("dispatchArrayMethod: '{String.from(methodTok.value)}' is on this receiver's roster ({rosterList(roster)}) and no arm served it. EITHER add the arm, or take the name back out of `arraySurfaceMemberNames`/`bufferSurfaceMemberNames` — the gate at the top of this function admits nothing else, so this line is unreachable while the two agree")
 	end 'dispatchArrayMethod'
 
 	// ⭐⭐ **REFUSE A RECEIVER-WRITING METHOD ON AN IMMUTABLE RECEIVER (E3019) — ONE RULE, ONE HOME, FOR
@@ -29609,6 +29774,14 @@ export type Parser
 			self.lastFieldReadOffset = offset
 		end 'namedFieldRead'
 
+		// ⭐ **A FIELD DECLARED `__ManagedMemory` READS AS THE BUFFER SURFACE (A2j)** — the declared SPELLING,
+		// which `declared` above cannot carry (the alias resolves to the same `genericInstance` a `ByteArray`
+		// field does), taken off the layout's own column. It sits at THIS mint rather than at the nine doors
+		// that reach it — `h.buf`, `self.buf`, a bare `buf` in a method, a chain hop, a compound assignment's
+		// read — because every one of them funnels through this line, and a per-door mark would be the
+		// enumeration that misses the tenth.
+		self.markDeclaredBufferSurface(result, declaredAsBuffer: layout.fieldIsBufferSurface(index))
+
 		return result
 	end 'emitFieldLoad'
 
@@ -30111,27 +30284,71 @@ export type Parser
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
 	// identical copy-on-write reason, through the same one home for it (`privateValueMarkSet`).
 	//
-	// Its THREE callers are the three producers of a buffer VALUE: `__ManagedMemory.create`
-	// (`parseManagedMemoryStaticCall`), a `slice` taken THROUGH the buffer surface (`parseArraySlice`), and
-	// `__ManagedDirectory.filename`/`currentPath` (`emitOwnedManagedMemoryResult`, R4.3). ⚠ It had said TWO,
-	// omitting the third, while D11b's own measurement enumerated four producers — the fourth being `.managed`,
-	// which mints NO value to mark: it is an identity read, so it passes the surface along the dispatch instead
-	// (see `dispatchArrayMethod`).
+	// Its callers are the producers of a buffer VALUE: `__ManagedMemory.create` (`parseManagedMemoryStaticCall`),
+	// a `slice` taken THROUGH the buffer surface (`parseArraySlice`), `__ManagedDirectory.filename`/`currentPath`
+	// (`emitOwnedManagedMemoryResult`, R4.3), and — through `markDeclaredBufferSurface` below — the three sites
+	// that bind a value whose DECLARED type spelled the alias (A2j). ⚠ It had said TWO, omitting the third,
+	// while D11b's own measurement enumerated four producers — the fourth being `.managed`, which mints NO
+	// value to mark: it is an identity read, so it passes the surface along the dispatch instead (see
+	// `dispatchArrayMethod`).
 	//
-	// ⚠⚠ **THE MARK IS A FACT ABOUT A `ValueId`, SO IT DOES NOT SURVIVE A DECLARED TYPE — AND THAT IS A HOLE
-	// D11b's ruling does NOT yet cover.** `__ManagedMemory` is registered as a generic ALIAS of `Array with
-	// Byte` (`ProgramSignatures.registerManagedFileType`, whose own note calls it "reaches the ordinary `Array`
-	// paths with nothing special-cased" — which is exactly this), so a parameter, a struct field or a return type
-	// SPELLED `__ManagedMemory` resolves to a type indistinguishable from `ByteArray` and the value it binds
-	// carries no mark. The buffer surface is therefore INVERTED at those three spellings, measured 2026-07-31:
-	// inside `function f(m __ManagedMemory)`, `m.push(7)`/`m.count()` compile, link and RUN, while `m.length()`
-	// is refused as an unknown `Array` method. Closing it needs a declared-as-the-buffer-alias bit carried per
-	// parameter / per field / per return through this index — the spelling is gone by the time
-	// `bindParameters` sees a `MaxonType` — which is a rung, not a mark.
+	// ⚠⚠ **THE MARK IS A FACT ABOUT A `ValueId`, SO IT DOES NOT SURVIVE TYPE ERASURE — AND A *DECLARED*
+	// SPELLING IS THEREFORE AN ENTRANCE A SWEEP OVER VALUE PRODUCERS STRUCTURALLY CANNOT SEE.** That is the
+	// generalisable lesson of A2j, and it is why D11b's enumeration missed it. `__ManagedMemory` is registered
+	// as a generic ALIAS of `Array with Byte` (`ProgramSignatures.registerManagedFileType`, whose own note
+	// calls it "reaches the ordinary `Array` paths with nothing special-cased"), so a parameter, a struct field
+	// or a return type SPELLED `__ManagedMemory` resolves to a type indistinguishable from `ByteArray`.
+	// MEASURED on the tree before A2j: inside `function f(m __ManagedMemory)`, `m.push(7)`/`m.count()`
+	// compiled, linked and RAN, while `m.length()` — the buffer roster's FIRST member — was refused as an
+	// unknown `Array` method. The roster, exactly inverted, at all three spellings.
+	// ⇒ Each of the three now carries a *declared-as-the-buffer-alias* bit from its declaration site to the
+	// site that binds the value, and marks it here. There is no second surface mechanism: this mark stays the
+	// one authority, and `dispatchArrayMethod` needed no change for it.
 	function markBufferSurface(value ValueId)
 		self.bufferSurfaceValues = privateValueMarkSet(self.bufferSurfaceValues, anchor: sharedEmptyBufferSurfaceValues)
 		self.bufferSurfaceValues.insert(value)
 	end 'markBufferSurface'
+
+	// ⭐⭐ **THE ONE DECISION: A TYPE SPELLED `__ManagedMemory` DENOTES THE BUFFER (A2j).** ⚖ **USER RULING,
+	// 2026-07-31** — D11b's ("the buffer's legitimate surface is EXACTLY what its roster names",
+	// `bufferSurfaceMemberNames`) applied to the spelling that NAMES the buffer. The alternative — a declared
+	// `__ManagedMemory` deliberately exposing the `Array` surface — would make the roster message false at
+	// three spellings, which is the defect this batch removes.
+	//
+	// ⚠ **IT IS ASKED OF THE TOKEN, NOT OF THE RESOLVED TYPE, AND THAT IS THE WHOLE POINT.**
+	// `parseTypeReference`'s generic-alias arm folds the spelling into `genericInstance(Array with Byte)`, so
+	// once a `MaxonType` exists there is nothing left to test — a `__ManagedMemory` annotation and a
+	// `ByteArray` one are then the same type. Every caller therefore asks BEFORE `parseTypeReference` runs.
+	// ⚠ A token test is also robust where a resolved-type test could not be: the tolerant declaration SWEEP
+	// asks this too, and at sweep time the alias may not be registered yet (`registerManagedFileType` is the
+	// sweep's own write), so `isGenericAlias` can still answer no there. A spelling is the same fact in both
+	// passes — the property `parseOptionalReturnType` is shared for.
+	//
+	// `identifierNameAt` answers the empty source text for anything that is not an identifier — a `returns
+	// int`, a missing clause, a token past the end — so every non-identifier type position answers "no".
+	function typeSpellingAtDenotesBuffer(index TokenIndex) returns bool
+		return self.identifierNameAt(index).equals(ManagedMemoryTypeName)
+	end 'typeSpellingAtDenotesBuffer'
+
+	// The RETURN clause's spelling, asked with the cursor ON `returns` — so the type token is the next one.
+	// ⚠ **ONE reader, because BOTH passes ask it**: the tolerant declaration sweep (`recordScannedSignature`,
+	// whose answer reaches every call site through the whole-program index) and the real parse
+	// (`parseFunction`). That is exactly why `parseOptionalReturnType` is shared, and a second hand-written
+	// peek beside it would be free to disagree the moment a return clause grows a second shape — silently,
+	// since a wrong SURFACE is a wrong answer and not a compile error.
+	function returnSpellingDenotesBuffer() returns bool
+		return self.at(TokenKind.returns) and self.typeSpellingAtDenotesBuffer((self.pos + 1) as TokenIndex)
+	end 'returnSpellingDenotesBuffer'
+
+	// ⭐ **THE ONE BRIDGE FROM A DECLARED SPELLING TO THE VALUE MARK.** Three declaration sites carry the bit
+	// (a parameter, a return type, a struct field) and three separate sites bind the value it describes, so
+	// three storage COLUMNS are inherent — parameters, returns and fields have three separate registries.
+	// Three copies of the *decision* are not, and this is what keeps them at one.
+	function markDeclaredBufferSurface(value ValueId, declaredAsBuffer bool)
+		if declaredAsBuffer 'declaredTheAlias'
+			self.markBufferSurface(value)
+		end 'declaredTheAlias'
+	end 'markDeclaredBufferSurface'
 
 	// Does `value` denote a `__ManagedMemory` BUFFER rather than the `Array` around it? The read side of the
 	// mark above — asked once per array-method dispatch, and `Set.contains` on the shared zero-capacity set
@@ -30205,7 +30422,10 @@ export type Parser
 		var paramNames = ByteArrayArray.create()
 		var paramTypes = MaxonTypeArray.create()
 		var paramRanges = SourceRangeArray.create()
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		// A closure parameter may spell `__ManagedMemory` exactly as a function's may (A2j) — it reaches the
+		// same `parseFunctionParameters` and the same `bindParameters`, so it needs no separate treatment.
+		var paramBufferSurfaces = BoolArray.create()
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces)
 		try self.consume(TokenKind.rightParen)
 		// A struct parameter is re-tagged `structRef` here, exactly as `parseFunction` does — the whole-program
 		// struct registry is complete in the real parse (see `resolveNamedStruct`).
@@ -30405,7 +30625,7 @@ export type Parser
 		let entry = self.artifact.module.addBlockAt(lifted, label: b"entry", filePath: self.filePath.toString(), firstLine: givesTok.line)
 		self.currentBlock = entry
 
-		try self.bindParameters(closureName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		try self.bindParameters(closureName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces)
 
 		// Parse the single body expression, then close the lifted function like a value `return`: the body
 		// IS the closure's returned value, so `emitOwnedValueReturn` promotes a borrowed String to owned and
@@ -30447,7 +30667,9 @@ export type Parser
 		// `__env` is a lowering-level detail the caller supplies from `valueClosureEnv`, not a source arg.
 		let returnType = MaxonReturnType.value(bodyType)
 		lifted.maxonReturnType = returnType
-		self.artifact.recordFuncReturnType(closureName, returnType: returnType)
+		// A closure's return type is INFERRED from its body expression, never spelled, so no declared
+		// spelling can name the buffer alias here (A2j).
+		self.artifact.recordFuncReturnType(closureName, returnType: returnType, declaredBufferSurface: false)
 		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
 		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
 		self.closureReturns.upsert(closureName, value: returnType)
@@ -32286,6 +32508,11 @@ export type Parser
 		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
 		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
+		// ⭐ **A CALLEE THAT DECLARED `returns __ManagedMemory` YIELDS THE BUFFER SURFACE (A2j).** Read HERE
+		// rather than inside the mint chain because the mint's tail (`mintOwnedCallResult`) is handed a
+		// `MaxonType` and not the callee name — and the name is the only thing that still knows the spelling,
+		// the alias having erased it. Every direct, method and static call funnels through this one line.
+		self.markDeclaredBufferSurface(result, declaredAsBuffer: self.signatures.returnsBufferSurface(callee))
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is

@@ -784,7 +784,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:8: Unsupported: `Array` method 'setLength' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later
+error E2015: <fragment>:4:8: Unsupported: `Array` method 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
 ```
 
 <!-- test: buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes -->
@@ -899,7 +899,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:8: Unsupported: `Array` method 'setLength' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later
+error E2015: <fragment>:7:8: Unsupported: `Array` method 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
 ```
 
 ### An element size shv2 has no element TYPE for is refused, not silently truncated
@@ -954,7 +954,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:12: Unsupported: `Array` method 'setByte' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later
+error E2015: <fragment>:10:12: Unsupported: `Array` method 'setByte' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
 ```
 
 ### R4.6 — the buffer's `set` is bounded by CAPACITY, and the `Array`'s is not
@@ -1489,29 +1489,36 @@ list (`bufferSurfaceMemberNames`) which the refusal renders and the dispatch con
 compiler KNOWS is a buffer cannot be handed a member the message denies, and the fall-through past the arms is
 a compiler PANIC rather than a second opinion about what exists.
 
-⛔ **WHAT THIS DOES *NOT* CLOSE, MEASURED IN REVIEW 2026-07-31 — THE SURFACE FOLLOWS THE VALUE'S PROVENANCE,
-NOT THE DECLARED TYPE.** `__ManagedMemory` is a generic ALIAS of `Array with Byte`
-(`ProgramSignatures.registerManagedFileType`), so a value bound by a **parameter**, a **struct field** or a
-**return type** spelled `__ManagedMemory` carries no buffer mark and takes the `Array` surface — the roster
-exactly INVERTED. All three compile, link and RUN today:
+⭐⭐ **A2j — AND A *DECLARED* SPELLING IS A FOURTH PRODUCER, WHICH THE PRODUCER SWEEP BELOW STRUCTURALLY
+COULD NOT SEE.** D11b's review measured the gap and this rung closed it. `__ManagedMemory` is a generic ALIAS
+of `Array with Byte` (`ProgramSignatures.registerManagedFileType`), so a value bound by a **parameter**, a
+**struct field** or a **return type** spelled `__ManagedMemory` carried no buffer mark and took the `Array`
+surface — the roster exactly INVERTED. All three compiled, linked and RAN:
 
 ```text
 function abuse(m __ManagedMemory) returns int      -- push/reserve/resize/insert/pop/first/last/
-    m.push(7) … m.count()                          -- remove/clone/isEmpty/count all ACCEPTED, exit 24
+    m.push(7) … m.count()                          -- remove/clone/isEmpty/count all ACCEPTED, exit 13
 function useBuffer(m __ManagedMemory) returns int  -- while the roster's own first member is REFUSED:
     return m.length()                              -- "`Array` method 'length' — … arrive later"
-function make() returns __ManagedMemory            -- b.push(7); b.count() ACCEPTED, exit 2
-type Box  var buf as __ManagedMemory               -- buf.push(7); buf.count() ACCEPTED, exit 2
+function make() returns __ManagedMemory            -- m.count() ACCEPTED, exit 5
+type Holder  var buf as __ManagedMemory            -- h.buf.count() ACCEPTED, exit 5
 ```
 
-No live case in `specs-shv2/` writes any of the three (the only one is a `disabled-test` in
-`interface-conformance.md`), which is why the producer-based enumeration below did not see them — an
-enumeration of *what the corpus calls* cannot bound *what a program may write*. It is not a regression (the
-behaviour is R4.4's and predates D11b) and it is not a wrong ANSWER — the record is the same `Array` record,
-so `__arr_push` on it is well-defined — but the ruling "the legitimate surface is EXACTLY what the roster
-names" is not yet true at those three spellings. Closing it needs a declared-as-the-alias bit carried per
-parameter / field / return through `SignatureIndex` (the spelling is gone by the time `bindParameters` sees a
-`MaxonType`), which is a rung, not a mark.
+⚖ **THE RULING IS THAT THE SPELLING WINS: a value whose DECLARED TYPE is written `__ManagedMemory` denotes
+the BUFFER and gets exactly the buffer roster.** The alternative — a declared spelling deliberately exposing
+the `Array` — would make the roster message false at three spellings, which is the whole defect. Each of the
+three now carries its *pre-erasure spelling* from the declaration site to the site that BINDS the value, and
+marks it through the SAME `Parser.markBufferSurface`: no second surface mechanism, and `dispatchArrayMethod`
+needed no change at all. Type RESOLUTION is untouched — `__ManagedMemory` still resolves to `Array with
+Byte`, which is what keeps a `ByteArray` argument assignable to a `__ManagedMemory` parameter, as every case
+in the section at the end of this file does.
+
+⚠ **WHY THE ENUMERATION MISSED IT, and it generalises past this type**: the sweep below enumerated the
+PRODUCERS OF A BUFFER VALUE, and a DECLARED TYPE is an entrance that a value-producer sweep cannot reach — it
+mints no value of its own, it *annotates* one. No live case in `specs-shv2/` wrote any of the three (the only
+one was a `disabled-test` in `interface-conformance.md`), so an enumeration of *what the corpus calls* was
+bounding *what a program may write*. The six cases under "A2j" at the end of this file are the fix for that
+too: each of the three spellings now has a case in both directions.
 
 ⚠ **THE MEASUREMENT THE RULING TURNED ON, and it is why the roster gained nothing.** Every buffer-surface
 call the corpus makes was enumerated from the four producers of a buffer VALUE (`__ManagedMemory.create`, a
@@ -1831,4 +1838,210 @@ end 'main'
 ```
 ```exitcode
 44
+```
+
+
+### A2j — a value DECLARED `__ManagedMemory` denotes the BUFFER, at all three spellings
+
+⚖ **USER RULING, 2026-07-31 — the ruling of D11b applied to the spelling that NAMES the buffer.** The surface
+used to follow a value's PROVENANCE alone, and `__ManagedMemory` is registered as a generic ALIAS of `Array
+with Byte`, so the spelling was gone before any `MaxonType` existed: a parameter, a return type or a struct
+field written `__ManagedMemory` bound a value indistinguishable from a `ByteArray` and got the `Array`
+surface — the roster exactly inverted, with `count()` accepted and `length()` refused.
+
+Six cases, three spellings × two directions. **The refusal direction alone would be worth little**: a new
+refusal hides its false rejects one level below where it is tested, so each spelling also has a case that
+COMPUTES a value through a roster member and asserts the number. The receiver in every one is a plain
+`"hello".toByteArray()` — an ordinary `Array with Byte` — which is the point: nothing about the VALUE says
+buffer, and the declaration is doing all the work.
+
+<!-- test: error.declared-parameter-has-the-buffer-surface -->
+
+`count` is an `Array` member and not a buffer one, so a parameter declared `__ManagedMemory` is refused it —
+and refused it with the BUFFER's roster, which is the half that says the message answers for the type it is
+shown about. This program compiled, linked and ran (exit 13) before A2j.
+```maxon
+function abuse(m __ManagedMemory) returns int
+	let n = m.count()
+	let e = m.capacity()
+	return n + e
+end 'abuse'
+
+function main() returns ExitCode
+	let bytes = "hello".toByteArray()
+	return abuse(bytes) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: declared-parameter-serves-the-roster -->
+
+⭐ **THE FALSE-REJECT HALF, and it is the one that was WRONG before rather than merely permissive**:
+`length()` is the buffer roster's FIRST member, and a declared parameter was refused it as an unknown `Array`
+method. It now answers, through an argument that is an ordinary byte array at the call site.
+```maxon
+function shown(m __ManagedMemory) returns int
+	return m.length()
+end 'shown'
+
+function main() returns ExitCode
+	let bytes = "hello".toByteArray()
+	return shown(bytes) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.declared-return-type-has-the-buffer-surface -->
+
+The RETURN spelling, refused the same member for the same reason. It is the one of the three that cannot be
+answered from the file the call is in — the callee may be declared anywhere — so the fact travels on the
+whole-program declaration index (`ProgramSignatures.bufferSurfaceReturns`), keyed and hashed beside the
+return type it describes.
+```maxon
+function makeBuf() returns __ManagedMemory
+	return "hello".toByteArray()
+end 'makeBuf'
+
+function main() returns ExitCode
+	let m = makeBuf()
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: declared-return-type-serves-the-roster -->
+
+The return spelling's false-reject half. `slice` is on BOTH rosters, so it is deliberately taken through the
+buffer's own bounds and then measured with `length()`, which is on neither the `Array`'s nor reachable
+before: the whole chain would have been refused at `length` a moment ago.
+```maxon
+function makeBuf() returns __ManagedMemory
+	return "hello".toByteArray()
+end 'makeBuf'
+
+function main() returns ExitCode
+	let m = makeBuf()
+	let part = try m.slice(1, 4) otherwise return 1
+	return (m.length() + part.length()) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: error.declared-field-has-the-buffer-surface -->
+
+The FIELD spelling. The bit rides `StructLayout` beside the field's declared type, in the column the SWEEP
+records — the whole-program layout every read door consults — and is read at the one site a field read mints
+its value, so `h.buf`, `self.buf` and a bare `buf` inside a method all answer alike.
+```maxon
+type Holder
+	export var buf as __ManagedMemory
+
+	export static function create(buf __ManagedMemory) returns Self
+		return Self{buf: buf}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return h.buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```
+
+<!-- test: declared-field-serves-the-roster -->
+
+The field spelling's false-reject half, and it reaches the buffer surface through TWO different doors on one
+layout: `h.buf` from outside the type, and a bare `self.buf` from inside a method. Both mint their value at
+the same place, which is why one column answers for both.
+```maxon
+type Holder
+	export var buf as __ManagedMemory
+
+	export static function create(buf __ManagedMemory) returns Self
+		return Self{buf: buf}
+	end 'create'
+
+	export function size() returns int
+		return self.buf.length()
+	end 'size'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return (h.buf.length() + h.size()) as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: error.a-buffer-returning-function-cannot-be-overloaded -->
+
+⭐⭐ **THE THIRD FACT THE DECLARATION SWEEP PUBLISHES PER BARE NAME (found reviewing A2j).** The sweep is
+keyed by the name the source WROTE, so an overload set leaves one entry — and the return spelling decides
+which roster a call's result carries. The mark is made when the call is PARSED and `resolveOverloadedCalls`
+rebinds the callee a whole pass later, so nothing downstream can repair a surface taken from the wrong
+member. **MEASURED before this refusal existed, on this exact program: with the buffer member written FIRST,
+`make().length()` was refused — the member that genuinely returns the buffer, denied the buffer's roster;
+with it written LAST, `make(1).count()` was refused instead — the member that returns an `Array`, handed the
+buffer's.** A wrong surface either way, decided by declaration order. It joins the consume bits and the
+`throws` clause under `requireOverloadableName`, refused with the same E2015 and for the same reason: the
+cure is per-member facts in the sweep, and until then a refusal beats a silent wrong answer. A set with only
+ONE declaration is untouched — that is the whole corpus, and the cases above.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function make() returns __ManagedMemory
+	return "hello".toByteArray()
+end 'make'
+
+function make(n Int) returns ByteArray
+	return "abc".toByteArray()
+end 'make'
+
+function main() returns ExitCode
+	let a = make()
+	return a.length() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:10: Unsupported: overloading 'make' — one of its declarations returns `__ManagedMemory`, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names
+```
+
+### A2k — the `Array` roster is DERIVED from the arms it describes
+
+<!-- test: error.array-roster-names-managed-and-not-create -->
+
+⭐⭐ **THE CASE WHOSE PURPOSE IS THE LIST ITSELF**, so a future edit to `arraySurfaceMemberNames` has a
+test that speaks for it rather than only goldens that happen to quote it. Until A2k the `Array` refusal was a
+HAND-WRITTEN literal, and it was false in both directions at once: it named **`create`**, which
+`dispatchArrayMethod` has never served as a member, and it omitted **`managed`**, which that dispatch does
+serve. It is now joined from the very constants the arms match on — so it names `managed`, does not name
+`create` among the members, and says separately where `create` actually lives — and the fall-through past the
+arms is a compiler PANIC naming the list, verified red by pushing a name onto the roster with no arm behind
+it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	return arr.create() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:13: Unsupported: `Array` method 'create' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
 ```
