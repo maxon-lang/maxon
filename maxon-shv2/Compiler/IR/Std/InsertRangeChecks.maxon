@@ -310,7 +310,7 @@ type RangeCheckEmitter
 			self.processArgSite(argSite, filePath: checks.filePath)
 		end 'eachArgSite'
 		if not checks.returnAliasName.isEmpty() 'rangedReturn'
-			self.processReturnSites(checks.returnAliasName, sites: checks.returnSites, filePath: checks.filePath)
+			self.processReturnSites(checks)
 		end 'rangedReturn'
 	end 'run'
 
@@ -441,17 +441,11 @@ type RangeCheckEmitter
 	// reason `rangedReturnAliasName` stopped excluding one when #19 closed: the domain is decided where
 	// the BOUNDS are read, never where the site is recorded.
 	//
-	// ⚠⚠ **A `function f(x T) returns T … return x` NOW GUARDS THE SAME VALUE TWICE — DELIBERATELY, AND
-	// IT IS FILED AS `A1f-dupguard`.** The entry guard and the `return` guard are both emitted, over the
-	// same `ValueId`, against the same alias. Eliding the second is probably sound (in SSA one id is one
-	// value), but this rung exists BECAUSE an elision rested on a premise nothing enforced, so it does not
-	// get to close by adding another elision argued in a paragraph. The duplicate stands until a rung with
-	// its own soundness argument and its own sabotage removes it.
+	// ⭐ **A `function f(x T) returns T … return x` GUARDS THE VALUE ONCE — HERE.** The `return` site's
+	// own guard is elided against this one, and the argument for that lives at `entryGuardAlreadyCovers`,
+	// which is where the two facts it needs are both in hand. This site emits exactly as it always did.
 	function guardRangedParam(site RangeCheckParamSite, entryId BlockId, filePath FilePath)
-		// A user parameter's ValueId IS its declared position — `parseFunction` reserves ids
-		// `0..paramCount-1` for parameters, user parameters first, and `rangedParamSites` walks that same
-		// declared list (see its header).
-		let paramValue = site.index as ValueId
+		let paramValue = rangedParamValue(site)
 		match self.guardVerdict(paramValue, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
 			noGuard then return
 			guard(alias) then self.emitGuardAt(self.guardSiteAt(entryId, stdOpPos: self.func.paramCount), value: paramValue, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
@@ -521,26 +515,76 @@ type RangeCheckEmitter
 
 	// ---- return sites ----
 
-	// `filePath` picks the alias, exactly as it does for a cast — a ranged `return` is checked against
-	// the range declared where the FUNCTION was written.
-	function processReturnSites(returnAliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath)
-		match self.project.typeAliases.lookup(returnAliasName, readerFilePath: filePath) 'bounds'
+	// `checks.filePath` picks the alias, exactly as it does for a cast — a ranged `return` is checked
+	// against the range declared where the FUNCTION was written. It takes the whole `FunctionRangeChecks`
+	// because `guardReturns` needs the PARAMETER sites too (see `entryGuardAlreadyCovers`), and threading
+	// a fifth field through would leave the two halves of one question arriving separately.
+	function processReturnSites(checks FunctionRangeChecks)
+		match self.project.typeAliases.lookup(checks.returnAliasName, readerFilePath: checks.filePath) 'bounds'
 			undeclared then return
-			declared(alias) then self.guardReturns(alias, aliasName: returnAliasName, sites: sites, filePath: filePath)
+			declared(alias) then self.guardReturns(alias, checks: checks)
 		end 'bounds'
 	end 'processReturnSites'
 
-	function guardReturns(alias RangedTypeAlias, aliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath)
-		for site in sites 'eachSite'
-			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: aliasName, line: site.line, column: site.column, filePath: filePath) 'noGuard'
+	function guardReturns(alias RangedTypeAlias, checks FunctionRangeChecks)
+		for site in checks.returnSites 'eachSite'
+			// ⚠ **ASKED FIRST, AND UNCONDITIONALLY** — it is the decider that raises the compile-time E3005
+			// on its way to an answer (`guardVerdict` states the same discipline), and it is also what makes
+			// the elision below legitimate: clause 4 is that the entry guard EXISTS, and the only thing that
+			// could have stopped it existing is this function answering `false` for the same value against
+			// the same alias. Reaching the elision at all is therefore the proof that it did not.
+			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: checks.returnAliasName, line: site.line, column: site.column, filePath: checks.filePath) 'noGuard'
 				continue
 			end 'noGuard'
+			if self.entryGuardAlreadyCovers(site.value, checks: checks) 'guardedAtTheEntry'
+				continue
+			end 'guardedAtTheEntry'
+
 			match self.retBlockOf(site) 'ret'
 				notFound then break 'ret'
-				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: aliasName), chain: GuardChain.retChain)
+				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), value: site.value, alias: alias, message: self.rangeCheckMessage(checks.filePath, line: site.line, aliasName: checks.returnAliasName), chain: GuardChain.retChain)
 			end 'ret'
 		end 'eachSite'
 	end 'guardReturns'
+
+	// ⭐⭐ **IS THIS `return`'S VALUE ALREADY STANDING BEHIND THIS FUNCTION'S OWN ENTRY GUARD (A1f-dupguard)?**
+	// `function f(x T) returns T … return x` emitted the entry cascade and an identical return cascade over
+	// the same `ValueId` against the same alias. The second is elided — and because A1f exists BECAUSE a
+	// guard was elided on a premise nothing enforced, the premise is spelled out and pinned rather than
+	// asserted. **Four clauses, and `specs-shv2/range-check-panic.md` has a case for each:**
+	//
+	//   1. **THE SAME VALUE.** Dense SSA numbers a value once, and a parameter's `ValueId` is defined by its
+	//      `param` op — so `site.value == rangedParamValue(paramSite)` is an IDENTITY, not an inference. A
+	//      `var` shadow reassigned before the `return` carries a different id (`Scope.setValue` rebinds),
+	//      and a parameter cannot be mutated at all (E2013). ⇒ `return-of-a-reassigned-shadow-is-still-guarded`,
+	//      `return-of-a-computed-value-is-still-guarded`.
+	//   2. **THE SAME ALIAS.** Both names are resolved through `checks.filePath` — `guardRangedParam` and
+	//      `processReturnSites` hand `lookup` the identical reader — so equal NAMES are one declaration and
+	//      therefore one pair of bounds. A narrower return alias over the same parameter is a different name
+	//      and gets its guard. ⇒ `return-through-a-narrower-alias-is-still-guarded`.
+	//   3. **DOMINANCE.** `guardRangedParams` splits the ENTRY block at `func.paramCount`, which is exactly
+	//      past `emitParams` and before a single body op, so every path to every `return` runs the cascade
+	//      first. This is the one clause no program can break — there is no `return` reachable without
+	//      passing the entry. ⇒ `entry-guard-covers-a-return-inside-a-branch`.
+	//   4. **THE ENTRY GUARD EXISTS.** Both sites route through the same `needsRuntimeGuard` with the same
+	//      value and the same alias, and `guardReturns` asks it BEFORE this — so this is reached only on the
+	//      answer that made the entry guard fire. The two remaining ways a guard can be skipped are shared
+	//      too: `lookup` is the same call (we are inside its `declared` arm), and `emitGuardAt`'s
+	//      both-bounds-elided return is a function of the alias alone, so it fires at neither site or both.
+	//
+	// ⚠ **A LINEAR SCAN, AND BOUNDED BY THE ARITY** — `paramSites` is SPARSE (one entry per RANGED
+	// parameter, never per parameter), so this walks at most the function's ranged parameters, which is
+	// usually one and never more than `MaxAbiArgs`. It is the same bound `paramAliasOf`'s scan already has
+	// and adds no growth shape a call did not have.
+	function entryGuardAlreadyCovers(value ValueId, checks FunctionRangeChecks) returns bool
+		for paramSite in checks.paramSites 'eachRangedParam'
+			if rangedParamValue(paramSite) == value and paramSite.aliasName.equals(checks.returnAliasName) 'sameValueSameAlias'
+				return true
+			end 'sameValueSameAlias'
+		end 'eachRangedParam'
+
+		return false
+	end 'entryGuardAlreadyCovers'
 
 	// ---- the shared decision ----
 
@@ -1051,6 +1095,16 @@ type RangeCheckEmitter
 		self.intConsts.upsert(resultId, value: value)
 	end 'recordConst'
 end 'RangeCheckEmitter'
+
+// ⭐ **THE `ValueId` A NARROWED PARAMETER'S GUARD CHECKS — its DECLARED POSITION, and the two readers of
+// that fact must be one function.** `parseFunction` reserves ids `0..paramCount-1` for parameters, user
+// parameters first, and `rangedParamSites` walks that same declared list (see its header), so a site's
+// `index` IS its value. `guardRangedParam` spends it to emit the guard and `entryGuardAlreadyCovers`
+// spends it to decide a `return` is already behind one — and an elision that computed the id differently
+// from the guard it claims to stand behind would elide against a guard that is not there.
+function rangedParamValue(site RangeCheckParamSite) returns ValueId
+	return site.index as ValueId
+end 'rangedParamValue'
 
 // The i64 the sign check compares against: a value `< 0` (signed) has bit 63 set, which for the
 // unsigned-max upper shape proves it is a huge unsigned the range ADMITS. Named so the sign

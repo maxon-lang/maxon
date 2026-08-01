@@ -1,28 +1,18 @@
-// Test: non-exported-same-name-different-range
-// --- file: a.maxon
-typealias Limit = int(0 to 500)
+// Test: range-check-panic.return-through-a-narrower-alias-is-still-guarded
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10)
 
-export function clampA(x Limit) returns Limit
-	return x
-end 'clampA'
+function narrow(x Wide) returns Narrow
+  return x
+end 'narrow'
 
-// --- file: b.maxon
-typealias Limit = int(0 to 2000)
-
-export function clampB(x Limit) returns Limit
-	return x
-end 'clampB'
-
-// --- file: main.maxon
 function main() returns ExitCode
-	let a = clampA(40)
-	let b = clampB(60)
-	return a + b
+  return narrow(50)
 end 'main'
 ---
-ExitCode: 100
+ExitCode: 1
 ---
-func @clampA {
+func @narrow {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -31,7 +21,7 @@ func @clampA {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 rcx, 500
+    x64.cmpRegImm32 rcx, 100
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -42,22 +32,11 @@ func @clampA {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @clampB {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 rcx, 2000
+    x64.cmpRegImm32 rcx, 10
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -78,16 +57,10 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rcx, 40
-    x64.callDirect clampA
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 60
-    x64.callDirect clampB
-    x64.leaRegRegReg r8, rbx, r8
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.prologue 32
+    x64.movRegImm32 rcx, 50
+    x64.callDirect narrow
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
