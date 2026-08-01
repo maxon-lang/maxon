@@ -9607,7 +9607,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // Void-returning functions can't be used as values in assignments
       if (!isStatementContext && tryCallOp.Result == null) {
         throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
-          $"type mismatch: ''{tryCallOp.Callee}' does not return a value'",
+          $"type mismatch: ''{TryTargetNoun(tryCallOp.Callee)}' does not return a value'",
           tryToken.Line, tryToken.Column);
       }
     }
@@ -11794,6 +11794,106 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // the E3019 immutable-receiver check at user call sites. Without this, calling a
   // mutating builtin (e.g. `managed.set(...)` synthetic-callee `__managed_mem_set`)
   // inside a user method like Array.set wouldn't propagate the mutation up.
+  /// ⭐⭐ THE AUTHOR'S SPELLING BEHIND A COMPILER-EMITTED RUNTIME SYMBOL — the ONE place the two
+  /// names are paired, and the reason a diagnostic can name a `try` target at all.
+  ///
+  /// A builtin method desugars to a runtime symbol at the moment it is emitted
+  /// (<c>mm.setLength(1)</c> → <c>__managed_mem_set_length</c>), and the emitted op carries only
+  /// that symbol: `MaxonCallOp.Callee` is set at construction and never rewritten, so by the time a
+  /// diagnostic reads it the author's word is gone. E3059 therefore reported
+  /// <c>'__managed_mem_set_length' does not return a value</c> about a name that appears nowhere in
+  /// the program — and `__` is precisely the space
+  /// <see cref="CheckReservedDeclName"/> exists to keep out of user-facing text.
+  ///
+  /// Keyed on the symbol rather than recorded per-op because the pairing is a CONSTANT of the
+  /// compiler, not a fact about one call site: the same symbol always came from the same method.
+  ///
+  /// ⚠ Every entry is a runtime symbol this file MINTS a few hundred lines below. The pairing is
+  /// held together by <see cref="TryTargetNoun"/>'s drift guard rather than by a check over two
+  /// lists: a family that adds a symbol and forgets its arm here cannot silently leak it — the
+  /// noun lookup panics instead, naming the symbol.
+  private static readonly Dictionary<string, string> RuntimeCalleeSourceMethods = new() {
+    ["__managed_mem_create"] = "create",
+    ["__managed_mem_create_cursor"] = "createCursor",
+    ["__managed_mem_set_length"] = "setLength",
+    ["__managed_mem_get"] = "get",
+    ["__managed_mem_remove"] = "remove",
+    ["__managed_mem_set"] = "set",
+    ["__managed_mem_grow"] = "grow",
+    ["__managed_mem_shift_right"] = "shiftRight",
+    ["__managed_mem_shift_left"] = "shiftLeft",
+    ["__managed_mem_swap"] = "swap",
+    ["__managed_mem_byte_at"] = "byteAt",
+    ["__managed_mem_set_byte"] = "setByte",
+    ["__managed_mem_slice"] = "slice",
+    ["__cursor_advance"] = "advance",
+    ["__cursor_retreat"] = "retreat",
+    ["__cursor_seek"] = "seek",
+    ["__cursor_peek"] = "peek",
+    ["__managed_file_size"] = "size",
+    ["__managed_file_read"] = "read",
+    ["__managed_file_write"] = "write",
+    ["__managed_file_close"] = "close",
+    ["__managed_file_open_read"] = "openRead",
+    ["__managed_file_open_write"] = "openWrite",
+    ["__managed_file_open_write_executable"] = "openWriteExecutable",
+    ["__managed_file_exists"] = "exists",
+    ["__managed_file_delete"] = "delete",
+    ["__managed_file_rename"] = "rename",
+    ["__managed_file_stat"] = "stat",
+    ["__managed_file_stat_field"] = "statField",
+    ["__managed_file_stat_free"] = "statFree",
+    ["__managed_directory_open_search"] = "openSearch",
+    ["__managed_directory_next"] = "next",
+    ["__managed_directory_filename"] = "filename",
+    ["__managed_directory_close"] = "close",
+    ["__managed_directory_create"] = "create",
+    ["__managed_directory_current_path"] = "currentPath",
+    // `sendFrom` is the one method whose emitted symbol DROPS part of its name, which is why this
+    // is a table and not a strip-the-prefix rule: such a rule would answer `send` here, silently.
+    ["__managed_socket_send"] = "sendFrom",
+    ["__managed_socket_recv"] = "recv",
+    ["__managed_socket_close"] = "close",
+    ["__managed_socket_tcp_connect"] = "tcpConnect",
+    ["__managed_list_reinsert_first"] = "reinsertFirst",
+    ["__managed_list_reinsert_last"] = "reinsertLast",
+    ["__managed_list_reinsert_after"] = "reinsertAfter",
+    ["__managed_list_reinsert_before"] = "reinsertBefore",
+    ["__managed_list_head"] = "head",
+    ["__managed_list_tail"] = "tail",
+    ["__managed_list_cursor_advance"] = "cursorAdvance",
+    ["__managed_list_cursor_start"] = "cursorStart",
+    ["__managed_list_node_next"] = "next",
+    ["__managed_list_node_prev"] = "prev",
+    // `/` and `mod` are OPERATORS, so their expansions have no method spelling at all. They are
+    // here because they are runtime symbols the guard below would otherwise refuse — and the word
+    // an author would recognize is the operator, not the symbol.
+    ["__checked_div"] = "/",
+    ["__checked_mod"] = "mod",
+  };
+
+  /// What a diagnostic should call a `try` target. A user function is named by the author's own
+  /// callee; a compiler-emitted runtime symbol is named by the method it was desugared FROM.
+  ///
+  /// ⚠ The drift guard is the point, and it panics rather than falling back: a silent fallback to
+  /// the raw callee IS the defect this exists to close, so an unmapped runtime symbol has to be a
+  /// loud compiler bug. "Compiler-emitted" is DERIVED rather than listed — a synthetic builtin is
+  /// absent from the function registry (see <see cref="RewriteTailCallAsTryCall"/>), so a `__` name
+  /// the stdlib genuinely DECLARES resolves and is reported as written, which is right: there the
+  /// author did write it.
+  private string TryTargetNoun(string callee) {
+    if (RuntimeCalleeSourceMethods.TryGetValue(callee, out var sourceMethod)) return sourceMethod;
+
+    if (callee.StartsWith("__") && _currentModule!.FindFunctionByExactName(callee) == null) {
+      throw new InvalidOperationException(
+        $"TryTargetNoun: '{callee}' is a compiler-emitted runtime symbol with no entry in "
+        + $"{nameof(RuntimeCalleeSourceMethods)}, so a diagnostic would leak it into user-facing "
+        + "text. Add the method it desugars from.");
+    }
+
+    return callee;
+  }
+
   private void SetBuiltinCallReceiver(MaxonCallOp callOp) {
     if (_builtinReceiverVarName == null) return;
     var names = new List<string?> { _builtinReceiverVarName };
@@ -19139,6 +19239,36 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return candidate < rangedType.IntLower || candidate > signedUpper;
   }
 
+  /// ⭐⭐ Does an INTEGER range's upper bound need a runtime compare? The runtime half of
+  /// <see cref="IntegerOutOfRange"/>, and it splits on the SAME question the literal check does —
+  /// is this an unsigned range or a signed one? — for the same reason.
+  ///
+  /// ⚠ It used to ask only the BOUND'S SIGN (`IntUpper >= 0 && IntUpper < long.MaxValue`), which
+  /// reads a stored `-1` as the wrapped `u64.max` whatever the low bound says. A **wholly negative**
+  /// range then carried no upper compare at all: `int(-100 to -1)` admitted `0` at run time, and
+  /// `int(i64.min to -2)` — whose lower bound needs no compare either — carried an EMPTY check list,
+  /// so a plain `as` cast admitted anything. The two halves of one rule disagreed about one alias:
+  /// the LITERAL `0 as int(-100 to -1)` was E3005 while the runtime cast let it through.
+  ///
+  /// The consequences reached past the binding into the divide's proof, which trusts a declared
+  /// range: `int(-100 to -1)` excludes 0, so `100 / d` is a bare `idiv` (an uncatchable
+  /// `integer divide by zero` where the language promises a catchable `DivisionByZero`), and
+  /// `int(i64.min to -2)` excludes -1, so `i64.min mod d` is one too (`integer overflow` — the very
+  /// fault <see cref="EmitRemainderOverflowSafeDividend"/> removes).
+  ///
+  /// ⇒ the sentinel question is asked of the LOW bound, not of the upper's sign:
+  ///   • a NON-NEGATIVE low bound makes the range unsigned, and a stored upper below 0 is then the
+  ///     wrapped `u64.max` region — unbounded in signed space, so no signed compare can express it
+  ///     (the `unsignedMaxUpper` cascade in <see cref="EmitRuntimeRangeCheck"/> replaces it, and
+  ///     `int(0 to u64.max)` never arrives at all: it is `IsFullBaseRange`).
+  ///   • a NEGATIVE low bound makes the range signed, and its upper is an ordinary signed number
+  ///     whatever its sign — `-1` is the largest value `int(-100 to -1)` admits.
+  private static bool IntegerUpperBoundNeedsRuntimeCheck(IrRangedPrimitiveType rangedType) {
+    if (rangedType.IntUpper >= long.MaxValue) return false;
+
+    return rangedType.IntLower < 0 || rangedType.IntUpper >= 0;
+  }
+
   /// <summary>
   /// The integer a value holds when it is a constants-enum case's raw value — the same compile-time
   /// constant a literal is, reached through the `MaxonEnumRawValueOp` that extracted it.
@@ -19240,28 +19370,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // For comparisons, use the appropriate float kind or Integer for int/byte
     var cmpKind = kind is MaxonValueKind.Float or MaxonValueKind.Float32 ? kind : MaxonValueKind.Integer;
 
-    bool needsLowerCheck, needsUpperCheck;
-    if (rangedType.IsFloatBased) {
-      needsLowerCheck = rangedType.FloatLower > double.MinValue;
-      needsUpperCheck = rangedType.FloatUpper < double.MaxValue;
-    } else {
-      // Values arrive as signed i64, so comparisons are signed.
-      // Upper bound: u64.max (-1 as signed) means no upper check is possible
-      // in signed arithmetic — the range effectively caps at i64.max.
-      needsLowerCheck = rangedType.IntLower > long.MinValue;
-      needsUpperCheck = rangedType.IntUpper >= 0 && rangedType.IntUpper < long.MaxValue;
-    }
-
-    MaxonValue? outOfRange = null;
-
-    // `int(N>0 to u64.max)` is an UNSIGNED range whose upper rides as the signed -1, so
-    // needsUpperCheck is false and the ordinary path below would emit only the signed lower
+    // `int(N>0 to u64.max)` is an UNSIGNED range whose upper rides as the signed -1, so it gets no
+    // signed upper compare and the ordinary path below would emit only the signed lower
     // check `value < N` — which wrongly rejects a bit-63-set value that is a huge unsigned the
     // range admits. Out-of-range for this shape is `value >= 0 AND value < N` (a non-negative
     // value below the low bound; a negative value is in range). This makes the runtime check
     // agree with the unsigned-correct compile-time LITERAL check above (`IntLower >= 0` branch).
     // Mirrors the And(Ge, Lt) range-membership idiom used by pattern matching.
     bool unsignedMaxUpper = !rangedType.IsFloatBased && rangedType.IntLower > 0 && rangedType.IntUpper == -1;
+
+    bool needsLowerCheck, needsUpperCheck;
+    if (rangedType.IsFloatBased) {
+      needsLowerCheck = rangedType.FloatLower > double.MinValue;
+      needsUpperCheck = rangedType.FloatUpper < double.MaxValue;
+    } else {
+      // Values arrive as signed i64, so comparisons are signed.
+      needsLowerCheck = rangedType.IntLower > long.MinValue;
+      needsUpperCheck = IntegerUpperBoundNeedsRuntimeCheck(rangedType);
+    }
+
+    MaxonValue? outOfRange = null;
 
     if (unsignedMaxUpper) {
       var zeroLit = new MaxonLiteralOp(0L);
@@ -23803,21 +23931,44 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private double? TryFoldFloatConst(MaxonValue value) =>
     _floatConstValues.TryGetValue(value, out var folded) ? folded : null;
 
+  /// The divisor `idiv` cannot divide `i64.min` by. `-1` is not a special number to the language;
+  /// it is special to ONE instruction, which is why it is named here rather than written as a
+  /// literal at the three sites that reason about it.
+  private const long OverflowingDivisorPattern = -1;
+
+  /// The bit index of an integer's sign, so `x sar SignBitShiftCount` spreads that sign across the
+  /// whole word. Derived from the shift width rather than written as 63: the two are the same fact.
+  private const long SignBitShiftCount = ShiftSemantics.ShiftCountBits - 1;
+
   /// Fold `lhs <op> rhs` over two integers the parser already holds. Only the operators whose
   /// folded value is TOTAL: a division by zero, and a shift (whose rule is ShiftSemantics', asked
   /// by <see cref="EmitShift"/> and nowhere else), are decided by the code that diagnoses them —
   /// not silently here, where a wrong answer would look like a constant.
+  ///
+  /// ⭐ `i64.min` over `-1` parts the two operators, and the fold has to part with them: the
+  /// QUOTIENT is `i64.max + 1` and has no representable value, so `Div` genuinely cannot answer —
+  /// but `a mod -1` is `0` for EVERY `a` (truncated division gives `a - (-1)·trunc(a / -1) = a - a`),
+  /// so declining to fold `Mod` was the folder disagreeing with the language it folds for. The `0`
+  /// is written out rather than left to `lhs % rhs` because .NET raises `OverflowException` for
+  /// exactly this pair — the same `#DE` `idiv` raises, one runtime up.
   private static long? TryFoldIntBinOp(MaxonBinOperator op, long lhs, long rhs) => op switch {
     MaxonBinOperator.Add => unchecked(lhs + rhs),
     MaxonBinOperator.Sub => unchecked(lhs - rhs),
     MaxonBinOperator.Mul => unchecked(lhs * rhs),
-    MaxonBinOperator.Div => rhs == 0 || (lhs == long.MinValue && rhs == -1) ? null : lhs / rhs,
-    MaxonBinOperator.Mod => rhs == 0 || (lhs == long.MinValue && rhs == -1) ? null : lhs % rhs,
+    MaxonBinOperator.Div => rhs == 0 || IsQuotientOverflow(lhs, rhs) ? null : lhs / rhs,
+    MaxonBinOperator.Mod => rhs == 0 ? null : IsQuotientOverflow(lhs, rhs) ? 0L : lhs % rhs,
     MaxonBinOperator.BitAnd => lhs & rhs,
     MaxonBinOperator.BitOr => lhs | rhs,
     MaxonBinOperator.BitXor => lhs ^ rhs,
     _ => null
   };
+
+  /// The one dividend/divisor pair whose QUOTIENT does not fit in the width it is computed at, and
+  /// the whole of what `idiv` raises `#DE` for besides a zero divisor. THE one place the pair is
+  /// spelled — the fold above reads it, and <see cref="DivisorMayBeNegativeOne"/> asks the divisor
+  /// half of it alone, which is exactly the asymmetry between the two operators.
+  private static bool IsQuotientOverflow(long dividend, long divisor) =>
+    dividend == long.MinValue && divisor == OverflowingDivisorPattern;
 
   /// True for the operand kinds a Maxon shift is defined over — the ones that reach the i64
   /// `shl`/`shr` lowering. `Short` is an i64 at the Standard tier exactly as `Integer` is.
@@ -23850,19 +24001,120 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         opToken.Line, opToken.Column);
     }
 
-    if (DivisorIsProvablyNonZero(divisorExpr, divisor, kind))
+    var divisorIsProvablyNonZero = DivisorIsProvablyNonZero(divisorExpr, divisor, kind);
+
+    // A possibly-zero divisor makes the divide a throwing operation, so it requires `try` (reusing
+    // E3057, exactly as a bare throwing call does). Asked BEFORE the guard below is emitted, for
+    // EmitShift's stated reason: a rejected program must leave no ops behind.
+    if (!divisorIsProvablyNonZero) ValidateThrowingDivisionContext(opToken);
+
+    // ⭐⭐ ONE PROOF, TWO HAZARDS. `idiv` faults for two unrelated reasons and the zero rule above
+    // closes only the first, so a REMAINDER over a divisor that might be `-1` is masked before
+    // either route below — the bare one AND the throwing one. Emitted at ONE site because both
+    // reach the same instruction, and a guard on only one of them is the defect wearing a fix's
+    // clothes: the throwing route's `idiv` is the very one `mod-at-int-min-by-minus-one-is-zero`
+    // (Door 1) reaches.
+    if (RemainderNeedsOverflowGuard(op, divisorExpr, divisor, kind, optimalType))
+      dividend = EmitRemainderOverflowSafeDividend(dividend, divisor, kind);
+
+    if (divisorIsProvablyNonZero)
       return EmitBinOp(op, dividend, divisor, kind, optimalType);
 
-    // Possibly-zero divisor: the divide is a throwing operation, so it requires `try` (reusing
-    // E3057, exactly as a bare throwing call does). Emit the throwing builtin and route its error
-    // flag through the active try context, mirroring the synthetic managed-mem builtins.
-    ValidateThrowingDivisionContext(opToken);
+    // The throwing desugar: emit the checked builtin and route its error flag through the active
+    // try context, mirroring the synthetic managed-mem builtins.
     var errorEnum = (IrEnumType)_typeRegistry["__DivisionByZeroError"];
     var tryOp = new MaxonCheckedDivTryCallOp(dividend, divisor, op == MaxonBinOperator.Mod,
       optimalType?.IsUnsigned ?? false, kind, errorEnum);
     _currentBlock!.AddOp(tryOp);
     InvalidateCachedSelfFields();
     return RouteAndRebindBuiltinTryCall(tryOp, errorEnum) ?? tryOp.Result!;
+  }
+
+  /// ⭐⭐ Does this `mod` need the overflow guard? — `idiv`'s SECOND hazard, and the one a
+  /// divide-by-zero proof says nothing about.
+  ///
+  /// `idiv` raises `#DE` on `i64.min / -1` as well as on a zero divisor, and a `mod` inherits that
+  /// fault from a quotient it does not even read. **A divisor proven non-zero is not a divisor
+  /// proven not `-1`** — which is exactly how `i64.min mod -1` came to die on the bare-divide route
+  /// while the whole divide-by-zero rule looked complete.
+  ///
+  /// ⚠ `/` HAS NO COUNTERPART AND MUST NOT GROW ONE. `i64.min / -1` is `i64.max + 1`, so there is no
+  /// value a guarded `/` could return; the remainder's answer at that divisor exists and is CONSTANT
+  /// (`a mod -1 == 0` for every `a`). That asymmetry is why this tests only the DIVISOR while
+  /// <see cref="IsQuotientOverflow"/> — the fold's rule for `/` — tests both operands.
+  ///
+  /// UNSIGNED and FLOAT `mod` are excluded as facts about the emitted instruction, not as omissions:
+  /// an unsigned optimal type lowers to `div`/`StdRemU64Op`, which cannot overflow (its quotient at
+  /// `u64.max` is 0), and there is no float remainder operator at all.
+  private bool RemainderNeedsOverflowGuard(MaxonBinOperator op, ExprResult divisorExpr,
+      MaxonValue divisor, MaxonValueKind kind, IrType? optimalType) =>
+    op == MaxonBinOperator.Mod
+    && !IsFloatDivKind(kind)
+    && !(optimalType?.IsUnsigned ?? false)
+    && DivisorMayBeNegativeOne(divisorExpr, divisor);
+
+  /// Might this divisor be the one value `idiv` overflows on? The mirror of
+  /// <see cref="DivisorIsProvablyNonZero"/> — same two sources of knowledge, same conservative
+  /// default — asking the OTHER hazard. Every gap in the proof answers "yes", which costs the
+  /// branchless guard below and never a wrong answer.
+  private bool DivisorMayBeNegativeOne(ExprResult divisorExpr, MaxonValue divisor) {
+    if (TryFoldIntConst(divisor) is { } folded)
+      return folded.Value == OverflowingDivisorPattern;
+
+    var rangedName = DivisorRangedTypeName(divisorExpr, divisor);
+    if (rangedName != null && _typeRegistry.TryGetValue(rangedName, out var rangedType)
+        && rangedType is IrRangedPrimitiveType rpt && !rpt.IsFloatBased) {
+      var effectiveUpper = rpt.UpperInclusive ? rpt.IntUpper : rpt.IntUpper - 1;
+
+      // A NON-NEGATIVE low bound makes the range unsigned, and a stored upper below 0 is then the
+      // wrapped `u64.max` region — which admits the `-1` BIT PATTERN even though no value it
+      // describes is negative. Only a real (non-wrapped) upper lets such a range clear the hazard.
+      // A NEGATIVE low bound reads signed throughout: the range clears `-1` iff it stops below it.
+      return rpt.IntLower >= 0 ? effectiveUpper < 0 : effectiveUpper >= OverflowingDivisorPattern;
+    }
+
+    return true;
+  }
+
+  /// ⭐⭐ The `mod` overflow guard: a dividend `idiv` can safely divide by ANY divisor, including
+  /// `-1`. Five branchless ops, and it masks the DIVIDEND rather than repairing the divisor because
+  /// **`a mod -1` is `0` for every `a`** (truncated division: `a - (-1)·trunc(a / -1) = a - a`), so
+  /// dividing `0` instead answers the same `0` with a quotient that cannot overflow.
+  ///
+  ///   `t = divisor + 1` · `mask = (t | -t) sar 63` · `safeDividend = dividend and mask`
+  ///
+  /// `t` is 0 exactly at `-1`, and `t | -t` has its sign bit set for every OTHER `t` (the standard
+  /// is-nonzero spread — it holds at `t == i64.min` too, where `-t` is `t`), so `mask` is all-ones
+  /// everywhere except at the one hazardous divisor, where it is 0.
+  ///
+  /// ⚠ WHY THE SIGN SPREAD AND NOT SHV2'S `(divisor == -1) + (-1)`. shv2 builds the same mask from
+  /// the compare's own 0/1 payload, which is one op shorter. It cannot be spelled at THIS tier: a
+  /// Maxon comparison yields a `Bool` (an i1 at the Standard tier) and no Maxon op widens one to an
+  /// integer, so the arithmetic would need an op the dialect does not have. The sign spread computes
+  /// the identical mask from integer ops the dialect already carries, and the emitted guard's VALUE —
+  /// a masked dividend — is shv2's exactly.
+  ///
+  /// ⚠ ONE WIDTH, for <see cref="EmitShift"/>'s stated reason. Every op here is emitted with a null
+  /// `optimalType`, so the guard is computed in i64 whatever narrow ranged type the division itself
+  /// carries: a narrowed operand sign-extends into it and the mask truncates back out of it, and the
+  /// guard never has to agree with the width dispatch about anything. The 32-bit `idiv` overflows on
+  /// `i32.min mod -1` in its own width, so the guard has to reach it too.
+  ///
+  /// ⚠ UNREACHED where the divisor is proven not `-1` — see <see cref="RemainderNeedsOverflowGuard"/>.
+  /// A positive ranged divisor, a folded constant other than `-1`, or `int(i64.min to -2)` pays none
+  /// of these ops, which is what keeps every existing division's codegen byte-identical.
+  private MaxonValue EmitRemainderOverflowSafeDividend(MaxonValue dividend, MaxonValue divisor,
+      MaxonValueKind kind) {
+    var distanceFromHazard = EmitBinOp(MaxonBinOperator.Add, divisor,
+      EmitIntLiteral(1), kind, optimalType: null);
+    var negated = EmitBinOp(MaxonBinOperator.Sub, EmitIntLiteral(0),
+      distanceFromHazard, kind, optimalType: null);
+    var eitherSign = EmitBinOp(MaxonBinOperator.BitOr, distanceFromHazard, negated, kind,
+      optimalType: null);
+    var mask = EmitBinOp(MaxonBinOperator.Shr, eitherSign, EmitIntLiteral(SignBitShiftCount),
+      kind, optimalType: null);
+
+    return EmitBinOp(MaxonBinOperator.BitAnd, dividend, mask, kind, optimalType: null);
   }
 
   /// A divisor the compiler holds as a compile-time constant 0 (`a / 0`, or `a / z` where `z`

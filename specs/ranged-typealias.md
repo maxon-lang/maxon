@@ -868,6 +868,118 @@ end 'main'
 7
 ```
 
+### A wholly-negative range's UPPER bound is a real bound, and is checked
+
+A stored upper of `-1` means `u64.max` in exactly ONE shape: an UNSIGNED range, whose low bound is
+non-negative (`int(5 to u64.max)`). Such a range is genuinely unbounded upwards in signed terms, so
+its upper compare is elided on purpose and replaced by the sign-plus-lower cascade above. A wholly
+NEGATIVE range — `int(-100 to -1)`, `int(i64.min to -2)` — also stores a negative upper, and there
+the bound is ordinary: `-1` is the largest value it admits and `0` is outside it.
+
+The LITERAL check has always told the two apart by the LOW bound; the runtime check tested only the
+upper's sign, so the two halves of one rule disagreed about one alias — a literal
+`0 as int(-100 to -1)` was E3005 (see `error.negative-out-of-range` above) while a runtime `0` cast
+into it was admitted.
+
+⚠ It matters beyond the binding: `specs/safety.md`'s division proof reads a divisor's DECLARED
+range, so both of `idiv`'s hazards were reachable through this hole. Both are pinned there.
+
+<!-- test: negative-upper-bound-cast-is-checked -->
+#### A runtime cast into a wholly-negative range tests its upper bound
+`0` is above `-1`, so the cast is the violation and the guard must fire at the cast's own line — as
+it does for the positive `int(0 to 150)` in `runtime-check-fail` above. Before the fix `a` simply
+became `0`, a value its declared type does not admit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NegativeOnly = int(-100 to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	print("start\n")
+	let a = ident(0) as NegativeOnly
+	print("a={a}\n")
+	return 0
+end 'main'
+```
+```stdout
+start
+```
+```exitcode
+1
+```
+```stderr
+panic at negative-upper-bound-cast-is-checked.test:11: Range check failed: value outside typealias 'NegativeOnly'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: negative-upper-bound-return-is-checked -->
+#### The ranged-RETURN door tests it too, and `low == i64.min` is what left it with no check at all
+`int(i64.min to -2)` needs NO lower compare (`i64.min` cannot be violated), so eliding the upper as
+well left the range with an EMPTY check list — the one shape where the hole was total rather than
+partial, and a plain narrowing admitted anything.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BelowMinusOne = int(i64.min to -2)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function narrow() returns BelowMinusOne
+	return ident(0 - 1)
+end 'narrow'
+
+function main() returns ExitCode
+	print("v={narrow()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at negative-upper-bound-return-is-checked.test:10: Range check failed: value outside typealias 'BelowMinusOne'
+Stack trace:
+  in narrow
+  in main
+  in mrt_start
+```
+
+<!-- test: negative-upper-bound-in-range-control -->
+#### The in-range control — the restored check must not fire on a value the range admits
+Both bounds of a wholly-negative range, through the cast door and the return door, with admissible
+values. A check restored to a shape must cost nothing where the value is legal.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NegativeOnly = int(-100 to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function pick() returns NegativeOnly
+	return ident(0 - 100)
+end 'pick'
+
+function main() returns ExitCode
+	let a = ident(0 - 1) as NegativeOnly
+	let b = ident(0 - 50) as NegativeOnly
+	print("a={a} b={b} c={pick()}\n")
+	return 0
+end 'main'
+```
+```stdout
+a=-1 b=-50 c=-100
+```
+```exitcode
+0
+```
+
 <!-- test: cast-to-stdlib-internal-typealias -->
 A typealias declared inside the stdlib is reachable as a cast target from any
 file, regardless of its source-level visibility modifier. The stdlib's internal

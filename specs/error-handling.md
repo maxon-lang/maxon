@@ -634,6 +634,40 @@ end 'main'
 error E3059: specs/fragments/error-handling/error.void-try-in-assignment.test:12:12: type mismatch: ''mayFail' does not return a value'
 ```
 
+<!-- test: error.void-try-builtin-method-names-the-author-spelling -->
+A builtin method desugars to a compiler-emitted runtime symbol at the moment it is emitted, and the
+op carries only that symbol — so this diagnostic used to answer about `__managed_mem_set_length`, a
+name that appears nowhere in the program and lives in the `__` space reserved against user
+declarations. It names what the author wrote. (The case above is the same rule for an ordinary
+function, where the callee IS the author's word; both must hold at once.)
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(8, 4) otherwise panic("create")
+	let x = try mm.setLength(1) otherwise 'handler'
+		return 1
+	end 'handler'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.void-try-builtin-method-names-the-author-spelling.test:4:10: type mismatch: ''setLength' does not return a value'
+```
+
+<!-- test: error.void-try-builtin-static-names-the-author-spelling -->
+A builtin STATIC desugars the same way, through a different family of emitted symbols — so the
+pairing has to be a property of every family and not of one. This reported `__managed_file_delete`.
+```maxon
+function main() returns ExitCode
+	let x = try __ManagedFile.delete("no-such-file".toByteArray().managed) otherwise 'handler'
+		return 1
+	end 'handler'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.void-try-builtin-static-names-the-author-spelling.test:3:10: type mismatch: ''delete' does not return a value'
+```
+
 <!-- test: error.binding-match-single-case -->
 ```maxon
 
