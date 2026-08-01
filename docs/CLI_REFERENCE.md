@@ -36,7 +36,7 @@ maxon build [file|directory] [options]
 
 | Option | Description |
 |--------|-------------|
-| `--target=ARCH-OS` | Set compilation target (default: `x64-windows`). Examples: `x64-windows`, `arm64-macos`, `x64-linux` |
+| `--target=ARCH-OS` | Set compilation target (default: the host triple). Supported: `x64-windows`, `arm64-macos` — anything else is refused by name (E5004). `maxon --help` prints the authoritative list, derived from `CompileTarget.SupportedTargets`; this table is a copy and defers to it |
 | `--emit-ir` | Write `.ir` file |
 | `--dump-stages` | Write IR at each pipeline stage (`.1-maxon.ir`, etc.), user program only |
 | `--dump-stages-stdlib` | Like `--dump-stages` but include the full stdlib IR in each stage file (implies `--dump-stages`) |
