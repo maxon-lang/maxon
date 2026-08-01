@@ -319,8 +319,15 @@ typealias AliasStorageBytesMap = Map with (ByteArray, ByteOffset)
 typealias MultiplyDeclaredAliasMap = Map with (ByteArray, RangedAliasByDeclaringFile)
 
 // Every name AT LEAST ONE declaration made nameable from any file — an `export`ed alias, or a
-// compiler-supplied stdlib one. See `RangedAliasRegistry.nameableFromAnyFile`.
-typealias NameableAliasNameSet = Set with ByteArray
+// compiler-supplied stdlib one — mapped to the LAST such declaration. See
+// `RangedAliasRegistry.nameableFromAnyFile` for the membership question and `lookup` for the
+// declaration, which is what a file that declares none of a contested name's declarations resolves to.
+//
+// ⚠ It holds the DECLARATION and not merely the name because one index has to answer both, and the two
+// answers are the same fact: "some declaration of this name may be written down anywhere" and "here is
+// one that may". A parallel name-only set beside it would be the same fact filed twice, which is the
+// shape every cross-file alias defect in this file has had.
+typealias NameableAliasMap = Map with (ByteArray, RangedTypeAlias)
 
 // What ONE `typealias` declaration conflicted with when it was filed — `RangedAliasRegistry.record`'s
 // answer, and the ONLY thing that decides whether E3105 is raised.
@@ -389,9 +396,10 @@ end 'AliasRecordOutcome'
 // "fragile/environment-coupled" (`StdlibLoader.findStdlibPath`).
 //
 // **OUT OF SCOPE, deliberately** (coordinator ruling): when a name is declared in several OTHER
-// files and none is the reader's, the bare probe still answers last-wins. That is the E3063
-// ambiguity case, and reporting it needs cross-file name resolution — the same rung that gives
-// `export` its meaning as a key.
+// files and MORE THAN ONE of them is nameable from the reader, the answer is still last-wins among
+// those. That is the E3063 ambiguity case, and reporting it needs cross-file name resolution — the same
+// rung that gives `export` its meaning as a key. What is NOT out of scope, and is fixed, is a candidate
+// the reader may not name at all deciding the answer: see `lookup`.
 // ⭐⭐ **THE ALIASES THE COMPILER SUPPLIES ON THE STDLIB'S BEHALF.** Each is declared, verbatim, in a
 // `stdlib/` module shv2 cannot compile — `Character.maxon` because it also declares `type Character`, a
 // name the compiler owns; `Array.maxon` because `Array` is a synthesized builtin — so the alias exists in
@@ -486,11 +494,13 @@ export type RangedAliasRegistry
 	// often than it is written. A width is asked once per array op site and once per `sizeof`; it is
 	// written once per `typealias` declaration in the program.
 	var storageBytes as AliasStorageBytesMap
-	// ⭐ **THE NAMES SOME DECLARATION MADE NAMEABLE FROM ANY FILE** — `export`ed or compiler-supplied.
+	// ⭐ **THE DECLARATIONS SOME FILE MADE NAMEABLE FROM ANY FILE** — `export`ed or compiler-supplied.
 	// A second derived index over the same declarations, maintained by the same single writer, for the
 	// reason `multiplyDeclared` is one: it answers a question `lookup` structurally cannot, because
 	// `lookup` returns ONE declaration and this is about ALL of them (see `nameableFromAnyFile`).
-	var nameable as NameableAliasNameSet
+	//
+	// ⭐ **AND IT IS ALSO THE DOOR A THIRD FILE RESOLVES A CONTESTED NAME THROUGH** — see `lookup`.
+	var nameable as NameableAliasMap
 
 	// ⭐⭐ **EVERY REGISTRY IS BORN HOLDING `Codepoint`, AND THAT IS WHAT GIVES IT A RANGE (P1.8 Slice E
 	// review).** `Codepoint` is declared, verbatim and with these bounds, in `stdlib/Character.maxon` —
@@ -524,7 +534,7 @@ export type RangedAliasRegistry
 	// `recordAlias`, one level up). The seed is identical in every program, so it distinguishes nothing —
 	// hashing it would invalidate every parse memo in the project to record a constant.
 	export static function create() returns RangedAliasRegistry
-		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), nameable: NameableAliasNameSet.create()}
+		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), nameable: NameableAliasMap.create()}
 		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath))
 		_ = registry.record(builtinStdlibAlias(ElementCountAliasName, low: ElementCountAliasLow, high: ElementCountAliasHigh, declPathText: ElementCountAliasDeclPath))
 		return registry
@@ -539,7 +549,7 @@ export type RangedAliasRegistry
 		// Recorded here, ABOVE the first-declaration early return below, so every declaration passes
 		// through it exactly once whatever else the name goes on to do.
 		if alias.visibility != Visibility.file 'nameableAnywhere'
-			self.nameable.insert(alias.name)
+			self.nameable.upsert(alias.name, value: alias)
 		end 'nameableAnywhere'
 
 		// The FIRST declaration of a name — which, in a program where nothing is redeclared, is every
@@ -628,10 +638,10 @@ export type RangedAliasRegistry
 	// answers, decided by two filenames — and the refusal was of the legal one, since an exported
 	// declaration was in scope the whole time.
 	//
-	// It does NOT make the reader resolve to the exported declaration — which range a contested name
-	// carries for a file that declares none of them is still last-wins, the E3063 cross-file ambiguity
-	// this rung leaves open. It only stops a diagnostic whose whole claim ("no declaration of this name
-	// is yours to name") is false from being raised.
+	// It answers only the MEMBERSHIP half — "may some declaration of this name be named from anywhere?"
+	// — and stops a diagnostic whose whole claim ("no declaration of this name is yours to name") is
+	// false from being raised. WHICH declaration a third file then resolves to is `lookup`'s answer, out
+	// of the same index: they are two questions over one fact, which is why one index carries both.
 	export function nameableFromAnyFile(name ByteArray) returns bool
 		return self.nameable.contains(name)
 	end 'nameableFromAnyFile'
@@ -643,13 +653,44 @@ export type RangedAliasRegistry
 	// A name only one file declares misses `multiplyDeclared` and falls straight through to the bare
 	// answer, which is the same answer; a name several files declare is answered out of the very
 	// entry that proved it contested, keyed by the reader's path with no composite key to build.
-	// The reader's own file having no declaration of a contested name is normal — it falls through
-	// to the bare answer exactly as before.
+	//
+	// ⭐⭐ **AND A THIRD FILE — one that names a CONTESTED alias and declares none of it — RESOLVES TO A
+	// DECLARATION IT MAY ACTUALLY NAME.** This used to fall straight through to the bare `byName` door,
+	// which is LAST-WINS, so whichever declaration merged last decided what a stranger's parameter,
+	// return type and cast meant. It is not a tie between equals: a plain `typealias` is FILE-LOCAL, so a
+	// declaration the third file is forbidden to write down cannot be the one it meant.
+	//
+	// ⛔ MEASURED, and the wrong answer went in the worst direction — a user's PRIVATE alias decided what
+	// a STDLIB function accepts. A user `typealias Codepoint = int(0 to 100)` made
+	// `stdlib/helpers/string/utf16.maxon`'s `utf16LeadSurrogate(codepoint Codepoint)` — whose `Codepoint`
+	// is `stdlib/Character.maxon`'s EXPORTED `int(0 to 1114111)` — refuse a legal `70000`, quoting a range
+	// from a file `utf16.maxon` has never seen. Pinned by `specs-shv2/typealias-file-scope.md`'s
+	// `third-file-resolves-to-the-nameable-declaration` and its runtime twin.
+	//
+	// ⚠ **IT NARROWS THE LAST-WINS SET; IT DOES NOT ABOLISH IT, and that is the E3063 boundary this rung
+	// deliberately does not cross.** Two files that both EXPORT one name still answer last-wins — on the
+	// strictly smaller set of declarations the reader may name — because choosing between two legal
+	// candidates is a cross-file name-resolution decision with its own diagnostic and its own
+	// false-reject sweep. What is fixed here is only the case where one candidate was never a candidate.
+	//
+	// ⚠ **AND THE FALLBACK TO `byName` IS NOT DEAD CODE — it is what the visibility diagnostics rest on.**
+	// A name whose every declaration is file-private must still be FOUND from another file, because that
+	// is exactly what tells "no declaration binds this name anywhere" (E3011) from "one does, elsewhere,
+	// and did not export it" (E2003 — see `visibleFrom`). Hiding it here would collapse the two into the
+	// blunter one's wording.
+	//
+	// ⚠ The extra probe is paid ONLY by a contested name whose reader declares none of it. An uncontested
+	// name — nearly every name in any program — short-circuits on the `multiplyDeclared` miss exactly as
+	// it did, so the hot path is unchanged.
 	export function lookup(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
 		if let byFile = try self.multiplyDeclared.get(name) 'contested'
 			if let own = try byFile.get(readerFilePath.toString()) 'readersOwnFile'
 				return DeclaredAlias.declared(own)
 			end 'readersOwnFile'
+
+			if let nameableHere = try self.nameable.get(name) 'someDeclarationIsNameable'
+				return DeclaredAlias.declared(nameableHere)
+			end 'someDeclarationIsNameable'
 		end 'contested'
 
 		if let any = try self.byName.get(name) 'declaredSomewhere'

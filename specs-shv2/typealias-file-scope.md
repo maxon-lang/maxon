@@ -52,9 +52,32 @@ it last-wins, and the disagreement reached the backends — the x64 emitter pani
 a gpr slot, wasm emitted a module its own validator rejected, and a struct field typed by the alias
 compiled to the wrong width with no diagnostic at all.
 
+## A THIRD file resolves to a declaration it MAY NAME
+
+The rule above answers for the two files that declare the name. A **third** file — one that names
+`Limit` and declares no `Limit` of its own — is the case neither of them covers, and the bare door
+answered it *last-wins*: whichever declaration was merged last decided what the third file's parameter,
+return type and cast meant.
+
+That is not a tie between equals, because **a plain `typealias` is file-local and a third file may not
+name it at all.** A declaration the reader is forbidden to write down cannot be the one the reader
+meant. So the third file resolves to a declaration it MAY name — an `export`ed one, or one the
+compiler supplies on the stdlib's behalf — and only falls back to the bare last-wins answer when *no*
+declaration of the name is nameable from anywhere, which is the state the "declared, but hidden from
+you" diagnostics (E2003 / E3011) are built on and which must keep its answer.
+
+**MEASURED, and it was a wrong answer in the worst direction — a user's private alias decided what a
+STDLIB function accepts.** A user file declaring `typealias Codepoint = int(0 to 100)` made
+`stdlib/helpers/string/utf16.maxon`'s `utf16LeadSurrogate(codepoint Codepoint)` — whose `Codepoint` is
+`stdlib/Character.maxon`'s exported `int(0 to 1114111)` — reject a perfectly legal `70000` with
+`E3005 … outside the range of 'Codepoint' (int(0 to 100))`. `utf16.maxon` declares no `Codepoint`, so it
+fell through to the bare door, and the user's file merged last. The range quoted at the user belonged to
+the user's own alias; the function refusing it belonged to a file that had never heard of it.
+
 **Out of scope**, and deliberately: `export` visibility as a *key* (an exported alias is still filed
-under its bare name) and **E3063** ambiguity between two exported aliases of one name in different
-files. Both need cross-file name resolution; this rung is the file-scoped half only.
+under its bare name) and **E3063** ambiguity between two *nameable* aliases of one name in different
+files — which is still last-wins, on the strictly smaller set of declarations the reader may name.
+Both need cross-file name resolution; this rung is the file-scoped half only.
 
 ## Tests
 
@@ -206,4 +229,103 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+
+<!-- test: third-file-resolves-to-the-nameable-declaration -->
+A **third** file is what the two-file rule does not answer. `lib.maxon` names `Codepoint` and declares
+none, so its parameter's range is neither of its own files' business — and the bare door used to hand it
+whichever declaration merged last, which is `main.maxon`'s private `int(0 to 100)`. A legal `70000` was
+then refused at the caller with a range that belongs to a file `lib.maxon` has never seen. The
+declaration `lib.maxon` may actually NAME is the exported one, and that is the one it gets.
+```maxon
+// --- file: alias.maxon
+export typealias Codepoint = int(0 to 1114111)
+
+// --- file: lib.maxon
+export function widen(c Codepoint) returns int
+	return c / 1000
+end 'widen'
+
+// --- file: main.maxon
+typealias Codepoint = int(0 to 100)
+
+function narrow(c Codepoint) returns int
+	return c
+end 'narrow'
+
+function main() returns ExitCode
+	return (widen(70000) - narrow(28)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: third-file-runtime-guard-uses-the-nameable-declaration -->
+The same collision through the door that emits CODE rather than a diagnostic: `big` is opaque, so
+`widen`'s narrowed parameter is enforced by its ENTRY GUARD (A1f), and that guard reads its bounds
+through the very lookup this rule fixes. Against the bare door it was built from `main.maxon`'s
+`int(0 to 100)` and the program died `Range check failed: value outside typealias 'Codepoint'` on a
+value the alias `lib.maxon` can name admits. A false panic is the runtime form of the false rejection
+above, and it is the form the stdlib actually met.
+```maxon
+// --- file: alias.maxon
+export typealias Codepoint = int(0 to 1114111)
+
+// --- file: lib.maxon
+export function widen(c Codepoint) returns Codepoint
+	return c
+end 'widen'
+
+// --- file: main.maxon
+typealias Codepoint = int(0 to 100)
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function narrow(c Codepoint) returns int
+	return c
+end 'narrow'
+
+function main() returns ExitCode
+	let big = opaque(70000)
+	return ((widen(big) / 1000) - narrow(28)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: error.file-private-alias-still-binds-in-its-own-file -->
+The direction the fix must not overreach into, and the reason the scoped probe stays FIRST. `main.maxon`
+declares `Codepoint` privately, so `narrow`'s parameter means `int(0 to 100)` **in `main.maxon`** — the
+exported declaration elsewhere does not widen it. Only a file that declares none of them resolves to the
+nameable one.
+```maxon
+// --- file: alias.maxon
+export typealias Codepoint = int(0 to 1114111)
+
+// --- file: lib.maxon
+export function widen(c Codepoint) returns int
+	return c
+end 'widen'
+
+// --- file: main.maxon
+typealias Codepoint = int(0 to 100)
+
+function narrow(c Codepoint) returns int
+	return c
+end 'narrow'
+
+function main() returns ExitCode
+	return (widen(70000) + narrow(150)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:18:25: Value 150 is outside the range of 'Codepoint' (int(0 to 100))
 ```
