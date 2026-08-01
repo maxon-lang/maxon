@@ -44,9 +44,16 @@ Stack trace:
 
 ### ⚠ Where the RUNTIME check is emitted — and WHERE a call argument's lands (A1f)
 
-The runtime half is emitted at **every** position: a `return`, a struct-literal field, a field store, a
-field's declared default, an explicit `as`, an **array element** (since `A1f-arrayelem`) and a **call
-argument** (since A1f). There is no position left owing the compile-time half alone.
+The runtime half is now enforced for **every** position: a `return`, a struct-literal field, a field
+store, a field's declared default, an explicit `as`, an **array element** (since `A1f-arrayelem`) and a
+**call argument** (since A1f).
+
+⚠ **"Enforced for every position" is not "emitted at every position", and the CALL ARGUMENT is the one
+that keeps them apart.** Its guard is emitted at the callee's ENTRY, not where the argument is written,
+so a call argument still owes the compile-time half *alone at its own site* — that is what
+`RangeCheckGuard.compileTimeOnly` names, it is still passed (by `checkArgAgainstParamRange` and by
+nothing else), and `checkArgAgainstParamRange` panics if the shared decider ever answers `guard` there.
+Read this paragraph before concluding the enum has no live case.
 
 **A call argument's runtime check is not emitted where the argument is written**, and the obstacle is
 mechanical: a check is a BRANCH, so it splits the block it lands in, and an argument is evaluated

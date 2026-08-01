@@ -21107,11 +21107,19 @@ export type Parser
 	// RETURNED** (P1.9 review) — "a declaration binds this name, elsewhere, and did not export it" is
 	// false the moment ANY declaration of it did.
 	//
-	// `lookup` hands back exactly one, and for a name the reading file does not itself declare, that one
-	// is whichever was recorded LAST. So judging the resolved declaration alone judged the file walk:
+	// `lookup` hands back exactly one, so judging the resolved declaration alone judged the file walk:
 	// MEASURED, an exported `Score` in `a.maxon` beside a private one in `b.maxon` REFUSED a third
 	// file's `as Score`, while the same two files named `bbb`/`aaa` compiled it. The second probe is
 	// paid only on the path that was about to report an error, so a clean build never makes it.
+	//
+	// ⚠ **`A1f-aliasclash` FIXED THAT ONE DOOR EARLIER, AND THE SECOND PROBE STAYS ANYWAY.** `lookup`
+	// now resolves a contested name to a declaration the reader MAY name, so `visibleFrom` above
+	// answers `true` on exactly the shapes this probe was built to rescue, and the probe answers `true`
+	// wherever it is still reached. Keeping it is what keeps E2003's claim ("no declaration of this
+	// name is yours to name") a question about ALL declarations rather than about whichever one
+	// `lookup` picked — the two must not be re-coupled, and an E3063 rung that narrows `lookup`'s
+	// nameable tier makes this probe load-bearing again without touching this line.
+	// See `RangedAliasRegistry.nameableFromAnyFile`.
 	function everyDeclarationHidden(alias RangedTypeAlias) returns bool
 		if visibleFrom(alias, readerFilePath: self.filePath) 'thisOneIsVisible'
 			return false
@@ -23659,9 +23667,9 @@ export type Parser
 		let value = self.emitLiteral(bits, valueType: self.fieldStorageType(declared), range: range)
 		// A declared default is a value coming to rest in the slot exactly as a written one is, so the
 		// field's range binds it (P1.9) — `export var v as Percent = 500` is the same E3005 `Self{v: 500}`
-		// gets. It is always a LITERAL, so `InsertRangeChecks` decides it entirely at compile time and the
-		// runtime half it is nominally owed is never emitted; recording it with the same `guard` the written
-		// field takes keeps the two doors saying one thing rather than two.
+		// gets. It is always a LITERAL, so `InsertRangeChecks` settles it entirely at compile time and the
+		// runtime half it is nominally owed is never emitted; it is recorded exactly as the WRITTEN field
+		// store is (`requireFieldType`), so the two doors say one thing rather than two.
 		self.recordRangeCheckSite(value, targetAlias: self.declaredAliasOfType(declared), line: range.line, column: range.column)
 
 		try fieldValues.set(index, value: value) otherwise panic("fillFieldDefault: fieldValues.set OOB at {index} — the column is sized to the layout's field count")
@@ -32836,11 +32844,19 @@ export type Parser
 	// which is built from the Std `const` ops. The cost is a site per float argument rather than per float
 	// LITERAL argument; float arguments are rare.
 	//
-	// ⚠ **A1 ADDED A FLOAT-DOMAIN CONSTANT VIEW (`floatConstIsKnown`), AND THIS SITE STILL MUST NOT NARROW TO
-	// IT.** The tag test is not a coarse stand-in for the missing literal test: a NON-literal float argument
-	// needs a site precisely SO THAT `needsRuntimeGuard` can emit its RUNTIME guard. Narrowing to
-	// `floatConstIsKnown` would record only the literals and silently drop every non-literal float argument's
-	// range check — a wrong answer, not a tighter filter.
+	// ⚠ **A1 ADDED A FLOAT-DOMAIN CONSTANT VIEW (`floatConstIsKnown`), AND NARROWING THIS SITE TO IT IS A
+	// QUESTION ABOUT THE TWO VIEWS, NOT ABOUT THE RANGE RULE.** ⛔ The reason written here until this rung
+	// — "a NON-literal float argument needs a site precisely SO THAT `needsRuntimeGuard` can emit its
+	// RUNTIME guard" — is FALSE, and it is false in the direction that would break the compiler: an
+	// argument site is asked as `compileTimeOnly` (`InsertRangeChecks.checkArgAgainstParamRange`), so no
+	// runtime guard is EVER emitted from one, and `checkArgAgainstParamRange` PANICS if the shared decider
+	// ever answers `guard` there. The argument door's runtime half is the callee's ENTRY guard (A1f), and
+	// it stands in front of every caller whether or not the caller filed a site.
+	// The honest reason the tag is the admission test is the paragraph above: the parser's own constant
+	// view is the INTEGER one and cannot answer for a float, so the TAG is the conservative filter and
+	// `InsertRangeChecks` decides literal-ness for itself from its Std-level `floatConsts`. What a narrowing
+	// would cost is therefore a COMPILE-TIME E3005 on a float literal the parser's float view fails to
+	// recognize — measure the two views against each other before believing they agree.
 	//
 	// ⚠ Without the float arm, `take(500.0)` into a `float(0 to 100)` parameter compiled and was caught
 	// only by the callee's own ranged `return` at RUN time, where the reference refuses it at compile time.

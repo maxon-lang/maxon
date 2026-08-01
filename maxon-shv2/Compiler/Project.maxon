@@ -464,12 +464,28 @@ end 'builtinStdlibAlias'
 // else, so it needs no registry state — and the parser, which is what asks it, holds an alias but no
 // registry.
 export function visibleFrom(alias RangedTypeAlias, readerFilePath FilePath) returns bool
-	if alias.visibility != Visibility.file 'exportedOrGlobal'
+	if nameableFromAnywhere(alias) 'exportedOrGlobal'
 		return true
 	end 'exportedOrGlobal'
 
 	return alias.declFilePath.toString().equals(readerFilePath.toString())
 end 'visibleFrom'
+
+// ⭐⭐ **TIER 2 OF `visibleFrom`, SPELLED ONCE — "may ANY file write this declaration's name down?"**
+// `RangedAliasRegistry.record` asks it to decide membership of `nameable`, and `visibleFrom` asks it as
+// its second tier. They are the SAME question, and until this was extracted each spelled
+// `alias.visibility != Visibility.file` for itself.
+//
+// ⚠ **THAT DUPLICATION STOPPED BEING COSMETIC WHEN `A1f-aliasclash` MADE `nameable` DECIDE BOUNDS.**
+// Before it, `nameable` gated only a DIAGNOSTIC (E2003), so a drift between the two copies cost a
+// wrong message. Now `lookup` resolves a third file's contested alias out of that same map, so a
+// `Visibility` case added to one copy and not the other hands that file a declaration `visibleFrom`
+// says it may not name — which is `A1f-aliasclash` itself, restored, and SILENT: the range would be
+// wrong and E2003 would agree with whichever copy was wrong, because it reads the same map.
+// `Visibility` has three cases today (`file`/`module`/`global`) and a fourth is the edit this guards.
+export function nameableFromAnywhere(alias RangedTypeAlias) returns bool
+	return alias.visibility != Visibility.file
+end 'nameableFromAnywhere'
 
 export type RangedAliasRegistry
 	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
@@ -548,7 +564,7 @@ export type RangedAliasRegistry
 
 		// Recorded here, ABOVE the first-declaration early return below, so every declaration passes
 		// through it exactly once whatever else the name goes on to do.
-		if alias.visibility != Visibility.file 'nameableAnywhere'
+		if nameableFromAnywhere(alias) 'nameableAnywhere'
 			self.nameable.upsert(alias.name, value: alias)
 		end 'nameableAnywhere'
 
@@ -627,9 +643,18 @@ export type RangedAliasRegistry
 
 	// ⭐⭐ **DOES *SOME* DECLARATION OF `name` MAKE IT NAMEABLE FROM ANY FILE?** — a question about ALL
 	// of a name's declarations, which is why it cannot be asked of `lookup`'s answer: `lookup` returns
-	// exactly ONE declaration, and for a name no file of the reader's declares that one is whichever was
-	// recorded LAST (the bare `byName` door). Reading visibility off that one alone answers about the
-	// file walk rather than about the program.
+	// exactly ONE declaration, and reading visibility off that one alone answers about the file walk
+	// rather than about the program.
+	//
+	// ⚠ **SINCE `A1f-aliasclash` THIS PROBE ANSWERS `true` EVERYWHERE IT IS ASKED, AND IT IS KEPT ON
+	// PURPOSE.** Its only caller is `Parser.everyDeclarationHidden`, which reaches it only after
+	// `visibleFrom` said false of `lookup`'s answer — and `lookup` now hands a contested name's
+	// non-declaring reader a NAMEABLE declaration whenever one exists, so that path is taken only when
+	// this map holds no entry for the name at all. Deleting it would put the E2003 decision back on
+	// `lookup`'s single answer, which is precisely the coupling that made the two deciders disagree
+	// (see the MEASURED note below); it is one probe on a path that was already about to report an
+	// error. ⛔ It also stops being a tautology the moment `lookup`'s nameable tier changes — which is
+	// exactly what an E3063 rung does.
 	//
 	// ⚠ **MEASURED, and it is what this exists for** (P1.9 review). Two files declaring `Score`, one
 	// `export`ed and one not, plus a third that casts to it: `a.maxon` exported + `b.maxon` private
@@ -672,6 +697,21 @@ export type RangedAliasRegistry
 	// strictly smaller set of declarations the reader may name — because choosing between two legal
 	// candidates is a cross-file name-resolution decision with its own diagnostic and its own
 	// false-reject sweep. What is fixed here is only the case where one candidate was never a candidate.
+	//
+	// ⚠⚠ **TWO BOUNDARIES THE PARAGRAPH ABOVE HIDES, both MEASURED (BATCH6 review), because "a user's
+	// private alias decided what a stdlib function accepts" reads wider than what moved:**
+	//
+	//   • **A contest ENTIRELY INSIDE `stdlib/` is untouched — the fix is a no-op there.**
+	//     `Parser.typeAliasVisibility` gives EVERY alias in a stdlib source file `Visibility.global`,
+	//     `export`ed or not, so every candidate is nameable and `nameable`'s last-wins winner IS
+	//     `byName`'s. The `Byte`/`ByteCount`/`Utf16UnitCount` contests this file cites elsewhere are all
+	//     of that shape. The case actually repaired is stdlib-vs-user-PRIVATE.
+	//   • **A user `export`ed alias still displaces the stdlib seed, exactly as before.** `record`'s
+	//     `nameable` is last-wins too, so `export typealias Codepoint = int(0 to 100)` in a user file
+	//     still wins for any file that declares no `Codepoint` of its own. That is NOT a regression —
+	//     `byName` did the same — and stdlib files that declare the name are unaffected, because
+	//     `readersOwnFile` runs first. It is the same E3063 contest, and it is the reason the bullet
+	//     above says "narrows", not "closes".
 	//
 	// ⚠ **AND THE FALLBACK TO `byName` IS NOT DEAD CODE — it is what the visibility diagnostics rest on.**
 	// A name whose every declaration is file-private must still be FOUND from another file, because that
