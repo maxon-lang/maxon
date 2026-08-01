@@ -8186,7 +8186,7 @@ export type Parser
 		// element name the buffer through the same one-entry-per-bare-name sweep and are chosen at the same
 		// moment, so an overload set that differs only at a slot has the identical unrepairable ambiguity — the
 		// message therefore says NAMES rather than returns.
-		if self.signatures.declaredReturnSurface(base) != PlainDeclaredSurface 'bufferReturningOverload'
+		if not surfaceIsPlain(self.signatures.declaredReturnSurface(base)) 'bufferReturningOverload'
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations NAMES `{String.from(ManagedMemoryTypeName)}` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'bufferReturningOverload'
 
@@ -8808,7 +8808,7 @@ export type Parser
 			let inferred = try self.readFieldDefaultLiteral()
 			// Shape 2 has no annotation at all, so no spelling can name the buffer alias (A2j); the type
 			// comes from a LITERAL, and no literal produces a `__ManagedMemory`.
-			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag), declaredSurface: PlainDeclaredSurface)
+			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag), declaredSurface: sharedEmptyDeclaredSurface)
 			return
 		end 'typeFromLiteral'
 
@@ -11079,7 +11079,7 @@ export type Parser
 			paramRanges.push(SourceRange.ofToken(nameTok))
 			// The receiver is typed by `enclosingSelfType`, never by a source spelling, so it can never be
 			// the buffer alias — but it occupies position 0 and every column here is indexed by position.
-			paramSurfaces.push(PlainDeclaredSurface)
+			paramSurfaces.push(sharedEmptyDeclaredSurface)
 		end 'receiverParam'
 
 		try self.consume(TokenKind.leftParen)
@@ -23862,16 +23862,6 @@ export type Parser
 			throw ParseError.unsupported("a one-element tuple type (a tuple has at least {MinTupleArity} elements, and parentheses around a single type would be indistinguishable from grouping)", line: openTok.line, column: openTok.column)
 		end 'singleElement'
 
-		// ⚠⚠ **AND A TUPLE WIDER THAN THE SURFACE MASK IS REFUSED RATHER THAN SILENTLY LOSING A SLOT (A2m).**
-		// Each element's declared `__ManagedMemory` spelling rides one bit of a `DeclaredSurface`
-		// (`MaxSurfaceMarkedTupleArity`), and a slot past the last bit would take the WRONG member roster — an
-		// accepted `count()` on a buffer, or a refused `length()` — with no diagnostic in either direction.
-		// Refused at the ONE place a tuple type is minted, unconditionally rather than only for a tuple that
-		// names the buffer, so the limit is a property of the type and not of what happens to be written in it.
-		if elements.count() > MaxSurfaceMarkedTupleArity 'tooManyElements'
-			throw ParseError.unsupported("a tuple type of {elements.count()} elements (shv2 records each element's declared `{String.from(ManagedMemoryTypeName)}` spelling in one bit of a 64-bit per-value word, so it carries at most {MaxSurfaceMarkedTupleArity}; a slot past that would silently take the wrong member roster). Name a `type` with the fields you need", line: openTok.line, column: openTok.column)
-		end 'tooManyElements'
-
 		return MaxonType.structRef(self.artifact.typeNames.intern((try self.internTupleLayout(elements, anchor: openTok)).name))
 	end 'parseTupleTypeReference'
 
@@ -31536,9 +31526,7 @@ export type Parser
 		//
 		// This one line is what serves `p.0`, `let (m, n) = pair()` and `h.p.0` alike — every read of a tuple
 		// element in the language funnels through this mint.
-		if self.valueSlotIsBufferSurface(box, slot: index) 'valueSaysThisSlotIsABuffer'
-			self.markBufferSurface(result)
-		end 'valueSaysThisSlotIsABuffer'
+		self.markDeclaredSurface(result, declared: self.valueSlotSurface(box, slot: index))
 
 		return result
 	end 'emitFieldLoad'
@@ -32078,13 +32066,13 @@ export type Parser
 	// `error.tuple-slot-mark-does-not-leak-across-functions` is what holds that shut.
 	//
 	// Only a NON-PLAIN mask is stored, so a program whose tuples name no buffer allocates no table.
-	function markBufferSurfaceSlots(value ValueId, slots DeclaredSurface)
-		if slots == PlainDeclaredSurface 'noSlotNamesTheBuffer'
+	function markBufferSurfaceSlots(value ValueId, surface DeclaredSurface)
+		if surfaceSlotCount(surface) == 0 'notATupleWithSlots'
 			return
-		end 'noSlotNamesTheBuffer'
+		end 'notATupleWithSlots'
 
 		self.bufferSurfaceSlots = privateValueSlotSurfaceMap(self.bufferSurfaceSlots, anchor: sharedEmptyBufferSurfaceSlots)
-		self.bufferSurfaceSlots.upsert(value, value: slots)
+		self.bufferSurfaceSlots.upsert(value, value: surface)
 	end 'markBufferSurfaceSlots'
 
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceElements` (A2m)** — `markBufferSurface`'s twin for an ARRAY whose
@@ -32117,52 +32105,58 @@ export type Parser
 
 	// ⭐⭐ **WHERE DOES THE TYPE WRITTEN AT `index` NAME `__ManagedMemory` (A2m)?** THE one reader every
 	// declaration door asks — a parameter, a struct field, a return clause — and the generalisation of the
-	// single-token test above from a BIT to a `DeclaredSurface` word. Three depths, one walk:
+	// single-token test above from a BIT to a whole `DeclaredSurface` TREE:
 	//
-	//   • `m __ManagedMemory`          ⇒ the outright bit
-	//   • `t (__ManagedMemory, Int)`   ⇒ slot 0's bit
-	//   • `a BufArray`                 ⇒ the element bit, where `BufArray = Array with __ManagedMemory`
+	//   • `m __ManagedMemory`              ⇒ the root's outright bit
+	//   • `a BufArray`                     ⇒ the root's element bit, `BufArray = Array with __ManagedMemory`
+	//   • `t (__ManagedMemory, Int)`       ⇒ slot 0's outright bit
+	//   • `t (BufArray, Int)`              ⇒ slot 0's ELEMENT bit
+	//   • `t ((__ManagedMemory, Int), Int)` ⇒ slot 0's slot 0's outright bit
+	//
+	// The last three are ONE rule, not three: a tuple slot is a declared position, so it gets whatever a
+	// declared position gets, by the same function calling itself. Nothing here knows how deep it is.
 	//
 	// ⚠ **IT IS ASKED OF THE TOKENS, BEFORE `parseTypeReference` RUNS, FOR THE REASON A2j STATES ABOVE** —
-	// and the tuple depth is why the word cannot be recovered afterwards even in principle: two tuple types
+	// and the tuple depth is why the tree cannot be recovered afterwards even in principle: two tuple types
 	// that differ only in a slot's spelling canonicalize to ONE interned name with ONE layout, so by the time
 	// a `MaxonType` exists the difference is not merely erased, it does not exist.
+	//
+	// ⚠ **A PLAIN POSITION ALLOCATES NOTHING** — the cheap whole-spelling test runs first and hands back the
+	// shared empty tree, so the overwhelming majority of declared positions in any program cost one token
+	// test and one `Set.contains` on an empty set. Only a position that actually names the buffer builds.
 	//
 	// ⚠ **THE ELEMENT BIT IS THE ONE ARM THAT CONSULTS A REGISTRY, AND ITS ASKERS ARE THEREFORE THE REAL-PARSE
 	// DOORS ONLY** (a parameter, an array static). The sweep would answer it from a half-built alias table —
 	// an answer about how far the sweep had got — so the two doors the sweep DOES feed (a struct field, a
-	// return type) leave it clear here and have it derived where every file is folded
-	// (`ProgramSignatures.declaredElementIsBufferSurface`). Asking it here costs a `Set.contains` on the
-	// shared empty set, which returns before it hashes.
+	// return type) have their ROOT's element bit derived instead, where every file is folded
+	// (`ProgramSignatures.declaredElementIsBufferSurface`). ⚠⚠ A SLOT's element bit has no such derivation:
+	// a tuple's element types are CANONICAL by the time anything could ask, so the alias name is gone. See
+	// the A2m spec block; that shape is answerable at a parameter and not at a field or a return.
 	function declaredSurfaceAt(index TokenIndex) returns DeclaredSurface
-		if self.kindAt(index) == TokenKind.leftParen 'tupleType'
-			return self.tupleSlotSurfacesAt(index)
-		end 'tupleType'
+		if not self.spellingNamesBufferAt(index) 'namesTheBufferNowhere'
+			return sharedEmptyDeclaredSurface
+		end 'namesTheBufferNowhere'
 
-		if self.typeSpellingAtDenotesBuffer(index) 'spelledTheAlias'
-			return SurfaceBitIsBuffer
-		end 'spelledTheAlias'
-
-		if self.signatures.aliasElementIsBufferSurface(self.identifierNameAt(index)) 'namedAnArrayOfBuffers'
-			return SurfaceBitElementIsBuffer
-		end 'namedAnArrayOfBuffers'
-
-		return PlainDeclaredSurface
+		var surface = DeclaredSurface.create()
+		self.appendSurfaceNodesAt(surface, index: index)
+		return surface
 	end 'declaredSurfaceAt'
 
-	// The slot bits of a TUPLE type written at `open` (which is its `(`). It walks the element list at PAREN
-	// DEPTH 1 — a nested tuple element is a type of its own, and its inner spellings belong to ITS slots, not
-	// to this tuple's — and reads each top-level element's first token through the same single-token test the
-	// outright spelling uses.
+	// Does the type written at `index` name the buffer ANYWHERE inside it? The cheap gate that keeps a plain
+	// declaration allocation-free, and it is EXACT rather than an over-approximation: `__ManagedMemory` and an
+	// array-of-buffers alias are type names, and a type position admits nothing but types — so a token inside
+	// the type that spells one IS a surface bit somewhere in its tree, and no bit exists without such a token.
 	//
-	// A malformed or unterminated type is not this walk's to report: it stops at the matching `)` or at the
-	// end of the token array, and `parseTupleTypeReference` reports what is actually wrong a moment later.
-	function tupleSlotSurfacesAt(open TokenIndex) returns DeclaredSurface
-		var surface = PlainDeclaredSurface
-		var slot = 0 as FieldIndex
+	// For a tuple it scans the whole balanced parenthesized range at once rather than walking element
+	// boundaries: the question is "anywhere", so where the boundaries fall does not matter and the scan needs
+	// no bookkeeping and no allocation.
+	function spellingNamesBufferAt(index TokenIndex) returns bool
+		if self.kindAt(index) != TokenKind.leftParen 'notATuple'
+			return self.spellingAtNamesBuffer(index)
+		end 'notATuple'
+
 		var depth = 0
-		var at = open
-		var elementStart = (open + 1) as TokenIndex
+		var at = index
 		while at < self.tokens.count() 'scanTuple'
 			let kind = self.kindAt(at)
 			if kind == TokenKind.leftParen 'openNested'
@@ -32172,36 +32166,90 @@ export type Parser
 			if kind == TokenKind.rightParen 'closeNested'
 				depth = depth - 1
 				if depth == 0 'endOfThisTuple'
-					return self.withTupleSlotSurface(surface, slot: slot, elementStart: elementStart)
+					return false
+				end 'endOfThisTuple'
+			end 'closeNested'
+
+			if self.spellingAtNamesBuffer(at) 'namesIt'
+				return true
+			end 'namesIt'
+
+			at = at + 1
+		end 'scanTuple'
+
+		return false
+	end 'spellingNamesBufferAt'
+
+	// The LEAF test: does the single token at `index` name the buffer, outright or as an array-of-buffers
+	// alias? THE one place the two spellings are asked together, so the cheap gate above and the builder
+	// below cannot come to disagree about what counts.
+	function spellingAtNamesBuffer(index TokenIndex) returns bool
+		return self.typeSpellingAtDenotesBuffer(index) or self.signatures.aliasElementIsBufferSurface(self.identifierNameAt(index))
+	end 'spellingAtNamesBuffer'
+
+	// Append the pre-order nodes of the type written at `index` to `out`. A tuple pushes its own node — whose
+	// payload is only its SLOT COUNT, since a tuple record denotes nothing itself — and then each element's
+	// whole subtree, in order. Everything else is one leaf node carrying the two spelling bits.
+	function appendSurfaceNodesAt(out DeclaredSurface, index TokenIndex)
+		if self.kindAt(index) != TokenKind.leftParen 'leafType'
+			out.push(self.leafSurfaceNodeAt(index))
+			return
+		end 'leafType'
+
+		let starts = self.tupleElementStartsAt(index)
+		out.push(tupleSurfaceNode(starts.count()))
+		for start in starts 'eachElement'
+			self.appendSurfaceNodesAt(out, index: start)
+		end 'eachElement'
+	end 'appendSurfaceNodesAt'
+
+	// The two spelling bits of a non-tuple type position, in one node.
+	function leafSurfaceNodeAt(index TokenIndex) returns DeclaredSurfaceNode
+		var node = 0 as DeclaredSurfaceNode
+		if self.typeSpellingAtDenotesBuffer(index) 'spelledTheAlias'
+			node = node or SurfaceBitIsBuffer
+		end 'spelledTheAlias'
+
+		if self.signatures.aliasElementIsBufferSurface(self.identifierNameAt(index)) 'namedAnArrayOfBuffers'
+			node = node or SurfaceBitElementIsBuffer
+		end 'namedAnArrayOfBuffers'
+
+		return node
+	end 'leafSurfaceNodeAt'
+
+	// The token index each top-level element of the tuple type at `open` starts at. It counts PAREN DEPTH, so
+	// a nested tuple's own commas belong to it and not to this list — which is exactly what makes the builder
+	// above recurse correctly rather than flattening a nested tuple into its parent's slots.
+	//
+	// A malformed or unterminated type is not this walk's to report: it stops at the matching `)` or at the
+	// end of the token array, and `parseTupleTypeReference` reports what is actually wrong a moment later.
+	function tupleElementStartsAt(open TokenIndex) returns TokenIndexColumn
+		var starts = TokenIndexColumn.create()
+		starts.push((open + 1) as TokenIndex)
+		var depth = 0
+		var at = open
+		while at < self.tokens.count() 'scanTuple'
+			let kind = self.kindAt(at)
+			if kind == TokenKind.leftParen 'openNested'
+				depth = depth + 1
+			end 'openNested'
+
+			if kind == TokenKind.rightParen 'closeNested'
+				depth = depth - 1
+				if depth == 0 'endOfThisTuple'
+					return starts
 				end 'endOfThisTuple'
 			end 'closeNested'
 
 			if kind == TokenKind.comma and depth == 1 'nextElement'
-				surface = self.withTupleSlotSurface(surface, slot: slot, elementStart: elementStart)
-				slot = (slot + 1) as FieldIndex
-				elementStart = (at + 1) as TokenIndex
+				starts.push((at + 1) as TokenIndex)
 			end 'nextElement'
 
 			at = at + 1
 		end 'scanTuple'
 
-		return surface
-	end 'tupleSlotSurfacesAt'
-
-	// Fold one tuple element's spelling into the running mask. Split out because the walk above ends an
-	// element at TWO places — a top-level comma and the closing paren — and a second copy of the test is
-	// exactly how one of the two would come to disagree with the other about which bit a slot owns.
-	//
-	// A slot the mask cannot express is silently skipped HERE and refused THERE: `parseTupleTypeReference`
-	// rejects a tuple type wider than `MaxSurfaceMarkedTupleArity` outright, so no such type is ever minted
-	// and no value of one reaches a reader. See `MaxSurfaceMarkedTupleArity`.
-	function withTupleSlotSurface(surface DeclaredSurface, slot FieldIndex, elementStart TokenIndex) returns DeclaredSurface
-		if slot >= MaxSurfaceMarkedTupleArity or not self.typeSpellingAtDenotesBuffer(elementStart) 'notABufferSlot'
-			return surface
-		end 'notABufferSlot'
-
-		return surface or tupleSlotSurfaceBit(slot)
-	end 'withTupleSlotSurface'
+		return starts
+	end 'tupleElementStartsAt'
 
 	// The RETURN clause's spelling, asked with the cursor ON `returns` — so the type token is the next one.
 	// ⚠ **ONE reader, because BOTH passes ask it**: the tolerant declaration sweep (`recordScannedSignature`,
@@ -32211,7 +32259,7 @@ export type Parser
 	// since a wrong SURFACE is a wrong answer and not a compile error.
 	function returnDeclaredSurface() returns DeclaredSurface
 		if not self.at(TokenKind.returns) 'noReturnClause'
-			return PlainDeclaredSurface
+			return sharedEmptyDeclaredSurface
 		end 'noReturnClause'
 
 		return self.declaredSurfaceAt((self.pos + 1) as TokenIndex)
@@ -32233,7 +32281,7 @@ export type Parser
 			self.markBufferSurfaceElements(value)
 		end 'declaredAnArrayOfBuffers'
 
-		self.markBufferSurfaceSlots(value, slots: declared)
+		self.markBufferSurfaceSlots(value, surface: declared)
 	end 'markDeclaredSurface'
 
 	// Does `value` denote a `__ManagedMemory` BUFFER rather than the `Array` around it? The read side of the
@@ -32243,13 +32291,21 @@ export type Parser
 		return self.bufferSurfaceValues.contains(value)
 	end 'valueIsBufferSurface'
 
-	// Does element `slot` of the TUPLE `value` denote the buffer (A2m)? The read side of
-	// `markBufferSurfaceSlots`, asked at `emitFieldLoad` — which every `p.0`, every destructured name and
-	// every chain hop funnels through. A value with no entry has no buffer slot, which is every tuple in a
-	// program that never writes the alias.
-	function valueSlotIsBufferSurface(value ValueId, slot FieldIndex) returns bool
-		return surfaceTupleSlotIsBuffer(try self.bufferSurfaceSlots.get(value) otherwise PlainDeclaredSurface, slot: slot)
-	end 'valueSlotIsBufferSurface'
+	// ⭐ **THE SURFACE OF ELEMENT `slot` OF THE TUPLE `value` — A WHOLE SURFACE, NOT A BIT (A2m).** The read
+	// side of `markBufferSurfaceSlots`, asked at `emitFieldLoad`, which every `p.0`, every destructured name
+	// and every chain hop funnels through. Because a slot's payload is a surface like any other, `p.0` of a
+	// `((__ManagedMemory, Int), Int)` binds a value carrying ITS slots — the recursion needs no case here, it
+	// is the same line running again one container in.
+	//
+	// A value with no entry is plain, which is every tuple in a program that never writes the alias.
+	function valueSlotSurface(value ValueId, slot FieldIndex) returns DeclaredSurface
+		let surface = try self.bufferSurfaceSlots.get(value) otherwise sharedEmptyDeclaredSurface
+		if slot >= surfaceSlotCount(surface) 'noSuchMarkedSlot'
+			return sharedEmptyDeclaredSurface
+		end 'noSuchMarkedSlot'
+
+		return surfaceSlot(surface, slot: slot)
+	end 'valueSlotSurface'
 
 	// Do the ELEMENTS of the array `value` denote buffers (A2m)? The read side of
 	// `markBufferSurfaceElements`, asked at `emitArrayElementAccessor`.
@@ -32573,7 +32629,7 @@ export type Parser
 		lifted.maxonReturnType = returnType
 		// A closure's return type is INFERRED from its body expression, never spelled, so no declared
 		// spelling can name the buffer alias here (A2j).
-		self.artifact.recordFuncReturnType(closureName, returnType: returnType, declaredSurface: PlainDeclaredSurface)
+		self.artifact.recordFuncReturnType(closureName, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
 		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
 		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
 		self.closureReturns.upsert(closureName, value: returnType)

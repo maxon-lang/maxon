@@ -1,0 +1,19 @@
+// Test: error.a-tuple-slot-of-byte-arrays-keeps-the-array-surface
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BufList = Array with ByteArray
+
+function slotted(t (BufList, Int)) returns Int
+	let m = try t.0.get(0) otherwise return 0
+	return m.length()
+end 'slotted'
+
+function main() returns ExitCode
+	var a = BufList.create()
+	a.push("hello".toByteArray())
+	return slotted((a, 7)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:9:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later

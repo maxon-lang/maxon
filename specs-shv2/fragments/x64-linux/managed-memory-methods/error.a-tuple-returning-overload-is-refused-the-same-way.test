@@ -1,19 +1,19 @@
-// Test: error.a-buffer-returning-function-cannot-be-overloaded
+// Test: error.a-tuple-returning-overload-is-refused-the-same-way
 typealias Int = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
-function make() returns __ManagedMemory
-	return "hello".toByteArray()
+function make() returns (__ManagedMemory, Int)
+	return ("hello".toByteArray(), 7)
 end 'make'
 
-function make(n Int) returns ByteArray
-	return "abc".toByteArray()
+function make(n Int) returns (ByteArray, Int)
+	return ("abc".toByteArray(), n)
 end 'make'
 
 function main() returns ExitCode
 	let a = make()
-	return a.length() as ExitCode
+	return a.0.length() as ExitCode
 end 'main'
 ---
 CompilerError:

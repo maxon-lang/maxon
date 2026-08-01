@@ -1799,8 +1799,8 @@ let StringIndexBytePosFieldName = b"bytePosition"
 // `buildStringRecordBytes`'s `appendRecordField` discipline, applied to a struct box.
 function stringIndexLayout() returns StructLayout
 	var layout = StructLayout.create(StringIndexTypeName)
-	layout.addField(StringIndexCharIdxFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: PlainDeclaredSurface)
-	layout.addField(StringIndexBytePosFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: PlainDeclaredSurface)
+	layout.addField(StringIndexCharIdxFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+	layout.addField(StringIndexBytePosFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 
 	if layout.offsetOfField(StringIndexCharIdxFieldIndex) != StringIndexCharIdxOffset or layout.offsetOfField(StringIndexBytePosFieldIndex) != StringIndexBytePosOffset 'offsetDrift'
 		panic("stringIndexLayout: the struct layout puts `charIdx`/`bytePosition` at {layout.offsetOfField(StringIndexCharIdxFieldIndex)}/{layout.offsetOfField(StringIndexBytePosFieldIndex)} but `__strix_make` writes them at {StringIndexCharIdxOffset}/{StringIndexBytePosOffset} — the parser's field reads and the runtime's field writes have drifted")
@@ -1874,85 +1874,188 @@ export let ManagedFileTypeName = b"__ManagedFile"
 // price of the binding, and it is the smaller one: the alternative is two ids for one record.
 export let ManagedMemoryTypeName = b"__ManagedMemory"
 
-// ⭐⭐ **ONE DECLARED TYPE POSITION'S PRE-ERASURE `__ManagedMemory` SPELLING, PACKED INTO A WORD (A2j /
-// A2m).** A parameter's annotation, a struct field's, a return clause's: each is a place where the SOURCE
-// said something no `MaxonType` can still say, because `parseTypeReference` folds `__ManagedMemory` into the
-// very `genericInstance(Array with Byte)` a `ByteArray` resolves to (`registerManagedFileType`).
+// ⭐⭐ **ONE DECLARED TYPE POSITION'S PRE-ERASURE `__ManagedMemory` SPELLING (A2j / A2m).** A parameter's
+// annotation, a struct field's, a return clause's: each is a place where the SOURCE said something no
+// `MaxonType` can still say, because `parseTypeReference` folds `__ManagedMemory` into the very
+// `genericInstance(Array with Byte)` a `ByteArray` resolves to (`registerManagedFileType`).
 //
-// THREE facts live in it, because a declaration can name the buffer at three DEPTHS and each decides a
-// different value's member roster:
-//   • the position IS the buffer                      — `m __ManagedMemory`                       (A2j)
-//   • the position is a TUPLE with buffers at slots    — `t (__ManagedMemory, Int)`                (A2m)
-//   • the position's ARRAY ELEMENT is the buffer       — `a BufArray`, `BufArray = Array with __ManagedMemory`
+// TWO facts per position, because a declaration can name the buffer as the position itself or one container
+// in, and each decides a different value's member roster:
+//   • the position IS the buffer                  — `m __ManagedMemory`                            (A2j)
+//   • the position's ARRAY ELEMENT is the buffer  — `a BufArray`, `BufArray = Array with __ManagedMemory`
 //
-// ⚠ **ONE PACKED WORD RATHER THAN THREE COLUMNS, AND THE REASON IS ALLOCATION.** Every door that carries
-// this fact carries it as an ARRAY (one per parameter, one per field), and shv2 boxes a `type` on the heap —
-// so a three-field record here would be a heap allocation per declared parameter of every function in the
-// program, for a fact that is empty in all but a handful. A word is an inline element, exactly as
-// `ParamConsumeInfo.bits` is a `BoolArray` and not an array of records.
+// ⭐⭐ **AND A TUPLE POSITION CARRIES ONE WHOLE SURFACE PER SLOT, WHICH IS WHY THIS IS A TREE AND NOT A
+// MASK.** A2m first shipped it as a flat 62-bit mask, one BIT per slot — which meant a slot could say "I am a
+// buffer" and nothing else, so `(__ManagedMemory, Int)` worked while `(BufArray, Int)` and
+// `((__ManagedMemory, Int), Int)` did not, for no reason a reader of the language could state. A slot is a
+// declared position like any other; it gets the same payload as any other, recursively.
 //
-// ⚠ **THE SLOT BITS ARE WHY IT MAY NOT RIDE THE TUPLE'S `StructLayout` INSTEAD.** `(__ManagedMemory, Int)`
-// and `(ByteArray, Int)` canonicalize to ONE interned tuple sharing ONE layout, so a surface written onto
-// that layout would hand the buffer's roster to BOTH spellings — a wrong ACCEPTANCE, which no diagnostic
-// reports and which `error.a-tuple-of-byte-arrays-keeps-the-array-surface` exists to hold shut. The
-// declaration carries the fact and the VALUE carries it onward (`Parser.bufferSurfaceSlots`).
-export typealias DeclaredSurface = int(0 to u64.max)
+// ⚠ **AND THAT REMOVES THE WIDTH QUESTION RATHER THAN ANSWERING IT AGAIN.** The mask had an arity ceiling
+// (62) and needed a REFUSAL to keep a 63rd slot from silently losing its bit — a lost bit being the wrong
+// member roster with no diagnostic either way. A tree has one node per named position and no ceiling in
+// either direction: no arity limit, no depth limit, nothing to truncate, and so nothing to refuse. The
+// ceiling and its refusal are gone.
+//
+// ⚠ **THE TREE MAY NOT RIDE THE TUPLE'S `StructLayout` INSTEAD.** `(__ManagedMemory, Int)` and
+// `(ByteArray, Int)` canonicalize to ONE interned tuple sharing ONE layout, so a surface written onto that
+// layout would hand the buffer's roster to BOTH spellings — a wrong ACCEPTANCE, which no diagnostic reports
+// and which `error.a-tuple-of-byte-arrays-keeps-the-array-surface` exists to hold shut. The declaration
+// carries the fact and the VALUE carries it onward (`Parser.bufferSurfaceSlots`).
+
+// ⭐ **ONE NODE OF THAT TREE, PACKED INTO A WORD.** Bit 0 is the position itself, bit 1 its array element,
+// and everything above is the number of TUPLE SLOTS the node has — zero for a position that is not a tuple.
+export typealias DeclaredSurfaceNode = int(0 to u64.max)
+
+// ⭐⭐ **THE TREE, FLATTENED PRE-ORDER: node 0 is the position, and each node's slots follow it in order,
+// each with its own subtree.** `(A, (B, C))` is `[tuple(2), A, tuple(2), B, C]`.
+//
+// ⚠ **FLAT AND PRE-ORDER RATHER THAN A RECORD THAT POINTS AT ITS CHILDREN, WHICH IS THIS COMPILER'S OWN
+// ESTABLISHED SHAPE FOR EXACTLY THIS** — see `GenericArgNodeArray`, which flattens a nested `Base with (…)`
+// the same way. It buys two things a record cannot: the element is an inline WORD, so a tree costs one
+// allocation however deep it is; and a PLAIN position is the shared EMPTY tree, so it costs none at all.
+// That matters because every door carries this fact as a column — one per parameter of every function in
+// the program, one per field of every type — and all but a handful of them are plain.
+export typealias DeclaredSurface = Array with DeclaredSurfaceNode
 
 // One declared surface per declared POSITION, in declaration order — a struct's fields
-// (`StructLayout.fieldDeclaredSurfaces`) and a function's parameters (`Parser.parseFunctionParameters`). An
-// inline word per element, which is the whole reason the surface is a word: see above.
+// (`StructLayout.fieldDeclaredSurfaces`) and a function's parameters (`Parser.parseFunctionParameters`).
 export typealias DeclaredSurfaceArray = Array with DeclaredSurface
 
-// A position that named the buffer nowhere — the answer for every type in a program that never writes the
-// alias, and the seed every `declaredSurfaceAt` walk starts from.
-export let PlainDeclaredSurface = 0 as DeclaredSurface
+// ⭐ **A POSITION THAT NAMED THE BUFFER NOWHERE — AN EMPTY TREE, AND THE ONE SHARED INSTANCE OF IT.** It is
+// the answer for every type in a program that never writes the alias, so it is handed out rather than built:
+// `sharedEmptyWhereConstraints`' pattern, stored in record fields and pushed into columns exactly as that one
+// is. Nothing ever writes it — every builder that finds something allocates its own tree first.
+export let sharedEmptyDeclaredSurface = DeclaredSurface.create()
 
 // Bit 0: the position itself was spelled `__ManagedMemory`.
-export let SurfaceBitIsBuffer = 1 as DeclaredSurface
+export let SurfaceBitIsBuffer = 1 as DeclaredSurfaceNode
 
 // Bit 1: the position named a generic alias whose ELEMENT was spelled `__ManagedMemory`.
-export let SurfaceBitElementIsBuffer = 2 as DeclaredSurface
+export let SurfaceBitElementIsBuffer = 2 as DeclaredSurfaceNode
 
-// Bits 2…63: tuple slot 0…61. Slot bits start above the two flags, which is the whole of the layout.
-let SurfaceTupleSlotShift = 2 as DeclaredSurface
+// Everything above the two flag bits is the node's SLOT COUNT. THE one speller of the shift, shared by the
+// builder (`Parser.declaredSurfaceAt`) and the readers below, so the two cannot come to disagree about where
+// a count ends and a flag begins.
+let SurfaceSlotCountShift = 2 as DeclaredSurfaceNode
 
-// ⚠ **THE MASK HAS A WIDTH, AND A TUPLE PAST IT IS REFUSED RATHER THAN SILENTLY TRUNCATED.** Losing a slot
-// bit is not a missing feature, it is the roster inverted at that one element — an accepted `count()` on a
-// buffer, or a refused `length()` — with no diagnostic either way. `Parser.parseTupleTypeReference` refuses a
-// wider tuple outright, at the one place a tuple type is minted, so no reader downstream has to wonder.
-// Two flag bits and 62 slots is the whole 64, with the top bit reachable exactly as `fnvOffsetBasis`'s is.
-export let MaxSurfaceMarkedTupleArity = 62 as FieldIndex
-
-// The single bit tuple slot `slot` occupies. THE one speller of the shift, shared by the builder
-// (`Parser.declaredSurfaceAt`) and the reader below, so the two cannot come to disagree about which bit is
-// whose — a disagreement that would read one slot's surface off another slot's declaration.
-export function tupleSlotSurfaceBit(slot FieldIndex) returns DeclaredSurface
-	// The `1` is bound rather than written inline: the bootstrap reads a cast nested inside a shift as already
+// The node a TUPLE position contributes: no flags of its own, and `slotCount` children behind it. A tuple
+// value is an ordinary record whatever its slots denote, which is why its own two flag bits stay clear.
+export function tupleSurfaceNode(slotCount FieldIndex) returns DeclaredSurfaceNode
+	// The count is bound rather than cast inline: the bootstrap reads a cast nested inside a shift as already
 	// hashed and rejects it as unneeded (E3010), the same false positive `mixDefaultLiteral` binds a local for.
-	let lowBit = 1 as DeclaredSurface
-	return lowBit shl ((slot as DeclaredSurface) + SurfaceTupleSlotShift)
-end 'tupleSlotSurfaceBit'
+	let widened = slotCount as DeclaredSurfaceNode
+	return widened shl SurfaceSlotCountShift
+end 'tupleSurfaceNode'
+
+// Does this position name the buffer nowhere at all? The empty tree, which is what every plain declaration
+// gets — asked wherever a caller wants to skip the whole mechanism for the overwhelmingly common case.
+export function surfaceIsPlain(surface DeclaredSurface) returns bool
+	return surface.count() == 0
+end 'surfaceIsPlain'
 
 // Was the position ITSELF spelled `__ManagedMemory`?
 export function surfaceIsBuffer(surface DeclaredSurface) returns bool
-	return (surface and SurfaceBitIsBuffer) != 0
+	return (surfaceRootNode(surface) and SurfaceBitIsBuffer) != 0
 end 'surfaceIsBuffer'
 
 // Did the position name a generic alias whose ELEMENT was spelled `__ManagedMemory`?
 export function surfaceElementIsBuffer(surface DeclaredSurface) returns bool
-	return (surface and SurfaceBitElementIsBuffer) != 0
+	return (surfaceRootNode(surface) and SurfaceBitElementIsBuffer) != 0
 end 'surfaceElementIsBuffer'
 
-// Was the position a TUPLE whose element `slot` was spelled `__ManagedMemory`? A slot at or past
-// `MaxSurfaceMarkedTupleArity` cannot be represented and cannot be asked: such a tuple TYPE is refused where
-// it is minted, so no value of one ever reaches a reader.
-export function surfaceTupleSlotIsBuffer(surface DeclaredSurface, slot FieldIndex) returns bool
-	if slot >= MaxSurfaceMarkedTupleArity 'pastTheMask'
-		return false
-	end 'pastTheMask'
+// How many TUPLE SLOTS this position has — zero for a position that is not a tuple, and zero for a plain
+// one. It is what a reader asks before `surfaceSlot`, so a non-tuple never reaches the walk.
+export function surfaceSlotCount(surface DeclaredSurface) returns FieldIndex
+	return surfaceNodeSlotCount(surfaceRootNode(surface))
+end 'surfaceSlotCount'
 
-	return (surface and tupleSlotSurfaceBit(slot)) != 0
-end 'surfaceTupleSlotIsBuffer'
+// How many slots ONE node has. THE one decoder of the count field, so the root reader above and the
+// pre-order subtree walk below cannot come to disagree about where a count ends and a flag begins.
+function surfaceNodeSlotCount(node DeclaredSurfaceNode) returns FieldIndex
+	return node shr SurfaceSlotCountShift
+end 'surfaceNodeSlotCount'
+
+// ⭐ **THE SURFACE OF TUPLE SLOT `slot` — A WHOLE SURFACE, WHICH IS THE POINT OF THE TREE.** The slot's own
+// subtree, copied out so the result is rooted at node 0 and every reader can be handed a `DeclaredSurface`
+// with no index alongside it. It allocates, and only here: a caller reaches this line only for a slot of a
+// tuple that actually named the buffer somewhere.
+//
+// `slot` is a precondition, not a case — every caller asked `surfaceSlotCount` first.
+export function surfaceSlot(surface DeclaredSurface, slot FieldIndex) returns DeclaredSurface
+	let start = surfaceSlotStart(surface, slot: slot)
+	let stop = start + surfaceSubtreeSize(surface, at: start)
+	var out = DeclaredSurface.create()
+	for i in start upto stop 'eachNode'
+		out.push(surfaceNodeAt(surface, at: i))
+	end 'eachNode'
+	return out
+end 'surfaceSlot'
+
+// ⭐ **THE SAME SURFACE WITH ITS ELEMENT BIT SET.** The one WRITER outside the parser's builder, and it
+// COPIES rather than mutating: the tree it is handed is the one stored on a `StructLayout` or in the
+// whole-program return table, shared by every reader of that declaration, and setting a bit in place would
+// teach one file's read to every other file's. Its callers are the two doors that must DERIVE the element
+// bit rather than store it — see `ProgramSignatures.declaredElementIsBufferSurface`.
+export function surfaceWithElementBuffer(surface DeclaredSurface) returns DeclaredSurface
+	var out = DeclaredSurface.create()
+	out.push(surfaceRootNode(surface) or SurfaceBitElementIsBuffer)
+	for i in 1 upto surface.count() 'eachRemainingNode'
+		out.push(surfaceNodeAt(surface, at: i))
+	end 'eachRemainingNode'
+	return out
+end 'surfaceWithElementBuffer'
+
+// Node `at` of the tree. A precondition, not a case: every index handed here came from a walk that started
+// at node 0 and advanced by whole subtrees.
+function surfaceNodeAt(surface DeclaredSurface, at FieldIndex) returns DeclaredSurfaceNode
+	return try surface.get(at) otherwise panic("surfaceNodeAt: node {at} is out of range for a {surface.count()}-node declared surface — every index came from a pre-order walk of this same tree")
+end 'surfaceNodeAt'
+
+// Node 0, or an all-clear node for the shared EMPTY tree. The empty tree is the plain answer, so reading it
+// as a node with no flags and no slots is what makes every accessor above answer plainly without its own
+// emptiness test.
+function surfaceRootNode(surface DeclaredSurface) returns DeclaredSurfaceNode
+	if surfaceIsPlain(surface) 'noNodes'
+		return 0 as DeclaredSurfaceNode
+	end 'noNodes'
+
+	return surfaceNodeAt(surface, at: 0)
+end 'surfaceRootNode'
+
+// How many nodes the subtree rooted at `at` occupies — itself plus every descendant. THE one walk that knows
+// pre-order layout, so `surfaceSlotStart` and `surfaceSlot` cannot come to disagree about where a subtree
+// ends.
+function surfaceSubtreeSize(surface DeclaredSurface, at FieldIndex) returns FieldIndex
+	var size = 1 as FieldIndex
+	let slots = surfaceNodeSlotCount(surfaceNodeAt(surface, at: at))
+	for _ in 0 upto slots 'eachSlot'
+		size = size + surfaceSubtreeSize(surface, at: at + size)
+	end 'eachSlot'
+	return size
+end 'surfaceSubtreeSize'
+
+// Fold a declared surface into a running hash — every node plus the node COUNT, so a tree that gained a
+// slot cannot collide with the one it grew from (`mixBytes`' trailing length tag, for its reason). The
+// surface is the one declaration fact `mixType` structurally cannot carry: `__ManagedMemory` and `ByteArray`
+// fold to the identical `genericInstance`, so an edit between the two spellings would move no memo key while
+// changing which member roster every caller's calls reach.
+export function mixSurface(state ContentHash, surface DeclaredSurface) returns ContentHash
+	var h = state
+	for node in surface 'eachNode'
+		h = mix(h, value: node)
+	end 'eachNode'
+	return mix(h, value: surface.count())
+end 'mixSurface'
+
+// The node index tuple slot `slot` starts at — node 0's first child, advanced past each earlier sibling's
+// whole subtree.
+function surfaceSlotStart(surface DeclaredSurface, slot FieldIndex) returns FieldIndex
+	var at = 1 as FieldIndex
+	for _ in 0 upto slot 'skipEarlierSlots'
+		at = at + surfaceSubtreeSize(surface, at: at)
+	end 'skipEarlierSlots'
+	return at
+end 'surfaceSlotStart'
 
 // ⭐ **THE THIRTEEN `__ManagedFile` METHODS — the surface BOTH references agree on line-for-line**
 // (`maxon-sharp/Compiler/2-Parser.cs:1414-1440`, `maxon-selfhosted/.../LowerMaxonToStd.maxon:1801-1842`),
@@ -2350,7 +2453,7 @@ end 'isTupleTypeName'
 export function tupleStructLayout(name ByteArray, elements MaxonTypeArray) returns StructLayout
 	var layout = StructLayout.create(name)
 	for i in 0 upto elements.count() 'eachElement'
-		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, exported: true, defaultValue: FieldDefault.none, declaredSurface: PlainDeclaredSurface)
+		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, exported: true, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 	end 'eachElement'
 	return layout
 end 'tupleStructLayout'
@@ -3484,18 +3587,17 @@ export type ProgramSignatures
 	// buffer in no declaration anywhere, and a name with one is either unique or already refused.
 	function record(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface)
 		self.returnTypes.upsert(name, value: returnType)
-		if declaredSurface != PlainDeclaredSurface 'namesTheBufferAlias'
-			self.declaredReturnSurfaces.upsert(name, value: declaredSurface or self.storedReturnSurface(name))
+		if not surfaceIsPlain(declaredSurface) 'namesTheBufferAlias'
+			self.declaredReturnSurfaces.upsert(name, value: declaredSurface)
 		end 'namesTheBufferAlias'
 
 		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType, declaredSurface: declaredSurface)
 	end 'record'
 
-	// The surface already recorded for `name`, or the plain one. Split out because the OR above needs the
-	// PRIOR value and `Map.get` is a `try`: a first declaration has no entry, which is the common case and
-	// not an error.
+	// The surface already recorded for `name`, or the plain one. Split out because `Map.get` is a `try` and a
+	// name with no entry is the common case rather than an error.
 	function storedReturnSurface(name ByteArray) returns DeclaredSurface
-		return try self.declaredReturnSurfaces.get(name) otherwise PlainDeclaredSurface
+		return try self.declaredReturnSurfaces.get(name) otherwise sharedEmptyDeclaredSurface
 	end 'storedReturnSurface'
 
 	// ⭐ **WHERE DOES A CALL TO `callee` NAME THE `__ManagedMemory` BUFFER (A2j / A2m)?** The door
@@ -3516,7 +3618,7 @@ export type ProgramSignatures
 	export function declaredReturnSurface(callee ByteArray) returns DeclaredSurface
 		let stored = self.storedReturnSurface(callee)
 		if self.returnElementIsBufferSurface(callee) 'returnsAnArrayOfBuffers'
-			return stored or SurfaceBitElementIsBuffer
+			return surfaceWithElementBuffer(stored)
 		end 'returnsAnArrayOfBuffers'
 
 		return stored
@@ -3946,7 +4048,8 @@ export type ProgramSignatures
 		// The alias name, its base name, its ELEMENT SPELLING and each arg's SHAPE ride the hash — a change to
 		// any of them changes what a `IntBox.create(…)` in another file resolves and type-checks against, and
 		// the spelling is the one `mixType` cannot carry (both arguments fold to one `genericInstance`).
-		var state = mix(mixBytes(mixBytes(mix(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: SurfaceBitElementIsBuffer if entry.elementIsBuffer else PlainDeclaredSurface)
+		let elementSpelling = SurfaceBitElementIsBuffer if entry.elementIsBuffer else 0 as DeclaredSurfaceNode
+		var state = mix(mixBytes(mixBytes(mix(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: elementSpelling)
 		for arg in args 'eachHash'
 			state = self.mixType(state, t: arg)
 		end 'eachHash'
@@ -4009,7 +4112,7 @@ export type ProgramSignatures
 		let withMutability = mix(named, value: FieldShapeMutable if layout.fieldIsMutable(index) else FieldShapeImmutable)
 		// The declared SPELLING (A2j / A2m) — the one fact here `mixType` structurally cannot carry, since
 		// `__ManagedMemory` and `ByteArray` fold to the identical `genericInstance`. See `FieldShapeSurface`.
-		let withSpelling = mix(mix(withMutability, value: FieldShapeSurface), value: layout.fieldDeclaredSurface(index))
+		let withSpelling = mixSurface(mix(withMutability, value: FieldShapeSurface), surface: layout.fieldDeclaredSurface(index))
 		return self.mixFieldDefault(withSpelling, defaultValue: layout.fieldDefault(index))
 	end 'mixField'
 
@@ -5266,8 +5369,8 @@ export type ProgramSignatures
 	// through `CharacterSetRuntime`'s constants, and two readers of one shape is the pair that drifts.
 	function characterSetLayout(charsInstance GenericInstanceId) returns StructLayout
 		var layout = StructLayout.create(CharacterSetTypeName)
-		layout.addField(CharacterSetCharsFieldName, declaredType: MaxonType.genericInstance(charsInstance), mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: PlainDeclaredSurface)
-		layout.addField(CharacterSetMaskFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: PlainDeclaredSurface)
+		layout.addField(CharacterSetCharsFieldName, declaredType: MaxonType.genericInstance(charsInstance), mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+		layout.addField(CharacterSetMaskFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 
 		if layout.offsetOfField(CharacterSetCharsFieldIndex) != CharSetCharsOffset or layout.offsetOfField(CharacterSetMaskFieldIndex) != CharSetMaskOffset 'offsetDrift'
 			panic("characterSetLayout: the struct layout puts `chars`/`categoryMask` at {layout.offsetOfField(CharacterSetCharsFieldIndex)}/{layout.offsetOfField(CharacterSetMaskFieldIndex)} but `__cs_make` writes them at {CharSetCharsOffset}/{CharSetMaskOffset} — the front end's shape and the runtime's field writes have drifted")
@@ -5327,7 +5430,7 @@ export type ProgramSignatures
 	// with nothing tying the two; this check is what keeps that from being repeated here.
 	function managedFileLayout() returns StructLayout
 		var layout = StructLayout.create(ManagedFileTypeName)
-		layout.addField(ManagedFileHandleFieldName, declaredType: MaxonType.integer, mutable: true, exported: false, defaultValue: FieldDefault.none, declaredSurface: PlainDeclaredSurface)
+		layout.addField(ManagedFileHandleFieldName, declaredType: MaxonType.integer, mutable: true, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 
 		if layout.offsetOfField(ManagedFileHandleFieldIndex) != ManagedFileHandleOffset 'offsetDrift'
 			panic("managedFileLayout: the struct layout puts `_handle` at {layout.offsetOfField(ManagedFileHandleFieldIndex)} but the runtime reads it at {ManagedFileHandleOffset} — the front end's shape and the runtime's field access have drifted")
@@ -5366,7 +5469,7 @@ export type ProgramSignatures
 	// shape and its `__mm_alloc` from becoming a fourth combination.
 	function managedDirectoryLayout() returns StructLayout
 		var layout = StructLayout.create(ManagedDirectoryTypeName)
-		layout.addField(ManagedDirectoryBlockFieldName, declaredType: MaxonType.integer, mutable: true, exported: false, defaultValue: FieldDefault.none, declaredSurface: PlainDeclaredSurface)
+		layout.addField(ManagedDirectoryBlockFieldName, declaredType: MaxonType.integer, mutable: true, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 
 		if layout.offsetOfField(ManagedDirectoryBlockFieldIndex) != ManagedDirectoryBlockOffset 'offsetDrift'
 			panic("managedDirectoryLayout: the struct layout puts `_block` at {layout.offsetOfField(ManagedDirectoryBlockFieldIndex)} but the runtime reads it at {ManagedDirectoryBlockOffset} — the front end's shape and the runtime's field access have drifted")
@@ -7034,7 +7137,7 @@ export type ProgramSignatures
 
 		let stored = layout.fieldDeclaredSurface(index)
 		if self.declaredElementIsBufferSurface(declared) 'holdsAnArrayOfBuffers'
-			return stored or SurfaceBitElementIsBuffer
+			return surfaceWithElementBuffer(stored)
 		end 'holdsAnArrayOfBuffers'
 
 		return stored
@@ -7618,7 +7721,7 @@ export type ProgramSignatures
 	// for `DeclShapeAlias`'s reason.
 	function mixDeclaration(state ContentHash, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface) returns ContentHash
 		let named = self.mixReturnType(mixBytes(state, bytes: name), returnType: returnType)
-		return mix(mix(named, value: ReturnShapeSurface), value: declaredSurface)
+		return mixSurface(mix(named, value: ReturnShapeSurface), surface: declaredSurface)
 	end 'mixDeclaration'
 
 	function mixReturnType(state ContentHash, returnType MaxonReturnType) returns ContentHash

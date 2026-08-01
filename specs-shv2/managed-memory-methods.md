@@ -2579,3 +2579,276 @@ end 'main'
 ```exitcode
 2
 ```
+
+### A2m — a tuple SLOT carries a whole surface, so the mechanism has no depth
+
+⚖ **COORDINATOR RULING.** A2m first shipped the slot payload as one BIT of a flat 62-slot mask, which gave
+the mechanism an arbitrary depth a reader of the language could see and could not state: `(__ManagedMemory,
+Int)` worked while `(BufArray, Int)` and `((__ManagedMemory, Int), Int)` did not. **A slot is a declared
+position like any other, so it now carries what any other carries — a whole `DeclaredSurface`, recursively.**
+
+That also **removed** the arity question rather than answering it again: the mask needed a ceiling (62) and a
+refusal to stop a 63rd slot silently losing its bit. A pre-order TREE has one node per named position, no
+width and no depth, nothing to truncate and so nothing to refuse.
+
+⚠ **ONE SHAPE IS NOT CLOSED AND IS NOT DISABLED — it is closed at the door that can answer it and stated
+here.** A slot spelled with an array-of-buffers ALIAS works through a PARAMETER (below) and does NOT work
+through a return type or a struct field. Those two are captured by the declaration SWEEP, which asks the
+alias registry at a moment it cannot guarantee an answer, and unlike the ROOT's element bit there is nothing
+left to derive it from later: a tuple's element types are CANONICAL by the time anything could ask, so the
+alias name is gone. It is blocked on the alias-visibility work, not on this mechanism.
+
+<!-- test: a-nested-tuple-slot-serves-the-roster -->
+
+A tuple inside a tuple. `p.0` binds a value carrying ITS slots, and `p.0.0` reads one off it — the same line
+of `emitFieldLoad` running twice, one container in each time. Nothing in the mechanism knows how deep it is.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+function nested() returns ((__ManagedMemory, Int), Int)
+	return (("hello".toByteArray(), 7), 9)
+end 'nested'
+
+function main() returns ExitCode
+	let p = nested()
+	return p.0.0.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.a-nested-tuple-of-byte-arrays-keeps-the-array-surface -->
+
+⭐⭐ **THE OVER-ACCEPTANCE CONTROL AT DEPTH, and it matters more than the positive case above.**
+`((ByteArray, Int), Int)` and `((__ManagedMemory, Int), Int)` canonicalize to the SAME two interned tuples
+sharing the same two layouts, so a surface written onto either layout would reach both spellings at both
+depths. It rides the value, so this stays refused.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function nested() returns ((ByteArray, Int), Int)
+	return (("hello".toByteArray(), 7), 9)
+end 'nested'
+
+function main() returns ExitCode
+	let p = nested()
+	return p.0.0.length() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+<!-- test: a-nested-tuple-of-byte-arrays-still-serves-count -->
+
+The depth control's positive half — the same nested slot, still answering the `Array` roster it belongs to.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function nested() returns ((ByteArray, Int), Int)
+	return (("hello".toByteArray(), 7), 9)
+end 'nested'
+
+function main() returns ExitCode
+	let p = nested()
+	return p.0.0.count() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-tuple-slot-of-buffers-serves-the-roster -->
+
+A slot whose declared type is an array-of-buffers ALIAS — the surface a slot could not express at all while
+its payload was one bit. The element bit is asked of the alias registry, so this is the PARAMETER door: it is
+read in the real parse, where every file is folded. See this section's ⚠ for why the return and field doors
+cannot yet answer it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
+
+function slotted(t (BufArray, Int)) returns Int
+	let m = try t.0.get(0) otherwise return 0
+	return m.length()
+end 'slotted'
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	return slotted((a, 7)) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.a-tuple-slot-of-byte-arrays-keeps-the-array-surface -->
+
+⭐⭐ **THE OVER-ACCEPTANCE CONTROL FOR THE ALIAS SLOT.** `Array with ByteArray` and
+`Array with __ManagedMemory` share one `GenericInstanceId`, so the slot's element surface may not be keyed on
+the tuple, the layout or the instance — only on the ALIAS NAME the declaration wrote, and this one did not
+write the buffer's.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BufList = Array with ByteArray
+
+function slotted(t (BufList, Int)) returns Int
+	let m = try t.0.get(0) otherwise return 0
+	return m.length()
+end 'slotted'
+
+function main() returns ExitCode
+	var a = BufList.create()
+	a.push("hello".toByteArray())
+	return slotted((a, 7)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:9:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+<!-- test: a-tuple-slot-of-byte-arrays-still-serves-count -->
+
+The alias-slot control's positive half, for the reason its two siblings have one.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BufList = Array with ByteArray
+
+function slotted(t (BufList, Int)) returns Int
+	let m = try t.0.get(0) otherwise return 0
+	return m.count()
+end 'slotted'
+
+function main() returns ExitCode
+	var a = BufList.create()
+	a.push("hello".toByteArray())
+	return slotted((a, 7)) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-nested-tuple-parameter-serves-the-roster -->
+
+The nested shape through the PARAMETER door, where the mask is read off the annotation's own tokens rather
+than off the whole-program index — the two capture sites must agree, and a case each is how they are held to
+it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+function shownNested(t ((__ManagedMemory, Int), Int)) returns Int
+	return t.0.0.length()
+end 'shownNested'
+
+function main() returns ExitCode
+	return shownNested((("hello".toByteArray(), 7), 9)) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+### A2m — probing the tree walk: depth, sibling order, and width
+
+The pre-order tree is read by skipping whole SUBTREES to reach a later sibling, which is where an off-by-one
+would live and where nothing above would find it: every case so far reads slot 0 of a tuple whose earlier
+siblings are absent. These four were written to break that walk, and are kept because a walk with no test
+over a LATER sibling of a NESTED slot is a walk nobody has read.
+
+<!-- test: a-buffer-three-tuples-deep-serves-the-roster -->
+
+Slot 1 of slot 1 of slot 0 — three levels, and every step past a sibling the walk has to skip.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+function deep() returns (Int, (Int, (__ManagedMemory, Int)), Int)
+	return (1, (2, ("hello".toByteArray(), 7)), 9)
+end 'deep'
+
+function main() returns ExitCode
+	let p = deep()
+	return p.1.1.0.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: two-nested-slots-of-one-tuple-take-their-own-surfaces -->
+
+⭐ **THE STRONGEST FORM OF THE OVER-ACCEPTANCE CONTROL: both spellings in ONE tuple, one statement.** Slot 1's
+slot 1 is a buffer and answers `length()` (4); slot 0's slot 0 is a `ByteArray` and answers `count()` (5).
+If the surface had leaked onto either shared tuple layout — and the two nested tuples ARE separate shared
+layouts — this program could not give 9, because one of the two calls would have been refused.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function mixed() returns ((ByteArray, Int), (Int, __ManagedMemory), Int)
+	return (("hello".toByteArray(), 1), (2, "abcd".toByteArray()), 9)
+end 'mixed'
+
+function main() returns ExitCode
+	let p = mixed()
+	return (p.1.1.length() + p.0.0.count()) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: error.a-byte-array-slot-beside-a-buffer-slot-keeps-the-array-surface -->
+
+And the refusal half of that same tuple: the `ByteArray`-spelled nested slot is still refused `length`, in a
+type that carries a buffer at another slot. A mask that set the wrong bit, or a walk that skipped the wrong
+subtree, would accept this.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function mixed() returns ((ByteArray, Int), (Int, __ManagedMemory), Int)
+	return (("hello".toByteArray(), 1), (2, "abcd".toByteArray()), 9)
+end 'mixed'
+
+function main() returns ExitCode
+	let p = mixed()
+	return p.0.0.length() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+<!-- test: a-seventy-element-tuple-carries-its-last-slots-surface -->
+
+⭐ **THE ARITY CEILING IS GONE, AND THIS IS WHAT SAYS SO.** A2m's first mask held 62 slots and REFUSED a
+wider tuple type, because a 63rd slot would have silently lost its bit. A tree has one node per named
+position, so seventy is not a special number and neither is any other: the buffer at slot 69 answers.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+function wide() returns (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, __ManagedMemory)
+	return (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "hello".toByteArray())
+end 'wide'
+
+function main() returns ExitCode
+	let p = wide()
+	return p.69.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
