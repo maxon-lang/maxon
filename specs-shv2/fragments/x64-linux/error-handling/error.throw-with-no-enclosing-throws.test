@@ -1,0 +1,20 @@
+// Test: error.throw-with-no-enclosing-throws
+typealias Code = int(0 to u32.max)
+
+enum ErrA implements Error
+	aZero
+end 'ErrA'
+
+function f(x Code) returns Code
+	if x < 10 'small'
+		throw ErrA.aZero
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return f(3)
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:10:3: type mismatch: 'throw of 'ErrA' but the enclosing function declares no 'throws' — the error flag has nowhere to be published and would be silently dropped, the throw path handing back the primary register's 0 as a real answer; declare 'throws ErrA', or handle it here with a `try … otherwise`'
