@@ -33,27 +33,41 @@
 #   CHECK 2  newer source, in-tree binary          -> REFUSES   (this is the gate)
 #   CHECK 3  newer source, binary with no sources  -> RUNS      (a RELEASED copy: ruling 1)
 #   CHECK 4  newer source, binary in a bare cache  -> RUNS      (same, one directory shape down)
-#   CHECK 5  newer EXCLUDED source, in-tree binary -> RUNS      (it is not in the binary), twice:
+#   CHECK 5  newer EXCLUDED source, in-tree binary -> RUNS      (it is not in the binary), three times:
 #            5a  under a `.maxonignore`d directory
 #            5b  inside the compiler's own `.maxon/` output directory
+#            5c  a `*.Test.maxon` — the suffix matched the way the BOOTSTRAP matches it
 #   CHECK 6  restored tree, in-tree binary         -> RUNS      (the refusal was the edit)
 #
 # CHECKS 3 and 4 are the ones that cost something to get right, and they are why the copies are made
 # with `cp -p`: a copy with a FRESH mtime would be newer than every source and would run for a reason
-# that has nothing to do with the rule under test. Copied mtime-preserving, the copy is exactly as
-# stale as the in-tree binary and the ONLY difference left is whether a source tree sits beside it.
+# that has nothing to do with the rule under test. Copied mtime-preserving, each copy is exactly as
+# stale as the in-tree binary CHECK 2 just refused, so staleness is held FIXED across 2/3/4 and only
+# the binary's surroundings vary. They vary in two steps, and the labels say which: CHECK 3 moves the
+# binary out of a `.maxon/` directory entirely (an installed release), CHECK 4 puts it back INTO one
+# with no project above it (the same release, one directory shape closer to the real thing) — which
+# is the case that reaches the "are this project's sources actually here" question rather than
+# stopping at "was this built in place".
 #
 # CHECK 5 is the false-refusal control, and it is not a hypothetical: `maxon build` does not compile
 # `.maxonignore`d directories, `*.test.maxon` files, or anything inside its OWN `.maxon/` output
 # directory, so none of those are "sources of this binary". 5b is the sharp one — that directory is
 # where the build writes, so every file in it is newer than the binary beside it BY CONSTRUCTION, and
-# a check that swept it would refuse every run forever.
+# a check that swept it would refuse every run forever. 5c is the one an eye passes over: the
+# bootstrap matches that suffix `OrdinalIgnoreCase`, and the first version of this check matched it
+# byte-exactly, so a `*.Test.maxon` was excluded from the build and counted as a source of it at the
+# same time — refusing the suite over a file the compiler had never read. Both were found by REVIEW,
+# after the tree was green.
 #
-# ⚠ VERIFIED TO GO RED: run against the binary built from this script's parent commit — the tree with
-#   no check in it at all — CHECK 2 fails (`exit=0`, `4 passed, 0 failed`: the suite ran a whole
-#   filtered pass off the stale binary) and CHECK 7 fails with it, while 1, 3, 4, 5, 6 pass. That
-#   split is the discriminator: everything that should RUN already ran; what did not exist was the
-#   refusal.
+# ⚠ VERIFIED TO GO RED, twice, and the two reds are different shapes:
+#   * against the binary built from this script's parent commit — the tree with no check in it at all
+#     — CHECK 2 fails (`exit=0`, `4 passed, 0 failed`: the suite ran a whole filtered pass off the
+#     stale binary) and CHECK 7 fails with it, while 1, 3, 4, 5, 6 pass. That split is the
+#     discriminator: everything that should RUN already ran; what did not exist was the refusal.
+#   * against the binary built from the commit that ADDED the refusal, CHECK 5c fails on its own
+#     (`exit=2`, naming `maxon-shv2/Testing/Probe.Test.maxon`) — a check present, working, and one
+#     clause narrower than the rule it mirrors. A refusal is not enough; it has to refuse the right
+#     files.
 #
 # ⚠ WHAT THIS CANNOT CATCH, and the message must not claim otherwise: the check ships INSIDE the
 #   binary it reports on, so a stale binary runs the OLD check. That is fine for the case that
@@ -112,9 +126,12 @@ fi
 is_newer_than_binary() { [ -n "$(find "$1" -newer "$SHV2" -print -quit 2>/dev/null)" ]; }
 
 # `cp -p` keeps the mtime, so the backup is a timestamp reference as well as a content one — and
-# `touch -r` puts BOTH halves back. Nothing here edits the file's bytes; a run interrupted between
-# these two leaves a source with a future mtime, which costs the next build a recompile of one file
-# and nothing else.
+# `touch -r` puts BOTH halves back. Nothing here edits the file's bytes.
+#
+# ⚠ An aged mtime that OUTLIVES this script refuses every `spec-test` and `scale-test` in the tree
+# until the next rebuild — this gate would hand the repo the exact failure it exists to detect. The
+# `trap` below covers every exit including INT and TERM; what it cannot cover is SIGKILL, so the
+# restore is ALSO attempted from a previous run's backups before this run overwrites them.
 VICTIM_BACKUP="$WORK/victim.bak"
 EXCLUDED_BACKUP="$WORK/excluded.bak"
 
@@ -122,22 +139,34 @@ EXCLUDED_BACKUP="$WORK/excluded.bak"
 # is a build artifact and is gitignored, so nothing here can dirty the working tree.
 SCRATCH="maxon-shv2/.maxon/stale-binary-gate-scratch.maxon"
 
+# CHECK 5c's file, and it must sit in a directory the source walk DOES sweep — the exclusion under
+# test is the SUFFIX, so putting it anywhere already excluded would prove nothing. `Test` is
+# capitalised deliberately: the bootstrap matches the suffix case-insensitively, and this file is
+# what makes the mirror match it the same way. Untracked in a tracked directory, so `cleanup` must
+# remove it or the working tree comes back dirty.
+TEST_SCRATCH="maxon-shv2/Testing/stale-binary-gate-scratch.Test.maxon"
+
 restore_mtimes() {
 	[ -f "$VICTIM_BACKUP" ] && touch -r "$VICTIM_BACKUP" "$VICTIM" 2>/dev/null
 	[ -f "$EXCLUDED_BACKUP" ] && touch -r "$EXCLUDED_BACKUP" "$EXCLUDED" 2>/dev/null
 	return 0
 }
 
-# Neither the aged mtimes nor the scratch file may outlive this script: a stranded `.maxon` file in
+# Neither the aged mtimes nor the scratch files may outlive this script: a stranded `.maxon` file in
 # the output directory would be a permanent refusal on a tree nobody had edited, which is the exact
 # failure CHECK 5b exists to make impossible.
 cleanup() {
 	restore_mtimes
-	rm -f "$SCRATCH"
+	rm -f "$SCRATCH" "$TEST_SCRATCH"
 	return 0
 }
 
 trap cleanup EXIT INT TERM
+
+# BEFORE the wipe, not after: `$WORK` is where a previous run's pristine mtimes are recorded, and
+# `rm -rf` would take them with it — leaving this run's own `cp -p` to record an AGED mtime as the
+# original and restore the tree to a state that keeps refusing.
+restore_mtimes
 
 rm -rf "$WORK" || exit 2
 mkdir -p "$WORK" || exit 2
@@ -152,9 +181,18 @@ done
 cp -p "$VICTIM" "$VICTIM_BACKUP" || exit 2
 cp -p "$EXCLUDED" "$EXCLUDED_BACKUP" || exit 2
 
-# Make a file strictly newer than the binary. `touch` sets NOW, and the harness reads mtimes at
-# ONE-SECOND resolution (`File.info().modifiedTime` is Unix epoch seconds), so a build that finished
-# in this same second would tie — and a tie is not "newer". Loop until the filesystem agrees.
+# Make a file newer than the binary AT THE RESOLUTION THE HARNESS READS — which is not the
+# resolution `find` compares at, and the difference is the whole reason for the trailing sleep.
+#
+# `find -newer` compares full filesystem precision; `File.info().modifiedTime` is Unix epoch SECONDS,
+# and a tie in whole seconds is not "newer". So on a binary written at T.900 and a `touch` landing at
+# T.950, `find` says newer and the harness says tie. Sleeping one full second past a moment already
+# known to be at-or-after the binary's, then touching again, closes it for good: the new mtime is at
+# least binary+1s, whose whole-second value is strictly greater whatever the sub-second parts were.
+#
+# It is not merely a flake in CHECK 2. It is worse in 5a/5b/5c, where the expected outcome is that
+# the suite RUNS: a tie there would let every false-refusal control PASS without ever having created
+# the condition it controls for — a green that measured nothing.
 age_forward() {
 	local target="$1"
 	local tries=0
@@ -165,6 +203,9 @@ age_forward() {
 		sleep 1
 		touch "$target" || return 1
 	done
+
+	sleep 1
+	touch "$target" || return 1
 	return 0
 }
 
@@ -236,8 +277,14 @@ fi
 # ---- CHECK 3: a RELEASED binary has no sources beside it, and must still run -----------------------
 #
 # `cp -p`: the copy keeps the ORIGINAL mtime, so it is exactly as old as the binary CHECK 2 just
-# refused. Same tree, same staleness, opposite verdict — and the only difference is that no source
-# tree sits beside it. A copy with a fresh mtime would run for a reason unrelated to the rule.
+# refused. Same tree, same aged source, same staleness — opposite verdict, and the variable that
+# moved is where the binary lives. A copy with a fresh mtime would run for a reason unrelated to the
+# rule.
+#
+# ⚠ This one stops at the FIRST question the harness asks — the copy's parent is not a `.maxon/`
+# output directory, so it was not built in place and has no project above it by definition. That is
+# a real shape (an installed release on a PATH) and it must run, but it does NOT exercise the
+# source-tree detection; CHECK 4 is what reaches that.
 #
 # It lives under `temp/` rather than the system temp directory because the stdlib is located by
 # walking UP from the executable's own path, so a runnable copy has to be inside the checkout.
@@ -317,6 +364,31 @@ if [ "$code" = "0" ] && [ "$got" = "$EXPECTED_SUMMARY" ]; then
 else
 	fail "CHECK 5b: a newer .maxon file inside the build-output directory does not refuse" \
 	     "exit=$code; ${got:-no summary line}  <-- the compiler's own output is not its source"
+fi
+
+# ---- CHECK 5c: ... and neither does a *.Test.maxon, matched the BOOTSTRAP's way ----------------------
+#
+# The suffix is matched `OrdinalIgnoreCase` by `SourceCollector.IsTestFile`, so `Api.Test.maxon` is
+# left out of the build on every platform — while a byte-exact mirror calls it a source of the very
+# binary it was excluded from. MEASURED against the first version of this check: `exit=2`, naming
+# `maxon-shv2/Testing/Probe.Test.maxon`, with the bootstrap reporting `Skipped 1 test file(s)` for
+# the same name in the same tree. The file goes in `Testing/` — a directory the walk really does
+# sweep — because the exclusion under test is the SUFFIX and nothing else.
+: > "$TEST_SCRATCH" || exit 2
+if ! age_forward "$TEST_SCRATCH"; then
+	printf 'stale-binary-gate: could not make %s newer than %s\n' "$TEST_SCRATCH" "$SHV2" >&2
+	exit 2
+fi
+
+code="$(run_suite "$SHV2")"
+got="$(summary)"
+rm -f "$TEST_SCRATCH"
+
+if [ "$code" = "0" ] && [ "$got" = "$EXPECTED_SUMMARY" ]; then
+	pass "CHECK 5c: a newer *.Test.maxon does not refuse — the suffix is matched case-insensitively ($got)"
+else
+	fail "CHECK 5c: a newer *.Test.maxon does not refuse — the suffix is matched case-insensitively" \
+	     "exit=$code; ${got:-no summary line}  <-- the bootstrap excludes *.test.maxon OrdinalIgnoreCase, so this file is not in the binary"
 fi
 
 # ---- CHECK 6: and the tree comes back ---------------------------------------------------------------

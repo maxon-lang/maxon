@@ -53,10 +53,18 @@
 //    answer both questions exactly. Reading it would mean a second parser for a `maxon-sharp`-owned
 //    format, which is this project's signature bug wearing a fix's clothes, so it is not done here.)
 //
-// mtimes are also read at ONE-SECOND resolution (`File.info().modifiedTime` is Unix epoch seconds), so
-// an edit landing in the same second the binary was written ties, and a tie is not "newer". That
-// biases the check toward MISSING a staleness rather than inventing one, which is the safe direction:
-// a false refusal has no workaround, and a miss leaves things exactly as they were before this file.
+// mtimes are also read at ONE-SECOND resolution — `File.info().modifiedTime` is Unix epoch seconds on
+// every target this compiler emits (x64-windows divides a FILETIME by 10,000,000, `EmitFileStat`;
+// arm64 reads `st_mtime`'s seconds field, `ARM64CodeEmitter.Runtime`) — so an edit landing in the same
+// second the binary was written TIES, and a tie is not "newer". That biases the check toward MISSING a
+// staleness rather than inventing one, which is the safe direction here: a false refusal has no
+// workaround, and a miss leaves things exactly as they were before this file.
+//
+// ⚠ The repo's OTHER in-binary staleness check breaks that same tie the OTHER way, on purpose, and the
+// two must not be read as an accident: `maxon-dev-mcp/mcp/Staleness.serverFreshness` compares `>=`
+// because its refusal costs one rebuild of a small tool nobody else is waiting on, while this one
+// wedges an entire suite for a rebuild measured in minutes. Same question, different price on being
+// wrong, so a different tie-break — not a rule that drifted.
 
 // The exit code a refusal returns. Distinct from 1 (a suite that RAN and had failures) and from 101
 // (a leak) on purpose: "nothing ran" and "something failed" are different facts, and a caller reading
@@ -68,6 +76,8 @@ let StaleBinaryExitCode = 2
 // directory is NOT that one was not built in place and has no project above it to compare against.
 // It is also what a file the compiler WROTE lives under, at any depth, and such a file is not a
 // source to anybody — `collectMaxonSources` walks straight into it.
+//
+// Written in lower case because every comparison against it goes through `caseFolded`. See there.
 let CompilerOutputDirName = ".maxon"
 
 // The directory whose presence in the project root says this is a DEVELOPMENT CHECKOUT rather than an
@@ -78,10 +88,18 @@ let SourceRootMarkerDirName = "Compiler"
 // A directory holding this file — and everything beneath it — is not compiled. `MaxonIgnore.IsIgnored`
 // in the bootstrap is the rule this mirrors; the bootstrap is what built this binary, so its answer is
 // the one that decides what went in.
+//
+// The ONE exclusion here that is deliberately NOT `caseFolded`: the bootstrap asks it with
+// `File.Exists`, so the FILESYSTEM decides the casing — insensitively on Windows, exactly on POSIX —
+// and `File.exists` here inherits the identical answer from the identical OS call. Folding the name
+// by hand would make this mirror STRICTER than the rule it mirrors on POSIX, which is the direction
+// that invents refusals.
 let IgnoreMarkerName = ".maxonignore"
 
 // A `*.test.maxon` holds `test` declarations and is left out of a production build
 // (`SourceCollector.ExclusionFor`), so it is not in the binary either.
+//
+// Written in lower case because the comparison against it goes through `caseFolded`. See there.
 let TestFileSuffix = ".test.maxon"
 
 // What one executable's freshness came out as.
@@ -129,7 +147,7 @@ end 'refuseIfSpecTestStale'
 // not an inventory, and the fix is the same however many there are.
 function stalenessOf(binary FilePath) returns StalenessVerdict
 	let outputDir = try binary.parent() otherwise return StalenessVerdict.mayProceed
-	if outputDir.filename() != CompilerOutputDirName 'notBuiltInPlace'
+	if caseFolded(outputDir.filename()) != CompilerOutputDirName 'notBuiltInPlace'
 		return StalenessVerdict.mayProceed
 	end 'notBuiltInPlace'
 
@@ -170,7 +188,7 @@ end 'stalenessOf'
 // already dropped the build manifest. See this file's header for why the remaining two clauses live
 // here rather than in that walk.
 function isCompiledInto(source FilePath, sourceRoot FilePath) returns bool
-	if source.filename().endsWith(TestFileSuffix) 'testFile'
+	if caseFolded(source.filename()).endsWith(TestFileSuffix) 'testFile'
 		return false
 	end 'testFile'
 
@@ -191,7 +209,7 @@ function isUnderExcludedDirectory(source FilePath, sourceRoot FilePath) returns 
 	var dir = try source.parent() otherwise panic("CompilerFreshness: {source.toString()} has no parent directory, though a directory walk found it inside one")
 
 	while true 'upwards'
-		if dir.filename() == CompilerOutputDirName 'compilerOutput'
+		if caseFolded(dir.filename()) == CompilerOutputDirName 'compilerOutput'
 			return true
 		end 'compilerOutput'
 
@@ -213,6 +231,28 @@ function isUnderExcludedDirectory(source FilePath, sourceRoot FilePath) returns 
 
 	return false
 end 'isUnderExcludedDirectory'
+
+// One path component, lower-cased for comparison against `CompilerOutputDirName` or
+// `TestFileSuffix` — which are therefore both spelled in lower case.
+//
+// ⚠ **THE AUTHORITY FOLDS CASE ON EVERY PLATFORM, AND A MIRROR THAT DOES NOT IS A FALSE REFUSAL.**
+// `SourceCollector.IsTestFile` and `SourceCollector.IsInCompilerOutputDir` both compare
+// `OrdinalIgnoreCase`, so `Api.Test.maxon` is NOT in the binary. MEASURED both ways: the bootstrap
+// answers `Skipped 1 test file(s)` for exactly that name, while a byte-exact `endsWith` here called
+// it a source of this binary, found it newer and REFUSED THE WHOLE SUITE over a file the build had
+// never read. That is the same shape as the `.maxon/` output directory this file's header already
+// records — a mirror one clause narrower than the rule it mirrors — and it is the expensive
+// direction, because a false refusal has no workaround. (The bootstrap carries its own scar from
+// this exact divergence: `SourceCollector.SuggestTestFileName`'s comment records a case-SENSITIVE
+// copy of the same suffix leaving `Api.Test.maxon` neither buildable nor testable.)
+//
+// The `clone()` is load-bearing rather than defensive: `String.toLower` mutates its receiver's buffer
+// IN PLACE, and `FilePath.filename()` hands back the FilePath's OWN `path` string for a component
+// with no separator in it. Folding without cloning would lower-case somebody else's path — the same
+// trap, with the same answer, as `FilePath.canonicalForCompare`.
+function caseFolded(component String) returns String
+	return component.clone().toLower()
+end 'caseFolded'
 
 // A constant path COMPONENT as a FilePath. `join` is overloaded on String and FilePath and a bare
 // String constant matches both (E3007), so every component joined in this file is bound to a FilePath
