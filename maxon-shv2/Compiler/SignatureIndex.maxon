@@ -7110,11 +7110,15 @@ export type ProgramSignatures
 	// crosses by NAME and is re-interned on arrival, so the id the parser stores is one its own
 	// file's merge will resolve.
 	//
-	// The struct and the index are preconditions, not cases: every caller reached here through a
-	// `structOf` that answered `declared`, and `index` is one `indexOfField` handed out.
-	export function fieldTypeOf(structName ByteArray, index FieldIndex, into TypeNameInterner) returns MaxonType
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.fieldTypeOf: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
-		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+	// ⚠ **IT TAKES THE LAYOUT AND NOT THE STRUCT NAME — see `fieldSurfaceOf` below for the measurement.**
+	// EVERY caller reached this door holding the layout already (it is `emitFieldLoad`'s own parameter, and a
+	// `FieldChainStep` carries one), so passing the NAME asked `structTypes` — a NAME-KEYED map — to hash a
+	// string per field access to find a record the caller had in hand. For a TUPLE, whose canonical name grows
+	// with its arity, that made a W-slot tuple read W times cost O(W²) bytes hashed.
+	//
+	// The index is a precondition, not a case: `index` is one `indexOfField` handed out.
+	export function fieldTypeOf(layout StructLayout, index FieldIndex, into TypeNameInterner) returns MaxonType
+		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(layout.name)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
 
 		return self.declaredSlotType(declared, into: into)
 	end 'fieldTypeOf'
@@ -7130,10 +7134,23 @@ export type ProgramSignatures
 	// — an answer that would depend on how far the sweep had got. So it is derived HERE, where every file is
 	// folded, from the alias NAME the swept `named` type still carries. See `declaredElementIsBufferSurface`.
 	//
-	// The struct and the index are preconditions, not cases, exactly as they are for `fieldTypeOf`.
-	export function fieldSurfaceOf(structName ByteArray, index FieldIndex) returns DeclaredSurface
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.fieldSurfaceOf: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
-		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldSurfaceOf: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+	// ⚠ **IT TAKES THE LAYOUT AND NOT THE STRUCT NAME, WHICH IS A COST AND NOT A STYLE.** `structTypes` is
+	// keyed by NAME, so re-resolving the layout here HASHES that name — and a TUPLE's canonical name grows with
+	// its arity, so a W-slot tuple read W times costs O(W²) bytes hashed for a layout `emitFieldLoad` already
+	// holds in hand. It was written the name-taking way first and MEASURED: a wide-tuple probe (a W-slot tuple
+	// parameter naming no buffer at all, every slot read once), parse CPU ticks minus this compile's ~6.0M
+	// floor, interleaved min-of-3 against the merge-base binary —
+	//
+	//   W        100      200      400      800
+	//   base    1.13M    3.25M   10.55M   38.24M     (`fieldTypeOf` alone, hashing the same name)
+	//   +this   1.43M    4.28M   15.15M   52.29M     (+0.35M / +1.08M / +4.65M / +14.11M, x3.0 per DOUBLING)
+	//   layout  0.89M    2.40M    7.32M   25.01M     (both doors handed the layout: -35% BELOW base)
+	//
+	// The name was never the caller's fact to give, and `fieldTypeOf`'s identical preamble went with it.
+	//
+	// The index is a precondition, not a case, exactly as it is for `fieldTypeOf`.
+	export function fieldSurfaceOf(layout StructLayout, index FieldIndex) returns DeclaredSurface
+		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldSurfaceOf: field {index} is out of range for `type {String.from(layout.name)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
 
 		let stored = layout.fieldDeclaredSurface(index)
 		if self.declaredElementIsBufferSurface(declared) 'holdsAnArrayOfBuffers'

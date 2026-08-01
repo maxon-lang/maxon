@@ -24583,7 +24583,7 @@ export type Parser
 			// it was a bare local — a managed field's move-in poisons that source.
 			let valueStart = self.pos
 			let parsed = try self.parseValueExpression(func)
-			let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+			let fieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 			// The COERCED value is what fills the slot — `Self{v: 3}` into a `float` field stores the
 			// widened f64, not the integer's bytes. A widening only ever produces a fresh scalar, so the
 			// ownership questions below still read the value the source actually named.
@@ -24785,7 +24785,7 @@ export type Parser
 	// constant changed no test. A condition that cannot fail is worse than no condition, because the next
 	// reader trusts it.
 	function fillFieldDefault(layout StructLayout, index FieldIndex, given ConstValue, fieldValues ValueIdArray, filled BoolArray, range SourceRange)
-		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 		let bits = self.constFloatBits(given) if tagIsFloat(maxonTypeTag(declared)) else given.payload
 		let value = self.emitLiteral(bits, valueType: self.fieldStorageType(declared), range: range)
 		// A declared default is a value coming to rest in the slot exactly as a written one is, so the
@@ -24843,7 +24843,7 @@ export type Parser
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let value = try fieldValues.get(i) otherwise panic("emitStructLiteral: fieldValues.get OOB at {i} — the column is sized to the layout's field count")
 			let bareLocal = try fieldBareLocal.get(i) otherwise panic("emitStructLiteral: fieldBareLocal.get OOB at {i} — the column is sized to the layout's field count")
-			let fieldType = self.signatures.fieldTypeOf(layout.name, index: i, into: self.artifact.typeNames)
+			let fieldType = self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames)
 			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
 			let stored = try self.moveInPayload(class, arg: value, argBareLocal: bareLocal, anchor: anchor, range: range)
 			self.emitFieldStore(box, layout: layout, index: i, value: stored, range: range)
@@ -26148,7 +26148,7 @@ export type Parser
 			// A NON-function field WITH a `(` falls through to the method path deliberately: `p.count(…)` on
 			// an int field `count` is not a call through the field, and it must report the unknown method
 			// (E3004) rather than silently reading the field and applying parens to an integer.
-			if maxonTypeTag(self.signatures.fieldTypeOf(base.layout.name, index: fieldIndex, into: self.artifact.typeNames)) == ValueTypeTag.function or not callFollows 'fieldRead'
+			if maxonTypeTag(self.signatures.fieldTypeOf(base.layout, index: fieldIndex, into: self.artifact.typeNames)) == ValueTypeTag.function or not callFollows 'fieldRead'
 				self.advance()
 				try self.requireFieldAccessible(base.layout, index: fieldIndex, fieldTok: memberTok)
 				try self.requireFieldOutlivesItsRead(base, index: fieldIndex, memberTok: memberTok)
@@ -30580,7 +30580,7 @@ export type Parser
 			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
 		end 'receiverField'
 
-		let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+		let fieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 		let nextLayout = try self.structLayoutOfField(layout, fieldTok: fieldTok, fieldType: fieldType)
 		let nextBox = self.emitFieldLoad(box, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
 		return try self.resolveFieldChainFrom(nextBox, layout: nextLayout, baseTok: baseTok, baseBinding: baseBinding)
@@ -30702,7 +30702,7 @@ export type Parser
 		// b.items.get(0) otherwise ""` was refused `b.add(42)` — a legal program the oracle compiles and runs
 		// (measured: it prints `44 42`). The field type is read through the one accessor the type check below
 		// already asks.
-		if self.typeIsArrayInstance(self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)) 'arrayFieldStore'
+		if self.typeIsArrayInstance(self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)) 'arrayFieldStore'
 			func.storageWrittenParamMask = func.storageWrittenParamMask or paramMaskOfValue(func, value: receiver)
 		end 'arrayFieldStore'
 
@@ -30710,7 +30710,7 @@ export type Parser
 		let parsed = try self.parseExpression(func, block: block)
 		// The COERCED value is what the store writes — `count = 3` into a `float` field stores the widened
 		// f64. Same door as the struct literal and the `p.v = 3` spelling.
-		let value = try self.requireFieldType(layout, index: index, fieldType: self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames), value: parsed, anchor: fieldTok)
+		let value = try self.requireFieldType(layout, index: index, fieldType: self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames), value: parsed, anchor: fieldTok)
 
 		// Routed through `emitFieldWrite`, exactly as `parseFieldAssignment` is: a MANAGED self-field
 		// (`name = n`) must drop its old value and MOVE the new one in (a borrowed String is promoted, a
@@ -30876,7 +30876,7 @@ export type Parser
 		let parsed = try self.parseExpression(func, block: block)
 		// The COERCED value is what the store writes — `p.v = 3` into a `float` field stores the widened
 		// f64. Same door as the struct literal and the bare self-field spelling.
-		let value = try self.requireFieldType(step.layout, index: index, fieldType: self.signatures.fieldTypeOf(step.layout.name, index: index, into: self.artifact.typeNames), value: parsed, anchor: step.lastFieldTok)
+		let value = try self.requireFieldType(step.layout, index: index, fieldType: self.signatures.fieldTypeOf(step.layout, index: index, into: self.artifact.typeNames), value: parsed, anchor: step.lastFieldTok)
 
 		try self.emitFieldWrite(step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
 	end 'parseFieldAssignment'
@@ -30900,7 +30900,7 @@ export type Parser
 		// at the field name (`anchor`).
 		try self.rejectEscapingClosure(value, message: "cannot store a closure that captures in field '{String.from(anchor.value)}' of '{String.from(layout.name)}': {CapturingClosureEscapeSuffix}", tok: anchor)
 
-		var fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+		var fieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 
 		// ⭐ **A BARE OPAQUE `T` FIELD REASSIGNMENT (P1.7 Finding A).** The field is typed opaque `T`
 		// (`typeParameter`) in the shared layout; how its OLD value drops depends on the box:
@@ -30992,7 +30992,7 @@ export type Parser
 		let layout = try self.enclosingLayout(anchor)
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let fieldName = try layout.fieldNames.get(i) otherwise panic("declareSelfFieldAliases: fieldNames.get OOB at {i} for `type {String.from(layout.name)}`, which declares {layout.fieldCount()}")
-			self.scope.declareSelfField(fieldName, varType: self.signatures.fieldTypeOf(layout.name, index: i, into: self.artifact.typeNames), fieldIndex: i)
+			self.scope.declareSelfField(fieldName, varType: self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames), fieldIndex: i)
 		end 'eachField'
 	end 'declareSelfFieldAliases'
 
@@ -31484,7 +31484,7 @@ export type Parser
 		// `function` (it functionizes over the whole-program function-alias registry, since the SWEEP that
 		// recorded the layout ran before the alias was known), which is what makes the loaded value carry
 		// the `function` tag so `h.op(21)` reaches an indirect call (P1.5-A1).
-		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 		let offset = layout.offsetOfField(index)
 		let result = self.emitIndirectLoad(declared, box: box, offset: offset, storageType: self.fieldStorageType(declared), range: range)
 
@@ -31516,7 +31516,7 @@ export type Parser
 		// that reach it — `h.buf`, `self.buf`, a bare `buf` in a method, a chain hop, a compound assignment's
 		// read — because every one of them funnels through this line, and a per-door mark would be the
 		// enumeration that misses the tenth.
-		self.markDeclaredSurface(result, declared: self.signatures.fieldSurfaceOf(layout.name, index: index))
+		self.markDeclaredSurface(result, declared: self.signatures.fieldSurfaceOf(layout, index: index))
 
 		// ⭐ **AND THE PER-VALUE SLOT MASK, WHICH THE LAYOUT CANNOT CARRY (A2m).** When `box` is a TUPLE, its
 		// layout is SHARED with every other tuple of the same canonical element types — `(__ManagedMemory, Int)`
@@ -31560,7 +31560,7 @@ export type Parser
 	// the width the layout says and an assignment that stored it at another would corrupt the box
 	// silently.
 	function emitFieldStore(box ValueId, layout StructLayout, index FieldIndex, value ValueId, range SourceRange)
-		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 		self.emitIndirectStore(box, offset: layout.offsetOfField(index), value: value, storageType: self.fieldStorageType(declared), range: range)
 	end 'emitFieldStore'
 
