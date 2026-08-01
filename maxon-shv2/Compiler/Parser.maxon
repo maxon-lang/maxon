@@ -294,6 +294,20 @@ export union ParseError implements Error
 	// operator needs — ONE variant and ONE message for both families, because the sentence is identical but
 	// for that name, and two copies of it would be free to drift.
 	operatorRequiresConformance(op String, typeParamName String, interfaceName String, line LineNumber, column ColumnNumber)
+	// A struct `==`/`!=` whose dispatch target does not return `Equatable`'s own `bool` — `type Box` with
+	// `function equals(other Box) returns String`. Renders as **E3005**, positioned at the operator.
+	//
+	// ⚠ **IT IS THE DIRECT-DISPATCH TWIN OF THE CHECK `witnessTargetIsProtocol` ALREADY MAKES, AND IT WAS
+	// MISSING** (BATCH2 slice 3 review). That site records the measurement in full: matching a dispatch
+	// target by METHOD NAME admits a method that merely shares the name, and *"the twin with `equals` made
+	// `a == b` evaluate to the raw `7` that `equals` returned"*. `structEqualityOperands` matches by name for
+	// the same reason and had no such filter, so the same wrong answer was reachable through the direct door:
+	// MEASURED on this tree, `a == b` evaluated to the `String` the author's `equals` returned, and `a != b`
+	// applied `logicalNot` to that heap POINTER while stamping the result `boolean` — a fabricated truth
+	// value, silent, and always `true`.
+	//
+	// `structName` is the struct, `got` its `equals`'s actual result, `op` the operator the author wrote.
+	structEqualsResultNotBool(structName String, got String, op String, line LineNumber, column ColumnNumber)
 	// A value that is NOT of the receiver's own type parameter supplied for a `Self`-typed witness-method
 	// argument (`item == 42` / `item.equals(42)` inside `type Box uses T where T is Equatable`, T a struct).
 	// Renders as **E3005**, positioned at the operator / method. The `where` constraint only proves
@@ -22368,6 +22382,14 @@ export type Parser
 	// same argument slotting, same `bool` result, so nothing downstream learns that an operator produced it.
 	// The receiver is argument 0, which is the whole of shv2's method-dispatch convention (`parseCallNamed`).
 	//
+	// ⚠⚠ **AND THAT `bool` RESULT IS CHECKED HERE, NOT ASSUMED — it was asserted by this comment and by
+	// nothing else** (BATCH2 slice 3 review). See `structEqualsResultNotBool`: the WITNESS form of this same
+	// dispatch already refuses a name-matched `equals` that returns anything but `bool`
+	// (`witnessTargetIsProtocol`, whose header carries the measurement), because matching by METHOD NAME is
+	// what both forms do and a bare name proves nothing about a result. The direct form skipped it and both
+	// operators went silently wrong: `==` evaluated to whatever `equals` returned, and `!=` `logicalNot`ted
+	// that value while stamping the result `boolean`.
+	//
 	// ⚠ **IT TAKES NEITHER THE E3019 NOR THE E3070 DOOR, and that is `emitTypeParamComparison`'s answer to
 	// the same question two screens up, not a shortcut.** Both doors describe a callee that WRITES through
 	// an argument and name the binding to blame; an OPERATOR wrote this call, its operands are values the
@@ -22382,6 +22404,15 @@ export type Parser
 		var args = pairArgs(lhs, second: rhs)
 
 		let equal = try self.emitCall(callee, anchor: opTok, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+
+		// The RESULT is asked of the emitted call rather than of the declaration, because `emitCall` has
+		// already resolved the callee's real return type and a second lookup would be a second answer. A
+		// `void` `equals` never reaches here — `resultUsed: true` refuses it inside `emitCall` — so this
+		// names exactly the wrong-typed case.
+		let resultTag = self.tagOf(equal)
+		if resultTag != ValueTypeTag.boolean 'equalsResultNotBool'
+			throw ParseError.structEqualsResultNotBool(String.from(self.internedName(self.valueNameId(lhs))), got: typeTagName(resultTag), op: comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
+		end 'equalsResultNotBool'
 
 		return match op 'op'
 			eq gives equal

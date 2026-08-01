@@ -10,7 +10,7 @@ category: language
 ## Documentation
 
 `specs/init-from-literal.md` pins what the `InitableFromStringLiteral` sugar DOES. This file pins the
-three decisions around it that the canonical corpus has no case for, and every one of them was taken by
+four decisions around it that the canonical corpus has no case for, and every one of them was taken by
 running the reference compiler on the program below rather than by reading it.
 
 **1. The conformance is required, and it is checked after the merge.** `<Type> from "…"` is sugar for
@@ -36,7 +36,23 @@ Only `==` and `!=` are served. Ordering (`<`, `>`, `<=`, `>=`) means `Comparable
 `Ordering`, which is a different method and a different verdict shape; a struct pair still earns the
 comparison type mismatch there.
 
-⚠ **TWO of the refusals below are shv2 DIVERGENCES from the reference, and the last two cases pin them as
+**4. The dispatch target must return `bool` — a struct that merely HAS the name is not `Equatable`.**
+Rule (3) matches by METHOD NAME, and a name proves nothing about a result. `primitive-conformance.md`
+already records the measurement for the WITNESS form of this same dispatch — an interface declaring
+`function equals(other Self) returns Integer` made `a == b` *"evaluate to the raw `7` that `equals`
+returned"* — and `Parser.witnessTargetIsProtocol` refuses it there. The DIRECT form did not ask, and both
+operators went silently wrong: `a == b` evaluated to whatever `equals` returned (a `String`, measured),
+and `a != b` applied `logicalNot` to that heap POINTER while stamping the result `boolean` — a fabricated
+truth value, always `true`. Both are now E3005 at the operator, naming the method and its actual result.
+
+⚠ The reference COMPILES the `==` half of that (it prints the `String`) and fails an internal cast
+(`E9001`, a .NET type-cast trace naming no source position) on the `!=` half. This is therefore a
+deliberate shv2 divergence, taken for `ParseError.nonBoolCondition`'s stated reason: an internal error
+leaking to a user is a bootstrap bug and is not a diagnostic to copy, and shv2 rejects where the type is
+known — in the parser. The two cases below pin it as a divergence, not as agreement.
+
+⚠ **TWO FURTHER refusals below are shv2 DIVERGENCES from the reference, and the
+`struct-equality-without-an-equals-method` / `struct-ordering-is-not-an-equals-dispatch` cases pin them as
 such — not as agreement.** Both were measured on the oracle, one program each, at the same time as the
 rules above:
 
@@ -170,4 +186,61 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:19:7: type mismatch: 'cannot compare struct with struct'
+```
+
+<!-- test: error.struct-equality-requires-a-bool-equals -->
+```maxon
+typealias Count = int(0 to 100)
+
+type Box
+	export let n as Count
+
+	export static function make(n Count) returns Box
+		return Box{n: n}
+	end 'make'
+
+	export function equals(other Box) returns String
+		return "not-a-bool"
+	end 'equals'
+end 'Box'
+
+function main() returns ExitCode
+	let a = Box.make(1)
+	let b = Box.make(1)
+	let r = a == b
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:19:12: Operator '==' dispatches 'Box.equals', which returns 'String' — an equality operator requires the 'bool' result 'Equatable' declares
+```
+
+<!-- test: error.struct-inequality-requires-a-bool-equals -->
+```maxon
+typealias Count = int(0 to 100)
+
+type Box
+	export let n as Count
+
+	export static function make(n Count) returns Box
+		return Box{n: n}
+	end 'make'
+
+	export function equals(other Box) returns Count
+		return 7
+	end 'equals'
+end 'Box'
+
+function main() returns ExitCode
+	let a = Box.make(1)
+	let b = Box.make(1)
+	if a != b 'ne'
+		return 1
+	end 'ne'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:19:7: Operator '!=' dispatches 'Box.equals', which returns 'int' — an equality operator requires the 'bool' result 'Equatable' declares
 ```

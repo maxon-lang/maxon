@@ -320,35 +320,33 @@ function markMaxonCallees(module MaxonModule, project Project, func IrFunction, 
 	end 'eachBlock'
 end 'markMaxonCallees'
 
-// The static reachability edge one `MaxonOp` names, if any. The arms RANGE over the whole union in
-// declaration order, ending at the current last variant (`witnessTryDispatch`), so a variant appended
-// past it FAILS TO COMPILE here rather than being silently swallowed — the band-append invariant
-// working in the reviewer's favour (MaxonDialect's header), exactly as `markCalleeOf` relies on it.
-// A new variant that carries a callee name must be added as its own arm.
+// The static reachability edge one `MaxonOp` names, if any — asked of the DIALECT'S OWN classifier, which
+// is the single place the op set answers "does this variant bind a callee name, and which operand is it?".
+//
+// ⚠⚠ **THIS USED TO BE A THIRD COPY OF THAT TABLE, AND ITS STATED REASON DIED IN THE SAME COMMIT THAT
+// LEFT IT STANDING** (BATCH2 slice 3 review). It re-derived the classification with its own band ranges,
+// justified by `maxonOpCallee` allocating a union box per ask — a cost this slice's own optimizer pass
+// removed by making the classifier a SCALAR enum (`maxonOpCalleeKind`). With the cost gone the copy is
+// only a second answer: a variant appended to `MaxonOp` does still fail to compile at both sites (the
+// band-append invariant), but nothing makes the two sites classify it the SAME WAY, and an
+// under-approximation here is not a compile error — it is `lowerMaxonToStd` skipping a body that is then
+// reached, which is exactly the `requireUnreachableStdlibStayedDead` panic this slice was opened by.
+//
+// A `functionValue` target is credited alongside a `direct` callee: a `functionRef`'s target is reachable
+// code even though no `call` op names it. `indirectCall` calls through the code POINTER that `functionRef`
+// already credited, and `maxonOpCalleeKind` answers `noCallee` for it.
 function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	match op 'op'
-		call(_, callee, _, _, _, _, _) then markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		// `literal` … `stringLiteral`: literals, arithmetic, comparisons, branches, returns, and the
-		// three `var`-access ops — none names a Maxon function.
-		literal to stringLiteral then break 'op'
-		tryCall(_, _, callee, _, _, _, _, _) then markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		// `throwError` … `panicAbort`: the error terminators name no callee.
-		throwError to panicAbort then break 'op'
-		functionRef(_, funcName) then markReachable(funcName, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		// `indirectCall` calls through a code POINTER a `functionRef` above already credited.
-		indirectCall then break 'op'
-		asyncCall(_, callee, _, _, _, _) then markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		// `await` … `witnessTryDispatch`: an await consumes a promise VALUE, and a witness dispatch reads
-		// an `.rdata` table — neither names a static Maxon callee here.
-		await to witnessTryDispatch then break 'op'
-	end 'op'
+	match maxonOpCalleeKind(op) 'kind'
+		direct to functionValue then markReachable(maxonOpCalleeName(op), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		noCallee then break 'kind'
+	end 'kind'
 end 'markMaxonCalleeEdge'
 
 // True iff any live op in USER code names a STDLIB callee — the allocation-free pre-scan that lets a
 // program which never touches stdlib skip the reachability walk and the substrate fixpoint entirely. It
-// reads the same four callee-naming variants `markMaxonCalleeEdge` does, and is a SEPARATE band match on
-// purpose: it runs on every compile, so it must allocate nothing (no boxed callee union, no map/queue) —
-// it only asks "is one present?". Both matches are guarded by the same band-append invariant.
+// asks the same dialect classifier `markMaxonCalleeEdge` does (`maxonOpCalleeKind`), and differs from it
+// only in what it does with a hit: it runs on every compile, so it must allocate nothing (no map, no
+// queue) — it only asks "is one present?".
 function userCodeCallsStdlib(module MaxonModule, stdlib FunctionNameSet) returns bool
 	for func in module.functions 'eachFunc'
 		// ⭐ SKIP STDLIB's OWN BODIES. Stdlib is internally connected (`Clock.elapsedMs` calls
@@ -380,20 +378,19 @@ function userCodeCallsStdlib(module MaxonModule, stdlib FunctionNameSet) returns
 	return false
 end 'userCodeCallsStdlib'
 
-// Whether one `MaxonOp` names a callee in `stdlib`. Same band structure — and same band-append protection
-// — as `markMaxonCalleeEdge` (a variant appended past `witnessTryDispatch` fails to compile here rather than
-// being silently swallowed).
+// Whether one `MaxonOp` names a callee in `stdlib` — the SAME dialect classifier `markMaxonCalleeEdge`
+// asks, over the same four callee-bearing variants.
+//
+// ⚠ Its header used to say it was *"a SEPARATE band match on purpose: it runs on every compile, so it
+// must allocate nothing (no boxed callee union…)"*. That was true of `maxonOpCallee`; it is not true of
+// `maxonOpCalleeKind`, which is a scalar enum and allocates nothing, and the NAME is fetched only for the
+// two kinds that carry one — i.e. only where this function was going to read a callee anyway. The
+// allocation-free property the comment defended is kept, and the second copy that was defending it is not.
 function opNamesStdlibCallee(op MaxonOp, stdlib FunctionNameSet) returns bool
-	return match op 'op'
-		call(_, callee, _, _, _, _, _) gives stdlib.contains(callee)
-		literal to stringLiteral gives false
-		tryCall(_, _, callee, _, _, _, _, _) gives stdlib.contains(callee)
-		throwError to panicAbort gives false
-		functionRef(_, funcName) gives stdlib.contains(funcName)
-		indirectCall gives false
-		asyncCall(_, callee, _, _, _, _) gives stdlib.contains(callee)
-		await to witnessTryDispatch gives false
-	end 'op'
+	return match maxonOpCalleeKind(op) 'kind'
+		direct to functionValue gives stdlib.contains(maxonOpCalleeName(op))
+		noCallee gives false
+	end 'kind'
 end 'opNamesStdlibCallee'
 
 // ⭐ **WHICH STDLIB FUNCTIONS NEED THE x64-WINDOWS SUBSTRATE, AND WHICH RUNTIME ENTRY EACH REACHES.**
