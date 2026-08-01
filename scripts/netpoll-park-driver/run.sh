@@ -15,9 +15,17 @@
 #   MAXON_GT_PARK_DELAY_MS   widens the PARKER's window: between its last self-detect and the
 #                            commit CAS. This is the window the old two-word protocol lost a
 #                            wakeup in, and the one B2's acceptance A/Bs.
-#   MAXON_GT_CLAIM_DELAY_MS  widens the COMPLETER's window: between `status = ready` and the claim
-#                            of the park word. A waiter that self-detects on `status` inside it
-#                            releases a word its completer has not claimed yet.
+#   MAXON_GT_CLAIM_DELAY_MS  widens the COMPLETER's window: the interval in which a completer OWNS
+#                            the park word and has not yet released it. Specifically its TAIL —
+#                            after the completer has published `status`/`io_result_val`, before it
+#                            store-releases `Ready`. That placement is deliberate and is the only
+#                            one that discriminates: held at the HEAD instead (right after the
+#                            claiming CAS) the window has `status` still reading `waiting`, so every
+#                            observer declines for a reason that predates the park word entirely,
+#                            and a green arm proves nothing. Held at the tail, `status` says ready
+#                            and the only thing standing between the recovery net and a false
+#                            positive — or between a waiter and a park it must not leave — is the
+#                            word itself. See RuntimeEmitter.Netpoll.cs at __netpoll_claim_done.
 #
 # ⚠ THE VERDICT IS THE LINE COUNT, NOT MERELY EXIT 0. A lost wakeup hangs and the timeout catches
 # that; a spuriously aborted park instead delivers the PREVIOUS completion's result, which comes

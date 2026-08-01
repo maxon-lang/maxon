@@ -149,9 +149,14 @@ public partial class RuntimeEmitter {
 
   /// <summary>
   /// FAULT INJECTION on the COMPLETER's side, in milliseconds; 0 = off. It widens the interval in
-  /// which the completer OWNS the park word but has not yet released it — the gap between
-  /// <see cref="EmitNetpollClaim"/>'s winning CAS and <see cref="EmitNetpollClaimDone"/>'s
-  /// store-release, with the caller's publish inside it.
+  /// which the completer OWNS the park word but has not yet released it — and specifically the TAIL
+  /// of that interval, after the caller's publish and before
+  /// <see cref="EmitNetpollClaimDone"/>'s store-release.
+  ///
+  /// ⚠ THE TAIL, NOT THE HEAD, AND THE DIFFERENCE IS THE WHOLE VALUE OF THE ARM. Stretching the head
+  /// (right after the claiming CAS) produces a window in which `status` still says `waiting`, so
+  /// every observer declines for a reason that predates the fifth state — a green run there proves
+  /// nothing this rung changed. See the comment at the call site.
   ///
   /// ⭐ WHY A SECOND KNOB EXISTS: A HANDSHAKE HAS TWO SIDES AND ONLY ONE OF THEM WAS INSTRUMENTED.
   /// <see cref="NetpollParkDelayMsLabel"/> widens the parker's window; nothing widened the
@@ -624,15 +629,8 @@ public partial class RuntimeEmitter {
     _b.AtomicCAS(VReg.Scratch1, GtOffParkState, VReg.Scratch2, VReg.Arg1);
     _b.JumpIfZero(VReg.Scratch3, loopLabel);     // lost the race — re-read and decide again
 
-    // Scratch2 still holds the state we claimed FROM: the CAS leaves it alone on both backends. Home
-    // it before the call below, which clobbers the whole scratch set.
+    // Scratch2 still holds the state we claimed FROM: the CAS leaves it alone on both backends.
     _b.StoreLocal(slotClaimedFrom, VReg.Scratch2);
-
-    // Fault injection, the completer's half. It sits AFTER the winning CAS, so what it widens is
-    // exactly the interval in which this completer owns the word and has not released it — the
-    // window the caller's publish happens inside. Nothing observable has changed yet at this point:
-    // the GT's result fields still hold their previous values and `status` still says `waiting`.
-    _b.Call(NetpollClaimDelayFn);
 
     _b.LoadLocal(VReg.Scratch0, slotClaimedFrom);
     _b.ReturnValue(VReg.Scratch0);
@@ -681,6 +679,19 @@ public partial class RuntimeEmitter {
     EmitNetpollThrow(NetpollClaimStateMsg);
 
     _b.DefineLabel(validLabel);
+
+    // ⭐ FAULT INJECTION, THE COMPLETER'S HALF — AND IT SITS HERE, NOT AT THE CLAIM, BECAUSE ONLY
+    // HERE DOES IT DISCRIMINATE. Held at the claim, the injected window has `status` still reading
+    // `waiting` and the word already reading `Claiming`, so __netpoll_recover declines for TWO
+    // independent reasons and a green run cannot say which one held — including the reason that was
+    // already true before this state existed. Held HERE, the caller's publish has happened: `status`
+    // says ready, and the ONLY thing standing between the recovery net and a false positive is that
+    // the word reads `Claiming` rather than `Parked`. That is precisely the change the fifth state
+    // makes, so this is the one placement where the arm tests it. It re-tests the waiter's half at
+    // the same instant, for the same reason: a waiter that still self-detected on `status` would
+    // leave the park inside this window, which is the defect __netpoll_woken closed.
+    _b.Call(NetpollClaimDelayFn);
+
     _b.LoadLocal(VReg.Scratch1, 0);              // gt
     _b.MovRegImm(VReg.Scratch0, NetpollReady);
     _b.StoreRelease(VReg.Scratch1, GtOffParkState, VReg.Scratch0);
