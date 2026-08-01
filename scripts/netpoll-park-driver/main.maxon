@@ -1,0 +1,50 @@
+typealias Count = int(0 to 1000000)
+
+// Hammer the async I/O PARK path.
+//
+// ⭐ THE PRODUCER MUST BE SLOW, and that is the whole design. Measured 2026-07-31: a child that
+// dumps 2000 lines at once is drained almost entirely through the self-detect FAST path — 8000
+// lines across 4 readers hit the park path only ~3 times, because the data is already in the pipe
+// buffer before the reader asks. A GT parks only when it genuinely outruns its producer.
+//
+// Pacing the producer at ~2 ms per line does two things at once: every read finds an empty pipe and
+// PARKS, and the completion then lands a couple of milliseconds later — comparable to the injected
+// window — so `MAXON_GT_PARK_DELAY_MS` has a real chance of straddling it. That is the interleaving
+// the old protocol loses a wakeup on, and it cannot be summoned from a fast producer at all.
+function reader(lines Count) returns Count
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("i=0; while [ $i -lt {lines} ]; do echo x; sleep 0.002; i=$((i+1)); done")
+	var child = try StreamingSubprocess.spawn(Executable.name("/bin/sh"), arguments: argv) otherwise panic("spawn failed")
+
+	var n = 0 as Count
+	while true 'lineLoop'
+		let line = try child.readStdoutLine() otherwise 'readFailed'
+			break
+		end 'readFailed'
+		if line.isEmpty() 'eof'
+			break
+		end 'eof'
+		n = n + 1
+	end 'lineLoop'
+
+	child.release()
+	return n
+end 'reader'
+
+function main() returns ExitCode
+	let a = async reader(400)
+	let b = async reader(400)
+	let c = async reader(400)
+	let d = async reader(400)
+	let ra = await a
+	let rb = await b
+	let rc = await c
+	let rd = await d
+	let total = ra + rb + rc + rd
+	print("lines={total}\n")
+	if total > 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
