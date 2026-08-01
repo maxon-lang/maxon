@@ -32,9 +32,19 @@ fixed-base writers bake a `.text` VA, wasm a funcref-table index, and arm64-macO
 rebase — so these cases run everywhere and carry no target marker (as the `primitive-conformance` and
 `where-clauses` witness cases do).
 
-Direct `s.hash()` on a concrete `String` value and `Character` conformance are separate future slices and are
-NOT covered here. `Set with String` keys — which reuse exactly this `String` `Hashable`/`Equatable`
-conformance — ship in P1.7b and are covered by `set-string`.
+Direct `s.hash()` / `s.equals(t)` on a concrete `String` value ship too, and reach the SAME two symbols: the
+call names `String.hash`, the witness slot holds a relocation to `String.hash`. There is one body per method
+and no thunk between the two spellings, which is what the `direct-hash-agrees-with-the-witness` case below
+asserts. `Set with String` keys probe through those same two witness slots and ship in P1.7b, covered by
+`set-string`; direct dispatch on a `Character` VALUE is a separate future slice and is not covered here
+(a `Character` receiver is routed to its own method table, which has no conformance fall-through yet).
+
+⚠ **THE `String.hash` / `String.equals` SYMBOLS ARE THE COMPILER'S, AND THAT IS ENFORCED RATHER THAN
+ASSUMED.** A user declaration binding the name `String` — or `Character`, whose two impls are built from the
+same builders — is refused (`TypeResolution.isCompilerOwnedTypeName`), because such a declaration's own
+`hash()` mints the identical symbol and the installer declines to build an impl for a name the module
+already defines. The two error cases at the end of this file pin both refusals and record the wrong answers
+measured before they existed.
 
 ## Tests
 
@@ -211,4 +221,182 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: string-conformance.direct-hash-on-a-concrete-string -->
+### A concrete `String` value hashes DIRECTLY, with no witness table in the program
+`s.hash()` on a String-typed value is an ordinary `call String.hash` — the very symbol a
+`__witness_String.Hashable` slot would have been stamped with — so the three djb2 answers the witness cases
+above pin through a `Box` are the same three answers here, reached without one. The three pins are the
+canonical djb2 triple: `""` -> `5381`, `"abc"` -> `193485963`, `"hi"` -> `5863446`.
+```maxon
+function main() returns ExitCode
+	let e = ""
+	if e.hash() != 5381 'p1'
+		return 1
+	end 'p1'
+	let a = "abc"
+	if a.hash() != 193485963 'p2'
+		return 2
+	end 'p2'
+	let h = "hi"
+	if h.hash() != 5863446 'p3'
+		return 3
+	end 'p3'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: string-conformance.direct-hash-agrees-with-the-witness -->
+### The direct call and the witness dispatch reach ONE body
+Both spellings in one program, over the same bytes. They must agree not because two implementations were
+written to match, but because there is only one: the direct call names `String.hash` and the witness slot
+holds a relocation to `String.hash`.
+```maxon
+type Box uses T where T is Hashable
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function itemHash() returns HashValue
+		return self.item.hash()
+	end 'itemHash'
+end 'Box'
+
+typealias StringBox = Box with String
+
+function main() returns ExitCode
+	let s = "abc"
+	let b = StringBox.create("abc")
+	if s.hash() != b.itemHash() 'agree'
+		return 1
+	end 'agree'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: string-conformance.direct-equals-on-a-concrete-string -->
+### A concrete `String` value compares DIRECTLY through `String.equals`
+Content equality, both verdicts, plus the length-mismatch shortcut the impl opens with.
+```maxon
+function main() returns ExitCode
+	let a = "ab"
+	if not a.equals("ab") 'same'
+		return 1
+	end 'same'
+	if a.equals("ac") 'differentByte'
+		return 2
+	end 'differentByte'
+	if a.equals("abc") 'differentLength'
+		return 3
+	end 'differentLength'
+	if not "".equals("") 'bothEmpty'
+		return 4
+	end 'bothEmpty'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: string-conformance.direct-call-borrows-both-operands -->
+### Both operands are BORROWED, so an OWNED temporary still drops
+The receiver and the `other` argument are read and never consumed — `String.hash` walks the bytes and
+`String.equals` compares them, freeing nothing — so an interpolated argument stays an ordinary pending temp
+and drops at statement end. Run 100 times so a leaked or double-freed temp cannot hide; the leak gate is the
+assertion.
+```maxon
+typealias Counter = int(0 to 1000)
+
+function main() returns ExitCode
+	var i = 0 as Counter
+	var acc = 0 as Counter
+	while i < 100 'loop'
+		if "a1b".equals("a{1}b") 'eq'
+			acc = acc + 1
+		end 'eq'
+		if "a{1}b".hash() == 5863446 + 0 'neverTrue'
+			return 1
+		end 'neverTrue'
+		i = i + 1
+	end 'loop'
+	if acc == 100 'all'
+		return 0
+	end 'all'
+	return 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.direct-equals-rejects-a-non-string-argument -->
+### `equals` declares `other Self`, so its argument must be a `String`
+`String.equals` walks bytes off a pointer, so an `int` actual would be DEREFERENCED — the mirror of the
+wrong answer `int.equals` gives a String actual, and refused by the same `Self`-formal check.
+```maxon
+function main() returns ExitCode
+	let a = "ab"
+	if a.equals(3) 'notAString'
+		return 1
+	end 'notAString'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:7: 'equals' requires a String, but its argument is int
+```
+
+<!-- test: error.a-declaration-may-not-bind-the-name-String -->
+### A declaration may not bind `String` to a nominal identity
+⚠ **This refusal is what makes the `String.hash` / `String.equals` SYMBOLS the compiler's.** A user
+`type String` is otherwise inert — `parseTypeReference` settles the name syntactically, so it can never be
+named at a parameter, `String{…}` is E3076 and `String.create(…)` is refused as an unknown builtin static —
+but its `hash()` method registers the symbol `String.hash`, and the conformance installer builds an impl only
+for a name the module does not already define. MEASURED before this refusal existed, with no diagnostic
+anywhere: `Box with String`'s `itemHash()` of `""` returned **7** (the user's body) instead of **5381**, and
+`Set with String` counted **3** for `insert("alice"); insert("bob"); insert("alice")` against a control's
+**2** — a duplicate key stored twice, because the user's `equals` answered `false`.
+```maxon
+type String
+	export var value as ExitCode
+
+	export function hash() returns HashValue
+		return 7
+	end 'hash'
+end 'String'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'String', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
+```
+
+<!-- test: error.a-declaration-may-not-bind-the-name-Character -->
+### `Character` is reserved on the same footing, and for the same symbols
+`Character.hash` and `Character.equals` are synthesized from the very builders `String`'s are
+(`BuiltinConformanceRuntime` — a Character IS the fused byte record), under Character's own symbols. So a
+user declaration of the name captures those two exactly as a `type String` captures String's, and the name
+is reserved beside it rather than after the next measurement.
+```maxon
+enum Character
+	first
+	second
+end 'Character'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Character', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
 ```

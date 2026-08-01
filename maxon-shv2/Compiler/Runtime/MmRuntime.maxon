@@ -167,10 +167,12 @@ let CompilerInternalPrefix = b"__"
 // function 'int.compare'"** against a call the user never wrote — the exact failure this predicate exists to
 // prevent for `__mm_alloc`.
 //
-// ⚠ The second clause covers the PRIMITIVE-KEYWORD qualifiers only (`int.`/`float.`/`bool.`), and that bound
-// is load-bearing rather than conservative — see `isBuiltinConformanceImplName` for why `String.` must stay
-// out and why a keyword qualifier is what makes the claim sound. It is allocation-free
-// (`isQualifiedUnderTypeName`), because this sits on the per-call path of `validateCall` and `lowerCall`.
+// ⚠ The second clause covers exactly the qualifiers a direct dispatch can be emitted under — `int.`,
+// `float.`, `bool.` and, since BATCH2 slice 2, `String.` — and that bound is load-bearing rather than
+// conservative. See `isBuiltinConformanceImplName` for the two DIFFERENT things that make it sound: the
+// three primitives are keywords, while `String.` rests on the name being reserved from user declarations
+// (`TypeResolution.isCompilerOwnedTypeName`). It is allocation-free (`isQualifiedUnderTypeName`), because
+// this sits on the per-call path of `validateCall` and `lowerCall`.
 export function isCompilerInternalCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: CompilerInternalPrefix) or isBuiltinConformanceImplName(callee)
 end 'isCompilerInternalCallee'

@@ -788,9 +788,16 @@ export let BoolConformerName = b"bool"
 // nothing installs, and the parser's dispatch, the E3017 conformance answer and the installed impl set
 // cannot drift: they are one function's three readers.
 //
-// Still deliberately excluded: direct dispatch on a `String` VALUE (`s.hash()` — a String receiver is routed
-// to `parseStringMethodCall` before the conformer classifier is asked). (`Set`-with-`String` keys SHIP,
-// P1.7b, riding exactly this `String` Hashable/Equatable answer.)
+// ⭐ **DIRECT DISPATCH ON A `String` VALUE SHIPS TOO (BATCH2 slice 2)** — `s.hash()` and `s.equals(t)` reach
+// the very impls a `__witness_String.*` slot would, so the two spellings of one question land in one body.
+// It arrives through `Parser.dispatchStringMethod`'s FALL-THROUGH rather than through the conformer arm of
+// `dispatchMethodOnReceiver`, because a String receiver is routed to its own method table first and that
+// order is load-bearing (`s.byteLength()` must not be resolved against the intrinsic conformances).
+//
+// A `Set with String` is a THIRD reader of the same two symbols (P1.7b): its probe dispatches the key's
+// `hash`/`equals` through `__witness_String.*` slots, so all three doors land in the same two bodies — which
+// is why the reservation below (`TypeResolution.isCompilerOwnedTypeName`) had to cover `String` before any of
+// them could be trusted.
 export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray) returns bool
 	if typeName.equals(IntConformerName) 'int'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
@@ -834,6 +841,7 @@ export enum BuiltinConformer
 	intConformer
 	floatConformer
 	boolConformer
+	stringConformer
 end 'BuiltinConformer'
 
 // ⭐ **THE BUILTIN CONFORMER A RESOLVED VALUE TAG CARRIES** — the ONE place a receiver's TYPE becomes the
@@ -843,9 +851,22 @@ end 'BuiltinConformer'
 // `ProgramSignatures.conformerTypeArgName` reduces a witness type ARGUMENT — so `Integer`, `Byte` and a bare
 // `int` all arrive here as `integer` and all dispatch `int.*`.
 //
-// ⚠ **EVERY OTHER TAG ANSWERS `notAConformer`, INCLUDING TAGS THAT WILL LATER HAVE ONE.** `string` is
-// routed to `parseStringMethodCall` before this is asked, so admitting it here would name a symbol nothing
-// installs — a link-time panic in place of a clean diagnostic. A tag joins this map when its impl does.
+// ⚠ **A TAG JOINS THIS MAP WHEN ITS DISPATCH DOES, and admitting one whose impl nothing installs would
+// name a symbol at LINK time in place of a clean diagnostic.** `string` joined at BATCH2 slice 2, with the
+// direct `s.hash()` / `s.equals(t)` door.
+//
+// ⭐ **AND `string`'S ENTRY IS READ BY THE `Self`-ARGUMENT CHECK, NOT BY THE RECEIVER SPLIT** — which is
+// worth stating, because the receiver split cannot reach it: `Parser.dispatchMethodOnReceiver` routes a
+// String receiver to `dispatchStringMethod` several arms ABOVE the conformer arm (that order is
+// load-bearing — `s.byteLength()` must not resolve against the intrinsic conformances), so a String
+// receiver never arrives at the classifier. What does arrive is `equals`'s ARGUMENT, through
+// `Parser.valueIsConformer`, and without this arm a perfectly good `"ab".equals("ac")` would be refused
+// for handing a `String` to a `Self` formal.
+//
+// ⚠ `character` is deliberately still out, and for a DIFFERENT reason than "no impl": `Character.hash` and
+// `Character.equals` are installed and witness-reachable, but `dispatchCharacterMethod` routes every
+// Character receiver and does not fall through to a conformance lookup, so an entry here would be
+// unreachable rather than wrong. It joins when that dispatcher grows the door `dispatchStringMethod` just did.
 //
 // ⚠ A tag admitted here answers for the CONFORMER, not for a method: `bool` carries `compare` and NEITHER
 // `hash` NOR `equals`, and that hole is `isIntrinsicBuiltinConformance`'s to state — `builtinConformerMethod`
@@ -860,6 +881,9 @@ export function builtinConformerOfTag(tag ValueTypeTag) returns BuiltinConformer
 	if tag == ValueTypeTag.boolean 'bool'
 		return BuiltinConformer.boolConformer
 	end 'bool'
+	if tag == ValueTypeTag.string 'string'
+		return BuiltinConformer.stringConformer
+	end 'string'
 	return BuiltinConformer.notAConformer
 end 'builtinConformerOfTag'
 
@@ -874,8 +898,9 @@ end 'isBuiltinConformer'
 // ⭐ **THE CANONICAL NAME A CONFORMER IS KEYED BY** — the key of the intrinsic-conformance answer, of the
 // `__witness_<conformer>.*` tables and of the `<conformer>.<method>` impl symbols, so a direct dispatch and a
 // witness dispatch on the same type reach the same body. Each name's own header states the invariant this
-// rests on: it MUST equal `primitiveTypeTagName` of the tag it answers for, i.e. `int`/`float`/`bool` are
-// what resolved `integer`/`float`/`boolean` tags are called everywhere in the compiler.
+// rests on: it MUST equal whatever the compiler calls the tag it answers for — `primitiveTypeTagName` for the
+// three primitives (`int`/`float`/`bool` are what resolved `integer`/`float`/`boolean` tags are called
+// everywhere), and for `String` the one syntactic spelling `Parser.parseTypeReference` recognizes.
 //
 // Fetched only where a name is actually spelled — a dispatch that is going to be emitted, or a diagnostic
 // naming the receiver's type — never on the classification path. The match is EXHAUSTIVE, so a conformer
@@ -889,6 +914,7 @@ export function builtinConformerName(conformer BuiltinConformer) returns ByteArr
 		intConformer then return IntConformerName
 		floatConformer then return FloatConformerName
 		boolConformer then return BoolConformerName
+		stringConformer then return StringConformerName
 		notAConformer then panic("builtinConformerName: asked for the name of a value that carries no builtin conformance — every caller is gated on `isBuiltinConformer`, so the gate and the name must read one classifier")
 	end 'c'
 end 'builtinConformerName'
@@ -899,24 +925,28 @@ end 'builtinConformerName'
 // name it (BuiltinConformanceRuntime's header) — so the prefix test cannot see it, and every reader that
 // asks "is this the compiler's own callee?" was answering `false` for `int.compare`.
 //
-// **It is a QUALIFIER test, and the qualifier is the whole soundness argument.** `int`, `float` and `bool`
-// are KEYWORDS (`Lexer.keywordTable`), so no user type may be declared under one and no user method symbol
-// can ever wear `int.`/`float.`/`bool.` — every callee under those qualifiers is one the compiler minted.
-// That is why no method LIST is needed here and why one must not be added: the fact being stated is *"these
-// primitive qualifiers belong to the compiler"*, which is one fact, where "and these three methods" would be
-// a second copy of `builtinConformerMethod`'s answer.
+// **It is a QUALIFIER test, and "the qualifier belongs to the compiler" is the whole soundness argument.**
+// It is one fact, which is why no method LIST is needed here and why one must not be added: "and these three
+// methods" would be a second copy of `builtinConformerMethod`'s answer.
 //
-// ⚠ **`String.` IS DELIBERATELY ABSENT AND MUST STAY SO UNTIL DIRECT STRING DISPATCH SHIPS.** `String` is
-// NOT in `TypeResolution.isCompilerOwnedTypeName`, so a user `type String` with its own `hash()` legitimately
-// owns the symbol `String.hash` — admitting it here would route a genuine user call past arity validation and
-// signature slotting, and would make `Parser.requireCalleeIsNotReservedName` reject a legal
-// `String.hash(…)` static call outright. The builtin `String.hash`/`String.equals` impls are reached ONLY
-// through witness relocs, which never consult this predicate.
+// ⚠⚠ **THE FOUR QUALIFIERS BUY THAT FACT TWO DIFFERENT WAYS, AND THE SECOND WAY IS A DEPENDENCY, NOT A
+// RESTATEMENT.** `int`, `float` and `bool` are KEYWORDS (`Lexer.keywordTable`), so the LEXER makes a user
+// declaration under one impossible and nothing further is needed. `String` is an ordinary identifier and
+// buys it from the RESERVATION instead: `TypeResolution.isCompilerOwnedTypeName` refuses any declaration
+// that would bind the name (BATCH2 slice 2), so no user `type String` exists to carry a `hash()` and no user
+// method symbol can wear `String.`. **Remove `String` from that list and this line becomes false**, in the
+// silent direction — see that function for the two wrong answers measured before it covered the name.
+//
+// ⚠ Its OTHER half is discharged by a door rather than by a rule: a source-written `String.<member>(…)` is
+// intercepted by `Parser.parseStringStaticCall` at its own span (E2015, naming the two statics the reference
+// exports) and never reaches `Parser.requireCalleeIsNotReservedName`, so admitting the qualifier here cannot
+// turn a user's `String.` call into an "unknown compiler intrinsic". `character-conformance`'s twin does not
+// arise: `Character.` is absent below.
 //
 // The conformers listed here are exactly those `builtinConformerOfTag` can return, because those are the
 // only qualifiers the parser can emit a direct dispatch under. A tag joins that map and this one together.
 export function isBuiltinConformanceImplName(name ByteArray) returns bool
-	return isQualifiedUnderTypeName(name, typeName: IntConformerName) or isQualifiedUnderTypeName(name, typeName: FloatConformerName) or isQualifiedUnderTypeName(name, typeName: BoolConformerName)
+	return isQualifiedUnderTypeName(name, typeName: IntConformerName) or isQualifiedUnderTypeName(name, typeName: FloatConformerName) or isQualifiedUnderTypeName(name, typeName: BoolConformerName) or isQualifiedUnderTypeName(name, typeName: StringConformerName)
 end 'isBuiltinConformanceImplName'
 
 // The protocol method a builtin conformer supplies under a given name, or `notSupplied`.

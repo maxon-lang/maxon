@@ -25347,7 +25347,31 @@ export type Parser
 			return self.emitRuntimeCall(StrByteAtOrPanicName, args: pairArgs(recv.value, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'byteAtOrPanic'
 
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `bytes`, the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`), the `StringIndex` family (`startIndex`, `endIndex`, `findFirst`, `findLast`, `slice`) and the three trims (`trim`, `trimStart`, `trimEnd`); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes`/`utf16` have no consumer yet", line: methodTok.line, column: methodTok.column)
+		// ⭐⭐ **`hash()` AND `equals(other)` ARE NOT STRING METHODS — THEY ARE THE BUILTIN CONFORMANCES, AND
+		// THIS IS THE DIRECT-CALL DOOR ONTO THE IMPLS THAT ALREADY EXIST (BATCH2 slice 2).**
+		// `BuiltinConformanceRuntime` synthesizes `String.hash` (djb2) and `String.equals` (`__str_eq`'s
+		// content compare) for `Hashable`/`Equatable`, and a `__witness_String.*` slot is already stamped with
+		// a `funcAbs64` reloc naming those exact symbols. So this emits the SAME callee the witness dispatch
+		// loads and the `Set with String` probe calls — one body, three doors, and emphatically not a second
+		// djb2 written at a call site.
+		//
+		// ⭐ **ASKED LAST, AND BY LOOKUP RATHER THAN BY TWO MORE `if`s.** Last, because the String method
+		// table above must win — the arm-order rule `dispatchMethodOnReceiver` states, one level down. By
+		// lookup, because then no method NAME is spelled here at all: the pair is DERIVED from
+		// `isIntrinsicBuiltinConformance`'s `String` row, so this door cannot offer a method the installer
+		// would decline to install, and the day `String` gains `Comparable` its `compare()` opens with no edit
+		// here. A name the row does not supply falls through to the roster below, which is what keeps a typo a
+		// typo rather than a permissions message.
+		match builtinConformerMethod(StringConformerName, methodName: methodTok.value) 'conformanceMethod'
+			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: recv.value, conformer: BuiltinConformer.stringConformer, method: method, baseTok: baseTok, methodTok: methodTok)
+			notSupplied then break 'conformanceMethod'
+		end 'conformanceMethod'
+
+		// The conformance pair is RENDERED rather than typed out, for `builtinConformerMethodNames`' own
+		// stated reason: a roster written as a literal is a copy of a decision made elsewhere, and this one
+		// had already gone stale in the other direction — it claimed `utf16` "has no consumer yet" while the
+		// arm above dispatches it, and omitted five Slice E/B2 methods that work.
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `isEmpty`, `clone`, `bytes`, `toByteArray`, `codepoints`, `utf16`, the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `replaceFirst`, `split`), the `StringIndex` family (`startIndex`, `endIndex`, `findFirst`, `findLast`, `slice`), the three trims (`trim`, `trimStart`, `trimEnd`) and the builtin conformances ({builtinConformerMethodNames(StringConformerName)}); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet", line: methodTok.line, column: methodTok.column)
 	end 'dispatchStringMethod'
 
 	// ⭐⭐ **A `module`-VISIBLE STRING METHOD IS `stdlib/`'s ALONE, AND THIS IS THE ONE PLACE THAT SAYS SO.**
@@ -26448,7 +26472,8 @@ export type Parser
 		return self.emitLoadStringField(receiver, offset: StringLengthOffset, range: SourceRange.ofToken(methodTok))
 	end 'parseStringByteLength'
 
-	// --- Direct builtin-conformance dispatch (P1.7a): `i.compare(j)` / `i.hash()` / `i.equals(j)` ---
+	// --- Direct builtin-conformance dispatch (P1.7a): `i.compare(j)` / `i.hash()` / `i.equals(j)`,
+	// and since BATCH2 slice 2 a `String` receiver's `s.hash()` / `s.equals(t)` through the same body ---
 
 	// ⭐ **ONE BODY SERVES BOTH DISPATCH PATHS.** A concrete receiver calls `int.compare` DIRECTLY — the
 	// very symbol a `__witness_int.Comparable` slot is stamped with (`ensureWitnessTable`'s funcAbs64
@@ -26476,9 +26501,12 @@ export type Parser
 		end 'lookup'
 	end 'dispatchBuiltinConformanceMethod'
 
-	// Parse the argument list and emit the call. The receiver is argument 0 and is BORROWED — all three
-	// impls read their operands as by-value scalars and free nothing — so no incref is emitted here and no
-	// drop is owed there, exactly as an instance method's receiver rides.
+	// Parse the argument list and emit the call. The receiver is argument 0 and is BORROWED, so no incref is
+	// emitted here and no drop is owed there, exactly as an instance method's receiver rides. That is a
+	// property of the IMPLS rather than of the operand kind, which is why it survived `String` joining them:
+	// the scalar impls read by-value operands and free nothing, and `buildStrHash`/`buildStrEq` take a String
+	// POINTER but only read `buffer@0`/`length@8` and walk the bytes (see their headers). A managed argument
+	// therefore stays an ordinary pending temp and drops at statement end, AFTER the compare.
 	//
 	// It goes through `emitRuntimeCall` rather than `emitCall` for that door's stated reason: a synthesized
 	// impl is built at the Std tier AFTER the pipeline, so no file declares it, `mintCallResult` would type
@@ -26516,11 +26544,19 @@ export type Parser
 	end 'emitBuiltinConformanceCall'
 
 	// ⭐ **A `Self`-TYPED FORMAL TAKES A VALUE OF THE RECEIVER'S OWN CONFORMER, AND NOTHING ELSE.**
-	// `Equatable.equals` and `Comparable.compare` both declare `other Self`, and `int.equals(self, other)`
-	// compares two RAW i64s — so a `String` actual would be compared as its heap POINTER and a struct as its
-	// box address. A silent wrong answer, which is precisely what `requireGenuineSelfArgs` refuses for the
-	// witness-dispatched form; this is the same question asked of a CONCRETE conformer instead of a type
-	// parameter. Interface formal `j` is actual `j + BuiltinConformanceReceiverArgs`; arity was checked above.
+	// `Equatable.equals` and `Comparable.compare` both declare `other Self`, and each impl reads its second
+	// operand the way its OWN receiver is represented: `int.equals(self, other)` compares two RAW i64s, so a
+	// String actual would be compared as its heap POINTER and a struct as its box address, while
+	// `String.equals` walks bytes off a pointer, so an INT actual would be dereferenced. Both directions are
+	// silent wrong answers, which is precisely what `requireGenuineSelfArgs` refuses for the witness-dispatched
+	// form; this is the same question asked of a CONCRETE conformer instead of a type parameter.
+	//
+	// ⚠ It is what makes `builtinConformerOfTag`'s `string` arm load-bearing rather than decorative: the
+	// RECEIVER never reaches that classifier (`dispatchMethodOnReceiver` routes a String several arms
+	// earlier), but `equals`'s ARGUMENT reaches it here, and without the arm a legal `"ab".equals("ac")`
+	// would be refused for handing a String to a `Self` formal.
+	//
+	// Interface formal `j` is actual `j + BuiltinConformanceReceiverArgs`; arity was checked above.
 	function requireBuiltinConformanceSelfArgs(method InterfaceMethodSig, args ValueIdArray, conformer BuiltinConformer, methodTok Token) throws ParseError
 		for j in 0 upto method.paramTypeNames.count() 'eachFormal'
 			let formalTypeName = try method.paramTypeNames.get(j) otherwise panic("requireBuiltinConformanceSelfArgs: paramTypeNames.get OOB at {j} below count {method.paramTypeNames.count()}")
