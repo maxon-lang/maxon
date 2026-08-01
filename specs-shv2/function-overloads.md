@@ -388,8 +388,7 @@ end 'main'
 105
 ```
 
-<!-- disabled-test: method-call-argument-chained -->
-<!-- BORROWED-AGGREGATE RETURN, not overloading — the `over` overloads themselves resolve now. `Trunk.branch()`'s `return self.leaf` hands back a BORROWED struct field, which P1.4b's borrowed-return rule refuses ("Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b"); the oracle runs it. The `t.branch().size()` chain is pinned green by `specs-shv2/postfix-member-walk.md`. -->
+<!-- test: method-call-argument-chained -->
 A chain resolves left to right: `t.branch()` yields a `Leaf`, and `size()` is
 looked up on THAT type rather than on `t`.
 ```maxon

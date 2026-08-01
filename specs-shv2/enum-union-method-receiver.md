@@ -369,7 +369,11 @@ end 'main'
 7
 ```
 
-<!-- test: error.return-self-from-a-boxed-union -->
+<!-- test: return-self-from-a-boxed-union -->
+A boxed union's `self` is a borrowed heap box, and it escapes through the same door a struct's does: the
+receiver is co-owned by an `__mm_retain` before the `ret`, so the caller's `c` and the receiver's own `b`
+each drop it once and the box is freed exactly once. This case used to pin the borrowed-return REFUSAL,
+whose sentence deferred the copy to "P1.4b" — a milestone that had already shipped.
 ```maxon
 union Boxed
 	one(v int)
@@ -385,12 +389,12 @@ function main() returns ExitCode
 	let c = b.giveBack()
 	match c 'k'
 		one(v) then return v as ExitCode
-		two(_) then return 1
+		two then return 1
 	end 'k'
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:7:3: Unsupported: returning a borrowed `int` value — a struct/union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b
+```exitcode
+3
 ```
 
 <!-- test: error.static-method-on-a-union -->

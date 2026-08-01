@@ -1,4 +1,4 @@
-// Test: ternary-expression.ownership.borrowed-arm-selected
+// Test: match-borrowed-aggregate-give-co-owned
 typealias Id = int(0 to 1000)
 
 union Kind
@@ -21,6 +21,13 @@ function remapKind(k Kind) returns Kind
 	end 'r'
 end 'remapKind'
 
+function chooseKind(e Entry, sel Id) returns Kind
+	return match sel 'c'
+		0 gives e.kind
+		default gives remapKind(e.kind)
+	end 'c'
+end 'chooseKind'
+
 function record(k Kind) returns Id
 	return match k 'r'
 		none gives 0
@@ -30,9 +37,7 @@ end 'record'
 
 function main() returns ExitCode
 	let e = Entry.create(Kind.value(3))
-	let identity = true
-	// `e.kind` is BORROWED; `remapKind(e.kind)` is FRESHLY OWNED.
-	let n = record(e.kind if identity else remapKind(e.kind))
+	let n = record(chooseKind(e, sel: 0))
 	print("{n}")
 	return 0
 end 'main'
@@ -103,6 +108,43 @@ func @remapKind {
   matchdead:
 }
 
+func @chooseKind {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchdefault
+  matcharm:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __mm_retain
+    x64.jmp matchcont
+  matchdefault:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect remapKind
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
 func @record {
   entry:
     x64.pushReg rbp
@@ -131,7 +173,7 @@ func @record {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -164,21 +206,10 @@ func @main {
     x64.movRegReg rcx, r8
     x64.callDirect Entry.create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, ternarytrue
-    x64.jmp ternaryfalse
-  ternarytrue:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect __mm_retain
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect chooseKind
     x64.movRegReg r12, r8
-    x64.jmp matchcont
-  ternaryfalse:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect remapKind
-    x64.movRegReg r12, r8
-    x64.jmp matchcont
-  matchcont:
     x64.movRegReg rcx, r12
     x64.callDirect record
     x64.movRegReg r13, r8

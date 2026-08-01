@@ -798,3 +798,48 @@ end 'main'
 ```maxoncstderr
 error E3102: <fragment>:4:14: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
 ```
+
+<!-- test: returned-tuple-copies-only-when-trivial -->
+⭐ **THE TWO HALVES OF `return t` ON A TUPLE PARAMETER, PINNED SIDE BY SIDE, BECAUSE THEY DIFFER (S5).** A
+TRIVIAL tuple gets its own record — the caller's `a` keeps its `2` after the returned `b` is written — and
+that is what a tuple is for. A MANAGED-element tuple gets an `__mm_retain` instead, because a shallow copy
+would leave two records pointing at one `String` and free it twice, so writing through the returned `n` shows
+on `m`. The split is a soundness one, not a taste one, and **the value oracle answers exactly the same on
+both halves** (measured: `a.1=2 b.1=99 m.1=99 n.1=99`). The managed half was REFUSED before S5, which is why
+this case exists: opening the borrowed-aggregate return opened it for a tuple too, and an unpinned share is
+the kind of thing that becomes a wrong answer without a test noticing.
+
+⚠ The exit code deliberately adds 7. `a.1 + m.1` alone is `2 + 99` = **101**, which is the runtime's
+LEAK-DETECTED exit code — a spec whose correct answer collides with the failure marker cannot tell the two
+apart, and this one nearly did.
+```maxon
+
+typealias Num = int(i64.min to i64.max)
+
+function echoTrivial(t (Num, Num)) returns (Num, Num)
+	return t
+end 'echoTrivial'
+
+function echoManaged(t (String, Num)) returns (String, Num)
+	return t
+end 'echoManaged'
+
+function main() returns ExitCode
+	var a = (1, 2)
+	var b = echoTrivial(a)
+	b.1 = 99
+
+	var m = ("a heap allocated tuple element", 3)
+	var n = echoManaged(m)
+	n.1 = 99
+
+	print("trivial a.1={a.1} b.1={b.1} managed m.1={m.1} n.1={n.1}")
+	return (a.1 + m.1 + 7) as ExitCode
+end 'main'
+```
+```stdout
+trivial a.1=2 b.1=99 managed m.1=99 n.1=99
+```
+```exitcode
+108
+```

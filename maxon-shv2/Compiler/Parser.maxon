@@ -4403,6 +4403,54 @@ enum ErrorExitDoor
 	throwStatement
 end 'ErrorExitDoor'
 
+// ⭐ **WHICH DOOR MADE A BORROWED MANAGED VALUE OWNED (S5).** `promoteBorrowedToOwned` is reached from four
+// places, and they share every rule EXCEPT one sentence: the immutable-global refusal has to name the door it
+// was reached through, or it describes a `var` binding that the program does not contain. It carries a door
+// rather than a noun `String` for `FunctionTypeDoor`'s MEASURED reason: a `String` threaded into a guard that
+// almost never fires costs one allocation per promotion, and the promotion path runs for every borrowed
+// String a program returns. `borrowLaunderRefusal` renders the words only where the diagnostic is built.
+enum BorrowLaunderDoor
+	// `var q = p` / `q = p2` — the binding becomes a second owner in THIS frame.
+	binding
+	// `return p` — the value escapes to the caller, which adopts it as owned.
+	returned
+	// A value merged into a result phi the consumer drops once: a `match`/ternary arm (`promoteBorrowedGive`)
+	// or a `try … otherwise <expr>` fallback (`finishValueTry`). ONE arm, because the two are one question —
+	// the phi does not know which construct minted it and drops its value exactly once either way.
+	merged
+end 'BorrowLaunderDoor'
+
+// What the author WROTE, per door — the only part of the immutable-global refusal that differs between
+// them, and the part a reader matches against their own source line. The clause is a phrase, not a
+// sentence: `borrowLaunderRefusal` builds the one sentence around it, so the shared reasoning is written
+// exactly once and a fourth door cannot restate it slightly differently.
+function borrowLaunderDoorClause(door BorrowLaunderDoor) returns String
+	return match door 'which'
+		binding gives "binding a `let`-declared top-level global to a `var`"
+		returned gives "returning a read of a `let`-declared top-level global"
+		merged gives "merging a read of a `let`-declared top-level global into an OWNED result"
+	end 'which'
+end 'borrowLaunderDoorClause'
+
+// The NOUN each door gives the value that would end up aliasing the global — "the binding", "the returned
+// value", "the merged value". Split from the clause above because the sentence names the value TWICE and
+// the two mentions must agree; deriving both from one door means they cannot drift apart.
+function borrowLaunderValueNoun(door BorrowLaunderDoor) returns String
+	return match door 'which'
+		binding gives "the binding"
+		returned gives "the returned value"
+		merged gives "the merged value"
+	end 'which'
+end 'borrowLaunderValueNoun'
+
+// The whole sentence for laundering a `let`-declared top-level global's record into an owned aggregate.
+// ⚠ The `binding` door's rendering is BYTE-IDENTICAL to the message that shipped before there were doors,
+// because four committed goldens pin it: a door that changes what the author sees would be this rung
+// charging its own churn to a rule it did not change.
+function borrowLaunderRefusal(door BorrowLaunderDoor) returns String
+	return "{borrowLaunderDoorClause(door)} — an aggregate has no owning COPY in shv2, so {borrowLaunderValueNoun(door)} would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`"
+end 'borrowLaunderRefusal'
+
 // The sentence for an error type leaving a function that declares no `throws` at all. Each door names the
 // remedy its author can actually reach for: the `try` door can convert the error with an `otherwise`, the
 // `throw` door has no such move and can only declare the clause.
@@ -11087,13 +11135,17 @@ export type Parser
 	// Is `value` a managed heap AGGREGATE — a struct box or a boxed union — but NOT a String? An aggregate
 	// has no cheap owning COPY (unlike a String, which promotes with the fused-record blit
 	// `promoteToOwnedString`), so a borrowed one becomes owned only by CO-OWNERSHIP — an `__mm_retain`
-	// incref of the shared box (`retainBorrowedAggregate`, OPEN #40). That is wired for a `var q = p`
-	// binding, whose scope-exit drop decrefs the co-owned box so the caller stays an owner. It is NOT yet
-	// wired for the two HANDOFF sites that name this predicate — `return <borrowed aggregate>`
+	// incref of the shared box (`retainBorrowedAggregate`, OPEN #40).
+	//
+	// ⭐ **ALL THREE DOORS NOW SPEND IT (S5), and the two that did not were held back by a wrong premise.**
+	// The `var q = p` binding always did. The two HAND-OFF sites — `return <borrowed aggregate>`
 	// (`emitOwnedValueReturn`) and a borrowed-aggregate `gives`/ternary arm merged into an owned result phi
-	// (`promoteBorrowedGive`) — where the value ESCAPES to the caller: co-owning across that boundary needs
-	// the cross-call consume (P1.5), so until then both cleanly REFUSE rather than hand off a box whose own
-	// owner would free it too (a double free).
+	// (`promoteBorrowedGive`) — refused, on the reasoning that co-owning ACROSS a call boundary needed the
+	// cross-call consume. It does not, and the refcount is what makes the difference: the callee increfs
+	// before the `ret`, the caller adopts and decrefs once, and the borrow's own owner never notices — the
+	// same balance the in-frame binding gets, with the two halves in different frames. What genuinely needs
+	// the cross-call consume is a MOVE, where the source must be poisoned so exactly one owner remains
+	// (`moveManagedValueInto`, still a clean refusal for a borrowed aggregate).
 	function valueIsNonTextAggregate(value ValueId) returns bool
 		let tag = self.tagOf(value)
 		// A generic INSTANCE (`Sizer with bool`, P1.6-B1) is a heap box exactly like a plain `structRef`: a
@@ -11736,7 +11788,7 @@ export type Parser
 		var boundValue = value
 		var boundBareLocal = rhsWasBareLocal
 		if mutable and self.valueIsManagedHeap(value) and not self.valueIsOwnedHeap(value) 'promoteBorrowedBinding'
-			boundValue = try self.promoteBorrowedToOwned(value, range: SourceRange.ofToken(nameTok))
+			boundValue = try self.promoteBorrowedToOwned(value, door: BorrowLaunderDoor.binding, range: SourceRange.ofToken(nameTok))
 			boundBareLocal = false
 		end 'promoteBorrowedBinding'
 
@@ -12322,7 +12374,7 @@ export type Parser
 		var newValue = value
 		var newIsOwned = self.valueIsOwnedHeap(value)
 		if inOwnedSet and not newIsOwned 'promoteBorrowed'
-			newValue = try self.promoteBorrowedToOwned(value, range: SourceRange.ofToken(nameTok))
+			newValue = try self.promoteBorrowedToOwned(value, door: BorrowLaunderDoor.binding, range: SourceRange.ofToken(nameTok))
 			newIsOwned = true
 		end 'promoteBorrowed'
 
@@ -13111,37 +13163,51 @@ export type Parser
 	//     `ownedBindings` OUTLIVES the `return` and the returned binding may sit in an enclosing block with
 	//     other LIVE exit edges whose drops are emitted LATER in the parse and still own it.
 	//
-	// **A RETURNED STRUCT / BOXED UNION MUST BE OWNED — a BORROWED one is refused, not miscompiled.** An
-	// OWNED box carries the provenance bit and is moved out, so exactly one owner drops it. A BORROWED
-	// aggregate (a struct/union parameter, or a re-borrow of one) has an owner ELSEWHERE, so handing the box
-	// back as owned makes two owners free one box: a double free. Consuming or copying a borrowed aggregate
-	// to return it is the cross-call CONSUME half deferred to P1.4b; until then it is a clean reject. A
-	// String is PROMOTED above; a scalar or payload-free enum carries no box and is always fine.
+	// ⭐⭐ **A RETURNED STRUCT / BOXED UNION MUST BE OWNED, AND A BORROWED ONE IS CO-OWNED RATHER THAN REFUSED
+	// (S5).** An OWNED box carries the provenance bit and is moved out, so exactly one owner drops it. A
+	// BORROWED aggregate — `return self`, a struct/union parameter, a re-borrow, a struct-typed field read —
+	// has an owner ELSEWHERE, and handing the box back untouched would make two owners free one box. It is
+	// therefore INCREF'd on the way out, through the one `promoteBorrowedToOwned` door a `var q = p` binding
+	// already uses: the caller adopts a real second reference and decrefs it once, the borrow's own owner is
+	// untouched, and the box is freed exactly once on every path.
+	//
+	// This used to be a clean REJECT whose sentence deferred the fix to "P1.4b" — a milestone that had long
+	// since shipped, and a mechanism (`__mm_retain`, OPEN #40) that was already in the tree and already wired
+	// to the binding door. The refusal cost `stdlib/FilePath.maxon` its two `return self` sites, which is the
+	// whole of what stood between that module and compiling.
+	//
+	// A String is COPIED rather than increfed (value semantics) and a trivial TUPLE gets its own record, both
+	// through the same door; a scalar or payload-free enum carries no box and is always fine.
 	//
 	// **THE DROPS GO AFTER THE VALUE, BEFORE THE TERMINATOR.** AFTER the value, because `return p.x + p.y`
 	// READS the box; dropping first would free the memory the loads are about to read. BEFORE the
 	// terminator, because a `ret` ENDS the block. `returned` is already in a register by then.
 	function emitOwnedValueReturn(retVal ValueId, anchor Token) throws ParseError
-		let retTag = self.tagOf(retVal)
 		var returned = retVal
-		if tagIsByteRecord(retTag) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
-			returned = self.promoteToOwnedString(returned, range: SourceRange.ofToken(anchor))
-		end 'promoteBorrowed'
 
-		// ⭐ **A BORROWED TUPLE IS COPIED, exactly as a borrowed String is PROMOTED one branch up (P1.10).** The
-		// caller adopts and frees whatever a `returns (…)` hands back, so `return t` on a tuple PARAMETER must
-		// give it a record of its own — and a tuple, unlike a struct, may simply be copied (see
-		// `moveManagedValueInto` for why, and for why the copy is limited to a trivial-element tuple). Without
-		// it, `function echo(t (Num, Num)) returns (Num, Num) return t end` is the borrowed-aggregate reject
-		// below, on a program that is not merely legal but is what a tuple is FOR.
+		// ⭐ **A BORROWED TUPLE IS COPIED, and it is asked FIRST because a tuple is a `structRef` and the
+		// shared door below would INCREF it instead (P1.10).** The caller adopts and frees whatever a
+		// `returns (…)` hands back, so `return t` on a tuple PARAMETER must give it a record of its own — and
+		// a TRIVIAL tuple, unlike a struct, may simply be copied — the only way to obtain one is the expression
+		// that produced it, so within the set this branch admits there is no prior identity to break (see
+		// `moveManagedValueInto` for the full argument). Without it,
+		// `function echo(t (Num, Num)) returns (Num, Num) return t end` would share one record where a tuple's
+		// whole point is that it does not.
+		//
+		// ⚠ **A MANAGED-ELEMENT tuple is NOT admitted here and therefore SHARES, which is the oracle's answer
+		// too** — measured on both compilers: writing through a returned `(String, Num)` shows on the source
+		// (`a.1=99 b.1=99`), while the trivial spelling one line over does not (`a.1=3 b.1=99`). So the split
+		// is not "tuples have no identity" — a managed one demonstrably does — it is that a shallow copy of a
+		// managed element would free one String twice, and the incref is the sound answer available today.
 		if self.valueIsCopyableTuple(returned) and not self.valueIsOwnedHeap(returned) 'copyBorrowedTuple'
 			returned = self.copyTupleValue(returned, range: SourceRange.ofToken(anchor))
 		end 'copyBorrowedTuple'
 
-		let returnedTag = self.tagOf(returned)
-		if self.valueIsNonTextAggregate(returned) and not self.valueIsOwnedHeap(returned) 'borrowedAggregateReturn'
-			throw ParseError.unsupported("returning a borrowed `{typeTagName(returnedTag)}` value — a struct/union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b", line: anchor.line, column: anchor.column)
-		end 'borrowedAggregateReturn'
+		// The ONE promotion door (see the header): a borrowed String COPIES, a borrowed struct/union/instance
+		// INCREFS. An already-owned value and a scalar pass straight through.
+		if self.valueIsManagedHeap(returned) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
+			returned = try self.promoteBorrowedToOwned(returned, door: BorrowLaunderDoor.returned, range: SourceRange.ofToken(anchor))
+		end 'promoteBorrowed'
 
 		// ⭐ **REJECT RETURNING AN OWNED OPAQUE type-parameter value (P1.7 slice 3b-vi-a).** `pop`/`remove` on an
 		// opaque `Array with <type parameter>` field now hand back an OWNED `typeParameter` element, dropped in
@@ -13899,19 +13965,27 @@ export type Parser
 		// ⭐ **A MANAGED RESULT PHI IS OWNED — reconcile both edges to owned before wiring them in.** When the
 		// try-result owns heap, the phi is the sole owner of whichever value reaches the merge and is dropped
 		// once at its scope exit, so each edge's contribution must transfer ONE owned reference IN: the ok
-		// `result` was already pulled off the entry drop set (`desugarTry`), and the err `otherwiseValue` — an
-		// owned call result, a borrowed String literal PROMOTED to an owned copy in `errEnd` (currentBlock
-		// here), or a live owned BINDING aliased into the merge — is reconciled by `transferFallbackToPhi`
-		// (move a temp, incref a binding). `parseUnboundOtherwiseForm` already refused a fallback that could not
-		// become an owned managed value of the result's type. A SCALAR result keeps the borrowed phi the Wave-1
-		// path built — nothing is owned, nothing is dropped.
+		// `result` was already pulled off the entry drop set (`desugarTry`), and the err `otherwiseValue` is
+		// reconciled here. `parseUnboundOtherwiseForm` already refused a fallback whose TYPE could not merge.
+		// A SCALAR result keeps the borrowed phi the Wave-1 path built — nothing is owned, nothing is dropped.
+		//
+		// ⭐ **THE TWO KINDS OF FALLBACK ARE RECONCILED BY DIFFERENT DOORS, AND THE SPLIT IS WHAT KEEPS THE
+		// COUNT AT ONE (S5).** A BORROWED fallback goes through the shared `promoteBorrowedToOwned` — a String
+		// copies, a struct/union increfs — which mints the phi's one reference outright; it is de-listed from
+		// the statement's pending temps at once, exactly as `promoteBorrowedGive` does for the merge this is
+		// the twin of. An ALREADY-OWNED fallback has an existing owner to settle with instead, which is
+		// `transferFallbackToPhi`'s job (move a temp, incref a live binding). Running BOTH on a promoted value
+		// would count it twice: the retain mints a fresh SSA name that is no pending temp, so
+		// `transferFallbackToPhi` would incref a second time and leak it.
 		var errEdgeValue = otherwiseValue
 		var phiOwned = false
 		if self.valueIsOwnedHeap(result) 'managedResultPhi'
 			if not self.valueIsOwnedHeap(otherwiseValue) 'promoteBorrowedFallback'
-				errEdgeValue = self.promoteToOwnedString(otherwiseValue, range: SourceRange.ofToken(tryTok))
-			end 'promoteBorrowedFallback'
-			self.transferFallbackToPhi(errEdgeValue, tryTok: tryTok)
+				errEdgeValue = try self.promoteBorrowedToOwned(otherwiseValue, door: BorrowLaunderDoor.merged, range: SourceRange.ofToken(tryTok))
+				self.removeFromPendingTemps(errEdgeValue)
+			end 'promoteBorrowedFallback' else 'ownedFallback'
+				self.transferFallbackToPhi(errEdgeValue, tryTok: tryTok)
+			end 'ownedFallback'
 			phiOwned = true
 		end 'managedResultPhi' else 'borrowResult'
 			// ⭐ **A BORROW try-result merged with an OWNED fallback** (`try arr.get(i) otherwise Item.create(…)`,
@@ -14164,24 +14238,20 @@ export type Parser
 
 		// ⭐ **A MANAGED try-result and its `otherwise` fallback merge through an OWNED result phi**
 		// (`finishValueTry`), dropped once at its scope exit — so both edges must contribute an OWNED value
-		// of the SAME managed type. Two ways that can be violated, both a wild free at the phi's drop, so
-		// both are refused HERE where the fallback's type is in hand (and regardless of `resultUsed`: the
-		// phi is dropped on the discard path too):
-		//   • a TAG MISMATCH — a `String` result with an `int` fallback — whose phi drop would decref an
-		//     integer as a String pointer.
-		//   • a BORROWED AGGREGATE fallback — a struct/union parameter (or a re-borrow) — which cannot
-		//     transfer into the phi because its own owner keeps a live reference: dropping the phi on the
-		//     fallback edge would double-free it. This is the same refusal `parseReturnStatement` makes for a
-		//     borrowed aggregate return; a borrowed String LITERAL is the one exception, promoted to an owned
-		//     copy at the merge (`finishValueTry`).
-		if self.valueIsOwnedHeap(result) 'managedOtherwise'
-			if self.tagOf(otherwiseValue) != self.tagOf(result) 'managedOtherwiseTypeMismatch'
-				throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
-			end 'managedOtherwiseTypeMismatch'
-			if not self.valueIsOwnedHeap(otherwiseValue) and not tagIsByteRecord(self.tagOf(otherwiseValue)) 'borrowedAggregateOtherwise'
-				throw ParseError.unsupported("an `otherwise` fallback that is a borrowed struct/union value — it merges with the try's owned result through a phi dropped exactly once, and a borrowed aggregate's own owner keeps a live reference, so dropping the merged value would free it twice. Return an OWNED value (a fresh factory call), or catch the error in an `otherwise (e) 'label' … end` block; consuming a borrowed aggregate arrives with cross-call consume", line: tryTok.line, column: tryTok.column)
-			end 'borrowedAggregateOtherwise'
-		end 'managedOtherwise'
+		// of the SAME managed type. The TAG must therefore agree: a `String` result with an `int` fallback
+		// would have the phi's drop decref an integer as a String pointer, a wild free. Refused HERE, where
+		// the fallback's type is in hand, and regardless of `resultUsed` (the phi is dropped on the discard
+		// path too).
+		//
+		// ⭐ **A BORROWED fallback is PROMOTED at the merge, not refused (S5).** It used to be a second
+		// refusal here, worded *"consuming a borrowed aggregate arrives with cross-call consume"* — the same
+		// premise `emitOwnedValueReturn` and `promoteBorrowedGive` were refusing on, and the same one that
+		// was false: a borrowed String COPIES and a borrowed struct/union INCREFS, either way giving the phi
+		// one owned reference of its own (`finishValueTry` → `promoteBorrowedToOwned`). The value oracle runs
+		// the program this refused (`try risky() otherwise <borrowed Item param>`, exit 12).
+		if self.valueIsOwnedHeap(result) and self.tagOf(otherwiseValue) != self.tagOf(result) 'managedOtherwiseTypeMismatch'
+			throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
+		end 'managedOtherwiseTypeMismatch'
 
 		return TryHandler.value(otherwiseValue)
 	end 'parseUnboundOtherwiseForm'
@@ -15213,15 +15283,24 @@ export type Parser
 		return retained
 	end 'retainBorrowedAggregate'
 
-	// ⭐ **MAKE A BORROWED MANAGED VALUE OWNED — the ONE `String`-copy-vs-aggregate-retain decision both a
-	// DECLARATION (`var q = p`) and a REASSIGNMENT (`q = p2`) of an owned binding must make.** A borrowed
-	// value cannot be enrolled as owned as-is: its owner is elsewhere, so a scope-exit drop would free the
-	// caller's box a second time. So it is promoted — a String COPIES into a fresh owned record (value
-	// semantics), a struct/union INCREFS the shared box (reference semantics: an aggregate has no cheap
-	// owning copy and its alias is observable through a field write). The caller has already established
-	// that `value` is a BORROWED managed heap value (`valueIsManagedHeap and not valueIsOwnedHeap`), so the
-	// two arms are exhaustive and a scalar — which owns no heap and never reaches an owned binding — is a
-	// parser invariant break, not an unhandled case.
+	// ⭐ **MAKE A BORROWED MANAGED VALUE OWNED — the ONE `String`-copy-vs-aggregate-retain decision every site
+	// that needs an owned value out of a borrowed one must make.** A borrowed value cannot be enrolled as
+	// owned as-is: its owner is elsewhere, so a scope-exit drop would free the caller's box a second time. So
+	// it is promoted — a String COPIES into a fresh owned record (value semantics), a struct/union INCREFS the
+	// shared box (reference semantics: an aggregate has no cheap owning copy and its alias is observable
+	// through a field write). The caller has already established that `value` is a BORROWED managed heap value
+	// (`valueIsManagedHeap and not valueIsOwnedHeap`), so the two arms are exhaustive and a scalar — which owns
+	// no heap and never reaches an owned binding — is a parser invariant break, not an unhandled case.
+	//
+	// ⭐⭐ **THREE DOORS, NOT TWO (S5).** A DECLARATION (`var q = p`) and a REASSIGNMENT (`q = p2`) were the
+	// first two; a HAND-OFF is the third — a `return` (`emitOwnedValueReturn`) and a match/ternary arm merged
+	// into an owned result phi (`promoteBorrowedGive`), which both used to REFUSE a borrowed aggregate outright
+	// on the reasoning that co-owning across a call boundary needed the cross-call consume. It does not: the
+	// callee increfs, the caller adopts and decrefs once, and the borrow's own owner is untouched — the
+	// refcount is balanced on every path, which is exactly what this incref already buys inside one frame. The
+	// value oracle settles the SEMANTICS the incref implies (measured: a `return self` whose result is written
+	// through shows the write on the receiver — `p.x=5 q.x=5`), and v1 emits the same `__mm_incref` before the
+	// `ret` for the same programs (`InsertRefcounts.planReturnIncrefs`).
 	//
 	// ⚠ Single-sourced BECAUSE the two callers straddle a boundary that let them drift: before this, the
 	// reassignment path spelled only the String half (`promoteToOwnedString`) and, once the declaration
@@ -15231,7 +15310,7 @@ export type Parser
 	// here makes a future divergence a compile error rather than a wrong answer.
 	//
 	// ⚠⚠ **AN AGGREGATE READ OUT OF AN IMMUTABLE GLOBAL IS REFUSED HERE (P1.7 slice 2b), and this is the ONE
-	// place that can refuse it.** The aggregate arm promotes by INCREF — the binding becomes a second owner of
+	// place that can refuse it.** The aggregate arm promotes by INCREF — the owner becomes a second owner of
 	// the SAME box, deliberately, because the alias is observable — so a mutable binding of a value read from
 	// a `let`-declared global would be a writable alias of a record the language says is immutable:
 	// `var b = A` then `b.push(9)` grows A, with E2013 and E3019 both intact and nothing to say so (MEASURED
@@ -15246,7 +15325,7 @@ export type Parser
 	// (measured: the oracle returns 3 for a `var` global and for a parameter, exactly as shv2 does), so
 	// copying would break an agreement rather than fix a disagreement. Immutability of the SOURCE is the
 	// whole discriminator.
-	function promoteBorrowedToOwned(value ValueId, range SourceRange) returns ValueId throws ParseError
+	function promoteBorrowedToOwned(value ValueId, door BorrowLaunderDoor, range SourceRange) returns ValueId throws ParseError
 		if tagIsByteRecord(self.tagOf(value)) 'byteRecord'
 			return self.promoteToOwnedString(value, range: range)
 		end 'byteRecord'
@@ -15265,7 +15344,7 @@ export type Parser
 			// `specs-shv2/static-variables.md` as part of the mutation-enforcement prerequisite, so the gap
 			// is documented where a reader of the rule will look rather than discovered by a user.
 			if self.immutableGlobalReads.contains(value) 'immutableSource'
-				throw ParseError.unsupported("binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`", line: range.line, column: range.column)
+				throw ParseError.unsupported(borrowLaunderRefusal(door), line: range.line, column: range.column)
 			end 'immutableSource'
 
 			return self.retainBorrowedAggregate(value, range: range)
@@ -18815,13 +18894,18 @@ export type Parser
 	// Carry the immutable-global-read mark from a merge's arms onto its result phi (P1.7 slice 2b) — see the
 	// call site in `finalizeMatchMerge` for why the phi must inherit it at all.
 	//
-	// It reads the FINAL gives (post-`resolveGivesOwnership`), which is the set of values the phi genuinely
-	// joins. On today's rules that is the same set as the raw gives whenever a mark can be present at all: a
-	// marked value is a borrowed non-text AGGREGATE (only an ARRAY binding is both stored and immutable — a
-	// `let` String has no slot to read), and `promoteBorrowedGive` REFUSES a borrowed aggregate rather than
-	// promoting one, so an owned phi cannot have a marked arm. Reading the finals anyway keeps this true if
-	// that ever gains a real aggregate copy: the copy's fresh record is what the phi would then hold, and a
-	// fresh record is correctly unmarked.
+	// ⭐ **IT READS THE FINAL GIVES (post-`resolveGivesOwnership`) — the values the phi genuinely joins — AND
+	// SINCE S5 THAT IS LOAD-BEARING RATHER THAN MERELY TIDY.** A marked value is a borrowed non-text AGGREGATE
+	// (only an ARRAY binding is both stored and immutable — a `let` String has no slot to read). The previous
+	// argument was that such an arm could never reach an owned phi at all, because `promoteBorrowedGive`
+	// REFUSED a borrowed aggregate; it now PROMOTES one, so that argument is gone and this one replaces it:
+	// a marked arm feeding an owned phi is refused INSIDE the promotion, at the `merged` door
+	// (`promoteBorrowedToOwned`), before a final give exists — so an owned phi still cannot have a marked arm,
+	// and a phi that survives to be marked here is one every arm of which was already borrowed.
+	//
+	// ⚠ A promotion that COPIES (a String, a trivial tuple) yields a fresh record which is correctly unmarked;
+	// one that INCREFS yields the SAME record, which is exactly why the marked case must be refused rather
+	// than promoted — an incref would launder the mark by minting an unmarked name for the same box.
 	function propagateImmutableGlobalReadToPhi(phi ValueId, gives ValueIdArray)
 		for give in gives 'eachGive'
 			if self.immutableGlobalReads.contains(give) 'markedArm'
@@ -18859,18 +18943,19 @@ export type Parser
 	end 'resolveGivesOwnership'
 
 	// Make a BORROWED `gives` value owned so a match/conditional whose OTHER arms give owned values has a
-	// uniformly-owned result phi its consumer can drop unconditionally. A borrowed STRING is copied — the
-	// SAME fused-record blit a borrowed `return`/`var` makes (`promoteToOwnedString`), emitted into the
-	// arm's still-unterminated exit block; it is a fresh owned temp the arm hands straight to the phi, so it
-	// leaves the pending list at once.
+	// uniformly-owned result phi its consumer can drop unconditionally. It is the second HAND-OFF door onto
+	// the shared `promoteBorrowedToOwned`, the `return`'s twin: a borrowed STRING is copied (the fused-record
+	// blit), a borrowed non-text AGGREGATE is INCREF'd, and either way the arm hands the phi a value it really
+	// owns. The promotion is emitted into the arm's still-unterminated exit block and de-listed from the
+	// statement's pending temps at once — the phi owns it now, and a statement-end drop would free a record
+	// the merged result still holds.
 	//
-	// A borrowed non-text AGGREGATE (a struct box or a boxed union — a field read, or a re-borrowed param)
-	// has NO cheap promotion: shv2 has neither `__mm_incref` nor an aggregate deep-copy, exactly the
-	// boundary that already E2015-refuses `return <borrowed aggregate>` (`emitOwnedValueReturn`). Left
-	// unpromoted it would hand the owned phi a box it does not own, and the phi's single drop double-frees
-	// the box the borrow's real owner also frees — a leak/UAF (OPEN #14, reachable via a `match … gives`
-	// arm AND a ternary arm alike). So it is REFUSED here (E2015), not returned unpromoted: every program
-	// this rejects currently leaks (exit 101), so the refusal cannot break a passing one.
+	// ⚠ **THE AGGREGATE ARM USED TO BE A REFUSAL WHOSE STATED REASON WAS FALSE (S5):** *"shv2 has neither
+	// `__mm_incref` nor an aggregate deep-copy"*. It had both — `__mm_retain` since OPEN #40 (wired to the
+	// `var q = p` door one screen up) and the `__clone_<T>` cascade since P1.7 slice 3b-vi-b. Left unpromoted
+	// a borrowed give really would hand the owned phi a box it does not own (OPEN #14, a leak/UAF reachable
+	// through a `match … gives` arm AND a ternary arm alike); the incref is what makes it owned, so the phi's
+	// single drop balances against a real second reference instead of the borrow's owner's one.
 	//
 	// An UNRESOLVED give reaches here too, and is DEFERRED, not refused: a give whose type could not be
 	// pinned at parse is a call NO file declares (`mintCallResult` defers rather than throwing), and
@@ -18882,23 +18967,14 @@ export type Parser
 	// so it is a parser invariant break.
 	function promoteBorrowedGive(give ValueId, arm MatchArmExit, matchTok Token) returns ValueId throws ParseError
 		let giveTag = self.tagOf(give)
-		if tagIsByteRecord(giveTag) 'byteRecord'
+		if self.valueIsManagedHeap(give) 'managed'
 			let saved = self.currentBlock
 			self.currentBlock = arm.exitBlock
-			let owned = self.promoteToOwnedString(give, range: SourceRange.ofToken(matchTok))
+			let owned = try self.promoteBorrowedToOwned(give, door: BorrowLaunderDoor.merged, range: SourceRange.ofToken(matchTok))
 			self.removeFromPendingTemps(owned)
 			self.currentBlock = saved
 			return owned
-		end 'byteRecord'
-
-		if self.valueIsNonTextAggregate(give) 'borrowedAggregate'
-			// `named` is the boxed-union tag whose `typeTagName` reads as a bare `int` (it is erased to one
-			// later), so the aggregate's real name comes from the registry via `aggregateNameOf` — the same
-			// column `checkGiveTypes` names a give by. Non-empty for both throwing shapes (a struct's name, a
-			// registered union's name), so the interpolation always names the declared aggregate.
-			let aggregateName = self.aggregateNameOf(giveTag, nameId: self.valueNameId(give))
-			throw ParseError.unsupported("a match or conditional arm that gives a borrowed `{String.from(aggregateName)}` value while another arm gives an OWNED one — the merged result would adopt and free the borrowed struct/union box while the borrow's own owner frees it too, a double free. Give an OWNED value on every arm; consuming or copying a borrowed aggregate to give it arrives with cross-call consume", line: matchTok.line, column: matchTok.column)
-		end 'borrowedAggregate'
+		end 'managed'
 
 		if tagIsUnresolved(giveTag) 'deferredCallError'
 			return give
@@ -24583,37 +24659,31 @@ export type Parser
 	// for. A consume would have to be a SINK: a store of the RECEIVER into heap storage, or its
 	// passing to a callee that consumes it.
 	//
-	// ⚠ **THE SINK IS UNREACHABLE BECAUSE `self` IS NOT A VALUE — NOT BECAUSE FIELDS ARE SCALAR.**
-	// This comment claimed the latter ("this rung has scalar and float fields only, so there is
-	// nowhere to store it") and it is FALSE, measured: `var next as Node` inside `type Node` is a
-	// legal struct-typed field (`parseTypeReference` mints a `structRef` for the enclosing type's
-	// own name), and `function link(other Node) → next = other` compiles TODAY, to
-	// `storeBaseDispReg.word64 [rcx + 8], rdx`. Heap storage, holding a struct pointer, with no
-	// incref. The sink exists. What does not exist is a way to put THE RECEIVER in it:
-	// `parseSelfPrimary` refuses a bare `self` as a value, so `next = self` never parses. That
-	// refusal is the whole load-bearing mechanism, and it lives one function away — which is
-	// exactly why it is named here rather than left to be re-derived. The absence of an incref on
-	// the receiver is correct; the reason previously written down was not the reason.
+	// ⚠⚠ **THE SINK IS UNREACHABLE BECAUSE A BORROWED AGGREGATE CANNOT BE MOVED INTO ONE — NOT BECAUSE
+	// `self` IS NOT A VALUE, AND NOT BECAUSE FIELDS ARE SCALAR.** Both of those earlier answers were
+	// written here and both have since gone false, so what is left is the one that was always doing the
+	// work. `var next as Node` inside `type Node` is a legal struct-typed field, and `self` IS a value
+	// (S5) — so `next = self`, `bag.push(self)`, `Self{f: self}` and `Cell.create(self)` all PARSE now.
+	// Every one of them is refused where it belongs, by the rules keyed on BORROWED-ness rather than on
+	// the `self` keyword: a store into durable storage is `moveManagedValueInto`'s refusal, a consuming
+	// argument is `requireConsumableArg`'s. **`self` reaches them as parameter 0, exactly as `other Node`
+	// does** — which is why the same probe refuses `next = other`, and why an earlier note claiming that
+	// spelling *"compiles TODAY, to a heap store with no incref"* is no longer true either.
 	//
-	// ⚠ **AND THAT REFUSAL IS NOW A STRUCT'S ONLY (D1): AN `enum`/`union` RECEIVER *IS* A VALUE.** So the
-	// sentence above no longer covers every receiver, and what keeps a BOXED union's `self` from reaching a
-	// sink is not one refusal but the three the ordinary borrowed-aggregate rules already spend — measured,
-	// each by its own probe, in `specs-shv2/enum-union-method-receiver.md`: `return self` (and `let x = self`,
-	// and `match self … gives self`) hits the borrowed-RETURN refusal; `a.push(self)` and `Self{f: self}` hit
-	// "moving a borrowed struct/union value into durable storage"; `Cell.create(self)` hits "passing a
-	// borrowed struct/union value at a CONSUMING argument position". `self` is parameter 0, so every one of
-	// them reaches it as the ordinary parameter rule and not as an enum special case. **A rung that weakens
-	// any of those three re-opens this**, which is why they are named here rather than counted once.
+	// ⭐ **A HAND-OFF IS NOT A SINK, and that distinction is the whole of what S5 changed.** `return self`
+	// and a `gives self` arm hand the receiver to the CALLER, which adopts one reference and drops it; they
+	// are co-owned by an `__mm_retain` (`promoteBorrowedToOwned`) and the receiver's own owner is untouched.
+	// A SINK is durable storage that OUTLIVES the statement, where co-ownership is not enough because the
+	// language's answer there is a MOVE — one owner, source poisoned — and moving out of a borrow needs the
+	// transitive-consume fixpoint. **A rung that weakens either durable-storage refusal re-opens this**,
+	// which is why they are named here rather than counted once; the probes live in
+	// `specs-shv2/enum-union-method-receiver.md` and `specs-shv2/structs.md`.
 	//
-	// ⚠ **THE RUNG THAT MAKES THE SINK REPRESENTABLE MUST REVISIT THIS**, and it is the one that
-	// gives a field a struct or `String` type — a method that stores `self` into durable storage is
-	// real and the stdlib exercises it. It inherits TWO things, not one: this receiver-ownership
-	// question, and the `next = other` store above, which is a live un-increfed store that no
-	// analysis checks (`requireStructBase` refuses every path that could OBSERVE such a field, so
-	// nothing today can read the dangling pointer back out — that is containment, not a fix). v1
-	// does not assert "the receiver is borrowed" anywhere: it FALLS OUT of `__self` being param 0
-	// plus a structural per-param consume analysis (`ParamConsumeAnalysis.maxon:5-13`). shv2 will
-	// need that analysis at the moment a sink can be written, and not before.
+	// v1 does not assert "the receiver is borrowed" anywhere: it FALLS OUT of `__self` being param 0 plus a
+	// structural per-param consume analysis (`ParamConsumeAnalysis.maxon:5-13`), and it pays for the
+	// hand-off with the same incref shv2 now emits (`InsertRefcounts.planReturnIncrefs`, whose own comment
+	// names `FilePath.normalize` and `FilePath.resolve` as its drivers). shv2 will need that analysis at the
+	// moment a borrowed aggregate may be MOVED into a sink, and not before.
 	function parseMethodCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let baseTok = self.current()
 		if self.scope.contains(self.baseBindingName(baseTok)) 'localReceiver'
@@ -24901,10 +24971,12 @@ export type Parser
 	//
 	// ⭐ **THE RECEIVER IS BORROWED, exactly as a struct's is** (`parseMethodCall`'s header argues it in
 	// full). A payload-free enum's receiver is a bare i64 tag with no ownership at all; a BOXED union's is
-	// a pointer the caller's binding owns, so no incref is emitted here and no drop there — and the callee
-	// cannot leak it either, because `return self` from a boxed union hits the SAME borrowed-return refusal
-	// a `returns Container` on a `c Container` parameter does (measured: `self` IS parameter 0, so it is
-	// not a special case, it is the ordinary parameter rule reaching it).
+	// a pointer the caller's binding owns, so no incref is emitted HERE and no drop there. The callee cannot
+	// leak it either — and since S5 that is because `return self` from a boxed union takes the SAME
+	// hand-off PROMOTION a `returns Container` on a `c Container` parameter does, minting its own `__mm_retain`
+	// inside the callee (it used to be because both hit the same borrowed-return REFUSAL). Either way `self`
+	// IS parameter 0, so it is not a special case; it is the ordinary parameter rule reaching it, and the
+	// call site's own accounting is unchanged because the callee pays for whatever it hands back.
 	//
 	// The three facts it shares with the struct path — liveness, the E3019 blame name and the E3070 borrow
 	// subject — are asked through the same three functions, so an enum receiver and a struct receiver
@@ -29362,10 +29434,15 @@ export type Parser
 	// The `(` at +3 splits them, exactly as `parseDottedPrimary` splits `p.x` from `p.m(…)` — one
 	// lookahead, written the same way, because it is the same question about the same three tokens.
 	//
-	// A BARE `self` — not followed by a dot — is the receiver as a VALUE, which means returning or
-	// passing a struct. That is P1.4's ownership ruling (a struct crossing a call boundary), so it
-	// is a positioned `unsupported` naming the rung rather than a confusing parse failure. No
-	// corpus case needs it: `self-modify-and-return` returns `self.n`, the FIELD.
+	// ⭐ **A BARE `self` — not followed by a dot — IS THE RECEIVER AS A VALUE, AND IT IS ONE (S5).** It used
+	// to be a positioned `unsupported` claiming the receiver's type needed "the ownership ruling struct-typed
+	// parameters and returns are deferred to" — a ruling those had already had for rungs (`stdlib/FilePath`
+	// alone declares 13 signatures taking and returning `FilePath`, all of which compiled while `return self`
+	// did not). What was actually missing was nothing: the receiver is parameter 0, a BORROWED managed value
+	// of the enclosing type, so handing it back here does not create an ownership case — it stops hiding one,
+	// and every rule that already governs a borrowed struct/union parameter reaches it unchanged. The
+	// load-bearing one is the HAND-OFF promotion: `return self` and `f(self)` are the `return p` / `f(p)` of
+	// a `p Point` parameter, decided by `emitOwnedValueReturn` and the ordinary argument rules, in ONE place.
 	function parseSelfPrimary(func IrFunction) returns ValueId throws ParseError
 		let selfTok = self.current()
 
@@ -29382,21 +29459,14 @@ export type Parser
 		// spelling passes through. See that function.
 		let receiver = try self.requireReceiverValue(selfTok)
 
+		// ⭐ **ONE ARM FOR EVERY RECEIVER KIND, and the two used to be split for a reason that was never real
+		// (D1 opened the enum half, S5 closed the struct half).** An enum's `self` is its i64 TAG or a pointer
+		// to its box; a struct's is a pointer to its box; a generic instance's is a pointer to its box — and
+		// each is exactly what a PARAMETER of that type holds, which `self` is. So there is nothing here to
+		// decide: the value goes back, and whichever rule governs a borrowed value of that type governs it.
 		if self.peekKind() != TokenKind.dot 'bareSelf'
-			// ⭐ **AN `enum`/`union` RECEIVER IS AN ORDINARY VALUE, AND `match self` NEEDS NO EXEMPTION TO SAY
-			// SO (D1).** The refusal below is about a STRUCT: a struct receiver is a heap box whose ownership
-			// across a call boundary is an unmade ruling. An enum's `self` is its i64 TAG (payload-free) or a
-			// pointer to its box, which is exactly what an `enum`-typed PARAMETER holds — and `self` IS
-			// parameter 0 — so handing it back here does not create a case, it stops hiding one. Every rule
-			// that governs a borrowed enum parameter then reaches it unchanged, the load-bearing one being the
-			// borrowed-RETURN refusal: `return self` from a boxed union is refused by the same check that
-			// refuses `return c` from a `c Container` parameter, so no borrowed box escapes as an owned one.
-			if self.enclosingTypeIsEnum 'enumReceiverIsAValue'
-				self.advance()
-				return receiver
-			end 'enumReceiverIsAValue'
-
-			throw ParseError.unsupported("'{selfTok.kind.rawValue}' as a value (a field can be read THROUGH the receiver — `self.x`, or a bare field name — but passing or returning the receiver itself hands a struct across a call boundary, which needs the ownership ruling struct-typed parameters and returns are deferred to)", line: selfTok.line, column: selfTok.column)
+			self.advance()
+			return receiver
 		end 'bareSelf'
 
 		if self.methodCallsAt(self.pos) 'methodCall'

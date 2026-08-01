@@ -608,26 +608,28 @@ still evaluated in its own branch — releases the reference it held when its sc
 ends. When one arm borrows a **String**, the borrow is promoted to an owned copy so
 the result is still uniformly owned.
 
-A borrowed **non-text aggregate** (a struct or a boxed union) has no such promotion:
-shv2 has neither `__mm_incref` nor an aggregate deep-copy — exactly the boundary that
-already refuses `return <borrowed aggregate>`. Merged into an owned result, the borrowed
-box would be freed by the result AND by the borrow's real owner: a double free, and a
-leak (exit 101) whenever the borrowed arm is the one taken. Because the parser cannot
-know which arm a runtime condition will pick, it refuses the construct outright (E2015),
-independently of the condition value — consuming or copying a borrowed aggregate across
-the merge arrives with cross-call consume (P1.5). See OPEN #14.
+A borrowed **non-text aggregate** (a struct or a boxed union) has no COPY promotion, and it
+does not need one: it is CO-OWNED instead, by an `__mm_retain` incref of the shared box —
+the same promotion a `var q = p` binding of a borrowed struct parameter gets, and the same
+one `return <borrowed aggregate>` gets. Left unpromoted the borrowed box really would be
+freed by the merged result AND by the borrow's real owner: a double free, and a leak
+(exit 101) whenever the borrowed arm is the one taken. The incref is what balances it —
+the result phi's single drop releases a real second reference — so the construct is
+CORRECT on either arm rather than refused on both, which is what the parser needs given
+that it cannot know which arm a runtime condition will pick. See OPEN #14, and S5 for why
+the refusal it originally shipped as was reasoning from a mechanism the tree already had.
 
-The owned-and-owned tests below exit `0` only when every allocation is freed (the
-runtime's leak check substitutes exit code `101` when any allocation is still live at
-exit); the borrowed-aggregate tests reject cleanly at parse.
+Every ownership test below exits `0` only when every allocation is freed (the runtime's
+leak check substitutes exit code `101` when any allocation is still live at exit), so the
+borrowed-arm cases pin the absence of the leak by RUNNING rather than by rejecting.
 
 <!-- test: ternary-expression.ownership.borrowed-arm-selected -->
-### A borrowed-aggregate arm merged with an owned arm is REFUSED (E2015), not leaked
+### A borrowed-aggregate arm merged with an owned arm is CO-OWNED, not leaked
 One arm gives a BORROWED boxed union (`e.kind`, a field read); the other gives an OWNED
-one (`remapKind(e.kind)`, a fresh call result). The merged result would be owned, so it
-would adopt and free the borrowed box while its real owner (`e`) frees it too — a double
-free, and a leak (exit 101) when the borrowed arm is taken. shv2 has no cheap copy for a
-borrowed aggregate, so the construct is refused at parse regardless of the condition.
+one (`remapKind(e.kind)`, a fresh call result). The merged result is owned, so the borrowed
+arm is increfed on its own edge: the result's drop releases that second reference and `e`
+still owns the box it always owned. Unpromoted this leaked (exit 101) with the borrowed arm
+taken, which is the run this case pins — the exit code is the assertion.
 ```maxon
 typealias Id = int(0 to 1000)
 
@@ -667,18 +669,22 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/fragments/ternary-expression/ternary-expression.ownership.borrowed-arm-selected.test:35:24: Unsupported: a match or conditional arm that gives a borrowed `Kind` value while another arm gives an OWNED one — the merged result would adopt and free the borrowed struct/union box while the borrow's own owner frees it too, a double free. Give an OWNED value on every arm; consuming or copying a borrowed aggregate to give it arrives with cross-call consume
+```exitcode
+0
+```
+```stdout
+3
 ```
 
 <!-- test: ternary-expression.ownership.owned-arm-selected -->
-### The SAME construct with the condition inverted is refused identically
-The only change from the case above is `identity = false`, which at runtime would take the
-OWNED arm and never touch the borrowed one. The refusal is a PARSE-time property of the
-construct, not of the runtime path: the parser cannot know the condition, so it refuses the
-borrowed-aggregate merge whichever arm the condition would pick. (The `identity = false` run
-did not leak — it was passing by dodging the unsound arm — so this pins that the fix does not
-depend on which arm wins.)
+### The SAME construct with the condition inverted is balanced identically
+The only change from the case above is `identity = false`, which at runtime takes the OWNED
+arm and never touches the borrowed one. The promotion is a PARSE-time property of the
+construct, not of the runtime path — the parser cannot know the condition, so it increfs the
+borrowed edge whichever arm the condition would pick — and the incref sits on that edge, so
+the untaken arm costs nothing. (This spelling never leaked even before the fix: it was passing
+by dodging the unsound arm. It is the CONTROL, and it must keep exiting `0` and printing the
+OWNED arm's answer, which is how a promotion wrongly hoisted out of the arm would show up.)
 ```maxon
 typealias Id = int(0 to 1000)
 
@@ -717,8 +723,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/fragments/ternary-expression/ternary-expression.ownership.owned-arm-selected.test:34:24: Unsupported: a match or conditional arm that gives a borrowed `Kind` value while another arm gives an OWNED one — the merged result would adopt and free the borrowed struct/union box while the borrow's own owner frees it too, a double free. Give an OWNED value on every arm; consuming or copying a borrowed aggregate to give it arrives with cross-call consume
+```exitcode
+0
+```
+```stdout
+4
 ```
 
 <!-- test: ternary-expression.ownership.owned-arm-first -->
@@ -800,11 +809,11 @@ end 'main'
 ```
 
 <!-- test: ternary-expression.ownership.chained-arms -->
-### A chained ternary is refused at the outer merge that borrows an aggregate
+### A chained ternary co-owns at the outer merge that borrows an aggregate
 The chain right-associates to `e.kind if a else (remapKind(e.kind) if b else remapKind(e.kind))`.
-The inner ternary merges two OWNED arms and is fine; the OUTER merge pairs the borrowed
-`e.kind` with the inner's owned result, which is the refused borrowed-aggregate merge — reported
-at the outer `if`.
+The inner ternary merges two OWNED arms; the OUTER merge pairs the borrowed `e.kind` with the
+inner's owned result, so the borrowed edge is increfed at the outer merge and the inner result
+is moved in at its own. Two merges, one rule, and the box is freed exactly once.
 ```maxon
 typealias Id = int(0 to 1000)
 
@@ -844,8 +853,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/fragments/ternary-expression/ternary-expression.ownership.chained-arms.test:35:24: Unsupported: a match or conditional arm that gives a borrowed `Kind` value while another arm gives an OWNED one — the merged result would adopt and free the borrowed struct/union box while the borrow's own owner frees it too, a double free. Give an OWNED value on every arm; consuming or copying a borrowed aggregate to give it arrives with cross-call consume
+```exitcode
+0
+```
+```stdout
+3
 ```
 
 <!-- test: ternary-expression.error.owned-string-arm-undeclared-call -->

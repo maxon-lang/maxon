@@ -304,3 +304,81 @@ end 'main'
 ```exitcode
 4
 ```
+
+<!-- test: try-otherwise-value-flow.borrowed-aggregate-fallback -->
+A BORROWED struct fallback merges with the try's owned result through the same door a borrowed `return`
+and a borrowed `gives` arm take (S5): the phi owns one reference on both edges, so the fallback is
+increfed on the error edge while the caller's `f` keeps its own. Both paths are exercised in one program
+— the error path takes the fallback (5) and the ok path takes the fresh result (7) — and exit `12` is the
+sum, which distinguishes a working merge from either arm silently winning. The value oracle runs it and
+answers 12. This was refused before S5, on the premise that consuming a borrowed aggregate needed the
+cross-call consume; it needs an incref, which the tree already had.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Fail
+	nope
+end 'Fail'
+
+type Item
+	export var n as Integer
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{n: n, label: "a heap allocated label for the probe"}
+	end 'create'
+end 'Item'
+
+function risky(ok bool) returns Item throws Fail
+	if ok 'good'
+		return Item.create(7)
+	end 'good'
+	throw Fail.nope
+end 'risky'
+
+function choose(fallback Item, ok bool) returns Integer
+	let got = try risky(ok) otherwise fallback
+	return got.n
+end 'choose'
+
+function main() returns ExitCode
+	let f = Item.create(5)
+	return (choose(f, ok: false) + choose(f, ok: true)) as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: try-otherwise-value-flow.borrowed-string-fallback-still-copies -->
+The CONTROL for the case above: the very same door, with a `String` result instead of a struct, must
+still COPY rather than incref — value semantics for text, reference semantics for an aggregate, decided
+in the one place. The fallback here is a borrowed String PARAMETER, so a share would leave the caller's
+`base` and the merged `got` on one record and free it twice.
+```maxon
+typealias Len = int(0 to 1000)
+
+enum Fail
+	nope
+end 'Fail'
+
+function risky(ok bool) returns String throws Fail
+	if ok 'good'
+		return "a freshly built heap string for the ok path"
+	end 'good'
+	throw Fail.nope
+end 'risky'
+
+function choose(base String, ok bool) returns Len
+	let got = try risky(ok) otherwise base
+	return got.count()
+end 'choose'
+
+function main() returns ExitCode
+	let base = "twelve chars"
+	return (choose(base, ok: false) + choose(base, ok: true)) as ExitCode
+end 'main'
+```
+```exitcode
+55
+```

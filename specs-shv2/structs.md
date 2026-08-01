@@ -492,3 +492,242 @@ end 'main'
 error E3005: specs/fragments/structs/error.callarg-wrong-struct-borrowed.test:26:9: argument type mismatch for 'x': expected 'BoxA', got 'BoxB'
 ```
 
+<!-- test: self-returned-from-a-method -->
+The receiver itself is a value. `return self` hands the caller the box the method was called on, so a
+chainable method (`bump()` mutates and gives the instance back) reads through the returned handle.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function bump() returns Counter
+		self.value = self.value + 1
+		return self
+	end 'bump'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.create(41)
+	let d = c.bump()
+	return d.value as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: self-returned-aliases-the-receiver -->
+⭐ **THE OWNERSHIP RULING, PINNED AS A VALUE.** `return self` is REFERENCE semantics: the returned handle
+is the SAME box, co-owned through an `__mm_retain`, not a copy. A write through the returned handle is
+therefore visible through the receiver. A COPY answer returns 41 here and an alias answer returns 42, so
+the case cannot pass for the wrong reason. The value oracle agrees (measured: the bootstrap prints
+`p.x=5 q.x=5` for this shape), and it is the same answer `var q = p` on a borrowed struct parameter
+already gives.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function bump() returns Counter
+		self.value = self.value + 1
+		return self
+	end 'bump'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(40)
+	var d = c.bump()
+	d.value = d.value + 1
+	return c.value as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: self-returned-with-a-managed-field -->
+A struct holding a MANAGED field is the case a bare pointer copy would get wrong twice over: the box's
+`String` is owned by the box, so a returned `self` must co-own the box rather than duplicate ownership of
+its field. Both handles read the one live String, and the box is freed exactly once at scope exit — a
+double free crashes here and a missed drop exits 101.
+```maxon
+
+type Tag
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	export function itself() returns Tag
+		return self
+	end 'itself'
+end 'Tag'
+
+function main() returns ExitCode
+	let a = Tag.create("probe")
+	let b = a.itself()
+	print("{a.name}/{b.name}")
+	return (a.name.count() + b.name.count()) as ExitCode
+end 'main'
+```
+```stdout
+probe/probe
+```
+```exitcode
+10
+```
+
+<!-- test: self-passed-as-an-argument -->
+`self` is a value in every position a struct value may occupy, not only after `return`: it is passed as
+an ARGUMENT here, and the borrowed struct PARAMETERS it lands in are returned in their turn (`pick`
+gives back whichever of its two borrowed arguments is larger). One rule — a borrowed aggregate handed
+across a call boundary is co-owned — covers the receiver, a parameter and a merge of the two.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+
+	export function tally(p Point) returns Integer
+		return self.x + p.x
+	end 'tally'
+
+	export function combineWith(other Point) returns Integer
+		return other.tally(self)
+	end 'combineWith'
+end 'Point'
+
+function pick(a Point, b Point) returns Point
+	if a.x > b.x 'bigger'
+		return a
+	end 'bigger' else 'smaller'
+		return b
+	end 'smaller'
+end 'pick'
+
+function main() returns ExitCode
+	let p = Point.create(11)
+	let q = Point.create(31)
+	let w = pick(p, b: q)
+	return (p.combineWith(q) + w.x) as ExitCode
+end 'main'
+```
+```exitcode
+73
+```
+
+<!-- test: borrowed-struct-field-returned -->
+A struct-typed FIELD read through the receiver is a borrowed aggregate exactly as `self` is, and it
+escapes through the same door: `return self.leaf` co-owns the inner box, so the chain `t.branch().tally`
+reads a live `Leaf` while the `Trunk` that owns it is still alive, and the inner box is freed once.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Leaf
+	export var tally as Integer
+
+	static function create(tally Integer) returns Self
+		return Self{tally: tally}
+	end 'create'
+end 'Leaf'
+
+type Trunk
+	export var leaf as Leaf
+
+	static function create(leaf Leaf) returns Self
+		return Self{leaf: leaf}
+	end 'create'
+
+	export function branch() returns Leaf
+		return self.leaf
+	end 'branch'
+end 'Trunk'
+
+function main() returns ExitCode
+	let t = Trunk.create(Leaf.create(42))
+	return t.branch().tally as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: self-returned-in-a-loop -->
+The co-ownership is BALANCED per trip, not per program: a `return self` inside a loop retains once and
+the caller drops once on every iteration. An unbalanced retain leaks the box (exit 101) and an
+unbalanced drop frees it under the still-live receiver.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Tally
+	export var n as Integer
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{n: n, label: "t"}
+	end 'create'
+
+	export function itself() returns Tally
+		return self
+	end 'itself'
+end 'Tally'
+
+function main() returns ExitCode
+	let t = Tally.create(3)
+	var sum = 0
+	for _ in 0 upto 14 'trip'
+		let handle = t.itself()
+		sum = sum + handle.n + handle.label.count()
+	end 'trip'
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+56
+```
+
+<!-- test: error.return-a-let-declared-global -->
+The negative control, and the one thing the widened door must still refuse. A `let`-declared top-level
+global's record cannot be laundered into a mutable alias by RETURNING it either: the caller adopts an
+owned aggregate, binds it to a `var` and writes the immutable global's record with E2013 and E3019 both
+intact. The refusal is the SAME intra-function mark that refuses `var b = A` — one guard, reached through
+whichever door makes a read of an immutable global owned — so the return door cannot drift from the
+binding door, and the message names the door it was reached through rather than a `var` there is none of.
+```maxon
+typealias Names = Array with String
+
+let A = ["ab", "cde"]
+
+function expose() returns Names
+	return A
+end 'expose'
+
+function main() returns ExitCode
+	var b = expose()
+	b.push("zz")
+	return A.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:2: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+```

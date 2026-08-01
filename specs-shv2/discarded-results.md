@@ -196,8 +196,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: chainable-method-discarded -->
-<!-- P1.1 structs (methods) -->
+<!-- test: chainable-method-discarded -->
 ```maxon
 
 typealias Count = int(i64.min to i64.max)

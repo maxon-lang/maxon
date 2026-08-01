@@ -1258,3 +1258,32 @@ end 'main'
 ```maxoncstderr
 error E3006: <fragment>:3:5: duplicate definition of 'counter'
 ```
+
+<!-- test: error.top-level-let-array-owned-merge-alias -->
+The FOURTH door onto the same guard, and the one S5 opened. The three above all reach it as a `var`
+BINDING; this one reaches it as a MERGE that must be OWNED because its other arm gives a fresh record —
+so the borrowed arm is promoted, and for an aggregate a promotion is an INCREF of the same box. That is
+precisely the launder: an incref mints an unmarked SSA name for the marked record, so `pick.push` would
+grow `A` with every other guard intact. Refused inside the promotion, at the door that names itself, so
+the guard covers a door the day the door opens rather than the day someone notices.
+```maxon
+typealias Names = Array with String
+
+let A = ["ab", "cde"]
+
+function fresh() returns Names
+	var n = Names.create()
+	n.push("zz")
+	return n
+end 'fresh'
+
+function main() returns ExitCode
+	let c = true
+	var pick = A if c else fresh()
+	pick.push("qq")
+	return A.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:14:15: Unsupported: merging a read of a `let`-declared top-level global into an OWNED result — an aggregate has no owning COPY in shv2, so the merged value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+```

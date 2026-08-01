@@ -282,13 +282,14 @@ end 'main'
 temporary scrutinee payload long enough to heap
 ```
 
-<!-- test: match-borrowed-aggregate-give-refused -->
+<!-- test: match-borrowed-aggregate-give-co-owned -->
 A `match … gives` whose arms merge a BORROWED aggregate give (`e.kind`, a field read of a
 borrowed struct parameter) with an OWNED one (`remapKind(e.kind)`, a fresh call result) is the
-same leak the equivalent ternary hits: the owned result phi would free the borrowed box while
-its real owner frees it too. shv2 has no cheap copy for a borrowed aggregate, so the construct
-is refused cleanly at parse (E2015), reported at the `match` — the shared merge, so the ternary
-and the match reject through the same code (OPEN #14).
+same merge the equivalent ternary makes, through the same shared code (OPEN #14): the owned
+result phi would free the borrowed box while its real owner frees it too, so the borrowed arm is
+INCREF'd on its own edge and the phi's drop releases that second reference. Exit `0` is the
+assertion — this program leaked (exit 101) before the merge promoted the borrowed give, and it
+was refused outright (E2015) between then and S5, on the false premise that shv2 had no incref.
 ```maxon
 typealias Id = int(0 to 1000)
 
@@ -333,8 +334,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/fragments/match-owned-value-flow/match-borrowed-aggregate-give-refused.test:25:9: Unsupported: a match or conditional arm that gives a borrowed `Kind` value while another arm gives an OWNED one — the merged result would adopt and free the borrowed struct/union box while the borrow's own owner frees it too, a double free. Give an OWNED value on every arm; consuming or copying a borrowed aggregate to give it arrives with cross-call consume
+```exitcode
+0
+```
+```stdout
+3
 ```
 
 <!-- test: gives-owned-string-arm-undeclared-call -->
