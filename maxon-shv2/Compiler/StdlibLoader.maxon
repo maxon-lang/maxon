@@ -304,6 +304,37 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// that constant is what grants this same file the E2051 exemption its `__` declarations need — two
 	// literals would be the listing and the exemption free to name different files. See its header.
 	try listWhitelistedModule(stdlibDir, relative: CompilerInternalDeclaringModule, into: listed)
+	// ⭐⭐ **BATCH2 slice 1 — `URL`, AND THE FIRST ENTRY THAT IS A CONE RATHER THAN A FILE.**
+	// `stdlib/URL.maxon` does not compile alone: its `parse`/`resolve` call SIX free functions declared in
+	// `stdlib/helpers/url/urlHelpers.maxon` (`urlIsAlpha`, `urlIsDigit`, `urlIsSchemeChar`,
+	// `urlValidatePercentEncoding`, `urlRemoveDotSegments`, `urlMergeBasePath`), and that file in turn names
+	// `URLError`. The two are mutually dependent and are listed as ONE entry in two lines — order-independent
+	// like every other, since `queryProgramSignatures` folds every file's declarations before any file parses.
+	//
+	// It clears every entry in this file's collision rule, each checked rather than assumed:
+	//   • FREE FUNCTIONS (E3006): the helper module's eight are all `url`-prefixed and are claimed by no other
+	//     listed module and by no BARE builtin — checked against `Parser.parseCallNamed`'s `if` chain AT THE
+	//     CHAIN, which is what that rule's last bullet insists on. `URL.maxon` itself declares none: every one
+	//     of its functions is a method or a static of `URL`.
+	//   • TYPE NAMES: `URL` and `URLError` are nominal declarations, so a user program spelling either wins and
+	//     these move into the reserved space (A1s wave 2). Against the other listed modules there is no overlap
+	//     (`Clock`/`WallClock`, `ParseError`/`Parsable`, `CodeUnit16`/`Utf16UnitCount`), and neither is a
+	//     builtin type name, so the one SILENT shape cannot be hit.
+	//   • `PortNumber` and `ByteValue` are RANGED typealiases, file-local per alias FORM, and reserve nothing.
+	//   • ⚠ The E3112 MEMBER-name rule — the one shadowing does not rescue — is a whole-program CHECK
+	//     (`Queries.refuseContestedNamesUsedAsMembers`) that fires only when a user program actually contests a
+	//     spelling, and it now scans these two files like every other listed module. Nothing to clear ahead of
+	//     time; what it protects is real, because `URL` carries ordinary English members (`path`, `host`,
+	//     `port`, `query`, `fragment`) and a user type spelled like one of them is refused rather than silently
+	//     half-renamed.
+	//
+	// ⚠ Its blockers were TWO `String` methods, and neither was a missing type: `addressableBytes()` and
+	// `byteAtOrPanic()` are `module function`s of `stdlib/String.maxon` — a file shv2 does not and will not
+	// parse, since `String` is compiler-owned — so they are answered as dispatch arms with a stdlib-provenance
+	// gate (`Parser.requireStdlibOnlyStringMethod`), which is what keeps a user program's
+	// `"x".addressableBytes()` refused exactly as the oracle refuses it.
+	try listWhitelistedModule(stdlibDir, relative: "URL.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "helpers/url/urlHelpers.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

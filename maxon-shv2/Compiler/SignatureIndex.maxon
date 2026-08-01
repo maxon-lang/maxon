@@ -1616,12 +1616,32 @@ let ManagedArrayElementBytes = 8 as ByteOffset
 //     declaration, so it misses the same probe, and it deliberately keeps the machine word
 //     (`specs-shv2/array-enum-element-size.md` pins that stride; narrowing it is its own rung).
 function undeclaredNamedElementStorageBytes(name ByteArray) returns ByteOffset
-	if name.equals(ByteElementTypeName) 'theByteStringsOwnInstance'
+	if name.equals(ByteElementTypeName) or name.equals(StringByteViewElementName) 'bytePacked'
 		return ByteStringElementSize as ByteOffset
-	end 'theByteStringsOwnInstance'
+	end 'bytePacked'
 
 	return primitiveTypeByteSize(ValueTypeTag.named)
 end 'undeclaredNamedElementStorageBytes'
+
+// ⭐⭐ **THE ELEMENT OF A STRING'S BYTE VIEW (`String.addressableBytes()`, BATCH2 slice 1) — AND WHY IT IS
+// NOT `Byte`.** `__str_bytes_view` publishes a record over a String's OWN buffer, and a String's bytes are
+// bytes: its `element_size@24` is `StringElementSize`, 1, always. `Array with Byte` cannot carry that,
+// because `Byte` is a name a USER PROGRAM may declare — `typealias Byte = int(0 to 1000)` makes
+// `internArrayByteInstance()` stride TWO — and the view would then be a static type and a runtime record
+// disagreeing about one instance's stride, which is the two-producer shape `arrayElementSize` exists to end.
+//
+// ⚠ **MEASURED, and it is why this name exists at all**: with the view typed `Array with Byte`,
+// `specs-shv2/bytearray-element-size.md`'s two wide-`Byte` cases went red with
+// `E3005 argument type mismatch for 'managed': expected '__ManagedMemory', got 'Array_Byte'` raised INSIDE
+// `stdlib/URL.maxon` — a whitelisted module is parsed by every program, so a user's `Byte` alias broke the
+// stdlib. A `b"…"` literal meets the identical wall and is REFUSED for it (E2015, same spec); the stdlib's
+// own byte reader cannot be refused, so it takes an element the user cannot reach instead.
+//
+// It is `__`-RESERVED, so no program can declare it and `undeclaredNamedElementStorageBytes` is the only
+// answer for its width — the same reason `StringIndexTypeName` wears one. This is `parseDecodedView`'s rule
+// applied to bytes: a compiler-synthesized view's stride is the compiler's to state, never a function of
+// which aliases the program happens to declare.
+let StringByteViewElementName = b"__StringByte"
 
 // ⭐⭐ **THE COMPILER-OWNED `StringIndex` TYPE (P1.8 slice B2), AND WHY IT WEARS A RESERVED NAME.**
 //
@@ -5461,6 +5481,17 @@ export type ProgramSignatures
 		self.arrayByteInstanceComputed = true
 		return self.arrayByteInstance
 	end 'internArrayByteInstance'
+
+	// ⭐ **THE `__ManagedMemory` INSTANCE A STRING'S BYTE VIEW WEARS (BATCH2 slice 1).**
+	// `internArrayByteInstance`'s twin, differing only in its element — see `StringByteViewElementName` for
+	// why a compiler-owned element rather than `Byte`, and for the measurement that chose it. Not memoized
+	// like its twin: this one is asked once per `addressableBytes()` in stdlib source (four sites in the
+	// whole corpus), never on a hot parser path.
+	export function internStringByteViewInstance() returns GenericInstanceId
+		var args = MaxonTypeArray.create()
+		args.push(MaxonType.named(self.typeNames.intern(StringByteViewElementName)))
+		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
+	end 'internStringByteViewInstance'
 
 	// ⭐⭐ **WHICH `Array` INSTANCE A `__ManagedMemory.create(count, elementSize)` YIELDS (R4.4)** — the one
 	// place the raw `elementSize` the source writes becomes a STATIC element type, and the reason it has to:

@@ -1126,10 +1126,12 @@ function emitIsNegative(module StdModule, block IrBlock, value ValueId, ids Valu
 end 'emitIsNegative'
 
 // A user index is OUT OF RANGE for a length-`length` array when it is NEGATIVE or at/above the length — the
-// ONE home of the "reject this index" test `__arr_get`/`__arr_set`/`__arr_remove` share. The negative guard is
-// OR-ed into the existing at-or-over-length test (both are 0/1 booleans, so the `bitOr` is a 0/1 boolean the
-// `condBranch` to the OOB block truth-tests directly).
-function emitIndexOutOfRange(module StdModule, block IrBlock, index ValueId, length ValueId, ids ValueMinter) returns ValueId
+// ONE home of the "reject this index" test `__arr_get`/`__arr_set`/`__arr_remove` share, and (exported for
+// it) `StringRuntime.__str_byte_at_or_panic`, whose index is a BYTE position into a `length@8`-byte string:
+// the same question over the same two words, differing only in what the caller does with the answer. The
+// negative guard is OR-ed into the existing at-or-over-length test (both are 0/1 booleans, so the `bitOr` is
+// a 0/1 boolean the `condBranch` to the OOB block truth-tests directly).
+export function emitIndexOutOfRange(module StdModule, block IrBlock, index ValueId, length ValueId, ids ValueMinter) returns ValueId
 	let negative = emitIsNegative(module, block: block, value: index, ids: ids)
 	let atOrOver = emitCmp(module, block: block, a: index, b: length, pred: StdCmpPred.ge, ids: ids)
 	return emitBin(module, block: block, a: negative, b: atOrOver, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -1198,25 +1200,46 @@ function emitArrayView(module StdModule, func IrFunction, cur IrBlock, exit IrBl
 
 	let es = emitLoadField(module, block: cur, record: srcRecord, offset: ArrElementSizeOffset, ids: ids)
 	let dtor = emitLoadField(module, block: cur, record: srcRecord, offset: ArrElementDestroyOffset, ids: ids)
-	let newRec = ids.mint()
-	module.appendOp(cur, op: StdOp.call(newRec, callee: ArrCreateName, args: twoArgs(es, second: dtor)))
-
 	let srcBuffer = emitLoadField(module, block: cur, record: srcRecord, offset: ArrBufferOffset, ids: ids)
-	let viewBuffer = emitSlotAddr(module, block: cur, buffer: srcBuffer, index: start, elementSize: es, ids: ids)
-	emitStoreField(module, block: cur, record: newRec, offset: ArrBufferOffset, value: viewBuffer)
-	emitStoreField(module, block: cur, record: newRec, offset: ArrLengthOffset, value: sliceLen)
-	let sentinel = emitConst(module, block: cur, value: ViewBufferCapacity, ids: ids)
-	emitStoreField(module, block: cur, record: newRec, offset: ArrCapacityOffset, value: sentinel)
+	let newRec = emitViewRecordHead(module, block: cur, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, elementSize: es, elementDestroy: dtor, ids: ids)
 
 	let base = emitOwedAllocationBase(module, func: func, cur: cur, join: baseJoin, record: srcRecord, slots: arrayBufferSlots(), ids: ids)
-
-	// baseJoin: record the debt, then take out the second ownership it names.
-	emitStoreField(module, block: baseJoin, record: newRec, offset: ArrParentOffset, value: base)
-	var afterIncref = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmIncrefName, ids: ids)
-	module.setTerminator(afterIncref, op: StdOp.branch(exit.id))
+	emitViewRecordTail(module, func: func, cur: baseJoin, exit: exit, view: newRec, base: base, ids: ids)
 
 	return newRec
 end 'emitArrayView'
+
+// ⭐⭐ **THE FIRST HALF OF A VIEW: MINT THE RECORD AND FILL EVERY SLOT BUT `parent@32`.** Split out of
+// `emitArrayView` because a view's SOURCE need not be an Array record: `StringRuntime.__str_bytes_view`
+// windows a STRING's bytes, and the two records disagree at exactly one slot (`element_destroy@40` against
+// `isAscii@40`), so the three facts a source decides — `elementSize`, `elementDestroy` and the owed base —
+// are the caller's to answer and everything else is one description of what a view IS.
+//
+// ⚠ **`parent@32` CANNOT BE FILLED HERE, and that is why this is a half rather than a whole.** The owed base
+// is a BRANCHY derivation that terminates `block` (`emitOwedAllocationBase` and its String twin), so the
+// store and the incref land on the join it produces — `emitViewRecordTail`, which is the other half. Calling
+// one without the other leaves `parent@32` at whatever `__arr_create`'s zeroing left, which reads as
+// `NoOwedAllocation`: a view that silently owes nothing and lets its parent's bytes be freed under it.
+export function emitViewRecordHead(module StdModule, block IrBlock, srcBuffer ValueId, start ValueId, sliceLen ValueId, elementSize ValueId, elementDestroy ValueId, ids ValueMinter) returns ValueId
+	let newRec = ids.mint()
+	module.appendOp(block, op: StdOp.call(newRec, callee: ArrCreateName, args: twoArgs(elementSize, second: elementDestroy)))
+
+	let viewBuffer = emitSlotAddr(module, block: block, buffer: srcBuffer, index: start, elementSize: elementSize, ids: ids)
+	emitStoreField(module, block: block, record: newRec, offset: ArrBufferOffset, value: viewBuffer)
+	emitStoreField(module, block: block, record: newRec, offset: ArrLengthOffset, value: sliceLen)
+	let sentinel = emitConst(module, block: block, value: ViewBufferCapacity, ids: ids)
+	emitStoreField(module, block: block, record: newRec, offset: ArrCapacityOffset, value: sentinel)
+
+	return newRec
+end 'emitViewRecordHead'
+
+// The SECOND half: the source's owed base is now known, so record the debt and take out the second
+// ownership it names. `cur` is the join the base arrived on; `exit` is the caller's continuation.
+export function emitViewRecordTail(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, view ValueId, base ValueId, ids ValueMinter)
+	emitStoreField(module, block: cur, record: view, offset: ArrParentOffset, value: base)
+	var afterIncref = emitReleaseOwedBase(module, func: func, cur: cur, base: base, callee: MmIncrefName, ids: ids)
+	module.setTerminator(afterIncref, op: StdOp.branch(exit.id))
+end 'emitViewRecordTail'
 
 // --- The runtime functions ---
 

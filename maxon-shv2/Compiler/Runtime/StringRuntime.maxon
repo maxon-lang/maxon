@@ -207,6 +207,24 @@ export let StrSplitName = b"__str_split"
 export let StrReplaceFirstName = b"__str_replace_first"
 export let StrFromBytesName = b"__str_from_bytes"
 
+// ⭐⭐ **THE TWO STDLIB-ONLY BYTE DOORS (BATCH2 slice 1) — what `stdlib/URL.maxon` and its helpers actually
+// ask a String for.** Both are `module function` in the corpus (`stdlib/String.maxon:181` and `:281`), so
+// no user program may reach either; the visibility is enforced at the PARSER, on stdlib provenance
+// (`Parser.requireStdlibOnlyStringMethod`), because shv2 has no `module` keyword.
+//
+//   * `__str_bytes_view(str) -> arrRecord` — `addressableBytes()`. A ZERO-COPY `Array with Byte` VIEW over
+//     the receiver's live bytes: nothing is copied and the cost does not depend on the length. See
+//     `buildStrBytesView` for why it is a fresh record rather than the String pointer retagged.
+//   * `__str_byte_at_or_panic(str, index) -> byte` — `byteAtOrPanic(index)`. One bounds-checked byte read
+//     that ABORTS rather than throws, because its 17 corpus call sites read bytes inside nested conditions
+//     (`if trimmed.byteAtOrPanic(pos) == 47`) where a `try` cannot go — the reference's own reason for the
+//     method existing (`stdlib/String.maxon:272-283`).
+//
+// Both are `__`-prefixed compiler-internal (no E3004, no signature slotting) and neither is
+// `__mm_`-prefixed, so each declares its own transitive floor in `closeStringMethodNeeds`.
+export let StrBytesViewName = b"__str_bytes_view"
+export let StrByteAtOrPanicName = b"__str_byte_at_or_panic"
+
 // ⭐ **`__str_find`/`__str_rfind`'s "no occurrence" answer, and it is a NEGATIVE INDEX rather than a thrown
 // error on purpose.** The stdlib spells both searches `throws StringError.notFound`, and a Std graph CAN
 // throw — `StdOp.errorReturn`'s dual-register flag is exactly that, and `__strix_first`/`__strix_last` use
@@ -479,6 +497,14 @@ export type RuntimeUsage
 	// program that only builds a String from bytes must carry neither.
 	export var usesStrReplaceFirst as bool
 	export var usesStrFromBytes as bool
+	// The two stdlib-only byte doors (BATCH2 slice 1), each with its OWN bit under this file's
+	// one-bit-per-entry-point discipline: a program whose stdlib cone reads bytes must not carry the view
+	// builder, and one that takes a byte view must not carry a second bounds check. `usesStrBytesView`
+	// declares `usesArray`/`usesHeap` in `closeStringMethodNeeds` — it calls `__arr_create` and
+	// `__mm_incref` inside its synthesized body, which this Maxon-module scan cannot see.
+	// `usesStrByteAtOrPanic` declares NOTHING: its body loads two words and either reads a byte or exits.
+	export var usesStrBytesView as bool
+	export var usesStrByteAtOrPanic as bool
 	// The program copies a MANAGED-element array (`__arr_slice_managed`/`__arr_clone_managed`/
 	// `__arr_append_managed`, P1.7 slice 3b-vi-b). Its OWN bit, DECOUPLED from `usesArray`, so a program that
 	// only uses TRIVIAL arrays does not carry the three managed-copy helpers. Set alongside `usesArray`/
@@ -569,7 +595,7 @@ export type RuntimeUsage
 	export var usesManagedDirectory as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1080,6 +1106,12 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrFromBytesName) 'frombytes'
 		usage.usesStrFromBytes = true
 	end 'frombytes'
+	if callee.equals(StrBytesViewName) 'bytesview'
+		usage.usesStrBytesView = true
+	end 'bytesview'
+	if callee.equals(StrByteAtOrPanicName) 'byteatorpanic'
+		usage.usesStrByteAtOrPanic = true
+	end 'byteatorpanic'
 	closeStringMethodNeeds(usage)
 end 'recordStringMethodUsage'
 
@@ -1111,6 +1143,14 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'buildsStrings'
+	// `__str_bytes_view` publishes an `Array` record through `__arr_create` and increfs the allocation the
+	// bytes live in through `__mm_incref` — both inside its synthesized body, which this scan cannot see.
+	// `usesArray` is what installs the array runtime AND (through `installMmRuntime`'s `usesIncref or
+	// usesArray`) the incref helper, so the two bits below are the whole of its transitive floor.
+	if usage.usesStrBytesView 'publishesAView'
+		usage.usesArray = true
+		usage.usesHeap = true
+	end 'publishesAView'
 end 'closeStringMethodNeeds'
 
 // Install the referenced String runtime functions into the lowered Std module. Called AFTER the
@@ -1174,6 +1214,12 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrFromBytes 'strfrombytes'
 		buildStrFromBytes(module)
 	end 'strfrombytes'
+	if usage.usesStrBytesView 'strbytesview'
+		buildStrBytesView(module)
+	end 'strbytesview'
+	if usage.usesStrByteAtOrPanic 'strbyteatorpanic'
+		buildStrByteAtOrPanic(module)
+	end 'strbyteatorpanic'
 end 'installStringRuntime'
 
 // `__print_string(strPtr)` — write a String's bytes to stdout, no trailing newline.
@@ -2438,6 +2484,157 @@ function buildStrFromBytes(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrFromBytes'
+
+// ⭐⭐ **`__str_bytes_view(str) -> arrRecord` — `addressableBytes()`, AND IT IS A BORROW OF THE BYTES WITH
+// AN OWNED RECORD AROUND IT.** The corpus's body is `return managed` (`stdlib/String.maxon:181-183`) — hand
+// out this String's own buffer, do not copy it — and that is exactly what this does: a zero-copy
+// `Array with Byte` VIEW whose `buffer@0` IS the receiver's, built in O(1) through the same
+// `emitViewRecordHead`/`emitViewRecordTail` pair `__arr_slice` uses. Nothing is copied and the cost does not
+// depend on the length.
+//
+// ⚠⚠ **IT IS NOT THE STRING POINTER RETAGGED, AND THE REASON IS ONE SLOT.** A String record and an Array
+// record agree at five of their six 8-byte slots — `buffer@0`, `length@8`, `capacity@16`, `element_size@24`
+// (a String's is 1), `parent@32` (one shared `BufferOwnership` encoding) — and DISAGREE at `@40`, where a
+// String keeps `isAsciiFlag` and an Array keeps `element_destroy`. Handing the String pointer to the array
+// dispatch would therefore make `urlBytes.slice(0, colonPos)` build a view whose `element_destroy@40` is the
+// source's ASCII FLAG, and `__arr_decref` would `callIndirect` address 1 on every element of an all-ASCII
+// slice. A URL is all-ASCII, so that is not a rare shape — it is every corpus call. A fresh record stamped
+// `element_destroy = TrivialDestructor` states the fact instead of inheriting a coincidence, and it costs
+// one 48-byte allocation for the whole `addressableBytes()` — the same allocation any `slice` already pays.
+//
+// ⭐ **A FRESH RECORD IS ALSO WHAT MAKES A WRITE THROUGH THE VIEW SAFE.** `capacity@16 = ViewBufferCapacity`
+// sends every in-place mutator through `__arr_cow_detach` first, so a stdlib caller that writes gets its own
+// private buffer and the String is untouched. The reference hands out the real buffer and a write shows
+// through; nothing in `stdlib/` writes through this door (all four call sites read, then `slice`), and shv2's
+// answer is the safer of the two rather than a second, quieter one.
+//
+// ⚠ **LIFETIME: the view holds a REFERENCE COUNT on the allocation the bytes live in** (see
+// `emitStringBytesAllocation`), so it cannot outlive them however its binding is scoped. That is one more
+// guarantee than the reference gives — where `return managed` relies on the caller keeping the String alive —
+// and it is not gold-plating: every other view in this compiler counts its parent, and a view that did not
+// would be the one dangling pointer in the runtime.
+function buildStrBytesView(module StdModule)
+	var func = IrFunction.createFromStd(StrBytesViewName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var baseJoin = module.addBlock(func, label: b"bvbase")
+	var ret = module.addBlock(func, label: b"ret")
+
+	emitParams(module, block: entry, count: 1)
+	let record = 0 as ValueId
+
+	let length = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let buffer = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
+	let start = emitConst(module, block: entry, value: 0, ids: ids)
+	let elementSize = emitConst(module, block: entry, value: StringElementSize, ids: ids)
+	let elementDestroy = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
+	let view = emitViewRecordHead(module, block: entry, srcBuffer: buffer, start: start, sliceLen: length, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids)
+
+	let base = emitStringBytesAllocation(module, func: func, cur: entry, join: baseJoin, record: record, ids: ids)
+	emitViewRecordTail(module, func: func, cur: baseJoin, exit: ret, view: view, base: base, ids: ids)
+
+	module.setTerminator(ret, op: StdOp.ret(view))
+
+	module.functions.push(func)
+end 'buildStrBytesView'
+
+// ⭐⭐ **WHICH ALLOCATION MUST STAY ALIVE FOR THIS STRING'S BYTES TO BE READABLE — `NoOwedAllocation` when
+// none must.** A near-twin of `emitOwedAllocationBase`, and DELIBERATELY BUILT ON IT rather than beside it,
+// because the two questions differ by exactly one provenance and the rest of the answer must not be
+// restated: *"which separate allocation do I owe a release to?"* and *"where do these bytes live?"* agree
+// for a DETACHED String (its own `buffer@0`), for a VIEW (its `parent@32`) and for an `.rdata` literal
+// (nothing) — and part company for an INLINE String, whose bytes sit inside its OWN `__mm_alloc` payload.
+// That one honestly owes NOTHING, which is the right answer to the first question and a dangling
+// `buffer@0` as an answer to this one.
+//
+// So: ask the shared question first, and answer this one only where it says "nothing".
+//
+//   * a non-zero owed base — a DETACHED String's own buffer, or a VIEW's shared base. Both are the
+//     allocation the bytes are in, and a view's flattens exactly as `emitArrayView`'s nesting note
+//     describes, so no chain is built or walked.
+//   * `capacity@16 == RdataBufferCapacity` — an immortal blob, and the RECORD is in `.rdata` too, so there
+//     is nothing to count and nothing that MAY be counted (an incref of read-only memory faults). This is
+//     the one place a specific provenance value has to be compared against, because "immortal" is not
+//     derivable from the other slots: an rdata literal and an inline String agree on both of them.
+//   * otherwise — INLINE: the bytes are at `record + StringRecordBytes`, so the RECORD is the allocation.
+//
+// ⭐ **THE COUNT IS CORRECT IN BOTH DROP ORDERS, in every arm.** DETACHED: the view increfs `buffer@0` and
+// the String's own `__str_decref` decrefs the same address on its last-owner path, so whichever dies second
+// frees it. INLINE: the view increfs the RECORD, so `__str_decref` finds a non-zero count, lowers it and
+// keeps the record — and the view's `__arr_decref` then `__mm_decref`s it, which for an inline String is
+// exactly right because it owes nothing else. RDATA: nothing happens, twice.
+function emitStringBytesAllocation(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	var owedJoin = module.addBlock(func, label: b"bvowed")
+	var separate = module.addBlock(func, label: b"bvsep")
+	var noSeparate = module.addBlock(func, label: b"bvnosep")
+	var immortal = module.addBlock(func, label: b"bvrdata")
+	var inlineBytes = module.addBlock(func, label: b"bvinline")
+
+	let owedBase = emitOwedAllocationBase(module, func: func, cur: cur, join: owedJoin, record: record, slots: stringBufferSlots(), ids: ids)
+
+	let base = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
+
+	let zero = emitConst(module, block: owedJoin, value: NoOwedAllocation, ids: ids)
+	let owesOne = emitCmp(module, block: owedJoin, a: owedBase, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(owedJoin, op: StdOp.condBranch(owesOne, thenBlockId: separate.id, elseBlockId: noSeparate.id))
+
+	module.setTerminator(separate, op: StdOp.branch(join.id))
+	separate.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(owedBase)))
+
+	let capacity = emitLoadField(module, block: noSeparate, record: record, offset: StringCapacityOffset, ids: ids)
+	let rdata = emitConst(module, block: noSeparate, value: RdataBufferCapacity as ParsedInt, ids: ids)
+	let isImmortal = emitCmp(module, block: noSeparate, a: capacity, b: rdata, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(noSeparate, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: inlineBytes.id))
+
+	let nothing = emitConst(module, block: immortal, value: NoOwedAllocation, ids: ids)
+	module.setTerminator(immortal, op: StdOp.branch(join.id))
+	immortal.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(nothing)))
+
+	module.setTerminator(inlineBytes, op: StdOp.branch(join.id))
+	inlineBytes.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(record)))
+
+	return base
+end 'emitStringBytesAllocation'
+
+// ⭐ **`__str_byte_at_or_panic(str, index) -> byte` — ONE BOUNDS-CHECKED BYTE READ THAT ABORTS RATHER THAN
+// THROWS.** The corpus's `byteAtOrPanic` (`stdlib/String.maxon:281-283`) is `try byteAt(index) otherwise
+// panic(…)`, and its whole reason for existing is stated there: its callers read bytes inside NESTED
+// CONDITIONS (`if trimmed.byteAtOrPanic(pos) == 47`), a position a `try` cannot occupy. So the failure has to
+// leave through the process rather than through the call, and `RuntimeAbort.stringByteAtOutOfRange` is that
+// exit — the same CLASS of answer the oracle gives (the process ends), not the same message.
+//
+// The range test is `ArrayRuntime.emitIndexOutOfRange`, the one home of "reject this index", rather than a
+// second `>= length` beside a second `< 0`: the negative half is the one every signed bounds check in this
+// compiler has been caught missing, and it is written once.
+//
+// ⚠ It reads through `buffer@0` with NO detach and NO ownership, which is right for the identical reason
+// `__arr_byte_at` gives: a read does not write, so an `.rdata` blob, an inline String's bytes and a viewed
+// buffer are all perfectly good things to read THROUGH.
+function buildStrByteAtOrPanic(module StdModule)
+	var func = IrFunction.createFromStd(StrByteAtOrPanicName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var bad = module.addBlock(func, label: b"oob")
+	var load = module.addBlock(func, label: b"load")
+
+	emitParams(module, block: entry, count: 2)
+	let record = 0 as ValueId
+	let index = 1 as ValueId
+
+	let length = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: bad.id, elseBlockId: load.id))
+
+	emitRuntimeAbort(module, func: func, block: bad, abort: RuntimeAbort.stringByteAtOutOfRange, ids: ids)
+
+	let buffer = emitLoadField(module, block: load, record: record, offset: StringBufferOffset, ids: ids)
+	module.setTerminator(load, op: StdOp.ret(emitLoadByteIndexed(module, block: load, base: buffer, index: index, ids: ids)))
+
+	module.functions.push(func)
+end 'buildStrByteAtOrPanic'
 
 // ⭐ **`__str_split(self, delim, arr)` — the stdlib's `split` (`:557-587`), filling a CALLER-CREATED array.**
 // The `Array with String` is built by the PARSER through `emitArrayCreateOp`, the one array-creation door, so

@@ -2635,6 +2635,21 @@ let ByteViewMethod = b"bytes"
 // the second its own emitter would be two producers of one value, free to drift on the independence that
 // is the whole contract.
 let StringToByteArrayMethod = b"toByteArray"
+
+// ⭐⭐ **THE TWO STDLIB-ONLY `String` METHODS (BATCH2 slice 1)** — `module function` in the corpus
+// (`stdlib/String.maxon:181` and `:281`), which is a real visibility and not a convention: the oracle
+// answers a user program `E3008: not exported`. shv2 has no `module` keyword — `export` is the only
+// modifier its lexer knows — and it parses no `stdlib/String.maxon` at all, so the visibility cannot be
+// read off a declaration. It is enforced on PROVENANCE instead (`requireStdlibOnlyStringMethod`), the fact
+// `Parser.isStdlibSource` already carries and already "decides VISIBILITY" by its own header.
+//
+// They are listed apart from the method families above because that is what they are: not a slice of the
+// language's String surface, but the two doors `stdlib/URL.maxon` and `stdlib/helpers/url/urlHelpers.maxon`
+// need in order to compile AS WRITTEN — which is the whole point of whitelisting a module rather than
+// transcribing it.
+let StringAddressableBytesMethod = b"addressableBytes"
+let StringByteAtOrPanicMethod = b"byteAtOrPanic"
+
 let StringReplaceFirstMethod = b"replaceFirst"
 let CodepointViewMethod = b"codepoints"
 let Utf16ViewMethod = b"utf16"
@@ -25289,8 +25304,51 @@ export type Parser
 			return try self.parseStringTrim(func, receiver: recv.value, fromStart: false, fromEnd: true, range: range)
 		end 'trimEnd'
 
+		// ⭐⭐ **THE TWO STDLIB-ONLY BYTE DOORS (BATCH2 slice 1)**, each opening with the provenance gate for
+		// the reason `requireVoidMethodIsStatement` opens its arms: the refusal must beat every argument
+		// diagnostic, and it must be reachable only once a real method NAME has matched — a user's TYPO must
+		// still be handed the roster below, not told it lacks permission for a method nobody has.
+		if methodTok.value.equals(StringAddressableBytesMethod) 'addressableBytes'
+			try self.requireStdlibOnlyStringMethod(methodTok)
+			try self.consumeEmptyArgList()
+			// ⭐ The result wears the `__ManagedMemory` SURFACE, which is the whole of what the declared
+			// `ByteMemory` (`__ManagedMemory with Byte`) means here — and it is what makes the corpus's
+			// `urlBytes.slice(0, colonPos)` resolve: the buffer surface is where `slice`'s `endIndex:` label
+			// is OPTIONAL, and the corpus writes both indices positionally.
+			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internStringByteViewInstance(), range: range)
+			self.markBufferSurface(view)
+			return view
+		end 'addressableBytes'
+		// ⚠ The RECORD is what the caller owns and drops, never the bytes — `__str_bytes_view` counts the
+		// allocation those live in, so the drop releases one reference and frees nothing the String still
+		// needs (see `StringRuntime.emitStringBytesAllocation`). That is why this goes through
+		// `emitOwnedRuntimeResult` at all: leaving the 48-byte record untracked would leak it.
+		if methodTok.value.equals(StringByteAtOrPanicMethod) 'byteAtOrPanic'
+			try self.requireStdlibOnlyStringMethod(methodTok)
+			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(StrByteAtOrPanicName, args: pairArgs(recv.value, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'byteAtOrPanic'
+
 		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `bytes`, the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`), the `StringIndex` family (`startIndex`, `endIndex`, `findFirst`, `findLast`, `slice`) and the three trims (`trim`, `trimStart`, `trimEnd`); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes`/`utf16` have no consumer yet", line: methodTok.line, column: methodTok.column)
 	end 'dispatchStringMethod'
+
+	// ⭐⭐ **A `module`-VISIBLE STRING METHOD IS STDLIB SOURCE'S ALONE, AND THIS IS THE ONE PLACE THAT SAYS
+	// SO.** `addressableBytes` hands out a live view of a String's bytes and `byteAtOrPanic` reads one
+	// without a catchable failure; the corpus declares BOTH `module function`, so a user program calling
+	// either gets `E3008: not exported` from the oracle. shv2 cannot answer with E3008 — it has no `module`
+	// keyword and no declaration of these to attach a visibility to — so it refuses on the fact it does
+	// have: which SOURCE this call is being parsed out of.
+	//
+	// ⚠ **IT NAMES THE REASON RATHER THAN FALLING THROUGH TO THE UNKNOWN-METHOD ROSTER.** "shv2 does not
+	// have this method" and "this method exists and is not yours to call" are different statements, and the
+	// first one about a method the compiler DOES implement is exactly the false claim D11 was about.
+	function requireStdlibOnlyStringMethod(methodTok Token) throws ParseError
+		if self.isStdlibSource 'thestdlibsOwn'
+			return
+		end 'thestdlibsOwn'
+
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference refuses to user code as E3008) and this file is not stdlib source. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies", line: methodTok.line, column: methodTok.column)
+	end 'requireStdlibOnlyStringMethod'
 
 	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime
 	// entry point they name**: same receiver, same single String argument, same `StringIndex` result, same
