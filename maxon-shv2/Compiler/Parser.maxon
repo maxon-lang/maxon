@@ -222,6 +222,19 @@ export union ParseError implements Error
 	// the two messages describe a requirement the same way.
 	ambiguousWitnessDispatch(method String, typeParamName String, argCount ParamCount, first String, second String, line LineNumber, column ColumnNumber)
 	noWitnessRequirementOfArity(method String, typeParamName String, argCount ParamCount, available String, line LineNumber, column ColumnNumber)
+	// ⭐⭐ **THE THIRD WAY, AND IT IS A REFUSAL RATHER THAN A CHOICE (A2w):** every requirement of the name
+	// is `static`, so none of them takes a receiver and the call supplies one. It is an ARM and not a
+	// recorded `Diagnostic` because the two are not interchangeable HERE, whatever they are at a
+	// declaration: a recorded diagnostic leaves the parse running, and the only thing left to run is the
+	// arity/ambiguity selection over the very requirements this refusal just rejected. MEASURED, all three
+	// with the diagnostic recorded and the candidates handed back: a wrong-arity call printed E3036's
+	// argument COUNT **alone**, two same-named statics printed E3114's "Rename one requirement, or drop one
+	// of the constraints" **alone**, and an unrelated later error anywhere in the file printed **alone** —
+	// because `abortedParseArtifact` salvages the type names and drops `artifact.diagnostics`, so a
+	// `ParseError` thrown later ERASES a recorded one. Each of those is the sentence E3116's own registry
+	// entry says must not be the answer. Throwing stops the selection before it can speak, and a reported
+	// parse error cannot be erased by a later one.
+	staticRequirementNotDispatchable(requirement String, typeParamName String, line LineNumber, column ColumnNumber)
 	// A VALUE-returning function whose body can fall off its end without returning.
 	// Renders as E3013, positioned at the function's name. Detected here, not in a
 	// later pass, because the parser is what knows the block its last statement left
@@ -27530,12 +27543,14 @@ export type Parser
 	// mean the instance one — so the statics are removed BEFORE arity selects, and the arity/ambiguity
 	// messages then speak only of requirements the call could have meant.
 	//
-	// ⚠ **IT RECORDS RATHER THAN THROWS, and returns the candidates it just refused.** A new `ParseError` arm
-	// would be a 97th managed union case for a message a `Diagnostic` already carries (see
-	// `recordArtifactDiagnostic`, and `readGenericInstanceAlias`'s header for the union limit that argument
-	// starts from). Handing the statics back keeps the parse on exactly the path it took before this reject
-	// existed — which is a path MEASURED to compile cleanly, so it cannot panic and it adds no second,
-	// cascading message — and the recorded diagnostic fails the build long before anything runs it.
+	// ⚠⚠ **IT THROWS, AND IT MAY NOT MERELY RECORD — see `ParseError.staticRequirementNotDispatchable` for
+	// the three measurements.** This reject first shipped as a `recordArtifactDiagnostic` + `return
+	// candidates`, on the argument that handing the statics back "keeps the parse on the path it took
+	// before this reject existed". It does — and that path's next step is `pickWitnessDispatchByArity` over
+	// the requirements just rejected, which then reports an argument COUNT or an ambiguity as if one of them
+	// could still have been meant. Worse, a recorded diagnostic does not survive a later `ParseError` in the
+	// same file at all (`abortedParseArtifact` salvages only the type names), so the refusal was contingent
+	// on nothing else in the file failing.
 	function requireWitnessDispatchCandidates(receiverParamPos TypeParamId, methodTok Token) returns WitnessDispatchTargetArray throws ParseError
 		let candidates = try self.findWitnessDispatchCandidates(receiverParamPos, methodName: methodTok.value, errorTok: methodTok)
 		if candidates.count() == 0 'noneProvideIt'
@@ -27547,14 +27562,14 @@ export type Parser
 		// literal-init protocols, and NO program anywhere that reaches one through a constraint — so almost
 		// every dispatch hands its candidates straight back: no array built, and the whole conformance corpus
 		// stays allocation-identical (measured: scale-test delta 0 at all six rungs).
-		if not witnessCandidatesIncludeStatic(candidates) 'allTakeAReceiver'
+		if not witnessCandidatesNeedReceiverFilter(candidates) 'allTakeAReceiver'
 			return candidates
 		end 'allTakeAReceiver'
 
 		var dispatchable = WitnessDispatchTargetArray.create()
 		for i in 0 upto candidates.count() 'eachCandidate'
 			let candidate = try candidates.get(i) otherwise panic("requireWitnessDispatchCandidates: candidates.get OOB at {i} below count {candidates.count()}")
-			if not candidate.isStatic 'takesAReceiver'
+			if witnessRequirementTakesReceiver(candidate) 'takesAReceiver'
 				dispatchable.push(candidate)
 			end 'takesAReceiver'
 		end 'eachCandidate'
@@ -27567,8 +27582,8 @@ export type Parser
 		// of them, and the one the author wrote the call against. A second static of the same name is the same
 		// fact twice, not a rival, so only the first is named.
 		let refused = try candidates.get(0) otherwise panic("requireWitnessDispatchCandidates: candidates.count() is {candidates.count()} but get(0) failed")
-		self.recordArtifactDiagnostic(ErrorCode.semanticStaticRequirementNotDispatchable, message: "'{self.witnessCalleeName(refused)}' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of type parameter '{String.from(self.enclosingTypeParamName(receiverParamPos))}' cannot reach it. Call a `static` member on a concrete type", tok: methodTok)
-		return candidates
+
+		throw ParseError.staticRequirementNotDispatchable(self.witnessCalleeName(refused), typeParamName: String.from(self.enclosingTypeParamName(receiverParamPos)), line: methodTok.line, column: methodTok.column)
 	end 'requireWitnessDispatchCandidates'
 
 	// ⭐⭐ **EVERY REQUIREMENT THE CONSTRAINTS ON `receiverParamPos` SUPPLY UNDER `methodName` (P1.7a slice 2b;

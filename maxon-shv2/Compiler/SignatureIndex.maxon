@@ -273,6 +273,16 @@ let DeclShapeInterfaceMethod = 52 as ContentHash
 // declaration in the program.
 let DeclShapeInterfaceParent = 60 as ContentHash
 
+// One interface requirement's RECEIVER KIND (A2w review) — a PRESENCE PAIR for `mixThrowsClause`'s reason and
+// not a marker on the `static` arm alone: both kinds are possible in this position, so a hash that mixed
+// nothing for the instance arm would let a requirement GAIN or LOSE `static` without any reader's memo moving.
+// It rides because a PARSE reads it: `Parser.requireWitnessDispatchCandidates` REFUSES a dispatch whose
+// requirements are all `static` (E3116) and `IrInterface.witnessTargetIsProtocol` refuses a `static` look-alike
+// as `Equatable`/`Comparable` (E3005), so flipping the keyword in file A decides whether file B compiles at all
+// while file B's own bytes stay put — this hash's stated rule, exactly.
+let MethodShapeStatic = 61 as ContentHash
+let MethodShapeInstance = 62 as ContentHash
+
 // A `throws` clause's PRESENCE discriminators (R8) — the two arms of `ThrowsClause`, so `none` and
 // `throwing(E)` cannot hash alike in a position where both are possible. `mixThrowsClause` is the one place a
 // throws clause enters a content hash; before it existed the only mixer recorded THROWING clauses alone, where
@@ -3424,11 +3434,20 @@ export type ProgramSignatures
 	//     while that file's own bytes stay put — the exact test this rule states. Only the parent NAMES ride;
 	//     the parents' own methods reach the hash through their own entries, since one hash is folded over
 	//     every declaration in the program.
-	//   • `isStatic` does NOT ride, and that is a statement rather than an omission: nothing in a PARSE reads
-	//     it. `ConformanceCheck` does, but off `project.interfaces` — which is rebuilt from the DECLARING
-	//     file's artifact, and that file re-parses on its own content hash. Mixing it would re-parse the whole
-	//     program for an edit no other file can observe, which is the "sound, and useless" key the
-	//     `var`-payload note in ARCHITECTURE.md warns about.
+	//   • **`isStatic` RIDES, and it did NOT until the A2w review — `extendsInterfaces`' story exactly, one
+	//     rung later.** The claim it used to carry ("nothing in a PARSE reads it; `ConformanceCheck` does, but
+	//     off `project.interfaces`") was true while a witness dispatch bound whatever requirement the name
+	//     search reached. A2w made a PARSE read it: `Parser.requireWitnessDispatchCandidates` REFUSES a
+	//     dispatch whose requirements are all `static` (E3116), and `IrInterface.witnessTargetIsProtocol`
+	//     refuses a `static` look-alike as `Equatable`/`Comparable` (E3005). So `function origin()` becoming
+	//     `static function origin()` here decides whether a `where T is Origin` body in ANOTHER file compiles
+	//     at all, while that file's own bytes stay put — the exact test this rule states. It is NOT the
+	//     "sound, and useless" key: a receiver kind is not a payload nobody outside the file can observe, and
+	//     the edit that moves it is rare.
+	//     MEASURED before the fix (`verify-warm-rebuild`, 2-file project + stdlib): a `static`-flag edit
+	//     re-parsed **1** file where the property demands **8**. `VerifyWarmRebuild.ReceiverKindEditBefore`
+	//     is the probe, and it is the only one here that can see this — the other four move a NAME or a
+	//     VALUE, and a key mixing those moves on all of them.
 	export function recordInterfaceDeclaration(iface IrInterface)
 		self.interfaces.upsert(iface.name, value: iface)
 
@@ -3440,6 +3459,7 @@ export type ProgramSignatures
 			self.hash = mixBytes(mixBytes(mix(self.hash, value: DeclShapeInterfaceMethod), bytes: method.name), bytes: method.returnTypeName)
 			self.hash = mixInterfaceFormals(self.hash, names: method.paramNames, types: method.paramTypeNames)
 			self.hash = mixThrowsClause(self.hash, clause: method.throwsClause)
+			self.hash = mix(self.hash, value: MethodShapeStatic if method.isStatic else MethodShapeInstance)
 		end 'eachMethod'
 	end 'recordInterfaceDeclaration'
 

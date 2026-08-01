@@ -1,0 +1,25 @@
+// Test: where-clauses.error.two-static-requirements-through-type-param
+typealias Code = int(0 to u32.max)
+
+interface OriginA
+	static function origin() returns Code
+end 'OriginA'
+
+interface OriginB
+	static function origin() returns Code
+end 'OriginB'
+
+type Box uses T where T is OriginA, T is OriginB
+	export var item as T
+
+	export function go() returns Code
+		return self.item.origin()
+	end 'go'
+end 'Box'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3116: <fragment>:16:20: 'OriginA.origin' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of type parameter 'T' cannot reach it. Call a `static` member on a concrete type

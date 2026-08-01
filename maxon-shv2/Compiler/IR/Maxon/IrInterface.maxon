@@ -576,20 +576,34 @@ export function witnessCandidateAlreadyCollected(candidates WitnessDispatchTarge
 	return false
 end 'witnessCandidateAlreadyCollected'
 
-// Does any collected requirement declare itself `static` (A2w)? The predicate
+// ⭐⭐ **THE ONE STATEMENT OF "COULD AN INSTANCE-SYNTAX CALL HAVE MEANT THIS REQUIREMENT?" (A2w, named in
+// its review).** `Parser.requireWitnessDispatchCandidates` asks it twice — once per candidate to build the
+// filtered list, and once over the whole list to decide whether it needs to build one at all — and those two
+// asks are the same rule, so it is written HERE and once. Spelled `not …isStatic` at both sites it was not:
+// a later rung widening "undispatchable" at the filter and not at the scan would leave the fast path
+// answering "nothing to filter" and hand the widened case straight through, with no diagnostic anywhere and
+// nothing that fails to compile. (`witnessTargetIsProtocol` deliberately does NOT route through this: its
+// question is `target.isStatic == want.isStatic`, an agreement with the FETCHED protocol, not a property of
+// the candidate alone. See its header.)
+export function witnessRequirementTakesReceiver(requirement WitnessDispatchTarget) returns bool
+	return not requirement.isStatic
+end 'witnessRequirementTakesReceiver'
+
+// Has the receiver-kind filter any work to do on this candidate list (A2w)? The question
 // `Parser.requireWitnessDispatchCandidates` takes its FAST PATH on: a `static` requirement is rare enough
 // that answering "no" without building a filtered array keeps the whole conformance corpus
-// allocation-identical, exactly as `witnessTargetHasFloatFormal` does for the float widening. It lives here
-// beside `witnessCandidateAlreadyCollected`, the other whole-candidate-list question, and takes no `self`.
-export function witnessCandidatesIncludeStatic(candidates WitnessDispatchTargetArray) returns bool
+// allocation-identical, exactly as `witnessTargetHasFloatFormal` does for the float widening. Named for the
+// JOB rather than for the rule, so the rule stays stated in exactly one place above. It lives here beside
+// `witnessCandidateAlreadyCollected`, the other whole-candidate-list question, and takes no `self`.
+export function witnessCandidatesNeedReceiverFilter(candidates WitnessDispatchTargetArray) returns bool
 	for i in 0 upto candidates.count() 'eachCandidate'
-		if (try candidates.get(i) otherwise panic("witnessCandidatesIncludeStatic: candidates.get OOB at {i} below count {candidates.count()}")).isStatic 'isStatic'
+		if not witnessRequirementTakesReceiver(try candidates.get(i) otherwise panic("witnessCandidatesNeedReceiverFilter: candidates.get OOB at {i} below count {candidates.count()}")) 'undispatchable'
 			return true
-		end 'isStatic'
+		end 'undispatchable'
 	end 'eachCandidate'
 
 	return false
-end 'witnessCandidatesIncludeStatic'
+end 'witnessCandidatesNeedReceiverFilter'
 
 // Do two interface methods declare the SAME formals — the same rendered types, in the same order (and so,
 // by construction, the same arity)? Both sides are `InterfaceMethodSig.paramTypeNames`, which are rendered

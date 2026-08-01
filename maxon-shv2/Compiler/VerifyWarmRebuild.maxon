@@ -317,6 +317,25 @@ let ConstantValueEditAfter = "let warmRebuildProbeConstant = 8"
 let GlobalValueEditBefore = "var warmRebuildProbeGlobal = 7"
 let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8"
 
+// ⭐ **THE `static`-FLAG PROBE: the same interface requirement twice, differing ONLY in the KEYWORD.**
+//
+// The four probes above move a NAME or a NUMBER. An interface requirement's RECEIVER KIND is neither,
+// and it became a fact a PARSE reads at A2w: a witness dispatch on a constrained type parameter now
+// REFUSES a `static` requirement (E3116) and the comparison operators refuse one as `Equatable`
+// (E3005). So `function origin()` becoming `static function origin()` in one file changes whether
+// ANOTHER file compiles at all, while moving neither that file's bytes nor any name in the program —
+// which is exactly the rule `recordInterfaceDeclaration` states and exactly what its hash must carry.
+//
+// Measured, not argued (2026-08-01, in A2w's review): with `recordInterfaceDeclaration`'s
+// `MethodShapeStatic`/`MethodShapeInstance` mix absent — which is how A2w shipped — this probe reported
+// **1** re-parse (the edited file's own bytes) where the property demands `fileCount`, measured at **8**,
+// while the spec suite reported 3091/0 and every other probe here still passed. None of them can see it:
+// the four edits above all move a NAME or a VALUE, and a key that mixes those moves on all four. Only an
+// edit that holds the name, the formals and the result FIXED and moves the receiver kind can tell a
+// key that carries the flag from one that does not.
+let ReceiverKindEditBefore = "interface WarmRebuildProbeInterface\n\tfunction warmRebuildProbeRequirement() returns bool\nend 'WarmRebuildProbeInterface'"
+let ReceiverKindEditAfter = "interface WarmRebuildProbeInterface\n\tstatic function warmRebuildProbeRequirement() returns bool\nend 'WarmRebuildProbeInterface'"
+
 // The fewest source files on which the INVALIDATION property says anything at all. TWO, and the
 // reason is arithmetic rather than taste: the property's halves assert "a declaration edit
 // re-parses `fileCount` files" (and likewise a constant-value edit) and "a bytes-only edit
@@ -340,15 +359,18 @@ let MinFilesForInvalidation = 2 as QueryCount
 //       special case of (a): (a) moves a NAME, and a key mixing only names passes it. A constant
 //       is the one declaration whose VALUE is copied into its readers, so `let X = 7` → `8` must
 //       move the key while no name in the program moves at all. See `ConstantValueEditBefore`.
+//   (d) EDIT AN INTERFACE REQUIREMENT'S `static` FLAG ⇒ EVERY file's parse must be invalidated. Not a
+//       special case of (a) or (c): no name moves and no value moves — a KEYWORD does, and since A2w a
+//       parse in another file accepts or REFUSES on it. See `ReceiverKindEditBefore`.
 //
-// All three are asserted here, on ONE fresh project, by editing a real file in the query database
+// All four are asserted here, on ONE fresh project, by editing a real file in the query database
 // and re-querying.
 //
 // ⚠ AND ON A SINGLE-FILE INPUT THIS PROPERTY PROVES NOTHING, SO IT REFUSES TO CLAIM IT DID.
-// With `fileCount == 1` the assertions above collapse into the SAME assertion — (a) and (c) expect
+// With `fileCount == 1` the assertions above collapse into the SAME assertion — (a), (c) and (d) expect
 // `fileCount` re-parses and (b) expects 1, and those are the same number — so a key that tracks only
 // the file's own bytes, which is EXACTLY the bug this property exists to catch, sails through all
-// three.
+// four.
 // This file used to say so in a comment and print PASS anyway, which is the worst of both: a gate
 // that knows it is vacuous and reports green. **A gate you cannot see fail is not a gate.**
 // It now FAILS, and says what to point it at.
@@ -396,6 +418,15 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{GlobalValueEditAfter}\n")
 	let globalValueEditMisses = try parseMissesOnRequery(project)
 
+	// Seat the receiver-kind probe at its BEFORE value — a declaration edit, discarded for the same
+	// reason the two above are.
+	fileChanged(project, path: editedPath, content: "{original}\n{ReceiverKindEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	// The measurement: same interface, same requirement, same formals and result — only `static` moved.
+	fileChanged(project, path: editedPath, content: "{original}\n{ReceiverKindEditAfter}\n")
+	let receiverKindEditMisses = try parseMissesOnRequery(project)
+
 	// A synthetic edit that stopped the program parsing would make BOTH assertions pass for the
 	// wrong reason — a failed parse is never cached, so it re-misses forever. Refuse to report on a
 	// probe whose premise broke.
@@ -412,9 +443,11 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 
 	let globalValueEditIsLocal = assertCounterMove("a top-level VAR's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: globalValueEditMisses, expectedDelta: OneQuery)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and globalValueEditIsLocal
+	let receiverKindEditInvalidatesEveryFile = assertCounterMove("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: receiverKindEditMisses, expectedDelta: fileCount)
+
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and globalValueEditIsLocal and receiverKindEditInvalidatesEveryFile
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value edit re-parsed all {fileCount}; var-value edit re-parsed 1 file\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value edit re-parsed all {fileCount}; var-value edit re-parsed 1 file; `static`-flag edit re-parsed all {fileCount}\n")
 		return true
 	end 'passed'
 

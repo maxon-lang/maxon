@@ -2123,6 +2123,114 @@ end 'main'
 error E3005: <fragment>:29:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
 ```
 
+### The refusal must be the message the author GETS — three shapes that used to answer something else
+
+The refusal above first shipped as a RECORDED diagnostic that left the parse running and handed the rejected
+`static` candidates back to the arity/ambiguity selection. It looked right on the one program that has a
+single static requirement, a matching argument count and nothing else wrong in the file — and on nothing
+else. **MEASURED, all three:** a wrong-arity call printed E3036's argument COUNT alone; two same-named
+statics printed E3114's *"Rename one requirement, or drop one of the constraints"* alone; and an unrelated
+later error anywhere in the file printed alone, because an aborted parse salvages the type names and drops
+the recorded diagnostics. Each of those is the sentence E3116's own registry entry says must **not** be the
+answer, and following any of them does not fix the program. The reject therefore THROWS, and these pin it.
+
+The count is what tells the two apart from a real arity error: the requirement is unreachable whatever the
+call supplies, so the receiver kind is reported and the argument count never comes up. Target-independent.
+
+<!-- test: where-clauses.error.static-requirement-wrong-arity-at-call -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Origin
+	static function origin(seed Code) returns Code
+end 'Origin'
+
+type Box uses T where T is Origin
+	export var item as T
+
+	export function go() returns Code
+		return self.item.origin()
+	end 'go'
+end 'Box'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:12:20: 'Origin.origin' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+### TWO `static` requirements of one name are the same fact twice, not a choice
+
+Two constraints supplying one `static` name are not an AMBIGUITY — there is nothing to disambiguate,
+because neither of them was ever reachable. Naming the first is the whole answer. Target-independent.
+
+<!-- test: where-clauses.error.two-static-requirements-through-type-param -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface OriginA
+	static function origin() returns Code
+end 'OriginA'
+
+interface OriginB
+	static function origin() returns Code
+end 'OriginB'
+
+type Box uses T where T is OriginA, T is OriginB
+	export var item as T
+
+	export function go() returns Code
+		return self.item.origin()
+	end 'go'
+end 'Box'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3116: <fragment>:16:20: 'OriginA.origin' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of type parameter 'T' cannot reach it. Call a `static` member on a concrete type
+```
+
+### A same-named INSTANCE requirement still binds — the filter removes statics, it does not refuse the name
+
+The escape hatch above pins a static and an instance requirement of DIFFERENT names coexisting. This pins
+the harder half: one NAME, supplied `static` by one constraint and as an INSTANCE requirement by another, so
+the filter has to keep the one the call could have meant instead of refusing the name outright. It is a
+generic BODY rather than an instantiation because no conforming type is representable — a type may not
+declare both `static origin` and `origin` (E3006) — which is exactly why the shape needs pinning here: the
+only thing that decides it is the parse.
+
+<!-- test: where-clauses.static-and-instance-requirement-of-one-name -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface StaticOrigin
+	static function origin() returns Code
+end 'StaticOrigin'
+
+interface InstanceOrigin
+	function origin() returns Code
+end 'InstanceOrigin'
+
+type Box uses T where T is StaticOrigin, T is InstanceOrigin
+	export var item as T
+
+	export function go() returns Code
+		return self.item.origin()
+	end 'go'
+end 'Box'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 ### Basic where clause with Map
 
 Map requires `Key is Hashable`. String implements Hashable, so this should work:
