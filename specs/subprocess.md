@@ -228,6 +228,69 @@ beta
 gamma
 ```
 
+<!-- test: subprocess-streaming-spawn-from-green-thread -->
+The case above spawns from `main`, i.e. from the OS thread's own stack. This
+one spawns the identical child from inside an `async` body, i.e. from a GREEN
+THREAD — and that is a genuinely different code path, not a restatement.
+Every heavyweight Win32 call the runtime makes is routed onto the P's 64 KB
+system stack, and the switch is emitted as a *conditional*: a green thread
+takes the switching arm, the main thread takes a straight-through arm. Any
+register the switching arm disturbs and the straight-through arm does not is
+therefore a defect that is INVISIBLE from `main` and fatal from a green
+thread — which is exactly the shape the bug this case pins had (the switch
+clobbered RAX, and the overlapped-pipe setup was holding its `CreateNamedPipeW`
+open-mode there). Nothing in the suite drove a streaming spawn off the main
+thread until this case existed.
+```maxon
+typealias StepCode = int(0 to 9)
+
+function echoFromGreenThread() returns StepCode
+	#if os(Windows)
+	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("findstr")
+	argv.push("x*")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
+	var argv = StringArray.create()
+	#endif
+
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+
+	try child.writeStdinLine("alpha") otherwise return 4
+	// Signal EOF so the child drains its input and exits.
+	child.closeStdin()
+
+	let lineA = try child.readStdoutLine() otherwise return 5
+	child.release()
+
+	if lineA != "alpha" 'check-a'
+		return 6
+	end 'check-a'
+
+	print("{lineA}\n")
+	return 0
+end 'echoFromGreenThread'
+
+function main() returns ExitCode
+	let g = async echoFromGreenThread()
+	let step = await g
+	print("step={step}\n")
+	if step != 0 'failed'
+		return 1
+	end 'failed'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+alpha
+step=0
+```
+
 <!-- test: subprocess-timeout-kill -->
 ```maxon
 function main() returns ExitCode

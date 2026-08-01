@@ -24,10 +24,18 @@ function reader(lines Count) returns Count
 	// never been armed on the one backend B2 shipped unexecuted.
 	//
 	// `Start-Sleep -Milliseconds 2` asks for the same 2 ms the POSIX arm does; Windows' timer
-	// granularity rounds it to ~18 ms MEASURED (100 lines in 1819 ms, 2026-08-01). That is still
-	// well inside the design's only real requirement — the producer must be SLOWER THAN THE
-	// READER, so every read finds an empty pipe and PARKS. A fast producer is drained through the
-	// self-detect path and never parks at all, which is the one way to make this driver lie.
+	// granularity rounds it to ~15.6 ms MEASURED (a flat 64 lines/s, timed at the consuming end,
+	// 2026-08-01) — so this producer is genuinely slow and genuinely un-bursty.
+	//
+	// ⚠⚠ AND YET "EVERY READ FINDS AN EMPTY PIPE AND PARKS" IS FALSE ON THIS BACKEND. That
+	// sentence stood here as the justification for the 2 ms and it was never measured on Windows;
+	// B3 measured it and it is wrong by ~50x. Off the PARK knob's slope, ~8 of a reader's 400 reads
+	// reach the parker's commit — the rest return synchronously. It is NOT a pacing problem and
+	// cannot be paced away: 2 / 10 / 25 / 50 / 200 ms, an explicitly flushed producer and a
+	// 1-40 ms jittered one all land in the same 1-8 range. Slowing this arm down buys almost no
+	// park coverage and costs the run linearly, so it stays at 2 ms.
+	// ⇒ What the Windows arm of this driver drives hard is the COMPLETER side, which is this row's
+	// acceptance anyway; see run.sh's header for the numbers behind both halves.
 	let exe = Executable.path(try FilePath.from("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe") otherwise panic("powershell path"))
 	var argv = StringArray.create()
 	argv.push("-NoProfile")

@@ -13111,32 +13111,44 @@ public partial class X86CodeEmitter {
     EmitMovMemDwordImm(SlotSA, 24);
     EmitMovMemDwordImm(SlotSA + 16, 1);
 
-    // Compute pipeAccess: dirCode 0 = stdin uses PIPE_ACCESS_OUTBOUND WITHOUT
-    // OVERLAPPED (sync writes — the write payload is tiny and fits in the
-    // 64KB buffer instantly, no need to yield on it). dirCode 1/2 = stdout/
-    // stderr use PIPE_ACCESS_INBOUND with FILE_FLAG_OVERLAPPED so the green
-    // thread can yield while waiting on the worker's output via IOCP.
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);                     // dirCode
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "rt_subp_cop_stdin");
-    EmitMovRegImm(X86Register.Rax, 0x40080001L);                  // INBOUND | OVERLAPPED | FIRST_PIPE_INSTANCE
-    EmitJmp("rt_subp_cop_access_done");
-    DefineLabel("rt_subp_cop_stdin");
-    EmitMovRegImm(X86Register.Rax, 0x00080002L);                  // OUTBOUND | FIRST_PIPE_INSTANCE (sync)
-    DefineLabel("rt_subp_cop_access_done");
-
     // CreateNamedPipeW(name, openMode, pipeMode=PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT (0),
     //                  nMaxInstances=1, nOutBufSize=0x10000, nInBufSize=0x10000,
     //                  nDefaultTimeOut=0, lpSecurityAttributes=NULL)
+    //
+    // ⚠ EVERY ARGUMENT IS MATERIALISED *INSIDE* THE SWITCHED REGION, FROM MEMORY
+    // OR AN IMMEDIATE — NEVER CARRIED IN A REGISTER ACROSS EmitSystemStackEnter.
+    // That macro emits a CONDITIONAL: a green thread takes the arm that swaps RSP
+    // to the P's system stack and repoints the TIB, and the main thread takes a
+    // straight-through arm that only adjusts RSP. The two arms do not clobber the
+    // same registers — the switching arm stages the new TIB bounds through RAX —
+    // so a value computed into RAX before the Enter survives on the main thread
+    // and is silently replaced by (systemStackTop - PSystemStackSize) on a green
+    // thread. That is precisely what this call site used to do with `openMode`:
+    // every streaming spawn issued from an `async` body reached CreateNamedPipeW
+    // with a stack address as its open mode, failed ERROR_INVALID_PARAMETER, and
+    // surfaced as "spawn failed: CreatePipe failed" — while the identical spawn
+    // from `main` worked, which is why nothing caught it.
     EmitSystemStackEnter(0x40);
-    EmitLeaRegMem(X86Register.Rcx, SlotWideName);
-    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);              // openMode
-    EmitXorRegReg(X86Register.R8, X86Register.R8);                // pipeMode = 0 (byte+wait)
-    EmitMovRegImm(X86Register.R9, 1);                             // nMaxInstances
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x01, 0x00); // [rsp+0x20] = 0x10000
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x01, 0x00); // [rsp+0x28] = 0x10000
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = 0 (default timeout = 50ms)
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x38, 0x00, 0x00, 0x00, 0x00); // [rsp+0x38] = NULL SA
+    EmitLeaRegMem(X86Register.Rcx, SlotWideName);
+    // openMode: dirCode 0 = stdin uses PIPE_ACCESS_OUTBOUND WITHOUT OVERLAPPED
+    // (sync writes — the write payload is tiny and fits in the 64KB buffer
+    // instantly, no need to yield on it). dirCode 1/2 = stdout/stderr use
+    // PIPE_ACCESS_INBOUND with FILE_FLAG_OVERLAPPED so the green thread can yield
+    // while waiting on the worker's output via IOCP.
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);                     // dirCode
+    EmitTestRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitJcc("z", "rt_subp_cop_stdin");
+    EmitMovRegImm(X86Register.Rdx, 0x40080001L);                  // INBOUND | OVERLAPPED | FIRST_PIPE_INSTANCE
+    EmitJmp("rt_subp_cop_access_done");
+    DefineLabel("rt_subp_cop_stdin");
+    EmitMovRegImm(X86Register.Rdx, 0x00080002L);                  // OUTBOUND | FIRST_PIPE_INSTANCE (sync)
+    DefineLabel("rt_subp_cop_access_done");
+    EmitXorRegReg(X86Register.R8, X86Register.R8);                // pipeMode = 0 (byte+wait)
+    EmitMovRegImm(X86Register.R9, 1);                             // nMaxInstances
     EmitCallImport("kernel32.dll", "CreateNamedPipeW");
     EmitSystemStackLeave(0x40);
 
@@ -13146,26 +13158,26 @@ public partial class X86CodeEmitter {
     EmitJcc("e", "rt_subp_cop_fail");
     EmitMovMemReg(SlotParentHandle, X86Register.Rax, 8);
 
-    // Compute childAccess: dirCode 0 → GENERIC_READ (0x80000000),
-    // dirCode 1/2 → GENERIC_WRITE (0x40000000).
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "rt_subp_cop_child_read");
-    EmitMovRegImm(X86Register.Rax, 0x40000000L);                  // GENERIC_WRITE
-    EmitJmp("rt_subp_cop_child_access_done");
-    DefineLabel("rt_subp_cop_child_read");
-    EmitMovRegImm(X86Register.Rax, unchecked((long)0x80000000L)); // GENERIC_READ
-    DefineLabel("rt_subp_cop_child_access_done");
-
     // CreateFileW(name, childAccess, 0, &SA_inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    // Same discipline as the CreateNamedPipeW call above — see the ⚠ there for why
+    // childAccess is derived inside the switched region rather than staged in RAX.
     EmitSystemStackEnter(0x40);
-    EmitLeaRegMem(X86Register.Rcx, SlotWideName);
-    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
-    EmitXorRegReg(X86Register.R8, X86Register.R8);                // dwShareMode = 0
-    EmitLeaRegMem(X86Register.R9, SlotSA);                        // lpSecurityAttributes
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x03, 0x00, 0x00, 0x00);  // OPEN_EXISTING
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x80, 0x00, 0x00, 0x00);  // FILE_ATTRIBUTE_NORMAL
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00);  // template = NULL
+    EmitLeaRegMem(X86Register.Rcx, SlotWideName);
+    // childAccess: dirCode 0 → GENERIC_READ (0x80000000),
+    // dirCode 1/2 → GENERIC_WRITE (0x40000000).
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);
+    EmitTestRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitJcc("z", "rt_subp_cop_child_read");
+    EmitMovRegImm(X86Register.Rdx, 0x40000000L);                  // GENERIC_WRITE
+    EmitJmp("rt_subp_cop_child_access_done");
+    DefineLabel("rt_subp_cop_child_read");
+    EmitMovRegImm(X86Register.Rdx, unchecked((long)0x80000000L)); // GENERIC_READ
+    DefineLabel("rt_subp_cop_child_access_done");
+    EmitXorRegReg(X86Register.R8, X86Register.R8);                // dwShareMode = 0
+    EmitLeaRegMem(X86Register.R9, SlotSA);                        // lpSecurityAttributes
     EmitCallImport("kernel32.dll", "CreateFileW");
     EmitSystemStackLeave(0x40);
 

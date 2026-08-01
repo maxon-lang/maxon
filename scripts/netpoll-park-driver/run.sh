@@ -32,6 +32,26 @@
 #   cleaner one (PARK=5 -> +2 s = 400 parks per reader x 5 ms, exactly), because parking is on the
 #   reader's own critical path by construction and completing is not.
 #
+# ⭐⭐ EVERY FIGURE ABOVE WAS TAKEN ON arm64/kqueue, AND ONE OF THEM DOES NOT CARRY TO x64-WINDOWS.
+# Measured 2026-08-01 (B3, the first run of this driver on Windows), 4x400 lines, ~6.5 s baseline:
+#   CLAIM=1000 -> +8 s. The completer knob costs two sleeps per traversal, so that is ~4 traversals
+#     per run landing where a reader waits — the SAME ORDER as the ~80-traversals-per-run figure the
+#     note above records for arm64. ⇒ THE ACCEPTANCE ARM IS DRIVEN COMPARABLY ON BOTH BACKENDS.
+#   PARK=1000  -> +8 s, i.e. ~8 parks per READER per run — NOT the 400 per reader the arm64 slope
+#     above resolves to. On Windows the streaming pipe read returns synchronously the great majority
+#     of the time (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS on the parent end), so the parker's commit is
+#     simply not on the path most reads take. ⇒ ~50x LESS PARK COVERAGE HERE THAN THERE.
+# ⚠ THAT IS WHY PARK=5 COSTS ZERO WALL-CLOCK ON WINDOWS AND +2 s ON arm64, AND IT IS NOT A DEAD KNOB:
+#   8 parks x 5 ms = 40 ms is inside the noise of a 6.5 s run. The knob was proven live by RAISING it
+#   until the slope showed — which is the header's own rule, and the only way to tell an inert
+#   injection from a cheap one. Anyone re-checking the knobs on Windows must do the same; a 5 ms run
+#   that costs nothing is the expected reading, not the dead-knob symptom E-fixed in a90dc2f10.
+# ⚠ AND IT IS NOT THE PRODUCER'S FAULT, WHICH WAS THE OBVIOUS HYPOTHESIS AND IS MEASURED FALSE. The
+#   1-8 parks per reader is invariant across 2 / 10 / 25 / 50 / 200 ms pacing, across an explicitly
+#   [Console]::Out.Flush()-ing producer, and across a 1-40 ms jittered one; and the producer's own
+#   arrival cadence was measured directly at a flat 64 lines/s with no bursting. Raising the Windows
+#   pacing buys coverage you can count on one hand and costs the run linearly.
+#
 # ⭐ TWO KNOBS, ONE PER SIDE OF THE HANDSHAKE — and a run that sets neither proves very little:
 #
 #   MAXON_GT_PARK_DELAY_MS   widens the PARKER's window: between its last self-detect and the
