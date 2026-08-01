@@ -87,7 +87,14 @@ internal static class DebugBuild {
     if (!File.Exists(sourcePath))
       throw new McpBuildException($"source file not found: '{sourcePath}'");
 
+    // The host is refused HERE, not left to Compiler.Compile below, for Program.ParseTarget's two
+    // stated reasons — both of which this method reaches first: GetOutputExtension on the very next
+    // line dies on an OS the roster does not hold with an unhandled ArgumentException, and
+    // BuildCache.IsCacheValid would otherwise hand back a cached binary for a request that should
+    // have been refused.
     var target = CompileTarget.Default;
+    if (target.Unsupported is { } unsupported) throw new McpBuildException(unsupported.Format());
+
     var outputPath = Program.ResolveOutputPath(sourcePath, Program.GetOutputExtension(target));
     var projectDir = Path.GetDirectoryName(Path.GetFullPath(sourcePath))!;
     var sources = new SourceFile[] {

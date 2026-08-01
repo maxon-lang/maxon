@@ -1004,8 +1004,12 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
 ./bin/maxon.exe spec-test                            # all tests
 ./bin/maxon.exe spec-test --filter=arithmetic        # filter
 ./bin/maxon.exe spec-test --update-required          # regenerate RequiredIR
-./bin/maxon.exe spec-test --target=x64-linux         # cross-compile
+./bin/maxon.exe spec-test --target=arm64-macos       # cross-compile
 ```
+
+`maxon-sharp` writes PE and Mach-O only, so `--target` takes `x64-windows` or
+`arm64-macos`. Anything else is refused (E5004) — `maxon-shv2` is where the ELF
+and wasm backends live.
 
 ### Spec tests (self-hosted compiler)
 

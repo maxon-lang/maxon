@@ -1749,12 +1749,36 @@ public static partial class MaxonToStandardConversion {
     MaxonPanicOp op,
     IrBlock<StandardOp> block,
     IrModule<StandardOp> result) {
-    // MaxonPanicOp deduplicates labels by message content, so skip if already emitted
-    if (!result.SymdataEntries.Any(e => e.label == op.SymdataLabel)) {
-      var bytes = System.Text.Encoding.UTF8.GetBytes(op.Message + "\n");
-      var cstrBytes = new byte[bytes.Length + 1]; // null-terminated
-      bytes.CopyTo(cstrBytes, 0);
+    // ⭐ THE PANIC LABEL→MESSAGE MAP IS CHECKED HERE, WHERE IT IS ALREADY BEING READ.
+    //
+    // `MaxonPanicOp` mints a label per distinct message (MaxonDialect.GetOrCreateLabel), so a label
+    // already present is expected — and re-emitting the same bytes under it is the dedup working.
+    // What must never happen is a DIFFERENT message arriving under a label already taken: only the
+    // first entry's bytes are emitted, so the second panic's `lea` resolves to the first one's text
+    // and the program prints a message from a function it never called.
+    //
+    // That is not hypothetical — it is exactly A1m: a cloned panic re-minted its label from a
+    // worker thread whose label cache was empty, took a number the parse thread had already given
+    // another message, and `Array.resize`'s panic printed `utf16.maxon:59`'s text. Skipping
+    // silently is what let it reach a running program, and the spec that pins it can only catch it
+    // when the scheduler cooperates (the thread that PARSED the stdlib re-mints to a cache HIT and
+    // sees nothing). Refusing here is a check on EVERY compile, on every thread, for free — the
+    // lookup was happening anyway.
+    var existing = result.SymdataEntries.FirstOrDefault(e => e.label == op.SymdataLabel);
+    var messageBytes = System.Text.Encoding.UTF8.GetBytes(op.Message + "\n");
+    var cstrBytes = new byte[messageBytes.Length + 1]; // null-terminated
+    messageBytes.CopyTo(cstrBytes, 0);
+
+    if (existing.label == null) {
       result.SymdataEntries.Add((op.SymdataLabel, cstrBytes, 1));
+    } else if (!existing.bytes.AsSpan().SequenceEqual(cstrBytes)) {
+      throw new InvalidOperationException(
+        $"panic label '{op.SymdataLabel}' is claimed by two different messages — the emitted "
+        + $"binary can only carry one, so the second would print the first's text. Already "
+        + $"emitted: {System.Text.Encoding.UTF8.GetString(existing.bytes).TrimEnd('\0', '\n')}; "
+        + $"now asked for: {op.Message}. A label is minted per distinct message and must be "
+        + "CARRIED by anything that reproduces an op (MaxonPanicOp.CloneKeepingLabel), never "
+        + "re-minted from a cache that is not the one it came from.");
     }
     // LEA to get pointer to the message
     var leaOp = new StdLeaSymdataOp(op.SymdataLabel);

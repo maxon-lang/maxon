@@ -404,16 +404,31 @@ public class Compiler {
   /// the same reason (a running or read-only exe), and a build that cannot remove the old binary must
   /// not go on to claim it replaced it.</para>
   /// </summary>
-  private static void DiscardPreviousOutput(string outputPath, string? irOutputPath) {
-    string?[] published = [
-      outputPath,
-      outputPath + Debug.MxdbgFormat.SidecarExtension,
-      Path.ChangeExtension(outputPath, IrPipeline.SidecarExtension),
-      irOutputPath,
-    ];
+  /// <summary>
+  /// Every path a compile of <paramref name="outputPath"/> can PUBLISH: the executable, its
+  /// `.mxdbg` debug-info sidecar, and its `.ir` sidecar (plus the explicitly-requested
+  /// <paramref name="irOutputPath"/>, which is not always the same file — `maxon run --emit-ir`
+  /// writes the sidecar beside `build.maxon` while its binary goes to the cache directory).
+  ///
+  /// <para>THE list, because two parties need it with two different FAILURE POLICIES and they must
+  /// not disagree about its CONTENT. <see cref="DiscardPreviousOutput"/> clears it before a build
+  /// and fails the build if it cannot; <c>Testing.CompiledArtifact.Delete</c> clears it after a spec
+  /// compile and swallows. The test-side copy listed only the first two — so the clause this
+  /// method's own caller documents in capitals ("THE `.ir` SIDECAR GOES UNCONDITIONALLY") was
+  /// already missing from the other copy, which aims at <c>specs/fragments-*/</c>, a COMMITTED
+  /// directory. One fact, two policies.</para>
+  /// </summary>
+  internal static IEnumerable<string> PublishedOutputPaths(string outputPath, string? irOutputPath = null) {
+    yield return outputPath;
+    yield return outputPath + Debug.MxdbgFormat.SidecarExtension;
+    yield return Path.ChangeExtension(outputPath, IrPipeline.SidecarExtension);
 
-    foreach (var path in published) {
-      if (path == null || !File.Exists(path)) continue;
+    if (irOutputPath != null) yield return irOutputPath;
+  }
+
+  private static void DiscardPreviousOutput(string outputPath, string? irOutputPath) {
+    foreach (var path in PublishedOutputPaths(outputPath, irOutputPath)) {
+      if (!File.Exists(path)) continue;
 
       try {
         File.Delete(path);

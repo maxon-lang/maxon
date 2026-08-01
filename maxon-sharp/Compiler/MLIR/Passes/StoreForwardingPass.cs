@@ -16,7 +16,7 @@ public static class StoreForwardingPass {
     ParallelFunctions.Run(module, func => {
       var useCounts = ComputeUseCounts(func);
       foreach (var block in func.Body.Blocks) {
-        ForwardStores(block, useCounts);
+        ForwardStores(func, block, useCounts);
       }
     });
   }
@@ -34,7 +34,17 @@ public static class StoreForwardingPass {
     return counts;
   }
 
-  private static void ForwardStores(IrBlock<StandardOp> block, Dictionary<int, int> useCounts) {
+  /// <summary>
+  /// ⚠ <paramref name="func"/> is here for the DEBUG SIDE-TABLE, not for the analysis, and it is
+  /// load-bearing. <see cref="IrFunction{TOp}.SetDebugSpan"/>'s table is keyed by OP REFERENCE, so a
+  /// rewrite that hands back a NEW op object silently drops that op's source position — and an op
+  /// with no position is not reported as missing: <c>DebugSpanFlow.Mark</c> simply records nothing
+  /// for it, so its machine instructions fall inside the PRECEDING marked op's range and the sidecar
+  /// attributes them to the previous statement's line. Nothing in the suite reads a <c>.mxdbg</c>'s
+  /// line table, so that is a wrong answer no gate can see. The replacement carries the span across.
+  /// </summary>
+  private static void ForwardStores(
+      IrFunction<StandardOp> func, IrBlock<StandardOp> block, Dictionary<int, int> useCounts) {
     var ops = block.Operations;
     var lastStored = new Dictionary<string, StdValue>();
     var toRemove = new HashSet<int>();
@@ -51,8 +61,13 @@ public static class StoreForwardingPass {
             && i + 1 < ops.Count
             && ops[i + 1] is IStoreOp nextStore
             && StoreUsesValue(nextStore, loadResult)) {
-          // Replace the store with one using the forwarded value
-          ops[i + 1] = CreateStore(forwardedValue, nextStore.VarName);
+          // Replace the store with one using the forwarded value. The new op inherits the replaced
+          // one's source position — see this method's summary for why that is not cosmetic.
+          var replacement = CreateStore(forwardedValue, nextStore.VarName);
+          if (func.TryGetDebugSpan((StandardOp)nextStore, out var storeSpan))
+            func.SetDebugSpan(replacement, storeSpan);
+
+          ops[i + 1] = replacement;
           lastStored[nextStore.VarName] = forwardedValue;
           toRemove.Add(i);
           forwarded++;

@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using MaxonSharp.Compiler.Ir.Core;
@@ -96,7 +95,15 @@ public static partial class FragmentGenerator {
   /// staleness against the .spec-cache, and returns work items for the unified test pipeline.
   /// Does NOT compile anything — compilation happens in worker threads.
   /// </summary>
-  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, string? filter = null, Compiler.CompileTarget? target = null, bool noBatch = false, bool includeNetwork = false) {
+  /// <remarks>
+  /// <paramref name="target"/> is REQUIRED, with no host default — the same decision
+  /// <c>TestRunner.CompileToExecutable</c> made and for the same reason. Its one caller
+  /// (<c>TestRunner.PrepareWorkItems</c>) always has a target, and the optional form bought only a
+  /// second, divergent answer to "what extension does an executable carry here": a null target fell
+  /// back to the RUNNING host while <see cref="Program.GetOutputExtension"/> — the compiler's own
+  /// answer — throws on an OS it has no writer for.
+  /// </remarks>
+  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, Compiler.CompileTarget target, string? filter = null, bool noBatch = false, bool includeNetwork = false) {
     var errors = new List<string>();
 
     if (!Directory.Exists(specDir)) {
@@ -106,7 +113,7 @@ public static partial class FragmentGenerator {
 
     Directory.CreateDirectory(fragmentDir);
 
-    var targetKey = target != null ? $"{target.Arch}-{target.Os}" : null;
+    var targetKey = target.Triple;
     var specs = SpecParser.ParseDirectory(specDir, targetKey, includeNetwork);
     var totalTests = specs.Sum(s => s.Tests.Count);
 
@@ -141,8 +148,9 @@ public static partial class FragmentGenerator {
       Directory.CreateDirectory(Path.Combine(specCacheDir, specName));
     }
 
-    // Determine exe extension for cached executables
-    var exeExt = target?.Os == "windows" || (target == null && RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) ? ".exe" : "";
+    // ASKED, not restated: the extension an executable carries is the compiler's own answer, and it
+    // must be the one the compile that writes the file used.
+    var exeExt = Program.GetOutputExtension(target);
 
     // Build work items with staleness info. Batched tests collapse into one
     // SpecBatchWorkItem per spec; everything else stays on the per-fragment
@@ -251,6 +259,10 @@ public static partial class FragmentGenerator {
         case AnyWorkItem.Single:
           singleTestCount++;
           break;
+        default:
+          throw new InvalidOperationException(
+            $"unhandled work-item kind '{w.GetType().Name}' in the batching summary — every kind "
+            + "must be counted, or the summary silently under-reports the work that ran");
       }
     }
     Logger.Info(LogCategory.Testing,
@@ -333,8 +345,19 @@ public static partial class FragmentGenerator {
   /// each WRITE site, where the next caller to forget would mint a CRLF golden that fails on every
   /// other host.
   /// </summary>
-  private static string FinishFragment(StringBuilder sb) =>
-    sb.ToString().Replace("\r\n", "\n").Replace("\r", "\n");
+  private static string FinishFragment(StringBuilder sb) => NormalizeToLf(sb.ToString());
+
+  /// <summary>
+  /// Newlines folded to LF — CRLF and a lone CR alike. THE statement of that rule, for every side of
+  /// every comparison and every write in the spec system.
+  ///
+  /// It was written three times: here (via <see cref="FinishFragment"/>), on the committed-golden
+  /// side of <c>TestRunner.CheckFragmentGolden</c>, and on the spec-file write in
+  /// <c>TestRunner.UpdateRequiredIr</c> — and the third copy had ALREADY lost the lone-CR clause,
+  /// which is how a rule spelled N times fails: not all at once, one clause at a time. Both sides of
+  /// a byte-for-byte comparison folding newlines DIFFERENTLY is a mismatch no diff can show.
+  /// </summary>
+  internal static string NormalizeToLf(string text) => text.Replace("\r\n", "\n").Replace("\r", "\n");
 
   /// <summary>
   /// Build a complete fragment file using a pre-extracted IR snippet (e.g. one
@@ -358,7 +381,7 @@ public static partial class FragmentGenerator {
     return FinishFragment(sb);
   }
 
-  public static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath, Compiler.CompileTarget? target = null) {
+  public static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath, Compiler.CompileTarget target) {
     var sb = BuildFragmentPrelude(test);
     string? error = null;
     var commentLine = $"// Test: {test.Name}";
@@ -399,20 +422,28 @@ public static partial class FragmentGenerator {
       } else {
         // Spec-fragment single-file: RootPath = the fragment directory (decision #2).
         sources = [new Compiler.SourceFile(fragmentPath, sourceWithComment, Path.GetDirectoryName(fragmentPath))];
-        var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: target);
-        if (result.Success) {
-          if (result.ArchIr != null) {
+        // `finally`, like the multi-file branch above and the three --update-required compiles in
+        // TestRunner. `exePath` here is inside specs/fragments-<triple>/, a COMMITTED directory, so
+        // a delete that a throw can skip leaves untracked litter beside the goldens. That it cannot
+        // throw TODAY is a property of Compiler.Compile's outermost `catch (Exception)`, which is a
+        // distant fact about another file, not an invariant of this call.
+        try {
+          var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: target);
+          if (result.Success) {
+            if (result.ArchIr != null) {
+              sb.AppendLine("// CompiledIR");
+              sb.Append(result.ArchIr.Trim());
+              sb.AppendLine();
+            }
+          } else {
+            var errorStr = string.Join("\n", result.Errors.Select(e => e.Format()));
             sb.AppendLine("// CompiledIR");
-            sb.Append(result.ArchIr.Trim());
-            sb.AppendLine();
+            sb.AppendLine($"// Compilation failed: {errorStr}");
+            error ??= errorStr;
           }
-        } else {
-          var errorStr = string.Join("\n", result.Errors.Select(e => e.Format()));
-          sb.AppendLine("// CompiledIR");
-          sb.AppendLine($"// Compilation failed: {errorStr}");
-          error ??= errorStr;
+        } finally {
+          CompiledArtifact.Delete(exePath);
         }
-        CompiledArtifact.Delete(exePath);
       }
     }
 
@@ -580,6 +611,20 @@ public static partial class FragmentGenerator {
         requiredRdata = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("RequiredData: ```")) {
         requiredData = ExtractMultilineValue(lines, ref i);
+      } else if (line.Length > 0) {
+        // ⭐ THE TERMINATING ARM IS WHAT MAKES THIS PARSER THE OTHER HALF OF A ROUND TRIP.
+        //
+        // Section 2 is written by BuildFragmentPrelude and by nothing else, so every non-blank line
+        // here is a key this method must know. Discarding an unknown one silently is what made the
+        // pairing UNASKABLE: a directive whose arm was forgotten or misspelled still gets written by
+        // the prelude, so the golden matches byte-for-byte and the test passes forever with the flag
+        // it asked for never reaching the compile. `DebugInfo:` is exactly that shape — spec comment
+        // → TestCase → prelude text → back to a Fragment field — and nothing else checks the two ends
+        // agree. Now the fragment does.
+        throw new InvalidDataException(
+          $"unrecognized expectation line '{line}' in a generated fragment. Section 2 is written by "
+          + $"{nameof(BuildFragmentPrelude)}, so every key it emits must have an arm here — a key "
+          + "with no arm is silently dropped and the directive it carries never reaches the compile.");
       }
 
       i++;

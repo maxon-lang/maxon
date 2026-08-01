@@ -51,7 +51,23 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// be minted by a FULL <c>--update-required</c> run. Letting a filtered one mint the tests it does
   /// cover would mean writing a golden for a batchable test from a batch it was never in.
   /// </summary>
-  private bool FragmentGoldensAreAuthoritative => _filter == null && !_noBatch;
+  private bool FragmentGoldensAreAuthoritative => WhyGoldensAreNotAuthoritative == null;
+
+  /// The flag that disqualified this run, for the line that has to say so — or null when none did.
+  ///
+  /// ⚠ It is the SAME predicate as <see cref="FragmentGoldensAreAuthoritative"/> and not a second
+  /// one, which is the point: the report used to re-derive which half had fired
+  /// (<c>_filter != null ? "--filter" : "--no-batch"</c>), so a third disqualifier added above would
+  /// have been announced confidently as <c>--no-batch</c>, with nothing to fail. A rule that must
+  /// explain itself should return the explanation.
+  private string? WhyGoldensAreNotAuthoritative =>
+    _filter != null ? FilterFlagName : _noBatch ? NoBatchFlagName : null;
+
+  /// The CLI spellings this runner's report quotes back. Named because the report is the only place
+  /// they appear outside `Program`'s argument parsing, and a flag renamed there must not leave this
+  /// line naming one that no longer exists.
+  private const string FilterFlagName = "--filter";
+  private const string NoBatchFlagName = "--no-batch";
 
   /// <summary>
   /// Which compile a test's committed golden pins. The CALLER decides, because only it knows whether
@@ -129,7 +145,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
     // Prepare work items from specs (sequential — parses specs, partitions
     // into batched + per-fragment, ensures directories exist).
-    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _filter, _target, _noBatch, _includeNetwork);
+    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _target, _filter, _noBatch, _includeNetwork);
 
     // Abort on errors (e.g., duplicate test names)
     if (prepResult.Errors.Count > 0) {
@@ -280,9 +296,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     if (FragmentGoldensAreAuthoritative) {
       Logger.Info(LogCategory.Testing, $"Fragment goldens: {tally.Verified} verified, {tally.Written} written");
     } else {
-      var reason = _filter != null ? "--filter" : "--no-batch";
       Logger.Info(LogCategory.Testing,
-        $"Fragment goldens: NOT checked — {reason} changes what a fragment contains, "
+        $"Fragment goldens: NOT checked — {WhyGoldensAreNotAuthoritative} changes what a fragment contains, "
         + "so only an unfiltered batched run is authoritative");
     }
 
@@ -384,7 +399,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // Both sides normalized, so the comparison is about CONTENT. The goldens are committed LF
     // (`.gitattributes`), but a checkout with `core.autocrlf=true` would otherwise fail every fragment
     // in the suite for a reason that is not codegen and that no diff would show.
-    var committed = File.ReadAllText(fragmentPath).Replace("\r\n", "\n").Replace("\r", "\n");
+    var committed = FragmentGenerator.NormalizeToLf(File.ReadAllText(fragmentPath));
     if (committed == content) {
       tally.CountVerified();
       return null;
@@ -740,33 +755,32 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // for the batched compile itself.
     var perTestFragmentPath = Path.Combine(_fragmentDir, item.SpecName, $"{test.Name}.test");
 
-    if (success.ExitCode.HasValue) {
-      var expectedCode = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-        ? success.ExitCode.Value
-        : success.ExitCode.Value & 0xFF;
-      if (slice.ExitCode != expectedCode) {
-        return new TestResult {
-          TestName = test.Name,
-          Passed = false,
-          ErrorMessage = $"Expected exit code {expectedCode}, got {slice.ExitCode}",
-          Duration = elapsed,
-          FilePath = perTestFragmentPath,
-        };
-      }
+    // ASKED, not restated. A batched test's exit code and stdout are judged by exactly the routines
+    // the per-fragment path uses — the POSIX 8-bit exit mask and the CRLF/path normalization are one
+    // rule each, and a batched run that folded either differently would pass or fail tests the
+    // unbatched run of the same program does not.
+    var exitCodeError = success.ExitCode.HasValue
+      ? CheckExitCode(success.ExitCode.Value, slice.ExitCode)
+      : null;
+    if (exitCodeError != null) {
+      return new TestResult {
+        TestName = test.Name,
+        Passed = false,
+        ErrorMessage = exitCodeError,
+        Duration = elapsed,
+        FilePath = perTestFragmentPath,
+      };
     }
 
-    if (success.Stdout != null) {
-      var expectedStdout = NormalizePathsForComparison(success.Stdout.Replace("\r\n", "\n").Trim());
-      var actualStdout = NormalizePathsForComparison(slice.Stdout.Replace("\r\n", "\n").Trim());
-      if (expectedStdout != actualStdout) {
-        return new TestResult {
-          TestName = test.Name,
-          Passed = false,
-          ErrorMessage = $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}",
-          Duration = elapsed,
-          FilePath = perTestFragmentPath,
-        };
-      }
+    var stdoutError = success.Stdout != null ? CheckStdout(success.Stdout, slice.Stdout) : null;
+    if (stdoutError != null) {
+      return new TestResult {
+        TestName = test.Name,
+        Passed = false,
+        ErrorMessage = stdoutError,
+        Duration = elapsed,
+        FilePath = perTestFragmentPath,
+      };
     }
 
     // Note: stderr is shared across the whole batch (it's the parent process's
@@ -864,7 +878,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     }
   }
 
-  private string ExeExtension => _target.Os == "windows" ? ".exe" : "";
+  /// ASKED, not restated — the same answer <see cref="Program.GetOutputExtension"/> gives the compile
+  /// that writes the file. Spelled here as its own `Os == "windows"` test, it was a third copy of the
+  /// rule (with `Program.GetOutputExtension` and `FragmentGenerator`) that would silently hand back
+  /// "" for an OS the compiler has no writer for, where the compiler's own answer throws.
+  private string ExeExtension => Program.GetOutputExtension(_target);
 
   private TestResult RunTest(Fragment fragment, TestWorkItem item) {
     var sw = Stopwatch.StartNew();
@@ -948,11 +966,20 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         var (irSources, irTempDir) = BuildTestSources(fragment.SourceFiles, fragment.FilePath, fragment.Source);
         var irExePath = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}_ir{ExeExtension}");
         SetCompileFlags();
-        var irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true, target: _target);
-        if (irTempDir != null) {
-          try { Directory.Delete(irTempDir, recursive: true); } catch { }
+
+        // `finally` for the same reason the three --update-required probes below use one. `irTempDir`
+        // lives under the OS temp directory and NOTHING sweeps it — CleanupExecutables only ever
+        // visits `_tempDir` — so a skipped delete here is not litter that a later run collects.
+        Compiler.CompileResult irResult;
+        try {
+          irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true, target: _target);
+        } finally {
+          if (irTempDir != null) {
+            try { Directory.Delete(irTempDir, recursive: true); } catch { }
+          }
+          CompiledArtifact.Delete(irExePath);
         }
-        CompiledArtifact.Delete(irExePath);
+
         if (!irResult.Success || irResult.AllStagesIr == null) {
           return new TestResult {
             TestName = fragment.TestName,
@@ -1194,8 +1221,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// </summary>
   private const string ForceDebugInfoEnvVar = "MAXON_SPEC_DEBUG_INFO";
 
+  /// The one value that turns <see cref="ForceDebugInfoEnvVar"/> on. Named beside the variable it
+  /// belongs to: an env var is a NAME AND A VALUE, and half of it written as a bare literal is the
+  /// half nothing describes.
+  private const string EnvVarEnabledValue = "1";
+
   private static readonly bool ForceDebugInfo =
-    Environment.GetEnvironmentVariable(ForceDebugInfoEnvVar) == "1";
+    Environment.GetEnvironmentVariable(ForceDebugInfoEnvVar) == EnvVarEnabledValue;
 
   /// <summary>
   /// Set the process-wide (ThreadStatic) compile flags every spec-test compile
@@ -2174,7 +2206,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       }
 
       if (updated) {
-        File.WriteAllText(spec.FilePath, specContent.Replace("\r\n", "\n"));
+        File.WriteAllText(spec.FilePath, FragmentGenerator.NormalizeToLf(specContent));
         updatedSpecs++;
       }
     }

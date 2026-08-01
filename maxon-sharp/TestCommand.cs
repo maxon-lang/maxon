@@ -138,10 +138,20 @@ internal static class TestCommand {
       }
     }
 
+    // The DEFAULT is put through the same refusal an explicit `--target=` already gets from
+    // CompileTarget.Parse above, and that half is not redundant: the default is the HOST, which on a
+    // Linux box is `x64-linux`. Refused HERE for Program.ParseTarget's two stated reasons, both of
+    // which this command reaches before any compile — Program.GetOutputExtension chooses the binary's
+    // extension from the OS and died on an unknown one with an unhandled ArgumentException and a
+    // stack trace, and BuildCache.IsCacheValid is consulted, so a cached binary could be handed back
+    // for a request that should have been refused.
+    var resolvedTarget = target ?? CompileTarget.Default;
+    if (resolvedTarget.Unsupported is { } unsupported) return Usage(unsupported.Format());
+
     return Execute(new Settings(
       path ?? Directory.GetCurrentDirectory(), filters, workers ?? TestExecutor.DefaultWorkers,
       isolate, bailAfter, timeoutMs, list, json, showTiming, color,
-      target ?? CompileTarget.Default));
+      resolvedTarget));
   }
 
   /// <summary>Everything the command line settled, so the run itself takes no strings apart.</summary>

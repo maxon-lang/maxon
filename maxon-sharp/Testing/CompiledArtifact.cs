@@ -1,5 +1,3 @@
-using MaxonSharp.Debug;
-
 namespace MaxonSharp.Testing;
 
 /// <summary>
@@ -18,12 +16,21 @@ namespace MaxonSharp.Testing;
 /// </summary>
 internal static class CompiledArtifact {
   /// <summary>
-  /// Delete a compiled binary and the debug-info sidecar a build may have written beside it.
+  /// Delete a compiled binary and every sidecar a build can have written beside it.
+  ///
+  /// WHICH files those are is ASKED of <see cref="MaxonSharp.Compiler.Compiler.PublishedOutputPaths"/>
+  /// — the compiler's own list, the one it clears before every build — rather than restated here.
+  /// Restated, it had already lost the `.ir` clause that list carries, which is the failure mode this
+  /// class exists to end and would have been the seventh copy of it.
+  ///
   /// Failures are ignored: a leftover the OS still has open is untidy, never a reason to fail a run.
+  /// That is the ONE thing that differs from the compiler's own use of the same list, which fails the
+  /// build instead — a policy difference, not a different set of files.
   /// </summary>
   internal static void Delete(string binaryPath) {
-    TryDelete(binaryPath);
-    TryDelete(binaryPath + MxdbgFormat.SidecarExtension);
+    foreach (var path in MaxonSharp.Compiler.Compiler.PublishedOutputPaths(binaryPath)) {
+      TryDelete(path);
+    }
   }
 
   private static void TryDelete(string path) {
