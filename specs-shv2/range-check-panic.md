@@ -44,8 +44,9 @@ Stack trace:
 
 ### ⚠ Where the RUNTIME check is emitted — and WHERE a call argument's lands (A1f)
 
-The runtime half is emitted at a `return`, a struct-literal field, a field store, an explicit `as`,
-and — since A1f — at a **call argument**. The remaining gap is an **array-literal element**.
+The runtime half is emitted at **every** position: a `return`, a struct-literal field, a field store, a
+field's declared default, an explicit `as`, an **array element** (since `A1f-arrayelem`) and a **call
+argument** (since A1f). There is no position left owing the compile-time half alone.
 
 **A call argument's runtime check is not emitted where the argument is written**, and the obstacle is
 mechanical: a check is a BRANCH, so it splits the block it lands in, and an argument is evaluated
@@ -53,6 +54,17 @@ part-way through building an argument list — a guard placed there lands PAST t
 already run on the value the range forbids. A1f did not defeat that obstacle; it moved the guard. The
 runtime half of the argument door belongs to the **callee's entry**: one guard per narrowed parameter
 per function, emitted once, standing in front of every caller.
+
+**An array element goes the other way, and the difference is where the ALIAS is known.** An element
+travels as `__arr_push`/`__arr_set`/`__arr_insert`'s third argument into a shared `Array` body whose
+parameter is the OPAQUE element type, so A1f's callee-entry cure has no narrowed parameter to stand
+behind. But the argument obstacle above never applied to it either: an element's alias is right there in
+the instance's declared element type, at parse time, so it records an ordinary positioned site and its
+guard goes at the **store**, immediately in front of the `__arr_*` call.
+
+⚠ **What is left unenforced is not a position at all** — `Array.resize` GROWS an array by *exposing*
+zero-initialized slots, so an `Array with NonZero` can acquire a `0` with no value crossing any door.
+`specs-shv2/safety.md`'s `divide-by-zero-fault-through-a-resized-array-slot` pins it.
 
 Three consequences follow, and all three are pinned below:
 

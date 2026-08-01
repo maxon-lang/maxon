@@ -711,9 +711,9 @@ threatened to delete the fault runtime's coverage along with the bug. It does no
 `integer-overflow-fault-from-int-min-over-minus-one` reaches `STATUS_INTEGER_OVERFLOW` (0xC0000095) with
 a divisor that is genuinely IN range (`-1` in `int(-1 to -1)`, so the new entry guard passes and the
 quotient overflows anyway), and `a-checked-divide-still-faults-at-int-min-over-minus-one` reaches it
-through the fallible spelling. The `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm keeps its own test
-through the ONE door that is still compile-time-only — see
-`divide-by-zero-fault-through-an-unchecked-array-element` below.
+through the fallible spelling. The `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm keeps its own test —
+see `divide-by-zero-fault-through-a-resized-array-slot` below, and the paragraph above it for why the
+route had to MOVE when `A1f-arrayelem` shut the array-element STORE.
 
 <!-- test: divide-by-zero-premise-enforced-at-the-callee-entry -->
 <!-- targets: x64-windows, x64-linux -->
@@ -795,22 +795,21 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: divide-by-zero-fault-through-an-unchecked-array-element -->
+<!-- test: array-element-premise-enforced-at-the-store -->
 <!-- targets: x64-windows, x64-linux -->
-#### ⚠ THE DOOR THAT IS STILL COMPILE-TIME-ONLY: an ARRAY ELEMENT, and the fault-thunk coverage it keeps alive
+#### ⭐ THE LAST DOOR: a runtime zero is refused at the `push`, not at the `idiv`
 
-A1f closed the call-argument door. It did **not** close the array-element one, and that is by design
-rather than by omission — an element travels as `__arr_push`'s third argument, which is a call argument
-in exactly the sense that made the guard unplaceable, and the callee whose entry could hold the guard is
-a shared `Array` body that knows nothing of `NonZero`. So `push` of an OPAQUE out-of-range value is
-still admitted with no cast to guard it and no runtime check, and the element read back out is a
-`NonZero` the compiler still believes.
+A1f closed the call-argument door at the CALLEE's entry, and could not reach this one — an element
+travels as `__arr_push`'s third argument into a shared `Array` body whose parameter is the OPAQUE
+element type, so there is no narrowed parameter for an entry guard to stand behind. `A1f-arrayelem`
+shuts it from the other side: the guard goes at the **store**, in the caller, which is the one place
+that still knows the element type. Everything the entry guard could not see is visible here, and the
+value never reaches the array.
 
-**This case is therefore doing two jobs at once, and both are deliberate.** It pins the surviving hole
-so it is a tested boundary rather than a sentence — and it is the suite's ONLY remaining program
-reaching the `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm of the Windows fault thunk, which A1f
-would otherwise have deleted along with the bug it fixed. `print("before")` runs, proving the value
-travelled the whole way rather than being stopped at the `push`.
+Before it, this program printed `before` and died `panic: integer divide by zero` — the element read
+back out was a `NonZero` the compiler still believed, so `100 / d` was a bare `idiv`. The `print` is
+kept and now does NOT run: the guard fires at the `push`, ahead of it, which is what proves the check
+lands at the store rather than at the read.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonZero = int(1 to i64.max)
@@ -823,6 +822,51 @@ end 'ident'
 function main() returns ExitCode
 	var xs = NonZeroArray.create()
 	xs.push(ident(0))
+	let d = try xs.get(0) otherwise 1
+	print("before\n")
+	return 100 / d
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at array-element-premise-enforced-at-the-store.test:12: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-fault-through-a-resized-array-slot -->
+<!-- targets: x64-windows, x64-linux -->
+#### ⚠⚠ THE ROUTE TO `#DE` A STORE GUARD STRUCTURALLY CANNOT CLOSE — a slot `resize` EXPOSED, which no value ever crossed a door into
+
+**Closing a door deletes the tests that came through it, and that is the trap this case exists to
+disarm.** `divide-by-zero-fault-through-an-unchecked-array-element` was the suite's ONLY program
+reaching the `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm of the Windows fault thunk; the case
+above is what it became, and it no longer reaches the arm. Sabotage-verified in both directions:
+break that arm and this case fails, and it is the only 0xC0000094 case there is.
+
+**The route is `Array.resize`, and it is not a store at all.** Growing an array *exposes*
+zero-initialized slots, which `stdlib/Array.maxon` documents as elements for exactly the inline
+element types this range applies to — *"a zero is an ELEMENT only while the element lives INLINE in the
+buffer — an int, a float, a bool, a byte, **a ranged typealias over one of those**"*. So an
+`Array with NonZero` acquires a `0` element with **no value crossing any door**: there is nothing for a
+store guard to stand in front of, and `A1f-arrayelem`'s cure is structurally out of reach of it exactly
+as A1f's was out of reach of the store. `100 / d` is a bare `idiv` because the compiler still believes
+`NonZero`, and `print("before")` runs, proving the zero travelled the whole way.
+
+⛔ **This is a REMAINING unenforced ranged premise, not a settled rule.** Whether `resize` should be
+refused for an element range that excludes its zero — as it already is, with **E3106**, for a MANAGED
+element it cannot invent — is a language decision with its own diagnostic and its own corpus sweep, and
+it is filed rather than decided here.
+```maxon
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroArray = Array with NonZero
+
+function main() returns ExitCode
+	var xs = NonZeroArray.create()
+	xs.resize(1)
 	let d = try xs.get(0) otherwise 1
 	print("before\n")
 	return 100 / d
@@ -841,15 +885,15 @@ Stack trace:
   in mrt_start
 ```
 
-⭐⭐ **AND THE ARRAY ELEMENT IS NOW THE ONLY DOOR THAT LEAKS — WHICH WAS NOT TRUE UNTIL THE TWO CASES
-BELOW WERE PINNED.** The claim above rests on the OTHER doors into a ranged binding enforcing their
-range at runtime, and for a **wholly NEGATIVE** divisor range they did not: a `-1` stored upper bound
-was read as the unbounded `u64.max` whatever the low bound said, so `int(-100 to -1)` and
-`int(i64.min to -2)` carried no upper compare and the plain `as` cast admitted anything
-(`specs-shv2/ranged-typealias.md`'s `negative-upper-bound-cast-is-checked` owns the rule). Both of
-`idiv`'s hazards were reachable through it, so both are pinned here — and they are the SAME defect as
-`divide-by-zero-fault-through-an-unchecked-array-element` above, arriving through a door that is
-supposed to be shut.
+⭐⭐ **NO DOOR LEAKS ANY MORE — WHICH WAS NOT TRUE UNTIL THE TWO CASES BELOW WERE PINNED.** The claim
+above rests on every door into a ranged binding enforcing its range at runtime, and for a **wholly
+NEGATIVE** divisor range they did not: a `-1` stored upper bound was read as the unbounded `u64.max`
+whatever the low bound said, so `int(-100 to -1)` and `int(i64.min to -2)` carried no upper compare and
+the plain `as` cast admitted anything (`specs-shv2/ranged-typealias.md`'s
+`negative-upper-bound-cast-is-checked` owns the rule). Both of `idiv`'s hazards were reachable through
+it, so both are pinned here — and they were the SAME defect as the array-element store above, arriving
+through a door that is supposed to be shut. What remains is not a door at all: it is the EXPOSED slot
+`resize` hands back, which no value ever crossed into.
 
 <!-- test: negative-range-cast-guard-fires-before-the-divide -->
 <!-- targets: x64-windows, x64-linux -->

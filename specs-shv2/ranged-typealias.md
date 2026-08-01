@@ -1551,6 +1551,80 @@ Stack trace:
   in mrt_start
 ```
 
+### Array element: runtime panic
+
+The array-element door's other half, and the one that was missing until `A1f-arrayelem`. An element
+is a storage slot the alias governs exactly as a field is, so an UNFOLDABLE element owes the runtime
+check a folded one owes the compile error — and until this rung it owed neither: `push` of an opaque
+out-of-range value was admitted in silence and the element read back out was a `Percent` the compiler
+still believed. The guard goes at the STORE, in the caller, where the element type is still known; the
+panic names the `push` that wrote it.
+
+<!-- test: array-element-runtime-panic -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `field-store-runtime-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+function grow(n Wide) returns Wide
+	return n * 101
+end 'grow'
+
+function main() returns ExitCode
+	var a = PA.create()
+	a.push(grow(5))
+	return a.count()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at array-element-runtime-panic.test:12: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+### Array `set`: runtime panic
+
+`push` is not the only way in. `set` and `insert` reach the same slot through the same door
+(`requireArrayElementType`), so all three owe the same two halves — a rule that held for one spelling
+and not the others would be the door half-shut.
+
+<!-- test: array-set-runtime-panic -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for the reason above. -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+function grow(n Wide) returns Wide
+	return n * 101
+end 'grow'
+
+function main() returns ExitCode
+	var a = PA.create()
+	a.push(3)
+	try a.set(0, value: grow(5)) otherwise 'oob'
+		return 9
+	end 'oob'
+	return a.count()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at array-set-runtime-panic.test:13: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in main
+  in mrt_start
+```
+
 ### Error: a call argument is checked against the CALLEE's declaration of the alias
 
 Two files each declare `Limit`, over different ranges — which

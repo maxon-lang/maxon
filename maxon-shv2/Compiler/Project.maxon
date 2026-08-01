@@ -993,31 +993,33 @@ end 'isLegalRepeatedAlias'
 // carries (ids pass through `lowerMaxonToStd` verbatim), never a name string. `line`/`column`
 // anchor the E3005 diagnostic and the runtime panic message on the source position.
 
-// ⭐ **WHICH HALVES OF THE RULE A SITE OWES.** `range-check-panic.md` states both — a compile-time
+// ⭐ **WHICH HALVES OF THE RULE A POSITION OWES.** `range-check-panic.md` states both — a compile-time
 // E3005 for a value the compiler can fold, and a runtime check where an unfoldable value LANDS — and
-// then names the one position that owes only the first: *"The runtime half is emitted at a `return`, a
-// struct-literal field, a field store, an explicit `as`, and — since A1f — at a **call argument**. The
-// remaining gap is an **array-literal element**."*
+// **EVERY POSITION NOW OWES BOTH EXCEPT ONE: the CALL ARGUMENT, which owes the compile-time half alone.**
 //
-// The reason a site can owe only the compile-time half is mechanical, and it is the same one in every
-// compiler in the tree: a runtime check is a BRANCH, so it splits the block it lands in, and a call
-// argument is evaluated part-way through building an argument list. shv2 emits its guards a tier later
-// than the bootstrap does — so it never splits a block mid-argument-list and never hits the bootstrap's
-// arg-pinning `E9001` — but the guard it WOULD place lands at the end of the argument's block, which is
-// PAST the call: the callee would already have run with the out-of-range value, and the panic would
-// blame a position the value had left.
+// The reason that one position can owe only the first half is mechanical: a runtime check is a BRANCH, so
+// it splits the block it lands in, and a call argument is evaluated part-way through building an argument
+// list. shv2 emits its guards a tier later than the bootstrap does — so it never splits a block
+// mid-argument-list and never hits the bootstrap's arg-pinning `E9001` — but it also has no alias to
+// check against at the argument: the parameter belongs to a callee that may be declared in another file
+// (`RangeCheckArgSite`), so no positioned site can be recorded there at all.
 //
-// ⭐⭐ **A CALL ARGUMENT USED TO END THERE. A1f DID NOT DEFEAT THAT OBSTACLE — IT MOVED THE GUARD.** The
-// runtime half of the argument door belongs to the CALLEE'S ENTRY instead: one guard per narrowed
-// parameter per function, standing in front of every caller including the indirect ones
-// (`RangeCheckParamSite`, `InsertRangeChecks.guardRangedParams`). So an argument site still records
-// `compileTimeOnly`, and the premise is enforced all the same.
+// ⭐⭐ **A1f DID NOT DEFEAT THAT OBSTACLE — IT MOVED THE GUARD.** The runtime half of the argument door
+// belongs to the CALLEE'S ENTRY instead: one guard per narrowed parameter per function, standing in front
+// of every caller including the indirect ones (`RangeCheckParamSite`,
+// `InsertRangeChecks.guardRangedParams`). So an argument site owes only the compile-time half, and the
+// premise is enforced all the same.
 //
-// ⚠ **THE ARRAY ELEMENT IS THE ONE POSITION THAT KEEPS ONLY THE COMPILE-TIME HALF, AND THAT CURE DOES
-// NOT REACH IT.** Its element is a call argument in exactly the sense above (it travels as
-// `__arr_push`'s third argument), but the callee whose entry could hold the guard is a shared `Array`
-// body whose parameter is the OPAQUE element type — there is no narrowed parameter to guard. The hole is
-// pinned by `specs-shv2/safety.md`'s `divide-by-zero-fault-through-an-unchecked-array-element`.
+// ⭐ **THE ARRAY ELEMENT WAS THE LAST POSITION LEFT OWING ONE HALF, AND `A1f-arrayelem` CLOSED IT FROM
+// THE OTHER SIDE.** A1f's cure could not reach it — the element travels into a shared `Array` body whose
+// parameter is the OPAQUE element type, so there is no narrowed parameter for an entry guard to stand
+// behind. But the obstacle above never applied to it either: an element's alias is known at PARSE time,
+// in the instance's declared element type, so it records an ordinary positioned site and its guard goes
+// at the STORE, in front of the `__arr_*` call. See `Parser.requireArrayElementType`.
+//
+// ⚠ **WHAT IS STILL UNENFORCED IS NOT A POSITION** — it is the zero-initialized slot `Array.resize`
+// EXPOSES, which no value ever crosses into. Pinned by `specs-shv2/safety.md`'s
+// `divide-by-zero-fault-through-a-resized-array-slot`.
 export enum RangeCheckGuard
 	runtime
 	compileTimeOnly
@@ -1054,19 +1056,24 @@ end 'RangeCheckGuard'
 // a field the next reader has to date. `stdOpPos` is 0 until the lowering fills it, which
 // `FunctionRangeChecks.positionsResolved` is the presence bit for — a `0` is a legitimate position (a
 // guard at the very top of its block), so no value of it can mean "unset".
+// ⚠ **IT CARRIES NO `RangeCheckGuard`, AND SINCE `A1f-arrayelem` IT CANNOT.** Every position that
+// records one of these owes BOTH halves — the array element was the last that owed only the
+// compile-time half, and its guard now goes at the STORE (`Parser.requireArrayElementType`). A field
+// holding one value at every site is a fact written twice, and the copy that goes stale is the prose.
+// The call-argument door is the one position that still owes the compile-time half alone, and it holds
+// no site at all: it asks `guardVerdict` directly (`InsertRangeChecks.checkArgAgainstParamRange`).
 export type RangeCheckSite
 	export var value as ValueId
 	export var aliasName as ByteArray
 	export var block as BlockId
 	export var maxonOpPos as BlockOpPos
 	export var stdOpPos as BlockOpPos
-	export var guard as RangeCheckGuard
 	export var line as LineNumber
 	export var column as ColumnNumber
 
 	// `stdOpPos` is not a parameter: it is the LOWERING's to write, and the parser has no way to know it.
-	export static function create(value ValueId, aliasName ByteArray, block BlockId, maxonOpPos BlockOpPos, guard RangeCheckGuard, line LineNumber, column ColumnNumber) returns RangeCheckSite
-		return Self{value: value, aliasName: aliasName, block: block, maxonOpPos: maxonOpPos, stdOpPos: 0, guard: guard, line: line, column: column}
+	export static function create(value ValueId, aliasName ByteArray, block BlockId, maxonOpPos BlockOpPos, line LineNumber, column ColumnNumber) returns RangeCheckSite
+		return Self{value: value, aliasName: aliasName, block: block, maxonOpPos: maxonOpPos, stdOpPos: 0, line: line, column: column}
 	end 'create'
 end 'RangeCheckSite'
 

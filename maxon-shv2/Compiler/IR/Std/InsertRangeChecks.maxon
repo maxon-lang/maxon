@@ -4,11 +4,10 @@
 // `return`, a struct-literal field, a field store, a field's declared default, an array element and a
 // call argument. It runs right after `lowerMaxonToStd`, before the other Std passes.
 //
-// ⚠ **WHICH HALVES A POSITION OWES IS THE SITE'S TO SAY, NOT THIS PASS'S** — see `RangeCheckGuard`. The
-// compile-time E3005 is owed EVERYWHERE and is raised by the one decision function
-// (`needsRuntimeGuard`); the runtime cascade is skipped at the positions where the value has already
-// travelled into a call by the time a guard could land (an array element, whose element travels as
-// `__arr_push`'s third argument).
+// ⚠ **WHICH HALVES A POSITION OWES IS `RangeCheckGuard`'S TO SAY, NOT THIS PASS'S.** The compile-time
+// E3005 is owed EVERYWHERE and is raised by the one decision function (`needsRuntimeGuard`); the runtime
+// cascade is skipped at exactly ONE position, the CALL ARGUMENT, whose alias is not known where the
+// argument is written and whose runtime half is therefore enforced at the callee's entry instead.
 //
 // ⭐ **A CALL ARGUMENT USED TO BE ON THAT LIST, AND A1f TOOK IT OFF — BY MOVING THE GUARD, NOT BY
 // DEFEATING THE OBSTACLE.** The obstacle is real and unchanged: a check is a BRANCH, so a guard emitted
@@ -360,9 +359,11 @@ type RangeCheckEmitter
 	end 'runtimeHalfOf'
 
 	// An alias-named site: both files are this function's own (every door here resolved its alias where it
-	// wrote it), and the site's own `stdOpPos` is where in its block the guard goes.
+	// wrote it), and the site's own `stdOpPos` is where in its block the guard goes. Every one of them owes
+	// the RUNTIME half — the array element was the last that did not, and `A1f-arrayelem` moved its guard
+	// to the store, which is why the site no longer carries a `RangeCheckGuard` to be asked for.
 	function processSite(site RangeCheckSite, filePath FilePath)
-		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: site.guard, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
+		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
 			noGuard then return
 			guard(alias) then self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
 		end 'verdict'

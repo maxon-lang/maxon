@@ -5108,7 +5108,8 @@ export type Parser
 	//
 	//   • `rangeCheckSites` — every position whose declared alias the parser holds in hand: an `as` cast
 	//     into a ranged alias, a struct-literal field, a field store, a field's declared default, an
-	//     array element. Each carries the alias name it resolved and which HALVES it owes.
+	//     array element. Each carries the alias name it resolved, and each owes BOTH halves of the rule —
+	//     see `RangeCheckSite` for why the site no longer says so per site.
 	//   • `rangeCheckArgSites` — a CALL ARGUMENT already folded to a constant. The alias is the callee's
 	//     to name, not this file's (see `RangeCheckArgSite`), so the site names the callee instead.
 	//   • `rangeCheckReturnSites` — every `return <expr>` in a ranged-alias-returning function.
@@ -21314,7 +21315,7 @@ export type Parser
 			// target checks (`500.7 as Byte` guards `500`). The result has its own Std op, but the guard still
 			// anchors at the cast's BLOCK (below) for the same reason an int->int cast does.
 			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: asTok)
-			self.recordRangeCheckSite(narrowed, targetAlias: targetAlias, guard: RangeCheckGuard.runtime, line: asTok.line, column: asTok.column)
+			self.recordRangeCheckSite(narrowed, targetAlias: targetAlias, line: asTok.line, column: asTok.column)
 			return narrowed
 		end 'floatToInt'
 
@@ -21332,7 +21333,7 @@ export type Parser
 		// time — `ranged-typealias.error.unsigned-max-upper-literal-out-of-range` is the case that says
 		// so. The float→int cast above anchors on its RESULT for the opposite reason, stated there:
 		// `trunc` changes the number, so the source is not the value being checked.
-		self.recordRangeCheckSite(value, targetAlias: targetAlias, guard: RangeCheckGuard.runtime, line: asTok.line, column: asTok.column)
+		self.recordRangeCheckSite(value, targetAlias: targetAlias, line: asTok.line, column: asTok.column)
 
 		// ⭐ **A CAST THAT CHANGES WHAT THE VALUE'S TYPE SAYS IS A CONVERSION, NOT A RE-TAG.** It yields a
 		// DISTINCT result value of the target type and leaves the SOURCE untouched, because the source
@@ -21564,10 +21565,17 @@ export type Parser
 
 	// ⭐ **THE ONE PLACE A RANGE-CHECK SITE IS APPENDED** for a position whose declared alias the parser
 	// already holds — an `as` cast, a struct-literal field, a field store, a self-field store, a field's
-	// declared default, an array element. Each caller decides only two things: which alias (through
-	// `declaredAliasOfType`, the one asker, so every door resolves the question the same way), and which
-	// HALVES it owes (`RangeCheckGuard`). `undeclared` — `ExitCode`, a bare primitive, a struct, a name
-	// nothing declares — records nothing.
+	// declared default, an array element. Each caller decides exactly ONE thing: which alias (through
+	// `declaredAliasOfType`, the one asker, so every door resolves the question the same way).
+	// `undeclared` — `ExitCode`, a bare primitive, a struct, a name nothing declares — records nothing.
+	//
+	// ⚠ **IT USED TO DECIDE A SECOND THING — WHICH HALVES THE SITE OWES — AND SINCE `A1f-arrayelem` THERE
+	// IS NOTHING LEFT TO DECIDE.** Every door that reaches here owes BOTH halves; the array element was the
+	// last that did not, and its guard now goes at the store. A `guard` field carrying one value at every
+	// site is a fact written twice, one copy of which can go stale against the prose — which is exactly what
+	// happened to the five copies of the door rule A1f's review had to rewrite. `RangeCheckGuard` itself
+	// stays: the CALL-ARGUMENT door still owes the compile-time half alone, and it asks `guardVerdict`
+	// directly, holding no site (`InsertRangeChecks.checkArgAgainstParamRange`).
 	//
 	// ⭐ **EVERY ONE OF THOSE DOORS STILL HOLDS THE UN-ERASED TYPE, which is precisely why they can resolve
 	// for themselves and the CALL-ARGUMENT door cannot.** A cast names its target outright, and a struct
@@ -21590,9 +21598,9 @@ export type Parser
 	// The anchor arrives as line/column rather than a `Token` because the field-DEFAULT door has no token
 	// of its own: the default is a literal from a declaration that may live in another file, so its
 	// diagnostic is anchored on the struct literal that took it, which that door holds as a `SourceRange`.
-	function recordRangeCheckSite(value ValueId, targetAlias DeclaredAlias, guard RangeCheckGuard, line LineNumber, column ColumnNumber)
+	function recordRangeCheckSite(value ValueId, targetAlias DeclaredAlias, line LineNumber, column ColumnNumber)
 		match targetAlias 'a'
-			declared(alias) then self.rangeCheckSites.push(RangeCheckSite.create(value, aliasName: alias.name, block: self.currentBlock.id, maxonOpPos: self.currentBlock.opRefs.count(), guard: guard, line: line, column: column))
+			declared(alias) then self.rangeCheckSites.push(RangeCheckSite.create(value, aliasName: alias.name, block: self.currentBlock.id, maxonOpPos: self.currentBlock.opRefs.count(), line: line, column: column))
 			undeclared then break 'a'
 		end 'a'
 	end 'recordRangeCheckSite'
@@ -21745,14 +21753,20 @@ export type Parser
 	// fault where the language promises a catchable `DivisionByZero`, and the bootstrap traps identically
 	// — it was the LANGUAGE's unenforced premise, not an shv2 divergence.
 	//
-	// ⚠ **ONE DOOR IS STILL COMPILE-TIME-ONLY, AND IT IS THE ARRAY ELEMENT.** An element travels as
-	// `__arr_push`/`__arr_set`/`__arr_insert`'s argument into a shared `Array` body that knows nothing of
-	// the element alias, so there is no callee parameter for an entry guard to stand behind and the
-	// element site owes only `RangeCheckGuard.compileTimeOnly` (see `requireArrayElementType`). A runtime
-	// 0 `push`ed into an `Array with NonZero` therefore still reaches an unguarded `idiv` and traps — that
-	// is the remaining way this verdict can be wrong, it is pinned by
-	// `specs-shv2/safety.md`'s `divide-by-zero-fault-through-an-unchecked-array-element`, and it is filed
-	// for its own rung.
+	// ⚠ **EVERY DOOR IS NOW SHUT — the ARRAY ELEMENT was the last, and `A1f-arrayelem` shut it at the
+	// STORE** (`requireArrayElementType`), which is the one place that still knows the element type: A1f's
+	// callee-entry cure could not reach it, because the element travels into a shared `Array` body whose
+	// parameter is the opaque element type. A runtime 0 `push`/`set`/`insert`ed into an `Array with NonZero`
+	// is now refused where it is written.
+	//
+	// ⚠ **WHAT REMAINS IS NOT A DOOR, and it is the one way left for this verdict to be wrong.**
+	// `Array.resize` GROWS an array by EXPOSING zero-initialized slots — which `stdlib/Array.maxon`
+	// documents as elements for exactly the inline types a ranged alias resolves to — so an
+	// `Array with NonZero` acquires a `0` element with no value crossing any door and nothing for a store
+	// guard to stand in front of. Pinned by `specs-shv2/safety.md`'s
+	// `divide-by-zero-fault-through-a-resized-array-slot`, and filed for its own ruling: whether `resize`
+	// should be refused for an element range that excludes its zero, as it already is (E3106) for a MANAGED
+	// element it cannot invent, is a language decision and not this function's to make.
 	function divisorProof(divisor ValueId) returns DivisorProof
 		if self.floatConstIsKnown(divisor) 'floatConstant'
 			// A FLOAT divisor cannot reach a `mod` at all (`requireBinOpOperands` refuses it), and `divsd`
@@ -23508,7 +23522,7 @@ export type Parser
 		// `float` before `fieldTypeOf` answers, so `declaredAliasOfType` sees no alias and the slot is
 		// unchecked. That is a named boundary of this rung — the erasure is `declaredSlotType`'s, whose own
 		// comment records it — and not something this door can decide.
-		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(fieldType), guard: RangeCheckGuard.runtime, line: anchor.line, column: anchor.column)
+		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(fieldType), line: anchor.line, column: anchor.column)
 		return stored
 	end 'requireFieldType'
 
@@ -23648,7 +23662,7 @@ export type Parser
 		// gets. It is always a LITERAL, so `InsertRangeChecks` decides it entirely at compile time and the
 		// runtime half it is nominally owed is never emitted; recording it with the same `guard` the written
 		// field takes keeps the two doors saying one thing rather than two.
-		self.recordRangeCheckSite(value, targetAlias: self.declaredAliasOfType(declared), guard: RangeCheckGuard.runtime, line: range.line, column: range.column)
+		self.recordRangeCheckSite(value, targetAlias: self.declaredAliasOfType(declared), line: range.line, column: range.column)
 
 		try fieldValues.set(index, value: value) otherwise panic("fillFieldDefault: fieldValues.set OOB at {index} — the column is sized to the layout's field count")
 		try filled.set(index, value: true) otherwise panic("fillFieldDefault: filled.set OOB at {index} — the column is sized to the layout's field count")
@@ -28535,18 +28549,25 @@ export type Parser
 		// value's E3005 needs is the container-slot one. A fourth noun would have to be minted in
 		// `FunctionTypeDoor`, and there is no fourth RULE here to justify one.
 		let stored = try self.assignableValue(methodTok, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field)
-		// The element's declared range binds it (P1.9), COMPILE-TIME ONLY: the element travels as an
-		// argument of `__arr_push`/`__arr_set`/`__arr_insert`, so a runtime guard would land past the call
-		// that already stored it.
+		// ⭐⭐ **THE ELEMENT'S DECLARED RANGE BINDS IT AT RUNTIME TOO (A1f-arrayelem) — AND THE GUARD GOES
+		// HERE, AT THE STORE, WHICH IS THE LAST PLACE THAT KNOWS THE ELEMENT TYPE.** This door owed only
+		// the compile-time half until this rung, on the argument the call-argument door owed it: the element
+		// travels as `__arr_push`/`__arr_set`/`__arr_insert`'s third argument, and the callee it travels
+		// into is a SHARED `Array` body whose parameter is the OPAQUE element type — so A1f's cure, a guard
+		// at the callee's entry, has no narrowed parameter to stand behind and structurally cannot reach it.
 		//
-		// ⚠ **THIS IS NOW THE LAST DOOR THAT OWES ONLY THE COMPILE-TIME HALF, AND IT IS NOT THE CALL
-		// ARGUMENT'S RULE ANY MORE.** A call argument owed the same half for the same reason until A1f
-		// moved its runtime half to the CALLEE'S ENTRY — one guard per narrowed parameter per function.
-		// That cure has no form here: the callee an element travels into is a shared `Array` body whose
-		// parameter is the opaque element type, so there is no narrowed parameter for an entry guard to
-		// stand behind. The hole is deliberate and PINNED, by `specs-shv2/safety.md`'s
-		// `divide-by-zero-fault-through-an-unchecked-array-element`. See `RangeCheckGuard`.
-		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(declared), guard: RangeCheckGuard.compileTimeOnly, line: methodTok.line, column: methodTok.column)
+		// ⭐ **BUT THE OTHER HALF OF THAT ARGUMENT — "a guard would land PAST the call" — WAS NEVER TRUE
+		// HERE, AND THAT IS THE WHOLE DIFFERENCE.** A general call argument has no alias at parse time (the
+		// parameter belongs to a callee that may be in another file — `RangeCheckArgSite`), so it can record
+		// no positioned site at all. An element's alias is RIGHT HERE, in the instance's declared element
+		// type, and this runs BEFORE the store call is emitted — so `recordRangeCheckSite`'s
+		// `opRefs.count()` is the ordinal the `__arr_*` call is about to take, and the split lands the
+		// cascade immediately in front of it. It is the ordinary alias-named site every other door records.
+		//
+		// ⚠ **WHAT IS STILL UNENFORCED IS NOT A DOOR** — it is the zero-initialized slot `Array.resize`
+		// EXPOSES, which no value ever crosses into, so there is nothing for a store guard to stand in front
+		// of. Pinned by `specs-shv2/safety.md`'s `divide-by-zero-fault-through-a-resized-array-slot`.
+		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(declared), line: methodTok.line, column: methodTok.column)
 		return stored
 	end 'requireArrayElementType'
 
