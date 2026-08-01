@@ -1,0 +1,33 @@
+// Test: range-check-panic.full-range-argument-gains-no-guard
+typealias Integer = int(i64.min to i64.max)
+
+function passthrough(n Integer) returns Integer
+  return n + 1
+end 'passthrough'
+
+function main() returns ExitCode
+  return passthrough(6)
+end 'main'
+---
+ExitCode: 7
+---
+func @passthrough {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 6
+    x64.callDirect passthrough
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

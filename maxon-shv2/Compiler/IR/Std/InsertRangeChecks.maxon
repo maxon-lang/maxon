@@ -392,6 +392,13 @@ type RangeCheckEmitter
 	// The panic names the PARAMETER's own declaration line, not the caller's: one guard stands in front of
 	// every call, so the caller's line is not a fact it holds — and the parameter list is where the premise
 	// is declared, which is the honest thing for it to name.
+	//
+	// ⚠ **THE COST IS NOT THE COMPARE — IT IS THAT A GUARDED LEAF STOPS BEING A LEAF.** `emitPanicBlock`
+	// emits a `call mrt_panic`, so a function that had no call at all acquires one, and
+	// `prologueEpilogue` gives it a real frame: `division/ranged-divisor-is-a-bare-idiv`'s `divide` gained
+	// `x64.prologue 32` / `x64.epilogue 32` around a body that still ends in the same bare `idiv`. That is
+	// a per-FUNCTION cost paid on the in-range path, not an instruction count on the failing one, and it
+	// is the honest price of the elision the guard makes legitimate.
 	function guardRangedParams(checks FunctionRangeChecks)
 		if checks.paramSites.isEmpty() 'noRangedParam'
 			return
@@ -415,6 +422,21 @@ type RangeCheckEmitter
 	// ⚠ A parameter is never a folded constant (its ValueId is defined by a `param` op, not a `const`), so
 	// `guardVerdict`'s compile-time half never fires here; what it decides for a parameter is the one thing
 	// that matters, `rangeIsFull` — a full-range parameter promises nothing and gets nothing.
+	//
+	// ⭐ **INT AND FLOAT ALIKE, AND THE SYMMETRY IS THE POINT RATHER THAN A CONVENIENCE.** `emitGuardAt`
+	// already forks the entire cascade on `aliasIsFloat` for the `as` and `return` doors, so a float
+	// parameter needs nothing of its own — and guarding only the integer half would replace *five doors of
+	// which four guard* with *parameters of which only the int ones guard*, which is a fresh instance of
+	// the very defect this rung exists to delete. `rangedParamSites` records a float alias for the same
+	// reason `rangedReturnAliasName` stopped excluding one when #19 closed: the domain is decided where
+	// the BOUNDS are read, never where the site is recorded.
+	//
+	// ⚠⚠ **A `function f(x T) returns T … return x` NOW GUARDS THE SAME VALUE TWICE — DELIBERATELY, AND
+	// IT IS FILED AS `A1f-dupguard`.** The entry guard and the `return` guard are both emitted, over the
+	// same `ValueId`, against the same alias. Eliding the second is probably sound (in SSA one id is one
+	// value), but this rung exists BECAUSE an elision rested on a premise nothing enforced, so it does not
+	// get to close by adding another elision argued in a paragraph. The duplicate stands until a rung with
+	// its own soundness argument and its own sabotage removes it.
 	function guardRangedParam(site RangeCheckParamSite, entryId BlockId, filePath FilePath)
 		// A user parameter's ValueId IS its declared position — `parseFunction` reserves ids
 		// `0..paramCount-1` for parameters, user parameters first, and `rangedParamSites` walks that same
@@ -422,22 +444,9 @@ type RangeCheckEmitter
 		let paramValue = site.index as ValueId
 		match self.guardVerdict(paramValue, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
 			noGuard then return
-			guard(alias) then self.emitParamGuard(alias, site: site, value: paramValue, entryId: entryId, filePath: filePath)
+			guard(alias) then self.emitGuardAt(self.guardSiteAt(entryId, stdOpPos: self.func.paramCount), value: paramValue, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
 		end 'verdict'
 	end 'guardRangedParam'
-
-	function emitParamGuard(alias RangedTypeAlias, site RangeCheckParamSite, value ValueId, entryId BlockId, filePath FilePath)
-		// ⛔ **A1f SPIKE SCOPE: INTEGER PARAMETERS ONLY.** A float alias's guard is mechanically identical
-		// — `emitGuardAt` already forks the whole cascade on `aliasIsFloat` for the `as`/`return` doors —
-		// but it widens the blast radius this rung was authorized to measure, so the float half awaits its
-		// own ruling. ⚠ Until it lands, a narrowed FLOAT parameter keeps the unenforced premise this rung
-		// exists to close.
-		if aliasIsFloat(alias) 'floatAwaitsItsOwnRuling'
-			return
-		end 'floatAwaitsItsOwnRuling'
-
-		self.emitGuardAt(self.guardSiteAt(entryId, stdOpPos: self.func.paramCount), value: value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
-	end 'emitParamGuard'
 
 	// ---- call-argument sites ----
 

@@ -37,6 +37,26 @@ func @Msg.shout {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 100
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.leaRegRdata rbx, [rip + __str_rec_1]
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0

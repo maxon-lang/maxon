@@ -1,4 +1,4 @@
-// Test: mod-overflow-fault-through-an-unchecked-call-argument
+// Test: mod-overflow-premise-enforced-at-the-callee-entry
 typealias Integer = int(i64.min to i64.max)
 typealias BelowMinusOne = int(i64.min to -2)
 
@@ -6,9 +6,6 @@ function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-// `d` excludes BOTH 0 and -1, so the remainder needs neither guard and no `try` is spellable. The
-// proof is the CALLER's to keep, and the call-argument door is the one position nothing at runtime
-// holds it to.
 function remainder(n Integer, d BelowMinusOne) returns Integer
 	return n mod d
 end 'remainder'
@@ -33,11 +30,24 @@ func @remainder {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegReg rsi, rdx
+    x64.cmpRegImm32 rsi, -2
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.movRegReg rax, rcx
     x64.cqo
     x64.idivReg rsi
     x64.movRegReg r8, rdx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

@@ -17,6 +17,22 @@ func @widen {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rcx, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.imulRegRegImm32 r8, rcx, 1000000
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
@@ -27,7 +43,7 @@ func @widen {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -68,6 +84,21 @@ func @utf16LeadSurrogate {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 1114111
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.leaRegRegImm32 rax, rcx, -65536
     x64.sarRegImm8 rax, rax, 10
     x64.leaRegRegImm32 r8, rax, 55296
@@ -79,7 +110,7 @@ func @utf16LeadSurrogate {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

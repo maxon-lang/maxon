@@ -62,6 +62,22 @@ func @utf16IsLeadSurrogate {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 65535
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.cmpRegImm32 rcx, 55296
     x64.movRegImm32 r8, 0
     x64.jcc greaterEqual, andrhs
@@ -73,6 +89,7 @@ func @utf16IsLeadSurrogate {
   critsplit:
     x64.jmp scmerge
   scmerge:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -81,6 +98,22 @@ func @utf16IsTrailSurrogate {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 65535
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.cmpRegImm32 rcx, 56320
     x64.movRegImm32 r8, 0
     x64.jcc greaterEqual, andrhs
@@ -92,6 +125,7 @@ func @utf16IsTrailSurrogate {
   critsplit:
     x64.jmp scmerge
   scmerge:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -103,6 +137,38 @@ func @utf16IsValidSurrogatePair {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegReg rbx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 65535
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 65535
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.callDirect utf16IsLeadSurrogate
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r8, 0

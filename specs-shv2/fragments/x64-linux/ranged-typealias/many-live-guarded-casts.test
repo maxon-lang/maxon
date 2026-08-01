@@ -93,6 +93,21 @@ func @widen {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 100000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.leaRegRegImm32 r8, rcx, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
@@ -102,7 +117,7 @@ func @widen {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -208,7 +223,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 216
@@ -228,7 +243,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 216
@@ -248,7 +263,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 216
@@ -268,7 +283,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.leaRegRdata rcx, [rip + __str_blob_5]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 216
@@ -288,28 +303,6 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 216
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.loadRegSlot rax, slot8
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.loadRegSlot rax, slot8
-    x64.cmpRegImm32 rax, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_6]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -322,12 +315,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot7
+    x64.loadRegSlot rax, slot8
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot7
+    x64.loadRegSlot rax, slot8
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -344,12 +337,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot6
+    x64.loadRegSlot rax, slot7
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot6
+    x64.loadRegSlot rax, slot7
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -366,12 +359,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rax, slot6
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rax, slot6
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -388,12 +381,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rax, slot5
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rax, slot5
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -410,12 +403,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rax, slot4
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rax, slot4
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -432,12 +425,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rax, slot3
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rax, slot3
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -454,12 +447,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot rax, slot2
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot rax, slot2
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -476,12 +469,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rax, slot1
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rax, slot1
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -498,12 +491,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot14
+    x64.loadRegSlot rax, slot0
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot14
+    x64.loadRegSlot rax, slot0
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -520,12 +513,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot15
+    x64.loadRegSlot rax, slot14
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot15
+    x64.loadRegSlot rax, slot14
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -542,12 +535,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot16
+    x64.loadRegSlot rax, slot15
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot16
+    x64.loadRegSlot rax, slot15
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -564,12 +557,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot17
+    x64.loadRegSlot rax, slot16
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot17
+    x64.loadRegSlot rax, slot16
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -586,12 +579,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot18
+    x64.loadRegSlot rax, slot17
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot18
+    x64.loadRegSlot rax, slot17
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -608,12 +601,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot19
+    x64.loadRegSlot rax, slot18
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot19
+    x64.loadRegSlot rax, slot18
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -630,12 +623,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegSlot rax, slot20
+    x64.loadRegSlot rax, slot19
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.loadRegSlot rax, slot20
+    x64.loadRegSlot rax, slot19
     x64.cmpRegImm32 rax, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
@@ -652,6 +645,28 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.loadRegSlot rax, slot20
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.loadRegSlot rax, slot20
+    x64.cmpRegImm32 rax, 1000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 216
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegSlot rax, slot21
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
@@ -662,7 +677,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_22]
+    x64.leaRegRdata rcx, [rip + __str_blob_23]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 216
@@ -684,7 +699,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_23]
+    x64.leaRegRdata rcx, [rip + __str_blob_24]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 216
@@ -704,7 +719,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_24]
+    x64.leaRegRdata rcx, [rip + __str_blob_25]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 216

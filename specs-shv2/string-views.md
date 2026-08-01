@@ -325,6 +325,16 @@ end 'main'
 The message half of the case above — same program, same reason for `widen`. `targets: x64-windows,
 x64-linux` for the reason stated at the head of this group, and the same reason every other panic-text
 case in the suite carries it.
+
+⭐⭐ **A1f CHANGED WHICH ALIAS THIS NAMES, AND THE NEW ANSWER IS THE VIOLATION THAT ACTUALLY HAPPENED.**
+`utf16LeadSurrogate(codepoint Codepoint) returns CodeUnit16` is handed `1,000,000,000`. That is outside
+`Codepoint` (`int(0 to 1114111)`) on the way IN — but the argument door owed only the compile-time half,
+and the argument is a call result nothing folds, so nothing checked it. The value ran the whole body and
+was caught on the way OUT by the `return`'s guard, which named `CodeUnit16` at `utf16.maxon:51`.
+**The old message named the SECOND violation because the first was never checked.** The entry guard now
+refuses it at `utf16.maxon:49`, naming `Codepoint` — the premise the caller actually broke, one door
+earlier, before `codepoint - 65536` underflows on a value the type said could not occur. Nothing about
+the program changed; the compiler simply stopped reporting the consequence in place of the cause.
 ```maxon
 typealias Wide = int(0 to u32.max)
 
@@ -341,7 +351,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at utf16.maxon:51: Range check failed: value outside typealias 'CodeUnit16'
+panic at utf16.maxon:49: Range check failed: value outside typealias 'Codepoint'
 Stack trace:
   in utf16LeadSurrogate
   in main

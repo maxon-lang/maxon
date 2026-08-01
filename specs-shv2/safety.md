@@ -669,34 +669,60 @@ r=-3
 0
 ```
 
-### The CPU fault a divide still reaches, and the two codes the thunk must tell apart
+### ⭐⭐ The premise the divide's proof rests on, ENFORCED (A1f)
 
-Both cases below reach a bare `idiv` carrying an operand the type system was told could not occur,
-through the ONE position a ranged typealias is checked at compile time but deliberately NOT at
-runtime: a **call argument**. `InsertRangeChecks` skips the runtime cascade there because by the time
-a guard could land the value has already travelled into the call, so a `NonZero` parameter handed a
-runtime 0 — or a `NegativeOne` parameter handed a runtime `-1` beside an `i64.min` dividend — is how
-a hardware trap is still reachable in a language whose `/` otherwise throws.
+The two cases below used to be this file's record of a hole. They are now its record of the cure, and
+the pair is worth reading as one thing.
 
-They are a PAIR: one door, one stack trace, and the two different exception codes
-(`STATUS_INTEGER_DIVIDE_BY_ZERO` 0xC0000094 vs `STATUS_INTEGER_OVERFLOW` 0xC0000095) the Windows
-thunk classifies. The divide-by-zero case is the CONTROL — it is what a classified fault looks like,
-and adding an arm beside it must not move it. It is also the only remaining test of the fault thunk
-at all: once `/` became a language-level throw, no program in this suite reached the handler.
+`/` and `mod` are throwing operations, and a divisor **proven** non-zero compiles to a bare `idiv`
+with no check and no `try` spellable. One of the two things that can constitute the proof is *a ranged
+type whose range excludes 0* — so when a `NonZero` PARAMETER was the proof, the whole guarantee rested
+on a premise **nothing enforced**. A call argument was the one position of five a ranged typealias was
+checked at compile time but deliberately not at runtime: a runtime check is a BRANCH, and an argument
+is evaluated part-way through building an argument list, so a guard emitted where the argument is
+WRITTEN lands past the call with the callee already run. A `NonZero` parameter handed a runtime `0`
+therefore reached the bare `idiv`, and the catchable `DivisionByZero` the language promises became an
+**uncatchable hardware fault** — a different failure, on a path `recover()` cannot see.
 
-⚠⚠ **AND SINCE A1x THAT DOOR REACHES A `mod` TOO, WHICH IS THE ONE PLACE `i64.min mod -1` IS STILL NOT
-`0`.** A1x made the answer `0` wherever the compiler's proof runs — and the proof reads a divisor's
-DECLARED RANGE, which this door does not enforce at runtime. So a `d BelowMinusOne` parameter
-(`int(i64.min to -2)`, a range that rules out both hazards, so the `mod` compiles bare and no `try` is
-even spellable) handed a runtime `-1` faults exactly as its divide-by-zero twin does. **It is the same
-unenforced premise, not a second one** — the cure belongs to the argument door, which owes only the
-compile-time half of a ranged check by design (`InsertRangeChecks.processArgSite`), and it now closes
-TWO hazards rather than one. Pinned here so the hole is a tested boundary rather than a sentence, and so
-the argument-door rung has a red case waiting for it.
+**A1f moved the guard rather than defeating the obstacle.** The obstacle is real and unchanged; the
+runtime half of the argument door simply belongs to the **callee's entry** instead — one guard per
+narrowed parameter per function, standing in front of every caller. So both cases below now panic with
+the RANGE message, naming the alias whose range was broken and the line the premise is DECLARED on,
+before the callee's body runs at all. The `idiv` is still bare; what changed is that its proof is now
+true.
 
-<!-- test: divide-by-zero-fault-through-an-unchecked-call-argument -->
+⚠ **The panic names the PARAMETER's line, not the caller's**, and that is forced rather than chosen:
+one guard serves every call site, including a call through a function value that has no argument list
+to blame, so the caller's line is not a fact the guard holds. The parameter list is where the premise
+is declared.
+
+⚠ **A guarded leaf function stops being a leaf.** The panic block calls `mrt_panic`, so a function
+whose body contained no call at all acquires one and gains a real frame (`x64.prologue 32`). That is a
+per-FUNCTION cost paid on the in-range path — the honest price of an elision that is now legitimate.
+
+⚠⚠ **THE `mod` HALF IS THE SAME PREMISE, NOT A SECOND ONE.** A1x made `i64.min mod -1` come back as
+`0` wherever the compiler's proof runs — and the proof reads a divisor's DECLARED RANGE. So a
+`d BelowMinusOne` parameter (`int(i64.min to -2)`, a range that rules out both of `idiv`'s hazards)
+handed a runtime `-1` used to fault exactly as its divide-by-zero twin did. One cure closed both.
+
+⚠⚠ **AND THE FAULT THUNK STILL HAS TESTS — WHICH HAD TO BE CHECKED, NOT ASSUMED.** These two cases
+were the suite's only programs reaching the `#DE` handler through a broken premise, so closing the door
+threatened to delete the fault runtime's coverage along with the bug. It does not:
+`integer-overflow-fault-from-int-min-over-minus-one` reaches `STATUS_INTEGER_OVERFLOW` (0xC0000095) with
+a divisor that is genuinely IN range (`-1` in `int(-1 to -1)`, so the new entry guard passes and the
+quotient overflows anyway), and `a-checked-divide-still-faults-at-int-min-over-minus-one` reaches it
+through the fallible spelling. The `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm keeps its own test
+through the ONE door that is still compile-time-only — see
+`divide-by-zero-fault-through-an-unchecked-array-element` below.
+
+<!-- test: divide-by-zero-premise-enforced-at-the-callee-entry -->
 <!-- targets: x64-windows, x64-linux -->
-#### A runtime zero reaching a bare `idiv` panics `integer divide by zero`
+#### ⭐ A runtime zero is refused AT `divide`'S PARAMETER — the `idiv` it would have reached is still bare
+`d` excludes 0, so the divide is proven safe and compiles to the unguarded `idiv` — no throw, no `try`.
+The proof is the CALLER's to keep, and A1f is what holds it to it: the entry guard fires at line 9,
+the parameter's own declaration, before a single body op runs. Before A1f this program died
+`panic: integer divide by zero` — an uncatchable CPU fault where the language promises a catchable
+`DivisionByZero`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonZero = int(1 to i64.max)
@@ -705,8 +731,6 @@ function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-// `d` excludes 0, so the divide is proven safe and compiles to the unguarded `idiv` — no throw,
-// no `try`. The proof is the CALLER's to keep, and nothing at runtime holds it to it.
 function divide(n Integer, d NonZero) returns Integer
 	return n / d
 end 'divide'
@@ -720,24 +744,29 @@ end 'main'
 1
 ```
 ```stderr
-panic: integer divide by zero
+panic at divide-by-zero-premise-enforced-at-the-callee-entry.test:9: Range check failed: value outside typealias 'NonZero'
 Stack trace:
   in divide
   in main
   in mrt_start
 ```
 
-<!-- test: mod-overflow-fault-through-an-unchecked-call-argument -->
+<!-- test: mod-overflow-premise-enforced-at-the-callee-entry -->
 <!-- targets: x64-windows -->
-#### ⭐ A runtime `-1` reaching a bare `mod` still faults — the ONE place `i64.min mod -1` is not `0` (A1x)
+#### ⭐ A runtime `-1` is refused at `remainder`'S PARAMETER — what A1x's guarantee actually rests on
 
-The THIRD case through the same door, and the one that says what A1x's guarantee actually rests on: the
-compiler's PROOF, not the hardware. `BelowMinusOne` rules out both of `idiv`'s divisors, so `n mod d`
-compiles to the bare sequence with no guard — correctly, given the declared type — and a caller that
-breaks the type it declared gets the fault the type was standing in front of.
+The twin of the case above, through the same door, and the one that says what A1x's guarantee rests
+on: the compiler's PROOF, not the hardware. `BelowMinusOne` rules out BOTH of `idiv`'s hazardous
+divisors, so `n mod d` compiles to the bare sequence with no guard and no `try` spellable — correctly,
+given the declared type. A caller that breaks the type it declared used to get the fault the type was
+standing in front of; it now gets the range panic, naming `BelowMinusOne` at the parameter that
+declared it. **One cure, two hazards** — the divide-by-zero premise and the `i64.min mod -1` premise
+were never two defects.
 
-`x64-linux` is excluded for its neighbours' measured reason: its kernel reports `FPE_INTDIV` for this
-`#DE` too, so it prints the divide-by-zero wording.
+`x64-linux` is excluded for its neighbours' measured reason: its kernel reports `FPE_INTDIV` for the
+`#DE` this case used to raise, so it printed the divide-by-zero wording. The exclusion is kept rather
+than re-derived: the case exists to pin the `mod` premise, and re-admitting a target is a measurement,
+not a guess.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias BelowMinusOne = int(i64.min to -2)
@@ -746,9 +775,6 @@ function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-// `d` excludes BOTH 0 and -1, so the remainder needs neither guard and no `try` is spellable. The
-// proof is the CALLER's to keep, and the call-argument door is the one position nothing at runtime
-// holds it to.
 function remainder(n Integer, d BelowMinusOne) returns Integer
 	return n mod d
 end 'remainder'
@@ -762,9 +788,55 @@ end 'main'
 1
 ```
 ```stderr
-panic: integer overflow
+panic at mod-overflow-premise-enforced-at-the-callee-entry.test:9: Range check failed: value outside typealias 'BelowMinusOne'
 Stack trace:
   in remainder
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-fault-through-an-unchecked-array-element -->
+<!-- targets: x64-windows, x64-linux -->
+#### ⚠ THE DOOR THAT IS STILL COMPILE-TIME-ONLY: an ARRAY ELEMENT, and the fault-thunk coverage it keeps alive
+
+A1f closed the call-argument door. It did **not** close the array-element one, and that is by design
+rather than by omission — an element travels as `__arr_push`'s third argument, which is a call argument
+in exactly the sense that made the guard unplaceable, and the callee whose entry could hold the guard is
+a shared `Array` body that knows nothing of `NonZero`. So `push` of an OPAQUE out-of-range value is
+still admitted with no cast to guard it and no runtime check, and the element read back out is a
+`NonZero` the compiler still believes.
+
+**This case is therefore doing two jobs at once, and both are deliberate.** It pins the surviving hole
+so it is a tested boundary rather than a sentence — and it is the suite's ONLY remaining program
+reaching the `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm of the Windows fault thunk, which A1f
+would otherwise have deleted along with the bug it fixed. `print("before")` runs, proving the value
+travelled the whole way rather than being stopped at the `push`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroArray = Array with NonZero
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	var xs = NonZeroArray.create()
+	xs.push(ident(0))
+	let d = try xs.get(0) otherwise 1
+	print("before\n")
+	return 100 / d
+end 'main'
+```
+```stdout
+before
+```
+```exitcode
+1
+```
+```stderr
+panic: integer divide by zero
+Stack trace:
   in main
   in mrt_start
 ```

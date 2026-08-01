@@ -34,6 +34,36 @@ func @utf16DecodeSurrogates {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 65535
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 65535
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.leaRegRegImm32 rax, rcx, -55296
     x64.leaRegRegImm32 rcx, rdx, -56320
     x64.imulRegRegImm32 rax, rax, 1024
@@ -47,7 +77,7 @@ func @utf16DecodeSurrogates {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

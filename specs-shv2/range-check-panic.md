@@ -42,25 +42,44 @@ Stack trace:
   in mrt_start
 ```
 
-### ⚠ Where the RUNTIME check is emitted, and the one gap
+### ⚠ Where the RUNTIME check is emitted — and WHERE a call argument's lands (A1f)
 
-The runtime half is emitted at a `return`, a struct-literal field, a field store, an array-literal
-element and an explicit `as`. It is **not** emitted at a call argument: a runtime check needs a
-branch, which splits the current block, and doing that part-way through building an argument list
-breaks the compiler's argument-pinning pass (an `E9001 … not in valueMap`, see PLAN.md's
-bootstrap-oracle-bugs list). So an unfoldable argument is not guarded at the boundary it crosses —
-it is guarded wherever it comes to rest, which is what the traces below show.
+The runtime half is emitted at a `return`, a struct-literal field, a field store, an explicit `as`,
+and — since A1f — at a **call argument**. The remaining gap is an **array-literal element**.
 
-**The compile-time half at a call argument is unaffected and is the half that was missing**: before
-it existed, `takePercent(500)` ran the callee with `p = 500` and the body observed `p > 100` as true.
-A declared range was simply not enforced at a call.
+**A call argument's runtime check is not emitted where the argument is written**, and the obstacle is
+mechanical: a check is a BRANCH, so it splits the block it lands in, and an argument is evaluated
+part-way through building an argument list — a guard placed there lands PAST the call, with the callee
+already run on the value the range forbids. A1f did not defeat that obstacle; it moved the guard. The
+runtime half of the argument door belongs to the **callee's entry**: one guard per narrowed parameter
+per function, emitted once, standing in front of every caller.
+
+Three consequences follow, and all three are pinned below:
+
+- **The panic names the PARAMETER's declaration line, not the caller's.** One guard serves every call
+  site, so a caller's line is not a fact it holds. The parameter list is where the premise is declared.
+- **It covers callers a call-site rule structurally could not** — a call through a function value has
+  no callee name at the call site to look a parameter's range up by.
+- **A guarded leaf function stops being a leaf**, because the panic block calls `mrt_panic`. That is a
+  per-FUNCTION cost on the in-range path, not an instruction count on the failing one.
+
+**The compile-time half at a call argument is unchanged and still fires first**: `clamp(101)` is
+refused by E3005 and never builds, so no entry guard ever runs for it. A parameter whose range is
+**full** promises nothing and gains nothing — no guard, no frame, byte-identical codegen.
+
+⚠ **A `function f(x T) returns T … return x` guards the same value TWICE** — once at the parameter and
+once at the `return`. That is deliberate and filed as its own rung (`A1f-dupguard`), not an oversight:
+eliding the second guard would be a new elision resting on a new premise, and this whole mechanism
+exists because an elision rested on a premise nothing enforced.
 
 ## Tests
 
 <!-- test: range-check-panic.upper-bound -->
 <!-- targets: x64-windows, x64-linux -->
-Above the maximum, and not foldable — so the runtime check on `clamp`'s `return` is what fires, and
-the trace names `clamp`.
+Above the maximum, and not foldable — so a runtime check is what fires, and the trace names `clamp`.
+⭐ Since A1f the guard is `clamp`'s ENTRY guard, at the parameter's own line (5), not the one on its
+`return` (6): the value was already outside `Percent` when it crossed the boundary, and the parameter
+list is where that premise is declared.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Percent = int(0 to 100)
@@ -82,7 +101,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at range-check-panic.upper-bound.test:6: Range check failed: value outside typealias 'Percent'
+panic at range-check-panic.upper-bound.test:5: Range check failed: value outside typealias 'Percent'
 Stack trace:
   in clamp
   in main
@@ -92,7 +111,8 @@ Stack trace:
 <!-- test: range-check-panic.lower-bound -->
 <!-- targets: x64-windows, x64-linux -->
 Below the minimum. `Natural`'s lower bound is 0, so a negative value is out of range even though it
-is a perfectly ordinary `int`.
+is a perfectly ordinary `int` — and, as above, `check`'s entry guard is what refuses it, at the
+parameter's line.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Natural = int(0 to i64.max)
@@ -114,7 +134,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at range-check-panic.lower-bound.test:6: Range check failed: value outside typealias 'Natural'
+panic at range-check-panic.lower-bound.test:5: Range check failed: value outside typealias 'Natural'
 Stack trace:
   in check
   in main
@@ -122,7 +142,10 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.in-range -->
-The half that must keep working: an in-range argument costs nothing and returns normally.
+The half that must keep working: an in-range argument passes every guard and returns normally.
+⚠ Its fragment is also where the `A1f-dupguard` duplicate is visible — `check`'s entry guard and its
+`return` guard are the same two bounds over the same `ValueId`, emitted twice. Deliberate; see the
+Documentation above.
 ```maxon
 typealias SmallInt = int(0 to 10)
 
@@ -141,7 +164,8 @@ end 'main'
 <!-- test: range-check-panic.nested-call -->
 <!-- targets: x64-windows, x64-linux -->
 The stack trace goes as deep as the value does: `process` receives an in-range `Score`, computes one
-that is not, and `validate` is where it comes to rest.
+that is not, and `validate` is where it is refused — at `validate`'s parameter (line 4), the boundary
+the bad value crosses first.
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -161,7 +185,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at range-check-panic.nested-call.test:5: Range check failed: value outside typealias 'Score'
+panic at range-check-panic.nested-call.test:4: Range check failed: value outside typealias 'Score'
 Stack trace:
   in validate
   in process
@@ -242,4 +266,81 @@ Stack trace:
   in divide
   in main
   in mrt_start
+```
+
+<!-- test: range-check-panic.full-range-argument-gains-no-guard -->
+⭐ **THE CONTROL THAT KEEPS THE COST HONEST.** `Integer` spans the whole of `i64`, so it forbids
+nothing — and a parameter that promises nothing must gain nothing. `rangeIsFull` discards it before a
+cascade is ever built, so `passthrough` stays a LEAF: no `__rc_ok`, no `__rc_panic`, no `mrt_panic`
+call, and therefore no frame. Its committed fragment is the proof, and it is the reason the entry
+guard is a cost only where a range is genuinely narrowed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function passthrough(n Integer) returns Integer
+  return n + 1
+end 'passthrough'
+
+function main() returns ExitCode
+  return passthrough(6)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: range-check-panic.float-argument -->
+<!-- targets: x64-windows, x64-linux -->
+⭐ A narrowed FLOAT parameter is guarded on exactly the same terms as an integer one. Shipping the
+integer half alone would have replaced *five doors of which four guard* with *parameters of which only
+the int ones guard* — a fresh instance of the very asymmetry the entry guard exists to delete. The
+cascade is the f64 one `emitGuardAt` already forks for the `as` and `return` doors; nothing about a
+parameter is special.
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function widen(x float) returns float
+  return x * 4.0
+end 'widen'
+
+function scale(r Ratio) returns float
+  return r * 100.0
+end 'scale'
+
+function main() returns ExitCode
+  let big = widen(0.5)
+  return scale(big) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.float-argument.test:8: Range check failed: value outside typealias 'Ratio'
+Stack trace:
+  in scale
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.error.literal-argument-into-a-divisor -->
+⭐ **THE COMPILE-TIME HALF STILL FIRES FIRST, AND IT IS STRICTLY BETTER THAN THE RUNTIME ONE.** `divide`
+now carries an entry guard, but a literal argument never reaches it: E3005 refuses the program at the
+line that wrote the `0`, naming the value, the type and its bounds — a caller-anchored diagnostic the
+one shared entry guard structurally cannot give. The two halves coexist; adding the runtime one did not
+displace the compile-time one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+function divide(a Integer, by NonZero) returns Integer
+  return a / by
+end 'divide'
+
+function main() returns ExitCode
+  return divide(10, by: 0)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-argument-into-a-divisor.test:10:10: Value 0 is outside the range of 'NonZero' (int(1 to 9223372036854775807))
 ```
