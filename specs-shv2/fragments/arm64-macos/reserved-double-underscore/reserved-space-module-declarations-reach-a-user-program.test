@@ -1,0 +1,46 @@
+// Test: reserved-space-module-declarations-reach-a-user-program
+function rank(e __ManagedListError) returns ExitCode
+	return match e 'which'
+		empty gives 1
+		endOfList gives 2
+		nodeNotInList gives 3
+		nodeAlreadyInList gives 4
+	end 'which'
+end 'rank'
+
+function main() returns ExitCode
+	return rank(__ManagedListError.nodeNotInList)
+end 'main'
+---
+ExitCode: 3
+---
+func @rank {
+  entry:
+    arm64.prologue 16
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm] @__jumptable_0
+  matchdead:
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 3
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 4
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.bl rank
+    arm64.epilogue 16
+    arm64.ret
+}

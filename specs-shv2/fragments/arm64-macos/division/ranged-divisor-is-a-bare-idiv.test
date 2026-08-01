@@ -14,6 +14,22 @@ ExitCode: 16
 func @divide {
   entry:
     arm64.prologue 16
+    arm64.cmp x1, 1
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 1000
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
     arm64.sdiv x2, x0, x1
     arm64.sdiv x16, x0, x1
     arm64.msub x0, x16, x1, x0

@@ -1,0 +1,47 @@
+// Test: where-clauses.error.no-witness-requirement-of-that-arity
+typealias Code = int(0 to u32.max)
+
+interface Base
+	function label() returns Code
+end 'Base'
+
+interface Derived extends Base
+	function label(a Code, b Code) returns Code
+end 'Derived'
+
+type Widget implements Derived
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function label() returns Code
+		return self.seed
+	end 'label'
+
+	export function label(a Code, b Code) returns Code
+		return a + b
+	end 'label'
+end 'Widget'
+
+type Box uses T where T is Derived
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function go() returns Code
+		return self.item.label(1)
+	end 'go'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	return WidgetBox.create(Widget.create(7)).go() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3115: <fragment>:36:20: no requirement named 'label' provided by the constraints on type parameter 'T' takes 1 argument(s); they provide Derived.label(a Code, b Code) returns Code, Base.label() returns Code

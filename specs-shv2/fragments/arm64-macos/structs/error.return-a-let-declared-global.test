@@ -1,0 +1,17 @@
+// Test: error.return-a-let-declared-global
+typealias Names = Array with String
+
+let A = ["ab", "cde"]
+
+function expose() returns Names
+	return A
+end 'expose'
+
+function main() returns ExitCode
+	var b = expose()
+	b.push("zz")
+	return A.count()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:7:2: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`

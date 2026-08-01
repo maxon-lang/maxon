@@ -1,0 +1,86 @@
+// Test: conformance-arguments-in-parentheses-at-arity-two
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+interface Two uses A, B
+	function first() returns A
+	function second() returns B
+end 'Two'
+
+type Pair implements Two with (Integer, Float)
+	let a as Integer
+	let b as Float
+
+	function first() returns Integer
+		return a
+	end 'first'
+
+	function second() returns Float
+		return b
+	end 'second'
+
+	static function create(a Integer, b Float) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(42, b: 1.5)
+	return p.first()
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Pair.first {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Pair.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, d8
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg d8, d0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], d8
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot d8, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 42
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.bl Pair.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Pair.first
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

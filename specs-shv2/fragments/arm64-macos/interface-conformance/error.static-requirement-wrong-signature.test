@@ -1,0 +1,32 @@
+// Test: error.static-requirement-wrong-signature
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	static function tag() returns Code
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export static function tag(extra Code) returns Code
+		return extra
+	end 'tag'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	return p.digest()
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:9:6: Partial interface implementation: type 'Point' has 1 method(s) with wrong signature:
+  - static tag(extra Code) returns Code (expected static tag() returns Code)

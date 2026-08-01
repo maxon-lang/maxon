@@ -1,0 +1,32 @@
+// Test: where-clauses.static-and-instance-requirement-of-one-name
+typealias Code = int(0 to u32.max)
+
+interface StaticOrigin
+	static function origin() returns Code
+end 'StaticOrigin'
+
+interface InstanceOrigin
+	function origin() returns Code
+end 'InstanceOrigin'
+
+type Box uses T where T is StaticOrigin, T is InstanceOrigin
+	export var item as T
+
+	export function go() returns Code
+		return self.item.origin()
+	end 'go'
+end 'Box'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,32 @@
+// Test: error.default-throws-arm-a-different-error-than-declared
+typealias Code = int(0 to u32.max)
+
+enum Kind
+	alpha
+	beta
+end 'Kind'
+
+enum ErrA implements Error
+	aZero
+end 'ErrA'
+
+enum ErrB implements Error
+	bZero
+end 'ErrB'
+
+function f(k Kind) returns Code throws ErrA
+	match k 'm'
+		alpha then return 1
+		default throws ErrB.bZero
+	end 'm'
+end 'f'
+
+function main() returns ExitCode
+	return try f(Kind.beta) otherwise 55
+end 'main'
+---
+MaxoncStderr: ```
+error E3059: specs/fragments/error-handling/error.default-throws-arm-a-different-error-than-declared.test:20:3: type mismatch: 'throw of 'ErrB' but the enclosing function throws 'ErrA' — the caller decodes the error flag against 'ErrA', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a 'ErrA' case, or declare 'throws ErrB''
+```
+---
+---

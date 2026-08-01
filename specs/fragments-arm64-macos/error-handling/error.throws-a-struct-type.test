@@ -1,0 +1,24 @@
+// Test: error.throws-a-struct-type
+typealias Code = int(0 to u32.max)
+
+type Payload
+	export var v as Code
+
+	export static function create(v Code) returns Self
+		return Self{ v: v }
+	end 'create'
+end 'Payload'
+
+function f(x Code) returns Code throws Payload
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(55) otherwise 1
+end 'main'
+---
+MaxoncStderr: ```
+error E3113: specs/fragments/error-handling/error.throws-a-struct-type.test:12:40: 'throws Payload' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
+```
+---
+---

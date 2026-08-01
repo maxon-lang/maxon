@@ -17,17 +17,14 @@ ExitCode: 1
 func @pick {
   entry:
     arm64.prologue 16
-    arm64.cbnz x2, isTrue
-    arm64.b ifcont
-  isTrue:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
+    arm64.cset x6, lt
+    arm64.cbnz x6, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
     arm64.cmp x0, 100
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
+    arm64.cset x6, gt
+    arm64.cbnz x6, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
     arm64.movImm x0, 1
@@ -36,6 +33,9 @@ func @pick {
     arm64.epilogue 16
     arm64.ret
   __rc_ok:
+    arm64.cbnz x2, isTrue
+    arm64.b ifcont
+  isTrue:
     arm64.epilogue 16
     arm64.ret
   ifcont:

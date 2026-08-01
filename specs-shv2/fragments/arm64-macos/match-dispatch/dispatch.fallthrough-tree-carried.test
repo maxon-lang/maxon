@@ -28,9 +28,25 @@ ExitCode: 4
 func @perms {
   entry:
     arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 1000000
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
     arm64.movImm x1, 0
     arm64.sub x0, x0, 1
-    arm64.jumpTable x0, default=matchdefault [[0]=matcharm, [1]=critsplit, [2]=critsplit, [3]=critsplit, [4]=critsplit] @__jumptable_1
+    arm64.jumpTable x0, default=matchdefault [[0]=matcharm, [1]=critsplit, [2]=critsplit, [3]=critsplit, [4]=critsplit] @__jumptable_2
   matchdefault:
     arm64.movImm x0, 0
     arm64.b matchcont

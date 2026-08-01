@@ -690,7 +690,7 @@ module {
     arm64.adrp_add_func x0, __destruct_IntContainer
     arm64.mov x1, x0
     arm64.mov x0, #8
-    arm64.mov x2, #14
+    arm64.mov x2, #13
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-16]
     arm64.ldr x2, [x29, #-8]
@@ -745,7 +745,7 @@ module {
     arm64.adrp_add_func x0, __destruct_StringContainer
     arm64.mov x1, x0
     arm64.mov x0, #8
-    arm64.mov x2, #15
+    arm64.mov x2, #14
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-16]
     arm64.ldr x2, [x29, #-8]
@@ -793,6 +793,40 @@ module {
     arm64.ldr x2, [x29, #-16]
     arm64.ldr x0, [x29, #-16]
     arm64.bl StringArray.count
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_IntContainer(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IntContainer.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntContainer.__skip_guarded_4
+    arm64.b __destruct_IntContainer.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_StringContainer(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_StringContainer.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_StringContainer.__skip_guarded_4
+    arm64.b __destruct_StringContainer.done
+  done:
     arm64.epilogue stack_size=48
     arm64.ret
   }
@@ -844,40 +878,6 @@ module {
     arm64.b __destruct_Array_Integer.skip_buf_0
   skip_buf_0:
     arm64.b __destruct_Array_Integer.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_IntContainer(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_IntContainer.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_IntContainer.__skip_guarded_4
-    arm64.b __destruct_IntContainer.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_StringContainer(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_StringContainer.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_StringContainer.__skip_guarded_4
-    arm64.b __destruct_StringContainer.done
   done:
     arm64.epilogue stack_size=48
     arm64.ret

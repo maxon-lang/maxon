@@ -1,0 +1,31 @@
+// Test: error.no-overload-matches-requirement
+typealias Code = int(0 to u32.max)
+
+interface Labeled
+	function label() returns Code
+end 'Labeled'
+
+type Tag implements Labeled
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function label(extra Code) returns Code
+		return extra
+	end 'label'
+
+	export function label(a Code, b Code) returns Code
+		return a + b
+	end 'label'
+end 'Tag'
+
+function main() returns ExitCode
+	let t = Tag.create(42)
+	return t.x
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:8:6: Partial interface implementation: type 'Tag' has 1 method(s) with wrong signature:
+  - no member named 'label' matches: label(extra Code) returns Code, label(a Code, b Code) returns Code (expected label() returns Code)

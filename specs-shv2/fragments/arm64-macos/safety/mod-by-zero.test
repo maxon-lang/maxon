@@ -25,13 +25,17 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 0
     arm64.bl opaque
-    arm64.movImm x1, 5
     arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cmp x0, -1
     arm64.cset x2, eq
-    arm64.orr x0, x0, x2
-    arm64.sdiv x16, x1, x0
-    arm64.msub x0, x16, x0, x1
-    arm64.cmp x2, 0
+    arm64.add x2, x2, -1
+    arm64.movImm x16, 5
+    arm64.and x2, x2, x16
+    arm64.orr x0, x0, x1
+    arm64.sdiv x16, x2, x0
+    arm64.msub x0, x16, x0, x2
+    arm64.cmp x1, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
     arm64.b tryok

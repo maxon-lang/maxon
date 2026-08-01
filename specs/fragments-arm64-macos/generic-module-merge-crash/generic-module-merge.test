@@ -316,7 +316,7 @@ module {
     arm64.adrp_add_func x0, __destruct_IntContainer
     arm64.mov x1, x0
     arm64.mov x0, #16
-    arm64.mov x2, #5
+    arm64.mov x2, #4
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-24]
     arm64.ldr x2, [x29, #-8]
@@ -522,6 +522,31 @@ module {
     arm64.epilogue stack_size=48
     arm64.ret
   }
+  func @__destruct_IntContainer(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IntContainer.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntContainer.__skip_guarded_4
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #8]
+    arm64.str x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq __destruct_IntContainer.__skip_guarded_7
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntContainer.__skip_guarded_7
+    arm64.b __destruct_IntContainer.done
+  done:
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
   func @__destruct_Array_Integer(ptr: i64) {
   entry:
     arm64.prologue stack_size=48
@@ -572,31 +597,6 @@ module {
     arm64.b __destruct_Array_Integer.done
   done:
     arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_IntContainer(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_IntContainer.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_IntContainer.__skip_guarded_4
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x2, #8]
-    arm64.str x3, [x29, #-24]
-    arm64.cmp x3, #0
-    arm64.b.eq __destruct_IntContainer.__skip_guarded_7
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label __destruct_IntContainer.__skip_guarded_7
-    arm64.b __destruct_IntContainer.done
-  done:
-    arm64.epilogue stack_size=64
     arm64.ret
   }
 }

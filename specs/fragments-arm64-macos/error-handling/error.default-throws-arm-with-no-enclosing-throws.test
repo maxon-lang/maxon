@@ -1,0 +1,28 @@
+// Test: error.default-throws-arm-with-no-enclosing-throws
+typealias Code = int(0 to u32.max)
+
+enum Kind
+	alpha
+	beta
+end 'Kind'
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(k Kind) returns Code
+	match k 'm'
+		alpha then return 1
+		default throws BoxedError.withMessage("reached")
+	end 'm'
+end 'f'
+
+function main() returns ExitCode
+	return f(Kind.beta)
+end 'main'
+---
+MaxoncStderr: ```
+error E3059: specs/fragments/error-handling/error.default-throws-arm-with-no-enclosing-throws.test:16:3: type mismatch: 'throw of 'BoxedError' but the enclosing function declares no 'throws' — the error flag has nowhere to be published and would be silently dropped, the throw path handing back the primary register's 0 as a real answer; declare 'throws BoxedError', or handle it here with a `try … otherwise`'
+```
+---
+---
