@@ -54,6 +54,38 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private bool FragmentGoldensAreAuthoritative => _filter == null && !_noBatch;
 
   /// <summary>
+  /// Which compile a test's committed golden pins. The CALLER decides, because only it knows whether
+  /// the fragment in its hand is that compile.
+  ///
+  /// ⚠ THE RULE HAS TO BE INDEPENDENT OF MACHINE LOAD, and the obvious one is not. "Gate whatever this
+  /// run produced" was tried and MEASURED wrong: a mint run that overlapped another agent's suite ran
+  /// 4.5x slower, batched binaries hit their timeouts, their specs fell back to per-fragment compiles,
+  /// every test still PASSED individually — and a golden was minted from the single compile whose
+  /// <c>mm_alloc</c> tag indices are one lower than the batched compile's. A gate whose expected value
+  /// depends on how busy the machine was is not a gate.
+  ///
+  /// The load-independent fact is that a fragment's content comes from a COMPILE, and the batched
+  /// compile either succeeded or it did not — which is a property of the source and the compiler
+  /// alone. Whether the batched BINARY then ran cleanly is a separate question, and the fallback it
+  /// triggers must not reach the goldens.
+  /// </summary>
+  private enum FragmentSource {
+    /// <summary>
+    /// This per-fragment compile. The test is in no batched module at all — it is not batchable, the
+    /// rewriter rejected it, or its spec's batched source did not compile — so compiling it alone is
+    /// the only content there is, on every run.
+    /// </summary>
+    ThisCompile,
+
+    /// <summary>
+    /// The BATCHED compile of its spec, gated separately by <see cref="CheckBatchFragments"/>. This
+    /// per-fragment compile is a re-run performed only to attribute a batch-level RUN failure; its IR
+    /// is a different artifact and must not touch the golden.
+    /// </summary>
+    BatchedCompile,
+  }
+
+  /// <summary>
   /// What this run did to the committed fragment goldens, plus anything that went wrong producing one.
   ///
   /// One object rather than a <c>ref int</c> and a bag threaded side by side through six frames: they
@@ -172,7 +204,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           var item = workItems[index];
           var itemSw = _verbose ? System.Diagnostics.Stopwatch.StartNew() : null;
           var itemResults = item switch {
-            AnyWorkItem.Single s => [ProcessWorkItem(s.Item, tally)],
+            AnyWorkItem.Single s => [ProcessWorkItem(s.Item, FragmentSource.ThisCompile, tally)],
             AnyWorkItem.Batch b => ProcessSpecBatch(b.Item, tally),
             _ => throw new InvalidOperationException("unknown work item kind"),
           };
@@ -300,18 +332,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// real failure is the report, and a derived second one buries it) nor written (a fragment from a
   /// broken compile is not a golden anybody should keep).
   ///
-  /// ⚠ EVERY OTHER PASSING TEST IS GATED, including one re-run through the per-fragment path after its
-  /// batch fell back — even though that content differs from a batched compile's. Exempting the
-  /// fallback was tried and MEASURED: it left 128 tests (4% of the suite) permanently ungated, because
-  /// four specs fall back on every single run for reasons that are properties of the BATCH and not of
-  /// any test in it (<c>async-await</c>: the batched binary trips the process-global leak check;
-  /// <c>ownership-edge-cases</c>: it exits non-zero; <c>parameter-labels</c>: the batched source does
-  /// not compile, E3010; <c>refcount-shared-borrow-root-phi-args</c>: the rewriter rejects its only
-  /// test). Those fallbacks are deterministic, so the single-compile fragment IS what every default run
-  /// produces for those tests and IS what their golden should pin. The cost of gating them is that a
-  /// future regression which knocks a batch over reports its siblings' goldens as moved alongside the
-  /// real failure — noise, but loud and true, and this gate exists precisely because the silent
-  /// alternative is the more expensive one.
+  /// EVERY OTHER PASSING TEST IS GATED — there is no ungated path. Which COMPILE each one is gated
+  /// against is <see cref="FragmentSource"/>'s question, and the answer never depends on how the run
+  /// went, only on what compiled.
   /// </summary>
   private TestResult ApplyFragmentGolden(TestResult result, string fragmentPath, string content, FragmentTally tally) {
     if (!result.Passed) return result;
@@ -395,7 +418,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// Process a single work item: generate fragment → compile → run → check the test → check its
   /// committed golden.
   /// </summary>
-  private TestResult ProcessWorkItem(TestWorkItem item, FragmentTally tally) {
+  private TestResult ProcessWorkItem(TestWorkItem item, FragmentSource source, FragmentTally tally) {
     var testSw = Stopwatch.StartNew();
 
     try {
@@ -432,8 +455,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       // Step 3: Run the test (compile + execute + check expectations)
       var result = RunTest(fragment, item);
 
-      // Step 4: Gate the committed golden against what the compiler just produced.
-      return ApplyFragmentGolden(result, item.FragmentPath, content, tally);
+      // Step 4: Gate the committed golden — unless this test's golden pins its spec's BATCHED
+      // compile, in which case CheckBatchFragments does it and this fragment is only a re-run.
+      return source == FragmentSource.ThisCompile
+        ? ApplyFragmentGolden(result, item.FragmentPath, content, tally)
+        : result;
     } catch (Exception ex) {
       return new TestResult {
         TestName = item.TestName,
@@ -464,7 +490,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // dispatcher's `main` go into one file. The rewriter mangles every
     // top-level decl (functions, types, typealiases, enums, lets, vars,
     // and per-test `main`) so concatenating fragment bodies never collides.
-    var (source, skipped, _) = FragmentGenerator.BuildBatchSource(item.SpecName, item.Tests);
+    var (source, skipped, notInBatchedModule) = FragmentGenerator.BuildBatchSource(item.SpecName, item.Tests);
     foreach (var s in skipped) {
       Logger.Debug(LogCategory.Testing, $"[BATCH SKIP] {s}");
     }
@@ -551,11 +577,17 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
     for (int i = 0; i < item.Tests.Length; i++) {
       var test = item.Tests[i];
-      var rewrite = BatchRewriter.Rewrite(test.Name, test.Source);
-      if (!rewrite.Batchable) {
-        // The rewriter rejected it, so `BuildBatchSource` left it out of the batched module too:
-        // compiling it alone is what every run does for it.
-        results[i] = RunOneAsSingle(item.SpecName, test, item.SpecFile, tally);
+
+      // ASK THE FUNCTION THAT BUILT THE MODULE. This used to re-run `BatchRewriter.Rewrite` and test
+      // only its `Batchable` flag, while `BuildBatchSource` also drops a test whose `RewrittenSource`
+      // or `MangledMainName` came back null — one membership question decided twice, by two
+      // predicates that are not the same predicate. The golden gate is precisely what a divergence
+      // would bite: a test believed batched but absent from the module has no IR slice, so its
+      // fragment would be pinned WITHOUT its `// CompiledIR` section and go on passing forever. It
+      // also drops a second full rewrite of every batchable test's source.
+      if (notInBatchedModule.Contains(test.Name)) {
+        // Not in the batched module, so compiling it alone is the only content there is.
+        results[i] = RunOneAsSingle(item.SpecName, test, item.SpecFile, FragmentSource.ThisCompile, tally);
         continue;
       }
       batchableIdx.Add(i);
@@ -570,16 +602,19 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       foreach (var i in batchableIdx) {
         results[i] = batchedResults[i]!;
       }
-      // Gate each batchable test's committed golden against IR sliced out of the batched compile —
-      // which IS the canonical fragment for these tests, because that is the compile an unfiltered
-      // batched run performs for them.
-      CheckBatchFragments(item, batchableIdx, batchedArchIr, results, tally);
     } else {
       Logger.Debug(LogCategory.Testing, $"[BATCH FALLBACK] {item.SpecName}: re-running batchable tests individually after batch failure");
       foreach (var i in batchableIdx) {
-        results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, tally);
+        results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, FragmentSource.BatchedCompile, tally);
       }
     }
+
+    // OUTSIDE the branch, and that is the whole point. These tests' goldens pin the batched COMPILE,
+    // which happened above and succeeded — whether the batched BINARY then ran cleanly is a different
+    // question, and one that a loaded machine can answer differently from run to run (a batched binary
+    // that misses its timeout falls back, and every test then passes individually). Gating here makes
+    // the expected content a function of the source and the compiler alone.
+    CheckBatchFragments(item, batchableIdx, batchedArchIr, results, tally);
 
     return results;
   }
@@ -753,11 +788,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// for the whole batch when batching fails (compile error or any per-test
   /// slice mismatch) — the user always sees real per-test pass/fail.
   /// </summary>
-  private TestResult RunOneAsSingle(string specName, TestCase test, FileInfo specFile, FragmentTally tally) {
+  private TestResult RunOneAsSingle(string specName, TestCase test, FileInfo specFile, FragmentSource source, FragmentTally tally) {
     var fragmentPath = Path.Combine(_fragmentDir, specName, $"{test.Name}.test");
     var irExePath = Path.Combine(_fragmentDir, specName, $"{test.Name}.ir_exe");
     var single = new TestWorkItem(fragmentPath, irExePath, specName, test.Name, test, specFile);
-    return ProcessWorkItem(single, tally);
+    return ProcessWorkItem(single, source, tally);
   }
 
   /// <summary>
@@ -772,7 +807,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     Logger.Debug(LogCategory.Testing, $"[BATCH FALLBACK] {item.SpecName}: {reason}");
     var results = new TestResult[item.Tests.Length];
     for (int i = 0; i < item.Tests.Length; i++) {
-      results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, tally);
+      // No batched module exists for this spec — the rewriter rejected everything, or the batched
+      // source did not compile — so this per-fragment compile IS what mints these goldens.
+      results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, FragmentSource.ThisCompile, tally);
     }
     return results;
   }

@@ -326,15 +326,32 @@ public static class FlatNamespaceCheck {
   /// Maxon projects in the tree that <see cref="Units"/> does not mention. A project is a directory
   /// holding a <c>build.maxon</c> that exports a <c>build()</c> — the same test <c>maxon build</c>
   /// applies when it decides whether a directory has a build manifest to run.
+  ///
+  /// THE DOMAIN IS THE REPOSITORY'S OWN CONTENT, which is why a gitignored path is not a candidate:
+  /// a directory a tool in this tree WROTE is not a project this table has to name. That was not
+  /// always so, and it failed <c>dotnet build</c> on a clean checkout — see
+  /// <see cref="SourceCollector.RepositoryIgnoredPaths"/> for the case and for why the answer is
+  /// git's rather than a fifth exclusion list here.
   /// </summary>
   static List<string> UntabledProjectDirs(string root) {
     var tabled = Units
       .Select(u => Path.GetFullPath(Path.Combine(root, u.RelativeDir.Replace('/', Path.DirectorySeparatorChar))))
       .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+    // One git query for the whole candidate list rather than one per manifest.
+    var manifests = Directory
+      .GetFiles(root, SourceCollector.BuildManifestFileName, SearchOption.AllDirectories)
+      .Select(SourceCollector.NormalizePath)
+      .ToList();
+    var ignored = SourceCollector.RepositoryIgnoredPaths(root, manifests);
+
     var untabled = new List<string>();
-    foreach (var manifest in Directory.GetFiles(root, SourceCollector.BuildManifestFileName, SearchOption.AllDirectories)) {
-      if (SourceCollector.IsInCompilerOutputDir(SourceCollector.NormalizePath(manifest))) continue;
+    foreach (var manifest in manifests) {
+      // Kept alongside the ignore query rather than folded into it: this one is the COMPILER's own
+      // structural rule about its output directory, true of any tree anywhere, and it still holds
+      // when git cannot be asked. The ignore query is about THIS repository's content.
+      if (SourceCollector.IsInCompilerOutputDir(manifest)) continue;
+      if (ignored.Contains(manifest)) continue;
       if (IsInNestedCheckout(root, manifest)) continue;
       if (!DeclaresBuildFunction(manifest)) continue;
 
@@ -363,6 +380,13 @@ public static class FlatNamespaceCheck {
   /// happens to sit. A worktree's <c>.git</c> is a FILE and a clone's is a DIRECTORY, so both are tested.
   /// Adding rows to <see cref="Units"/> for a worktree would be worse than useless: the rows would name
   /// paths that vanish when the slice merges.
+  /// </para>
+  /// <para>
+  /// It now OVERLAPS <see cref="SourceCollector.RepositoryIgnoredPaths"/> — <c>.claude/worktrees/</c> is
+  /// gitignored, so the agent-worktree case is answered twice — and it is kept because the two answers
+  /// are not the same answer. A checkout vendored under a TRACKED path is a different repository while
+  /// being repository content, and this is the only test that sees it; and when git cannot be asked at
+  /// all, this one still holds.
   /// </para>
   /// </remarks>
   static bool IsInNestedCheckout(string root, string path) {

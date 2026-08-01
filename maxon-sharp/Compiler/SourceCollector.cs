@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace MaxonSharp.Compiler;
 
 /// <summary>
@@ -290,4 +292,95 @@ public static class SourceCollector {
   /// </summary>
   public static string NormalizePath(string path) =>
     Path.GetFullPath(path).Replace('\\', '/');
+
+  /// <summary>The VCS this repository's ignore rules live in, asked directly rather than imitated.</summary>
+  private const string GitExecutable = "git";
+
+  /// <summary>Git's own "would this path be excluded?" query, which is the whole of the question.</summary>
+  private const string GitCheckIgnoreVerb = "check-ignore";
+
+  /// <summary>
+  /// Which of <paramref name="normalizedPaths"/> this repository's own ignore rules exclude: the
+  /// tool-owned scratch, caches and generated corpora that live inside the tree without being part of
+  /// it. Paths are matched, and returned, in the exact spelling they were passed — use
+  /// <see cref="NormalizePath"/> on both sides.
+  ///
+  /// IT ASKS GIT, AND THAT IS THE POINT. "These paths are not repository content" is already written
+  /// down exactly once, in <c>.gitignore</c>. Any hand-maintained copy of it in C# would be that fact
+  /// written twice — this repository's signature defect, and there are already FOUR tree walkers here
+  /// with four different exclusion sets, so a fifth would not have been an answer. Reimplementing the
+  /// matcher is not an option either: gitignore has anchoring, negation, <c>**</c>, per-directory
+  /// files and repository-local excludes, and a partial mirror of another tool's rule loses one clause
+  /// at a time, silently.
+  ///
+  /// WHAT IT COST BEFORE: <c>scale-test --perType</c> writes a generated Maxon project into
+  /// <c>.scale-tmp/mmtrace-src/</c>, which <c>.gitignore</c> excludes and
+  /// <c>FlatNamespaceCheck.UntabledProjectDirs</c> did not, so a tree that had ever run that tool
+  /// failed <c>dotnet build</c> — loudest for an unattended agent, which then had a red baseline it
+  /// did not cause.
+  ///
+  /// FAILURE IS IN THE SAFE DIRECTION, deliberately. No git on PATH, no repository, a git that errors
+  /// — each yields the EMPTY set, every candidate stays in, and the caller OVER-reports. Over-reporting
+  /// fails a build asking for an explicit decision, which is loud and recoverable; under-reporting
+  /// would let a real project escape a completeness check, which is the silence being guarded against.
+  /// (Git says "none are ignored" with exit 1 and an error with exit 128; both produce no output, so
+  /// the empty result covers all three without the caller having to tell them apart.)
+  /// </summary>
+  public static HashSet<string> RepositoryIgnoredPaths(string root, IReadOnlyCollection<string> normalizedPaths) {
+    var ignored = new HashSet<string>(StringComparer.Ordinal);
+    if (normalizedPaths.Count == 0) return ignored;
+
+    var startInfo = new ProcessStartInfo(GitExecutable) {
+      RedirectStandardInput = true,
+      RedirectStandardOutput = true,
+      RedirectStandardError = true,
+      UseShellExecute = false,
+      CreateNoWindow = true,
+    };
+    // `-C` rather than WorkingDirectory: it is git's own way of naming the tree, and it keeps the
+    // answer tied to the root the caller asked about rather than to this process's cwd.
+    startInfo.ArgumentList.Add("-C");
+    startInfo.ArgumentList.Add(root);
+    startInfo.ArgumentList.Add(GitCheckIgnoreVerb);
+    // `--stdin` so a long candidate list cannot overflow a command line, and `-z` on both ends
+    // because NUL is the one byte a filesystem path cannot contain.
+    startInfo.ArgumentList.Add("--stdin");
+    startInfo.ArgumentList.Add("-z");
+
+    string output;
+    try {
+      using var git = Process.Start(startInfo);
+      if (git == null) return ignored;
+
+      // Drain both pipes WHILE writing. A candidate list large enough to fill the OS pipe buffer
+      // would otherwise deadlock, each side blocked waiting for the other to read.
+      var stdout = git.StandardOutput.ReadToEndAsync();
+      var stderr = git.StandardError.ReadToEndAsync();
+      foreach (var path in normalizedPaths) {
+        git.StandardInput.Write(path);
+        git.StandardInput.Write('\0');
+      }
+      git.StandardInput.Close();
+      // Blocking on the readers is what the async start bought: the pipes drain while stdin is being
+      // written, and only then does this thread wait. Same suppression and same reason as
+      // ProcessLauncher.Run and TargetStdio — a console command has no SynchronizationContext for
+      // GetResult() to deadlock against, which is the hazard the analyzer is about.
+#pragma warning disable VSTHRD002
+      output = stdout.GetAwaiter().GetResult();
+      stderr.GetAwaiter().GetResult();
+#pragma warning restore VSTHRD002
+      git.WaitForExit();
+    } catch (Exception) {
+      // Every way of failing to ASK means the same thing — we do not know which paths git considers
+      // ignored — and not knowing must degrade to the over-reporting direction documented above,
+      // never to "nothing is a project".
+      return ignored;
+    }
+
+    foreach (var path in output.Split('\0')) {
+      if (path.Length > 0) ignored.Add(path);
+    }
+
+    return ignored;
+  }
 }
