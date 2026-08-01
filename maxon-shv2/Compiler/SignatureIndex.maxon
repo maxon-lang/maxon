@@ -1414,6 +1414,15 @@ end 'ParamDefaultEntry'
 export typealias ParamDefaultEntryArray = Array with ParamDefaultEntry
 export typealias ParamDefaultMap = Map with (ByteArray, ParamDefaultInfo)
 
+// ⭐ **THE NAMES TWO DIFFERENT DECLARATIONS BOTH CLAIMED, EACH WITH ITS OWN PARAMETER DEFAULTS.** The
+// defaults registry is keyed by the name the SOURCE wrote and is last-wins, exactly as `funcParamConsumes`
+// is — and a name may be written twice, in two files, which is E3006 and is reported after every file has
+// parsed. Until then the loser's own parse reads the WINNER's shape out of this registry, so the position
+// its `=` sits at may hold no helper: `Parser.captureParamDefault` asks this set so that collision earns a
+// positioned refusal instead of the drain's internal-consistency panic, which is about a different defect
+// entirely (the sweep and the real parse disagreeing about ONE declaration) and must stay loud.
+typealias CollidingParamDefaultNameSet = Set with ByteArray
+
 // The answer to "does this callee declare any parameter default?" — a union so "no recorded entry" is an
 // ANSWER (every parameter is mandatory), never confused with an empty-but-present one. `CalleeConsume`'s
 // twin, one declaration fact over.
@@ -2929,6 +2938,9 @@ export type ProgramSignatures
 	// default are recorded — a callee with no entry has no defaults, the "absence is the answer" default
 	// `funcParamConsumes` rests on — so the overwhelming majority of programs carry an empty map.
 	var funcParamDefaults as ParamDefaultMap
+	// The names `funcParamDefaults` had to overwrite with a DIFFERENT declaration's defaults — see
+	// `CollidingParamDefaultNameSet`. Empty for every program that declares each function once.
+	var collidingParamDefaults as CollidingParamDefaultNameSet
 	// ⭐ **THE NAMES OF EVERY FUNCTION WHOSE DECLARED RETURN TYPE WAS SPELLED `__ManagedMemory` (A2j).**
 	// `returnsBufferSurface(callee)` is the door `Parser.emitCall` asks "does this call's result denote the
 	// BUFFER, or the `Array` around it?" — a question no `MaxonReturnType` can answer, because the alias
@@ -3052,7 +3064,7 @@ export type ProgramSignatures
 	var stdlibShadowRenames as StdlibShadowRenameMap
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), bufferSurfaceReturns: BufferSurfaceReturnNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), bufferSurfaceReturns: BufferSurfaceReturnNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create()}
 	end 'create'
 
 	// --- The stdlib/user SHADOW CONTEST (A1s wave 2). See `StdlibShadowRenameMap`. ---
@@ -3474,6 +3486,16 @@ export type ProgramSignatures
 	// `recordParamConsume`'s reason. A function with NO default is not recorded (its default answer is
 	// "every parameter is required"), so the common function costs no map entry and no hash movement.
 	function recordParamDefaults(name ByteArray, info ParamDefaultInfo)
+		// ⚠ **THE OVERWRITE IS NOTED, BECAUSE THE KEY IS NOT UNIQUE.** Two files may each declare
+		// `function f` with defaults; the map keeps one, and the other file's own parse would then look up
+		// a position the winner holds no helper at. MEMBERSHIP IS THE WHOLE TEST — a name reaches here once
+		// per DECLARATION that defaults something, so a second arrival IS a second declaration, and the two
+		// need not be compared. (A program that declares one name twice is E3006 either way; all that is
+		// decided here is whether it is refused with a position or with the drain's panic.)
+		if self.funcParamDefaults.contains(name) 'twoDeclarationsOfOneName'
+			self.collidingParamDefaults.insert(name)
+		end 'twoDeclarationsOfOneName'
+
 		self.funcParamDefaults.upsert(name, value: info)
 		var state = mixBytes(mix(self.hash, value: DeclShapeParamDefault), bytes: name)
 		// The param NAMES ride for `recordParamConsume`'s reason — a rename changes which labelled argument
@@ -3517,6 +3539,12 @@ export type ProgramSignatures
 	export function declaresParamDefaults(callee ByteArray) returns bool
 		return self.funcParamDefaults.contains(callee)
 	end 'declaresParamDefaults'
+
+	// Did TWO declarations of `name` each publish parameter defaults, so that the registry holds one and
+	// the other cannot find itself? See `CollidingParamDefaultNameSet`.
+	export function paramDefaultsCollide(name ByteArray) returns bool
+		return self.collidingParamDefaults.contains(name)
+	end 'paramDefaultsCollide'
 
 	// Record one function's `throws E` clause AND fold it into the hash — the one write, for `record`'s
 	// reason. A NON-throwing function is not recorded (its default answer is "does not throw"), so the

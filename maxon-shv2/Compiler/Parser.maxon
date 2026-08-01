@@ -11385,6 +11385,20 @@ export type Parser
 			declaredFunction then break 'owner'
 		end 'owner'
 
+		// ⭐ **THE FOURTH REFUSAL: THE NAME THIS DEFAULT WOULD BE PUBLISHED UNDER IS NOT THIS DECLARATION'S
+		// ALONE.** `requireOverloadableName` refuses a DELIBERATE second declaration of a defaulted name; a
+		// second one written by accident — the same `function f` in two files — is E3006, and E3006 is
+		// reported only once every file has parsed. Until then the losing file's own drain reads the
+		// WINNER's shape out of the by-name registry and finds no helper at its parameter's position, which
+		// reached `requireSweptHelperName`'s panic: MEASURED as a compiler crash with no diagnostic and no
+		// source position, where the identical program without the defaults answers a clean E3006. So the
+		// collision is refused HERE, at the `=`, with a position — and the drain's panic goes back to
+		// meaning only what it says, that ONE declaration's two walks came apart.
+		let ownerName = paramDefaultOwnerName(owner)
+		if self.signatures.paramDefaultsCollide(ownerName) 'twoDeclarationsOfOneName'
+			throw ParseError.unsupported("a default value on parameter '{String.from(paramName)}' of '{String.from(ownerName)}' — that name is declared more than once in this program, each declaration with its own parameter defaults, and the whole-program declaration sweep publishes defaults under the name the source wrote, so a call that omits an argument cannot be told which declaration's default to supply. Remove the duplicate declaration, or drop the default", line: eqTok.line, column: eqTok.column)
+		end 'twoDeclarationsOfOneName'
+
 		// ⚠ **THE HELPER'S NAME IS NOT MINTED HERE — IT IS READ BACK FROM THE SWEEP AT THE DRAIN**
 		// (`parseParamDefaultHelper`). The sweep is the mechanism's ONE mint, because it is the mint a CALL
 		// SITE in another file must be able to see; a second one here would be the same name derived twice,
@@ -11392,7 +11406,7 @@ export type Parser
 		// disagree on when this was written that way. Reading it turns the agreement into a lookup that
 		// either finds the sweep's answer or says so.
 		self.pendingParamDefaults = materializedPendingParamDefaults(self.pendingParamDefaults)
-		self.pendingParamDefaults.push(PendingParamDefault.create(paramDefaultOwnerName(owner), paramIndex: paramIndex, paramType: paramType, exprStart: (self.pos + 1) as TokenIndex))
+		self.pendingParamDefaults.push(PendingParamDefault.create(ownerName, paramIndex: paramIndex, paramType: paramType, exprStart: (self.pos + 1) as TokenIndex))
 		self.pos = self.skipParamDefault(self.pos)
 	end 'captureParamDefault'
 
