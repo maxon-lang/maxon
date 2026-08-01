@@ -144,18 +144,13 @@ public partial class RuntimeEmitter {
     EmitNetpollInit();
   }
 
-  /// <summary>
-  /// Load the current park state of the GT in stack slot <paramref name="gtSlot"/> into
-  /// <paramref name="dest"/>, with acquire ordering.
-  ///
-  /// The acquire half matters on arm64 and is easy to lose: every reader of this word goes on to
-  /// read something the writer published BEFORE it (the completer publishes <c>io_result_val</c> and
-  /// <c>status</c> before it claims; the parker's context is saved before <c>ioYielded</c>), and a
-  /// control dependency orders a later STORE on a weakly ordered machine, never a later LOAD.
-  /// </summary>
-  private void EmitLoadParkState(VReg dest, VReg gtReg) {
-    _b.LoadAcquire(dest, gtReg, GtOffParkState);
-  }
+  // ⚠ EVERY READ OF THE PARK WORD IS A LoadAcquire, AND THAT IS NOT DECORATION. Each reader goes on
+  // to read something the writer published BEFORE it — the completer publishes io_result_val and
+  // status before it claims; the parker's context is saved before ioYielded — and on a weakly
+  // ordered machine a control dependency orders a later STORE, never a later LOAD. The CAS supplies
+  // the same pairing on its own (arm64's is LDAXR/STLXR, so its release half orders the claimer's
+  // prior stores and its acquire half orders the loser's subsequent loads), which is why the old
+  // two-word handshake's hand-rolled Dekker fence could be retired with it rather than kept beside it.
 
   /// <summary>
   /// Panic with <paramref name="msgSymdata"/>. The equivalent of Go's <c>throw</c>: an invariant
@@ -287,7 +282,7 @@ public partial class RuntimeEmitter {
     // is better than a fifth atomic every backend would have to implement.
     _b.DefineLabel(retryLabel);
     _b.LoadLocal(VReg.Scratch1, 0);              // gt
-    EmitLoadParkState(VReg.Scratch2, VReg.Scratch1);
+    _b.LoadAcquire(VReg.Scratch2, VReg.Scratch1, GtOffParkState);
     _b.MovRegImm(VReg.Arg1, NetpollNil);
     _b.AtomicCAS(VReg.Scratch1, GtOffParkState, VReg.Scratch2, VReg.Arg1);
     _b.JumpIfZero(VReg.Scratch3, retryLabel);
@@ -343,14 +338,13 @@ public partial class RuntimeEmitter {
     _b.FunctionStart("__netpoll_unblock", 1, 0x40);
 
     var loopLabel = UniqueLabel("netpoll_unblock_loop");
-    var claimedLabel = UniqueLabel("netpoll_unblock_claimed");
     var spinLabel = UniqueLabel("netpoll_unblock_spin");
     var enqueueLabel = UniqueLabel("netpoll_unblock_enqueue");
     var noneLabel = UniqueLabel("netpoll_unblock_none");
 
     _b.DefineLabel(loopLabel);
     _b.LoadLocal(VReg.Scratch1, 0);              // gt
-    EmitLoadParkState(VReg.Scratch2, VReg.Scratch1);
+    _b.LoadAcquire(VReg.Scratch2, VReg.Scratch1, GtOffParkState);
 
     // Already claimed by another completer, or the waiter has already left the park and consumed
     // the readiness itself. Either way there is nothing for us to do.
@@ -363,7 +357,6 @@ public partial class RuntimeEmitter {
     _b.AtomicCAS(VReg.Scratch1, GtOffParkState, VReg.Scratch2, VReg.Arg1);
     _b.JumpIfZero(VReg.Scratch3, loopLabel);     // lost the race — re-read and decide again
 
-    _b.DefineLabel(claimedLabel);
     // Scratch2 still holds the state we claimed FROM: the CAS leaves it alone on both backends.
     _b.CmpRegImm(VReg.Scratch2, NetpollWait);
     _b.JumpIf(Condition.Equal, noneLabel);       // not committed: it will abort its own park

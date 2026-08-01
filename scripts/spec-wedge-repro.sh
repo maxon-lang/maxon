@@ -14,10 +14,15 @@
 #
 # Usage:  scripts/spec-wedge-repro.sh [iterations] [hang-seconds] [lanes]
 #   iterations   how many suite runs to attempt          (default 40)
-#   hang-seconds how long a run may take before it is    (default 90)
-#                declared wedged; the suite runs in
-#                5-9 s, so this is a >10x margin. It
-#                must also stay BELOW the pool's own
+#   hang-seconds how long a run may go before it is     (default 90)
+#                CHECKED — not before it is declared
+#                wedged. On expiry the loop asks
+#                scripts/wedge-signature.sh whether any
+#                process is still advancing its CPU
+#                time; a slow run gets another interval,
+#                and only a pool where NOTHING advances
+#                is captured and counted. It must still
+#                stay BELOW the pool's own
 #                `WedgeWatchdogMs`, or the pool panics
 #                first and there is nothing left to
 #                sample — the loop says so if it does.
@@ -33,6 +38,9 @@
 set -u
 
 repoRoot="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/wedge-signature.sh
+. "$repoRoot/scripts/wedge-signature.sh"
+
 iterations="${1:-40}"
 hangSeconds="${2:-90}"
 lanes="${3:-both}"
@@ -73,7 +81,9 @@ capture() {
 	echo "$tree" > "$dir/pids.txt"
 
 	# The process table FIRST — it is the one thing that changes if sampling perturbs anything.
-	ps -o pid,ppid,etime,%cpu,stat,wq,command -p $(echo "$tree" | tr ' ' ',') > "$dir/ps.txt" 2>&1
+	# `cputime` is included because it, not `%cpu`, is what the wedge verdict turns on: %CPU is a
+	# decaying average and reads non-zero for a pool that stopped a moment ago.
+	ps -o pid,ppid,etime,%cpu,cputime,stat,wq,command -p $(echo "$tree" | tr ' ' ',') > "$dir/ps.txt" 2>&1
 
 	# Workers = direct children of the parent. Sample the parent and EVERY worker in PARALLEL, so
 	# all thirteen stacks describe the same instant rather than thirteen instants 5 s apart. The
@@ -219,10 +229,23 @@ for i in $(seq 1 "$iterations"); do
 	runner=$!
 
 	wedged=0
+	deadline=$hangSeconds
 	while kill -0 "$runner" 2>/dev/null; do
-		if [ $(( $(date +%s) - start )) -ge "$hangSeconds" ]; then
-			wedged=1
-			break
+		if [ $(( $(date +%s) - start )) -ge "$deadline" ]; then
+			# ⚠ THE CLOCK PROPOSES; scripts/wedge-signature.sh DISPOSES. Expiring the deadline only
+			# means "long", and long is a fact about the machine. Three runs in one 250-run batch
+			# were reported as wedges here whose own logs ended `2696 passed, 0 failed` — they were
+			# slow, because a build was running alongside them. Ask whether anything is still
+			# advancing before spending a capture on it, and before counting it.
+			verdict="$(wedgeProgressCheck "$runner" 5)"
+			case "$verdict" in
+				WEDGED)
+					wedged=1
+					break ;;
+				*)
+					deadline=$((deadline + hangSeconds))
+					echo "run $i $lane slow but PROGRESSING ($verdict) — extending to ${deadline}s" >> "$summary" ;;
+			esac
 		fi
 		sleep 1
 	done
@@ -230,11 +253,11 @@ for i in $(seq 1 "$iterations"); do
 	if [ "$wedged" -eq 1 ]; then
 		wedges=$((wedges + 1))
 		dir="$outDir/wedge-$i-$lane"
-		echo "=== WEDGE on run $i ($lane) — capturing to $dir ===" | tee -a "$summary"
+		echo "=== WEDGE on run $i ($lane) — no process advanced its CPU time over a 5s window; capturing to $dir ===" | tee -a "$summary"
 		capture "$runner" "$dir"
 		killTree "$runner" "$dir/pids.txt"
 		wait "$runner" 2>/dev/null
-		echo "run $i $lane WEDGED after ${hangSeconds}s" >> "$summary"
+		echo "run $i $lane WEDGED (progress check: nothing advancing)" >> "$summary"
 	else
 		wait "$runner"
 		code=$?
