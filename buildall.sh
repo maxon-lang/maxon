@@ -24,6 +24,17 @@ echo "=== Running shv2 Spec Tests ==="
 maxon-shv2/.maxon/maxon-shv2 spec-test
 
 echo ""
+echo "=== Checking the output-lock refusal (E6002) ==="
+# Gates what E6002 SAYS, which the spec suite structurally cannot reach: taking that branch needs the
+# filesystem to refuse an unlink, and a spec's directive set cannot change a permission. The suite runs
+# the success arm thousands of times per run and the refusal arm never — coverage that looks incidental
+# rather than absent, which is the worst shape a branch can have.
+#
+# Runs AFTER the shv2 build because it drives that binary. It deliberately makes a build FAIL and
+# asserts the wording of the refusal, so a failure here is the gate working, not the tree being broken.
+bash scripts/output-lock-gate.sh
+
+echo ""
 echo "=== Building maxon-dev MCP Server ==="
 pkill -f maxon-dev-mcp 2>/dev/null || true
 bin/maxon build maxon-dev-mcp/mcp
