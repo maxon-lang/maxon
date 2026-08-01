@@ -47,6 +47,13 @@ public class TestCase {
   /// </summary>
   public bool AsyncTrace { get; init; }
   /// <summary>
+  /// When true, the test's RUN binary is compiled with debug info on — the default for
+  /// `maxon build`, and off for every other spec compile. Enabled by a
+  /// `&lt;!-- DebugInfo --&gt;` directive. See <see cref="Fragment.DebugInfo"/> for which of a
+  /// test's several compiles this reaches, and why it is only that one.
+  /// </summary>
+  public bool DebugInfo { get; init; }
+  /// <summary>
   /// Per-test runtime timeout in milliseconds. When null, the runner uses
   /// its default (2000ms). Parsed from `&lt;!-- TimeoutMs: N --&gt;` directives
   /// in the spec file. Use for tests that legitimately take longer than the
@@ -151,6 +158,17 @@ public class Fragment {
   /// When true, compile with --async-trace enabled.
   /// </summary>
   public bool AsyncTrace { get; init; }
+  /// <summary>
+  /// When true, compile with debug info on (the `.mxdbg` sidecar's span capture).
+  ///
+  /// ⚠ IT REACHES EXACTLY ONE OF A TEST'S COMPILES — <c>TestRunner.CompileToExecutable</c>,
+  /// the one whose binary is RUN — and deliberately not the fragment-golden compile, the RequiredIR
+  /// regeneration, or the mm-trace capture. Debug info is a pure observer: it changes not one
+  /// emitted byte (docs/DEBUGGER_DESIGN.md), so those three artifacts are identical either way and
+  /// a flag that could only perturb them buys nothing. What it does change is whether the lowering
+  /// passes' span propagation runs at all, and THAT is what the run compile has to survive.
+  /// </summary>
+  public bool DebugInfo { get; init; }
   /// <summary>
   /// Per-test runtime timeout in milliseconds. When null, the runner uses
   /// its default. See <see cref="TestCase.TimeoutMs"/>.

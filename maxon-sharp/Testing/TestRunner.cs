@@ -815,27 +815,32 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   /// <summary>
-  /// Recursively clean up compiled executables from the fragment directory and its subdirectories.
-  /// On Windows, these are .exe files. On macOS/Linux, these are extensionless files
+  /// Compiled artifacts a run leaves beside the committed <c>.test</c> goldens, by glob.
+  ///
+  /// <c>*.mxdbg</c> is here because a compile with debug info on writes a sidecar next to every
+  /// binary it produces — so the moment anything switches that flag on for a compile aimed at this
+  /// tree, every deleted executable leaves one behind, untracked, in a committed directory. The glob
+  /// catches all three spellings (<c>x.exe.mxdbg</c>, <c>x.ir_exe.mxdbg</c>, and the extensionless
+  /// posix <c>x.mxdbg</c>), which is why it is a pattern rather than a suffix per binary kind.
+  /// </summary>
+  private static readonly string[] FragmentArtifactPatterns = ["*.exe", "*.ir_exe", "*.mxdbg"];
+
+  /// <summary>
+  /// Recursively clean up compiled artifacts from the fragment directory and its subdirectories.
+  /// On Windows the binaries are .exe files; on macOS/Linux they are extensionless files
   /// whose name matches a .test file in the same directory.
   /// </summary>
   private static void CleanupExecutables(string directory) {
     if (!Directory.Exists(directory)) return;
 
     try {
-      // Delete .exe and .ir_exe files in this directory
-      foreach (var exeFile in Directory.GetFiles(directory, "*.exe")) {
-        try {
-          File.Delete(exeFile);
-        } catch {
-          // Ignore deletion errors (file may be locked)
-        }
-      }
-      foreach (var irExeFile in Directory.GetFiles(directory, "*.ir_exe")) {
-        try {
-          File.Delete(irExeFile);
-        } catch {
-          // Ignore deletion errors (file may be locked)
+      foreach (var pattern in FragmentArtifactPatterns) {
+        foreach (var artifact in Directory.GetFiles(directory, pattern)) {
+          try {
+            File.Delete(artifact);
+          } catch {
+            // Ignore deletion errors (file may be locked)
+          }
         }
       }
 
@@ -880,9 +885,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         compileSw.Stop();
         Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
         compileError = Error;
-        if (File.Exists(tempExe)) {
-          try { File.Delete(tempExe); } catch { /* ignore */ }
-        }
+        CompiledArtifact.Delete(tempExe);
 
         var compiledSuccessfully = compileError == null;
         if (compiledSuccessfully) {
@@ -949,7 +952,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         if (irTempDir != null) {
           try { Directory.Delete(irTempDir, recursive: true); } catch { }
         }
-        try { if (File.Exists(irExePath)) File.Delete(irExePath); } catch { }
+        CompiledArtifact.Delete(irExePath);
         if (!irResult.Success || irResult.AllStagesIr == null) {
           return new TestResult {
             TestName = fragment.TestName,
@@ -1180,18 +1183,42 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   /// <summary>
+  /// Environment variable that forces <c>DebugInfo</c> on for EVERY spec compile, whatever each
+  /// test's directive says. This is a MEASURING INSTRUMENT, not a mode: it answers "how much of the
+  /// corpus survives the path `maxon build` takes by default?", which no per-test directive can ask
+  /// of 3200 programs at once. It is deliberately not a CLI flag — nothing gates on it, and a run
+  /// under it is not the run the committed goldens pin.
+  ///
+  /// Read once into a static, not per compile: the value cannot change mid-run, and
+  /// <see cref="SetCompileFlags"/> is on the hot path of every one of those compiles.
+  /// </summary>
+  private const string ForceDebugInfoEnvVar = "MAXON_SPEC_DEBUG_INFO";
+
+  private static readonly bool ForceDebugInfo =
+    Environment.GetEnvironmentVariable(ForceDebugInfoEnvVar) == "1";
+
+  /// <summary>
   /// Set the process-wide (ThreadStatic) compile flags every spec-test compile
   /// depends on. All compile sites route through here so the trace producers
   /// (`MmTrace` text-stderr, the mm-trace binary `DebugStream`, `AsyncTrace`)
-  /// are explicitly (re)set on each compile — a flag left set from a prior
-  /// compile on the same worker thread would silently mis-trace an unrelated
-  /// test. `MmDebug` (runtime debug checks) is never enabled by the harness,
-  /// and `Testing` is always on.
+  /// and `DebugInfo` are explicitly (re)set on each compile — a flag left set
+  /// from a prior compile on the same worker thread would silently mis-trace an
+  /// unrelated test. `MmDebug` (runtime debug checks) is never enabled by the
+  /// harness, and `Testing` is always on.
+  ///
+  /// ⚠ `DebugInfo` HAD NO CALLER HERE AT ALL, and that is the whole reason the debug-info lowering
+  /// path could crash on a program this suite compiles every run: the flag is [ThreadStatic], only
+  /// `maxon build` and the MCP's debug build ever wrote it, and the spec workers are their own
+  /// threads — so all ~3200 compiles read the CLR default `false`. It defaults to false HERE too,
+  /// because the goldens pin a no-debug-info compile; it is a test's `&lt;!-- DebugInfo --&gt;`
+  /// directive that turns it on, for the one compile whose binary gets run.
   /// </summary>
-  private static void SetCompileFlags(bool mmTrace = false, bool debugStream = false, bool asyncTrace = false) {
+  private static void SetCompileFlags(bool mmTrace = false, bool debugStream = false, bool asyncTrace = false,
+      bool debugInfo = false) {
     Compiler.Compiler.MmTrace = mmTrace;
     Compiler.Compiler.DebugStream = debugStream;
     Compiler.Compiler.AsyncTrace = asyncTrace;
+    Compiler.Compiler.DebugInfo = debugInfo || ForceDebugInfo;
     Compiler.Compiler.MmDebug = false;
     Compiler.Compiler.Testing = true;
   }
@@ -1256,7 +1283,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         // text-stderr MmTrace producer: the harness decodes the ring buffer
         // via `monitor --filter=mm`. Both gate the same MM instrumentation
         // sites, so DebugStream alone is sufficient.
-        SetCompileFlags(debugStream: fragment.MmTrace, asyncTrace: fragment.AsyncTrace);
+        SetCompileFlags(debugStream: fragment.MmTrace, asyncTrace: fragment.AsyncTrace,
+          debugInfo: fragment.DebugInfo);
         var result = new Compiler.Compiler().Compile(sources, outputPath, target: target);
         var error = result.Errors.Count > 0
           ? string.Join("\n", result.Errors.Select(e => e.Format()))
@@ -1936,6 +1964,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
                 Args = test.Args,
                 MmTrace = test.MmTrace,
                 AsyncTrace = test.AsyncTrace,
+                DebugInfo = test.DebugInfo,
                 Expectation = cerr,
                 SourceFiles = test.SourceFiles,
               },
@@ -2055,7 +2084,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
               }
             }
           } finally {
-            try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
+            CompiledArtifact.Delete(exePath);
           }
         }
 
@@ -2101,7 +2130,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
               }
             }
           } finally {
-            try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
+            CompiledArtifact.Delete(exePath);
           }
         }
 
@@ -2139,7 +2168,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
               }
             }
           } finally {
-            try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
+            CompiledArtifact.Delete(exePath);
           }
         }
       }

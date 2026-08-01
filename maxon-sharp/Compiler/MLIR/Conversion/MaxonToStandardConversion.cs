@@ -316,6 +316,13 @@ public static partial class MaxonToStandardConversion {
         // the top of the op loop so a `continue` inside the switch cannot skip it.
         var spanMarks = Compiler.DebugInfo ? new List<(int, SourceSpan)>() : null;
 
+        // The block those marks are indexes INTO, which is not always `newBlock`: lowering a single
+        // Maxon op can replace `newBlock` with a fresh merge block (a bounds check, a divide-by-zero
+        // guard, a `try` error edge — see the `ref newBlock` helpers), and marks taken before that
+        // belong to the block being left behind. Tracked so the switch can be seen and stamped at;
+        // see DebugSpanFlow's remarks for what interpreting a mark against the wrong block cost.
+        var spanMarkBlock = newBlock;
+
         // Snapshot cross-block dictionaries before this block starts processing.
         // Some lowering paths mutate entries to reflect block-local context (e.g.
         // updating valueMap[%arg] to a freshly-loaded SSA value after a call
@@ -473,6 +480,14 @@ public static partial class MaxonToStandardConversion {
         }
 
         foreach (var op in block.Operations) {
+          // A block lowering has moved past is COMPLETE — nothing appends to it again — so its final
+          // size is the last mark's end and stamping it here loses nothing by being early.
+          if (spanMarks != null && !ReferenceEquals(spanMarkBlock, newBlock)) {
+            DebugSpanFlow.AssignRange(newFunc, spanMarkBlock, spanMarks);
+            spanMarks.Clear();
+            spanMarkBlock = newBlock;
+          }
+
           DebugSpanFlow.Mark(spanMarks, func, op, newBlock);
 
           if (bulkZeroSkipOps.Contains(op)) {
@@ -2656,7 +2671,9 @@ public static partial class MaxonToStandardConversion {
           }
         }
 
-        if (spanMarks != null) DebugSpanFlow.AssignRange(newFunc, newBlock, spanMarks);
+        // `spanMarkBlock`, not `newBlock`: the LAST op lowered may itself have switched blocks, and
+        // the marks still in hand were measured before it did.
+        if (spanMarks != null) DebugSpanFlow.AssignRange(newFunc, spanMarkBlock, spanMarks);
 
         // Restore entries that existed before this block. Entries created inside
         // this block stay (their key is still the unique definition). Entries that

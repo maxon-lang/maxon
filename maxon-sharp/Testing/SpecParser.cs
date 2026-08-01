@@ -123,6 +123,13 @@ public static partial class SpecParser {
       bool mmTrace = MmTraceDirectiveRegex().IsMatch(testSection) || mmTraceExpected != null;
       bool asyncTrace = AsyncTraceDirectiveRegex().IsMatch(testSection);
 
+      // `<!-- DebugInfo -->` compiles this test's binary the way `maxon build` does by default:
+      // with the `.mxdbg` sidecar's span capture switched on. The suite's other 3200 compiles run
+      // with it OFF (the flag is [ThreadStatic] and the workers never set it), so without this
+      // directive the whole debug-info lowering path has no coverage at all — which is how it came
+      // to crash on a program the repo itself ships as a passing fragment.
+      bool debugInfo = DebugInfoDirectiveRegex().IsMatch(testSection);
+
       // Tests that exercise a self-hosted-only diagnostic (e.g. E3095) can
       // opt out of the C# runner by emitting a `<!-- SelfhostedOnly -->`
       // directive between the test marker and its first fence.
@@ -233,6 +240,7 @@ public static partial class SpecParser {
         MmTrace = mmTrace,
         MmTraceExpected = mmTraceExpected,
         AsyncTrace = asyncTrace,
+        DebugInfo = debugInfo,
         TimeoutMs = timeoutMs,
       });
     }
@@ -384,6 +392,9 @@ public static partial class SpecParser {
 
   [GeneratedRegex(@"<!--\s*AsyncTrace\s*-->")]
   private static partial Regex AsyncTraceDirectiveRegex();
+
+  [GeneratedRegex(@"<!--\s*DebugInfo\s*-->")]
+  private static partial Regex DebugInfoDirectiveRegex();
 
   [GeneratedRegex(@"<!--\s*TimeoutMs:\s*(\d+)\s*-->")]
   private static partial Regex TimeoutMsDirectiveRegex();

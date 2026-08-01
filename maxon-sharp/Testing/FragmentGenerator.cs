@@ -53,6 +53,11 @@ public static partial class FragmentGenerator {
     if (test.MmTrace || success.MmTrace) return false;
     if (test.AsyncTrace || success.AsyncTrace) return false;
 
+    // A batch's single compile is shared by every test in it and runs with the default flags, so a
+    // batched DebugInfo test's directive would reach no compile at all — it would pass without ever
+    // exercising the path it names, which is precisely the hole the directive exists to close.
+    if (test.DebugInfo) return false;
+
     // Tests that assert runtime stderr (panics, stack traces, runtime errors)
     // are sensitive to: the source file's virtual name, the test's `main`
     // symbol name, and the dispatcher frame appearing in the stack trace.
@@ -270,6 +275,7 @@ public static partial class FragmentGenerator {
     if (test.Args != null) sb.AppendLine($"Args: {test.Args}");
     if (test.MmTrace) sb.AppendLine("MmTrace: true");
     if (test.AsyncTrace) sb.AppendLine("AsyncTrace: true");
+    if (test.DebugInfo) sb.AppendLine("DebugInfo: true");
     if (test.TimeoutMs.HasValue) sb.AppendLine($"TimeoutMs: {test.TimeoutMs.Value}");
 
     if (test.Expectation is SuccessExpectation success) {
@@ -386,7 +392,7 @@ public static partial class FragmentGenerator {
             sb.AppendLine($"// Compilation failed: {errorStr}");
             error ??= errorStr;
           }
-          try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
+          CompiledArtifact.Delete(exePath);
         } finally {
           try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
@@ -406,7 +412,7 @@ public static partial class FragmentGenerator {
           sb.AppendLine($"// Compilation failed: {errorStr}");
           error ??= errorStr;
         }
-        try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
+        CompiledArtifact.Delete(exePath);
       }
     }
 
@@ -452,7 +458,7 @@ public static partial class FragmentGenerator {
     }
 
     var expectationSection = string.Join("\n", lines[(separatorIndex + 1)..secondSeparatorIndex]);
-    var (expectation, fragmentArgs, mmTrace, asyncTrace, timeoutMs) = ParseExpectation(expectationSection);
+    var (expectation, fragmentArgs, mmTrace, asyncTrace, debugInfo, timeoutMs) = ParseExpectation(expectationSection);
 
     // Parse compiled IR (between second --- and third ---).
     // Non-empty section 3 must start with the "// CompiledIR" header so it
@@ -480,6 +486,7 @@ public static partial class FragmentGenerator {
       SourceFiles = sourceFiles,
       MmTrace = mmTrace,
       AsyncTrace = asyncTrace,
+      DebugInfo = debugInfo,
       TimeoutMs = timeoutMs,
     };
   }
@@ -521,7 +528,7 @@ public static partial class FragmentGenerator {
     return string.Join('\n', remainder).TrimEnd();
   }
 
-  private static (TestExpectation Expectation, string? Args, bool MmTrace, bool AsyncTrace, int? TimeoutMs) ParseExpectation(string section) {
+  private static (TestExpectation Expectation, string? Args, bool MmTrace, bool AsyncTrace, bool DebugInfo, int? TimeoutMs) ParseExpectation(string section) {
     var lines = section.Split('\n');
     int? exitCode = null;
     string? stdout = null;
@@ -534,6 +541,7 @@ public static partial class FragmentGenerator {
     string? args = null;
     bool mmTrace = false;
     bool asyncTrace = false;
+    bool debugInfo = false;
     int? timeoutMs = null;
 
     var i = 0;
@@ -553,6 +561,8 @@ public static partial class FragmentGenerator {
         mmTrace = line["MmTrace:".Length..].Trim() == "true";
       } else if (line.StartsWith("AsyncTrace:")) {
         asyncTrace = line["AsyncTrace:".Length..].Trim() == "true";
+      } else if (line.StartsWith("DebugInfo:")) {
+        debugInfo = line["DebugInfo:".Length..].Trim() == "true";
       } else if (line.StartsWith("TimeoutMs:")) {
         var value = line["TimeoutMs:".Length..].Trim();
         if (int.TryParse(value, out var ms) && ms > 0) {
@@ -578,7 +588,7 @@ public static partial class FragmentGenerator {
     if (expectedError != null) {
       return (new CompilerErrorExpectation {
         ExpectedStderr = expectedError
-      }, args, mmTrace, asyncTrace, timeoutMs);
+      }, args, mmTrace, asyncTrace, debugInfo, timeoutMs);
     }
 
     return (new SuccessExpectation {
@@ -591,7 +601,7 @@ public static partial class FragmentGenerator {
       MmTrace = mmTrace,
       MmTraceExpected = mmTraceExpected,
       AsyncTrace = asyncTrace,
-    }, args, mmTrace, asyncTrace, timeoutMs);
+    }, args, mmTrace, asyncTrace, debugInfo, timeoutMs);
   }
 
   private static readonly Regex FileMarkerPattern = FileMarkerRegex();
