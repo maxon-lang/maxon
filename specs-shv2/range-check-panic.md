@@ -32,7 +32,7 @@ end 'clamp'
 ```
 
 `clamp(101)` is refused at compile time — the 101 is right there. A value the compiler cannot fold
-reaches the runtime check on the `return`:
+reaches a runtime check — since A1f, `clamp`'s ENTRY guard on the parameter, before its body runs:
 
 ```text
 Range check failed: value outside typealias 'Percent'
@@ -343,4 +343,84 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-argument-into-a-divisor.test:10:10: Value 0 is outside the range of 'NonZero' (int(1 to 9223372036854775807))
+```
+
+<!-- test: range-check-panic.entry-guard-on-a-parameter-no-body-reads -->
+<!-- targets: x64-windows, x64-linux -->
+⭐⭐ **THE GUARD IS NOT DEAD CODE, EVEN WHEN NOTHING BUT THE PREMISE CONSUMES IT.** `unused`'s body never
+mentions `d`, so the only thing the entry guard establishes is *the premise itself* — and a guard whose
+sole consumer is a premise is exactly what a naive dead-value pass deletes. That is not a hypothetical:
+the whole point of this mechanism is that the divide prover TRUSTS a `NonZero` parameter, so a pass that
+elided the guard on the grounds that nothing reads the value would silently restore the bug A1f closed,
+with every existing case still green. Pinned so `pruneDeadBlockArgs` / `elimTrivialBlockArgs` /
+`foldConstOperands` — and anything later that walks uses — has a test standing in front of it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function unused(d NonZero) returns Integer
+  return 7
+end 'unused'
+
+function main() returns ExitCode
+  return unused(opaque(0)) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.entry-guard-on-a-parameter-no-body-reads.test:9: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in unused
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.argument-through-a-function-value-is-guarded -->
+<!-- targets: x64-windows, x64-linux -->
+⭐⭐ **THE CLAIM THE CALLEE-ENTRY DESIGN RESTS ON, AND THE ONLY CASE THAT CAN TEST IT.** The reason the
+guard belongs to the callee rather than the call is that a call-site rule structurally cannot reach every
+caller: a call through a function VALUE has no callee name at the call site to look a parameter's range
+up by, so `callIndirect` / `witnessCall` would have stayed open for ever. Here the out-of-range `0`
+crosses the boundary through `fn`, and the trace shows the whole route — `main` → `apply` →
+`__fnref_divide` → `divide` — with the guard firing inside `divide`, where the range is declared. Nothing
+at any of those three call sites knows the word `NonZero`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias DivFn = function(Integer, NonZero) returns Integer
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function divide(a Integer, b NonZero) returns Integer
+  return a / b
+end 'divide'
+
+function apply(f DivFn, a Integer, b Integer) returns Integer
+  return f(a, b)
+end 'apply'
+
+function main() returns ExitCode
+  let fn = divide
+  return apply(fn, a: 10, b: opaque(0)) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.argument-through-a-function-value-is-guarded.test:10: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in divide
+  in __fnref_divide
+  in apply
+  in main
+  in mrt_start
 ```

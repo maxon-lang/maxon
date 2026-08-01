@@ -21432,18 +21432,26 @@ export type Parser
 	// its own; the divergence costs a needless `try` on `x / d` for a `float(1.0 to 2.0)` divisor and nothing
 	// else, and no corpus case spells one.
 	//
-	// ⚠⚠ **THE ALIAS ARM IS ONLY AS SOUND AS THE RANGE IS ENFORCED, AND ONE DOOR DOES NOT ENFORCE IT AT
-	// RUNTIME — measured, and the one way this verdict can be WRONG rather than merely coarse.** Four of the
-	// five doors into a ranged binding emit a runtime guard (`as` cast, field store, field default, ranged
-	// `return`), so `neverZero` off a `NonZero` value from any of them is a real proof. The fifth — a CALL
-	// ARGUMENT — owes only the COMPILE-TIME half by design (`InsertRangeChecks.processArgSite`, whose
-	// `RangeCheckGuard.compileTimeOnly` catches an out-of-range LITERAL and nothing else), so a runtime 0
-	// passed to a `d NonZero` parameter, or pushed into an `Array with NonZero`, reaches an unguarded `idiv`
-	// and traps. VERIFIED against the bootstrap on the parameter case: it emits the identical bare divide and
-	// traps identically, so this is the LANGUAGE's unenforced premise rather than an shv2 divergence, and the
-	// cure belongs to the argument door (every call site with a ranged parameter gains a guard) and not to
-	// the division rule. Filed for its own rung; recorded here because a premise nothing enforces is worth
-	// more written down than inferred.
+	// ⚠⚠ **THE ALIAS ARM IS ONLY AS SOUND AS THE RANGE IS ENFORCED, AND THE ENFORCEMENT IS NOT THIS
+	// FUNCTION'S — it is `InsertRangeChecks`', and this verdict is WRONG rather than merely coarse
+	// wherever that enforcement has a hole.** A `NonZero` value reaching here is proof only because every
+	// door it could have come through checks the range at RUNTIME: the `as` cast, the field store, the
+	// field default and the ranged `return` each emit a guard where the value lands, and a narrowed
+	// PARAMETER is guarded at its function's ENTRY (A1f) — one guard in front of every caller, direct,
+	// indirect and witness-dispatched alike, which is what makes `neverZero` off a `d NonZero` parameter a
+	// real proof rather than an assumption. The parameter case was MEASURED as a hole before A1f closed
+	// it: a runtime 0 reached the bare `idiv` and died `panic: integer divide by zero`, an UNCATCHABLE
+	// fault where the language promises a catchable `DivisionByZero`, and the bootstrap traps identically
+	// — it was the LANGUAGE's unenforced premise, not an shv2 divergence.
+	//
+	// ⚠ **ONE DOOR IS STILL COMPILE-TIME-ONLY, AND IT IS THE ARRAY ELEMENT.** An element travels as
+	// `__arr_push`/`__arr_set`/`__arr_insert`'s argument into a shared `Array` body that knows nothing of
+	// the element alias, so there is no callee parameter for an entry guard to stand behind and the
+	// element site owes only `RangeCheckGuard.compileTimeOnly` (see `requireArrayElementType`). A runtime
+	// 0 `push`ed into an `Array with NonZero` therefore still reaches an unguarded `idiv` and traps — that
+	// is the remaining way this verdict can be wrong, it is pinned by
+	// `specs-shv2/safety.md`'s `divide-by-zero-fault-through-an-unchecked-array-element`, and it is filed
+	// for its own rung.
 	function divisorProof(divisor ValueId) returns DivisorProof
 		if self.floatConstIsKnown(divisor) 'floatConstant'
 			// A FLOAT divisor cannot reach a `mod` at all (`requireBinOpOperands` refuses it), and `divsd`
@@ -28102,8 +28110,15 @@ export type Parser
 		let stored = try self.assignableValue(methodTok, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field)
 		// The element's declared range binds it (P1.9), COMPILE-TIME ONLY: the element travels as an
 		// argument of `__arr_push`/`__arr_set`/`__arr_insert`, so a runtime guard would land past the call
-		// that already stored it. That is not an exception to the rule — an array element IS a call
-		// argument, and takes the rule call arguments take. See `RangeCheckGuard`.
+		// that already stored it.
+		//
+		// ⚠ **THIS IS NOW THE LAST DOOR THAT OWES ONLY THE COMPILE-TIME HALF, AND IT IS NOT THE CALL
+		// ARGUMENT'S RULE ANY MORE.** A call argument owed the same half for the same reason until A1f
+		// moved its runtime half to the CALLEE'S ENTRY — one guard per narrowed parameter per function.
+		// That cure has no form here: the callee an element travels into is a shared `Array` body whose
+		// parameter is the opaque element type, so there is no narrowed parameter for an entry guard to
+		// stand behind. The hole is deliberate and PINNED, by `specs-shv2/safety.md`'s
+		// `divide-by-zero-fault-through-an-unchecked-array-element`. See `RangeCheckGuard`.
 		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(declared), guard: RangeCheckGuard.compileTimeOnly, line: methodTok.line, column: methodTok.column)
 		return stored
 	end 'requireArrayElementType'

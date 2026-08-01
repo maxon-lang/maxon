@@ -955,17 +955,28 @@ end 'isLegalRepeatedAlias'
 // ⭐ **WHICH HALVES OF THE RULE A SITE OWES.** `range-check-panic.md` states both — a compile-time
 // E3005 for a value the compiler can fold, and a runtime check where an unfoldable value LANDS — and
 // then names the one position that owes only the first: *"The runtime half is emitted at a `return`, a
-// struct-literal field, a field store, an array-literal element and an explicit `as`. It is **not**
-// emitted at a call argument."*
+// struct-literal field, a field store, an explicit `as`, and — since A1f — at a **call argument**. The
+// remaining gap is an **array-literal element**."*
 //
-// The reason is mechanical and it is the same one in every compiler in the tree: a runtime check is a
-// BRANCH, so it splits the block it lands in, and a call argument is evaluated part-way through building
-// an argument list. shv2 emits its guards a tier later than the bootstrap does — so it never splits a
-// block mid-argument-list and never hits the bootstrap's arg-pinning `E9001` — but the guard it WOULD
-// place lands at the end of the argument's block, which is PAST the call: the callee would already have
-// run with the out-of-range value, and the panic would blame a position the value had left. An
-// array-element `push` is a call argument in exactly that sense (its element travels as `__arr_push`'s
-// third argument), so it takes the same rule.
+// The reason a site can owe only the compile-time half is mechanical, and it is the same one in every
+// compiler in the tree: a runtime check is a BRANCH, so it splits the block it lands in, and a call
+// argument is evaluated part-way through building an argument list. shv2 emits its guards a tier later
+// than the bootstrap does — so it never splits a block mid-argument-list and never hits the bootstrap's
+// arg-pinning `E9001` — but the guard it WOULD place lands at the end of the argument's block, which is
+// PAST the call: the callee would already have run with the out-of-range value, and the panic would
+// blame a position the value had left.
+//
+// ⭐⭐ **A CALL ARGUMENT USED TO END THERE. A1f DID NOT DEFEAT THAT OBSTACLE — IT MOVED THE GUARD.** The
+// runtime half of the argument door belongs to the CALLEE'S ENTRY instead: one guard per narrowed
+// parameter per function, standing in front of every caller including the indirect ones
+// (`RangeCheckParamSite`, `InsertRangeChecks.guardRangedParams`). So an argument site still records
+// `compileTimeOnly`, and the premise is enforced all the same.
+//
+// ⚠ **THE ARRAY ELEMENT IS THE ONE POSITION THAT KEEPS ONLY THE COMPILE-TIME HALF, AND THAT CURE DOES
+// NOT REACH IT.** Its element is a call argument in exactly the sense above (it travels as
+// `__arr_push`'s third argument), but the callee whose entry could hold the guard is a shared `Array`
+// body whose parameter is the OPAQUE element type — there is no narrowed parameter to guard. The hole is
+// pinned by `specs-shv2/safety.md`'s `divide-by-zero-fault-through-an-unchecked-array-element`.
 export enum RangeCheckGuard
 	runtime
 	compileTimeOnly

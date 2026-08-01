@@ -419,6 +419,20 @@ type RangeCheckEmitter
 	// DIAGNOSTIC file are the callee's own — a parameter's range is the one visible where the function was
 	// written, and the panic points at the parameter itself.
 	//
+	// ⚠⚠ **"THE ONE VISIBLE WHERE THE FUNCTION WAS WRITTEN" IS ONLY AS GOOD AS `RangedAliasRegistry.lookup`,
+	// AND FOR A NAME THE CALLEE'S FILE DOES NOT ITSELF DECLARE THAT LOOKUP IS LAST-WINS.** Handing it the
+	// callee's path is right and is all this site can do; the registry answers out of the reader's own file
+	// only when the reader HAS a declaration of the name, and otherwise falls through to the bare
+	// `byName` door — which is the E3063 cross-file ambiguity `lookup`'s own header records as open.
+	// ⛔ MEASURED, on a program the suite cannot express as a fragment (it needs two files, or a user file
+	// plus a stdlib one): a user `typealias Codepoint = int(0 to 100)` makes
+	// `stdlib/helpers/string/utf16.maxon`'s `utf16LeadSurrogate(codepoint Codepoint)` — whose `Codepoint`
+	// is `stdlib/Character.maxon`'s `int(0 to 1114111)` — panic on a perfectly legal `70000`.
+	// ⭐ **IT IS NOT THIS DOOR'S DEFECT AND IT DID NOT ARRIVE WITH THIS DOOR**: the same collision refuses
+	// the same value through the `return` door on the pre-A1f compiler (`utf16DecodeSurrogates`, which
+	// RETURNS `Codepoint`, panics identically at `utf16.maxon:67`). One registry gap, now visible at one
+	// more door; the cure is E3063's rung, not a second resolution rule here.
+	//
 	// ⚠ A parameter is never a folded constant (its ValueId is defined by a `param` op, not a `const`), so
 	// `guardVerdict`'s compile-time half never fires here; what it decides for a parameter is the one thing
 	// that matters, `rangeIsFull` — a full-range parameter promises nothing and gets nothing.

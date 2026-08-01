@@ -841,14 +841,15 @@ Stack trace:
   in mrt_start
 ```
 
-⭐⭐ **AND THE CALL ARGUMENT IS THE ONLY DOOR THAT LEAKS — WHICH WAS NOT TRUE UNTIL THE TWO CASES BELOW
-WERE PINNED.** The claim above rests on the OTHER doors into a ranged binding enforcing their range at
-runtime, and for a **wholly NEGATIVE** divisor range they did not: a `-1` stored upper bound was read as
-the unbounded `u64.max` whatever the low bound said, so `int(-100 to -1)` and `int(i64.min to -2)`
-carried no upper compare and the plain `as` cast admitted anything
+⭐⭐ **AND THE ARRAY ELEMENT IS NOW THE ONLY DOOR THAT LEAKS — WHICH WAS NOT TRUE UNTIL THE TWO CASES
+BELOW WERE PINNED.** The claim above rests on the OTHER doors into a ranged binding enforcing their
+range at runtime, and for a **wholly NEGATIVE** divisor range they did not: a `-1` stored upper bound
+was read as the unbounded `u64.max` whatever the low bound said, so `int(-100 to -1)` and
+`int(i64.min to -2)` carried no upper compare and the plain `as` cast admitted anything
 (`specs-shv2/ranged-typealias.md`'s `negative-upper-bound-cast-is-checked` owns the rule). Both of
 `idiv`'s hazards were reachable through it, so both are pinned here — and they are the SAME defect as
-the divide-by-zero control three cases up, arriving through a door that is supposed to be shut.
+`divide-by-zero-fault-through-an-unchecked-array-element` above, arriving through a door that is
+supposed to be shut.
 
 <!-- test: negative-range-cast-guard-fires-before-the-divide -->
 <!-- targets: x64-windows, x64-linux -->
