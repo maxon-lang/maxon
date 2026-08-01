@@ -90,9 +90,13 @@ NETWORK_CATEGORY = "network"
 
 ACTIVE, DISABLED, DEFERRED, MISSING = "active", "disabled", "deferred", "missing"
 
-# Targets the per-target census reports on. Both compilers emit x64-windows and
-# x64-linux; arm64-macos is the bootstrap's second emitter; wasm32-wasi is shv2's
-# scalar backend.
+# Targets the per-target census reports on. The two compilers do NOT emit the same
+# set, and this comment used to say they did: the BOOTSTRAP emits x64-windows and
+# arm64-macos only (A1n withdrew the rest — it has a PE writer and a Mach-O writer
+# and no ELF writer, so anything else is refused by name). x64-linux and wasm32-wasi
+# are SHV2's, and both are real: the cross-target gate runs the Linux ELF under WSL
+# and the wasm component under the vendored wasmtime. x64-linux therefore stays in
+# the census — it is a live lane for one compiler and refused by the other.
 CENSUS_TARGETS = ("x64-windows", "x64-linux", "arm64-macos", "wasm32-wasi")
 
 
