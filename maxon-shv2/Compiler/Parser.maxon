@@ -1201,6 +1201,56 @@ let sharedEmptyInstanceAliasNames = ValueInstanceAliasNameMap.create()
 // per-file parse fan-out and stored into `FunctionRangeChecks`.
 let sharedEmptyParamSites = RangeCheckParamSiteArray.create()
 
+// ⭐ **WHICH DECLARATION A PARAMETER LIST BELONGS TO, asked for exactly one purpose: may a parameter here
+// carry a DEFAULT?** (BATCH2 slice 4). Three declaration forms share `parseFunctionParameters`, and only
+// one of them has what a default needs — a NAME a call site can look the declaration up by:
+//
+//   • a declared FUNCTION (free, static or instance method) is registered in `funcSignatures` under
+//     `name`, which is exactly what a call site slots its arguments against and what the whole-program
+//     sweep publishes the defaults under. This is the arm that captures.
+//   • a CLOSURE LITERAL is called INDIRECTLY, through a function value: the call site has no callee name
+//     at all, so nothing there can ever discover that an argument may be omitted.
+//   • an INTERFACE REQUIREMENT is in no signature registry — a witness dispatch slots against the
+//     interface's formals (`slottedWitnessArgs`) and has no declaration to read a default from.
+//
+// So the two refusing arms are not "not yet implemented for this form"; each names the thing that is
+// missing. Carrying the name in the union rather than beside a `bool` is what makes "allowed" and "the
+// name it is allowed under" one fact instead of two that can disagree.
+union ParamDefaultOwner
+	declaredFunction(name ByteArray)
+	closureLiteral
+	interfaceRequirement
+end 'ParamDefaultOwner'
+
+// One captured parameter default awaiting its helper's parse (BATCH2 slice 4): the helper's name, the
+// parameter's declared type — which is the helper's declared RETURN type — and the token index of the
+// default expression's first token, which is where the drain sets the cursor.
+type PendingParamDefault
+	export let ownerName as ByteArray
+	export let paramIndex as ParamCount
+	export let paramType as MaxonType
+	export let exprStart as TokenIndex
+
+	export static function create(ownerName ByteArray, paramIndex ParamCount, paramType MaxonType, exprStart TokenIndex) returns PendingParamDefault
+		return Self{ownerName: ownerName, paramIndex: paramIndex, paramType: paramType, exprStart: exprStart}
+	end 'create'
+end 'PendingParamDefault'
+
+typealias PendingParamDefaultArray = Array with PendingParamDefault
+
+// The list a file holds until it has declared a parameter default — nearly every file, and every file on
+// the scale corpus. Materialized copy-on-write exactly as `sharedEmptyParamSites` is, and a free function
+// for that binding's stated reason.
+let sharedEmptyPendingParamDefaults = PendingParamDefaultArray.create()
+
+function materializedPendingParamDefaults(pending PendingParamDefaultArray) returns PendingParamDefaultArray
+	if pending is sharedEmptyPendingParamDefaults 'firstDefault'
+		return PendingParamDefaultArray.create()
+	end 'firstDefault'
+
+	return pending
+end 'materializedPendingParamDefaults'
+
 // Materialize `rangedParamSites`' list on the FIRST parameter that turns out to be a ranged alias; a
 // list already materialized is returned untouched.
 //
@@ -2631,6 +2681,16 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 		return
 	end 'theCompilersOwnPrimitiveStaticMint'
 
+	// ⭐ **THE FOURTH KIND OF EXEMPTION: A PARAMETER DEFAULT'S HELPER (BATCH2 slice 4)** — the
+	// `primitiveStatic` clause one mint over, and conjoined with `declaresCallee` for its exact reason: the
+	// mint says the compiler spelled the callee, and this says the program actually contains that function.
+	// A helper is declared by the SWEEP (`recordScannedParamDefaults` publishes its return type), so a mint
+	// whose helper is absent is a drift between the sweep and the fill and lands here rather than in the
+	// backend.
+	if mint == CalleeMint.paramDefaultHelper and signatures.declaresCallee(callee) 'theCompilersOwnParamDefaultMint'
+		return
+	end 'theCompilersOwnParamDefaultMint'
+
 	if fileDeclaresReservedNames and signatures.declaresCallee(callee) 'theReservedSpacesOwnDeclaration'
 		return
 	end 'theReservedSpacesOwnDeclaration'
@@ -3210,6 +3270,21 @@ function pushCallArg(args ValueIdArray, argLabels ByteArrayArray, argRanges Sour
 	argRanges.push(range)
 	argImmutableNames.push(immutableName)
 end 'pushCallArg'
+
+// ⭐ **PUSH AN ARGUMENT THE COMPILER SUPPLIED, NOT THE AUTHOR** (BATCH2 slice 4) — a parameter default's
+// materialized value. It fills the three columns `pushCallArg` fills and DELIBERATELY leaves the fourth,
+// `argImmutableNames`, short.
+//
+// Two reasons, and either one alone is sufficient. First, the column exists to blame a BINDING for E3019,
+// and a defaulted argument is a freshly minted call result that no binding owns — there is nothing to
+// blame, which is exactly what a missing entry means (`immutableArgNameAt` decodes a short column as
+// empty; it is the column's only reader). Second, three `emitCall` sites hand in the SHARED
+// `NoImmutableArgNames`, so a push would grow a global array every other call in the program then reads.
+function pushDefaultedCallArg(args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, value ValueId, label ByteArray, range SourceRange)
+	args.push(value)
+	argLabels.push(label)
+	argRanges.push(range)
+end 'pushDefaultedCallArg'
 
 // A `MaxonOp.call`'s `argLabels` column for a call whose every argument is POSITIONAL — one empty
 // slice per argument. The op's columns are parallel by construction, so an all-positional call
@@ -5303,6 +5378,11 @@ export type Parser
 	var rangeCheckReturnSites as RangeCheckReturnSiteArray
 	var rangeCheckReturnAlias as ByteArray
 	var rangeCheckParamSites as RangeCheckParamSiteArray
+	// ⭐ Parameter defaults captured by this FILE's declarations, awaiting their helpers' parse (BATCH2
+	// slice 4). It is per-FILE and not per-function — deliberately: the helpers are drained once, at
+	// end-of-file, when no declaration is open (see `captureParamDefault`), so it is one of the few parser
+	// lists that must NOT be re-created per function.
+	var pendingParamDefaults as PendingParamDefaultArray
 	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
 	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
 	// parsed and handed to every Parser.
@@ -5682,6 +5762,7 @@ export type Parser
 			rangeCheckReturnSites: RangeCheckReturnSiteArray.create(),
 			rangeCheckReturnAlias: EmptySourceText,
 			rangeCheckParamSites: sharedEmptyParamSites,
+			pendingParamDefaults: sharedEmptyPendingParamDefaults,
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			enclosingTypeIsEnum: false,
@@ -5738,6 +5819,11 @@ export type Parser
 			end 'done'
 			try self.dispatchTopLevel()
 		end 'top'
+
+		// ⭐ Every parameter default this file declared becomes a function HERE, with no declaration open
+		// (BATCH2 slice 4) — see `parseParamDefaultHelpers` for why the drain is at the end and why it comes
+		// before the unused-alias report below.
+		try self.parseParamDefaultHelpers()
 
 		// ⭐ AT THE END, AND ONLY AT THE END: "is this alias used?" is a question about the WHOLE file, so
 		// it cannot be answered before the last declaration has been read. A file that threw never gets
@@ -5810,6 +5896,10 @@ export type Parser
 		// from the SAME token walk. `recordScannedSignature` fills one entry per function whose body moves a
 		// parameter into a struct field, so a call site can decide whether an owned argument is moved.
 		var paramConsumes = ParamConsumeEntryArray.create()
+		// ⭐ Per-function parameter DEFAULTS (BATCH2 slice 4) — the call-site dual of the return type, from
+		// the SAME token walk. One entry per function that declares at least one default, so a call site can
+		// decide whether an omitted argument is legal and which helper produces it.
+		var paramDefaults = ParamDefaultEntryArray.create()
 		// ⭐ Per-function `throws E` clauses (P1.4b) — the call-site dual of the return type, from the SAME
 		// token walk. One entry per THROWING function so a call site can decide whether it needs `try`.
 		var throwsEntries = ThrowsClauseEntryArray.create()
@@ -5959,7 +6049,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams)
 				continue
 			end 'isFunction'
 
@@ -5981,7 +6071,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, methodInnerAliasParamOut: methodInnerAliasParams)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, methodInnerAliasParamOut: methodInnerAliasParams)
 				continue
 			end 'isTypeDecl'
 
@@ -5991,7 +6081,7 @@ export type Parser
 			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
 			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
 			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
-				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, isUnion: self.at(TokenKind.union))
+				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
 
@@ -6008,7 +6098,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
 		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
@@ -6390,7 +6480,7 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
 		let nameTok = self.current()
 		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so its modifier —
 		// if any — is the token before that, and `static` is what marks a receiver-less method. Read after the
@@ -6414,6 +6504,15 @@ export type Parser
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		let funcName = self.declaredMethodName(nameTok)
 		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredBufferSurface: declaredBufferSurface))
+		// ⭐ Whether the declaration takes a receiver decides where its own parameters sit in a CALL's
+		// argument list, so it is read here, once, and shared by the default scan below and the consume scan
+		// at the end of this routine — the two facts that are recorded CALL-ALIGNED.
+		let takesReceiver = not self.enclosingType.isEmpty() and not hasStaticModifier
+		// ⭐ **PARAMETER DEFAULTS (BATCH2 slice 4)** — recorded from the SAME token walk, and the ONLY place
+		// the whole program learns that a call may legally omit an argument. It also publishes each
+		// synthesized helper's RETURN TYPE into `entries`, which is what lets a call site in another file
+		// type the call it emits to that helper (`mintCallResult`).
+		self.recordScannedParamDefaults(funcName, paramsStart: paramsStart, takesReceiver: takesReceiver, entries: entries, paramDefaults: paramDefaults)
 		// The `throws E` clause follows the return type; parsed BEFORE the consume-scan so the cursor lands
 		// past it. Only a THROWING function gets an entry (its absence is "does not throw"), mirroring
 		// `paramConsumes` recording only consuming functions. Gated on the `throws` KEYWORD being present so
@@ -6450,7 +6549,6 @@ export type Parser
 		// direct `Self{f: p}` store in an instance method is deliberately left to the callee-side borrowed-value
 		// refusal (`moveInPayload`'s clean E2015), exactly as before this slice — so no NON-array instance method
 		// changes its consume facts (`detectFieldStores: false`).
-		let takesReceiver = not self.enclosingType.isEmpty() and not hasStaticModifier
 		if not takesReceiver 'receiverless'
 			// A parameter can be type-parameter-typed ONLY inside a generic type's body (a non-empty `uses`
 			// list); a top-level function and a non-generic type's method have none. Off the generic path the
@@ -6471,6 +6569,112 @@ export type Parser
 			end 'genericInstanceMethod'
 		end 'instanceMethod'
 	end 'recordScannedSignature'
+
+	// ⭐ **RECORD THIS FUNCTION'S PARAMETER DEFAULTS WHOLE-PROGRAM (BATCH2 slice 4)** — one
+	// `ParamDefaultEntry` per function that declares at least one, and one `FuncReturnTypeEntry` per default
+	// naming the synthesized helper that produces it (see `SignatureIndex.ParamDefaultInfo` for what the
+	// helper is). Both must come from the SWEEP rather than from the real parse, because both answer a
+	// question a CALL SITE asks about a callee that may be declared in another file: "may I omit this
+	// argument?" and "what type does the helper I am about to call return?".
+	//
+	// The names are recorded CALL-ALIGNED — `SelfParamName` at slot 0 for an instance method — exactly as
+	// `callAlignedInstanceParams` aligns the consume facts, and for that routine's reason: the call site
+	// slots a label to a position in the list the RECEIVER-PREPENDING caller built. The helper's own name is
+	// minted from the parameter's SOURCE position, which is the position `parseFunctionParameters` knows, so
+	// the two ends of the mint need share nothing but `paramDefaultHelperName`.
+	//
+	// It is TOLERANT like every other routine on this walk: a parameter type it cannot read abandons the
+	// whole function's defaults rather than publishing half of them, and the real parse reports the malformed
+	// declaration with a position.
+	function recordScannedParamDefaults(funcName ByteArray, paramsStart TokenIndex, takesReceiver bool, entries FuncReturnTypeEntryArray, paramDefaults ParamDefaultEntryArray)
+		if not self.paramListDeclaresDefault(paramsStart) 'noDefaults'
+			return
+		end 'noDefaults'
+
+		var names = ByteArrayArray.create()
+		var helperNames = ByteArrayArray.create()
+		if takesReceiver 'prependReceiver'
+			names.push(SelfParamName)
+			helperNames.push(EmptySourceText)
+		end 'prependReceiver'
+
+		let resume = self.pos
+		var q = paramsStart + 1
+		while true 'params'
+			names.push(self.tokenAt(q).value)
+			let typeStart = q + 1
+			let typeEnd = self.skipParamType(typeStart)
+			let itemEnd = self.paramItemEndFrom(typeEnd)
+			if self.kindAt(typeEnd) != TokenKind.equals 'noDefault'
+				helperNames.push(EmptySourceText)
+			end 'noDefault' else 'hasDefault'
+				// The helper RETURNS the parameter's declared type, so the default expression is typed and
+				// range-checked against exactly what the parameter demands, by the ordinary `return` rules.
+				self.pos = typeStart
+				let paramType = try self.parseTypeReference() otherwise 'malformedType'
+					self.pos = resume
+					return
+				end 'malformedType'
+				// ⚠ **THE INDEX IS THE PARAMETER'S CALL-ALIGNED POSITION, NOT ITS SOURCE POSITION**, which for
+				// an instance method differ by the prepended receiver. `helperNames.count()` IS that position
+				// — one entry has been pushed per parameter already named, plus one for the receiver — and it
+				// is also the index `ParamDefaultInfo.helperFor` is asked with, so the mint and the lookup
+				// cannot key on different numbers. (They did: minted from the SOURCE index, a defaulted
+				// instance method published `#0` and its declaration looked up `#1`, and the divergence
+				// surfaced as a backend `call to unknown function` with no source position at all.)
+				let helperName = paramDefaultHelperName(funcName, paramIndex: helperNames.count())
+				helperNames.push(helperName)
+				// ⭐ **AND ITS PRE-ERASURE SPELLING RIDES TOO (A2j).** The helper's return type IS the
+				// parameter's declared type, so if the parameter was written `__ManagedMemory` the helper
+				// RETURNS the buffer surface — and `emitCall`'s `markDeclaredBufferSurface` reads that off
+				// the whole-program index by callee name, which for this callee is the entry pushed here.
+				// Hardcoded `false`, a defaulted buffer parameter would hand its call site a value bearing
+				// the `Array` member roster instead of the buffer's: a wrong surface, which is a wrong
+				// answer rather than a compile error. Asked at `typeStart`, the one place the spelling is
+				// still readable, through the same door `parseFunctionParameters` asks it at.
+				entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredBufferSurface: self.typeSpellingAtDenotesBuffer(typeStart)))
+			end 'hasDefault'
+
+			if self.kindAt(itemEnd) != TokenKind.comma 'endList'
+				break
+			end 'endList'
+			q = itemEnd + 1
+		end 'params'
+		self.pos = resume
+
+		paramDefaults.push(ParamDefaultEntry.create(funcName, info: ParamDefaultInfo.create(names, helperNames: helperNames)))
+	end 'recordScannedParamDefaults'
+
+	// Does the parameter list at `parenPos` declare a default on ANY parameter? A peek-only, allocation-free
+	// walk asked once per declared function.
+	//
+	// ⚠ It is a SEPARATE walk from `recordScannedParamDefaults`' and deliberately so: merged, every function
+	// in the program would allocate the two name arrays that routine builds, on the sweep's hottest path, to
+	// discover that the overwhelming majority declare no default at all. This is the same gate
+	// `recordScannedSignature` puts in front of the `throws` clause and the inner-alias parameter info.
+	function paramListDeclaresDefault(parenPos TokenIndex) returns bool
+		if self.kindAt(parenPos) != TokenKind.leftParen 'noParens'
+			return false
+		end 'noParens'
+		var q = parenPos + 1
+		if self.kindAt(q) == TokenKind.rightParen 'noParams'
+			return false
+		end 'noParams'
+
+		while true 'params'
+			let typeEnd = self.skipParamType(q + 1)
+			if self.kindAt(typeEnd) == TokenKind.equals 'found'
+				return true
+			end 'found'
+			if self.kindAt(typeEnd) != TokenKind.comma 'endList'
+				return false
+			end 'endList'
+			q = typeEnd + 1
+		end 'params'
+		// No `paramItemEndFrom` step here, and that is not an omission: this walk RETURNS at the first `=`
+		// it finds, so it never has one to step over.
+		panic("paramListDeclaresDefault: the parameter loop only exits by returning at `=`, the closing `)` or EOF")
+	end 'paramListDeclaresDefault'
 
 	// ⭐ **THE CALL-ALIGNED PARAMETER LIST of an instance method in a generic type** — `SelfParamName` at slot 0
 	// (its sentinel type-parameter position), then the source parameters, in the SAME order the receiver-prepending
@@ -7520,10 +7724,12 @@ export type Parser
 			if collectTypeParamFlags 'flag'
 				typeParamPositionsOut.push(self.paramTypeParamPosition(typeStart, typeEnd: typeEnd))
 			end 'flag'
-			if self.kindAt(typeEnd) != TokenKind.comma 'endList'
+			// The TYPE ends at `typeEnd` and the PARAMETER may not — see `paramItemEndFrom`.
+			let itemEnd = self.paramItemEndFrom(typeEnd)
+			if self.kindAt(itemEnd) != TokenKind.comma 'endList'
 				return names
 			end 'endList'
-			q = typeEnd + 1
+			q = itemEnd + 1
 		end 'params'
 		panic("paramNamesIn: the parameter loop only exits by returning at the closing `)` or at EOF")
 	end 'paramNamesIn'
@@ -7562,10 +7768,12 @@ export type Parser
 			let typeStart = q + 1
 			let typeEnd = self.skipParamType(typeStart)
 			members.push(self.innerAliasMemberOfParamType(typeStart, typeEnd: typeEnd))
-			if self.kindAt(typeEnd) != TokenKind.comma 'endList'
+			// The TYPE ends at `typeEnd` and the PARAMETER may not — see `paramItemEndFrom`.
+			let itemEnd = self.paramItemEndFrom(typeEnd)
+			if self.kindAt(itemEnd) != TokenKind.comma 'endList'
 				return InnerAliasParamInfo.create(names, members: members)
 			end 'endList'
-			q = typeEnd + 1
+			q = itemEnd + 1
 		end 'params'
 		panic("innerAliasParamsIn: the parameter loop only exits by returning at the closing `)` or at EOF")
 	end 'innerAliasParamsIn'
@@ -7582,8 +7790,17 @@ export type Parser
 	end 'innerAliasMemberOfParamType'
 
 	// Advance past ONE parameter's TYPE — from the token AFTER the parameter's name to the token that
-	// ENDS the type: the `,` before the next parameter, the `)` closing the list, or EOF on a malformed
-	// list. Balanced over nested `(...)` (a `function(…)`-typed parameter).
+	// ENDS the type: the `=` opening its DEFAULT VALUE, the `,` before the next parameter, the `)` closing
+	// the list, or EOF on a malformed list. Balanced over nested `(...)` (a `function(…)`-typed parameter).
+	//
+	// ⚠ **THE `=` STOP IS NOT ONLY FOR THE DEFAULT WALK — IT IS WHAT KEEPS THE EXISTING SCANS CORRECT**
+	// (BATCH2 slice 4). Every caller reads the SPAN `[typeStart, typeEnd)` as the declared type:
+	// `paramTypeParamPosition` calls a span of length 1 a bare type parameter, and
+	// `innerAliasMemberOfParamType` reads its tokens. Left running to the `,`, `p T = 1` would hand both of
+	// them a three-token "type" and a `uses`-parameter-typed parameter would stop being recognized as one
+	// the moment it gained a default. No type reference can CONTAIN a top-level `=` — `int(0 to 100)` and
+	// `function(X) returns Y` are the two shapes with internal structure and neither spells one — so the
+	// stop is unambiguous.
 	function skipParamType(fromType TokenIndex) returns TokenIndex
 		var q = fromType
 		var depth = 0
@@ -7601,13 +7818,73 @@ export type Parser
 				end 'endList'
 				depth = depth - 1
 			end 'closeType'
+			if (kind == TokenKind.comma or kind == TokenKind.equals) and depth == 0 'endOfType'
+				return q
+			end 'endOfType'
+			q = q + 1
+		end 'skip'
+		panic("skipParamType: the loop only exits by returning at `=`, `,`, `)` or EOF")
+	end 'skipParamType'
+
+	// ⭐ **THE TOKEN THAT ENDS ONE PARAMETER — ITS TYPE, PLUS ITS DEFAULT IF IT HAS ONE.** THE one stepper
+	// every peek-only parameter-list walk advances by, and it exists because the alternative shipped a
+	// SEGFAULT.
+	//
+	// ⚠⚠ **A WALK THAT STEPS BY `skipParamType` STOPS AT THE FIRST DEFAULTED PARAMETER AND SILENTLY REPORTS
+	// A SHORT LIST.** `skipParamType` ends the TYPE, which for `tag Integer = 1, item T` is the `=` — not a
+	// `,`, so the walk reads the list as finished and never sees `item`. A short parameter list is a
+	// well-formed one, so nothing downstream notices: what is lost is the per-parameter OWNERSHIP fact those
+	// walks exist to publish. MEASURED (`specs-shv2/param-default-list-walks.md`): with `item` dropped from
+	// `scanConsumeBits`' view, a `Box uses T` constructor's type-parameter FEED went unrecorded, the concrete
+	// call site did not consume the `String` it passed, caller and box both owned it — and the program died
+	// with an access violation, against a control identical but for the default that answered 6.
+	//
+	// So the TYPE SPAN and the STEP are two different questions and are now asked separately: a caller that
+	// wants `[typeStart, typeEnd)` still calls `skipParamType`, and every caller that wants the NEXT
+	// parameter calls this.
+	function paramItemEndFrom(typeEnd TokenIndex) returns TokenIndex
+		if self.kindAt(typeEnd) != TokenKind.equals 'noDefault'
+			return typeEnd
+		end 'noDefault'
+
+		return self.skipParamDefault(typeEnd)
+	end 'paramItemEndFrom'
+
+	// Advance past ONE parameter's DEFAULT VALUE expression — from the `=` that opens it to the token that
+	// ENDS it: the `,` before the next parameter, the `)` closing the list, or EOF on a malformed list.
+	// `skipParamType`'s twin, one token span over, and balanced over all THREE bracket kinds rather than
+	// just parens: a default is an arbitrary expression, so `[10, 20, 12]`, `Point.create(10, y: 32)` and
+	// `Self{x: 1, y: 2}` each carry commas that are not parameter separators.
+	//
+	// ⚠ It never sees a top-level `=` of its own: `parseFunctionParameters` and the sweep both enter here
+	// AT the `=` and start their walk one token past it, and Maxon has no assignment expression.
+	function skipParamDefault(fromEquals TokenIndex) returns TokenIndex
+		var q = fromEquals + 1
+		var depth = 0
+		while true 'skip'
+			let kind = self.kindAt(q)
+			if kind == TokenKind.eof 'malformed'
+				return q
+			end 'malformed'
+			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'openGroup'
+				depth = depth + 1
+			end 'openGroup'
+			if kind == TokenKind.rightBracket or kind == TokenKind.rightBrace 'closeGroup'
+				depth = depth - 1
+			end 'closeGroup'
+			if kind == TokenKind.rightParen 'closeParen'
+				if depth == 0 'endList'
+					return q
+				end 'endList'
+				depth = depth - 1
+			end 'closeParen'
 			if kind == TokenKind.comma and depth == 0 'nextParam'
 				return q
 			end 'nextParam'
 			q = q + 1
 		end 'skip'
-		panic("skipParamType: the loop only exits by returning at `,`, `)` or EOF")
-	end 'skipParamType'
+		panic("skipParamDefault: the loop only exits by returning at `,`, `)` or EOF")
+	end 'skipParamDefault'
 
 	// The name a `function <nameTok>` is DECLARED under: its own, at file scope; `Point.create`
 	// inside `type Point`.
@@ -7728,6 +8005,18 @@ export type Parser
 		if self.signatures.returnsBufferSurface(base) 'bufferReturningOverload'
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations returns `{String.from(ManagedMemoryTypeName)}`, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'bufferReturningOverload'
+
+		// ⭐ **PARAMETER DEFAULTS (BATCH2 slice 4) — the `throws` clause's exact shape, one declaration fact
+		// over.** A default is published by the sweep under the name the SOURCE wrote, and the omitted
+		// argument is filled when the call is PARSED (`fillOmittedArgDefaults`) — a whole pass before
+		// `resolveOverloadedCalls` picks a member. So a short call to an overloaded name would be filled from
+		// whichever declaration the by-name sweep recorded last, and the helper it calls returns THAT
+		// declaration's parameter type: a silently wrong value, of a possibly wrong type, at run time. It is
+		// also what makes the helper's own name unique by construction (`paramDefaultHelperName` keys on the
+		// source name, which every member of an overload set shares).
+		if self.signatures.declaresParamDefaults(base) 'defaultedOverload'
+			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations gives a parameter a DEFAULT VALUE, and the whole-program declaration sweep publishes defaults under the name the source wrote, so a call that omits an argument cannot be told which overload's default to supply. The argument is filled when the call is parsed and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names, or drop the default", line: nameTok.line, column: nameTok.column)
+		end 'defaultedOverload'
 	end 'requireOverloadableName'
 
 	// Does this signature declare a parameter whose OWNERSHIP a call can transfer — a managed value (String,
@@ -7904,7 +8193,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
 		let nameTok = try self.readTypeHeader() otherwise return
 		self.enterTypeScope(nameTok, isEnum: false)
 
@@ -7979,7 +8268,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut)
 				continue
 			end 'isMethod'
 
@@ -8094,7 +8383,7 @@ export type Parser
 	// followed by a character literal — byte-for-byte what `enumBodyEndsAt` recognizes as the ENUM's
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
-	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, isUnion bool)
+	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, isUnion bool)
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum) otherwise return
 		let nameTok = try self.consume(TokenKind.identifier) otherwise return
 		let conformsTo = try self.readOptionalImplementsClause() otherwise return
@@ -8120,7 +8409,7 @@ export type Parser
 				self.pos = self.enumMethodKeywordIndex(self.pos)
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut)
 				continue
 			end 'method'
 
@@ -9869,7 +10158,7 @@ export type Parser
 		// would be a second way for the columns to come apart.
 		var paramBufferSurfaces = BoolArray.create()
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces, owner: ParamDefaultOwner.interfaceRequirement)
 		try self.consume(TokenKind.rightParen)
 
 		let returnType = try self.parseOptionalReturnType()
@@ -10587,7 +10876,7 @@ export type Parser
 		end 'receiverParam'
 
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces, owner: ParamDefaultOwner.declaredFunction(sourceName))
 		try self.consume(TokenKind.rightParen)
 
 		// ⭐ **A STRUCT PARAMETER OR RETURN TYPE IS RE-TAGGED `structRef` HERE**, in the real parse where
@@ -11007,16 +11296,15 @@ export type Parser
 	// Parse a comma-separated parameter list `name type[, name type]*` into the
 	// parallel `paramNames`/`paramTypes` lists (empty when the list is empty). Each
 	// parameter is `name type` — a bare identifier followed by a type reference. A
-	// `= <default>` after the type is a later milestone, so it is rejected here with
-	// a positioned `unsupported` rather than silently dropped. The caller has already
-	// consumed the `(` and consumes the closing `)`.
+	// `= <default>` after the type is captured for `owner` (see `ParamDefaultOwner`).
+	// The caller has already consumed the `(` and consumes the closing `)`.
 	//
 	// ⭐ **`paramBufferSurfaces` IS THE PRE-ERASURE SPELLING COLUMN (A2j)**, the shape
 	// `FuncSignature.paramAggregateNames` already established for a union parameter's name: a fact the
 	// declaration holds and `parseTypeReference` is about to destroy, captured at the last moment it is
 	// readable and carried alongside the columns it describes. It needs no signature-index entry, because the
 	// only reader is `bindParameters` — and both live inside one `parseFunction`.
-	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramBufferSurfaces BoolArray) throws ParseError
+	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramBufferSurfaces BoolArray, owner ParamDefaultOwner) throws ParseError
 		if self.at(TokenKind.rightParen) 'noParams'
 			return
 		end 'noParams'
@@ -11033,14 +11321,34 @@ export type Parser
 			let declaresBufferSurface = self.typeSpellingAtDenotesBuffer(self.pos)
 			let paramType = try self.parseTypeReference()
 
-			if self.at(TokenKind.equals) 'hasDefault'
-				let eqTok = self.current()
-				throw ParseError.unsupported("a default value on parameter '{String.from(nameTok.value)}' (parameter defaults arrive at a later milestone)", line: eqTok.line, column: eqTok.column)
-			end 'hasDefault'
-
+			// ⭐ **A DEFAULT VALUE IS CAPTURED, NOT PARSED HERE (BATCH2 slice 4)** — its expression becomes the
+			// whole body of a synthesized nullary helper, parsed at the END of the file by
+			// `parseParamDefaultHelpers`, and the call site emits a call to that helper for every argument it
+			// omits (see `SignatureIndex.ParamDefaultInfo` for the mechanism and why it is a function).
+			//
+			// ⚠ **IT IS DEFERRED TO END-OF-FILE RATHER THAN PARSED IN PLACE, AND THAT IS THE WHOLE REASON
+			// THIS RUNG NEEDS NO STATE SAVE/RESTORE.** A helper is a FUNCTION: parsing one needs the ~25
+			// per-function columns (scope, value numbering, blocks, drop sets, range-check accumulators)
+			// swapped to fresh ones. Done HERE, in the middle of a declaration, that is
+			// `parseClosureExpression`'s save/restore dance — whose header records that its ~25 live
+			// `savedX` aliases crashed the bootstrap's refcount runtime when they were factored into a
+			// method. Drained between top-level declarations there is nothing live to alias: the enclosing
+			// function has closed, so the helper simply re-initializes the columns as `parseFunction` does
+			// at its own entry and nothing has to be put back.
+			//
+			// It ALSO gives the default the scope reset it needs for free (v1 does this explicitly): drained
+			// outside every declaration, the helper's body cannot see the callee's parameters or locals, nor
+			// its enclosing `type`. A default is evaluated at the CALL site and belongs to neither frame.
 			if byteArrayContains(paramNames, name: nameTok.value) 'duplicate'
 				throw ParseError.duplicateParameter(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 			end 'duplicate'
+
+			// After the duplicate check, so a declaration already refused captures nothing — and BEFORE the
+			// pushes below, because `paramNames.count()` is this parameter's own CALL-ALIGNED position only
+			// while its own name is still absent from the list.
+			if self.at(TokenKind.equals) 'hasDefault'
+				try self.captureParamDefault(owner, paramName: nameTok.value, paramIndex: paramNames.count(), paramType: paramType)
+			end 'hasDefault'
 
 			paramNames.push(nameTok.value)
 			paramTypes.push(paramType)
@@ -11060,6 +11368,171 @@ export type Parser
 			try self.consume(TokenKind.comma)
 		end 'paramLoop'
 	end 'parseFunctionParameters'
+
+	// Capture one parameter's `= <default>` for its owning declaration and leave the cursor on the token
+	// that ENDS it (the `,` before the next parameter, or the list's `)`), so the parameter loop resumes
+	// exactly as it would have without a default. The cursor arrives ON the `=`.
+	//
+	// The two non-function owners are refused here rather than in their own callers, because the refusal is
+	// a property of the PARAMETER LIST's owner and this is the one routine that reads a parameter list —
+	// stated in either caller it would be a rule about a construct written somewhere other than where the
+	// construct is parsed, and the third caller would silently not have it.
+	function captureParamDefault(owner ParamDefaultOwner, paramName ByteArray, paramIndex ParamCount, paramType MaxonType) throws ParseError
+		let eqTok = self.current()
+		match owner 'owner'
+			closureLiteral then throw ParseError.unsupported("a default value on closure parameter '{String.from(paramName)}' — a closure is called INDIRECTLY, through a function value, so no call site has a callee name to look the default up by. Give the closure's caller the value explicitly", line: eqTok.line, column: eqTok.column)
+			interfaceRequirement then throw ParseError.unsupported("a default value on interface requirement parameter '{String.from(paramName)}' — a witness dispatch slots its arguments against the INTERFACE's formals, which are in no signature registry, so no dispatch site can read a default from the requirement. Declare the default on each conforming type's method", line: eqTok.line, column: eqTok.column)
+			declaredFunction then break 'owner'
+		end 'owner'
+
+		// ⚠ **THE HELPER'S NAME IS NOT MINTED HERE — IT IS READ BACK FROM THE SWEEP AT THE DRAIN**
+		// (`parseParamDefaultHelper`). The sweep is the mechanism's ONE mint, because it is the mint a CALL
+		// SITE in another file must be able to see; a second one here would be the same name derived twice,
+		// and the only input the two could disagree on — the parameter's index — is exactly what they did
+		// disagree on when this was written that way. Reading it turns the agreement into a lookup that
+		// either finds the sweep's answer or says so.
+		self.pendingParamDefaults = materializedPendingParamDefaults(self.pendingParamDefaults)
+		self.pendingParamDefaults.push(PendingParamDefault.create(paramDefaultOwnerName(owner), paramIndex: paramIndex, paramType: paramType, exprStart: (self.pos + 1) as TokenIndex))
+		self.pos = self.skipParamDefault(self.pos)
+	end 'captureParamDefault'
+
+	// The declared name a `declaredFunction` owner carries. It panics on the other two arms because
+	// `captureParamDefault` has already thrown for them — the extraction exists only because a `match`
+	// binding cannot be used past the arm that binds it.
+	function paramDefaultOwnerName(owner ParamDefaultOwner) returns ByteArray
+		match owner 'owner'
+			declaredFunction(name) then return name
+			closureLiteral then panic("paramDefaultOwnerName: a closure literal owner is refused by captureParamDefault before this is asked")
+			interfaceRequirement then panic("paramDefaultOwnerName: an interface requirement owner is refused by captureParamDefault before this is asked")
+		end 'owner'
+	end 'paramDefaultOwnerName'
+
+	// ⭐ **PARSE EVERY CAPTURED PARAMETER DEFAULT AS ITS OWN FUNCTION** (BATCH2 slice 4) — the drain, run
+	// once at the end of `parseModule`, when the last top-level declaration has closed and NO function is
+	// open. That timing is the whole design: see `parseFunctionParameters`' capture site for why parsing a
+	// helper in place would be `parseClosureExpression`'s ~25-alias save/restore, and why draining here needs
+	// none of it.
+	//
+	// It runs BEFORE `reportUnusedTypeAliases`, because a default expression can be the only USE of an alias
+	// in its file (`items IntArray = [1, 2, 3]` names `IntArray` in the type, but `let n = Count.max` in a
+	// default names one nothing else need mention). Reported first, that alias would be called unused on the
+	// strength of code the parser had not read yet.
+	//
+	// ⚠ The list cannot grow while it is drained: the only construct inside a default expression that parses
+	// a parameter list at all is a CLOSURE literal, and `captureParamDefault` refuses a default there.
+	function parseParamDefaultHelpers() throws ParseError
+		if self.pendingParamDefaults.isEmpty() 'noDefaults'
+			return
+		end 'noDefaults'
+
+		let resume = self.pos
+		for pending in self.pendingParamDefaults 'eachDefault'
+			try self.parseParamDefaultHelper(pending)
+		end 'eachDefault'
+		self.pos = resume
+	end 'parseParamDefaultHelpers'
+
+	// The name the SWEEP published for this captured default — the mechanism's one mint, read back rather
+	// than re-derived (see `captureParamDefault`). It panics rather than falling back to a fresh mint,
+	// because a fallback would emit a function under a name no call site can be calling: the callers were
+	// compiled against the sweep's answer, so a disagreement is a missing symbol at LINK time with no source
+	// position, which is precisely how this was found.
+	//
+	// It is asked at the DRAIN and not at the capture, deliberately. The sweep is tolerant and abandons a
+	// declaration it cannot read (a malformed return type, which it reads AFTER the parameter list the real
+	// parse has already captured from); asked at the capture, that would panic ahead of the positioned
+	// diagnostic the real parse is about to raise for the same malformed declaration. Asked here, a file
+	// whose parse throws never reaches the drain at all.
+	function sweptParamDefaultHelperName(pending PendingParamDefault) returns ByteArray
+		match self.signatures.defaultsOf(pending.ownerName) 'swept'
+			allRequired then break 'swept'
+			defaults(info) then return self.requireSweptHelperName(info.helperFor(pending.paramIndex), pending: pending)
+		end 'swept'
+
+		return self.requireSweptHelperName(EmptySourceText, pending: pending)
+	end 'sweptParamDefaultHelperName'
+
+	// The panic the lookup above owes when the sweep has no name at the position the parse captured — one
+	// sentence for both ways that happens (no entry for the function at all, or an entry with nothing at
+	// this position), because they are one defect: the two walks of one parameter list have come apart.
+	function requireSweptHelperName(helperName ByteArray, pending PendingParamDefault) returns ByteArray
+		if helperName.isEmpty() 'sweepRecordedNoDefaultHere'
+			panic("sweptParamDefaultHelperName: '{String.from(pending.ownerName)}' declares a default on CALL-ALIGNED parameter {pending.paramIndex}, and the declaration sweep published no helper at that position — `recordScannedParamDefaults` and `parseFunctionParameters` walk the same parameter list and have come apart on whether it holds a `=`, or on where the parameter sits in it")
+		end 'sweepRecordedNoDefaultHere'
+
+		return helperName
+	end 'requireSweptHelperName'
+
+	// One helper: `function __paramDefault#<callee>#<i>() returns <the parameter's type>` whose entire body
+	// is `return <the default expression>`.
+	//
+	// Every per-function column is re-created exactly as `parseFunction` re-creates it at its own entry, and
+	// for its stated reason — a stray entry carried in from the previous function would name a value in that
+	// function's SSA space. Nothing is saved: the caller restores only the CURSOR, because between top-level
+	// declarations no other per-function state is live to restore.
+	//
+	// The body goes through `parseCheckedValueReturn`, so the default meets every rule a `return` meets —
+	// which is what makes `name String = 42` an ordinary return-type mismatch and `factor Number = 2` an
+	// ordinary widening, with no rule written twice.
+	function parseParamDefaultHelper(pending PendingParamDefault) throws ParseError
+		let helperName = self.sweptParamDefaultHelperName(pending)
+		self.pos = pending.exprStart
+		let anchor = self.current()
+		// Resolved HERE rather than at the capture: a `named` parameter type is re-tagged `structRef` only
+		// once the whole-program struct registry is complete, which at capture time — mid-declaration, and
+		// possibly above the `type` being named — it is not.
+		let returnType = self.resolveNamedStructReturn(MaxonReturnType.value(pending.paramType))
+
+		self.scope = Scope.create()
+		self.valueIds = ValueIdRef.create(0 as ParamCount)
+		self.mutableVars = VarInfoArray.create()
+		self.mutableVarShadowed = sharedEmptyMutableVarShadowed
+		self.mutableVarInnermost = sharedEmptyMutableVarInnermost
+		self.ownedBindings = VarInfoArray.create()
+		self.pendingTempDrops = ValueIdArray.create()
+		self.lastFieldReadValid = false
+		self.loops = LoopContextArray.create()
+		self.matches = MatchContextArray.create()
+		self.iterationLockedBindings = sharedEmptyIterationLocks
+		self.valueTags = ValueTypeTagArray.create()
+		self.valueNameIds = TypeNameIdArray.create()
+		self.valueConsts = ParsedIntArray.create()
+		self.valueConstDomains = ConstPayloadDomainArray.create()
+		self.valueOwnsHeap = BoolArray.create()
+		self.valuePromiseMarks = BoolArray.create()
+		self.valueIsCapturingClosure = BoolArray.create()
+		self.valueClosureEnv = ValueIdArray.create()
+		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
+		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
+		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
+		self.inMatchArmBody = false
+		self.rangeCheckSites = RangeCheckSiteArray.create()
+		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
+		self.rangeCheckReturnSites = RangeCheckReturnSiteArray.create()
+		// A ranged-alias parameter type makes the helper a ranged-RETURN function, so the default is guarded
+		// by the P1.9 entry check exactly as `return <expr>` from such a function is — which is precisely the
+		// check the parameter itself would otherwise owe.
+		self.rangeCheckReturnAlias = self.rangedReturnAliasName(returnType)
+		self.rangeCheckParamSites = sharedEmptyParamSites
+
+		var helper = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, returnLine: anchor.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: anchor), throwsTypeName: ThrowsClause.none)
+		helper.namespace = self.namespace
+		// ⭐ GLOBAL, unlike a lifted closure's `file`: a defaulted parameter of an `export function` is
+		// omitted by call sites in OTHER files, and each of them emits a call to this helper by name.
+		helper.visibility = Visibility.global
+
+		let helperIndex = self.artifact.module.funcCount()
+		self.artifact.module.pushFunc(helper)
+		self.artifact.setCurrentFuncIndex(helperIndex)
+		let entry = self.artifact.module.addBlockAt(helper, label: b"entry", filePath: self.filePath.toString(), firstLine: anchor.line)
+		self.currentBlock = entry
+
+		try self.parseCheckedValueReturn(helper, block: entry, anchor: anchor)
+
+		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredBufferSurface: false)
+		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create()), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
+		self.commitRangeChecks(helperName)
+	end 'parseParamDefaultHelper'
 
 	// Bind each parameter name to its reserved SSA ValueId in the fresh function
 	// scope: parameter `i` is ValueId `i` (the ids 0..paramCount-1 the value
@@ -13131,6 +13604,21 @@ export type Parser
 			throw ParseError.returnWithoutValue(String.from(func.name), line: retTok.line, column: retTok.column)
 		end 'noValue'
 
+		try self.parseCheckedValueReturn(func, block: block, anchor: retTok)
+	end 'parseReturnStatement'
+
+	// ⭐ **PARSE AND RETURN ONE VALUE EXPRESSION, WITH EVERY RULE A `return` OWES** — the character-expecting
+	// coercion, the escaping-closure reject, the declared-type check, the aggregate-identity check, the
+	// widening coercion, the owned hand-off and the ranged-return site. The cursor sits ON the expression's
+	// first token; `anchor` is what a diagnostic and the emitted span point at.
+	//
+	// ⭐⭐ **IT IS SHARED BECAUSE A PARAMETER DEFAULT *IS* A RETURN** (BATCH2 slice 4). A default is
+	// compiled as the whole body of a synthesized nullary helper whose declared return type is the
+	// parameter's declared type (`parseParamDefaultHelper`), so `name String = 42` has to be refused with
+	// exactly the diagnostic `return 42` earns from a `returns String` function, and `factor Number = 2` has
+	// to widen exactly as `return 2` does. Every one of those rules lives here, once: a second copy at the
+	// default site would be a second opinion about what a value must satisfy to leave a function.
+	function parseCheckedValueReturn(func IrFunction, block IrBlock, anchor Token) throws ParseError
 		// The terminator goes on the block the EXPRESSION ended in, not the one it started
 		// in. `return a or b` evaluates the `or` across three blocks and leaves control in
 		// the merge; terminating `block` instead would leave the merge unterminated (a
@@ -13146,7 +13634,7 @@ export type Parser
 		// closure mark is a per-function column, so `retVal` can only be a capturing closure of THIS frame. It
 		// rides the stable `boundValue`, so a `return f` from a nested block refuses just as one from the top
 		// does — the value crossing the block boundary is the same SSA id, still marked.
-		try self.rejectEscapingClosure(retVal, message: "cannot return a closure that captures: {CapturingClosureEscapeSuffix}", tok: retTok)
+		try self.rejectEscapingClosure(retVal, message: "cannot return a closure that captures: {CapturingClosureEscapeSuffix}", tok: anchor)
 
 		// The value must satisfy what the function PROMISED — `checkDeclaredType`, the same
 		// COERCION-SITE rule the call arguments and the assignments ask, and deliberately not the
@@ -13174,13 +13662,13 @@ export type Parser
 		// where `checkDeclaredType(named, named)` agrees because `ValueTypeTag.named` is overloaded.
 		match checkDeclaredType(retTag, declared: declaredTag) 'declared'
 			ok then break 'declared'
-			mismatch then throw ParseError.returnTypeMismatch(typeTagName(retTag), expected: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
-			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(retTag), targetType: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
+			mismatch then throw ParseError.returnTypeMismatch(typeTagName(retTag), expected: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
+			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(retTag), targetType: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
 			// A FUNCTION VALUE returned where a NON-function type is declared (P1.5-A1) — the spec's
 			// specific E3005 ("Cannot return 'function' from function declared to return '{declared}': …").
 			// A function returned from a function-typed return (`return double` from `returns UnaryOp`)
 			// agrees and never reaches this.
-			functionIntoNonFunction then throw ParseError.functionValueReturned(typeTagName(declaredTag), line: retTok.line, column: retTok.column)
+			functionIntoNonFunction then throw ParseError.functionValueReturned(typeTagName(declaredTag), line: anchor.line, column: anchor.column)
 		end 'declared'
 
 		// ⭐ OPEN #54/#59: a `return` of the WRONG named aggregate — a DIFFERENT struct/union, OR an
@@ -13194,13 +13682,13 @@ export type Parser
 		// function type is declared agrees on the tag and can still be a different function type entirely.
 		// See `recordFunctionTypeDoor` for why it is recorded rather than decided here.
 		if isFunctionTypeDoor(declaredTag, got: retTag) 'functionTypeDoor'
-			self.recordFunctionTypeDoor(declaredNameId, gotNameId: self.valueNameId(retVal), door: FunctionTypeDoor.returned, placeName: EmptySourceText, anchor: retTok)
+			self.recordFunctionTypeDoor(declaredNameId, gotNameId: self.valueNameId(retVal), door: FunctionTypeDoor.returned, placeName: EmptySourceText, anchor: anchor)
 		end 'functionTypeDoor'
 
 		let declaredReturnName = self.aggregateNameOf(declaredTag, nameId: declaredNameId)
 		let returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(retVal))
 		if self.signatures.aggregatesConflict(declaredReturnName, got: returnedName) 'aggregateReturnMismatch'
-			throw ParseError.returnTypeMismatch(self.giveTypeName(retTag, aggregateName: returnedName), expected: self.giveTypeName(declaredTag, aggregateName: declaredReturnName), line: retTok.line, column: retTok.column)
+			throw ParseError.returnTypeMismatch(self.giveTypeName(retTag, aggregateName: returnedName), expected: self.giveTypeName(declaredTag, aggregateName: declaredReturnName), line: anchor.line, column: anchor.column)
 		end 'aggregateReturnMismatch'
 
 		// ⭐ **THE `ok` VERDICT ABOVE LICENSED A WIDENING, AND SOMETHING HAS TO PERFORM IT.** `return 3`
@@ -13209,9 +13697,9 @@ export type Parser
 		// x64 emitter panicked on the cross-register-file move it was asked for. The same door every other
 		// coercion site uses; `retVal` is already a float when the source wrote one, so this is a no-op for
 		// every program that compiled before.
-		let returned = self.coerceToDeclared(retVal, declared: declaredTag, anchor: retTok)
+		let returned = self.coerceToDeclared(retVal, declared: declaredTag, anchor: anchor)
 
-		try self.emitOwnedValueReturn(returned, anchor: retTok)
+		try self.emitOwnedValueReturn(returned, anchor: anchor)
 
 		// P1.9: a `return` in a ranged-int-alias-returning function is a narrowing site. `returned` is the
 		// scalar the `ret` terminator carries (a ranged int return is never an owned value, so
@@ -13225,9 +13713,9 @@ export type Parser
 		// hand-off's scope drops run first and may branch, so the block the `return` keyword was parsed
 		// in is not reliably the one holding the `ret`.
 		if not self.rangeCheckReturnAlias.isEmpty() 'rangedReturn'
-			self.rangeCheckReturnSites.push(RangeCheckReturnSite.create(returned, block: self.currentBlock.id, line: retTok.line, column: retTok.column))
+			self.rangeCheckReturnSites.push(RangeCheckReturnSite.create(returned, block: self.currentBlock.id, line: anchor.line, column: anchor.column))
 		end 'rangedReturn'
-	end 'parseReturnStatement'
+	end 'parseCheckedValueReturn'
 
 	// ⭐ **EMIT A VALUE `ret` THAT HANDS ITS VALUE TO THE CALLER AS AN OWNED ONE** — the shared tail of a
 	// value `return` and a non-capturing closure body's `gives <expr>` (P1.5-A2a). A closure body IS a
@@ -22402,8 +22890,12 @@ export type Parser
 		let range = SourceRange.ofToken(opTok)
 		// `var`, because `emitCall`'s caller-side consume may rewrite an argument in place (E3019).
 		var args = pairArgs(lhs, second: rhs)
+		// `var` for `args`' reason one line up, plus one of its own: `emitCall` GROWS all three columns in
+		// lockstep when the callee defaults an argument the call omits (BATCH2 slice 4).
+		var argLabels = emptyArgLabels(args)
+		var argRanges = uniformArgRanges(args, range: range)
 
-		let equal = try self.emitCall(callee, anchor: opTok, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		let equal = try self.emitCall(callee, anchor: opTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 
 		// The RESULT is asked of the emitted call rather than of the declaration, because `emitCall` has
 		// already resolved the callee's real return type and a second lookup would be a second answer. A
@@ -31205,7 +31697,7 @@ export type Parser
 		// A closure parameter may spell `__ManagedMemory` exactly as a function's may (A2j) — it reaches the
 		// same `parseFunctionParameters` and the same `bindParameters`, so it needs no separate treatment.
 		var paramBufferSurfaces = BoolArray.create()
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramBufferSurfaces: paramBufferSurfaces, owner: ParamDefaultOwner.closureLiteral)
 		try self.consume(TokenKind.rightParen)
 		// A struct parameter is re-tagged `structRef` here, exactly as `parseFunction` does — the whole-program
 		// struct registry is complete in the real parse (see `resolveNamedStruct`).
@@ -33286,6 +33778,13 @@ export type Parser
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
 		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
+		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED HERE, BEFORE ANYTHING ELSE READS THE ARGUMENT LIST** (BATCH2
+		// slice 4). Every direct, method and static call funnels through this one line, so the fill needs no
+		// second copy at the method / static / operator-desugar doors — and by the time `applyCallerConsume`
+		// and the emit below see `args`, a defaulted argument is indistinguishable from a written one, which
+		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
+		// it with no change to any of them.
+		try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
 		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// ⭐ **A CALLEE THAT DECLARED `returns __ManagedMemory` YIELDS THE BUFFER SURFACE (A2j).** Read HERE
@@ -33302,6 +33801,75 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), mint: mint), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitCall'
+
+	// ⭐ **SUPPLY EVERY ARGUMENT THE CALL OMITTED AND THE DECLARATION DEFAULTS** (BATCH2 slice 4) — each one
+	// becomes a call to the declaration's synthesized helper, appended with the parameter's own NAME as its
+	// label, so `slotCallArgs` puts it in the right position whatever order the written arguments came in.
+	//
+	// ⚠ **IT FILLS BY SLOT, NOT BY TRAILING RUN, AND THAT IS WHAT MAKES A NON-TRAILING DEFAULT WORK.**
+	// `choose(flag bool = true, a Integer = 40, b Integer = 10)` called `choose()` fills all three; the same
+	// declaration called `choose(false, b: 7)` fills only `a`. The occupied slots are computed through
+	// `argSlotPosition` — the SAME label→position mapping `slotCallArgs` will use — so a call cannot be
+	// filled against one slotting and validated against another.
+	//
+	// ⚠ **A SLOT WITH NEITHER AN ARGUMENT NOR A DEFAULT IS LEFT EMPTY ON PURPOSE**, and so is a call whose
+	// label resolves to no parameter. Both are diagnostics that already exist, own their wording and their
+	// position, and read the RESOLVED signature rather than the tolerant sweep — E3036 and E3037, from
+	// `SemanticCheck` through `slotCallArgs`. Reporting either here would be a second opinion built on the
+	// weaker registry.
+	function fillOmittedArgDefaults(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) throws ParseError
+		// ⚡ The gate is the allocation-free PRESENCE test, not `defaultsOf` itself: this runs at every call
+		// in the program, and a payload-free union case still heap-allocates in Maxon — an `allRequired`
+		// minted per parsed call is the constant factor that reverted the math-intrinsic resolver
+		// (`parseCallNamed`). Only a callee that genuinely declares a default pays for the union.
+		if not self.signatures.declaresParamDefaults(callee) 'everyParameterRequired'
+			return
+		end 'everyParameterRequired'
+
+		match self.signatures.defaultsOf(callee) 'defaults'
+			allRequired then return
+			defaults(info) then try self.fillArgsFromParamDefaults(info, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
+		end 'defaults'
+	end 'fillOmittedArgDefaults'
+
+	function fillArgsFromParamDefaults(info ParamDefaultInfo, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) throws ParseError
+		let paramCount = info.paramNames.count()
+		if args.count() >= paramCount 'nothingOmitted'
+			return
+		end 'nothingOmitted'
+
+		var filled = BoolArray.create()
+		for _ in 0 upto paramCount 'initSlots'
+			filled.push(false)
+		end 'initSlots'
+
+		for i in 0 upto args.count() 'markSupplied'
+			let label = try argLabels.get(i) otherwise panic("fillArgsFromParamDefaults: argLabels.get OOB at {i} — the label column is pushed in lockstep with args")
+			let suppliedSlot = argSlotPosition(info.paramNames, argIndex: i, label: label)
+			if suppliedSlot >= paramCount 'labelNamesNoParameter'
+				return
+			end 'labelNamesNoParameter'
+			try filled.set(suppliedSlot, value: true) otherwise panic("fillArgsFromParamDefaults: filled.set OOB at {suppliedSlot} despite suppliedSlot < paramCount")
+		end 'markSupplied'
+
+		for slot in 0 upto paramCount 'fillDefaults'
+			let supplied = try filled.get(slot) otherwise panic("fillArgsFromParamDefaults: filled.get OOB at {slot} despite slot < paramCount")
+			if supplied 'alreadyGiven'
+				continue
+			end 'alreadyGiven'
+
+			let helperName = info.helperFor(slot)
+			if helperName.isEmpty() 'noDefault'
+				continue
+			end 'noDefault'
+
+			let paramName = try info.paramNames.get(slot) otherwise panic("fillArgsFromParamDefaults: paramNames.get OOB at {slot} despite slot < paramCount")
+			// The helper is nullary, so this recursion bottoms out at once: no helper declares a parameter,
+			// hence none is in `funcParamDefaults` and `fillOmittedArgDefaults` returns on its first match.
+			let value = try self.emitCall(helperName, anchor: anchor, args: ValueIdArray.create(), argLabels: ByteArrayArray.create(), argRanges: SourceRangeArray.create(), argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.paramDefaultHelper)
+			pushDefaultedCallArg(args, argLabels: argLabels, argRanges: argRanges, value: value, label: paramName, range: SourceRange.ofToken(anchor))
+		end 'fillDefaults'
+	end 'fillArgsFromParamDefaults'
 
 	// ⭐ **RETYPE-OF-T AT A CONCRETE METHOD'S RETURN (D7) — `emitFieldLoad`'s rule, reached one op further.**
 	// `c.unwrap()` on a `Cell with Wide` returns what the SHARED body declared, the opaque `T`, and an opaque
@@ -33494,6 +34062,12 @@ export type Parser
 		// it consumes a bare `identifier` callee, so an `async` spawn's name is always the author's own bytes.
 		// `async int.fromString(s)` does not parse at all — the `async` target grammar admits a free call only.
 		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, mint: CalleeMint.notMinted, signatures: self.signatures)
+		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED AT THIS DOOR TOO** (BATCH2 slice 4) — the SECOND of the two
+		// source call doors, so `async f()` against `function f(n Integer = 1)` is the same legal call
+		// `f()` is. It sits BEFORE the scalar check on purpose: the helper's result is an ordinary value and
+		// must meet the async argument rule exactly as a written argument does, so a MANAGED default earns
+		// the existing refusal below rather than a second one worded here.
+		try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
 			if not tagIsAsyncScalar(self.tagOf(argValue)) 'managedArg'

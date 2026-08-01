@@ -283,6 +283,16 @@ let DeclShapeInterfaceParent = 60 as ContentHash
 let MethodShapeStatic = 61 as ContentHash
 let MethodShapeInstance = 62 as ContentHash
 
+// ⭐ A function's PER-PARAMETER DEFAULTS (BATCH2 slice 4), mixed into the hash beside its name for
+// `DeclShapeParamConsume`'s reason and with the identical PRESENCE-PAIR shape. What rides is what a CALL
+// SITE compiles to: a parameter that GAINS a default turns a caller's `f()` from E3036 into a legal call
+// that emits a helper invocation, and one that LOSES it does the reverse — in both directions the caller's
+// own bytes never move, so only this hash can carry it. The pair distinguishes "param 0 defaulted, param 1
+// not" from the reverse, exactly as `ConsumeBitSet`/`ConsumeBitClear` do.
+let DeclShapeParamDefault = 63 as ContentHash
+let DefaultBitSet = 64 as ContentHash
+let DefaultBitClear = 65 as ContentHash
+
 // A `throws` clause's PRESENCE discriminators (R8) — the two arms of `ThrowsClause`, so `none` and
 // `throwing(E)` cannot hash alike in a position where both are possible. `mixThrowsClause` is the one place a
 // throws clause enters a content hash; before it existed the only mixer recorded THROWING clauses alone, where
@@ -1330,6 +1340,87 @@ end 'ParamConsumeEntry'
 
 export typealias ParamConsumeEntryArray = Array with ParamConsumeEntry
 export typealias ParamConsumeMap = Map with (ByteArray, ParamConsumeInfo)
+
+// ⭐⭐ **A DEFAULT VALUE IS A SYNTHESIZED NULLARY FUNCTION, AND THIS IS ITS NAME (BATCH2 slice 4).**
+// `function greet(name String = "World")` declares a second function, `__paramDefault#greet#0`, whose whole
+// body is `return "World"`; a call site that omits the argument emits an ordinary call to it and passes the
+// result. That is the ENTIRE mechanism, and everything it buys follows from "it is an ordinary call":
+//
+//   • **Ownership needs no new rule.** shv2 decides drops in the PARSER — a value materialized in a later
+//     tier has no scope to be dropped from — so the default's value has to be born at the call site, and a
+//     call RESULT is a shape the parser already owns and drops (`mintOwnedCallResult`). v1 materializes at
+//     LOWERING instead, and pays for it with an explicit `classifyValue(callReturnRc1)` that only works
+//     because v1 has a late refcount inserter; shv2 has none, and a lowering-minted `String` would leak.
+//   • **The default's EXPRESSION is parsed exactly once, in the file that declares it**, by the ordinary
+//     expression parser, against the ordinary scope rules. A call site in ANOTHER FILE could not re-parse
+//     it in any case: a shv2 parse is a pure function of one file's `(tokens, filePath, namespace)`, which
+//     is precisely what makes the per-file fan-out possible — so the bootstrap's trick of replaying the
+//     default's TOKENS at each call site (`CaptureDefaultValueTokens`/`EmitDefaultFromTokens`) is not
+//     available here, and would be an architectural regression if it were.
+//   • **Dead-function elimination, the linker and the type checker all see it for free**, because they see
+//     a `MaxonOp.call`. v1 has to pin its helper in `project.livenessRoots` by hand precisely because its
+//     synthesized call is minted at Std level, below the tier DFE walks.
+//
+// ⚠ **THE CONSEQUENCE, RECORDED SO IT IS NOT LATER READ AS AN OVERSIGHT:** a helper is compiled ONCE, at
+// the declaration, so it cannot see anything about the CALL SITE. Caller-location defaults —
+// `__line__`/`__file__`, which `specs/source-location-defaults.md` is built on end to end — are therefore
+// not expressible under this design and are OUT of scope here. They need the default materialized at the
+// caller from caller-side facts, which is a different mechanism, not a missing arm of this one. v1 has the
+// identical limitation for the identical reason.
+//
+// ⚠ There is no constant fast path (v1 splits `intLiteral`/`boolLiteral`/`floatLiteralBits`/`byteLiteral`/
+// `enumCase` out of `helper`). One mechanism means one place a default's value is produced: a constant arm
+// would have to re-derive literal emission — String interning, array construction, enum tagging, ranged and
+// float alias widening — at the CALL SITE, in a second writer, for a value the declaring file's own parser
+// already types correctly against the parameter's declared type. The cost is one `call`/`ret` per OMITTED
+// argument, which no hot path in a real program pays.
+//
+// The name is minted by `Project.paramDefaultHelperName` (there, so the `#` join keeps its one speller).
+//
+// ⭐ **A FUNCTION'S PER-PARAMETER DEFAULTS** — the call-aligned `paramNames` (so a call site can slot a
+// LABELLED argument to its position before any `FuncSignature` exists, exactly as `ParamConsumeInfo` does)
+// and, per position, the synthesized helper's NAME, or `EmptySourceText` when that parameter has no
+// default. The sweep computes it from tokens — the only whole-program input a pure per-file parse may read
+// — and records one entry per function that declares AT LEAST ONE default, so a program with none costs a
+// single empty map. It travels by NAME with no interner ids, exactly like `ParamConsumeEntry`.
+export type ParamDefaultInfo
+	export let paramNames as ByteArrayArray
+	export let helperNames as ByteArrayArray
+
+	export static function create(paramNames ByteArrayArray, helperNames ByteArrayArray) returns ParamDefaultInfo
+		return Self{paramNames: paramNames, helperNames: helperNames}
+	end 'create'
+
+	// The helper that produces parameter `index`'s default, or EMPTY when it has none — the door the
+	// call-site fill asks per unfilled slot. An index past the recorded list answers EMPTY, the same
+	// "absence is the answer" default `ParamConsumeInfo.isConsumed` rests on.
+	export function helperFor(index ParamCount) returns ByteArray
+		if index >= self.helperNames.count() 'past'
+			return EmptySourceText
+		end 'past'
+		return try self.helperNames.get(index) otherwise panic("ParamDefaultInfo.helperFor: helperNames.get OOB at {index} despite index < count")
+	end 'helperFor'
+end 'ParamDefaultInfo'
+
+export type ParamDefaultEntry
+	export let name as ByteArray
+	export let info as ParamDefaultInfo
+
+	export static function create(name ByteArray, info ParamDefaultInfo) returns ParamDefaultEntry
+		return Self{name: name, info: info}
+	end 'create'
+end 'ParamDefaultEntry'
+
+export typealias ParamDefaultEntryArray = Array with ParamDefaultEntry
+export typealias ParamDefaultMap = Map with (ByteArray, ParamDefaultInfo)
+
+// The answer to "does this callee declare any parameter default?" — a union so "no recorded entry" is an
+// ANSWER (every parameter is mandatory), never confused with an empty-but-present one. `CalleeConsume`'s
+// twin, one declaration fact over.
+export union CalleeParamDefaults
+	defaults(info ParamDefaultInfo)
+	allRequired
+end 'CalleeParamDefaults'
 
 // One function's `throws E` clause, captured by the declaration sweep (P1.4b) — the argument- and
 // call-site dual of its return type, from the SAME token walk. `recordScannedSignature` fills one per
@@ -2831,6 +2922,13 @@ export type ProgramSignatures
 	// makes recording only the throwing ones correct (the same "absence is the answer" `funcParamConsumes`
 	// rests on).
 	var funcThrows as FuncThrowsMap
+	// ⭐ Function name -> its per-parameter DEFAULTS (BATCH2 slice 4). `defaultsOf(callee)` is the door
+	// `Parser.emitCall` asks before deciding an under-supplied call is an arity error. Filled by
+	// `recordParamDefaults` from each file's scanned signatures; last-wins on a duplicate name (E3006
+	// reported elsewhere), exactly as `funcParamConsumes` is. Only functions that declare AT LEAST ONE
+	// default are recorded — a callee with no entry has no defaults, the "absence is the answer" default
+	// `funcParamConsumes` rests on — so the overwhelming majority of programs carry an empty map.
+	var funcParamDefaults as ParamDefaultMap
 	// ⭐ **THE NAMES OF EVERY FUNCTION WHOSE DECLARED RETURN TYPE WAS SPELLED `__ManagedMemory` (A2j).**
 	// `returnsBufferSurface(callee)` is the door `Parser.emitCall` asks "does this call's result denote the
 	// BUFFER, or the `Array` around it?" — a question no `MaxonReturnType` can answer, because the alias
@@ -2954,7 +3052,7 @@ export type ProgramSignatures
 	var stdlibShadowRenames as StdlibShadowRenameMap
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), bufferSurfaceReturns: BufferSurfaceReturnNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), bufferSurfaceReturns: BufferSurfaceReturnNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create()}
 	end 'create'
 
 	// --- The stdlib/user SHADOW CONTEST (A1s wave 2). See `StdlibShadowRenameMap`. ---
@@ -3114,7 +3212,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// ⭐ **THE USER HALF OF THE SHADOW CONTEST (A1s wave 2)** — recorded from the SAME declaration arrays
 		// the registries below are built from, so "what the user declared" and "what the index holds" are one
 		// walk. Every KIND is noted, not just the four nominal ones: the contest is asymmetric on purpose (see
@@ -3155,6 +3253,12 @@ export type ProgramSignatures
 		for entry in paramConsumes 'eachConsume'
 			self.recordParamConsume(entry.name, info: entry.info)
 		end 'eachConsume'
+
+		// Default facts carry names and helper names and no ids either, so they fold here beside the consume
+		// facts, ahead of the interner reconciliation.
+		for entry in paramDefaults 'eachParamDefault'
+			self.recordParamDefaults(entry.name, info: entry.info)
+		end 'eachParamDefault'
 
 		// Throws clauses travel by NAME and carry no ids either (the throws type is a bare enum name),
 		// so they fold here alongside the consume facts, before the interner reconciliation.
@@ -3365,6 +3469,54 @@ export type ProgramSignatures
 		let info = try self.funcParamConsumes.get(callee) otherwise return CalleeConsume.borrowsAll
 		return CalleeConsume.consumes(info)
 	end 'consumeOf'
+
+	// Record one function's per-parameter DEFAULTS AND fold them into the hash — the one write, for
+	// `recordParamConsume`'s reason. A function with NO default is not recorded (its default answer is
+	// "every parameter is required"), so the common function costs no map entry and no hash movement.
+	function recordParamDefaults(name ByteArray, info ParamDefaultInfo)
+		self.funcParamDefaults.upsert(name, value: info)
+		var state = mixBytes(mix(self.hash, value: DeclShapeParamDefault), bytes: name)
+		// The param NAMES ride for `recordParamConsume`'s reason — a rename changes which labelled argument
+		// slots to a defaulted position — and the per-position presence bit rides because it is what decides
+		// whether a caller's short call is legal at all.
+		//
+		// ⚠ **THE DEFAULT'S EXPRESSION DELIBERATELY DOES NOT RIDE**, and that is ARCHITECTURE.md's "mix what
+		// a reader COPIES" rule, not an omission. A reader copies NOTHING out of the expression: it emits
+		// `call __paramDefault#f#0`, byte-identical whether the default is `"World"` or `"Maxon"`, and the
+		// expression reaches only the DECLARING file's own helper body — which re-parses on that file's own
+		// content hash. What a reader does depend on is the helper's RETURN TYPE, and that rides already,
+		// through the ordinary `FuncReturnTypeEntry` the same sweep publishes for it. Mixing the expression
+		// would be sound and WRONG: every keystroke inside any default would re-parse the whole program,
+		// which is the `var`-payload mistake one registry over.
+		for i in 0 upto info.paramNames.count() 'eachName'
+			let paramName = try info.paramNames.get(i) otherwise panic("recordParamDefaults: paramNames.get OOB at {i} despite i < count")
+			let hasDefault = not info.helperFor(i).isEmpty()
+			state = mix(mixBytes(state, bytes: paramName), value: DefaultBitSet if hasDefault else DefaultBitClear)
+		end 'eachName'
+		self.hash = state
+	end 'recordParamDefaults'
+
+	// ⭐ **THE CALLEE'S DEFAULT FACTS, or `allRequired`** — the door a CALL SITE asks once, and only when it
+	// supplied fewer arguments than it might have. `allRequired` (no recorded entry) is every runtime callee
+	// and every function that declares no default, which is the overwhelming common case — so the call
+	// site's fast path is a single map miss and nothing to slot.
+	export function defaultsOf(callee ByteArray) returns CalleeParamDefaults
+		let info = try self.funcParamDefaults.get(callee) otherwise return CalleeParamDefaults.allRequired
+		return CalleeParamDefaults.defaults(info)
+	end 'defaultsOf'
+
+	// ⚡ **DOES `callee` DECLARE A DEFAULT ON ANY PARAMETER? — the presence-only half of `defaultsOf`, and
+	// the one a HOT PATH may ask.** Membership IS the answer, because only a function that declares a default
+	// is recorded, so this is a `contains` and not a `get otherwise` — whose fallback would mint a
+	// payload-free `allRequired` union case (still a heap object) at every one of the program's calls that
+	// is not to a defaulting callee, i.e. almost all of them. The same accounting `throwsMap.contains` is
+	// written for one registry over.
+	//
+	// Two askers: `Parser.fillOmittedArgDefaults`' gate, and `Parser.overloadRegistrationNameFor`'s refusal
+	// to overload a name whose defaults the by-name sweep could not tell apart.
+	export function declaresParamDefaults(callee ByteArray) returns bool
+		return self.funcParamDefaults.contains(callee)
+	end 'declaresParamDefaults'
 
 	// Record one function's `throws E` clause AND fold it into the hash — the one write, for `record`'s
 	// reason. A NON-throwing function is not recorded (its default answer is "does not throw"), so the

@@ -116,8 +116,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: default-param-named -->
-<!-- PARAMETER DEFAULTS (`function repeat(value Integer, times Integer = 1)`) — shv2 reports `E2015: a default value on parameter 'times' (parameter defaults arrive at a later milestone)`. A distinct, later mechanism on no current rung, and unrelated to FIELD defaults, which P1.1a wave 2 landed (`field-initialization.md`'s `all-defaults` is enabled). -->
+<!-- test: default-param-named -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -134,8 +133,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: default-param-omitted -->
-<!-- PARAMETER DEFAULTS, as `default-param-named` — and this case additionally OMITS the defaulted argument, so it needs the call-site half (an omitted parameter filled from its declaration) on top of the declaration half. -->
+<!-- test: default-param-omitted -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

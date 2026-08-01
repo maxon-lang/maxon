@@ -2310,6 +2310,74 @@ export function overloadRegistrationName(base ByteArray, suffix ByteArray) retur
 	return "{String.from(base)}{OverloadNameSeparator}{String.from(suffix)}".toByteArray()
 end 'overloadRegistrationName'
 
+// ⭐ **THE NAME OF THE SYNTHESIZED NULLARY FUNCTION THAT PRODUCES PARAMETER `paramIndex`'s DEFAULT VALUE**
+// (BATCH2 slice 4) — `__paramDefault#greet#0`. See `SignatureIndex.ParamDefaultInfo` for what the mechanism
+// is and why a default is a FUNCTION rather than a replayed expression; this is only where its name is
+// spelled.
+//
+// ⚠ **IT HAS EXACTLY ONE CALLER — the declaration SWEEP** (`Parser.recordScannedParamDefaults`), which
+// publishes the name whole-program so a call site in any file can emit a call to it. The real parse, which
+// synthesizes the helper's BODY, READS that published name back rather than minting a second time
+// (`Parser.sweptParamDefaultHelperName`). It did mint its own, briefly, and the two derivations disagreed
+// on the one input that differs between them — an instance method's receiver shifts every parameter's
+// position by one — which surfaced as a backend `call to unknown function` with no source position at all.
+// A name derived in one place cannot disagree with itself.
+//
+// `paramIndex` is the parameter's CALL-ALIGNED position (the receiver occupies 0 on an instance method),
+// which is also the index `ParamDefaultInfo.helperFor` is asked with.
+//
+// It joins through `overloadRegistrationName` rather than re-spelling `#` — the separator has one speller —
+// and it is unique by CONSTRUCTION: `funcName` is unique whole-program (a second declaration of one name is
+// E3006, and an OVERLOADED name is refused a default outright, `Parser.overloadRegistrationNameFor`), and
+// the `__` prefix puts the result in the reserved space no declaration may enter (E2051), so it can collide
+// with nothing the author writes. `#` is not in the identifier alphabet, so the two joins are injective by
+// character class — the property ARCHITECTURE.md states for every symbol built by joining names.
+export function paramDefaultHelperName(funcName ByteArray, paramIndex ParamCount) returns ByteArray
+	return overloadRegistrationName(overloadRegistrationName(ParamDefaultHelperPrefix.toByteArray(), suffix: funcName), suffix: "{paramIndex}".toByteArray())
+end 'paramDefaultHelperName'
+
+let ParamDefaultHelperPrefix = "__paramDefault"
+
+// ⭐ **THE INVERSE OF THE MINT ABOVE: WHICH CALL DID THE AUTHOR ACTUALLY WRITE?** A helper call is a call
+// the author wrote NO part of — they wrote `greet()`, and the compiler supplied the argument — so a
+// diagnostic that quoted `__paramDefault#greet#0` would name a symbol absent from the program, which is the
+// defect class D11c is on the board for. Every consumer asks THIS rather than decoding the name itself
+// (`SemanticCheck.callDiagnosticNoun`), and it lives beside the join so the two cannot drift —
+// `primitiveStaticSourceSpelling`'s arrangement exactly, one mint over.
+//
+// ⭐ **AND IT CHECKS ITSELF AGAINST THE FORWARD JOIN RATHER THAN TRUSTING ITS OWN SPLIT**, for that
+// routine's reason: the split takes everything between the FIRST separator and the LAST, which is exact
+// only while the prefix holds no separator and the trailing index is one run — re-joining the pieces and
+// comparing turns those premises into a check the mint owns.
+export function paramDefaultCalleeSpelling(helperName ByteArray) returns ByteArray
+	let separator = try OverloadNameSeparator.toByteArray().get(0) otherwise panic("paramDefaultCalleeSpelling: OverloadNameSeparator is a one-byte literal")
+
+	var firstSplit = helperName.count()
+	var lastSplit = helperName.count()
+	for i in 0 upto helperName.count() 'scan'
+		if (try helperName.get(i) otherwise panic("paramDefaultCalleeSpelling: helperName.get OOB at {i} inside its own count()")) != separator 'ordinaryByte'
+			continue
+		end 'ordinaryByte'
+		if firstSplit == helperName.count() 'firstSeparator'
+			firstSplit = i
+		end 'firstSeparator'
+		lastSplit = i
+	end 'scan'
+
+	if firstSplit == lastSplit 'fewerThanTwoSeparators'
+		panic("paramDefaultCalleeSpelling: '{String.from(helperName)}' holds fewer than two '{OverloadNameSeparator}' separators, so `paramDefaultHelperName` cannot have minted it — only a call site the op marks `CalleeMint.paramDefaultHelper` may be asked")
+	end 'fewerThanTwoSeparators'
+
+	let funcName = try helperName.slice(firstSplit + 1, endIndex: lastSplit) otherwise panic("paramDefaultCalleeSpelling: slice [{firstSplit + 1}, {lastSplit}) of a {helperName.count()}-byte name is in range by the indices just found")
+	let indexDigits = try helperName.slice(lastSplit + 1, endIndex: helperName.count()) otherwise panic("paramDefaultCalleeSpelling: slice [{lastSplit + 1}, {helperName.count()}) is in range by the index just found")
+	let remint = overloadRegistrationName(overloadRegistrationName(ParamDefaultHelperPrefix.toByteArray(), suffix: funcName), suffix: indexDigits)
+	if not remint.equals(helperName) 'decodeDisagreesWithTheMint'
+		panic("paramDefaultCalleeSpelling: '{String.from(helperName)}' splits as ('{String.from(funcName)}', '{String.from(indexDigits)}'), which `paramDefaultHelperName` re-mints as '{String.from(remint)}' — the join and its inverse have come apart")
+	end 'decodeDisagreesWithTheMint'
+
+	return funcName
+end 'paramDefaultCalleeSpelling'
+
 // Append one part to an overload suffix under construction — so a suffix's parts and the suffix's own join
 // to the base name are the same character, stated once above.
 export function overloadSuffixPart(suffix String, part String) returns String

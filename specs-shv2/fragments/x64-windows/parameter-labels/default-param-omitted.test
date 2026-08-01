@@ -1,0 +1,49 @@
+// Test: default-param-omitted
+
+typealias Integer = int(i64.min to i64.max)
+
+function repeat(value Integer, times Integer = 2) returns Integer
+	return value * times
+end 'repeat'
+
+function main() returns ExitCode
+	return repeat(21)
+end 'main'
+---
+ExitCode: 42
+---
+func @repeat {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.imulRegReg r8, rcx, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 21
+    x64.callDirect __paramDefault#repeat#1
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect repeat
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__paramDefault#repeat#1 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+}
