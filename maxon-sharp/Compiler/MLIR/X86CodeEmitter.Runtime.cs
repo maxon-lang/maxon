@@ -57,8 +57,10 @@ public partial class X86CodeEmitter {
     // === Subprocess runtime (Phase 3.2) ===
     // Real Windows implementation: CreateProcessW + anonymous pipes for
     // collect, parent-handle inheritance for inherit, NUL device for
-    // discard, file redirection for file. WaitForSingleObject is routed
-    // through __io_submit_sync(SyncOpProcessWait) so green threads yield.
+    // discard, file redirection for file. ⚠ WaitForSingleObject is NOT routed
+    // through the scheduler: maxon_subprocess_wait_internal calls it directly
+    // on the system stack, so a green-thread caller BLOCKS ITS OS THREAD. See
+    // SyncOpProcessWait's declaration for the reserved-but-unreferenced path.
     // Pipe draining uses CreateThread on the caller's side; the drain
     // threads write into mm_raw_alloc'd buffers that the result struct
     // takes ownership of.
@@ -9017,9 +9019,14 @@ public partial class X86CodeEmitter {
   // stream (kind = 0 discard, 1 inherit, 2 collect, 3 file). Collect mode
   // hands the parent the read end of an anonymous pipe; a per-stream drain
   // thread spawned by `maxon_subprocess_wait_collect` blocks on ReadFile
-  // until the child exits and Windows closes its write end. Wait routes
-  // through __io_submit_sync(SyncOpProcessWait) so a green-thread caller
-  // yields to the scheduler rather than blocking the OS thread.
+  // until the child exits and Windows closes its write end. ⚠ Wait does NOT
+  // route through __io_submit_sync(SyncOpProcessWait): that dispatch arm is
+  // reserved and UNREFERENCED (no call site passes 16), and
+  // maxon_subprocess_wait_internal calls WaitForSingleObject directly on the
+  // system stack — so a green-thread caller blocks its OS thread rather than
+  // yielding. The park protocol therefore cannot see a subprocess wait at all:
+  // __netpoll_recover's regression net only rescues a GT that was ARMED, and
+  // this one never was.
   //
   // Handle struct (mm_raw_alloc'd, lifetime = release_handle):
   //   +0x00  hProcess              child process handle
