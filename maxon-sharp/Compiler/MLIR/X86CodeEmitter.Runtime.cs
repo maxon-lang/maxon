@@ -13115,19 +13115,17 @@ public partial class X86CodeEmitter {
     //                  nMaxInstances=1, nOutBufSize=0x10000, nInBufSize=0x10000,
     //                  nDefaultTimeOut=0, lpSecurityAttributes=NULL)
     //
-    // ⚠ EVERY ARGUMENT IS MATERIALISED *INSIDE* THE SWITCHED REGION, FROM MEMORY
-    // OR AN IMMEDIATE — NEVER CARRIED IN A REGISTER ACROSS EmitSystemStackEnter.
-    // That macro emits a CONDITIONAL: a green thread takes the arm that swaps RSP
-    // to the P's system stack and repoints the TIB, and the main thread takes a
-    // straight-through arm that only adjusts RSP. The two arms do not clobber the
-    // same registers — the switching arm stages the new TIB bounds through RAX —
-    // so a value computed into RAX before the Enter survives on the main thread
-    // and is silently replaced by (systemStackTop - PSystemStackSize) on a green
-    // thread. That is precisely what this call site used to do with `openMode`:
-    // every streaming spawn issued from an `async` body reached CreateNamedPipeW
-    // with a stack address as its open mode, failed ERROR_INVALID_PARAMETER, and
-    // surfaced as "spawn failed: CreatePipe failed" — while the identical spawn
-    // from `main` worked, which is why nothing caught it.
+    // Every argument is materialised INSIDE the switched region, from memory or an
+    // immediate, rather than staged in a register beforehand. This is the idiom the
+    // other Enter sites in this file follow (and the one spawn_core's own
+    // CreateProcessW site spells out), and it is DEFENCE IN DEPTH, not the guarantee:
+    // the guarantee is that EmitSystemStackEnter's two arms clobber the same
+    // registers, which is enforced there and verified by
+    // specs/subprocess.md's `subprocess-streaming-spawn-from-green-thread`.
+    // ⚠ These two argument loads are why that spec exists. They used to stage
+    // `openMode` / `childAccess` in RAX across the Enter, which the green-thread arm
+    // then overwrote with a stack address — so every streaming spawn from an `async`
+    // body died at CreateNamedPipeW while the identical spawn from `main` worked.
     EmitSystemStackEnter(0x40);
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x01, 0x00); // [rsp+0x20] = 0x10000
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x01, 0x00); // [rsp+0x28] = 0x10000

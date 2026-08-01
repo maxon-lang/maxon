@@ -626,12 +626,44 @@ public partial class X86CodeEmitter() {
   }
 
   /// <summary>
+  /// Point the TIB's stack bounds at the P's system stack, for the duration of one kernel call.
+  /// Heavy Win32 calls (CreateProcessW, CreateFileW, ...) probe the TIB during their internal RPC
+  /// and fault when RSP is outside [gs:[0x10], gs:[0x08]).
+  ///
+  /// Requires R11 = P*. Clobbers R11 ONLY — and that is load-bearing, not incidental: see the
+  /// register-contract note on <see cref="EmitSystemStackEnter"/> for why this sequence may not
+  /// touch RAX.
+  /// </summary>
+  private void EmitTibRepointToSystemStack() {
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, POffSystemStackSP);
+    EmitBytes(0x65, 0x4C, 0x89, 0x1C, 0x25, 0x08, 0x00, 0x00, 0x00); // MOV gs:[0x08], R11
+    EmitSubRegImm(X86Register.R11, PSystemStackSize);
+    EmitBytes(0x65, 0x4C, 0x89, 0x1C, 0x25, 0x10, 0x00, 0x00, 0x00); // MOV gs:[0x10], R11
+  }
+
+  /// <summary>
+  /// Put the TIB's stack bounds back to the green thread's own, from the bounds the GT saved.
+  ///
+  /// Requires R11 = GT. Clobbers R11 and RCX; PRESERVES RAX, which at every call site is the kernel
+  /// call's return value. RCX is free here for a reason that holds at both call sites and is worth
+  /// stating rather than re-deriving: this only ever runs immediately after a Win64 call, and RCX is
+  /// volatile under that ABI, so nothing can be live in it.
+  /// </summary>
+  private void EmitTibRestoreFromGt() {
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackBase);
+    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);             // MOV gs:[0x08], RCX
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackLimit);
+    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x10, 0x00, 0x00, 0x00);             // MOV gs:[0x10], RCX
+  }
+
+  /// <summary>
   /// Emit a Windows API call that runs on the OS thread's system stack.
   /// If on a GT stack (currentGt->stackBase != 0), switches RSP to
   /// P->systemStackSP for the call and restores afterwards. If on the
   /// main thread or during early init, calls directly without switching.
   /// R10 is preserved (saved/restored around the switch). R11 is clobbered.
   /// Assumes register args (RCX, RDX, R8, R9) are already set by the caller.
+  /// RAX is NOT disturbed before the call — see <see cref="EmitSystemStackEnter"/>.
   /// </summary>
   private int _sysStackLabelCounter;
   private void EmitCallImportOnSystemStack(string dllName, string functionName) {
@@ -673,27 +705,18 @@ public partial class X86CodeEmitter() {
     // SUB 0x28 (shadow 0x20 + pad 0x08) → 16-aligned before CALL.
     EmitSubRegImm(X86Register.Rsp, 0x28);
 
-    // Repoint TIB at the system stack bounds for the call. Heavy kernel calls
-    // (CreateProcessW, CreateFileW, ...) probe TIB during their internal RPC
-    // and fault when RSP is outside [gs:[0x10], gs:[0x08]).
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R11, POffSystemStackSP);
-    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x08, 0x00, 0x00, 0x00); // MOV gs:[0x08], RAX
-    EmitSubRegImm(X86Register.Rax, PSystemStackSize);
-    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x10, 0x00, 0x00, 0x00); // MOV gs:[0x10], RAX
+    EmitTibRepointToSystemStack();
 
     EmitCallImport(dllName, functionName);
     EmitAddRegImm(X86Register.Rsp, 0x28);
 
     // Restore TIB to the GT's saved bounds. R11 may be clobbered by the call,
-    // so re-load P* via TLS. Use RCX as scratch; preserve RAX (call result).
+    // so re-load P* via TLS.
     EmitGlobalLoadReg(X86Register.R11, "__sched_tls_teb_offset");
     EmitByte(0x65); // GS prefix
     EmitMovRegIndirectMemRaw(X86Register.R11, X86Register.R11, 0);               // R11 = P*
     EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, POffCurrentGt);      // R11 = GT
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackBase);  // RCX = GT TIB base
-    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);             // MOV gs:[0x08], RCX
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackLimit); // RCX = GT TIB limit
-    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x10, 0x00, 0x00, 0x00);             // MOV gs:[0x10], RCX
+    EmitTibRestoreFromGt();
 
     EmitPopReg(X86Register.R10);       // R10 = GT RSP (pointing at saved R10)
     EmitMovRegReg(X86Register.Rsp, X86Register.R10); // restore GT RSP
@@ -710,6 +733,24 @@ public partial class X86CodeEmitter() {
   /// Switch RSP to system stack for 5+ arg calls. Same stackBase check as above.
   /// After this, [RSP+0x20..] is on the system stack for stack arg writes.
   /// Must be paired with EmitSystemStackLeave(frameSize).
+  ///
+  /// ⚠⚠ REGISTER CONTRACT — AND THE ONLY RULE THAT MATTERS IS THAT THE TWO ARMS AGREE.
+  /// This emits a CONDITIONAL: a green thread takes the arm that swaps RSP and repoints the TIB, the
+  /// main thread takes an arm that is nothing but `SUB RSP, frameSize`. Any register the first arm
+  /// disturbs and the second does not is a defect that WORKS FROM main AND FAILS FROM A GREEN
+  /// THREAD — invisible to every test that does not spawn one.
+  ///
+  /// So the switching arm may clobber ONLY what the straight-through arm already clobbers, which is
+  /// exactly R11: the guard's `EmitGlobalLoadReg(R11, ...)` below runs BEFORE the first branch, so
+  /// R11 is destroyed on every path in and is therefore free for the switch to use. (R10 is
+  /// disturbed only BETWEEN Enter and Leave, where the Win64 call being set up destroys it anyway.)
+  ///
+  /// ⚠ IT USED TO STAGE THE NEW TIB BOUNDS THROUGH RAX, AND THAT COST A REAL BUG. RAX is the natural
+  /// register to compute an argument into, and two call sites in `__subp_create_overlapped_pipe` did
+  /// exactly that: on a green thread their `CreateNamedPipeW` / `CreateFileW` argument was replaced
+  /// by (systemStackTop - PSystemStackSize), so every streaming subprocess spawn issued from an
+  /// `async` body failed while the identical spawn from `main` worked. Pinned by
+  /// specs/subprocess.md's `subprocess-streaming-spawn-from-green-thread`.
   /// </summary>
   private void EmitSystemStackEnter(int frameSize) {
     var id = _sysStackLabelCounter++;
@@ -744,11 +785,7 @@ public partial class X86CodeEmitter() {
     EmitPushReg(X86Register.R10);      // save GT RSP on system stack (RSP now 8 mod 16)
     EmitSubRegImm(X86Register.Rsp, frameSize + 8); // +8 pad → 16-aligned pre-CALL
 
-    // Repoint TIB stack bounds at the system stack for the upcoming kernel call.
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R11, POffSystemStackSP);
-    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x08, 0x00, 0x00, 0x00); // MOV gs:[0x08], RAX
-    EmitSubRegImm(X86Register.Rax, PSystemStackSize);
-    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x10, 0x00, 0x00, 0x00); // MOV gs:[0x10], RAX
+    EmitTibRepointToSystemStack();
     EmitJmp(doneLabel);
 
     // --- Main thread / early init path: just SUB frameSize ---
@@ -781,14 +818,9 @@ public partial class X86CodeEmitter() {
     EmitJcc("z", skipLabel);
 
     // --- GT stack path: restore GT TIB, undo SUB, restore GT RSP, restore R10 ---
-    // R11 = P*. Recover GT struct via P->currentGt, then write its saved TIB
-    // bounds back into gs:[0x08]/[0x10]. Preserve RAX (kernel call return);
-    // RCX is volatile.
+    // R11 = P*. Recover GT struct via P->currentGt, then write its saved TIB bounds back.
     EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, POffCurrentGt);      // R11 = GT
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackBase);  // RCX = GT TIB base
-    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);             // MOV gs:[0x08], RCX
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackLimit); // RCX = GT TIB limit
-    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x10, 0x00, 0x00, 0x00);             // MOV gs:[0x10], RCX
+    EmitTibRestoreFromGt();
 
     EmitAddRegImm(X86Register.Rsp, frameSize + 8);
     EmitPopReg(X86Register.R10);       // R10 = GT RSP (pointing at saved R10)
