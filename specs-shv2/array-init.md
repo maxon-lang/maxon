@@ -61,6 +61,13 @@ answer, not an error. The rule is instead that the argument's generic instance m
 receiver alias's, which is element-agnostic and strictly stronger.
 `error.a-buffer-of-the-wrong-element` is that refusal.
 
+It is not "carries the buffer mark" either, and that is the second half of the choice. The mark
+(`bufferSurfaceValues`) is a per-function fact about a `ValueId`, so it is GONE after a closure capture
+while the record and its stride are unchanged — `a-captured-buffer-adopts-inside-a-closure` is measured
+proof. A door keyed on the mark would refuse `stdlib/File.maxon:135`'s shape for a reason having nothing
+to do with the stride. So an ORDINARY array of the instance is admitted too
+(`an-ordinary-array-of-the-instance-adopts`), and adopting one is an ordinary co-owning retain.
+
 ### ⚠ Every adoption reachable TODAY is a BYTE one, and the reason is not this door
 
 MEASURED, and it is worth writing down because the door looks byte-agnostic and is:
@@ -397,6 +404,213 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: an-ordinary-array-of-the-instance-adopts -->
+⭐ **WHAT THE DOOR ACTUALLY ASKS, PINNED (review).** The rule is SAME-INSTANCE, and that admits an
+ORDINARY array of the instance as well as a buffer — `requireSameArrayInstance` never consults the
+buffer mark. Adopting one is an ordinary co-owning retain: `src` and `b` are two owners of one record,
+so a `push` through either shows through the other and both drop at the same scope exit. The stricter
+reading (require `valueIsBufferSurface`) is not merely narrower, it is wrong — see
+`a-captured-buffer-adopts-inside-a-closure` below, where the mark is already gone and the adoption must
+still work.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var src = ByteArray.create()
+	src.push(1)
+	src.push(2)
+	var b = ByteArray.init(src)
+	b.push(3)
+	return (src.count() * 10 + b.count()) as ExitCode
+end 'main'
+```
+```exitcode
+33
+```
+
+<!-- test: a-captured-buffer-adopts-inside-a-closure -->
+⭐ **THE MARK DOES NOT CROSS A CLOSURE BOUNDARY AND THE ADOPTION MUST.** `bufferSurfaceValues` is a
+per-function fact about a `ValueId`, so a captured `mm` has lost it inside the closure body — measured:
+`mm.length()` there is already refused. `ByteArray.init(mm)` nonetheless adopts, because the door asks
+the INSTANCE, which erasure cannot take away. This is the case that makes the door's choice of test a
+correctness property rather than a preference: keyed on the mark, `stdlib/File.maxon:135`'s shape would
+stop compiling the day it moved inside a closure.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Integer = int(i64.min to i64.max)
+typealias Counter = function(Integer) returns Integer
+
+function apply(f Counter, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	let r = apply(function(n Integer) gives ByteArray.init(mm).count() + n, x: 5)
+	return (r * 10 + mm.length()) as ExitCode
+end 'main'
+```
+```exitcode
+72
+```
+
+<!-- test: an-opaque-element-array-adopts-and-becomes-the-last-owner -->
+⭐⭐ **THE OPAQUE INSTANCE, AND THE ADOPTION AS SOLE OWNER.** `parseArrayStaticCall`'s header claims the
+adoption serves an OPAQUE instance (`Array with Element` inside a generic body) exactly as a concrete
+one, "element-agnostic by construction" — a claim nothing ran until this case. It is reachable through
+a nested `typealias ElementArray = Array with Element` whose own FIELD supplies the same instance. The
+element is a `String`, so the record's elements are managed, and `drain` then drops the container's
+reference — leaving the adopted array the LAST owner, whose drop must free the record AND destroy both
+Strings. A wrong drop callee for the retained value is exit **101** or a double free; neither is
+expressible as a wrong count.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{items: ElementArray.create()}
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function drain() returns Count
+		let t = ElementArray.init(self.items)
+		self.items = ElementArray.create()
+		return t.count()
+	end 'drain'
+end 'Container'
+
+typealias StrContainer = Container with String
+
+function main() returns ExitCode
+	var c = StrContainer.create()
+	c.push("ab")
+	c.push("cd")
+	let n = c.drain()
+	return (n * 10 + c.items.count()) as ExitCode
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: an-inner-alias-adopts -->
+`parseArrayStaticCall` has TWO call sites and this rung edited both: a top-level generic alias, and an
+alias declared INSIDE a type body (`enclosingInnerAliases` → `innerArrayStatic`). Every case above
+reaches only the first. This one reaches the second, in the shape it will actually be written — a
+static factory adopting its `__ManagedMemory` parameter straight into the type's own field.
+```maxon
+typealias Byte = int(0 to u8.max)
+
+type Holder
+	typealias Inner = Array with Byte
+
+	export var bytes as Inner
+
+	export static function wrap(mm __ManagedMemory) returns Self
+		return Self{bytes: Inner.init(mm)}
+	end 'wrap'
+end 'Holder'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	try mm.setByte(0, value: 20) otherwise return 3
+	try mm.setByte(1, value: 22) otherwise return 3
+	let h = Holder.wrap(mm)
+	let v0 = try h.bytes.get(0) otherwise return 4
+	let v1 = try h.bytes.get(1) otherwise return 4
+	return (v0 + v1) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: the-adopted-array-drops-on-the-throw-edge -->
+⭐ **RELEASE ON EVERY PATH, INCLUDING THE ONE THAT DOES NOT RETURN.** The adopted array is a BOUND owner
+when the function throws past it. Its drop rides the unwind edge or it does not ride at all, and a
+missing one is invisible in a single call — so the pair is run 8 times over both edges, thrown and
+returned, and the leak checker is the assertion.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+function adoptThenThrow(fail bool) returns int throws Boom
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
+	try mm.setLength(2) otherwise panic("setLength failed")
+	let a = ByteArray.init(mm)
+	if fail 'boom'
+		throw Boom.bad
+	end 'boom'
+	return a.count()
+end 'adoptThenThrow'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 8 'spin'
+		total = total + (try adoptThenThrow(true) otherwise 1)
+		total = total + (try adoptThenThrow(false) otherwise 9)
+		i = i + 1
+	end 'spin'
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+24
+```
+
+<!-- test: an-unbound-adoption-is-dropped-when-the-callee-throws -->
+The other half of the same question, one owner-kind over: the adoption is UNBOUND — a statement-scoped
+pending temporary handed straight to a callee — and the callee throws before it ever reads it. The
+temporary's drop is owed by the statement, and the error edge leaves the statement early. 8 rounds of
+both outcomes; the buffer's own length is returned afterwards to prove the record survived all 16.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+function eat(xs ByteArray, fail bool) returns int throws Boom
+	if fail 'boom'
+		throw Boom.bad
+	end 'boom'
+	return xs.count()
+end 'eat'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	var total = 0
+	var i = 0
+	while i < 8 'spin'
+		total = total + (try eat(ByteArray.init(mm), fail: true) otherwise 1)
+		total = total + (try eat(ByteArray.init(mm), fail: false) otherwise 9)
+		i = i + 1
+	end 'spin'
+	return (total * 10 + mm.length()) as ExitCode
+end 'main'
+```
+```exitcode
+242
 ```
 
 <!-- test: error.a-non-buffer-argument -->

@@ -27771,7 +27771,7 @@ export type Parser
 	function parseArrayInitStatic(func IrFunction, giid GenericInstanceId, methodTok Token, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let managed = try self.parseExpression(func, block: self.currentBlock)
-		try self.requireSameInstanceBuffer(managed, giid: giid, anchor: methodTok)
+		try self.requireSameArrayInstance(managed, giid: giid, anchor: methodTok)
 		try self.consume(TokenKind.rightParen)
 
 		let adopted = self.retainBorrowedAggregate(managed, range: range)
@@ -27803,13 +27803,24 @@ export type Parser
 	// ⚠ The sentence names `__ManagedMemory with <element>` because that is what the SIGNATURE declares
 	// (`ElementMemory`), not the `Array` spelling of the same instance — the split `ParseError`'s two
 	// builtin-argument sentences already draw, for the same reason.
-	function requireSameInstanceBuffer(value ValueId, giid GenericInstanceId, anchor Token) throws ParseError
+	//
+	// ⚠⚠ **IT ASKS FOR THE INSTANCE, NOT FOR THE BUFFER MARK, AND THE NAME SAYS SO (review, BATCH2 s5).**
+	// It was called `requireSameInstanceBuffer`, which claimed a test it does not make: an ORDINARY array of
+	// the same instance is admitted too, and adopting one is an ordinary co-owning retain
+	// (`array-init.an-ordinary-array-of-the-instance-adopts` pins it). Keying on `valueIsBufferSurface`
+	// instead would not merely be stricter, it would be WRONG — the mark is a per-function fact about a
+	// `ValueId` and it does not survive a CLOSURE CAPTURE (MEASURED: inside a closure body `mm.length()` is
+	// already refused, while `ByteArray.init(mm)` must still adopt — `array-init.a-captured-buffer-adopts-
+	// inside-a-closure`). A door keyed on the mark would refuse the `stdlib/File.maxon:135` shape the moment
+	// it appeared inside a closure, for a reason having nothing to do with the element stride this rule
+	// exists to keep honest. The instance is the fact the stride depends on, so the instance is what is asked.
+	function requireSameArrayInstance(value ValueId, giid GenericInstanceId, anchor Token) throws ParseError
 		if self.tagOf(value) == ValueTypeTag.genericInstance and self.valueNameId(value) == giid 'sameInstance'
 			return
 		end 'sameInstance'
 
 		throw ParseError.builtinArgumentType(String.from(StringInitManagedParamName), expected: "{String.from(ManagedMemoryTypeName)} with {self.signatures.arrayElementDisplayName(giid)}", got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
-	end 'requireSameInstanceBuffer'
+	end 'requireSameArrayInstance'
 
 	// `IntSet.create()` — the one `Set` static factory at this slice (P1.7b slice A). Yields an OWNED empty set
 	// (`__set_create`), tracked so its scope-exit drop routes through `genericInstanceBoxDropCallee` →
