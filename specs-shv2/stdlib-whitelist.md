@@ -110,11 +110,18 @@ A whitelisted module must declare no name a user program declares and no builtin
   not the test fragment, so this diagnostic is documented here rather than pinned as a golden — the
   runner only rewrites the fragment's own path to `<fragment>`.)
 
-- TYPE-name-vs-builtin collisions are the maintainer's responsibility. shv2 has no
-  builtin-type-redeclaration diagnostic at all — a user `type String` compiles today as a distinct
-  nominal — so enforcing one is a general language matter, not a whitelist one. Clock declares
-  `Clock`/`WallClock` and time typealiases, none of them builtin, so it cannot hit this. Do not
-  whitelist a module that redeclares a builtin.
+- TYPE-name-vs-builtin collisions are the maintainer's responsibility, with **exactly two
+  exceptions**. `String` and `Character` are now REFUSED as user type names (`E2015`, via
+  `isCompilerOwnedTypeName`) — BATCH2 slice 2, because those two are the only builtins that mint
+  CONFORMANCE IMPL SYMBOLS (`String.hash`, `Character.hash`, …) which a user declaration of the same
+  name does not collide with but silently **REPLACES**: `undefinedImplNames` then declines to install
+  the builtin. Measured before the fix, both silent and undiagnosed: a `Box with String` whose
+  `.itemHash()` of `""` answered the user's body instead of djb2's `5381`, and a `Set with String`
+  that stored `"alice"` **twice** because the user's `equals` answered `false`.
+  ⚠ **For every OTHER builtin the original statement still holds** — shv2 has no general
+  builtin-type-redeclaration diagnostic, and enforcing one is a language matter rather than a
+  whitelist one. Clock declares `Clock`/`WallClock` and time typealiases, none of them builtin, so it
+  cannot hit this. Do not whitelist a module that redeclares a builtin.
 
 - FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT, so the builtin is RETIRED FIRST — which is
   what made `stdlib/Sleep.maxon` the second entry. The parser recognizes a set of BARE names —
