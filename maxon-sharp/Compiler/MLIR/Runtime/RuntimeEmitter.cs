@@ -9,6 +9,16 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 /// </summary>
 public partial class RuntimeEmitter(IEmitterBackend backend) {
   private readonly IEmitterBackend _b = backend;
+
+  /// <summary>
+  /// ⚠ PER-INSTANCE, SO IT ONLY MAKES A LABEL UNIQUE AMONG LABELS FROM THE SAME EMITTER. Two
+  /// RuntimeEmitters both start at 0, so two instances that mint the same PREFIX emit the same
+  /// NAME — a duplicate-label failure, not a subtle one, but one that appears only when a method
+  /// first grows a <see cref="UniqueLabel"/> call. Backends do construct more than one (the
+  /// throwaway <c>EmitMmRawAlloc260</c> instance, and <c>rawRt</c>): any two that can emit the same
+  /// prefix must be the SAME instance. The park protocol's globals and functions are, for exactly
+  /// this reason — see the note at <c>schedRt</c>'s declaration in either backend.
+  /// </summary>
   private int _uniqueLabelCounter;
 
   private string UniqueLabel(string prefix) => $"__{prefix}_{_uniqueLabelCounter++}";

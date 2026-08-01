@@ -424,10 +424,18 @@ public interface IEmitterBackend {
   /// trailing suffix is ignored rather than rejected — every caller treats 0 as "leave the default
   /// alone", which is also what a malformed value should get.
   ///
-  /// <paramref name="scratchSlot"/> is the first of FOUR consecutive stack slots used as the
-  /// value buffer on Windows (GetEnvironmentVariableA copies into caller memory); POSIX ignores it,
-  /// because getenv returns a pointer into the environment block. Same convention as
-  /// <see cref="GetCurrentTimeMs"/>'s out-parameter slot.
+  /// <paramref name="scratchSlot"/> names a FOUR-SLOT (32-byte) value buffer on Windows, because
+  /// GetEnvironmentVariableA copies into caller memory; POSIX ignores it, because getenv returns a
+  /// pointer into the environment block. Same convention as <see cref="GetCurrentTimeMs"/>'s
+  /// out-parameter slot.
+  ///
+  /// ⚠ THE BUFFER GROWS TOWARD RBP, SO IT OCCUPIES SLOTS <paramref name="scratchSlot"/> DOWN TO
+  /// <paramref name="scratchSlot"/>−3, NOT UP TO +3 — a caller that reserves the wrong three
+  /// neighbours will be overwritten by a call that reports success. x86's slot N is at
+  /// <c>rbp−(N+1)*8</c> (see <see cref="LeaLocal"/>), so ADDRESSES rise as the slot index falls, and
+  /// a 32-byte buffer based at slot N covers N, N−1, N−2, N−3. Slot 0 is therefore NEVER a legal
+  /// argument: its buffer would run over the saved RBP and the return address. The two callers in
+  /// tree pass 4 and 8, which cover 4..1 and 8..5 and are disjoint.
   /// Clobbers Arg0..Arg5 and Scratch0..Scratch3.
   /// </summary>
   void ReadEnvUnsigned(VReg dest, string nameSymdata, int scratchSlot);

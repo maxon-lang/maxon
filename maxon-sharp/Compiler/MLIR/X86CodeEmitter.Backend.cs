@@ -445,23 +445,37 @@ public partial class X86CodeEmitter {
     }
 
     // GetEnvironmentVariableA copies into caller memory, so unlike POSIX's getenv this needs the
-    // caller's scratch slots. Four consecutive slots = 32 bytes, which is ample for the unsigned
-    // decimals this reads and matches the buffer __gt_init's own env reads use.
+    // caller's scratch slots. Four slots = 32 bytes, which is ample for the unsigned decimals this
+    // reads and matches the buffer __gt_init's own env reads use. The buffer starts AT
+    // scratchSlot's address and grows toward RBP, so it occupies slots scratchSlot..scratchSlot-3
+    // (see LeaLocal, and IEmitterBackend's contract for why the direction is written down).
     public void ReadEnvUnsigned(VReg dest, string nameSymdata, int scratchSlot) {
       const int envBufSlots = 4;
+      var zeroLabel = BackendLabel("env_unsigned_zero");
       var doneLabel = BackendLabel("env_unsigned_done");
 
       _e.EmitLeaRegSymdataRel(X86Register.Rcx, nameSymdata);   // lpName
       LeaLocal(VReg.Arg1, scratchSlot);                        // lpBuffer
       _e.EmitMovRegImm(X86Register.R8, envBufSlots * 8);        // nSize
       _e.EmitCallImport("kernel32.dll", "GetEnvironmentVariableA");
-      _e.EmitXorRegReg(R(dest), R(dest));
+
+      // ⚠ TEST THE RETURNED COUNT BEFORE ZEROING `dest`, AND ZERO IT AT A SEPARATE LABEL — the
+      // order is load-bearing, not style. `dest` MAY ALIAS RAX (VReg.Scratch0 maps to it, and both
+      // of this helper's callers pass Scratch0), so zeroing first destroys the very count that
+      // distinguishes "unset or empty" from "read N chars" and leaves ZF=1 unconditionally: the
+      // branch is then always taken and every read answers 0. It did exactly that — both netpoll
+      // injection knobs were silently dead on Windows. This is the shape the pre-existing twin
+      // EmitReadMaxProcsEnvOverride has always used, for the same reason.
       _e.EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-      _e.EmitJcc("z", doneLabel);                              // unset or empty -> 0
+      _e.EmitJcc("z", zeroLabel);                              // unset or empty -> 0
 
       LeaLocal(VReg.Arg0, scratchSlot);
       _e.EmitParseUnsignedCstrIntoRax(X86Register.Rcx);
       if (R(dest) != X86Register.Rax) _e.EmitMovRegReg(R(dest), X86Register.Rax);
+      _e.EmitJmp(doneLabel);
+
+      _e.DefineLabel(zeroLabel);
+      _e.EmitXorRegReg(R(dest), R(dest));
 
       _e.DefineLabel(doneLabel);
     }

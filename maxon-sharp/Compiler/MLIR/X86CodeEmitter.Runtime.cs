@@ -2827,9 +2827,14 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
 
     // This site never adopted OPEN #66's clear-before-arm — it still clears ioYielded down in the
-    // yield branch — and under the netpoll protocol it no longer has to: a completer that reaps the
-    // ConnectEx completion claims the park word, finds `Wait` (we have not committed) and declines
-    // the enqueue, so the stale ioYielded==1 a running GT carries can no longer let it through.
+    // yield branch — and it keeps that shape deliberately: unlike the other four submit families
+    // rt_ntc never RESTORES ioYielded=1 on its sync paths, so a clear here would leave a GT that
+    // returned synchronously running at ioYielded==0. What the clear must NOT be is LATE: see the
+    // ordering note at rt_ntc_yield, where it now runs strictly before the commit CAS.
+    //
+    // Between the arm and that commit the stale ioYielded==1 a running GT carries is harmless, and
+    // the park word is why: a completer that reaps the ConnectEx completion claims the word, finds
+    // `Wait` (we have not committed) and declines the enqueue, so it never looks at ioYielded at all.
     EmitNetpollArmCurrent();
 
     // --- Call ConnectEx via function pointer ---
@@ -2921,14 +2926,27 @@ public partial class X86CodeEmitter {
     DefineLabel("rt_ntc_yield");
     EmitJumpIfMainThread("rt_ntc_mainthread_loop");
 
+    // ⚠ CLEAR ioYielded BEFORE THE COMMIT, NEVER AFTER — this is the ONE of the five submit families
+    // that had it the other way round, and the ordering is a correctness rule rather than a tidy-up.
+    // x86's convention leaves a RUNNING GT at ioYielded==1 (the sync paths restore 1, and the resumer
+    // stamps 1 after every context switch), so 1 is the normal value here for any GT that has parked
+    // before. The commit CAS PUBLISHES `Parked`: from that instruction on, a completer may claim this
+    // GT, and __netpoll_claim_done's spin then reads ioYielded to decide the context save is
+    // finished. With the clear below the commit, that spin can read the STALE 1 and enqueue a GT that
+    // is still executing these instructions — a second M resumes it on a stale sp/rbp, which is
+    // precisely the double-schedule the spin exists to prevent. Cleared first, the completer either
+    // sees 0 and waits for __gt_context_switch's resumer to stamp 1, or never gets that far.
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
+
     // Non-mainThread: commit the park (Go's netpollblockcommit), then switch to P->mainThread. A
     // failed commit means a completer claimed the wakeup while we were getting here, so we must NOT
-    // park — rt_ntc_resume reads the published result.
+    // park — rt_ntc_resume reads the published result. The commit clobbers the call-clobbered set,
+    // so RCX/RDX are re-established below for __gt_context_switch's (from, to).
     EmitNetpollCommitCurrentOrAbort("rt_ntc_resume");
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitLeaMainThreadInline(X86Register.Rdx);
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
     EmitMovRegImm(X86Register.Rax, GtStatusRunning);
     EmitMovIndirectMemReg(X86Register.Rdx, GtOffStatus, X86Register.Rax);
     EmitCallRuntimeLabel("__gt_context_switch");
@@ -4379,9 +4397,19 @@ public partial class X86CodeEmitter {
     DefineGlobal("__gt_timer_count", 8, 0);   // current number of entries in the heap
     DefineGlobal("__gt_timer_cs", 40, 0);     // CRITICAL_SECTION protecting the timer heap
 
+    // Scheduler functions migrated to RuntimeEmitter (shared x86/ARM64). Declared HERE, ahead of the
+    // globals block, so the park protocol's globals and its functions come out of ONE emitter.
+    //
+    // ⚠ THAT IS STRUCTURAL, NOT TIDINESS: RuntimeEmitter.UniqueLabel counts per INSTANCE, so a
+    // throwaway emitter for the globals would start its counter at 0 and mint `__netpoll_*_0` names
+    // that collide with this one's the moment either side grows a label. It was harmless only
+    // because EmitNetpollGlobals mints none today — a property of what that method happens to do,
+    // which nothing checks and nothing would preserve.
+    var schedRt = new Runtime.RuntimeEmitter(CreateBackend());
+
     // The async-I/O park protocol's own globals — see RuntimeEmitter.Netpoll.cs, which owns the
     // protocol for every target.
-    new Runtime.RuntimeEmitter(CreateBackend()).EmitNetpollGlobals();
+    schedRt.EmitNetpollGlobals();
 
     if (Compiler.AsyncTrace) {
       DefineGlobal("__gt_trace_counter", 8, 0);
@@ -4436,8 +4464,6 @@ public partial class X86CodeEmitter {
     EmitGtTryAwait();
     EmitGtYield();
     EmitGtProcessPendingWaiter();
-    // Scheduler functions migrated to RuntimeEmitter (shared x86/ARM64)
-    var schedRt = new Runtime.RuntimeEmitter(CreateBackend());
     schedRt.EmitGtStackHigh();
     schedRt.EmitGtStackHighCurrent();
     schedRt.EmitGtEnqueue();
@@ -5488,6 +5514,11 @@ public partial class X86CodeEmitter {
     DefineLabel("__gt_try_await_sched");
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     EmitCallRuntimeLabel("__io_check_completions");
+    // The recovery net belongs in every scheduling loop that can park, not only in __gt_await's:
+    // when a wakeup goes missing the thread that notices is whichever one is still looking for work,
+    // and this loop is that thread just as often as its structural twin. It is time-gated to once
+    // per 10 ms inside itself, so a loop that spins costs nothing.
+    EmitCallRuntimeLabel("__netpoll_recover");
 
     // Check if promise already completed
     EmitMovRegMem(X86Register.R10, -0x08, 8);
@@ -7596,7 +7627,7 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax); // status = ready
 
-    // ⭐ STEP 3/4 — RELEASE the word and find out whether the enqueue is ours. The `comp` free moved
+    // ⭐ STEP 3 — RELEASE the word and find out whether the enqueue is ours. The `comp` free moved
     // BELOW this call: mm_raw_free can take the slab's remote-free path, and a call inside the
     // claim window is time a waiter's __netpoll_park_done may have to spin through for no reason.
     // Everything between a claim and its release should be straight-line stores.
@@ -8293,7 +8324,7 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax);
 
-    // ⭐ STEP 3/4 — RELEASE the word and find out whether the enqueue is ours. Nothing below may read
+    // ⭐ STEP 3 — RELEASE the word and find out whether the enqueue is ours. Nothing below may read
     // or write this GT except through the returned pointer.
     //
     // The signal below still runs on every path, INCLUDING the lost-claim path that now publishes

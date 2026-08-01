@@ -59,7 +59,14 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   2. PUBLISH — the caller writes <c>io_result_val</c> / <c>io_result_len</c> /
 ///                <c>io_error_code</c> / <c>status</c>. It writes them ONLY because step 1 won.
 ///   3. RELEASE — <c>__netpoll_claim_done</c> store-releases <c>Ready</c>, and only now may a waiter
-///                leave the park.
+///                leave the park. It also answers who owes the enqueue, because the answer is
+///                <c>claimedFrom</c> and this is the call that has it.
+///
+/// ⚠ THE ENQUEUE ITSELF IS NOT A FOURTH STEP AND MUST NOT BE NUMBERED AS ONE — it is the CALLER's
+/// act on step 3's answer, taken after the protocol is done with the GT, and every site does it
+/// differently (inline, after a free, or not at all). Three is the count everywhere: here, at
+/// <see cref="EmitNetpollClaim"/>, at <see cref="EmitNetpollClaimDone"/>, and in both backends'
+/// completers.
 ///
 /// ⚠ STEP 3 IS WHY THIS IS A FIFTH STATE AND NOT A REORDERING. If step 1 stored <c>Ready</c>
 /// directly, a waiter claimed from <c>Wait</c> — which is STILL RUNNING — would see
@@ -115,10 +122,16 @@ public partial class RuntimeEmitter {
   /// ⚠ THIS HOLDS A GT POINTER ACROSS 10 ms WITH NO LOCK AND NO OWNERSHIP, AND THAT IS SAFE FOR ONE
   /// REASON ONLY: <b>the stale value is COMPARED, never DEREFERENCED.</b> The next scan re-walks the
   /// live list under <c>__sched_all_lock</c> and produces its own candidate; this word's whole
-  /// contribution is the equality test between the two. Every load through the pointer —
-  /// <c>ioYielded</c>, the claiming CAS, the enqueue — is made on THAT walk's candidate, which the
-  /// lock proves is live. Nothing here rests on a <c>Parked</c> GT being un-freeable, which would be
-  /// the weaker and less obviously true argument; it rests on the pointer never being followed.
+  /// contribution is the equality test between the two. Every load through the pointer — the
+  /// <c>ioYielded</c> load and the claiming CAS — is made on THAT walk's candidate <b>while the walk
+  /// still holds the lock</b>, which is what proves the pointee live. Nothing here rests on a
+  /// <c>Parked</c> GT being un-freeable, which would be the weaker and less obviously true argument.
+  ///
+  /// ⚠ THE ENQUEUE IS THE ONE ACT OUTSIDE THE LOCK, AND IT STANDS ON A DIFFERENT ARGUMENT — OWNERSHIP,
+  /// NOT LIVENESS-BY-LOCK. Holding the all-threads lock across <c>__gt_enqueue</c> is exactly the
+  /// thing to avoid, so the release happens once the claiming CAS has won. That CAS makes this GT
+  /// ours and nobody else's, and a GT that has been readied but not yet enqueued cannot run, so it
+  /// cannot complete and cannot be freed before we hand it over.
   ///
   /// The residual is a false POSITIVE, not a use-after-free: a GT can be freed and its address
   /// recycled by <c>__gt_spawn</c>'s free list, and the recycled GT can be a genuine two-sighting
@@ -149,14 +162,34 @@ public partial class RuntimeEmitter {
 
   /// <summary>
   /// FAULT INJECTION on the COMPLETER's side, in milliseconds; 0 = off. It widens the interval in
-  /// which the completer OWNS the park word but has not yet released it — and specifically the TAIL
-  /// of that interval, after the caller's publish and before
-  /// <see cref="EmitNetpollClaimDone"/>'s store-release.
+  /// which the completer OWNS the park word but has not yet released it — the interval between
+  /// <see cref="EmitNetpollClaim"/>'s winning CAS and <see cref="EmitNetpollClaimDone"/>'s
+  /// store-release, with the caller's publish inside it.
   ///
-  /// ⚠ THE TAIL, NOT THE HEAD, AND THE DIFFERENCE IS THE WHOLE VALUE OF THE ARM. Stretching the head
-  /// (right after the claiming CAS) produces a window in which `status` still says `waiting`, so
-  /// every observer declines for a reason that predates the fifth state — a green run there proves
-  /// nothing this rung changed. See the comment at the call site.
+  /// ⭐⭐ IT FIRES AT BOTH ENDS OF THAT INTERVAL, AND THE TWO ENDS FALSIFY DIFFERENT THINGS. They are
+  /// not two spellings of one window, and one does not subsume the other:
+  ///
+  ///   HEAD — inside <see cref="EmitNetpollClaim"/>, on the far side of the winning CAS: <b>claimed,
+  ///          results not yet written.</b> This is what a WAITER must not act on. Under a regression
+  ///          that CASes straight to <c>Ready</c> (skipping <c>Claiming</c>), a waiter reads the word,
+  ///          sees <c>Ready</c>, leaves the park and reads a STALE <c>io_result_val</c> — which is
+  ///          exactly what the fifth state exists to prevent, and it is visible only while this end
+  ///          is stretched.
+  ///   TAIL — inside <see cref="EmitNetpollClaimDone"/>, after the caller's publish and before the
+  ///          store-release: <b>results written, not yet released.</b> This is what the RECOVERY NET
+  ///          must not act on. Here <c>status</c> already says ready, so the only thing standing
+  ///          between the net and a false positive is that the word reads <c>Claiming</c> rather than
+  ///          <c>Parked</c>.
+  ///
+  /// ⚠ AND THE HEAD WAS ONCE DELETED ON THE ARGUMENT THAT IT "CANNOT FAIL FOR THE THING IT IS AIMED
+  /// AT" — MEASUREMENT FALSIFIED IT. The argument was that at the head <c>status</c> still reads
+  /// <c>waiting</c>, so every observer declines for a reason that predates the fifth state. That
+  /// holds for the recovery NET, whose suspicion condition includes <c>status != waiting</c>; it does
+  /// NOT hold for the WAITER, which reads the word and nothing else. Injecting a fourth-state
+  /// regression (<c>__netpoll_claim</c> CASing straight to <c>Ready</c>) and running 10 iterations at
+  /// <c>MAXON_GT_CLAIM_DELAY_MS=5</c>: head alone <b>0/10</b> (<c>runtime: double wait</c>, plus a
+  /// wedge), tail alone <b>0/10</b>, the correct protocol with BOTH armed <b>10/10</b>. Both ends
+  /// discriminate; the deletion replaced one window with the other instead of adding it.
   ///
   /// ⭐ WHY A SECOND KNOB EXISTS: A HANDSHAKE HAS TWO SIDES AND ONLY ONE OF THEM WAS INSTRUMENTED.
   /// <see cref="NetpollParkDelayMsLabel"/> widens the parker's window; nothing widened the
@@ -166,12 +199,12 @@ public partial class RuntimeEmitter {
   /// took it to 1/10 by a DIFFERENT route: the recovery net could not tell a slow completer from a
   /// lost wakeup, so it raced live ones (see <see cref="EmitNetpollRecover"/>).
   ///
-  /// ⚠ IT IS THE SAME WINDOW, RE-AIMED, NOT A DIFFERENT ONE. It used to be documented as the gap
-  /// between "I published <c>status = ready</c>" and "I claimed the park word", because that was the
-  /// order completers ran in. Claim-then-publish did not remove that interval, it INVERTED it: the
-  /// instructions between a completer's first and last act on a GT are the same instructions, and
-  /// what changed is that the word now says who owns them. Stretching it is still exactly "hold a
-  /// completer mid-completion and see what the rest of the runtime does".
+  /// ⚠ AND IT IS THE SAME INTERVAL IT ALWAYS WAS, IN NEW VOCABULARY. It used to be documented as the
+  /// gap between "I published <c>status = ready</c>" and "I claimed the park word", because that was
+  /// the order completers ran in. Claim-then-publish did not remove that interval, it INVERTED it:
+  /// the instructions between a completer's first and last act on a GT are the same instructions, and
+  /// what changed is that the word now says who owns them. Stretching either end is still exactly
+  /// "hold a completer mid-completion and see what the rest of the runtime does".
   /// </summary>
   private const string NetpollClaimDelayMsLabel = "__netpoll_claim_delay_ms";
 
@@ -228,7 +261,8 @@ public partial class RuntimeEmitter {
 
   /// <summary>
   /// Emit every function of the park protocol. Both backends call this; the LABELS are the interface
-  /// a platform's readiness plumbing binds to, and there are only six of them:
+  /// a platform's readiness plumbing binds to. Six of them carry the STATE MACHINE — and six is not
+  /// the whole obligation; see the two below the list, which fail silently rather than loudly.
   ///
   ///   <c>__netpoll_arm(gt)</c>        — before publishing a registration the completer can see.
   ///   <c>__netpoll_woken(gt) -&gt; 0|1</c> — "has a completer CLAIMED AND PUBLISHED my wakeup?", the
@@ -241,6 +275,26 @@ public partial class RuntimeEmitter {
   ///
   /// A new platform supplies readiness discovery (epoll_wait, kevent, GetQueuedCompletionStatus) and
   /// calls these six. It writes no state machine of its own.
+  ///
+  /// ⚠ BUT SIX IS NOT THE WHOLE INTERFACE, AND THE TWO IT LEAVES OUT ARE THE TWO THAT FAIL SILENTLY.
+  /// A platform that binds only the six above still compiles, still runs, and still passes — while
+  /// having neither of these:
+  ///
+  ///   <c>__netpoll_init</c>    — call it from that platform's <c>__gt_init</c>. It is what reads the
+  ///                             two injection knobs out of the environment. Unwired, both read 0,
+  ///                             the acceptance instrument cannot be armed at all, and every run
+  ///                             looks clean because nothing is being stretched. (x64 shipped in
+  ///                             exactly this state for a different reason — see
+  ///                             <c>IEmitterBackend.ReadEnvUnsigned</c> — and the symptom was
+  ///                             identical: a green driver measuring nothing.)
+  ///   <c>__netpoll_recover</c> — call it from EVERY scheduler idle/park loop that can wait on an
+  ///                             I/O, not just the one that drives timers. It is the regression
+  ///                             detector; a loop that omits it is a loop where a lost wakeup is a
+  ///                             silent wedge instead of a counted, named failure. It time-gates
+  ///                             itself to 10 ms, so adding it to a loop that spins costs nothing.
+  ///                             (arm64 has ONE such call site because <c>EmitDriveSchedulerAndIo</c>
+  ///                             de-duplicated the sequence; x86 has ten hand-written copies, and one
+  ///                             of them was missed on the first pass.)
   ///
   /// ⚠ THE LAST TWO EXIST BECAUSE DISCOVERY AND OWNERSHIP ARE DIFFERENT QUESTIONS AND EVERY PLATFORM
   /// CONFLATES THEM IF LET. A backend always has some earlier, cheaper-looking sign that the I/O
@@ -499,8 +553,9 @@ public partial class RuntimeEmitter {
   ///
   /// The spin is bounded for the same reason <see cref="EmitNetpollClaimDone"/>'s is: everything
   /// between a claim and its release is straight-line stores in the completer, so the bound is a
-  /// scheduling quantum — plus <see cref="NetpollClaimDelayMsLabel"/> when the fault injection is
-  /// armed, which is a deliberate sleep and bounded by construction. It cannot self-deadlock either:
+  /// scheduling quantum — plus TWICE <see cref="NetpollClaimDelayMsLabel"/> when the fault injection
+  /// is armed (it fires at both ends of the claim window), which is a deliberate sleep and bounded by
+  /// construction. It cannot self-deadlock either:
   /// claim → publish → release is one straight-line region inside a single call frame, so no thread
   /// can be inside it and in this function at once, and the completer waited on is always another M.
   /// </summary>
@@ -629,8 +684,23 @@ public partial class RuntimeEmitter {
     _b.AtomicCAS(VReg.Scratch1, GtOffParkState, VReg.Scratch2, VReg.Arg1);
     _b.JumpIfZero(VReg.Scratch3, loopLabel);     // lost the race — re-read and decide again
 
-    // Scratch2 still holds the state we claimed FROM: the CAS leaves it alone on both backends.
+    // Scratch2 still holds the state we claimed FROM: the CAS leaves it alone on both backends. Home
+    // it before the call below, which clobbers the whole scratch set.
     _b.StoreLocal(slotClaimedFrom, VReg.Scratch2);
+
+    // ⭐ FAULT INJECTION, THE COMPLETER'S HALF — THE **HEAD** OF THE CLAIM WINDOW: claimed, results
+    // not yet written. Its twin at the TAIL (in __netpoll_claim_done) aims at the recovery net; this
+    // one aims at the WAITER, which reads the park word and nothing else. Stretch it and a waiter
+    // that can see anything but `Claiming` here has time to leave the park and read an
+    // io_result_val that has not been stored yet — which is precisely the failure the fifth state
+    // exists to prevent, and which the tail arm cannot expose because by then the results ARE there.
+    //
+    // ⚠ IT WAS ONCE DELETED IN FAVOUR OF THE TAIL, ON THE ARGUMENT THAT `status` STILL READS
+    // `waiting` HERE SO EVERY OBSERVER DECLINES FOR A PRE-EXISTING REASON. That argument is true of
+    // the recovery net and FALSE of the waiter, and the measurement says so: against an injected
+    // fourth-state regression (this CAS going straight to `Ready`), head alone 0/10, tail alone 0/10,
+    // correct protocol with both armed 10/10. Two windows, two failures; keep both.
+    _b.Call(NetpollClaimDelayFn);
 
     _b.LoadLocal(VReg.Scratch0, slotClaimedFrom);
     _b.ReturnValue(VReg.Scratch0);
@@ -641,8 +711,9 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// <c>__netpoll_claim_done(gt, claimedFrom)</c> -&gt; the GT to enqueue, or 0. STEPS 3 and 4 of the
-  /// completer's four: release the word, then decide whose job the enqueue is. <c>gt</c> and
+  /// <c>__netpoll_claim_done(gt, claimedFrom)</c> -&gt; the GT to enqueue, or 0. STEP 3 of the
+  /// completer's three: release the word, and say whose job the enqueue is. (The enqueue is the
+  /// caller's act on that answer, not a step of the protocol — see the class comment.) <c>gt</c> and
   /// <c>claimedFrom</c> are exactly what the matching <see cref="EmitNetpollClaim"/> was given and
   /// returned.
   ///
@@ -680,16 +751,15 @@ public partial class RuntimeEmitter {
 
     _b.DefineLabel(validLabel);
 
-    // ⭐ FAULT INJECTION, THE COMPLETER'S HALF — AND IT SITS HERE, NOT AT THE CLAIM, BECAUSE ONLY
-    // HERE DOES IT DISCRIMINATE. Held at the claim, the injected window has `status` still reading
-    // `waiting` and the word already reading `Claiming`, so __netpoll_recover declines for TWO
-    // independent reasons and a green run cannot say which one held — including the reason that was
-    // already true before this state existed. Held HERE, the caller's publish has happened: `status`
-    // says ready, and the ONLY thing standing between the recovery net and a false positive is that
-    // the word reads `Claiming` rather than `Parked`. That is precisely the change the fifth state
-    // makes, so this is the one placement where the arm tests it. It re-tests the waiter's half at
-    // the same instant, for the same reason: a waiter that still self-detected on `status` would
-    // leave the park inside this window, which is the defect __netpoll_woken closed.
+    // ⭐ FAULT INJECTION, THE COMPLETER'S HALF — THE **TAIL** OF THE CLAIM WINDOW: results written,
+    // not yet released. Its twin at the HEAD (in __netpoll_claim) aims at the waiter; this one aims
+    // at the RECOVERY NET. The caller's publish has happened, so `status` says ready, and the ONLY
+    // thing standing between the net and a false positive is that the word reads `Claiming` rather
+    // than `Parked` — precisely the change the fifth state makes. At the head that same test is
+    // decided earlier by `status != waiting`, so the net declines there for a reason that predates
+    // this state and the head arm cannot exercise it. It re-tests the waiter's half at the same
+    // instant: a waiter that still self-detected on `status` would leave the park inside THIS window,
+    // which is the defect __netpoll_woken closed.
     _b.Call(NetpollClaimDelayFn);
 
     _b.LoadLocal(VReg.Scratch1, 0);              // gt
@@ -749,11 +819,17 @@ public partial class RuntimeEmitter {
   /// instruction the race needs turns "an admissible interleaving" into "every run". The acceptance
   /// for this rung is that the OLD protocol wedges under injection and the new one does not.
   ///
-  /// ⚠ THERE ARE TWO SUCH INSTRUCTIONS, ONE PER SIDE, WHICH IS WHY THIS TAKES ITS GLOBAL AS A
-  /// PARAMETER. <see cref="NetpollParkDelayFn"/> sits between the parker's last self-detect and its
-  /// commit CAS; <see cref="NetpollClaimDelayFn"/> sits inside <see cref="EmitNetpollClaim"/>, on the
-  /// far side of the winning CAS, so it holds a completer mid-completion with the word reading
-  /// <c>Claiming</c>. Widening only the first can only ever falsify the parker's half of the protocol.
+  /// ⚠ THERE ARE TWO SUCH GLOBALS, ONE PER SIDE OF THE HANDSHAKE, WHICH IS WHY THIS TAKES ITS GLOBAL
+  /// AS A PARAMETER — and the completer's is called from TWO sites, not one.
+  /// <see cref="NetpollParkDelayFn"/> sits between the parker's last self-detect and its commit CAS.
+  /// <see cref="NetpollClaimDelayFn"/> sits at BOTH ENDS of the completer's claim window: inside
+  /// <see cref="EmitNetpollClaim"/> on the far side of the winning CAS (claimed, results not yet
+  /// written — the window a WAITER must not act in), and inside
+  /// <see cref="EmitNetpollClaimDone"/> just before the store-release (results written, not yet
+  /// released — the window the RECOVERY NET must not act in). Widening only the parker's can only
+  /// ever falsify the parker's half of the protocol, and each end of the completer's falsifies a
+  /// different half of the completer's; see <see cref="NetpollClaimDelayMsLabel"/> for the
+  /// measurement that says neither end subsumes the other.
   ///
   /// It SHIPS rather than hiding behind a build flag, deliberately: unset, each costs one
   /// predictable-not-taken load and branch, and it is the only way a future change to this handshake
@@ -781,9 +857,11 @@ public partial class RuntimeEmitter {
   private void EmitNetpollInit() {
     _b.FunctionStart("__netpoll_init", 0, 0x80);
 
-    // Each ReadEnvUnsigned owns FOUR consecutive slots as its Windows value buffer (POSIX ignores
-    // them), so the two reads must not share a base — same scratchSlot convention GetCurrentTimeMs
-    // and friends use.
+    // Each ReadEnvUnsigned owns a FOUR-SLOT Windows value buffer (POSIX ignores it) that grows
+    // DOWNWARD in slot index from the one named, so slot 4 covers 4..1 and slot 8 covers 8..5 — two
+    // disjoint buffers inside this function's 0x80 frame. Same scratchSlot convention
+    // GetCurrentTimeMs and friends use; see IEmitterBackend.ReadEnvUnsigned for why the direction is
+    // written down rather than inferred.
     _b.ReadEnvUnsigned(VReg.Scratch0, NetpollParkDelayEnvSymdata, 4);
     _b.StoreGlobal(NetpollParkDelayMsLabel, VReg.Scratch0);
 
@@ -867,9 +945,10 @@ public partial class RuntimeEmitter {
     const int slotCursor = 1;
     const int slotNow = 2;
     var retLabel = UniqueLabel("netpoll_recover_ret");
+    var unlockRetLabel = UniqueLabel("netpoll_recover_unlock_ret");
     var walkLabel = UniqueLabel("netpoll_recover_walk");
     var nextLabel = UniqueLabel("netpoll_recover_next");
-    var unlockLabel = UniqueLabel("netpoll_recover_unlock");
+    var decideLabel = UniqueLabel("netpoll_recover_decide");
     var confirmLabel = UniqueLabel("netpoll_recover_confirm");
     var claimLabel = UniqueLabel("netpoll_recover_claim");
     var enqueueLabel = UniqueLabel("netpoll_recover_enqueue");
@@ -906,7 +985,7 @@ public partial class RuntimeEmitter {
 
     _b.DefineLabel(walkLabel);
     _b.LoadLocal(VReg.Scratch0, slotCursor);
-    _b.JumpIfZero(VReg.Scratch0, unlockLabel);
+    _b.JumpIfZero(VReg.Scratch0, decideLabel);
 
     // Acquire, because the `status` load below must not be satisfied out of a line older than this
     // one: on a weakly ordered machine a control dependency orders a later store, never a later load.
@@ -918,25 +997,33 @@ public partial class RuntimeEmitter {
     _b.JumpIf(Condition.Equal, nextLabel);
     // Committed to a park, and something has already declared the I/O finished. Nobody owns it.
     _b.StoreLocal(slotCandidate, VReg.Scratch0);
-    _b.Jump(unlockLabel);
+    _b.Jump(decideLabel);
 
     _b.DefineLabel(nextLabel);
     _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, GtOffAllNext);
     _b.StoreLocal(slotCursor, VReg.Scratch0);
     _b.Jump(walkLabel);
 
-    _b.DefineLabel(unlockLabel);
-    _b.AllThreadsLockRelease();
+    // ⚠⚠ EVERYTHING FROM HERE TO THE CAS RUNS WITH __sched_all_lock STILL HELD, AND THAT IS THE
+    // WHOLE SAFETY ARGUMENT FOR DEREFERENCING slotCandidate AT ALL. See NetpollSuspectLabel: this
+    // net follows a raw GT pointer, and the only thing that says the pointee is still live is the
+    // walk that produced it — which is to say, the lock that walk ran under. Releasing first and
+    // dereferencing after would leave the safety resting on "a Parked GT cannot be freed", which is
+    // precisely the weaker argument that comment disclaims. Only the enqueue goes outside, because
+    // holding the all-threads lock across it is the thing to avoid; by then the CAS below has made
+    // this GT ours, and a GT we have readied but not yet enqueued cannot run, cannot complete, and
+    // so cannot be freed underneath us.
+    _b.DefineLabel(decideLabel);
 
     // Publish this scan's candidate (possibly none) and act only if the PREVIOUS scan saw the same
     // GT. No transient state of a live completer survives a scan interval.
     _b.LoadLocal(VReg.Scratch0, slotCandidate);
     _b.LoadGlobal(VReg.Scratch1, NetpollSuspectLabel);
     _b.StoreGlobal(NetpollSuspectLabel, VReg.Scratch0);
-    _b.JumpIfZero(VReg.Scratch0, retLabel);
+    _b.JumpIfZero(VReg.Scratch0, unlockRetLabel);
     _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
     _b.JumpIf(Condition.Equal, confirmLabel);
-    _b.Jump(retLabel);
+    _b.Jump(unlockRetLabel);
 
     _b.DefineLabel(confirmLabel);
     // Only rescue a GT whose context is actually saved; otherwise leave it for the next scan, which
@@ -944,7 +1031,7 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, slotCandidate);
     _b.LoadAcquire(VReg.Scratch1, VReg.Scratch0, GtOffIoYielded);
     _b.JumpIfNonZero(VReg.Scratch1, claimLabel);
-    _b.Jump(retLabel);
+    _b.Jump(unlockRetLabel);
 
     _b.DefineLabel(claimLabel);
     // Parked -> Ready in ONE CAS, skipping `Claiming`, and that is right rather than sloppy: the
@@ -956,7 +1043,12 @@ public partial class RuntimeEmitter {
     _b.MovRegImm(VReg.Scratch2, NetpollParked);
     _b.MovRegImm(VReg.Arg1, NetpollReady);
     _b.AtomicCAS(VReg.Scratch1, GtOffParkState, VReg.Scratch2, VReg.Arg1);
-    _b.JumpIfZero(VReg.Scratch3, retLabel);      // a real completer got there first: nothing to fix
+    // Branch on the CAS result BEFORE the release below: releasing is a CALL and clobbers Scratch3.
+    _b.JumpIfZero(VReg.Scratch3, unlockRetLabel); // a real completer got there first: nothing to fix
+
+    // The GT is ours. Drop the lock before the counter, the one-shot warning and the enqueue —
+    // none of them touches the all-threads list, and __gt_enqueue takes locks of its own.
+    _b.AllThreadsLockRelease();
 
     // ⚠ ATOMIC, because EVERY M runs this scan and two of them can confirm the same GT in the same
     // interval — the CAS above makes only one of them the claimer, but a load/add/store here would
@@ -977,6 +1069,12 @@ public partial class RuntimeEmitter {
     _b.DefineLabel(enqueueLabel);
     _b.LoadLocal(VReg.Arg0, slotCandidate);
     _b.Call("__gt_enqueue");
+    _b.Jump(retLabel);
+
+    // Every declining path above still holds the lock. retLabel does NOT release, because the two
+    // time-gate exits jump there before the lock was ever taken.
+    _b.DefineLabel(unlockRetLabel);
+    _b.AllThreadsLockRelease();
 
     _b.DefineLabel(retLabel);
     _b.FunctionEnd();

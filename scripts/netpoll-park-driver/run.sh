@@ -10,22 +10,50 @@
 # SLOW child (~2 ms per line), so every read finds an empty pipe and takes the async park path. A
 # fast producer is drained almost entirely through the self-detect fast path and exercises nothing.
 #
+# ⚠ THE FOUR READERS ARE LOAD-BEARING, NOT A ROUND NUMBER — one of the two knobs is UNREACHABLE
+# without them. On the arm64 park handshake (EmitGtParkForIoCompletion) the parker's injection point
+# sits on the `{prefix}_has_next` arm, i.e. it fires only when __gt_dequeue hands this GT a
+# SUCCESSOR to switch to; with nothing else runnable the parker takes the drive-scheduler-and-
+# self-detect arm instead and never reaches the commit CAS at all. Measured: a single-reader probe
+# at MAXON_GT_PARK_DELAY_MS=25 adds 0 ms to the run, while this 4-reader driver at 5 ms adds ~2 s.
+# A driver that parks one GT is a driver whose park arm silently measures nothing.
+#
+# ⭐ HOW MUCH TRAFFIC A RUN ACTUALLY BUYS, AND THE TWO NUMBERS ARE NOT THE SAME NUMBER:
+#   TRAVERSALS — __netpoll_claim_done was measured firing about twice per 40 lines, so a 4x400-line
+#     run makes roughly 80 full traversals of the protocol. That is the sample size behind the ratios
+#     below.
+#   CRITICAL-PATH EXPOSURE — far smaller, and it is what the knobs' wall-clock cost measures. From
+#     the delay/elapsed slope (CLAIM=100 -> +1 s, CLAIM=1000 -> +8.5 s over a ~1.5 s baseline; the
+#     knob costs TWO sleeps per traversal), only about four or five traversals per run land where a
+#     reader is actually waiting on them. The rest are reaped by an M that had nothing else to do,
+#     so their injected sleep hides behind the producer's 2 ms pacing and costs nothing.
+# ⇒ DO NOT read a knob's small wall-clock cost as "the arm barely fired". Read the SLOPE: it is
+#   linear in the delay, which is what says the injection is live. The PARK knob's slope is the
+#   cleaner one (PARK=5 -> +2 s = 400 parks per reader x 5 ms, exactly), because parking is on the
+#   reader's own critical path by construction and completing is not.
+#
 # ⭐ TWO KNOBS, ONE PER SIDE OF THE HANDSHAKE — and a run that sets neither proves very little:
 #
 #   MAXON_GT_PARK_DELAY_MS   widens the PARKER's window: between its last self-detect and the
 #                            commit CAS. This is the window the old two-word protocol lost a
 #                            wakeup in, and the one B2's acceptance A/Bs.
 #   MAXON_GT_CLAIM_DELAY_MS  widens the COMPLETER's window: the interval in which a completer OWNS
-#                            the park word and has not yet released it. Specifically its TAIL —
-#                            after the completer has published `status`/`io_result_val`, before it
-#                            store-releases `Ready`. That placement is deliberate and is the only
-#                            one that discriminates: held at the HEAD instead (right after the
-#                            claiming CAS) the window has `status` still reading `waiting`, so every
-#                            observer declines for a reason that predates the park word entirely,
-#                            and a green arm proves nothing. Held at the tail, `status` says ready
-#                            and the only thing standing between the recovery net and a false
-#                            positive — or between a waiter and a park it must not leave — is the
-#                            word itself. See RuntimeEmitter.Netpoll.cs at __netpoll_claim_done.
+#                            the park word and has not yet released it. It fires at BOTH ENDS of
+#                            that interval, and the two ends falsify different things:
+#                              HEAD (inside __netpoll_claim, just past the winning CAS) — claimed,
+#                                results not yet written. This is what a WAITER must not act on: a
+#                                protocol that skipped `Claiming` lets a waiter see `Ready` here and
+#                                read a stale io_result_val.
+#                              TAIL (inside __netpoll_claim_done, just before the store-release) —
+#                                results written, not yet released. This is what the RECOVERY NET
+#                                must not act on: `status` already says ready, so the only thing
+#                                between the net and a false positive is the word reading `Claiming`
+#                                rather than `Parked`.
+#                            ⚠ NEITHER END SUBSUMES THE OTHER, and the head was once deleted on the
+#                            argument that it did. Against an injected fourth-state regression
+#                            (__netpoll_claim CASing straight to `Ready`), 10 iterations each at
+#                            CLAIM_DELAY=5: head alone 0/10, tail alone 0/10, correct protocol with
+#                            both armed 10/10. See RuntimeEmitter.Netpoll.cs at both call sites.
 #
 # ⚠ THE VERDICT IS THE LINE COUNT, NOT MERELY EXIT 0. A lost wakeup hangs and the timeout catches
 # that; a spuriously aborted park instead delivers the PREVIOUS completion's result, which comes

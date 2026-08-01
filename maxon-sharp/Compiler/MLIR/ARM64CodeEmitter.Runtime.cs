@@ -3561,9 +3561,19 @@ public partial class ARM64CodeEmitter {
     // same KqCtx. __io_poll_kqueue indexes this by the calling P's id.
     DefineGlobal("__io_kevent_bufs_base", 8, 0);
 
+    // Scheduler functions migrated to RuntimeEmitter (shared x86/ARM64). Declared HERE, ahead of the
+    // globals block, so the park protocol's globals and its functions come out of ONE emitter.
+    //
+    // ⚠ THAT IS STRUCTURAL, NOT TIDINESS: RuntimeEmitter.UniqueLabel counts per INSTANCE, so a
+    // throwaway emitter for the globals would start its counter at 0 and mint `__netpoll_*_0` names
+    // that collide with this one's the moment either side grows a label. It was harmless only
+    // because EmitNetpollGlobals mints none today — a property of what that method happens to do,
+    // which nothing checks and nothing would preserve.
+    var schedRt = new Runtime.RuntimeEmitter(CreateBackend());
+
     // The async-I/O park protocol's own globals — see RuntimeEmitter.Netpoll.cs, which owns the
     // protocol for every target.
-    new Runtime.RuntimeEmitter(CreateBackend()).EmitNetpollGlobals();
+    schedRt.EmitNetpollGlobals();
 
     // Trace lock always defined to keep data layout stable (only used when AsyncTrace is enabled)
     DefineGlobal("__gt_trace_counter", 8, 0);
@@ -3600,8 +3610,6 @@ public partial class ARM64CodeEmitter {
 
 
     EmitGtInit();
-    // Scheduler functions migrated to RuntimeEmitter (shared x86/ARM64)
-    var schedRt = new Runtime.RuntimeEmitter(CreateBackend());
     schedRt.EmitGtStackHigh();
     schedRt.EmitGtStackHighCurrent();
     schedRt.EmitGtEnqueue();
@@ -7233,7 +7241,7 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, GtStatusReady);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffStatus, 8);
 
-    // ⭐ STEP 3/4 — RELEASE the word and find out whether the enqueue is ours. Nothing below may read
+    // ⭐ STEP 3 — RELEASE the word and find out whether the enqueue is ours. Nothing below may read
     // or write this GT except through the returned pointer.
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 64, 8); // waiter GT
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 72, 8); // claimedFrom
