@@ -2638,7 +2638,7 @@ let StringToByteArrayMethod = b"toByteArray"
 
 // ⭐⭐ **THE TWO STDLIB-ONLY `String` METHODS (BATCH2 slice 1)** — `module function` in the corpus
 // (`stdlib/String.maxon:181` and `:281`), which is a real visibility and not a convention: the oracle
-// answers a user program `E3008: not exported`. shv2 has no `module` keyword — `export` is the only
+// refuses a user program with its NOT-EXPORTED diagnostic. shv2 has no `module` keyword — `export` is the only
 // modifier its lexer knows — and it parses no `stdlib/String.maxon` at all, so the visibility cannot be
 // read off a declaration. It is enforced on the file's PHYSICAL LOCATION instead
 // (`requireStdlibOnlyStringMethod`, reading `livesUnderStdlibDirectory`) — and emphatically NOT on
@@ -25352,10 +25352,17 @@ export type Parser
 
 	// ⭐⭐ **A `module`-VISIBLE STRING METHOD IS `stdlib/`'s ALONE, AND THIS IS THE ONE PLACE THAT SAYS SO.**
 	// `addressableBytes` hands out a live view of a String's bytes and `byteAtOrPanic` reads one without a
-	// catchable failure; the corpus declares BOTH `module function`, so a user program calling either gets
-	// `E3008: not exported` from the oracle. shv2 cannot answer with E3008 — it has no `module` keyword and
-	// no declaration of these to attach a visibility to — so it refuses on the fact it does have: WHERE the
-	// file being parsed physically lives.
+	// catchable failure; the corpus declares BOTH `module function`, so a user program calling either is
+	// refused by the oracle's NOT-EXPORTED diagnostic. shv2 cannot answer with that code — it has no `module`
+	// keyword and no declaration of these to attach a visibility to — so it refuses on the fact it does have:
+	// WHERE the file being parsed physically lives.
+	//
+	// ⚠ **THE MESSAGE STATES THE ORACLE'S ANSWER AND DELIBERATELY DOES NOT SPELL ITS NUMBER.** A 4-digit code
+	// written outside `docs/error-codes.txt` is a copy of the number space, and this one could not even be a
+	// checked copy: it names a code shv2 does not claim, so shv2's generated `ErrorCodeRegistry` has no member
+	// for it and nothing here could be derived from the registry. Renumber that code and the literal would
+	// survive as a confident sentence about another compiler that had quietly become false — in the message,
+	// in `specs-shv2/stdlib-only-string-methods.md` and in three goldens at once.
 	//
 	// ⚠⚠ **THE FACT IS `livesUnderStdlibDirectory`, NOT `isStdlibSource`, AND THE DIFFERENCE COST THE
 	// WORKSTREAM ITS MEASUREMENT COMMAND FOR ONE COMMIT.** `isStdlibSource` answers a VISIBILITY question,
@@ -25375,7 +25382,7 @@ export type Parser
 			return
 		end 'thestdlibsOwn'
 
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference refuses to user code as E3008) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies", line: methodTok.line, column: methodTok.column)
 	end 'requireStdlibOnlyStringMethod'
 
 	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime

@@ -15,11 +15,17 @@ exported: `addressableBytes()`, which hands out a live view of the string's own 
 stdlib's own byte walkers — `stdlib/URL.maxon` and `stdlib/helpers/url/urlHelpers.maxon` are what
 force them — and neither is part of the language a user program may write.
 
-The reference compiler refuses a user call to either with `E3008: not exported`. shv2 has no `module`
+The reference compiler refuses a user call to either with its not-exported diagnostic. shv2 has no `module`
 keyword and never parses `stdlib/String.maxon` (`String` is compiler-owned), so it enforces the same
 visibility on the fact it does have: whether the calling file is physically **under `stdlib/`**. The
 refusal names the reason rather than falling through to the unknown-method roster — the method exists,
 it is simply not the caller's to reach.
+
+⚠ It names the oracle's ANSWER and not the oracle's CODE NUMBER, and the expected stderr below must keep
+it that way. A 4-digit code written outside `docs/error-codes.txt` is a copy of the number space, and
+this one cannot even be a checked copy: shv2 does not claim that code, so its generated
+`ErrorCodeRegistry` has no member to derive the spelling from. Written out, a renumber would leave the
+sentence standing and false in four places at once — the message, this file, and three goldens.
 
 ⚠ The gate asks about the file's LOCATION and deliberately not about `isStdlibSource`, which answers a
 visibility question and hands a project rooted under `stdlib/` its own files back as the user's. Gated
@@ -42,7 +48,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:16: Unsupported: String method 'addressableBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference refuses to user code as E3008) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies
+error E2015: <fragment>:3:16: Unsupported: String method 'addressableBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
 <!-- test: error.byte-at-or-panic-is-stdlib-only -->
@@ -52,7 +58,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: String method 'byteAtOrPanic' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference refuses to user code as E3008) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies
+error E2015: <fragment>:3:15: Unsupported: String method 'byteAtOrPanic' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
 <!-- test: error.addressable-bytes-on-a-string-variable-is-stdlib-only -->
@@ -65,7 +71,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:12: Unsupported: String method 'addressableBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference refuses to user code as E3008) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies
+error E2015: <fragment>:5:12: Unsupported: String method 'addressableBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
 <!-- test: unknown-string-method-still-gets-the-roster -->
