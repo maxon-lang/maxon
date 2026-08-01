@@ -12818,7 +12818,20 @@ export type Parser
 	// step, so `Percent.compare` is `float.compare`.
 	//
 	// Every tag with no synthesized impl answers `notAConformer` (`builtinConformerOfTag`), which is what
-	// keeps a `String`-valued receiver out of here and a struct receiver on the struct path.
+	// keeps a struct receiver on the struct path.
+	//
+	// ⚠⚠ **A `string` TAG IS NO LONGER ONE OF THOSE, AND NOTHING HERE IS WHAT KEEPS A `String` RECEIVER OFF
+	// THE CONFORMER ARM — THE ARM *ORDER* IS** (BATCH2 slice 2). This paragraph used to read "which is what
+	// keeps a `String`-valued receiver out of here", and that sentence inverted the day `String` gained its
+	// synthesized `hash`/`equals`: this classifier now answers `stringConformer` for a string tag, and
+	// `dispatchMethodOnReceiver` routes a String receiver to `dispatchStringMethod` SEVEN arms above the
+	// conformer arm — which is the load-bearing fact that header states, and the only one. Reading the
+	// guarantee off this function instead would be reading it off the wrong mechanism, and the wrong one
+	// stopped holding.
+	//
+	// ⇒ what the `string` answer is actually FOR is the `Self`-ARGUMENT check
+	// (`requireBuiltinConformanceSelfArgs` → `valueIsConformer`), which the receiver split cannot reach:
+	// `"ab".equals("ac")` hands a String to a `Self` formal and is admitted here, once.
 	//
 	// ⚠ It answers with the CONFORMER and not its name, and that is a measured decision rather than a
 	// stylistic one — see `BuiltinConformer`'s header for the 16-byte box this used to allocate at every
@@ -29828,10 +29841,13 @@ export type Parser
 	// this refusal would come to reject a name the authority accepts — and it would do it by asserting the
 	// name is undeclared, which is the very false statement this guard exists to remove.
 	//
-	// ⚠⚠ **FIVE OF SIX — AND THE SIXTH IS WHY THE `isCompilerOwnedTypeName` GATE IS HERE.** The cascade
-	// answers `ExitCode` by its own arm, `HashValue`/`Codepoint` through `isSynthesizedIntAliasName`,
-	// `Ordering` because `createEnumRegistry` seeds it, and `CharSet` because `registerCharacterSetType`
-	// folds it into `genericAliases`. It answers `CharacterSet` NOWHERE — the layout is registered under the
+	// ⚠⚠ **ONE RESERVED NAME THE CASCADE CANNOT ANSWER FOR IS WHY THE `isCompilerOwnedTypeName` GATE IS
+	// HERE, AND THE GATE IS WRITTEN OVER THE WHOLE LIST RATHER THAN OVER THAT NAME.** The cascade answers
+	// `ExitCode` by its own arm, `HashValue`/`Codepoint` through `isSynthesizedIntAliasName`, `Ordering` and
+	// `ArrayError` because `createEnumRegistry` seeds them, and `CharSet` because `registerCharacterSetType`
+	// folds it into `genericAliases`; `String` and `Character` never arrive here at all, because
+	// `parseTypeReference` settles both syntactically and neither ever wears a `named` tag. It answers
+	// `CharacterSet` NOWHERE — the layout is registered under the
 	// RESERVED spelling `__CharacterSet` (`CharacterSetTypeName`) exactly so a user `type CharacterSet`
 	// cannot contest its bucket, while the user-facing door is the bare name (`CharacterSetBuiltinName`), so
 	// `containsStruct("CharacterSet")` is FALSE and the cascade raises `notDeclared` for a type the compiler
@@ -29840,8 +29856,14 @@ export type Parser
 	// replaced, which at least named `CharacterSet` as a member-carrying builtin in the same sentence.
 	//
 	// ⇒ **A NAME THE COMPILER RESERVES IS NEVER THE USER'S UNDECLARED NAME**, so this gate cannot swallow a
-	// genuine typo: `requireTypeNameNotCompilerOwned` refuses any user declaration that would bind one of
-	// the six, which is what makes "reserved" and "the program's own missing type" disjoint by construction.
+	// genuine typo: `requireTypeNameNotCompilerOwned` refuses any user declaration that would bind a name on
+	// that list, which is what makes "reserved" and "the program's own missing type" disjoint by
+	// construction — and it is stated as *the list* rather than as a COUNT of it on purpose. The count was
+	// written down here as "five of six", and it had already gone stale once (at `ArrayError`) before this
+	// paragraph was reread at the BATCH2 slice 2 review, which added two more. A count is a copy of a list
+	// that lives somewhere else, and this file has the rule in so many words one registry over
+	// (`BuiltinConformanceRuntime`: "no count written down, because a count is a copy that goes stale on the
+	// next rung").
 	// The pre-existing refusal then stands unchanged — and it is the RIGHT one, because the type is real and
 	// merely cannot be NAMED at a parameter yet (`CharacterSetTypeName`'s header states why it cannot cross
 	// a function boundary). Pinned by `field-declared-unknown-type`'s
