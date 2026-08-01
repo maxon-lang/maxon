@@ -1,0 +1,226 @@
+// Testing/HarnessSelfTest.maxon — the gate over the SPEC HARNESS'S OWN REFUSALS.
+//
+// ⭐⭐ **A REFUSAL NOTHING RUNS IS A CLAIM, NOT A DOOR** — this project's own rule, and until this
+// file the harness broke it in six places at once. `SpecParser` refuses an empty ```RequiredRuntime
+// block, an empty section pin, and a pin or runtime block on a case that never links; `TargetPrinter`
+// refuses a ```RequiredRuntime name nothing emits and one the fragment already shows; and
+// `pinsAnyResult` refuses a case with a program and nothing to check. Every one of them was written,
+// reviewed, and then run by NOTHING. A refusal that has never fired is a refusal nobody has seen work.
+//
+// ⚠ **AN ORDINARY SPEC CASE STRUCTURALLY CANNOT PIN THESE, WHICH IS WHY THIS FILE EXISTS AND IS
+// SHAPED THE WAY IT IS.** The three `SpecParser` refusals are `panic`s raised while the harness parses
+// its OWN corpus, in the parent process, before a worker is spawned (`buildPlans`). A deliberately
+// malformed spec committed to `specs-shv2/` would therefore abort the WHOLE SUITE rather than fail one
+// case — the gate would take the suite down with it every single run.
+//
+// ⚠ **AND PINNING THE PANIC TEXT WOULD NOT DO EITHER.** A Maxon panic prints `panic at
+// <file>:<line>: <message>`, so an expectation carrying the whole text embeds `SpecParser.maxon:807`
+// and goes red on every edit that moves a line above it — a false-red generator wired to an unrelated
+// property. What this file compares is a SUBSTRING of the message, chosen to name the refusal and to
+// contain no file, no line and no stack frame.
+//
+// ⇒ **THE SHAPE IS THE RUNNER'S OWN, ONE LEVEL UP.** `runStagedTest` already proves a compiler
+// diagnostic by SPAWNING the compiler and reading its exit code and stderr; this proves a HARNESS
+// refusal by spawning the HARNESS, pointed at a fixture corpus of deliberately-malformed specs, and
+// reading the same two things. Each fixture is its own directory holding one `.md`, because
+// `buildPlans` parses every spec in a directory before any filter is applied — so a second malformed
+// spec beside the first would never be reached, and the case that never ran would look exactly like
+// the case that passed.
+//
+// ⚠ **THE CORPUS IS DELIBERATELY NOT UNDER `specs-shv2/`.** `specFilePaths` lists `*.md` directly
+// under the spec directory, so a subdirectory there would be invisible TODAY — but "invisible because
+// the walk does not recurse" is a property of the walk, and the whole point of these files is that
+// they detonate if anything ever reads them as ordinary specs. Living under `maxon-shv2/Testing/`,
+// they are not in the corpus at all, whatever the walk grows into.
+
+// Where the fixture corpus lives, relative to the repo root — anchored at the working directory for
+// the reason `LadderIndex` and `spec-test`'s own default spec directory are: the suite is invoked from
+// the repo root, and a run from anywhere else has already failed to find `specs-shv2`.
+let FixturesRelativeDir = "maxon-shv2/Testing/harness-fixtures"
+
+// The corpus root's own name, which is ALSO the recursion guard: a fixture case is driven by spawning
+// this harness at `<FixturesRelativeDir>/<case>`, and that sub-run must not run the self-test again.
+// Derived from the path the sub-run was GIVEN rather than signalled by a private flag, because a flag
+// is a second way of saying which directory this is and the directory already says it.
+let FixturesDirName = "harness-fixtures"
+
+let FixtureSpecExtension = ".md"
+
+// The line a fixture carries to say which refusal it is about: `<!-- expect-refusal: <substring> -->`.
+//
+// ⭐ **IT LIVES IN THE FIXTURE, NOT IN A ROSTER HERE, AND THAT IS THE `LadderIndex` LESSON APPLIED.**
+// A hand-maintained table of (case, expected text) beside a directory of cases is one fact written
+// twice, and the half that drifts is always the table. The case SET is derived by listing the
+// directory and the expectation is read out of the case itself, so adding a refusal to the harness is
+// one new directory and nothing else.
+//
+// It sits ABOVE the fixture's `## Tests` heading, so `extractTests` never scans the line — the marker
+// grammar it shares (`<!-- key: value -->`) is read by `markerValue`, the same reader every other
+// marker in a spec goes through.
+let ExpectRefusalMarker = "<!-- expect-refusal:"
+
+// ⭐ **PROVE EVERY HARNESS REFUSAL STILL FIRES.** Called ONCE, by the spec suite's parent process,
+// before a worker is spawned — the placement `requireLadderIndexComplete` and `requireRunnerAvailable`
+// already use, and for their reason: this is a property of the TREE, not of any one test, so there is
+// no test to fail and nothing downstream that could act on it. It PANICS, naming the fixture and what
+// its sub-run actually did.
+//
+// `workerExe` is what a fixture sub-run IS (this harness — its parser's refusals are half of what is
+// under test); `compilerExe` is forwarded as `--compiler=` so the other half — the printer's two
+// refusals — is asked of the COMPILER UNDER TEST rather than of whatever compiler this harness happens
+// to be. In-tree they are the same binary; under the Phase 1 gate they are not, and that is exactly
+// the configuration in which asking the wrong one would be silent.
+//
+// ⚠ The sub-runs deliberately do NOT inherit the run's `--target`. What a fixture asks is whether the
+// HARNESS refuses a malformed directive, which no target changes — and two of the fixtures reach a
+// refusal in the IR printer, which a target emitting no Target IR (wasm32) never runs at all. Under a
+// cross-target suite run, forwarding the target would turn those two into false reds about nothing.
+export function requireHarnessRefusalsFire(workerExe FilePath, compilerExe FilePath, specDir FilePath)
+	if isFixtureCaseDir(specDir) 'thisIsAFixtureSubRun'
+		return
+	end 'thisIsAFixtureSubRun'
+
+	let root = try FilePath.from(FixturesRelativeDir) otherwise panic("HarnessSelfTest: '{FixturesRelativeDir}' is not a valid path")
+	let cases = try Directory.list(root) otherwise panic("HarnessSelfTest: could not list {FixturesRelativeDir} — it holds the deliberately-malformed specs that prove the harness's own refusals still fire. Run the suite from the repo root.")
+
+	// EVERY fixture is run and every failure is reported TOGETHER, rather than stopping at the first.
+	// One edit routinely breaks several — `refuseVacuousDirective` is reached through three fences — and
+	// a report naming one of them sends the reader back for another full sweep per remaining fixture.
+	// (`LadderIndex` reports its three directions in one message for the same reason.)
+	var checked = 0 as FixtureTally
+	var broken = StringArray.create()
+	for caseDir in cases 'eachCase'
+		if not Directory.isDirectory(caseDir) 'notACase'
+			continue
+		end 'notACase'
+
+		match checkFixture(workerExe, compilerExe: compilerExe, caseDir: caseDir) 'verdict'
+			fired then break 'verdict'
+			didNotFire(reason) then broken.push(reason)
+		end 'verdict'
+		checked = checked + 1
+	end 'eachCase'
+
+	// An EMPTY corpus would let every refusal go unproven while this function reported nothing at all —
+	// the exact silence it exists to remove, one level up. `LadderIndex` refuses a missing directory for
+	// the identical reason.
+	if checked == 0 'noFixtures'
+		panic("HarnessSelfTest: {FixturesRelativeDir} holds no case directories, so not one harness refusal was proven to fire. Each refusal is a subdirectory containing one {FixtureSpecExtension} that trips it.")
+	end 'noFixtures'
+
+	if broken.isEmpty() 'everyRefusalFired'
+		return
+	end 'everyRefusalFired'
+
+	// ⚠ `panic` takes a STRING LITERAL — a `let`-bound String is rejected outright — so the list is
+	// built as text and INTERPOLATED. Same constraint `LadderIndex.requireLadderIndexComplete` documents.
+	let report = brokenRefusalReport(broken)
+	panic("HarnessSelfTest: {broken.count()} of {checked} harness refusals did not fire on the fixture written to trip them. A refusal nothing runs is a claim, not a door.{report}")
+end 'requireHarnessRefusalsFire'
+
+// One fixture's verdict. A union rather than an empty-String reason, so "the refusal fired" carries no
+// vestigial text and there is no sentinel to re-derive.
+union FixtureVerdict
+	fired
+	didNotFire(reason String)
+end 'FixtureVerdict'
+
+// How many fixture cases one sweep proved. Named because it is the count the empty-corpus refusal
+// reads, not a loop counter.
+typealias FixtureTally = int(0 to u64.max)
+
+// The failing fixtures, one indented paragraph each.
+function brokenRefusalReport(broken StringArray) returns String
+	var out = StringBuilder.create()
+	for reason in broken 'each'
+		out.append("\n  {reason}")
+	end 'each'
+	return out.build()
+end 'brokenRefusalReport'
+
+// Is `specDir` one of the fixture case directories — i.e. is this process a fixture sub-run? See
+// `FixturesDirName`. A path with no parent (the filesystem root) is not one, which is the only thing
+// the failure arm can honestly say.
+function isFixtureCaseDir(specDir FilePath) returns bool
+	let parent = try specDir.parent() otherwise return false
+	return parent.filename() == FixturesDirName
+end 'isFixtureCaseDir'
+
+// Run ONE fixture and require that the harness refused it, saying what the fixture says it will say.
+//
+// TWO conditions, and both are necessary. A NON-ZERO exit alone proves only that something went wrong
+// — a fixture whose program failed to compile for an unrelated reason would satisfy it — so the
+// message must also carry the refusal's own words. And the substring alone would not do either: it
+// could appear in output from a run that nevertheless reported PASS.
+//
+// A fixture that could not be RUN AT ALL (a spawn failure, a missing or unmarked spec) panics on the
+// spot instead of joining the report: that is the harness's instrument being broken rather than a
+// refusal being gone, and the two must not read alike.
+function checkFixture(workerExe FilePath, compilerExe FilePath, caseDir FilePath) returns FixtureVerdict
+	let caseName = caseDir.filename()
+	let expected = expectedRefusalIn(caseDir, caseName: caseName)
+
+	var argv = StringArray.create()
+	argv.push(SpecTestCommandName)
+	argv.push(caseDir.toString())
+	argv.push("{CompilerFlagPrefix}{compilerExe.toString()}")
+
+	let run = try runProcess(Executable.path(workerExe), argv: argv) otherwise (e) 'spawnFailed'
+		panic("HarnessSelfTest: could not run the '{caseName}' fixture ({e.displayReason()}) — it proves a harness refusal still fires, and a refusal nothing runs is a claim")
+	end 'spawnFailed'
+
+	// BOTH streams: a `SpecParser` refusal panics the sub-run's parent onto stderr, while the two
+	// printer refusals reach the reader as a FAILED TEST's reason on stdout. One rule reads either.
+	let said = "{run.stdout}\n{run.stderr}"
+
+	if run.exitCode == 0 'harnessAcceptedIt'
+		return FixtureVerdict.didNotFire("'{caseName}' was ACCEPTED (exit 0). It is a deliberately-malformed spec, and the refusal that should have caught it — the one that says '{expected}' — did not fire. Either that refusal was removed, or this fixture no longer trips it.")
+	end 'harnessAcceptedIt'
+
+	if not said.contains(expected) 'wrongRefusal'
+		return FixtureVerdict.didNotFire("'{caseName}' failed (exit {run.exitCode}) but for the WRONG REASON. Expected the output to contain '{expected}', and it said:\n{said}")
+	end 'wrongRefusal'
+
+	return FixtureVerdict.fired
+end 'checkFixture'
+
+// The substring `caseDir`'s one `.md` says its refusal must print — see `ExpectRefusalMarker`.
+//
+// Every failure here is the FIXTURE being wrong rather than the harness, and each is a panic for the
+// reason the whole file is: a fixture that cannot say what it expects proves nothing, and a self-test
+// that skipped it would be the silence this file removes.
+function expectedRefusalIn(caseDir FilePath, caseName String) returns String
+	let text = try File.readText(fixtureSpecIn(caseDir, caseName: caseName)) otherwise panic("HarnessSelfTest: could not read the '{caseName}' fixture's spec file")
+
+	for line in text.split("\n") 'eachLine'
+		if line.contains(ExpectRefusalMarker) 'isTheMarker'
+			let expected = markerValue(line)
+			if expected.isEmpty() 'noValue'
+				panic("HarnessSelfTest: the '{caseName}' fixture's '{ExpectRefusalMarker}' marker names no text. It must carry the part of the refusal's message that identifies it — and NOT the `<file>:<line>` a panic prints in front of it, which moves on every edit above it.")
+			end 'noValue'
+			return expected
+		end 'isTheMarker'
+	end 'eachLine'
+
+	panic("HarnessSelfTest: the '{caseName}' fixture carries no '{ExpectRefusalMarker} … -->' line, so nothing says WHICH refusal it is about — and a fixture that merely fails proves only that something went wrong.")
+end 'expectedRefusalIn'
+
+// The one `.md` in a fixture case directory. EXACTLY one, because a case is one refusal: a second spec
+// beside it would never be reached (`buildPlans` parses in listing order and the first refusal panics),
+// so it would sit there looking like coverage it is not.
+function fixtureSpecIn(caseDir FilePath, caseName String) returns FilePath
+	let entries = try Directory.list(caseDir) otherwise panic("HarnessSelfTest: could not list the '{caseName}' fixture directory")
+
+	var specs = FilePathArray.create()
+	for entry in entries 'eachEntry'
+		if entry.fileExtension() == FixtureSpecExtension 'isSpec'
+			specs.push(entry)
+		end 'isSpec'
+	end 'eachEntry'
+
+	if specs.count() != 1 'notExactlyOne'
+		panic("HarnessSelfTest: the '{caseName}' fixture holds {specs.count()} '{FixtureSpecExtension}' files, and a case is ONE refusal. A second spec beside the first is never reached — the first one's refusal aborts the sub-run — so it would look like coverage it is not.")
+	end 'notExactlyOne'
+
+	return try specs.get(0) otherwise panic("HarnessSelfTest: the '{caseName}' fixture's spec list is empty despite its count being 1")
+end 'fixtureSpecIn'

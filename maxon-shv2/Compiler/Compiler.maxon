@@ -210,9 +210,13 @@ end 'refuseCompile'
 // (`--emit-ir-runtime=`) is how a caller asks for a NAMED one of those bodies
 // anyway: it is the only route an emitted body has to a golden, and it is per-build
 // so no fragment that does not ask for one moves a byte. See `printTargetModule`.
+//
+// The CHUNKS ride along for the same list's sake: a hand-assembled runtime piece has no `IrFunction`
+// to print, so `printTargetModule` renders its assembled bytes instead — and this is the only place
+// that holds both the module and the chunks it was encoded into.
 function writeTargetIr(codeResult CodeResult, outputPath FilePath, runtimeIrNames RuntimeFunctionNameArray)
 	let irPath = outputPath.changeExtension(IrFileExtension)
-	let irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames)
+	let irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks)
 
 	try File.writeText(irPath, content: irText) otherwise 'writeErr'
 		logError(LogCategory.binary, message: function() gives "Failed to write Target IR to {irPath}")

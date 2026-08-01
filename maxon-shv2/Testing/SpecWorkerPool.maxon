@@ -996,6 +996,13 @@ end 'NoSlot'
 // `compilerExe` is what each test is BUILT with; `workerExe` is what each worker process IS. See
 // `spawnNoWait` for why those are two parameters and not one.
 export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount, effectiveTarget Target) returns PoolRun throws CompileError
+	// ⭐ **THE HARNESS'S OWN REFUSALS, PROVEN TO FIRE — BEFORE THE HARNESS IS TRUSTED TO JUDGE ANYTHING
+	// ELSE.** It runs here rather than in `Main` because this is the one function only the PARENT of a
+	// pool reaches (a worker goes to `runPersistentWorker`), and it runs FIRST — ahead of `buildPlans`,
+	// which is itself one of the things under test — so a `--filter`ed run gets the same door an
+	// unfiltered one does. See `HarnessSelfTest` for why a committed malformed spec cannot do this job.
+	requireHarnessRefusalsFire(workerExe, compilerExe: compilerExe, specDir: specDir)
+
 	let plans = try buildPlans(specDir, filter: filter, effectiveTarget: effectiveTarget)
 	if plans.count() == 0 'selectsNothing'
 		// Main owns the "no tests selected" diagnostic and reads it off an empty result array.

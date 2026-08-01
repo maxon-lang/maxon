@@ -28,6 +28,20 @@ let X64OpPrefix = "x64."
 let Arm64OpPrefix = "arm64."
 let FuncHeaderPrefix = "func @"
 
+// A HAND-ASSEMBLED chunk's header. Deliberately NOT `func @`: what follows is a hex dump of the
+// bytes the backend assembled, not a rendering of ops, and a reader must be able to tell the two
+// apart at a glance rather than by noticing the body looks odd.
+let ChunkHeaderPrefix = "chunk @"
+
+// How a chunk's bytes are laid out: sixteen per line, each line opened by its CHUNK-LOCAL offset (a
+// chunk's `entryOffset` is always 0, so the offsets a reader sees are the ones a disassembler
+// listing of that chunk alone would show). Named because the three together are a format contract
+// with every committed chunk golden.
+let ChunkBytesPerLine = 16
+let ChunkOffsetDigits = 4
+let ChunkOffsetSeparator = ": "
+let ChunkByteSeparator = " "
+
 // The emitted-runtime functions a rendering names — a `--emit-ir-runtime=` list, which a spec
 // case writes as a ```RequiredRuntime block. EMPTY is the ordinary case and is not a sentinel: it
 // is the literal count of names the caller gave.
@@ -89,10 +103,21 @@ end 'printDataSection'
 // identical. A name that RENDERED nothing is REFUSED (`requireEveryNameRendered`), because a
 // misspelling that quietly rendered nothing would leave a test claiming a gate it does not have.
 //
+// ⭐⭐ **AND THE LIST REACHES THE HAND-ASSEMBLED CHUNKS TOO — they are not `module.functions`, but they
+// ARE addressable.** `mrt_panic`, the green-thread pieces and (on arm64) the entry stub are raw bytes
+// rather than `TargetOp`s, so there is no IR body to print for them — and the block used to be REFUSED
+// on that ground, which confused *"has no IR body"* with *"cannot be pinned"*. Every one of them
+// carries its NAME on its `FunctionCodeChunk`, so a requested name that no FUNCTION answered is
+// offered to `codeChunks`, and the chunk bearing it renders its ASSEMBLED BYTES. That is the entire
+// difference: two RENDERINGS of one selection rule, not two selection rules. What it buys is measured
+// rather than hoped for — the panic runtime, the scheduler's context switch and the stack-growth
+// trampoline had no gate of ANY kind, being the one part of an emitted program that neither an exit
+// code, nor the leak gate, nor a section pin, nor a fragment could see.
+//
 // The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
 // owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
 // would make printing a module quadratic in its own output.
-export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray) returns String
+export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray, codeChunks FunctionCodeChunkArray) returns String
 	var body = StringBuilder.create()
 	let dataText = printDataSection(globalData)
 	body.append(dataText)
@@ -117,7 +142,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	rendered.resize(runtimeNames.count())
 
 	for func in module.functions 'eachFunc'
-		let named = markNamedBy(runtimeNames, func: func, rendered: rendered)
+		let named = markNamedBy(runtimeNames, name: func.name, rendered: rendered)
 
 		// Naming a function the fragment ALREADY shows says nothing new, and reading the block as if it
 		// had would be a reader's mistake. It is caught here rather than in a pre-pass so it, too, reads
@@ -138,27 +163,150 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 		afterFirst = true
 	end 'eachFunc'
 
+	// ⚠ **THE CHUNK PASS RUNS SECOND, AND THE ORDER IS WHAT MAKES "HAND-ASSEMBLED" DERIVED RATHER THAN
+	// RECORDED.** EVERY module function also has a chunk (`emitFunctionChunk` built it), so "is this
+	// chunk hand-assembled?" is exactly "did no function of this name already answer the request?" —
+	// which the flag column above has just finished recording. Asking it that way means nothing has to
+	// carry a `isHandAssembled` bit that a new chunk producer could forget to set, and a name can never
+	// be rendered twice: `markNamedBy` reports a match as NEW only when at least one of its flags was
+	// still down.
+	for chunk in codeChunks 'eachChunk'
+		if not markNamedBy(runtimeNames, name: chunk.funcName, rendered: rendered) 'notNamedOrAlreadyRendered'
+			continue
+		end 'notNamedOrAlreadyRendered'
+
+		if afterFirst 'separator'
+			body.append("\n")
+		end 'separator'
+
+		body.append(printChunkBytes(chunk))
+		afterFirst = true
+	end 'eachChunk'
+
 	requireEveryNameRendered(runtimeNames, rendered: rendered)
 
 	return body.build()
 end 'printTargetModule'
 
-// Raise `rendered[k]` for every name that selects `func`, and answer whether any did. THE one place a
-// name is matched against a function — the print loop's skip rule and the refusal above both read
-// this and nothing else.
+// Raise `rendered[k]` for every requested name equal to `name`, and answer whether that introduced
+// anything NEW — i.e. whether at least one of the flags it raised had been down. THE one place a
+// ```RequiredRuntime name is matched against something renderable: the function loop's skip rule, the
+// chunk loop's hand-assembled test, and the refusal below all read this column and nothing else.
 //
-// A linear scan over a list a spec author typed by hand (one or two entries, never more), against
-// `IrFunction.name`'s own `ByteArray`.
-function markNamedBy(runtimeNames RuntimeFunctionNameArray, func IrFunction, rendered BoolArray) returns bool
-	var named = false
-	for (iter, name) in runtimeNames.withIterator() 'each'
-		if func.name.equals(name.toByteArray()) 'match'
-			try rendered.set(iter.index(), value: true) otherwise panic("markNamedBy: flag write at {iter.index()} is outside a column sized by the same list")
-			named = true
-		end 'match'
+// ⚠ **THE TWO HALVES OF THAT ANSWER ARE BOTH LOAD-BEARING, and they are not the same question.** Every
+// matching flag is RAISED, because a case listing one name twice has asked for one body and must not
+// be refused for the second mention. But the answer REPORTED is "was anything still down?", because
+// that is what the chunk loop needs: a chunk whose name a function already answered must not render
+// its bytes underneath that function's IR.
+//
+// It takes the NAME rather than the `IrFunction`, so the chunk pass — which has no function — matches
+// through this and not through a second, driftable copy of "does this list select this name?".
+//
+// A linear scan over a list a spec author typed by hand (one or two entries, never more), against the
+// caller's own `ByteArray`.
+function markNamedBy(runtimeNames RuntimeFunctionNameArray, name ByteArray, rendered BoolArray) returns bool
+	var isNew = false
+	for (iter, requested) in runtimeNames.withIterator() 'each'
+		if not name.equals(requested.toByteArray()) 'noMatch'
+			continue
+		end 'noMatch'
+
+		let alreadyRendered = try rendered.get(iter.index()) otherwise panic("markNamedBy: flag read at {iter.index()} is outside a column sized by the same list")
+		if not alreadyRendered 'firstAnswer'
+			isNew = true
+		end 'firstAnswer'
+
+		try rendered.set(iter.index(), value: true) otherwise panic("markNamedBy: flag write at {iter.index()} is outside a column sized by the same list")
 	end 'each'
-	return named
+	return isNew
 end 'markNamedBy'
+
+// ⭐ **ONE HAND-ASSEMBLED CHUNK, AS BYTES** — `chunk @<name> {`, then sixteen bytes a line prefixed by
+// their chunk-local offset, then the closing brace. The `func @` twin for the runtime pieces that have
+// no ops to print.
+//
+// ⚠ **THESE ARE THE CHUNK'S OWN PRE-LINK BYTES, and that is what makes the golden STABLE.** A chunk's
+// buffer is fixed at assembly time; the `.text` image the linker builds from it then has every
+// intra-module call resolved to a rel32 and every IAT reference patched to an RVA, both of which move
+// when anything ELSE in the program changes size. A dump cut from the linked image would therefore go
+// red on an unrelated edit to the test's own `main` — the same reason a printed IR body shows a branch
+// LABEL rather than a displacement. (`CodeResult.codeChunks` carries this decision on the other side.)
+function printChunkBytes(chunk FunctionCodeChunk) returns String
+	let openBrace = "\{"
+	let closeBrace = "\}"
+	var sb = StringBuilder.create()
+	sb.append("{ChunkHeaderPrefix}{String.from(chunk.funcName)} {openBrace}\n")
+
+	let byteCount = chunk.code.count()
+	for (iter, b) in chunk.code.withIterator() 'eachByte'
+		let column = iter.index() mod ChunkBytesPerLine
+		if column == 0 'opensALine'
+			sb.append("{OpIndent}{hexOffset(iter.index())}{ChunkOffsetSeparator}")
+		end 'opensALine' else 'continuesOne'
+			sb.append(ChunkByteSeparator)
+		end 'continuesOne'
+
+		sb.append(hexByte(b))
+
+		// The last byte of a full line, or the last byte of the chunk — a short final line is closed by
+		// the same test rather than by a second one after the loop, which could disagree about whether
+		// an exactly-full chunk needs one. Written as `index + 1 == count` rather than against a
+		// `count - 1` bound, which underflows its own range type on a (never-produced) empty chunk.
+		if column == ChunkBytesPerLine - 1 or iter.index() + 1 == byteCount 'closesALine'
+			sb.append("\n")
+		end 'closesALine'
+	end 'eachByte'
+
+	sb.append("{closeBrace}\n")
+	return sb.build()
+end 'printChunkBytes'
+
+// A chunk-local offset as lowercase hex, zero-padded to `ChunkOffsetDigits` so every line of a dump
+// starts in the same column and a diff points at a byte rather than at a re-wrapped line.
+//
+// ⚠ It PADS, it does not TRUNCATE. No chunk today is within three orders of magnitude of overflowing
+// four digits, but a fixed-width render of a wider one would print an offset the byte is not at —
+// silently, and in a golden whose whole job is to be read literally. A longer line is the honest
+// failure mode.
+function hexOffset(offset CodeOffset) returns String
+	var digits = ChunkOffsetDigits
+	while (offset shr (digits * BitsPerHexDigit)) > 0 'tooWide'
+		digits = digits + 1
+	end 'tooWide'
+
+	var out = StringBuilder.create()
+	for i in 0 upto digits 'eachDigit'
+		out.append(hexDigit((offset shr ((digits - 1 - i) * BitsPerHexDigit)) and 0xF))
+	end 'eachDigit'
+	return out.build()
+end 'hexOffset'
+
+// --- The one spelling of a byte in hex ---
+//
+// ⚠ **DECLARED HERE, IN THE COMPILER TIER, AND CONSUMED BY THE HARNESS ABOVE IT.** `Testing`'s section
+// gates render a `.data` mismatch in bytes and used to carry their own `hexByte`/`hexDigit`; a chunk
+// dump is the same rendering in the compiler, and a second copy of "a byte, in hex" is a second copy
+// whichever direction it faces. The harness may call down into the compiler (it already does, for
+// `targetToString` and `emitsTargetIr`); the compiler may not call up. So the shared spelling lives on
+// the lower side, and `PeSectionReader.formatHexBytes` reads it from here.
+
+// How many bits one hex digit carries — the shift `hexOffset` walks its nibbles by, and the shift
+// `hexByte` splits a byte on. A literal `4` in both places is one fact written twice.
+let BitsPerHexDigit = 4
+
+export function hexByte(b MachineWord) returns String
+	return "{hexDigit((b shr BitsPerHexDigit) and 0xF)}{hexDigit(b and 0xF)}"
+end 'hexByte'
+
+// One lowercase hex digit. A `ByteArray` lookup rather than a `String` index: the digits are ASCII
+// bytes and `String.from` of a one-byte array is the shortest honest route to a one-character String
+// in a language whose String is UTF-8 and whose indices are byte positions.
+export function hexDigit(nibble MachineWord) returns String
+	let digits = b"0123456789abcdef"
+	var one = ByteArray.create()
+	one.push(try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with 0xF"))
+	return String.from(one)
+end 'hexDigit'
 
 // ⭐ **A NAME THAT RENDERED NOTHING IS REFUSED, because the alternative is a test that claims a gate
 // it does not have.** A ```RequiredRuntime block exists to put ONE body under a golden; a typo in it
@@ -168,12 +316,16 @@ end 'markNamedBy'
 //
 // The cause is a misspelling, or a runtime family this program does not use: the emitted runtime is
 // installed on DEMAND, so `__str_bytes_view` exists only in a program whose stdlib cone takes a
-// String's bytes. (The other way to name nothing — naming a function the fragment already shows — is
-// caught inside the render loop, where the function is in hand.)
+// String's bytes, and `__gt_morestack` only in one that runs a green thread. (The other way to name
+// nothing — naming a function the fragment already shows — is caught inside the render loop, where the
+// function is in hand.)
 //
-// ⚠ A hand-assembled runtime CHUNK is a third cause and is not repairable by respelling: the byte-
-// level pieces (`__gt_morestack`, `__gt_context_switch`) never enter `module.functions` at all, so
-// they have no IR body to render and cannot be pinned by this mechanism at any spelling.
+// ⚠ **"IT IS A HAND-ASSEMBLED CHUNK" USED TO BE LISTED HERE AS A THIRD, UNFIXABLE CAUSE. IT IS NOT A
+// CAUSE AT ALL ANY MORE**, and the message must not send a reader after a spelling that will never
+// work: a chunk has no IR body, which is still true, but it is rendered as BYTES instead of being
+// refused (see `printChunkBytes`). Every remaining reason a name renders nothing is repairable — a
+// different spelling, or a program whose runtime includes the piece — which is exactly what this text
+// now says.
 //
 // It panics rather than reporting a diagnostic: the list arrives on a `--emit-ir-runtime=` command
 // line, which is the spec runner's own instrument rather than a program's source, and a panic
@@ -182,7 +334,7 @@ function requireEveryNameRendered(runtimeNames RuntimeFunctionNameArray, rendere
 	for (iter, name) in runtimeNames.withIterator() 'eachName'
 		let didRender = try rendered.get(iter.index()) otherwise panic("requireEveryNameRendered: flag read at {iter.index()} is outside a column sized by the same list")
 		if not didRender 'noSuchFunction'
-			panic("printTargetModule: this program emits no function named '{name}', so a ```RequiredRuntime block naming it would render nothing and the golden would pin nothing. Check the spelling, or pick a program whose runtime includes it — the emitted runtime is installed on demand, and a hand-assembled runtime chunk has no IR body at all")
+			panic("printTargetModule: this program emits nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the golden would pin nothing. Check the spelling, or pick a program whose runtime includes it: the emitted runtime is installed on demand")
 		end 'noSuchFunction'
 	end 'eachName'
 end 'requireEveryNameRendered'

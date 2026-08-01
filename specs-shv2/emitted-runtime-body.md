@@ -46,10 +46,30 @@ below it. An instruction encoder that emits different bytes for the same mnemoni
 operands leaves this golden identical. ```RequiredData / ```RequiredRdata are the gates
 that read the linked image back; ```RequiredRuntime is not one of them.
 
-⚠ It also cannot reach a runtime piece that has no IR at all. The hand-assembled byte-level
-chunks — `__gt_morestack`, `__gt_context_switch` — never enter the module's function list,
-so no spelling of them renders; naming one is refused as "this program emits no function
-named …".
+### A hand-assembled chunk: the same block, rendered as BYTES
+
+Some of what the compiler emits is not IR at all. The panic runtime (`mrt_panic` and its
+backtrace walker), the green-thread pieces (`__gt_context_switch`, `__gt_trampoline`,
+`__gt_morestack`) and arm64's entry stub are assembled as raw machine bytes, so they never
+enter the module's function list and there is no body to print for them.
+
+They are still named, and the same ```RequiredRuntime block reaches them: a name no IR
+function answers is offered to the emitted chunks, and the one bearing it renders a hex dump
+instead of a body.
+
+```
+chunk @mrt_panic {
+    0000: 55 48 89 e5 …
+}
+```
+
+⚠ **The bytes are the chunk's own, BEFORE linking** — every intra-module call still shows a
+zero displacement (`e8 00 00 00 00`) and every imported call a zero IAT slot. That is
+deliberate and it is what makes the golden usable: the linked image resolves those against
+where everything landed, so a dump cut from it would move whenever anything ELSE in the
+program changed size. A chunk's own buffer depends on nothing outside the chunk — the same
+reason a printed IR body shows a branch LABEL rather than a displacement. What this golden
+pins is therefore the ASSEMBLER's output, exactly as the IR form pins the lowering's.
 
 ## Tests
 
@@ -110,4 +130,54 @@ end 'main'
 ```
 ```RequiredRuntime
 mrt_start
+```
+
+<!-- test: panic-runtime-chunk -->
+<!-- targets: x64-windows, x64-linux -->
+The panic runtime is HAND-ASSEMBLED bytes, not `TargetOp`s — so it has no IR body, is skipped
+by every fragment, and until this case had no gate of any kind: not an exit code (a program
+that never panics never enters it), not the leak gate, not a section pin, not a golden. It is
+installed in EVERY x64 program, so the smallest possible one pins it. The zero
+displacements are the unresolved call fixups the linker fills in; see the note above.
+
+```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredRuntime
+mrt_panic
+```
+
+<!-- test: stack-growth-chunk -->
+<!-- targets: x64-windows -->
+`__gt_morestack` — the relocating stack grower every green thread's prologue calls. The
+directive's own documentation used to name it as the example of a piece that *could not* be
+pinned at any spelling; this case is that claim's retirement. It is installed on demand, so
+the program has to actually run a green thread. Gated to x64-windows for
+`async-stack-growth.md`'s reason: the grower is hand-written x64 assembly over a
+`VirtualAlloc`ed stack.
+
+```maxon
+function deepRecurse(n int) returns int
+	if n == 0 'base'
+		return 0
+	end 'base'
+	return deepRecurse(n - 1) + 1
+end 'deepRecurse'
+
+function main() returns ExitCode
+	let p = async deepRecurse(200)
+	let r = await p
+	return r as ExitCode
+end 'main'
+```
+```exitcode
+200
+```
+```RequiredRuntime
+__gt_morestack
 ```

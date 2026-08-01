@@ -1,0 +1,113 @@
+// Test: stack-growth-chunk
+function deepRecurse(n int) returns int
+	if n == 0 'base'
+		return 0
+	end 'base'
+	return deepRecurse(n - 1) + 1
+end 'deepRecurse'
+
+function main() returns ExitCode
+	let p = async deepRecurse(200)
+	let r = await p
+	return r as ExitCode
+end 'main'
+---
+ExitCode: 200
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_system_stack_top@56 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_clock_ticks@80 = i64 0
+  __gt_clock_freq@88 = i64 0
+  __gt_proc_count@96 = i64 0
+  __gt_proc_handles_base@104 = i64 0
+  __gt_proc_gts_base@112 = i64 0
+  __gt_free_list_head@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __gt_startup_base@136 = i64 0
+  __gt_procinfo_base@144 = i64 0
+  __gt_exitcode_base@152 = i64 0
+  __gt_cmdline_buf_base@160 = i64 0
+  __gt_cmdline_buf_cap@168 = i64 0
+}
+
+func @deepRecurse {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, base
+    x64.jmp ifcont
+  base:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.callDirect deepRecurse
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 200
+    x64.leaRegFunc rcx, [rip + deepRecurse]
+    x64.callDirect __gt_spawn
+    x64.storeBaseDispReg.word64 [r8 + 176], rbx
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+chunk @__gt_morestack {
+    0000: 49 89 62 f8 49 8d 62 f8 55 53 41 54 41 55 41 56
+    0010: 41 57 51 52 41 50 41 51 56 57 50 48 83 ec 50 f2
+    0020: 0f 11 44 24 20 f2 0f 11 4c 24 28 f2 0f 11 54 24
+    0030: 30 f2 0f 11 5c 24 38 f2 0f 11 64 24 40 f2 0f 11
+    0040: 6c 24 48 4c 89 db 65 4c 89 14 25 08 00 00 00 49
+    0050: 81 ea 00 00 01 00 65 4c 89 14 25 10 00 00 00 4c
+    0060: 8b 63 18 4c 8b 6b 20 4d 89 ee 4d 01 f6 48 31 c9
+    0070: 4c 89 f2 41 b8 00 30 00 00 41 b9 04 00 00 00 ff
+    0080: 15 00 00 00 00 49 89 c7 fc 4c 89 ff 4c 01 f7 4c
+    0090: 29 ef 4c 89 e6 4c 89 e9 f3 a4 4c 89 f8 4c 01 f0
+    00a0: 4c 29 e8 4c 29 e0 4c 89 e1 4c 01 e9 4c 39 e5 0f
+    00b0: 82 0c 00 00 00 48 39 cd 0f 83 03 00 00 00 48 01
+    00c0: c5 48 89 ac 24 b0 00 00 00 48 89 e9 4d 89 f8 4d
+    00d0: 01 f0 4d 29 e8 4d 89 f9 4d 01 f1 48 85 c9 0f 84
+    00e0: 3b 00 00 00 4c 39 c1 0f 82 32 00 00 00 4c 39 c9
+    00f0: 0f 83 29 00 00 00 4c 8b 19 4d 39 e3 0f 82 15 00
+    0100: 00 00 4d 89 e2 4d 01 ea 4d 39 d3 0f 83 06 00 00
+    0110: 00 49 01 c3 4c 89 19 48 8b 09 e9 bc ff ff ff 4c
+    0120: 89 7b 18 4c 89 73 20 4c 89 f9 48 81 c1 a0 03 00
+    0130: 00 48 89 4b 50 4c 89 f9 4c 01 f1 48 89 8b 90 00
+    0140: 00 00 4c 89 bb 98 00 00 00 48 89 c5 4c 89 e1 ba
+    0150: 00 00 00 00 41 b8 00 80 00 00 ff 15 00 00 00 00
+    0160: 48 89 e8 48 8b 8b 90 00 00 00 65 48 89 0c 25 08
+    0170: 00 00 00 48 8b 8b 98 00 00 00 65 48 89 0c 25 10
+    0180: 00 00 00 f2 0f 10 44 24 20 f2 0f 10 4c 24 28 f2
+    0190: 0f 10 54 24 30 f2 0f 10 5c 24 38 f2 0f 10 64 24
+    01a0: 40 f2 0f 10 6c 24 48 48 83 c4 50 4c 8b 54 24 68
+    01b0: 49 01 c2 58 5f 5e 41 59 41 58 5a 59 41 5f 41 5e
+    01c0: 41 5d 41 5c 5b 5d 48 81 c4 08 00 00 00 4c 89 d4
+    01d0: c3
+}

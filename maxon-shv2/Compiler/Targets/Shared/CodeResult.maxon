@@ -422,6 +422,22 @@ export type CodeResult
 	// concat pass; each writer patches them into the `.rdata` image with `patchJumpTables`. Empty for the
 	// wasm path (its `br_table` needs no relocation) and for any program with no dense `match`.
 	export var jumpTableRelocs as JumpTableRelocArray
+	// ⭐ **THE CHUNKS THIS BACKEND ASSEMBLED, RETAINED FOR THE ONE READER THAT HAS NO OTHER ROUTE TO
+	// THEM.** A HAND-ASSEMBLED chunk — the panic runtime, the green-thread pieces, arm64's entry stub —
+	// is raw bytes rather than `TargetOp`s, so it never enters `targetModule.functions` and
+	// `printTargetModule` cannot render it as IR. It is addressable by NAME all the same
+	// (`FunctionCodeChunk.funcName`), and a ```RequiredRuntime block naming one renders these bytes.
+	//
+	// ⚠ **IT IS THE CHUNK'S OWN BYTES, NOT A SLICE OF `code`, AND THAT IS THE WHOLE POINT.** `code` is
+	// the CONCATENATED `.text` with every intra-module call resolved to a rel32 and (once the writer
+	// runs) every IAT reference patched to an RVA — values that move when anything ELSE in the program
+	// changes size. A golden cut from it would go red on an unrelated edit to the test's own `main`. A
+	// chunk's own buffer is fixed at assembly time and depends on nothing outside the chunk, exactly as
+	// a printed IR body's branch targets are labels rather than displacements.
+	//
+	// Retaining the array is a LIFETIME, not a copy: these are the same chunk objects the concat pass
+	// walked, so nothing is allocated for it. Empty for the wasm path, which builds no chunks at all.
+	export var codeChunks as FunctionCodeChunkArray
 
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, stdModule StdModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
 		return Self{
@@ -439,7 +455,8 @@ export type CodeResult
 			debugSymbols: DebugSymbolArray.create(),
 			wasmCoreModule: ByteArray.create(),
 			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
-			jumpTableRelocs: JumpTableRelocArray.create()
+			jumpTableRelocs: JumpTableRelocArray.create(),
+			codeChunks: FunctionCodeChunkArray.create()
 		}
 	end 'create'
 
@@ -464,7 +481,8 @@ export type CodeResult
 			debugSymbols: DebugSymbolArray.create(),
 			wasmCoreModule: wasmCoreModule,
 			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
-			jumpTableRelocs: JumpTableRelocArray.create()
+			jumpTableRelocs: JumpTableRelocArray.create(),
+			codeChunks: FunctionCodeChunkArray.create()
 		}
 	end 'forWasm'
 end 'CodeResult'

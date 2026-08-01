@@ -229,6 +229,12 @@ end 'appendLittleEndian'
 //
 // A `.data` mismatch is a BYTE-level failure, so it is reported in bytes: "expected 2a 00 00 00 00
 // 00 00 00, got 00 00 …" is a diff a reader can act on, where "the layout differs" is not.
+//
+// ⚠ **`hexByte`/`hexDigit` LIVE IN THE COMPILER, NOT HERE.** A chunk golden's hex dump
+// (`TargetPrinter.printChunkBytes`) is the same rendering one tier down, and this file used to carry
+// its own copy of it. The harness may call INTO the compiler and does (`targetToString`,
+// `emitsTargetIr`); the compiler may not call out here — so the one spelling sits on the lower side
+// and this reads it from there.
 
 export function formatHexBytes(bytes ByteArray) returns String
 	var out = StringBuilder.create()
@@ -240,17 +246,3 @@ export function formatHexBytes(bytes ByteArray) returns String
 	end 'each'
 	return out.build()
 end 'formatHexBytes'
-
-export function hexByte(b MachineWord) returns String
-	return "{hexDigit((b shr 4) and 0xF)}{hexDigit(b and 0xF)}"
-end 'hexByte'
-
-// One lowercase hex digit. A `ByteArray` lookup rather than a `String` index: the digits are ASCII
-// bytes and `String.from` of a one-byte array is the shortest honest route to a one-character
-// String in a language whose String is UTF-8 and whose indices are byte positions.
-function hexDigit(nibble MachineWord) returns String
-	let digits = b"0123456789abcdef"
-	var one = ByteArray.create()
-	one.push(try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with 0xF"))
-	return String.from(one)
-end 'hexDigit'

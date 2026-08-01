@@ -1843,6 +1843,10 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	result.debugSymbols = debugSymbols
 	result.dataPrelude = globalData.dataSectionImage()
 	result.jumpTableRelocs = jumpTableRelocs
+	// The chunks' own PRE-LINK bytes, for the one reader `code` cannot serve: a ```RequiredRuntime
+	// golden over a hand-assembled chunk (`mrt_panic`, `__gt_context_switch`, …), which has no
+	// `IrFunction` and therefore no IR body to print. See `CodeResult.codeChunks`.
+	result.codeChunks = chunks
 	return result
 end 'concatX64FunctionChunks'
 
