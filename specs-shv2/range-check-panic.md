@@ -10,8 +10,8 @@ category: runtime
 ## Documentation
 
 A ranged typealias binds every value that meets it. Wherever a value reaches a place declared with
-one — a **call argument**, a `return`, a **struct-literal field**, a **field store**, an array-literal
-element, an explicit `as` — the declared bounds are enforced.
+one — a **call argument**, a `return`, a **struct-literal field**, a **field store**, a field's
+**declared default**, an **array element**, an explicit `as` — the declared bounds are enforced.
 
 **How they are enforced depends on what the compiler can know, and the two halves are one rule:**
 
