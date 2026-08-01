@@ -1,0 +1,90 @@
+// Test: return-self-from-a-boxed-union
+union Boxed
+	one(v int)
+	two(s String)
+
+	export function giveBack() returns Boxed
+		return self
+	end 'giveBack'
+end 'Boxed'
+
+function main() returns ExitCode
+	let b = Boxed.one(3)
+	let c = b.giveBack()
+	match c 'k'
+		one(v) then return v as ExitCode
+		two then return 1
+	end 'k'
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Boxed.giveBack {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __mm_retain
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 3
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect Boxed.giveBack
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_Boxed
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Boxed
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_Boxed
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Boxed
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}

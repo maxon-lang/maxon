@@ -1,0 +1,20 @@
+// Test: error.top-level-let-array-owned-merge-alias
+typealias Names = Array with String
+
+let A = ["ab", "cde"]
+
+function fresh() returns Names
+	var n = Names.create()
+	n.push("zz")
+	return n
+end 'fresh'
+
+function main() returns ExitCode
+	let c = true
+	var pick = A if c else fresh()
+	pick.push("qq")
+	return A.count()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:15: Unsupported: merging a read of a `let`-declared top-level global into an OWNED result — an aggregate has no owning COPY in shv2, so the merged value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`

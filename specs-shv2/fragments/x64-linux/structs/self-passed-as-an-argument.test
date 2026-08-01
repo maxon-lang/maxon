@@ -1,0 +1,148 @@
+// Test: self-passed-as-an-argument
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+
+	export function tally(p Point) returns Integer
+		return self.x + p.x
+	end 'tally'
+
+	export function combineWith(other Point) returns Integer
+		return other.tally(self)
+	end 'combineWith'
+end 'Point'
+
+function pick(a Point, b Point) returns Point
+	if a.x > b.x 'bigger'
+		return a
+	end 'bigger' else 'smaller'
+		return b
+	end 'smaller'
+end 'pick'
+
+function main() returns ExitCode
+	let p = Point.create(11)
+	let q = Point.create(31)
+	let w = pick(p, b: q)
+	return (p.combineWith(q) + w.x) as ExitCode
+end 'main'
+---
+ExitCode: 73
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Point.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Point.tally {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Point.combineWith {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rax, rcx
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect Point.tally
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 0]
+    x64.cmpRegReg rax, rsi
+    x64.jcc greater, bigger
+    x64.jmp ifelse
+  bigger:
+    x64.callDirect __mm_retain
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.movRegReg rcx, rdx
+    x64.callDirect __mm_retain
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 11
+    x64.callDirect Point.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 31
+    x64.callDirect Point.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect pick
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Point.combineWith
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.leaRegRegReg r14, r8, rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

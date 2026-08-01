@@ -843,3 +843,68 @@ trivial a.1=2 b.1=99 managed m.1=99 n.1=99
 ```exitcode
 108
 ```
+
+<!-- test: merged-tuple-copies-at-every-hand-off -->
+⭐⭐ **THE VALUE-SEMANTICS ANSWER BELONGS TO THE HAND-OFF, NOT TO THE `return` KEYWORD (S5 review).** The case
+above pins `return t`; this one pins the two doors that reach the caller through a MERGE first — a ternary arm
+and a `try … otherwise` fallback — and a BINDING as the negative control. A borrowed trivial tuple is copied at
+a hand-off and INCREF'd at a binding, so `a.1` and `m.1` keep their `2` while `g.1` reads the `55` the callee
+wrote through its alias. **The value oracle answers all three identically** (measured: `merged a.1=2 fallback
+m.1=2 binding g.1=55`).
+
+⚠ It is the merge that made this worth pinning. The tuple copy first shipped inside `emitOwnedValueReturn`,
+where it was the `returned` door's private rule; when S5 opened the `merged` door onto the same shared
+promotion, a borrowed tuple was increfed by the merge and then walked past the return's own copy — which asks
+`not valueIsOwnedHeap`, and an incref answers that question wrongly by design. shv2 printed `a.1=99` here
+against the oracle's `a.1=2`. The gate lives in `promoteBorrowedToOwned` now, where all three doors ask it.
+```maxon
+
+typealias Num = int(i64.min to i64.max)
+
+enum Fail
+	nope
+end 'Fail'
+
+function risky(ok bool) returns (Num, Num) throws Fail
+	if ok 'ok'
+		return (7, 8)
+	end 'ok'
+	throw Fail.nope
+end 'risky'
+
+function viaMerge(t (Num, Num), c bool) returns (Num, Num)
+	return t if c else (7, 8)
+end 'viaMerge'
+
+function viaFallback(t (Num, Num)) returns (Num, Num)
+	return try risky(false) otherwise t
+end 'viaFallback'
+
+function viaBinding(t (Num, Num)) returns Num
+	var q = t
+	q.1 = 55
+	return 0
+end 'viaBinding'
+
+function main() returns ExitCode
+	var a = (1, 2)
+	var b = viaMerge(a, c: true)
+	b.1 = 99
+
+	var m = (1, 2)
+	var n = viaFallback(m)
+	n.1 = 99
+
+	var g = (1, 2)
+	let z = viaBinding(g)
+
+	print("merged a.1={a.1} fallback m.1={m.1} binding g.1={g.1} z={z}")
+	return (a.1 + m.1 + g.1 + 9) as ExitCode
+end 'main'
+```
+```stdout
+merged a.1=2 fallback m.1=2 binding g.1=55 z=0
+```
+```exitcode
+68
+```

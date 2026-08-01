@@ -4403,20 +4403,27 @@ enum ErrorExitDoor
 	throwStatement
 end 'ErrorExitDoor'
 
-// ⭐ **WHICH DOOR MADE A BORROWED MANAGED VALUE OWNED (S5).** `promoteBorrowedToOwned` is reached from four
-// places, and they share every rule EXCEPT one sentence: the immutable-global refusal has to name the door it
-// was reached through, or it describes a `var` binding that the program does not contain. It carries a door
-// rather than a noun `String` for `FunctionTypeDoor`'s MEASURED reason: a `String` threaded into a guard that
-// almost never fires costs one allocation per promotion, and the promotion path runs for every borrowed
-// String a program returns. `borrowLaunderRefusal` renders the words only where the diagnostic is built.
+// ⭐ **WHICH DOOR MADE A BORROWED MANAGED VALUE OWNED (S5).** Each door names the ONE function that spends it,
+// so this reads as a mapping rather than as a COUNT that goes stale the next time a caller is factored (this
+// file has had a call-site count go wrong three times — see `markDeclaredBufferSurface`; do not write a number
+// here). The doors share every rule EXCEPT two, and the door is what tells them apart: the immutable-global
+// refusal has to name the door it was reached through, or it describes a `var` binding that the program does
+// not contain — and a TRIVIAL TUPLE copies at a HAND-OFF while it increfs at a BINDING
+// (`borrowLaunderDoorIsHandOff`, measured on both compilers). It carries a door rather than a noun `String`
+// for `FunctionTypeDoor`'s MEASURED reason: a `String` threaded into a guard that almost never fires costs
+// one allocation per promotion, and the promotion path runs for every borrowed String a program returns.
+// `borrowLaunderRefusal` renders the words only where the diagnostic is built.
 enum BorrowLaunderDoor
-	// `var q = p` / `q = p2` — the binding becomes a second owner in THIS frame.
+	// `var q = p` / `q = p2` — the binding becomes a second owner in THIS frame. Spent by `parseBinding`'s
+	// declaration and reassignment paths, the only two that enrol a value as an owned BINDING.
 	binding
-	// `return p` — the value escapes to the caller, which adopts it as owned.
+	// `return p` — the value escapes to the caller, which adopts it as owned. Spent by `emitOwnedValueReturn`,
+	// which is every `return` AND a closure body's `gives` (both hand a value to a caller that drops it once).
 	returned
 	// A value merged into a result phi the consumer drops once: a `match`/ternary arm (`promoteBorrowedGive`)
 	// or a `try … otherwise <expr>` fallback (`finishValueTry`). ONE arm, because the two are one question —
-	// the phi does not know which construct minted it and drops its value exactly once either way.
+	// the phi does not know which construct minted it and drops its value exactly once either way — and since
+	// the review they are also ONE caller, `promoteBorrowedMergeEdge`, which is what spends this door.
 	merged
 end 'BorrowLaunderDoor'
 
@@ -4442,6 +4449,26 @@ function borrowLaunderValueNoun(door BorrowLaunderDoor) returns String
 		merged gives "the merged value"
 	end 'which'
 end 'borrowLaunderValueNoun'
+
+// ⭐⭐ **IS THIS DOOR A HAND-OFF — the value LEAVES the expression that produced it — or a BINDING, a second
+// name for it in THIS frame?** It is the one question a TRIVIAL TUPLE's promotion turns on, and the answer is
+// MEASURED on both compilers rather than chosen: `var q = t` on a tuple PARAMETER aliases (a write through
+// `q` shows on `t` — shv2 and the bootstrap oracle both print 55), while `return t` COPIES (both print 2).
+// So a binding increfs like any other aggregate, and a hand-off gives the tuple a record of its own.
+//
+// ⚠ **WITHOUT THIS SPLIT THE `merged` DOOR SILENTLY DISAGREED WITH THE `returned` ONE (review of S5).** The
+// tuple copy used to live in `emitOwnedValueReturn` alone, so `return t` copied while
+// `return t if c else (7, 8)` — the same borrowed tuple, one hand-off further out — was increfed by the
+// merge and then passed the return's `not valueIsOwnedHeap` guard as if the frame solely owned it. Measured:
+// shv2 printed `a.1=99` where the oracle and shv2's own `return t` print `a.1=2`. It is asked HERE now, so
+// the three doors cannot come to disagree about which values have value semantics.
+function borrowLaunderDoorIsHandOff(door BorrowLaunderDoor) returns bool
+	return match door 'which'
+		binding gives false
+		returned gives true
+		merged gives true
+	end 'which'
+end 'borrowLaunderDoorIsHandOff'
 
 // The whole sentence for laundering a `let`-declared top-level global's record into an owned aggregate.
 // ⚠ The `binding` door's rendering is BYTE-IDENTICAL to the message that shipped before there were doors,
@@ -11926,9 +11953,16 @@ export type Parser
 	end 'requireDestructurableTuple'
 
 	// ⭐ **IS `value` A TUPLE THIS RUNG MAY COPY?** — a tuple `structRef` none of whose elements owns heap.
-	// THE one gate on the value-semantics copy, asked by both of its sites (the durable-storage move-in and
-	// the return), so they cannot come to disagree about which tuples have value semantics — a disagreement
-	// that would not be a missed case but a record freed twice or not at all.
+	// THE one gate on the value-semantics copy, so its askers cannot come to disagree about which tuples have
+	// value semantics — a disagreement that would not be a missed case but a record freed twice or not at all.
+	// Its askers are the durable-storage move-in (`moveManagedValueInto`) and `promoteBorrowedToOwned`, which
+	// asks it for the whole HAND-OFF family at once (a `return`, a closure `gives`, a `match`/ternary arm, a
+	// `try … otherwise` fallback). ⚠ It used to say "BOTH of its sites … and the return", naming the return
+	// because that is where the hand-off copy was spelled — and while it was spelled THERE rather than here,
+	// the merge doors silently increfed a borrowed tuple instead (see `borrowLaunderDoorIsHandOff`).
+	// ⚠ `transferConsumedArg` is a THIRD borrowed-managed decider that does NOT ask this and REFUSES a
+	// borrowed trivial tuple at a consuming argument position, where the move-in one call away copies it.
+	// Pre-existing, and a refusal rather than a wrong answer, so it is filed rather than widened here.
 	//
 	// The managed probe is asked through `structHasManagedField`, the SAME predicate the destructor synthesis
 	// gates on, so "this tuple needs no deep clone" and "this tuple needs no drop cascade" are one answer.
@@ -13185,26 +13219,11 @@ export type Parser
 	function emitOwnedValueReturn(retVal ValueId, anchor Token) throws ParseError
 		var returned = retVal
 
-		// ⭐ **A BORROWED TUPLE IS COPIED, and it is asked FIRST because a tuple is a `structRef` and the
-		// shared door below would INCREF it instead (P1.10).** The caller adopts and frees whatever a
-		// `returns (…)` hands back, so `return t` on a tuple PARAMETER must give it a record of its own — and
-		// a TRIVIAL tuple, unlike a struct, may simply be copied — the only way to obtain one is the expression
-		// that produced it, so within the set this branch admits there is no prior identity to break (see
-		// `moveManagedValueInto` for the full argument). Without it,
-		// `function echo(t (Num, Num)) returns (Num, Num) return t end` would share one record where a tuple's
-		// whole point is that it does not.
-		//
-		// ⚠ **A MANAGED-ELEMENT tuple is NOT admitted here and therefore SHARES, which is the oracle's answer
-		// too** — measured on both compilers: writing through a returned `(String, Num)` shows on the source
-		// (`a.1=99 b.1=99`), while the trivial spelling one line over does not (`a.1=3 b.1=99`). So the split
-		// is not "tuples have no identity" — a managed one demonstrably does — it is that a shallow copy of a
-		// managed element would free one String twice, and the incref is the sound answer available today.
-		if self.valueIsCopyableTuple(returned) and not self.valueIsOwnedHeap(returned) 'copyBorrowedTuple'
-			returned = self.copyTupleValue(returned, range: SourceRange.ofToken(anchor))
-		end 'copyBorrowedTuple'
-
-		// The ONE promotion door (see the header): a borrowed String COPIES, a borrowed struct/union/instance
-		// INCREFS. An already-owned value and a scalar pass straight through.
+		// The ONE promotion door (see the header): a borrowed String COPIES, a borrowed TRIVIAL TUPLE gets its
+		// own record, a borrowed struct/union/instance INCREFS. An already-owned value and a scalar pass
+		// straight through. The tuple half used to be asked HERE, one branch ahead of the shared door, which
+		// made it the `returned` door's private rule — and the `merged` door, opening onto the same shared door
+		// in S5, increfed a borrowed tuple instead and then handed the return an alias wearing the owned bit.
 		if self.valueIsManagedHeap(returned) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
 			returned = try self.promoteBorrowedToOwned(returned, door: BorrowLaunderDoor.returned, range: SourceRange.ofToken(anchor))
 		end 'promoteBorrowed'
@@ -13970,19 +13989,17 @@ export type Parser
 		// A SCALAR result keeps the borrowed phi the Wave-1 path built — nothing is owned, nothing is dropped.
 		//
 		// ⭐ **THE TWO KINDS OF FALLBACK ARE RECONCILED BY DIFFERENT DOORS, AND THE SPLIT IS WHAT KEEPS THE
-		// COUNT AT ONE (S5).** A BORROWED fallback goes through the shared `promoteBorrowedToOwned` — a String
-		// copies, a struct/union increfs — which mints the phi's one reference outright; it is de-listed from
-		// the statement's pending temps at once, exactly as `promoteBorrowedGive` does for the merge this is
-		// the twin of. An ALREADY-OWNED fallback has an existing owner to settle with instead, which is
-		// `transferFallbackToPhi`'s job (move a temp, incref a live binding). Running BOTH on a promoted value
-		// would count it twice: the retain mints a fresh SSA name that is no pending temp, so
-		// `transferFallbackToPhi` would incref a second time and leak it.
+		// COUNT AT ONE (S5).** A BORROWED fallback is minted a reference of its own by
+		// `promoteBorrowedMergeEdge` — the SAME helper a `match`/ternary arm's borrowed give goes through, which
+		// is where the steps that keeps the count at one (and the reason running `transferFallbackToPhi` on top
+		// would leak) are written down. An ALREADY-OWNED fallback has an existing owner to settle with instead,
+		// which is `transferFallbackToPhi`'s job (move a temp, incref a live binding). The error edge IS
+		// `currentBlock` here, which is the block the promotion must land in.
 		var errEdgeValue = otherwiseValue
 		var phiOwned = false
 		if self.valueIsOwnedHeap(result) 'managedResultPhi'
 			if not self.valueIsOwnedHeap(otherwiseValue) 'promoteBorrowedFallback'
-				errEdgeValue = try self.promoteBorrowedToOwned(otherwiseValue, door: BorrowLaunderDoor.merged, range: SourceRange.ofToken(tryTok))
-				self.removeFromPendingTemps(errEdgeValue)
+				errEdgeValue = try self.promoteBorrowedMergeEdge(otherwiseValue, edgeBlock: self.currentBlock, anchor: tryTok)
 			end 'promoteBorrowedFallback' else 'ownedFallback'
 				self.transferFallbackToPhi(errEdgeValue, tryTok: tryTok)
 			end 'ownedFallback'
@@ -15330,6 +15347,34 @@ export type Parser
 			return self.promoteToOwnedString(value, range: range)
 		end 'byteRecord'
 
+		// ⭐ **A TRIVIAL TUPLE HANDED OFF GETS ITS OWN RECORD (P1.10), AND IT IS ASKED BEFORE THE AGGREGATE ARM
+		// BECAUSE A TUPLE IS A `structRef` THAT ARM WOULD INCREF INSTEAD.** The caller adopts and frees whatever
+		// a `returns (…)` hands back, and a TRIVIAL tuple — unlike a struct — may simply be COPIED: the only way
+		// to obtain one is the expression that produced it, so within the set `valueIsCopyableTuple` admits there
+		// is no prior identity to break (see `moveManagedValueInto` for the full argument). Without it,
+		// `function echo(t (Num, Num)) returns (Num, Num) return t end` would share one record where a tuple's
+		// whole point is that it does not.
+		//
+		// ⚠ **A MANAGED-ELEMENT tuple is NOT admitted and therefore falls through to the INCREF, which is the
+		// oracle's answer too** — measured on both compilers: writing through a returned `(String, Num)` shows on
+		// the source (`a.1=99 b.1=99`), while the trivial spelling one line over does not (`a.1=3 b.1=99`). So the
+		// split is not "tuples have no identity" — a managed one demonstrably does — it is that a shallow copy of
+		// a managed element would free one String twice, and the incref is the sound answer available today.
+		//
+		// ⚠ It is gated on the door because a BINDING is not a hand-off: `var q = t` aliases on both compilers
+		// (see `borrowLaunderDoorIsHandOff`), so copying there would break an agreement rather than fix one.
+		//
+		// ⚠ **IT SITS AHEAD OF THE IMMUTABLE-GLOBAL REFUSAL BELOW, AND THAT ORDER IS SOUND RATHER THAN LUCKY.**
+		// That refusal exists because an INCREF would launder a marked record into an unmarked owned alias; a
+		// COPY launders nothing — the fresh record is a different record, and writing it cannot reach the
+		// global — which is the same reason the `byteRecord` arm above is already ahead of it. So a marked
+		// TUPLE would be copied rather than refused. It cannot arise today (a top-level global cannot hold a
+		// tuple: `let A = (1, 2)` is E2010 in shv2 AND in the bootstrap oracle), and the day one can, copying
+		// is the answer that keeps the global immutable, not the one that needs a new refusal.
+		if borrowLaunderDoorIsHandOff(door) and self.valueIsCopyableTuple(value) 'copyableTuple'
+			return self.copyTupleValue(value, range: range)
+		end 'copyableTuple'
+
 		if self.valueIsNonTextAggregate(value) 'aggregate'
 			// The one asker of `immutableGlobalReads`, and the one place the answer changes anything: a
 			// borrowed managed aggregate about to become an owned mutable binding. The mark reaches every use
@@ -15352,6 +15397,35 @@ export type Parser
 
 		panic("promoteBorrowedToOwned: v{value} is neither text nor a managed aggregate — the caller has already gated on `valueIsManagedHeap`, so a borrowed value promoted to owned is always a String (copy) or a struct/union box (retain); a scalar owns no heap and never reaches an owned binding's promotion")
 	end 'promoteBorrowedToOwned'
+
+	// ⭐⭐ **MINT THE ONE OWNED REFERENCE A RESULT PHI'S BORROWED EDGE OWES IT, INTO THAT EDGE'S OWN BLOCK.**
+	// The `merged` door has TWO callers — a `match`/ternary arm (`promoteBorrowedGive`) and a
+	// `try … otherwise <expr>` fallback (`finishValueTry`) — and they owe the phi the identical THREE steps, of
+	// which only the block differs. Spelled at both sites they were held together by a comment reading *"exactly
+	// as `promoteBorrowedGive` does"*, which is a test nobody wrote: a third obligation added to one edge kind
+	// would not fail to compile at the other, it would silently leak or double-free on the arm that missed it.
+	//
+	// The three steps, and why each:
+	//   • EMIT INTO THE EDGE, not into `currentBlock`. A match arm's promotion belongs in its still-unterminated
+	//     exit block, or the incref runs on the path that did not take the arm. `finishValueTry` passes the
+	//     block it is already in (`errEnd`), so the save/restore is inert there and the rule stays stated once.
+	//   • PROMOTE through the one door — a String copies, a trivial tuple gets its own record, an aggregate
+	//     increfs.
+	//   • DE-LIST it from the statement's pending temps. The phi owns it now; a statement-end drain would free a
+	//     record the merged result still holds. ⚠ And this is why the promotion must NOT also be handed to
+	//     `transferFallbackToPhi`: a retain mints a fresh SSA name that is no pending temp, so that helper would
+	//     read it as an aliased BINDING and incref a second time — a leak. `transferFallbackToPhi` settles an
+	//     ALREADY-OWNED edge, which is the other branch of the question, not a further step of this one.
+	function promoteBorrowedMergeEdge(value ValueId, edgeBlock IrBlock, anchor Token) returns ValueId throws ParseError
+		let saved = self.currentBlock
+		self.currentBlock = edgeBlock
+
+		let owned = try self.promoteBorrowedToOwned(value, door: BorrowLaunderDoor.merged, range: SourceRange.ofToken(anchor))
+		self.removeFromPendingTemps(owned)
+
+		self.currentBlock = saved
+		return owned
+	end 'promoteBorrowedMergeEdge'
 
 	// ⭐ **DROP EVERY OWNED TEMPORARY THE STATEMENT LEFT UNCONSUMED**, in REVERSE creation order (the
 	// `emitScopeDrops` convention — the last built is the first torn down), into `currentBlock`. Called at
@@ -18899,13 +18973,15 @@ export type Parser
 	// (only an ARRAY binding is both stored and immutable — a `let` String has no slot to read). The previous
 	// argument was that such an arm could never reach an owned phi at all, because `promoteBorrowedGive`
 	// REFUSED a borrowed aggregate; it now PROMOTES one, so that argument is gone and this one replaces it:
-	// a marked arm feeding an owned phi is refused INSIDE the promotion, at the `merged` door
-	// (`promoteBorrowedToOwned`), before a final give exists — so an owned phi still cannot have a marked arm,
-	// and a phi that survives to be marked here is one every arm of which was already borrowed.
+	// a marked arm that would be INCREF'd into an owned phi is refused inside the promotion, at the `merged`
+	// door (`promoteBorrowedToOwned`), before a final give exists.
 	//
-	// ⚠ A promotion that COPIES (a String, a trivial tuple) yields a fresh record which is correctly unmarked;
-	// one that INCREFS yields the SAME record, which is exactly why the marked case must be refused rather
-	// than promoted — an incref would launder the mark by minting an unmarked name for the same box.
+	// ⚠ **THE LOAD-BEARING PROPERTY IS "NO OWNED PHI ALIASES A MARKED RECORD", NOT "NO OWNED PHI HAS A MARKED
+	// ARM"**, and the two came apart in review. A promotion that COPIES (a String, a trivial tuple) yields a
+	// FRESH record, so it is correctly unmarked and is allowed through rather than refused — it launders
+	// nothing, because writing the copy cannot reach the global. Only the INCREF arm hands back the SAME box,
+	// which is why only it is refused. So an owned phi may hold an unmarked COPY of a marked arm's record,
+	// which is right, and can never hold the record itself, which is the property this rests on.
 	function propagateImmutableGlobalReadToPhi(phi ValueId, gives ValueIdArray)
 		for give in gives 'eachGive'
 			if self.immutableGlobalReads.contains(give) 'markedArm'
@@ -18943,12 +19019,11 @@ export type Parser
 	end 'resolveGivesOwnership'
 
 	// Make a BORROWED `gives` value owned so a match/conditional whose OTHER arms give owned values has a
-	// uniformly-owned result phi its consumer can drop unconditionally. It is the second HAND-OFF door onto
-	// the shared `promoteBorrowedToOwned`, the `return`'s twin: a borrowed STRING is copied (the fused-record
-	// blit), a borrowed non-text AGGREGATE is INCREF'd, and either way the arm hands the phi a value it really
-	// owns. The promotion is emitted into the arm's still-unterminated exit block and de-listed from the
-	// statement's pending temps at once — the phi owns it now, and a statement-end drop would free a record
-	// the merged result still holds.
+	// uniformly-owned result phi its consumer can drop unconditionally. It reaches the shared
+	// `promoteBorrowedToOwned` through `promoteBorrowedMergeEdge`, as the `return`'s twin: a borrowed STRING is copied (the fused-record
+	// blit), a borrowed TRIVIAL TUPLE gets its own record, a borrowed non-text AGGREGATE is INCREF'd, and either
+	// way the arm hands the phi a value it really owns. Which block it lands in and what else the edge owes the
+	// phi are `promoteBorrowedMergeEdge`'s, shared with the `try … otherwise` fallback that asks the same thing.
 	//
 	// ⚠ **THE AGGREGATE ARM USED TO BE A REFUSAL WHOSE STATED REASON WAS FALSE (S5):** *"shv2 has neither
 	// `__mm_incref` nor an aggregate deep-copy"*. It had both — `__mm_retain` since OPEN #40 (wired to the
@@ -18968,12 +19043,7 @@ export type Parser
 	function promoteBorrowedGive(give ValueId, arm MatchArmExit, matchTok Token) returns ValueId throws ParseError
 		let giveTag = self.tagOf(give)
 		if self.valueIsManagedHeap(give) 'managed'
-			let saved = self.currentBlock
-			self.currentBlock = arm.exitBlock
-			let owned = try self.promoteBorrowedToOwned(give, door: BorrowLaunderDoor.merged, range: SourceRange.ofToken(matchTok))
-			self.removeFromPendingTemps(owned)
-			self.currentBlock = saved
-			return owned
+			return try self.promoteBorrowedMergeEdge(give, edgeBlock: arm.exitBlock, anchor: matchTok)
 		end 'managed'
 
 		if tagIsUnresolved(giveTag) 'deferredCallError'
