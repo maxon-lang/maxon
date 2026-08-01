@@ -106,6 +106,42 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 	end 'eachSite'
 end 'checkWhereConstraints'
 
+// ⭐ **`<Type> from "…"` REQUIRES `implements InitableFromStringLiteral` — checked HERE, at the merge, for
+// `checkWhereConstraints`' reason (BATCH2 slice 3).** The construction is sugar for `<Type>.init(<literal>)`
+// and the parser emits exactly that call; what it CANNOT decide at the construction site is whether the type
+// declares the conformance, because the clause is recorded when the type's own file is parsed and the two
+// files have no ordering. So the parser records the SITE (see `LiteralInitSite`) and the verdict is taken
+// here, off the one conformance store `checkConformance` validated.
+//
+// The diagnostic is the ORACLE'S, word for word — `E3005: Type 'Wrapper' does not conform to
+// InitableFromStringLiteral`, anchored on the type-name token (measured against the bootstrap on the same
+// program) — so a `/specs` case pinning it is portable between the two compilers with no edit.
+//
+// ⚠ **A NON-CONFORMING TYPE IS THE ONLY THING LEFT TO CHECK, AND THAT IS WHY THIS IS THE WHOLE PASS.** An
+// UNDECLARED name never reaches here (the parser's arm requires a declared struct, so `Bogus from "x"` stays
+// `E2004 Undefined variable`, which is also what the oracle answers); a missing or wrongly-typed `init` is
+// the ordinary unknown-callee / argument check against `<Type>.init`, raised where every other call raises it.
+// A program with no such construction — every one in the suite but two specs — short-circuits allocation-free.
+export function checkLiteralInitConformance(project Project)
+	if project.literalInitSites.count() == 0 'noConstructions'
+		return
+	end 'noConstructions'
+
+	// A prior diagnostic may leave `project.conformances` INCOMPLETE — a file whose parse failed has not
+	// merged its `implements` clauses — so a conforming type could read as non-conforming and earn a
+	// SPURIOUS E3005. Refuse to check a malformed program, exactly as `checkWhereConstraints` does.
+	if projectHasErrors(project) 'malformedProject'
+		return
+	end 'malformedProject'
+
+	let declared = buildDeclaredConformanceMap(project)
+	for site in project.literalInitSites 'eachSite'
+		if not typeDeclaresInterface(declared, typeName: site.typeName, interfaceName: InitableFromStringLiteralName) 'doesNotConform'
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: "Type '{String.from(site.typeName)}' does not conform to {String.from(InitableFromStringLiteralName)}", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+		end 'doesNotConform'
+	end 'eachSite'
+end 'checkLiteralInitConformance'
+
 // Validate one instantiation site's every `where` constraint (P1.7a slice 2a). A base with no constraints
 // (the whole non-generic-witness corpus) iterates zero times.
 function checkOneInstantiation(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite)

@@ -2695,6 +2695,10 @@ export type Project
 	// type declaring conformance twice is two decls to report, not one to overwrite. Reset with the
 	// other push-merge targets (`pendingFnMergeChecks`) so a warm rebuild does not double it.
 	export var conformances as ConformanceDeclArray
+	// Every `<Type> from "…"` construction the program writes (see LiteralInitSite), one per site, in
+	// merge order. An ARRAY for `conformances`' reason: the check drains it once whole-program and two
+	// constructions of one type are two positions to report. Read by `checkLiteralInitConformance`.
+	export var literalInitSites as LiteralInitSiteArray
 	// id <-> name table behind every `MaxonType.named`. Folded from per-file
 	// artifact interners at merge time (see TypeNameInterner.maxon).
 	export var typeNames as TypeNameInterner
@@ -2771,6 +2775,7 @@ export type Project
 			enumTypes: createEnumRegistry(),
 			interfaces: IrInterfaceMap.create(),
 			conformances: ConformanceDeclArray.create(),
+			literalInitSites: LiteralInitSiteArray.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
 			valueOrigins: ValueOriginTable.create(),

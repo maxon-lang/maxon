@@ -6119,6 +6119,35 @@ export type Parser
 		return self.current().value.equals(SetBuiltinBaseName) or self.namesSetInstanceAlias(self.current().value)
 	end 'atSetFromConstruction'
 
+	// ⭐ **IS THE CURSOR ON A `<Type> from "…"` LITERAL CONSTRUCTION?** — the `InitableFromStringLiteral`
+	// sugar, which is how `/specs` spells nearly every `FilePath` in the corpus (128 occurrences, and 31 of
+	// `specs/filepath.md`'s own 40 cases).
+	//
+	// ⚠ **THE `<Type>` HALF IS "NAMES A DECLARED STRUCT", AND THAT BOUND IS MEASURED AGAINST THE ORACLE, NOT
+	// CHOSEN.** A name no `type` declares must keep falling through to `E2004 Undefined variable`, because
+	// that is what the bootstrap answers for `Bogus from "hello"` (measured on this tree, `2-Parser.cs`'s
+	// identifier path never reaching `ParseFromStringLiteral`). Claiming the shape for any identifier would
+	// have replaced a correct diagnostic with a bespoke one — the "no diagnostic moves" rule every arm added
+	// to `parsePrimary` is held to.
+	//
+	// ⚠ **AND THE OPERAND HALF IS THE STRING LITERAL, so `InitableFromCharLiteral` / `InitableFromArrayLiteral`
+	// are NOT claimed by this arm** — `X from 'A'` and `X from […]` keep whatever they do today. Each is a
+	// separate conformance with a separate `init` parameter type, and neither has a consumer in this rung's
+	// cone; claiming their token shapes here would mint a `<Type>.init` call against the wrong signature.
+	//
+	// It cannot collide with `atSetFromConstruction`: `Set` (and a `Set`-instance alias) is not a declared
+	// `type`, and that arm is asked first anyway. The two are ordered, not overlapping.
+	function atStringLiteralInitConstruction() returns bool
+		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.kindAt((self.pos + 2) as TokenIndex) == TokenKind.stringLiteral) 'notTheShape'
+			return false
+		end 'notTheShape'
+
+		return match self.signatures.structOf(self.current().value) 'declared'
+			declared gives true
+			undeclared gives false
+		end 'declared'
+	end 'atStringLiteralInitConstruction'
+
 	// Is the cursor on the `.` of a `<receiver>.split` method call? Asked at the DOT rather than at the
 	// method name so the predicate reads FORWARD like `atSetFromConstruction` and never has to index behind
 	// the cursor.
@@ -22279,6 +22308,30 @@ export type Parser
 			return try self.emitTypeParamComparison(lhs, rhs: rhs, op: op, opTok: opTok, leftIsParam: self.isEnclosingTypeParam(lhs))
 		end 'typeParamComparison'
 
+		// ⭐⭐ **`a == b` ON TWO VALUES OF ONE USER STRUCT DISPATCHES ITS OWN `equals` (BATCH2 slice 3).**
+		// Without this, `comparableOperands` refused the pair — *"cannot compare struct with struct"* — for a
+		// program the oracle compiles and runs; `specs/filepath.md`'s `filepath-equality` /
+		// `filepath-inequality` are the corpus cases that reach it, and `stdlib/FilePath.maxon:181` is the
+		// `equals` they mean to run (case-insensitive on Windows, so a POINTER compare or a memberwise one
+		// would both be the WRONG ANSWER, not merely a different one).
+		//
+		// ⚠ **THE RULE IS "HAS AN `equals` METHOD", NOT "DECLARES `implements Equatable`" — MEASURED AGAINST
+		// THE ORACLE, one program each.** A struct with an `equals` and NO conformance clause compiles and
+		// prints `equal`; it is exactly the rule `materializeStructToStringPart` already states for
+		// interpolation (`toString` by NAME, not by `Stringable`), and stating it the other way would refuse
+		// a legal program. It is also why this needs no site record: unlike `<Type> from "…"`, whose oracle
+		// DOES demand the conformance (E3005, measured), the question here is answerable from the
+		// whole-program signature index at the cursor, order-independently.
+		//
+		// ⚠ **EQUALITY ONLY.** `<`/`>`/`<=`/`>=` on two structs stay the E3005 below: ordering means
+		// `Comparable.compare` returning an `Ordering`, which is a different method, a different verdict
+		// shape and has no consumer anywhere in this cone — and admitting the four operators here would
+		// silently answer them with an EQUALITY test. `!=` is the negation of the same call, built from it,
+		// so the two can never come to disagree about what equality means — `emitStringCompare`'s rule.
+		if self.structEqualityOperands(lhs, rhs: rhs, op: op) 'structEquality'
+			return try self.emitStructEqualityCall(lhs, rhs: rhs, op: op, opTok: opTok)
+		end 'structEquality'
+
 		if not comparableOperands(leftTag, right: rightTag) 'mismatch'
 			throw ParseError.comparisonTypeMismatch(typeTagName(leftTag), right: typeTagName(rightTag), line: opTok.line, column: opTok.column)
 		end 'mismatch'
@@ -22287,6 +22340,67 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitCompare'
+
+	// Is this an `==`/`!=` between two values of ONE user struct that declares an `equals` method? The gate in
+	// front of the dispatch below, and every clause is load-bearing:
+	//
+	//   • EQUALITY ONLY — the four ordering operators have no `equals` reading (see the call site).
+	//   • BOTH operands `structRef`, and of the SAME struct — spelled as one property, exactly as the
+	//     byte-record and `StringIndex` arms above spell theirs, so a later edit cannot widen one side alone
+	//     into a compare of one type's box against another's.
+	//   • the struct DECLARES the method, asked of the WHOLE-PROGRAM index (`declaresCallee`) rather than of
+	//     this file — `equals` may be declared in any file, including the one using it, which is
+	//     `materializeStructToStringPart`'s reason for asking the same question the same way. A struct with
+	//     no `equals` falls through to the existing E3005, unchanged.
+	function structEqualityOperands(lhs ValueId, rhs ValueId, op MaxonCmpOp) returns bool
+		if not comparisonIsEquality(op) 'notEquality'
+			return false
+		end 'notEquality'
+
+		if not (self.tagOf(lhs) == ValueTypeTag.structRef and self.tagOf(rhs) == ValueTypeTag.structRef and self.valueNameId(lhs) == self.valueNameId(rhs)) 'notOneStructsPair'
+			return false
+		end 'notOneStructsPair'
+
+		return self.signatures.declaresCallee(qualifiedMethodName(self.internedName(self.valueNameId(lhs)), methodName: EqualsMethodName))
+	end 'structEqualityOperands'
+
+	// `a == b` / `a != b` on one user struct, as the ORDINARY instance call `a.equals(b)` — same callee key,
+	// same argument slotting, same `bool` result, so nothing downstream learns that an operator produced it.
+	// The receiver is argument 0, which is the whole of shv2's method-dispatch convention (`parseCallNamed`).
+	//
+	// ⚠ **IT TAKES NEITHER THE E3019 NOR THE E3070 DOOR, and that is `emitTypeParamComparison`'s answer to
+	// the same question two screens up, not a shortcut.** Both doors describe a callee that WRITES through
+	// an argument and name the binding to blame; an OPERATOR wrote this call, its operands are values the
+	// climber already produced, and the witness form of exactly this dispatch passes empty for the identical
+	// reason. So the compiler-written-call columns (`emptyArgLabels` / `uniformArgRanges` /
+	// `NoImmutableArgNames`) are the honest ones here — every argument shares the operator's own span,
+	// because that IS where each came from.
+	function emitStructEqualityCall(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
+		let callee = qualifiedMethodName(self.internedName(self.valueNameId(lhs)), methodName: EqualsMethodName)
+		let range = SourceRange.ofToken(opTok)
+		// `var`, because `emitCall`'s caller-side consume may rewrite an argument in place (E3019).
+		var args = pairArgs(lhs, second: rhs)
+
+		let equal = try self.emitCall(callee, anchor: opTok, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+
+		return match op 'op'
+			eq gives equal
+			ne gives self.emitUnaryOp(equal, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, opTok: opTok)
+			// Unreachable: `structEqualityOperands` admits only `eq`/`ne`, and it is the one gate in front of
+			// this function.
+			lt to ge panic("emitStructEqualityCall: reached with the ordering operator {comparisonOpSpelling(op)}, which `structEqualityOperands` refuses")
+		end 'op'
+	end 'emitStructEqualityCall'
+
+	// Is this comparison an EQUALITY one (`==`/`!=`) rather than an ordering one? Asked where the two families
+	// need different machinery — a struct's `equals` dispatch has no ordering reading.
+	function comparisonIsEquality(op MaxonCmpOp) returns bool
+		return match op 'op'
+			eq gives true
+			ne gives true
+			lt to ge gives false
+		end 'op'
+	end 'comparisonIsEquality'
 
 	// Two `StringIndex`es compared through their `charIdx` fields — the reference's `equals`/`compare` bodies,
 	// which read that one field and never `bytePosition`. Two field loads and the ORDINARY integer `compare`
@@ -22699,10 +22813,18 @@ export type Parser
 			// `Set from [1, 2, 3]` — a builtin `Set` CONSTRUCTED from an array literal (P1.7b slice B). The bare
 			// `Set` identifier followed by `from` is a construction, NOT a variable reference (`Set` names no
 			// binding, so the plain path below reports E2004 `Undefined variable 'Set'`). Its element type is
-			// inferred from the literal. This is the ONLY `<Type> from […]` form shv2 parses this slice.
+			// inferred from the literal.
 			if self.atSetFromConstruction() 'setFromConstruction'
 				return try self.parseSetFromConstruction(func)
 			end 'setFromConstruction'
+
+			// `FilePath from "C:\\x.txt"` — the `InitableFromStringLiteral` construction, which is the SECOND
+			// `<Type> from …` form (see `atStringLiteralInitConstruction`, and the paragraph above it that
+			// used to say `Set from` was the only one). It is asked AFTER the `Set` arm because that arm
+			// claims a name no `type` declares, so the order is a reading order and not a precedence.
+			if self.atStringLiteralInitConstruction() 'literalInitConstruction'
+				return try self.parseStringLiteralInitConstruction(func)
+			end 'literalInitConstruction'
 
 			// One-token lookaheads split the four forms an identifier can open. `(` makes it a CALL
 			// (the same shape the statement parser uses to tell a call apart from a bare name); `{`
@@ -27151,6 +27273,59 @@ export type Parser
 		let setGid = try self.setInstanceForArrayLiteral(self.valueNameId(arr), setTok: setTok)
 		return self.emitOwnedRuntimeResult(SetFromName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: setGid, range: SourceRange.ofToken(setTok))
 	end 'parseSetFromConstruction'
+
+	// ⭐⭐ **`FilePath from "C:\\x.txt"` — THE `InitableFromStringLiteral` CONSTRUCTION, WHICH IS SUGAR AND
+	// NOTHING MORE.** It is exactly `<Type>.init(<the literal as a String>)`, which is what both references
+	// build (`2-Parser.cs:19795` `ParseFromStringLiteral` → `EmitFromLiteralInitCall`) and what the interface
+	// itself says (`stdlib/Builtins.maxon:40` — `static function init(value String) returns Self`).
+	//
+	// ⭐ **SO IT REUSES `emitCall`, and that is the whole implementation.** The callee is the SAME
+	// `qualifiedMethodName(<Type>, "init")` a written-out `FilePath.init("…")` builds — verified by running
+	// both spellings side by side — so the result type, the arity and argument checks, the ownership of the
+	// returned struct and the E3004 for a type with no `init` are the ones every other static call gets, and
+	// none of them learns that this sugar exists. A bespoke emit here would be a second static-call path.
+	//
+	// ⚠ **THE LITERAL GOES THROUGH `parseStringLiteral`, NOT A RAW TOKEN DECODE**, so an INTERPOLATED
+	// `Type from "a{n}b"` materializes its String the one way every other String expression does. The
+	// reference does the same (`EmitStringLiteralWithInterpolation`); decoding the token here would have been
+	// a second literal decoder that silently dropped the interpolation.
+	//
+	// ⚠ **THE CONFORMANCE IS NOT CHECKED HERE, AND IT CANNOT BE.** `implements InitableFromStringLiteral` is
+	// recorded when the type's OWN file is parsed, and shv2 orders files only by source path — so the answer
+	// at this cursor depends on which file came first. The site is RECORDED and the verdict taken after the
+	// merge (`ConformanceCheck.checkLiteralInitConformance`), which is `checkWhereConstraints`' shape and its
+	// reason. The site's anchor is the TYPE NAME token, where the oracle anchors the same E3005.
+	function parseStringLiteralInitConstruction(func IrFunction) returns ValueId throws ParseError
+		let typeTok = try self.consume(TokenKind.identifier)
+		// A construction NAMES its type, so it is a use for the E3062 unused-type check — the same hook
+		// `parseQualifiedCall` takes for `Type.method()`, and for its reason: this form never reaches
+		// `parseTypeReference` either.
+		self.recordTypeNameUse(typeTok.value)
+		try self.consume(TokenKind.from)
+
+		let literalTok = self.current()
+		let literalStart = self.pos
+		let value = try self.parseStringLiteral(func)
+
+		var args = ValueIdArray.create()
+		var argLabels = ByteArrayArray.create()
+		var argRanges = SourceRangeArray.create()
+		var argImmutableNames = ByteArrayArray.create()
+		// The E3070 call-argument door, taken exactly as `parseCallArgs` takes it — a literal names no
+		// storage, so it returns at `sourceNamesABase`, but asking through the one door is what keeps this
+		// argument path from being a second, quietly different one.
+		self.noteBorrowSubjectCallArg(func, callee: qualifiedMethodName(typeTok.value, methodName: StringInitMethod), anchor: typeTok, argColumn: args.count(), argLabel: EmptySourceText, valueStart: literalStart)
+		// POSITIONAL and un-nameable: `init`'s single parameter takes it at position 0, and a literal is not a
+		// bare binding, so it can never be the subject of an E3019 blame.
+		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: value, label: EmptySourceText, range: SourceRange.ofToken(literalTok), immutableName: EmptySourceText)
+
+		self.artifact.recordLiteralInitSite(LiteralInitSite.create(typeTok.value, nameLine: typeTok.line, nameColumn: typeTok.column, filePath: self.filePath))
+
+		// `rparenTok` is the LITERAL — this form writes no parenthesis, and that token is what a diagnostic
+		// about the call's tail must point at. `resultUsed: true` because a construction is an expression:
+		// `parsePrimary` only reaches here in operand position.
+		return try self.emitCall(qualifiedMethodName(typeTok.value, methodName: StringInitMethod), anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.notMinted)
+	end 'parseStringLiteralInitConstruction'
 
 	// The `Set with <elem>` instance a `Set from [<literal>]` constructs — its key type is the array literal's
 	// ELEMENT type. A `Set from [ints]` → `Set with integer` (whose `integer` element canonicalizes to the `int`

@@ -244,6 +244,15 @@ let CloneableInterfaceName = b"Cloneable"
 // be a second copy of the one name this file's `builtinInterface` answers for.
 export let ErrorInterfaceName = b"Error"
 
+// ⚠ **THE ONE PROTOCOL NAME HERE THAT IS *NOT* SYNTHESIZED — it is DECLARED, in `stdlib/Builtins.maxon:40`,
+// which the loader already lists.** So it needs no `builtinInterface` arm: a `type X implements
+// InitableFromStringLiteral` resolves through the ordinary user-interface lookup and `checkConformance`
+// validates its `static function init(value String) returns Self` like any other requirement. What this
+// spelling is for is the CONVERSE question — "may `X from "…"` be written?" — which
+// `checkLiteralInitConformance` asks of the declared-conformance index. Exported so that question is asked
+// with the same bytes the stdlib declares, never a second literal.
+export let InitableFromStringLiteralName = b"InitableFromStringLiteral"
+
 // The protocol methods + their result/param type spellings, verbatim from
 // stdlib/Interfaces.maxon (the SAME file the reference compilers parse).
 export let HashMethodName = b"hash"
@@ -458,6 +467,34 @@ export type ConformanceDecl
 end 'ConformanceDecl'
 
 export typealias ConformanceDeclArray = Array with ConformanceDecl
+
+// ⭐ **WHERE A `<Type> from "…"` CONSTRUCTION WAS WRITTEN** — the sugar for `<Type>.init(<literal>)`,
+// which the language allows only for a type declaring `implements InitableFromStringLiteral`.
+//
+// ⚠ **IT IS A SITE RECORD BECAUSE THE ANSWER IS NOT AVAILABLE WHERE THE QUESTION IS ASKED.** The
+// construction is PARSED in one file; the `implements` clause is recorded when its own DECLARING file is
+// parsed (`Parser.parseTypeImplementsClause` → `project.conformances`), and shv2 parses files in
+// source-path order with no ordering between the two. Asking at the construction site would therefore
+// answer "does not conform" or "conforms" depending on which file came first — an order dependence, which
+// is the one thing `queryProgramSignatures` exists to make impossible. So the parser records WHERE, and
+// `checkLiteralInitConformance` decides AFTER the merge, off the single conformance store
+// `checkConformance` and the E3017 where-constraint check already read. That is exactly
+// `GenericInstantiationSite`'s shape and exactly its reason.
+//
+// The position is the TYPE NAME token — where the oracle anchors the same diagnostic (measured:
+// `E3005 … :16:10`, the `Wrapper` of `let w = Wrapper from "hello"`).
+export type LiteralInitSite
+	export let typeName as ByteArray
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(typeName ByteArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns LiteralInitSite
+		return Self{typeName: typeName, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
+	end 'create'
+end 'LiteralInitSite'
+
+export typealias LiteralInitSiteArray = Array with LiteralInitSite
 
 // The outcome of resolving an interface NAME to its definition — a synthesized builtin
 // or a user-declared one, else `notFound` (which `checkConformance` renders as E3015).

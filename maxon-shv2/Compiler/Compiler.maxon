@@ -279,6 +279,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 
 	checkConformance(project, module: module, signatures: signatures)
 
+	// ⭐ **`<Type> from "…"` NEEDS `implements InitableFromStringLiteral`** — checked right beside the
+	// conformance pass it reads the same store as, and for the same reason it sits before the pipeline: its
+	// E3005 is caught by the pipeline's error gate after `resolveTypes`.
+	checkLiteralInitConformance(project)
+
 	// ⭐ LAY OUT THE `.data` SECTION — once per compile, and HERE rather than inside
 	// `queryProgramSignatures`.
 	//

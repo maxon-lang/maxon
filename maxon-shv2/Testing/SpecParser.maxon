@@ -3,9 +3,11 @@
 // `<!-- test: NAME -->` marker, the ```maxon source block, and one expected
 // block (```exitcode or ```maxoncstderr), plus the `status:` frontmatter. Every
 // v1 feature the specs-shv2 corpus does not use — fragment caching, RequiredIR /
-// RequiredRdata / RequiredLowering, per-target `Stdout:<target>`, mm-trace,
+// RequiredRdata / RequiredLowering, mm-trace,
 // `Args`/`TimeoutMs` directives, doc-example extraction — is dropped; each
-// returns when a spec first needs it.
+// returns when a spec first needs it. **Per-target `Stdout:<target>` is the first
+// one to have come back** — BATCH2 slice 3, for `specs/filepath.md`, whose 26
+// separator-printing cases pin one answer per platform. See `TargetStdoutFencePrefix`.
 //
 // MULTI-FILE TESTS — `// --- file: <name>` (added for the cross-file signature rung).
 //
@@ -132,6 +134,26 @@ let RuntimeStderrFence = "```stderr"
 // is edited.)
 let StdoutFence = "```stdout"
 
+// ⭐ **THE PER-TARGET EXPECTED STDOUT — `` ```Stdout:x64-windows ``, and the fence a PORTED spec needs
+// when one program prints different bytes on different targets.** `specs/filepath.md` is the canonical
+// case and the reason this arrived: a path separator is `\` on Windows and `/` everywhere else, so
+// **26 of its 40 cases carry BOTH** a `` ```Stdout:x64-windows `` block and a portable ```stdout one.
+// Without this fence shv2 read the portable block on Windows and failed every one of them with a
+// mismatch whose "actual" was the CORRECT answer — a red that says nothing about the compiler.
+//
+// ⚠ **THE RESOLUTION IS THE REFERENCE'S, NOT A NEW ONE** (`SpecParser.cs:177-185`): a block naming THIS
+// run's target WINS over the portable ```stdout block, and a block naming any other target is consumed
+// and discarded. Order in the file is irrelevant — the reference matches each fence independently, so a
+// spec author may write either block first, and `specs/filepath.md` writes the qualified one first.
+// A second, shv2-only resolution rule would be this project's signature bug in a file THREE compilers'
+// suites read.
+//
+// ⚠ It is NOT a superstring of `StdoutFence`, and that is checked rather than assumed: "```Stdout:"
+// first differs from "```stdout" at the `S`/`s`, so neither arm can swallow the other and their order is
+// free — the same property `DisabledTestMarker` and `TestMarker` rest on. (`String.startsWith` compares
+// bytes, so the case difference is a real difference.)
+let TargetStdoutFencePrefix = "```Stdout:"
+
 // ⭐ THE `.data` SECTION'S BYTES, as typed values — `i64 42` / `i8 1` / `f64 3.14`, one per line.
 // The gate on a top-level `var`'s STORAGE: not what the compiler thinks it laid out, but what the
 // linked binary actually contains, read back out of the PE (`SpecTestRunner.checkRequiredData`).
@@ -205,13 +227,37 @@ export union SpecRequiredData
 	pinned(text String)
 end 'SpecRequiredData'
 
+// ⭐⭐ **WHAT A SPEC PINS ABOUT THE EXIT CODE — AND UNTIL BATCH2 slice 3 THERE WAS NO SUCH THING, WHICH
+// SILENTLY DROPPED WHOLE TEST CASES.** The exit code used to be the one half of a run expectation with no
+// "unpinned" state: `scanTestFromMarker` pushed a test only `if haveExitCode`, so a `/specs` case that
+// pins ONLY stdout — which is legal, and which the C# reference runs (`SpecParser.cs:171`, `ExitCode` is
+// nullable and the success expectation is built from ANY result block) — was consumed as a full test
+// boundary and then thrown away. No test, no golden, and NOTHING IN THE OUTPUT SAYING SO: the case simply
+// was not in the count.
+//
+// ⚠ **MEASURED WHEN IT FIRST BIT: all 3 cases of `specs/init-from-literal.md` vanished** — the file
+// parsed, the suite reported `no tests selected matching --filter=init-from-literal/`, and a reader
+// checking the summary would have seen a green suite that had never compiled the feature. A sweep of the
+// whole committed corpus at the same time found NO other file affected (every other case carries an
+// ```exitcode or ```maxoncstderr block), so this drop was latent rather than active — but it is exactly
+// the shape `RequiredDataFence`'s header calls out: a gate that cannot see its own property must not
+// report PASS.
+//
+// ⇒ the exit code is now the same UNION the other three halves are, and the push condition is "a source
+// block and AT LEAST ONE result check", which is the reference's rule.
+export union SpecExitCode
+	unpinned
+	pinned(value ExitCodeValue)
+end 'SpecExitCode'
+
 // The expected outcome of one test. A UNION (not a struct with presence flags)
 // so a test asserts EXACTLY one of two mutually exclusive things — the compiled
 // program RAN, OR the compiler rejected the source with `text` (a ```maxoncstderr
 // block) — with no sentinel "unset" state.
 //
-// The `run` arm carries EVERY half of a run expectation (stderr, stdout, requiredData), because none
-// of them replaces an ```exitcode block — each ACCOMPANIES one. `specs/safety.md` asserts that
+// The `run` arm carries EVERY half of a run expectation (exit code, stderr, stdout, requiredData),
+// because they ACCOMPANY one another — a case may pin any subset, and most pin an exit code plus one
+// stream. `specs/safety.md` asserts that
 // `100 / zero` exits 1 AND prints a panic to stderr; `specs/static-variables.md` asserts that
 // `data-section-i64-8byte` exits 0 AND lays down `i64 42`; `specs/string-type.md` asserts that
 // `print-literal` exits 0 AND writes `Hello, World!` to stdout. Each is one indivisible claim about
@@ -221,7 +267,7 @@ end 'SpecRequiredData'
 // ExitCode/Stdout/Stderr/RequiredData, mutually exclusive with a compile-error expectation); this is
 // that shape with the "unset" states the reference leaves as `null` made unrepresentable.
 export union SpecExpectation
-	run(exitCode ExitCodeValue, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData)
+	run(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData)
 	compilerError(text String)
 end 'SpecExpectation'
 
@@ -331,10 +377,17 @@ end 'FenceBlock'
 // Read the spec file at `path` and extract its frontmatter status + active
 // tests. Throws `readError` when the file cannot be read (the runner surfaces
 // it), reusing the driver's IO error union rather than inventing a parallel one.
-export function parseSpecFile(path FilePath) returns SpecFile throws CompileError
+//
+// ⚠ **IT TAKES THE RUN'S TARGET, because ONE fence's meaning depends on it** — `` ```Stdout:<target> ``
+// resolves HERE, the way the reference resolves it (`SpecParser.cs:177`), so a `SpecTest` carries ONE
+// already-decided `SpecStdout` and no reader downstream can resolve it a second, different way. It is
+// deliberately NOT the treatment `<!-- targets: … -->` gets — that marker decides whether the test is in
+// this run's SET at all, which is a selection the RUNNER owns and reports ("skipped"); this one decides
+// what the test's expectation IS, which is the parse's own answer.
+export function parseSpecFile(path FilePath, effectiveTargetKey String) returns SpecFile throws CompileError
 	let content = try File.readText(path) otherwise throw CompileError.readError(path)
 	let lines = content.split("\n")
-	let extracted = extractTests(lines)
+	let extracted = extractTests(lines, effectiveTargetKey: effectiveTargetKey)
 	return SpecFile.create(parseStatus(lines), tests: extracted.tests, disabledCount: extracted.disabledCount)
 end 'parseSpecFile'
 
@@ -389,7 +442,7 @@ end 'valueAfterKey'
 // `## ` heading (or EOF). A `## Deferred` heading therefore ends scanning, so no
 // deferred test is ever reached — see the deferred-skip convention at the top of
 // this file.
-function extractTests(lines StringArray) returns ExtractedTests
+function extractTests(lines StringArray, effectiveTargetKey String) returns ExtractedTests
 	var tests = SpecTestArray.create()
 	var disabledCount = 0 as DisabledTestCount
 	let lineCount = lines.count()
@@ -428,9 +481,9 @@ function extractTests(lines StringArray) returns ExtractedTests
 		// mode of that disagreement is a shelved case silently RUNNING.
 		if line.contains(DisabledTestMarker) 'isDisabledMarker'
 			disabledCount = disabledCount + 1
-			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: false)
+			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: false, effectiveTargetKey: effectiveTargetKey)
 		end 'isDisabledMarker' else if line.contains(TestMarker) 'isMarker'
-			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: true)
+			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: true, effectiveTargetKey: effectiveTargetKey)
 		end 'isMarker' else 'notMarker'
 			i = i + 1
 		end 'notMarker'
@@ -445,10 +498,14 @@ end 'extractTests'
 // the shelved case is skipped by consuming exactly the blocks a live test would
 // have consumed rather than by a separate, driftable walker.
 //
-// A test is pushed ONLY when both a ```maxon source block and one expected block
-// were seen before the next marker / section boundary (the "marker + source +
-// expected, contiguous" active-test contract) — an incomplete run of blocks is not
-// a runnable test and is silently left out rather than half-built.
+// A test is pushed when a ```maxon source block AND AT LEAST ONE result block were
+// seen before the next marker / section boundary (the "marker + source + expected,
+// contiguous" active-test contract). ANY result block qualifies — an exit code, either
+// stream, or a `.data` pin — which is the C# reference's rule (`SpecParser.cs:171`) and
+// NOT what this used to require; see `SpecExitCode` for the three cases it silently
+// dropped. A source block with NO result block is not a runnable test and PANICS naming
+// it, because it is a spec-authoring error whose only other outcome is a case that looks
+// present and tests nothing.
 //
 // The scan reads the test's WHOLE block run and builds the expectation once at the end,
 // rather than returning at the first expected block it recognizes. It has to: a run
@@ -457,17 +514,21 @@ end 'extractTests'
 // block to the outer loop, which — finding no marker in it — would walk over it line by
 // line and silently drop the assertion. A spec that pins a panic would then pass on the
 // exit code alone, which is the one failure mode a panic spec exists to catch.
-function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray, active bool) returns LineIndex
+function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray, active bool, effectiveTargetKey String) returns LineIndex
 	let lineCount = lines.count()
 	let name = markerValue(markerLine)
 	var source = ""
 	var haveSource = false
 	var compilerError = ""
 	var haveCompilerError = false
-	var exitCode = 0 as ExitCodeValue
-	var haveExitCode = false
+	var exitCode = SpecExitCode.unpinned
 	var stderr = SpecStderr.unpinned
 	var stdout = SpecStdout.unpinned
+	// The `` ```Stdout:<thisTarget> `` block, kept APART from the portable one until the whole run of
+	// blocks has been read — the two fences may appear in either order (see `TargetStdoutFencePrefix`),
+	// so "the qualified block wins" cannot be expressed by letting a later assignment overwrite an
+	// earlier one. Resolved once, below, where both are known.
+	var targetStdout = SpecStdout.unpinned
 	var requiredData = SpecRequiredData.unpinned
 	var targets = TargetKeyArray.create()
 	var i = markerIndex + 1
@@ -522,6 +583,18 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			continue
 		end 'runtimeStdout'
 
+		// A TARGET-QUALIFIED stdout block. Every one is READ — the fence has to be consumed either way,
+		// or the outer scan would walk its contents line by line as markup — and only the one naming this
+		// run's target is KEPT.
+		if line.startsWith(TargetStdoutFencePrefix) 'targetStdout'
+			let block = readFence(lines, openIndex: i)
+			if valueAfterKey(line, key: TargetStdoutFencePrefix) == effectiveTargetKey 'namesThisTarget'
+				targetStdout = SpecStdout.pinned(block.text.trim())
+			end 'namesThisTarget'
+			i = block.nextIndex
+			continue
+		end 'targetStdout'
+
 		if line.startsWith(RequiredDataFence) 'requiredDataBlock'
 			let block = readFence(lines, openIndex: i)
 			requiredData = SpecRequiredData.pinned(block.text.trim())
@@ -535,8 +608,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 				i = block.nextIndex
 				continue
 			end 'badExitCode'
-			exitCode = parsed
-			haveExitCode = true
+			exitCode = SpecExitCode.pinned(parsed)
 			i = block.nextIndex
 			continue
 		end 'exitCodeBlock'
@@ -567,14 +639,48 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		return i
 	end 'rejected'
 
-	// An ```exitcode block, plus whatever ```stderr accompanied it, is ONE claim about ONE
-	// execution.
-	if haveExitCode 'ran'
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, stdout: stdout, requiredData: requiredData), targets: targets))
-	end 'ran'
+	// Whatever result blocks this case carried are ONE claim about ONE execution.
+	let resolvedStdout = resolveStdout(targetStdout, portable: stdout)
+	if not pinsAnyResult(exitCode, stderr: stderr, stdout: resolvedStdout, requiredData: requiredData) 'pinsNothing'
+		panic("SpecParser: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr or ```RequiredData block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at")
+	end 'pinsNothing'
+
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, stdout: resolvedStdout, requiredData: requiredData), targets: targets))
 
 	return i
 end 'scanTestFromMarker'
+
+// Does this case assert ANYTHING about the run? The push condition, and the one place the four halves of
+// a run expectation are asked as a group — a fifth half added to `SpecExpectation.run` without a clause
+// here would be a result block that still counts as no result.
+function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData) returns bool
+	match exitCode 'exit'
+		unpinned then break 'exit'
+		pinned then return true
+	end 'exit'
+	match stderr 'err'
+		unpinned then break 'err'
+		pinned then return true
+	end 'err'
+	match stdout 'out'
+		unpinned then break 'out'
+		pinned then return true
+	end 'out'
+	return match requiredData 'data'
+		unpinned gives false
+		pinned gives true
+	end 'data'
+end 'pinsAnyResult'
+
+// The run's expected stdout: the block naming THIS target when the spec wrote one, else the portable
+// ```stdout block. The reference's `?? ` (`SpecParser.cs:184`), spelled as a function so the preference
+// is stated once — a spec may carry either block, both, or neither, and only this decides which wins.
+function resolveStdout(targetStdout SpecStdout, portable SpecStdout) returns SpecStdout
+	return match targetStdout 'qualified'
+		unpinned gives portable
+		pinned(text) gives SpecStdout.pinned(text)
+	end 'qualified'
+end 'resolveStdout'
 
 // Split a ```maxon block into its `// --- file:` sections. EMPTY when the block has no marker —
 // the ordinary single-file test, which is most of them.

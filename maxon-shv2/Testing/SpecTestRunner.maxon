@@ -73,6 +73,8 @@ let FragmentExtension = ".test"
 let FragmentTestPrefix = "// Test: "
 let FragmentSectionSep = "---"
 let ExitCodeLabel = "ExitCode: "
+// What follows `ExitCode: ` in the fragment of a case that pins no exit code (see `fragmentExitCodeText`).
+let UnpinnedExitCodeLabel = "unpinned"
 let CompilerErrorLabel = "CompilerError:"
 
 // Stand-in for the IR section when the sidecar could not be read — only reachable
@@ -294,7 +296,7 @@ end 'runProcess'
 export function runOneSpec(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target) returns SpecTestResultArray throws CompileError
 	var results = SpecTestResultArray.create()
 
-	let specFile = try parseSpecFile(specDir.join("{specName}{SpecFileExtension}"))
+	let specFile = try parseSpecFile(specDir.join("{specName}{SpecFileExtension}"), effectiveTargetKey: targetToString(effectiveTarget))
 	let tests = selectedTests(specFile, specName: specName, filter: filter, effectiveTarget: effectiveTarget)
 	if tests.count() == 0 'selectsNothing'
 		// A `draft` spec, or one every test of which the filter rejected. The pool never dispatches
@@ -837,10 +839,22 @@ end 'fragmentHeader'
 
 // An exitCode test's fragment: the shared head, the expected exit code, and the
 // generated Target IR read back from the `--emit-ir` sidecar.
-function buildExitCodeFragment(test SpecTest, expected ExitCodeValue, irPath FilePath) returns String
+function buildExitCodeFragment(test SpecTest, expected SpecExitCode, irPath FilePath) returns String
 	let irText = try File.readText(irPath) otherwise MissingIrPlaceholder
-	return "{fragmentHeader(test)}{ExitCodeLabel}{expected}\n{FragmentSectionSep}\n{irText}"
+	return "{fragmentHeader(test)}{ExitCodeLabel}{fragmentExitCodeText(expected)}\n{FragmentSectionSep}\n{irText}"
 end 'buildExitCodeFragment'
+
+// What the fragment's `ExitCode:` line says. A PINNED code renders as the number, byte-identically to
+// before `SpecExitCode` existed — every committed golden is a pinned case, so none of them moves. A case
+// that pins only a stream renders `unpinned`, which is the honest word: writing `0` there would put a
+// claim into the golden that the spec never made, and a reviewer diffing the fragment would read it as an
+// assertion.
+function fragmentExitCodeText(expected SpecExitCode) returns String
+	return match expected 'pin'
+		unpinned gives UnpinnedExitCodeLabel
+		pinned(value) gives "{value}"
+	end 'pin'
+end 'fragmentExitCodeText'
 
 // A compilerError test's fragment: the shared head plus the compiler's normalized
 // stderr (the ACTUAL diagnostic the compiler produced — what the fragment exists
@@ -1149,10 +1163,10 @@ function requireWslAvailable(effectiveTarget Target)
 	end 'distroUnreachable'
 end 'requireWslAvailable'
 
-// A RUN test (an ```exitcode block, plus the ```stderr / ```stdout blocks that may accompany it): the
-// compile MUST succeed, then the produced exe is spawned and EVERY half of the expectation is checked
-// against that one execution — its exit code, what it wrote to stderr, and what it wrote to stdout.
-function checkRun(expected ExitCodeValue, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData, compile ProcessCapture, exePath FilePath, effectiveTarget Target) returns TestOutcome
+// A RUN test (whatever result blocks the case carried — an ```exitcode, a ```stdout, a ```stderr, a
+// ```RequiredData, in any combination): the compile MUST succeed, then the produced exe is spawned and
+// EVERY half the spec pinned is checked against that one execution.
+function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData, compile ProcessCapture, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	if compile.exitCode != 0 'compileFailed'
 		return TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}")
 	end 'compileFailed'
@@ -1180,9 +1194,17 @@ function checkRun(expected ExitCodeValue, stderr SpecStderr, stdout SpecStdout, 
 		return TestOutcome.fail("program spawn failed: {e.displayReason()}")
 	end 'runSpawnFailed'
 
-	if run.exitCode != expected 'exitMismatch'
-		return TestOutcome.fail("exit code mismatch: expected {expected}, got {run.exitCode}")
-	end 'exitMismatch'
+	// An UNPINNED exit code is "this spec says nothing about it" — not "expect 0". A `/specs` case that
+	// pins only stdout (the `init-from-literal` shape) is asserting what the program PRINTS, and holding it
+	// to an exit code it never wrote would be this harness inventing an expectation. That is the one place
+	// `SpecExitCode.unpinned` differs from `SpecStdout.unpinned`, which DOES assert silence — and the
+	// difference is real: a program that prints nothing is a claim a spec can make by omission, while a
+	// program that exits 0 is not.
+	let exitOutcome = checkRunExitCode(expected, actual: run.exitCode)
+	match exitOutcome 'exit'
+		pass then break 'exit'
+		fail then return exitOutcome
+	end 'exit'
 
 	// Both streams are checked against the ONE execution. stdout first (it is what a `print` test
 	// exists to pin); on a pass, stderr is checked and its outcome returned.
@@ -1277,6 +1299,24 @@ end 'checkRunStderr'
 // The `unpinned` arm is NOT "ignore stdout": it asserts the program printed NOTHING, which is what a
 // non-`print` program does. Every pre-P1.2 program printed nothing to stdout, so this holds the whole
 // suite to it — an accidental stray write becomes a FAILURE rather than an invisible one.
+// The exit-code half of a run expectation. `unpinned` passes without looking — see `checkRun`'s note on
+// why that is not the same rule the stdout half follows.
+function checkRunExitCode(expected SpecExitCode, actual ExitCodeValue) returns TestOutcome
+	return match expected 'pin'
+		unpinned gives TestOutcome.pass
+		pinned(value) gives exitCodeOutcome(value, actual: actual)
+	end 'pin'
+end 'checkRunExitCode'
+
+// The verdict for a case that DID pin an exit code — the arm body, split out because a `match` arm takes
+// an expression, which is the same shape `checkRunStdout` uses for its two stream checkers.
+function exitCodeOutcome(expected ExitCodeValue, actual ExitCodeValue) returns TestOutcome
+	if actual != expected 'exitMismatch'
+		return TestOutcome.fail("exit code mismatch: expected {expected}, got {actual}")
+	end 'exitMismatch'
+	return TestOutcome.pass
+end 'exitCodeOutcome'
+
 function checkRunStdout(stdout SpecStdout, actual String) returns TestOutcome
 	let cleaned = actual.trim()
 	return match stdout 'pin'

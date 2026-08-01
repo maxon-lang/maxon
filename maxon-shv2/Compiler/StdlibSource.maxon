@@ -211,6 +211,33 @@ end 'stdlibFunctionNames'
 // — and it used to resolve one last-wins and unchecked, walking ONE of the two bodies and crediting the
 // callees of whichever it picked. What the tie-break chose was never observable, because the refusal came
 // later; a walk that silently under-approximates reachability is not something to leave resting on that.
+//
+// ⚠⚠ **AND IT RUNS BEFORE OVERLOAD RESOLUTION, SO A CALLEE NAME HERE IS PROVISIONAL — WHICH IS WHY THE
+// OVERLOAD SET IS CREDITED WHOLE.** `SemanticCheck.resolveOverloadedCalls` rewrites `call FilePath.join`
+// into `call FilePath.join#FilePath` — and its own header opens *"OVERLOAD RESOLUTION RUNS FIRST, BEFORE
+// ANYTHING READS A CALLEE"* — but it runs inside `PassPipeline.run`, and `deriveStdlibFacts` runs one
+// screen ABOVE that call in `compileToCodeResult`. So this walk is the one reader that precedes it, and
+// the bare name it sees is the registration name of the FIRST member only.
+//
+// MEASURED, and it is a compiler PANIC on a correct program, not a size regression:
+// `specs/filepath.md`'s `filepath-join-filepath` writes `base.join(child)` against
+// `stdlib/FilePath.maxon:357/371`'s two `join` overloads. The walk credited `FilePath.join` (the `String`
+// member, declared first), filed `FilePath.join#FilePath` as unreachable, `lowerMaxonToStd` skipped its
+// body — and then dead-function elimination, which runs AFTER resolution and sees the real callee,
+// reached it and tripped `requireUnreachableStdlibStayedDead`.
+//
+// ⇒ A provisional callee names a SET, and this walk answers "might this be reached?", so every member is
+// credited. That is exact for the question asked and cannot make the assert fire: an OVER-approximation
+// only ever removes names from `unreachable`, and every consumer of that set (`lowerMaxonToStd`,
+// `insertRangeChecks`, `scanRuntimeUsage`, `checkCalls`) treats absence as "compile it normally".
+// ⚠ Moving `resolveOverloadedCalls` above this instead was considered and REJECTED: it sits after
+// `resolveTypes` today, so hoisting it would hand overload selection the UNRESOLVED parameter spellings
+// and could change which member a call picks — trading a loud panic for a silent misdispatch.
+//
+// The unused member is still dropped from the emitted image: dead-function elimination runs after
+// resolution, keys on the real callee, and prunes it there. What this costs is only that
+// `scanRuntimeUsage` may read an unreached sibling overload's body — and only in a program that already
+// calls that stdlib name.
 function reachableMaxonFunctionNames(module MaxonModule, project Project) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
@@ -219,11 +246,11 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project) return
 	var worklist = FuncIndexArray.create()
 	var names = FunctionNameSet.create()
 
-	markReachable(UserEntryName.toByteArray(), byName: byName, reached: reached, worklist: worklist, names: names)
+	markReachable(UserEntryName.toByteArray(), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("reachableMaxonFunctionNames: pop from a non-empty worklist")
-		markMaxonCallees(module, func: module.getFunc(idx), byName: byName, reached: reached, worklist: worklist, names: names)
+		markMaxonCallees(module, project: project, func: module.getFunc(idx), byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'walk'
 
 	return names
@@ -232,7 +259,36 @@ end 'reachableMaxonFunctionNames'
 // Mark `name` reachable and queue its body. A name no module function carries (a runtime helper,
 // or a root whose runtime this program never installs) is not found and not queued — nothing to
 // walk. Mirrors `DeadFunctionElimination.markLiveFunction`.
-function markReachable(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markReachable(name ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	markOneReachable(name, byName: byName, reached: reached, worklist: worklist, names: names)
+
+	// The provisional-callee rule (see this walk's header): a name that is an overload SET's base names
+	// every member, because which one the call means is not decided until `resolveOverloadedCalls`. The
+	// bare name marked above is the FIRST member's registration name and is already covered; the rest are
+	// these.
+	//
+	// ⚠⚠ **`contains` BEFORE `get`, AND THAT IS NOT A MICRO-OPTIMIZATION — IT IS THE DIFFERENCE BETWEEN A
+	// CONSTANT AND A LINEAR TERM.** This runs once per CALL EDGE in the reachable program, and a
+	// `try map.get(k) otherwise …` on a MISS constructs the error value — **a payload-free union case still
+	// heap-allocates** (`Parser.parseCallNamed` measured exactly this and reverted a resolver union for it).
+	// A miss is what nearly every edge is: almost no program overloads anything. MEASURED on the scale
+	// ladder, the `get`-first spelling billed **+0.101 allocations per source byte** — a term growing with
+	// the user's program forever, 1.4% of the whole compile — on top of this rung's genuine per-compile
+	// constant. `contains` answers the same question and allocates nothing.
+	if not project.overloadSets.contains(name) 'notAnOverloadSet'
+		return
+	end 'notAnOverloadSet'
+
+	let members = try project.overloadSets.get(name) otherwise panic("markReachable: overloadSets lost the key '{String.from(name)}' between `contains` and `get`")
+	for member in members 'eachMember'
+		markOneReachable(member, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'eachMember'
+end 'markReachable'
+
+// Mark exactly ONE function name, with no overload widening — the body `markReachable` shares between the
+// name it was handed and each member of that name's overload set. Split out so the widening is written
+// once and cannot recurse into itself (a member's own registration name keys no set).
+function markOneReachable(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	let idx = try byName.get(name) otherwise 'notAModuleFunction'
 		return
 	end 'notAModuleFunction'
@@ -245,19 +301,19 @@ function markReachable(name ByteArray, byName FuncIndexByName, reached BoolArray
 	try reached.set(idx, value: true) otherwise panic("reachableMaxonFunctionNames: reached.set OOB at function index {idx}")
 	names.insert(name)
 	worklist.push(idx)
-end 'markReachable'
+end 'markOneReachable'
 
 // Walk `block.opRefs` DIRECTLY — not `IrModule.liveOpIndices`, which allocates a fresh op-index array
 // per function. This runs at the Maxon tier BEFORE any block-rebuilding pass, so `opRefs` holds no
 // orphan ops (the concern that forces `liveOpIndices` at the Std tier), which is exactly why
 // `scanRuntimeUsage` walks the same way here. A terminator names no callee, so visiting only the body
 // ops in `opRefs` is complete for reachability.
-function markMaxonCallees(module MaxonModule, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markMaxonCallees(module MaxonModule, project Project, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
-			markMaxonCalleeEdge(op, byName: byName, reached: reached, worklist: worklist, names: names)
+			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		end 'eachOp'
 	end 'eachBlock'
 end 'markMaxonCallees'
@@ -267,19 +323,19 @@ end 'markMaxonCallees'
 // past it FAILS TO COMPILE here rather than being silently swallowed — the band-append invariant
 // working in the reviewer's favour (MaxonDialect's header), exactly as `markCalleeOf` relies on it.
 // A new variant that carries a callee name must be added as its own arm.
-function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match op 'op'
-		call(_, callee, _, _, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+		call(_, callee, _, _, _, _, _) then markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		// `literal` … `stringLiteral`: literals, arithmetic, comparisons, branches, returns, and the
 		// three `var`-access ops — none names a Maxon function.
 		literal to stringLiteral then break 'op'
-		tryCall(_, _, callee, _, _, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+		tryCall(_, _, callee, _, _, _, _, _) then markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		// `throwError` … `panicAbort`: the error terminators name no callee.
 		throwError to panicAbort then break 'op'
-		functionRef(_, funcName) then markReachable(funcName, byName: byName, reached: reached, worklist: worklist, names: names)
+		functionRef(_, funcName) then markReachable(funcName, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		// `indirectCall` calls through a code POINTER a `functionRef` above already credited.
 		indirectCall then break 'op'
-		asyncCall(_, callee, _, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+		asyncCall(_, callee, _, _, _, _) then markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		// `await` … `witnessTryDispatch`: an await consumes a promise VALUE, and a witness dispatch reads
 		// an `.rdata` table — neither names a static Maxon callee here.
 		await to witnessTryDispatch then break 'op'

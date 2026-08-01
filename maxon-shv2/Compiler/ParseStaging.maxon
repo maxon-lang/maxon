@@ -37,6 +37,10 @@
 // type-name rung's memory cost, spent on nothing.
 let sharedEmptyInterfaces = IrInterfaceArray.create()
 let sharedEmptyConformances = ConformanceDeclArray.create()
+// A `<Type> from "…"` construction is rare — and, like `typeNameDecls`, it has the stronger reason:
+// only the REAL parse can build one, so the tolerant declaration sweep and every top-level constant's
+// transient `Parser` would otherwise each pay for an array with no writer.
+let sharedEmptyLiteralInitSites = LiteralInitSiteArray.create()
 let sharedEmptyTypeNameDecls = TypeNameDeclArray.create()
 let sharedEmptyFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
 
@@ -177,6 +181,10 @@ export type FileParseArtifact
 	// type-name token position so the whole-program `checkConformance` can anchor an E3015/E3016 on it.
 	// Remap-free (all names are plain ByteArrays). Folded into `project.conformances` by `mergeArtifact`.
 	export var conformances as ConformanceDeclArray
+	// This file's `<Type> from "…"` construction sites (see LiteralInitSite). Appended to
+	// `project.literalInitSites` by `commitLiteralInitSites`; the conformance they require is decided
+	// after the merge, by `checkLiteralInitConformance`.
+	export var literalInitSites as LiteralInitSiteArray
 	// This file's LOCAL type-name interner. Its ids are file-local; `mergeArtifact`
 	// folds them into the project interner and remaps this artifact's ids.
 	export var typeNames as TypeNameInterner
@@ -233,6 +241,7 @@ export type FileParseArtifact
 			interfaces: sharedEmptyInterfaces,
 			typeNameDecls: sharedEmptyTypeNameDecls,
 			conformances: sharedEmptyConformances,
+			literalInitSites: sharedEmptyLiteralInitSites,
 			typeNames: TypeNameInterner.create(),
 			currentFuncIndex: 0,
 			diagnostics: DiagnosticArray.create(),
@@ -402,6 +411,16 @@ export type FileParseArtifact
 		self.conformances.push(conformance)
 	end 'recordConformance'
 
+	// Record a `<Type> from "…"` construction as this file's contribution to `project.literalInitSites`
+	// (BATCH2 slice 3). Copy-on-write off the shared empty on the first push, exactly as
+	// `recordConformance`.
+	export function recordLiteralInitSite(site LiteralInitSite)
+		if self.literalInitSites.count() == 0 'firstSite'
+			self.literalInitSites = LiteralInitSiteArray.create()
+		end 'firstSite'
+		self.literalInitSites.push(site)
+	end 'recordLiteralInitSite'
+
 	// Record a function VALUE meeting a function-typed PLACE (see PendingFunctionTypeDoor). Copy-on-write
 	// off the shared empty on the first push, for the reason `recordTypeNameDecl` is: only the REAL parse
 	// can reach a door, so eagerly creating the array would bill one allocation to every declaration SWEEP
@@ -470,6 +489,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitEnumTypes(project, artifact: artifact)
 	commitInterfaces(project, artifact: artifact)
 	commitConformances(project, artifact: artifact)
+	commitLiteralInitSites(project, artifact: artifact)
 	commitDiagnostics(project, artifact: artifact)
 	commitDeferredNameDiagnostics(project, artifact: artifact)
 end 'mergeArtifact'
@@ -760,6 +780,15 @@ function commitConformances(project Project, artifact FileParseArtifact)
 		project.conformances.push(conformance)
 	end 'each'
 end 'commitConformances'
+
+// Commit the artifact's `<Type> from "…"` construction sites into `project.literalInitSites` — a PUSH,
+// for `commitConformances`' reason: each is a distinct source position and
+// `checkLiteralInitConformance` drains them all.
+function commitLiteralInitSites(project Project, artifact FileParseArtifact)
+	for site in artifact.literalInitSites 'each'
+		project.literalInitSites.push(site)
+	end 'each'
+end 'commitLiteralInitSites'
 
 // Commit the artifact's range-check contributions into `project.rangeChecks` (P1.9) — a plain
 // upsert keyed by function name, which is UNIQUE per program (the whole-program E3006 check runs
