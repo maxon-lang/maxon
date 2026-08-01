@@ -625,8 +625,8 @@ let FloatOrderedLabel = b"fordered"
 // carries no types, so a `TargetModule` alone does not say which file any of its values lives in,
 // and the allocator cannot recover it (see `ValueClassColumn`). Handing them back together is what
 // makes it impossible to have one without the other.
-export function lowerStdToX64(stdModule StdModule, target Target, globalData GlobalDataTable) returns (TargetModule, ValueClassColumns)
-	var lowering = StdToX64Lowering.create(stdModule, target: target, globalData: globalData)
+export function lowerStdToX64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns (TargetModule, ValueClassColumns)
+	var lowering = StdToX64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames)
 	lowering.prepareSkeleton()
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers — the
 	// float-equality split appends to its `blockRefs` and bumps its `nextBlockId` — so no
@@ -641,7 +641,7 @@ export function lowerStdToX64(stdModule StdModule, target Target, globalData Glo
 	// TARGET ops, so every op has to exist before it can be measured. `buildValueClassColumns` is the
 	// shared, target-independent producer (see `Targets/Shared/StdLoweringShared.maxon`); bind it
 	// FIRST so its borrow of `targetModule` closes before the tuple moves `targetModule` out.
-	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule, calleeResultClasses: lowering.calleeResultClasses)
+	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule, funcNames: lowering.funcNames)
 	return (lowering.targetModule, valueClasses)
 end 'lowerStdToX64'
 
@@ -697,21 +697,24 @@ type StdToX64Lowering
 	// binds it), and then it emits `cmp` + `setcc` + `jcc` — sound because `setcc` and `movzx`
 	// READ the flags rather than writing them.
 	var valuesReadFromRegisters as StdValueUseSet
-	// Callee name → the register FILE its result comes back in — XMM0 for a float-returning callee, R8
-	// otherwise (see `callResultRegister`). Built ONCE here (not per call site) and threaded into
-	// `buildValueClassColumns` too, so a float result's CAPTURE register and its allocation CLASS are the
-	// one `calleeResultClass` fact rather than two that could disagree. Exported like `targetModule`:
-	// `lowerStdToX64` reads it to thread the one instance into `buildValueClassColumns`.
-	export var calleeResultClasses as CalleeResultClassMap
-	// Callee name → its parameters' register FILES as a bitmask — the ARGUMENT-side twin of
-	// `calleeResultClasses`. Built ONCE here (not per call site) and read by `emitCallArgMoves` to route
-	// each argument to a GPR or an XMM arg register by the callee's declared parameter type. Only the
-	// argument routing consults it — the value-class column already classes a `param` result from its
-	// own carried f64 type — so, unlike `calleeResultClasses`, it is not threaded into `buildValueClassColumns`.
+	// The module's CHECKED name index (`FunctionNameIndex`, A2l), built by `eliminateDeadFunctions` over the
+	// array it left behind and threaded down from `buildBackend`. It answers "what register FILE does this
+	// callee's result come back in?" — XMM0 for a float-returning callee, R8 otherwise (see
+	// `callResultRegister`) — WITHOUT a second name-keyed map: `calleeResultClass` reads the callee's own
+	// `returnType` through it, so a float result's CAPTURE register and its allocation CLASS are the one
+	// fact rather than two that could disagree. Exported like `targetModule`: `lowerStdToX64` reads it to
+	// thread the same index into `buildValueClassColumns`.
+	export let funcNames as FunctionNameIndex
+	// Callee name → its parameters' register FILES as a bitmask. Built ONCE here (not per call site), FROM
+	// the index above — so its key set is the checked one — and read by `emitCallArgMoves` to route each
+	// argument to a GPR or an XMM arg register by the callee's declared parameter type. It is a real FOLD
+	// over a parameter list rather than a field read, which is why it stays a map where the result-class
+	// map did not. Only the argument routing consults it — the value-class column already classes a `param`
+	// result from its own carried f64 type — so it is not threaded into `buildValueClassColumns`.
 	var calleeParamClasses as CalleeParamClassMap
 
-	static function create(stdModule StdModule, target Target, globalData GlobalDataTable) returns StdToX64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), calleeResultClasses: buildCalleeResultClasses(stdModule), calleeParamClasses: buildCalleeParamClasses(stdModule)}
+	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns StdToX64Lowering
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
 	end 'create'
 
 	// The value-class column producer — the pass that answers "what register file does this op's
@@ -1607,13 +1610,13 @@ type StdToX64Lowering
 	end 'lowerParam'
 
 	// The physical register a call to `callee` returns its PRIMARY value in — **XMM0** for a
-	// float-returning callee, **R8** otherwise. Read off the SAME `calleeResultClasses` index the
+	// float-returning callee, **R8** otherwise. Read off the SAME checked name index the
 	// value-class column uses (`calleeResultClass`), so the value the capture move writes into is coloured
 	// in the file the register it reads from lives in: a float result is XMM-classed, so `movRegReg` sees
 	// two XMM ends (a `movsd`), never a cross-file `mov r, xmm`. The error-flag register (R10) is separate
 	// and unconditional — it is always a GPR.
 	function callResultRegister(callee ByteArray) returns X64Register
-		return X64Register.xmm0 if calleeResultClass(self.calleeResultClasses, callee: callee) == RegClass.xmm else X64Register.r8
+		return X64Register.xmm0 if calleeResultClass(self.funcNames, callee: callee) == RegClass.xmm else X64Register.r8
 	end 'callResultRegister'
 
 	// The DIRECT-call argument moves: each argument's register FILE is the CALLEE's declared PARAM class,

@@ -210,9 +210,29 @@ export type PassPipeline
 	// stub to call). The driver catches this, prints the diagnostics, and exits
 	// non-zero. Per-pass IR compaction/dump grows in with the backend cache.
 	export function run() throws CompileError
+		// ⭐⭐ **ONE CHECKED NAME INDEX FOR THE WHOLE PIPELINE (A2l).** Three passes derive a name-keyed map
+		// from this module's function array — `semanticCheck`'s throws map and escape summary, and
+		// `lowerMaxonToStd`'s layout-descriptor set — and each used to hand-roll its own bare `upsert` loop.
+		// Two of them ran BEFORE the pass that built the checking index, so they were right by ORDERING and
+		// could not say so; the third had no index in front of it at all.
+		//
+		// It is built HERE, and once, because the Maxon function array is FROZEN across this pipeline: every
+		// synthesizer that appends to it (`installManagedGlobalInit` is the last) has run in
+		// `compileToCodeResult` before the pipeline is even constructed, `resolveTypes` rewrites signature
+		// FIELDS in place without touching the array, and `lowerMaxonToStd` pushes into the STD module it
+		// produces. So one index describes the array every pass below will walk — which is what lets each of
+		// them take the index instead of the module, and stop resting on a guarantee none of them stated.
+		//
+		// It replaces `buildParamMutationSummary`'s build rather than adding one, so the duplicate refusal
+		// simply moves EARLIER — ahead of `resolveTypes` instead of the middle of `semanticCheck` — and
+		// `run`'s own `throws` is the gate it lands on.
+		// `var` because the passes below STORE it (the lowering keeps it as a field), and a binding handed to a
+		// storage-writing parameter must be mutable (E3019).
+		var funcNames = try FunctionNameIndex.create(self.maxonModule.functions, project: self.project)
+
 		for pass in self.passes 'eachPass'
 			logDebug(LogCategory.ir, message: function() gives "=== Running pass: {passKindToString(pass)} ===")
-			self.dispatch(pass)
+			self.dispatch(pass, funcNames: funcNames)
 			if projectHasErrors(self.project) 'errorGate'
 				throw CompileError.compileError
 			end 'errorGate'
@@ -229,13 +249,13 @@ export type PassPipeline
 	// runs through here, so no pass can be scheduled and go unmeasured, and the passes
 	// stay free functions that know nothing about the clock or the allocator. No pass
 	// calls another, so the phases are disjoint with nothing to subtract.
-	function dispatch(pass PassKind)
+	function dispatch(pass PassKind, funcNames FunctionNameIndex)
 		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
 
 		match pass 'dispatch'
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
-			semanticCheck then semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures)
-			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project)
+			semanticCheck then semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: funcNames)
+			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)

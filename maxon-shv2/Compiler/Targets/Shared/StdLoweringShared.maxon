@@ -50,28 +50,21 @@ export function memoryDisplacement(offset ByteOffset) returns Imm32
 	return offset as Imm32
 end 'memoryDisplacement'
 
-// Callee name -> the register FILE its return value lands in. Built once per module so a call's result
-// class is an O(1) lookup rather than a Θ(calls × functions) scan of `stdModule.functions` per call
-// site. Stores the CLASS (a scalar enum), NOT the payload-carrying `StdReturnType` union, so the map
-// heap-boxes nothing per function.
+// Callee name -> its `ArgFloatMask`. Built once per module so a call site's per-argument register-FILE
+// decision is an O(1) lookup rather than a Θ(calls × functions) scan of `stdModule.functions` for the
+// callee's parameter types.
 //
-// EXPORTED because the lowering itself now needs it, not only the value-class column: `lowerCall` must
-// capture a float-returning callee's result from XMM0/d0 rather than R8/x0, which is the same
-// `calleeResultClass` fact the column reads. Each backend builds ONE map (in its `create`) and threads
-// that same instance into both `lowerCall`/`lowerTryCall` and `buildValueClassColumns`, so it is built
-// once per lowering.
-export typealias CalleeResultClassMap = Map with (ByteArray, RegClass)
-
-// Callee name -> its `ArgFloatMask`. Built once per module beside `CalleeResultClassMap` so a
-// call site's per-argument register-FILE decision is an O(1) lookup rather than a Θ(calls ×
-// functions) scan of `stdModule.functions` for the callee's parameter types.
-//
-// A MASK, not the `Map with (ByteArray, RegClassArray)` that would be the array-shaped mirror of
-// `CalleeResultClassMap`: a parameter's class is ONE bit (GPR vs XMM), and a per-callee array would
-// heap-box one small array for EVERY function in the module — most all-integer and never the target
-// of a float-argument call. The scalar mask keeps this index as allocation-flat as
-// `CalleeResultClassMap` (a scalar per entry). The bit is read back as a `RegClass` by
+// A MASK, not the `Map with (ByteArray, RegClassArray)` an array-shaped mirror would be: a parameter's
+// class is ONE bit (GPR vs XMM), and a per-callee array would heap-box one small array for EVERY function
+// in the module — most all-integer and never the target of a float-argument call. The scalar mask keeps
+// this index allocation-flat (a scalar per entry). The bit is read back as a `RegClass` by
 // `calleeParamClass`, the one door the caller-side argument routing consults.
+//
+// ⚠ **ITS RESULT-SIDE TWIN NO LONGER EXISTS (A2l).** `CalleeResultClassMap` held
+// `returnTypeResultClass(func.returnType)` — a match over a field, not a fold — so it was a SECOND COPY of
+// something `FunctionNameIndex` already reaches in two O(1) steps, keyed on a uniqueness guarantee it did
+// not state. `calleeResultClass` reads through the index instead; there is one fewer name-keyed map per
+// native compile, and one fewer place the key set could disagree with the module's.
 export typealias CalleeParamClassMap = Map with (ByteArray, ArgFloatMask)
 
 // ⭐ THE ONE DOOR from a Std type to a register FILE. A value's class is what its TYPE says, and
@@ -165,33 +158,32 @@ end 'setValueClass'
 // module (the source of truth for ops/blocks/functions) and the Target module (whose operand-derived
 // `scanFunctionValueCount` sizes the column). EXHAUSTIVE over `StdOp` with no bare `default`, so a new
 // op that defines a value fails to compile here rather than defaulting a float into a GPR.
-export function buildValueClassColumns(stdModule StdModule, targetModule TargetModule, calleeResultClasses CalleeResultClassMap) returns ValueClassColumns
+export function buildValueClassColumns(stdModule StdModule, targetModule TargetModule, funcNames FunctionNameIndex) returns ValueClassColumns
 	var columns = ValueClassColumns.create()
 	for funcIndex in 0 upto stdModule.funcCount() 'eachFunc'
-		columns.push(buildFunctionValueClasses(stdModule, targetModule: targetModule, funcIndex: funcIndex, calleeResultClasses: calleeResultClasses))
+		columns.push(buildFunctionValueClasses(stdModule, targetModule: targetModule, funcIndex: funcIndex, funcNames: funcNames))
 	end 'eachFunc'
 	return columns
 end 'buildValueClassColumns'
 
-// Build the callee name → RESULT CLASS index, once per module. Exported so each backend's `create`
-// builds it and stores it, threading the one instance into both the lowering (`lowerCall`) and
-// `buildValueClassColumns`.
-export function buildCalleeResultClasses(stdModule StdModule) returns CalleeResultClassMap
-	var calleeResultClasses = CalleeResultClassMap.create()
-	for func in stdModule.functions 'eachFunc'
-		calleeResultClasses.upsert(func.name, value: returnTypeResultClass(func.returnType))
-	end 'eachFunc'
-	return calleeResultClasses
-end 'buildCalleeResultClasses'
-
-// Build the callee name → `ArgFloatMask` index, once per module — the argument-side twin of
-// `buildCalleeResultClasses`. Each backend builds it in its `create` and threads the one instance
-// into the argument-move emission (`lowerCall`/`lowerTryCall`), so a float argument's XMM
-// destination and the callee's declared parameter type are the ONE fact, never two that could
-// disagree.
-export function buildCalleeParamClasses(stdModule StdModule) returns CalleeParamClassMap
+// Build the callee name → `ArgFloatMask` index, once per module. Each backend builds it in its `create`
+// and threads the one instance into the argument-move emission (`lowerCall`/`lowerTryCall`), so a float
+// argument's XMM destination and the callee's declared parameter type are the ONE fact, never two that
+// could disagree.
+//
+// ⭐ **IT TAKES THE CHECKED INDEX, NOT THE MODULE (A2l)** — so its key set is provably the one
+// `FunctionNameIndex.create` refused a duplicate over, rather than whatever the module happened to hold
+// when someone called it. See that file's header for why the guarantee is carried by the argument type.
+//
+// ⭐ **AND IT IS THE ONLY ONE OF THIS PAIR LEFT: the RESULT-class map is gone.** Its value was
+// `returnTypeResultClass(func.returnType)` — a match over a field the index already reaches in two O(1)
+// steps — so it was a second copy of a fact rather than a memo of a computation, and `calleeResultClass`
+// now reads it through the index. This one stays because `floatParamMaskOf` FOLDS a parameter list: it is
+// a real computation, asked twice per direct call op, and recomputing it per lookup would trade a stated
+// guarantee for a measured cost.
+export function buildCalleeParamClasses(funcNames FunctionNameIndex) returns CalleeParamClassMap
 	var calleeParamClasses = CalleeParamClassMap.create()
-	for func in stdModule.functions 'eachFunc'
+	for func in funcNames.functions 'eachFunc'
 		calleeParamClasses.upsert(func.name, value: floatParamMaskOf(func.paramTypes))
 	end 'eachFunc'
 	return calleeParamClasses
@@ -365,7 +357,7 @@ end 'abiStackSlotsBefore'
 // One function's column. Pre-sized to `scanFunctionValueCount` (a LOWER bound — operand-used values)
 // and EXTENDED by `setValueClass` for the walk-defined values beyond it. `gpr` is the FILL for ids no
 // op defines (nothing is ever coloured for them).
-function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModule, funcIndex FuncIndex, calleeResultClasses CalleeResultClassMap) returns ValueClassColumn
+function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModule, funcIndex FuncIndex, funcNames FunctionNameIndex) returns ValueClassColumn
 	let srcFunc = stdModule.getFunc(funcIndex)
 	var column = ValueClassColumn.create()
 	column.refill(scanFunctionValueCount(targetModule, func: srcFunc), value: RegClass.gpr)
@@ -382,7 +374,7 @@ function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModul
 		end 'targetOnlyBlock'
 
 		recordBlockArgClasses(stdModule, blockRef: blockRef, column: column)
-		recordBlockOpClasses(stdModule, blockRef: blockRef, column: column, calleeResultClasses: calleeResultClasses)
+		recordBlockOpClasses(stdModule, blockRef: blockRef, column: column, funcNames: funcNames)
 	end 'eachBlock'
 
 	return column
@@ -397,11 +389,11 @@ function recordBlockArgClasses(stdModule StdModule, blockRef BlockRef, column Va
 	end 'eachArg'
 end 'recordBlockArgClasses'
 
-function recordBlockOpClasses(stdModule StdModule, blockRef BlockRef, column ValueClassColumn, calleeResultClasses CalleeResultClassMap)
+function recordBlockOpClasses(stdModule StdModule, blockRef BlockRef, column ValueClassColumn, funcNames FunctionNameIndex)
 	let block = try stdModule.blocks.get(blockRef) otherwise panic("recordBlockOpClasses: blockRef {blockRef} not in stdModule.blocks")
 	for opIdx in block.opRefs 'eachOp'
 		let op = try stdModule.ops.get(opIdx) otherwise panic("recordBlockOpClasses: opIdx {opIdx} not in stdModule.ops")
-		recordOpResultClass(op, column: column, calleeResultClasses: calleeResultClasses)
+		recordOpResultClass(op, column: column, funcNames: funcNames)
 	end 'eachOp'
 
 	if block.hasTerminatorOp() 'hasTerm'
@@ -409,11 +401,11 @@ function recordBlockOpClasses(stdModule StdModule, blockRef BlockRef, column Val
 		// being skipped — so an op that both terminates and defines is a compile error here rather than
 		// a value with no class.
 		let term = try stdModule.ops.get(block.terminatorIndex()) otherwise panic("recordBlockOpClasses: terminatorIndex not in stdModule.ops")
-		recordOpResultClass(term, column: column, calleeResultClasses: calleeResultClasses)
+		recordOpResultClass(term, column: column, funcNames: funcNames)
 	end 'hasTerm'
 end 'recordBlockOpClasses'
 
-function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClasses CalleeResultClassMap)
+function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames FunctionNameIndex)
 	match op 'result'
 		// The op's own type IS the result's.
 		const(resultId, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
@@ -430,10 +422,10 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		div(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		mod(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		param(resultId, _, paramType) then setValueClass(column, valueId: resultId, class: regClassForStdType(paramType))
-		call(resultId, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(calleeResultClasses, callee: callee))
+		call(resultId, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(funcNames, callee: callee))
 		// A throwing call classes its primary result exactly as `call` does (the callee's return type);
 		// its error-flag second result is an i64, which the column's `gpr` default already covers (P1.4b).
-		tryCall(resultId, _, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(calleeResultClasses, callee: callee))
+		tryCall(resultId, _, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(funcNames, callee: callee))
 		// An ADDRESS is an integer, whatever the global holds.
 		globalAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		loadIndirect(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
@@ -538,11 +530,17 @@ end 'classifyIndirectResult'
 // is `gpr` and not an error: the value is a garbage integer nobody may read. Exported so `lowerCall`
 // picks the SAME capture register (XMM0/d0 for a float result, else R8/x0) the column classes the
 // result under — one door, so the capture and the class cannot disagree.
-export function calleeResultClass(calleeResultClasses CalleeResultClassMap, callee ByteArray) returns RegClass
-	let cls = try calleeResultClasses.get(callee) otherwise 'runtimeChunk'
+//
+// ⭐ **READ THROUGH THE CHECKED INDEX, NOT OUT OF A MAP THAT COPIED IT (A2l).** The answer is a match over
+// the callee's own `returnType` field, so the index reaches it in the same one hash probe the deleted map
+// cost plus an array read — and the index is the only structure in the compile whose key set is PROVEN
+// duplicate-free. A callee with no Std function is the runtime-chunk case the miss arm below owns, exactly
+// as before: `funcNamed` misses on the same names the map missed on.
+export function calleeResultClass(funcNames FunctionNameIndex, callee ByteArray) returns RegClass
+	let func = try funcNames.funcNamed(callee) otherwise 'runtimeChunk'
 		requireRuntimeChunkCallee(callee, context: "calleeResultClass")
 		return RegClass.gpr
 	end 'runtimeChunk'
 
-	return cls
+	return returnTypeResultClass(func.returnType)
 end 'calleeResultClass'

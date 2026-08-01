@@ -458,8 +458,8 @@ function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteInd
 	end 'outOfOrder'
 end 'requireSiteOrdinalsAscend'
 
-export function lowerMaxonToStd(maxonModule MaxonModule, project Project) returns StdModule
-	return MaxonToStdLowering.create(maxonModule, project: project).lower()
+export function lowerMaxonToStd(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns StdModule
+	return MaxonToStdLowering.create(maxonModule, project: project, funcNames: funcNames).lower()
 end 'lowerMaxonToStd'
 
 // The label guard shared by `lowerRuntimeCall` (a plain `call`) and the compiler-internal arm of
@@ -533,6 +533,11 @@ type MaxonToStdLowering
 	// instance's `(baseId, args)` payload: `ensureLayoutDescriptor` sizes and mangles a descriptor
 	// through `genericInstanceBoxSize` / `genericInstanceSoleArgLogicalSize` / `mangleGenericInstance`.
 	var signatures as ProgramSignatures
+	// The Maxon module's CHECKED name index (`FunctionNameIndex`, A2l), built once for the whole pipeline
+	// and threaded in. `buildLayoutNeedingFuncs` derives its FILTERED set by walking `funcNames.functions`,
+	// so that set's key space is provably the duplicate-free one rather than whatever the module happened to
+	// hold — the same argument `SemanticCheck`'s throws map and escape summary now stand on.
+	let funcNames as FunctionNameIndex
 	// The qualified names of functions that carry a hidden layout-descriptor parameter (P1.6-B1) — built
 	// once by `buildLayoutNeedingFuncs` (an op-scan for `sizeofType(typeParameter)`), then read at every
 	// call site (append the descriptor argument?) and per callee (bind the descriptor param?).
@@ -630,12 +635,12 @@ type MaxonToStdLowering
 	// columns to fit the highest id, so a monotonic counter is all that is required.
 	var nextValueId as ValueId
 
-	static function create(maxonModule MaxonModule, project Project) returns MaxonToStdLowering
+	static function create(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns MaxonToStdLowering
 		// `queryProgramSignatures` is memoized and was computed by `compileToCodeResult` before the
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1032,7 +1037,10 @@ type MaxonToStdLowering
 	// has no `sizeofType` op of its own — which is exactly why detection is by PARAM COUNT here, not an op-scan:
 	// the reserved slot is the whole-program fact a caller reads to decide whether to append the descriptor arg.
 	function buildLayoutNeedingFuncs()
-		for func in self.maxonModule.functions 'eachFunc'
+		// Walks the CHECKED index's own array rather than the module's (A2l): this set is keyed by function
+		// NAME, so two functions of one name would silently collapse into one entry and a caller would read
+		// the wrong one's descriptor need. `FunctionNameIndex` has already refused that pair.
+		for func in self.funcNames.functions 'eachFunc'
 			if self.functionHasDescriptorParam(func) 'needsLayout'
 				self.layoutNeedingFuncs.upsert(func.name, value: true)
 			end 'needsLayout'

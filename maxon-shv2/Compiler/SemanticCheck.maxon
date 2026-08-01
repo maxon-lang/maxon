@@ -23,7 +23,7 @@ let MainWrongReturnMessage = "Function 'main' must return ExitCode"
 // `name:` label names a distinct parameter, and every argument's TYPE agrees with its
 // parameter's) — the checks that need the callee's signature, which only the whole-program
 // `funcSignatures` registry carries.
-export function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures)
+export function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
 	// ⭐ **OVERLOAD RESOLUTION RUNS FIRST, BEFORE ANYTHING READS A CALLEE** (D7). Until it has run, a call to
 	// an overloaded name carries the BARE name the source wrote, which is the registration name of the FIRST
 	// declaration only — so `checkCalls` would validate every one of them against that member's signature and
@@ -39,19 +39,15 @@ export function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// The whole-program throws map (name -> its `throws` clause, throwing functions only) — built once
 	// from the merged module and read at every call site to decide whether a plain call needs a `try`
 	// (E3057). The parser handled the mirror rule (E3055, `try` on a non-throwing call) at the `try` token.
-	let throwsMap = buildThrowsMap(module)
+	let throwsMap = buildThrowsMap(funcNames)
 	// The interprocedural closure-escape summary (P1.5-A2b-2) — built once, read at every call site to refuse
 	// a capturing closure passed to a callee that persists the parameter.
-	let escapeSummary = buildEscapeSummary(module, funcSignatures: project.funcSignatures)
+	let escapeSummary = buildEscapeSummary(module, funcNames: funcNames, funcSignatures: project.funcSignatures)
 	// The interprocedural PARAMETER-MUTATION summary (E3019, the call-site half) — built once, read at every
-	// call site to refuse an immutable binding handed to a parameter the callee writes.
-	// A duplicate function name is refused by the index this builds (`FunctionNameIndex`, A1w). The E4015 is
-	// already recorded, and the pipeline's error gate refuses the build the moment this pass returns — so
-	// there is nothing left for the checks below to say about a program that cannot be built, which is the
-	// refusal `checkConformance` and `checkWhereConstraints` make for the same reason.
-	let mutationSummary = try buildParamMutationSummary(project, module: module) otherwise 'duplicateFunctionName'
-		return
-	end 'duplicateFunctionName'
+	// call site to refuse an immutable binding handed to a parameter the callee writes. It reads the same
+	// index the two summaries above do; a duplicate function name was refused where that index was BUILT,
+	// which is now before this pass runs at all (`PassPipeline.run`, A2l) rather than in the middle of it.
+	let mutationSummary = buildParamMutationSummary(project, module: module, funcNames: funcNames)
 	checkCalls(project, module: module, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary)
 	// The function-type doors the parser recorded (`PendingFunctionTypeDoor`). It runs HERE, and not beside
 	// `checkValueMergeSignatures`, for one reason: the shapes are compared RESOLVED, and resolution has not
@@ -685,9 +681,14 @@ end 'reportThrowsClauseViolation'
 
 // The throws clauses of every THROWING function in the program, keyed by (mangled) name. A non-throwing
 // function is absent — the same "absence is the answer" the parser's `ProgramSignatures.funcThrows` uses.
-function buildThrowsMap(module MaxonModule) returns FuncThrowsMap
+//
+// ⭐ **IT TAKES THE CHECKED INDEX, NOT THE MODULE (A2l).** The map is keyed by NAME and read at every call
+// site to decide whether a plain call needs a `try`; two functions of one name would collapse to one entry
+// and a call could be validated against the OTHER one's clause. This used to be a bare last-wins `upsert`
+// running BEFORE the pass that built the checking index — right on this rule and unable to say why.
+function buildThrowsMap(funcNames FunctionNameIndex) returns FuncThrowsMap
 	var throwsMap = FuncThrowsMap.create()
-	for func in module.functions 'eachFunc'
+	for func in funcNames.functions 'eachFunc'
 		if throwsClauseIsThrowing(func.throwsTypeName) 'throwing'
 			throwsMap.upsert(func.name, value: func.throwsTypeName)
 		end 'throwing'
@@ -711,9 +712,11 @@ end 'buildThrowsMap'
 // first-order function costs no entry.
 typealias ParamEscapeSummary = Map with (ByteArray, BoolArray)
 
-function buildEscapeSummary(module MaxonModule, funcSignatures FuncSignatureMap) returns ParamEscapeSummary
+// Keyed by name and read at every call site, so it is built from the CHECKED index for `buildThrowsMap`'s
+// reason (A2l); `module` still travels because the per-function escape scan reads the module's OPS.
+function buildEscapeSummary(module MaxonModule, funcNames FunctionNameIndex, funcSignatures FuncSignatureMap) returns ParamEscapeSummary
 	var summary = ParamEscapeSummary.create()
-	for func in module.functions 'eachFunc'
+	for func in funcNames.functions 'eachFunc'
 		if not functionHasFunctionParam(func) 'noFunctionParam'
 			continue
 		end 'noFunctionParam'
@@ -1156,8 +1159,8 @@ end 'MutationEdges'
 // backend emits code, so the tie-break could change which body was summarised but not what any program MEANT
 // — which is a fine argument for the answer being harmless and no argument at all for it being made
 // silently. `FunctionNameIndex` refuses the duplicate instead, so there is nothing left to break a tie over.
-function buildParamMutationSummary(project Project, module MaxonModule) returns ParamMutationSummary throws CompileError
-	let funcIndexByName = (try FunctionNameIndex.create(module.functions, project: project)).byName
+function buildParamMutationSummary(project Project, module MaxonModule, funcNames FunctionNameIndex) returns ParamMutationSummary
+	let funcIndexByName = funcNames.byName
 
 	// ⭐⭐ **TWO SEEDS, ONE GRAPH, ONE FIXPOINT RUN TWICE.** The parser records both per-function facts at the
 	// same doors (`Parser.noteReceiverWrite`, `Parser.emitCheckedSelfFieldStore`); the CLOSURE is identical
@@ -1165,15 +1168,19 @@ function buildParamMutationSummary(project Project, module MaxonModule) returns 
 	// statement about one call graph — so the edges and the CSR are built ONCE and drained twice. That is
 	// also what makes the transitive case work without a second rule: `wipe()` calling a `reset()` that
 	// clears the receiver's field inherits the bit through the very same edge E3019's column travels.
+	// Seeded from the INDEX's own array, not the module's, and the two are the same array: the masks are
+	// addressed by POSITION and `funcIndexByName` resolves a name TO that position, so a seed walk over any
+	// other array would leave every edge pointing at the wrong function's mask (A2l — the staleness
+	// `FunctionNameIndex`'s header describes, made unspellable by taking the array off the index).
 	var masks = MutatedParamMaskArray.create()
 	var storageMasks = MutatedParamMaskArray.create()
-	for func in module.functions 'seed'
+	for func in funcNames.functions 'seed'
 		masks.push(func.writtenParamMask)
 		storageMasks.push(func.storageWrittenParamMask)
 	end 'seed'
 
 	let edges = collectMutationEdges(project, module: module, funcIndexByName: funcIndexByName)
-	let byCallee = edges.byCallee(module.functions.count())
+	let byCallee = edges.byCallee(funcNames.functions.count())
 	propagateMutationMasks(masks, edges: edges, byCallee: byCallee)
 	propagateMutationMasks(storageMasks, edges: edges, byCallee: byCallee)
 	return ParamMutationSummary.create(masks, storageMasks: storageMasks, funcIndexByName: funcIndexByName)

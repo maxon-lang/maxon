@@ -232,8 +232,8 @@ function arm64RequireScalarDouble(t StdType, what String)
 	end 'notDouble'
 end 'arm64RequireScalarDouble'
 
-export function lowerStdToArm64(stdModule StdModule, target Target, globalData GlobalDataTable) returns (TargetModule, ValueClassColumns)
-	var lowering = StdToArm64Lowering.create(stdModule, target: target, globalData: globalData)
+export function lowerStdToArm64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns (TargetModule, ValueClassColumns)
+	var lowering = StdToArm64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames)
 	lowering.prepareSkeleton()
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers (the divide-by-zero
 	// guard appends blocks to its `blockRefs` and bumps `nextBlockId`), so no `srcFunc` borrowed out of
@@ -246,7 +246,7 @@ export function lowerStdToArm64(stdModule StdModule, target Target, globalData G
 	// The value-class column producer is the shared, target-independent `buildValueClassColumns` (see
 	// `Targets/Shared/StdLoweringShared.maxon`); bind it FIRST so its borrow of `targetModule` closes
 	// before the tuple moves `targetModule` out.
-	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule, calleeResultClasses: lowering.calleeResultClasses)
+	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule, funcNames: lowering.funcNames)
 	return (lowering.targetModule, valueClasses)
 end 'lowerStdToArm64'
 
@@ -262,20 +262,23 @@ type StdToArm64Lowering
 	// the arm64 concat once sections are laid out.
 	var globalData as GlobalDataTable
 	export var targetModule as TargetModule
-	// Callee name → the register FILE its result comes back in — d0 for a float-returning callee, x0
-	// otherwise (see `callResultRegister`). Built ONCE here and threaded into `buildValueClassColumns` too,
-	// so a float result's CAPTURE register and its allocation CLASS are the one `calleeResultClass` fact.
-	// Exported like `targetModule`: `lowerStdToArm64` reads it to thread the one instance into the column.
-	export var calleeResultClasses as CalleeResultClassMap
-	// Callee name → its parameters' register FILES as a bitmask — the ARGUMENT-side twin of
-	// `calleeResultClasses`. Built ONCE here and read by `emitCallArgMoves` to route each argument to a
-	// GPR (x0..x7) or a SIMD (d0..d7) arg register by the callee's declared parameter type. Only the
-	// argument routing consults it (the value-class column classes a `param` result from its own carried
-	// f64 type), so unlike `calleeResultClasses` it is not threaded into `buildValueClassColumns`.
+	// The module's CHECKED name index (`FunctionNameIndex`, A2l), built by `eliminateDeadFunctions` over the
+	// array it left behind and threaded down from `buildBackend`. It answers "what register FILE does this
+	// callee's result come back in?" — d0 for a float-returning callee, x0 otherwise (see
+	// `callResultRegister`) — WITHOUT a second name-keyed map: `calleeResultClass` reads the callee's own
+	// `returnType` through it, so a float result's CAPTURE register and its allocation CLASS are the one
+	// fact. Exported like `targetModule`: `lowerStdToArm64` threads the same index into the column.
+	export let funcNames as FunctionNameIndex
+	// Callee name → its parameters' register FILES as a bitmask. Built ONCE here, FROM the index above — so
+	// its key set is the checked one — and read by `emitCallArgMoves` to route each argument to a GPR
+	// (x0..x7) or a SIMD (d0..d7) arg register by the callee's declared parameter type. It is a real FOLD
+	// over a parameter list rather than a field read, which is why it stays a map where the result-class map
+	// did not. Only the argument routing consults it (the value-class column classes a `param` result from
+	// its own carried f64 type), so it is not threaded into `buildValueClassColumns`.
 	var calleeParamClasses as CalleeParamClassMap
 
-	static function create(stdModule StdModule, target Target, globalData GlobalDataTable) returns StdToArm64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), calleeResultClasses: buildCalleeResultClasses(stdModule), calleeParamClasses: buildCalleeParamClasses(stdModule)}
+	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns StdToArm64Lowering
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
 	end 'create'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks` (preserving the
@@ -863,11 +866,11 @@ type StdToArm64Lowering
 	end 'lowerParam'
 
 	// The physical register a call to `callee` returns its PRIMARY value in — **d0** for a float-returning
-	// callee, **x0** otherwise. Read off the SAME `calleeResultClasses` index the value-class column uses
+	// callee, **x0** otherwise. Read off the SAME checked name index the value-class column uses
 	// (`calleeResultClass`), so the captured value is coloured in the file the register it reads from lives
 	// in: a float result is XMM-classed, so `movRegReg` sees two FP ends (`fmov`), never a cross-file move.
 	function callResultRegister(callee ByteArray) returns Arm64Register
-		return Arm64FloatReturnReg if calleeResultClass(self.calleeResultClasses, callee: callee) == RegClass.xmm else Arm64IntReturnReg
+		return Arm64FloatReturnReg if calleeResultClass(self.funcNames, callee: callee) == RegClass.xmm else Arm64IntReturnReg
 	end 'callResultRegister'
 
 	// The DIRECT-call argument moves: each argument's register FILE is the CALLEE's declared PARAM class,

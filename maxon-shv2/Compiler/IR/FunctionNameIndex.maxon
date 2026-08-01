@@ -1,7 +1,7 @@
 // FunctionNameIndex — the name -> function index, and the ONE statement of the invariant it rests on.
 //
 // ⭐⭐ **THE POLICY, IN ONE PLACE: AN INDEX OVER A MODULE'S FUNCTIONS HAS NO TIE-BREAK, BECAUSE IT REFUSES
-// A TIE.** Four passes need to resolve a function NAME to the function it names, and every one of them
+// A TIE.** Several passes need to resolve a function NAME to the function it names, and every one of them
 // rests on the same fact — a merged module holds no two functions of one name. Before A1w each carried its
 // own copy of the index and its own answer to "what if it does": last-wins at three of them, FIRST-wins at
 // the fourth, and a check at exactly one. That is one fact with four readers, and the reader that had
@@ -18,31 +18,61 @@
 // act is to refuse the compile.
 //
 // ⭐ **WHAT EACH CALLER CAN ACTUALLY SEE IS DIFFERENT, AND THAT IS WHY THE CHECK BELONGS HERE RATHER THAN
-// AT ONE CHOKE POINT.** The four sites sit at four points of one compile, and a module GAINS functions
+// AT ONE CHOKE POINT.** The sites sit at successive points of one compile, and a module GAINS functions
 // between them, so the set of duplicates each can meet grows monotonically. There is no single moment that
-// covers all four (MEASURED, A1w):
+// covers all of them (MEASURED, A1w):
 //
 //   * `ConformanceCheck.checkConformance` — Maxon tier, before `installManagedGlobalInit` and before the
 //     pipeline. **It can see NONE.** Its only available cause is two parsed declarations, which is E3006 at
 //     merge, and it refuses to read a malformed module (`projectHasErrors`) four lines before it asks for an
 //     index; no synthesizer has appended to the module yet. It is the one site that is not in this class —
-//     and it builds its index HERE anyway, because a fourth spelling of the same loop costs more than the
+//     and it builds its index HERE anyway, because another spelling of the same loop costs more than the
 //     one integer compare does.
 //   * `StdlibSource.reachableMaxonFunctionNames` — Maxon tier, AFTER `installManagedGlobalInit`. It can see
 //     a `stdlib/Builtins.maxon` declaration of `__module_init` / `__maxon_global_cleanup` against the
 //     compiler's own.
-//   * `SemanticCheck.buildParamMutationSummary` — Maxon tier, inside the pipeline. Same pair; the pipeline's
-//     error gate after `resolveTypes` is what keeps two PARSED declarations away from it.
-//   * `IR/Std/DeadFunctionElimination` — Std tier, after every `install*Runtime`. The above plus a
+//   * `IR/PassPipeline.run` — Maxon tier, ONCE for the whole pipeline, over the array `resolveTypes`,
+//     `semanticCheck` and `lowerMaxonToStd` all walk (A2l). Same pair as above. It replaced a build inside
+//     `SemanticCheck.buildParamMutationSummary`, which sat AFTER two other name-keyed maps that pass builds —
+//     so those two were right by ORDERING and could not say so; they now take this index as an argument.
+//   * `IR/Std/DeadFunctionElimination` — Std tier, after every `install*Runtime`, and TWICE: once over the
+//     array it prunes (the walk resolves its call-graph edges through it) and once over the array it leaves
+//     behind, which is the one every backend then resolves a callee through. It can see the above plus a
 //     declaration of any symbol a runtime installs (`__print_string`, `__str_eq`, `__mm_*`, a `__destruct_<T>`
 //     cascade …), which is the pair A1t was written for and the only one no earlier site can reach.
 //
+// ⚠ **AND ONE CLASS OF COLLISION IS STILL BELOW ALL OF THEM.** The entry stub, the hand-assembled runtime
+// chunks and `__symtable` are laid into `.text` under names that are in NO module, so no index here can see
+// them; that collision is noticed where the layout is decided (`BackendDispatch.recordChunkLabel`), under
+// the same E4015.
+//
 // ⚠ **THE INDEX DESCRIBES THE ARRAY AS IT WAS AT `create`, AND GOES STALE WITH IT.** Exactly one pass
 // replaces a function array — `DeadFunctionElimination.sweepUnreachedFunctions`, which assigns a freshly
-// built one — and it runs after the last read of the index built over the old one; an index resolved against
-// a DIFFERENT array is the failure `ValueOrigin`'s header describes. The array travels INSIDE the record
-// because `funcNamed` needs both halves and they must be the same two halves; the three callers that only
-// want a position read `byName` and index the module they already hold, which is that same array.
+// built one — and it builds a REPLACEMENT index over the array it just installed, because the backend reads
+// one downstream of it; an index resolved against a DIFFERENT array is the failure `ValueOrigin`'s header
+// describes. The array travels INSIDE the record because `funcNamed` needs both halves and they must be the
+// same two halves; the callers that only want a position read `byName` and index the module they already
+// hold, which is that same array.
+//
+// ⭐⭐ **EVERY NAME-KEYED MAP DERIVED FROM A FUNCTION ARRAY IS BUILT FROM ONE OF THESE, AND THAT IS WHY
+// `functions` IS EXPORTED (A2l).** Ten sites used to hand-roll their own `Map with (ByteArray, …)` over a
+// module's function array — the wasm function-index map, the two ABI class maps the native backends thread
+// through every call site, the throws map, the escape summary, the layout-descriptor set — each with a bare
+// last-wins `upsert` and no check, and every one of them resting on this file's guarantee without standing
+// behind it. Ordering made most of them right, and ordering is not something the next reader can see.
+//
+// So the guarantee is now carried by a TYPE rather than by a comment: a builder that walks `index.functions`
+// cannot be called without an index existing, and an index cannot exist without `create` having refused a
+// duplicate over THAT ARRAY. Exposing the array is what makes the two halves inseparable — a builder handed
+// the module instead could walk a different (or later) array than the one that was checked, which is the
+// staleness the paragraph above describes.
+//
+// ⭐ **AND WHERE THE VALUE IS A FIELD READ, THERE IS NO SECOND MAP AT ALL.** A map from name to
+// `func.returnType` is a copy of a fact the index can already reach in two O(1) steps (`byName` →
+// `functions.get` → the field), so those sites read THROUGH the index and the map is deleted rather than
+// blessed. A map whose value is COMPUTED (a float parameter mask, a wasm valtype list) or whose key set is
+// FILTERED stays, because recomputing per lookup would trade a stated guarantee for a real cost — but it is
+// built from `index.functions`, so its key set is provably the checked one.
 
 // name -> position in the function array. Unique by construction: `FunctionNameIndex.create` refuses a
 // duplicate rather than resolving one.
@@ -50,8 +80,9 @@ export typealias FuncIndexByName = Map with (ByteArray, FuncIndex)
 
 export type FunctionNameIndex
 	// The array the indices index, carried WITH the map for the reason the header's last paragraph gives.
-	// Read only through `funcNamed` and `create`, so it stays inside.
-	let functions as IrFunctionArray
+	// EXPORTED so a derived per-callee map is built by walking the very array the duplicate check ran over —
+	// see the header's A2l paragraph.
+	export let functions as IrFunctionArray
 	export let byName as FuncIndexByName
 
 	export static function create(functions IrFunctionArray, project Project) returns FunctionNameIndex throws CompileError
@@ -127,7 +158,7 @@ function refuseDuplicateFunctionName(functions IrFunctionArray, project Project,
 	// ⭐ **BOTH PARSED, AND WHETHER THAT IS A COMPILER BUG IS NOT A PROPERTY OF THE DUPLICATE — IT IS
 	// WHETHER ANYTHING HAS ALREADY SAID SO.** Two declarations of one name is a USER error, and A1t could
 	// argue the panic below because its one caller ran at the BACK END, downstream of the pipeline's error
-	// gate; three of the four callers now run upstream of that gate, so the argument has to be read off the
+	// gate; most callers now run upstream of that gate, so the argument has to be read off the
 	// project instead of inherited from a call site. A program already carrying a diagnostic is already
 	// refused: stop, and let the caller's own gate print what was accumulated. Resolving the tie would be
 	// the silent half of the very behaviour this file removes.

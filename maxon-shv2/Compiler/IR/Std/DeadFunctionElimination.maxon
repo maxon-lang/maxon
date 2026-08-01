@@ -62,14 +62,22 @@
 // a `seen` insert per edge (`StdDeadFunctionElimination.maxon:88-105`), so its walk paid three byte-sequence
 // hashes per edge where this pays one.
 //
-// That index is also where a DUPLICATE NAME is refused, and this pass is the last of the four sites that
-// build one — the only one downstream of every `install*Runtime`, hence the only one that can see a
-// declaration colliding with an installed runtime symbol (A1t). The policy, and what each of the four can
-// actually see, live in `FunctionNameIndex`.
+// That index is also where a DUPLICATE NAME is refused, and this pass is the LAST site that builds one over
+// the Std module — the only one downstream of every `install*Runtime`, hence the only one that can see a
+// declaration colliding with an installed runtime symbol (A1t). The policy, and what each site can actually
+// see, live in `FunctionNameIndex`.
 
 // Drop every function unreachable from the program's roots, in place. Rebuilds `module.functions`;
 // the dropped functions' blocks and ops stay in the flat arrays as orphans (see the header).
-export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable, project Project) throws CompileError
+//
+// ⭐ **IT RETURNS AN INDEX OVER THE ARRAY IT LEAVES BEHIND, AND THAT REPLACES A WALK RATHER THAN ADDING
+// ONE (A2l).** Every backend derives at least one name-keyed map from the post-prune function array, and
+// the pruning is what makes the index built above stale — positions move. So the fresh one is built HERE,
+// billed to this phase, by the pass that invalidated the old one: a backend cannot then be handed a
+// module without an index, and the index it is handed cannot describe a different array than the module
+// it accompanies. The map it replaces is `buildCalleeResultClasses`, which walked the same array to store
+// a value the index can already reach in two O(1) steps.
+export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable, project Project) returns FunctionNameIndex throws CompileError
 	let index = try FunctionNameIndex.create(module.functions, project: project)
 	let byName = index.byName
 
@@ -86,6 +94,12 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 
 	requireUnreachableStdlibStayedDead(project, byName: byName, reached: reached)
 	sweepUnreachedFunctions(module, reached: reached, project: project)
+
+	// The survivors are a SUBSET of an array this pass already refused a duplicate over, so this build
+	// cannot report one — it is here for the POSITIONS, which the sweep renumbered. It goes through the one
+	// door anyway rather than a subset-only shortcut: a second construction path is a second place the
+	// check could be skipped, which is the shape this whole mechanism exists to remove.
+	return try FunctionNameIndex.create(module.functions, project: project)
 end 'eliminateDeadFunctions'
 
 // ⭐⭐ **THE PRE-ELIMINATION PASSES BET ON THIS PASS, AND THIS IS WHERE THE BET IS SETTLED.** Four passes

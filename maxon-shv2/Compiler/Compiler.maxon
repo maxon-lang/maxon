@@ -38,6 +38,31 @@ export function compile(inputPath FilePath, target Target, outputOverride String
 	let unit = traceUnitOf(inputPath)
 	setTraceUnit(unit)
 
+	// ⭐⭐ **THE ONE PLACE A FAILED COMPILE CLOSES WHAT IT LEFT OPEN (A1v).** Four stages inside phase
+	// brackets can throw — `load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001 and `link`'s
+	// chunk-label refusal — and none of them reaches the `record*Delta` that would emit its span's END. The
+	// split exists ONLY to give that drain one home: an END at each throw site would be the same fact
+	// written once per site, forgotten by the next throwing exit exactly as it was by the last two (see
+	// `PhaseProbe.openPhaseSpans`).
+	//
+	// The error is RE-THROWN unchanged, never flattened: `Main` distinguishes the file/IO cases
+	// (`fileNotFound`/`noSourceFiles`/`readError`) from a reported `compileError` and prints a different
+	// message for each, so a fresh `compileError` here would replace three specific messages with one wrong
+	// one.
+	//
+	// `verifyWarmRebuild` drives `compileToCodeResult` directly and so does not pass through here. It needs
+	// no drain of its own for the reason this function's header already gives for the TOTAL: it is the only
+	// other whole-build entry, and a throw out of it ends the process with nothing left to mis-nest.
+	return try compileMeasured(inputPath, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, unit: unit) otherwise (e) 'compileFailed'
+		closeOpenPhaseSpans(unit)
+		throw e
+	end 'compileFailed'
+end 'compile'
+
+// The build itself, from the whole-compile probe to the timing report — everything `compile` measures. It
+// is a separate function for the single reason its caller states: one failure path to hang the trace-span
+// drain on, rather than one per `try` in this body.
+function compileMeasured(inputPath FilePath, target Target, outputOverride String, emitIr bool, metricsPath String, unit TraceUnit) returns FilePath throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
@@ -81,7 +106,7 @@ export function compile(inputPath FilePath, target Target, outputOverride String
 
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes of code to {outputPath}")
 	return outputPath
-end 'compile'
+end 'compileMeasured'
 
 // ⭐ **EVERYTHING THIS BUILD WOULD PUBLISH IS REMOVED BEFORE THE FIRST STEP THAT CAN FAIL.**
 //
@@ -332,7 +357,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: signatures.managedGlobals(liveGlobals))
 
 	// ⚠ **ITS OWN GATE, BECAUSE IT IS THE FIRST SITE THAT CAN REFUSE AND THE PIPELINE'S IS STILL BELOW
-	// (A1w).** `deriveStdlibFacts` builds a `FunctionNameIndex` over this module — the earliest of the four
+	// (A1w).** `deriveStdlibFacts` builds a `FunctionNameIndex` over this module — the earliest site
 	// that sits AFTER `installManagedGlobalInit`, hence the earliest that can meet a declaration colliding with
 	// `__module_init` / `__maxon_global_cleanup` — and refuses it with E4015. Without a gate here that throw
 	// would leave `compileToCodeResult` having passed both gates below, and the diagnostic would never be

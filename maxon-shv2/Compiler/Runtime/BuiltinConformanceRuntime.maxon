@@ -238,26 +238,52 @@ function referencedBuiltinImpls(module StdModule, globalData GlobalDataTable, im
 end 'referencedBuiltinImpls'
 
 // The candidate impls no function in the module already defines — see `referencedBuiltinImpls`' second
-// warning for the wrong answer this exists to prevent. `module.functions` is walked once, and the inner test
-// is one byte compare per candidate, almost all of which fail on length.
+// warning for the wrong answer this exists to prevent.
+//
+// ⭐ **ONE WALK OF `module.functions`, NOT ONE PER CANDIDATE (A2l/2).** It used to ask a
+// `moduleDefinesFunction` helper per impl, and each of those rescanned the WHOLE array — O(impls ×
+// functions), which with a constant eleven candidates meant ELEVEN full walks of every compile's function
+// array. (The comment here claimed the array was "walked once"; it was not. That is the shape this batch
+// exists to remove, in its cost form rather than its correctness form.)
+//
+// The eleven questions are the same question asked of one array, so it is asked once per FUNCTION instead:
+// the outer walk reads each `IrFunction` record exactly once — the expensive half — and the inner test is
+// the same eleven byte compares that were being made anyway, almost all of which fail on length, and which
+// stop at the first hit because a name can answer for at most one candidate.
+//
+// ⚠ **THE LADDER CANNOT SEE THIS ONE, AND THAT IS A PROPERTY OF THE INSTRUMENT.** `installBuiltinConformanceRuntime`
+// runs between the pipeline and `buildBackend`, outside every `PhaseProbe` bracket, so its cost lands in
+// `unattributed` and no per-phase row moves. The claim here is structural (eleven walks became one), not a
+// measured delta — do not read a flat scale-test row as evidence about it.
+//
+// ⚠ **IT IS NOT KEYED THROUGH `FunctionNameIndex`, AND THAT IS DELIBERATE.** No checked index exists at
+// this point in the compile — the installers are still appending, and this one appends too — so building
+// one here would add a module-sized map to EVERY compile to answer eleven questions. It would also buy no
+// guarantee: this is a MEMBERSHIP test, not a resolution, so it has no tie to break. Two functions of one
+// name would make it answer `defined` either way, which is the same answer, and the pair itself is refused
+// downstream where an index does exist (`DeadFunctionElimination`).
 function undefinedImplNames(module StdModule, impls ByteArrayArray) returns ByteArrayArray
+	// At most eleven entries, and it is a SET rather than a per-candidate flag column so both loops can walk
+	// their arrays by BORROW — neither the function records nor the candidate names are retained to answer a
+	// byte compare.
+	var definedCandidates = FunctionNameSet.create()
+	for func in module.functions 'eachFunc'
+		for impl in impls 'eachImpl'
+			if func.name.equals(impl) 'definesCandidate'
+				definedCandidates.insert(impl)
+				break
+			end 'definesCandidate'
+		end 'eachImpl'
+	end 'eachFunc'
+
 	var undefined = ByteArrayArray.create()
-	for impl in impls 'eachImpl'
-		if not moduleDefinesFunction(module, funcName: impl) 'undefined'
+	for impl in impls 'eachCandidate'
+		if not definedCandidates.contains(impl) 'notDefined'
 			undefined.push(impl)
-		end 'undefined'
-	end 'eachImpl'
+		end 'notDefined'
+	end 'eachCandidate'
 	return undefined
 end 'undefinedImplNames'
-
-function moduleDefinesFunction(module StdModule, funcName ByteArray) returns bool
-	for i in 0 upto module.funcCount() 'eachFunc'
-		if module.getFunc(i).name.equals(funcName) 'match'
-			return true
-		end 'match'
-	end 'eachFunc'
-	return false
-end 'moduleDefinesFunction'
 
 // The function NAME one `StdOp` spells, credited if it is one of the candidate impls. THREE variants carry
 // one — `call`, `tryCall` and `funcAddr` — the same three `DeadFunctionElimination.markCalleeOf` walks for

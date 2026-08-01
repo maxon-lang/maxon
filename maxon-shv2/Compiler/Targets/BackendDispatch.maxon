@@ -91,19 +91,27 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// re-adding it. `globalData` reaches it because an `.rdata` slot is a reference this module's ops do
 	// not spell (see DeadFunctionElimination's root set).
 	//
-	// It `throws` for one reason, and it is a USER error rather than a pruning failure: this is the LAST of
-	// the four sites that build a `FunctionNameIndex`, and the only one downstream of every install — so a
+	// It `throws` for one reason, and it is a USER error rather than a pruning failure: this is the LAST site
+	// that builds a `FunctionNameIndex` over a module, and the only one downstream of every install — so a
 	// declaration colliding with a symbol the compiler emits is visible here and nowhere earlier, and E4015 is
 	// reported at the index. Its root set raises the same code for the other half of that rule (a name the
 	// compiler ROOTS, in a program that installs nothing under it) — see `markCompilerOwnedRoot`.
 	let dfeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deadFunctions)
-	try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
+	// ⭐⭐ **THE ONE NAME INDEX EVERY BACKEND RESOLVES A CALLEE THROUGH (A2l).** It comes back from the
+	// prune rather than being built here because the prune is what makes an earlier one stale, and it is
+	// built at all because NOTHING APPENDS A FUNCTION AFTER THIS LINE: every `install*Runtime` ran in
+	// `compileToCodeResult` above, the entry stub and the hand-assembled runtime chunks join at the TARGET
+	// tier as chunks rather than Std functions, and this dispatch is the last thing between the prune and
+	// the backends. So an index taken here describes the array all three backends will walk — which is what
+	// lets their per-callee maps take the INDEX as an argument instead of the module, and stop resting on a
+	// uniqueness guarantee none of them stated.
+	let funcNames = try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
 	recordPhase(project, phase: CompilePhase.deadFunctions, probe: dfeProbe)
 
 	match target.cpu 'cpu'
-		x64 then return try buildX64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage)
-		arm64 then return try buildArm64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage)
-		wasm32 then return buildWasmBackend(stdModule, globalData: globalData, project: project, usage: usage)
+		x64 then return try buildX64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
+		arm64 then return try buildArm64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
+		wasm32 then return buildWasmBackend(stdModule, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
 	end 'cpu'
 end 'buildBackend'
 
@@ -121,9 +129,9 @@ end 'buildBackend'
 // `usage` reaches it for the ONE reason the native backends need it: the leak gate. `usesHeap` is
 // where "was the MM runtime installed?" is decided, so wasm reads that bit rather than re-deriving it
 // from the module — see `StdToWasm.appendLeakGate`.
-function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage) returns CodeResult
+function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, funcNames: funcNames)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)
@@ -131,7 +139,7 @@ end 'buildWasmBackend'
 
 // The x64 backend: Std → Target → register allocation → prologue/epilogue → runtime augmentation →
 // machine-code emission → CodeResult.
-function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage) returns CodeResult throws CompileError
+function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
 	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
 	// `globalData` reaches ISel because a float CONSTANT is `.rdata` content the lowering is the
 	// first to see (`lowerFloatConst`). It is the same table concat resolves those labels against
@@ -145,7 +153,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// The two come back TOGETHER because a `TargetModule` alone is not a complete answer: it carries no
 	// types, so nothing downstream could say what file any of its values belongs in. Returning the pair
 	// is what makes it impossible to hand the allocator one without the other.
-	var (targetModule, valueClasses) = lowerStdToX64(stdModule, target: target, globalData: globalData)
+	var (targetModule, valueClasses) = lowerStdToX64(stdModule, target: target, globalData: globalData, funcNames: funcNames)
 	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
 
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
@@ -191,11 +199,72 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
-	let codeResult = concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData)
+	let codeResult = try concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
 	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
 
 	return codeResult
 end 'buildX64Backend'
+
+// Function/chunk name → the byte offset that chunk starts at in `.text`. Declared ONCE, here, because
+// it is one fact: x64 and arm64 each carried an identical typealias under its own name, and both concat
+// passes key exactly this map with exactly this meaning.
+export typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
+
+// How many labels a concat pass has laid so far — the ordinal `recordChunkLabel` compares the map's height
+// against. Not a `FuncIndex`: a chunk is not a module function (the entry stub, the hand-assembled runtime
+// chunks and `__symtable` have no position in `stdModule.functions`).
+export typealias ChunkLabelCount = int(0 to u64.max)
+
+// ⭐⭐ **LAY ONE CHUNK'S LABEL DOWN, AND REFUSE A SECOND CLAIM ON THAT NAME (A2l).**
+//
+// ⚠ **THIS IS A REACHABLE, SILENT MISCOMPILE, AND IT WAS MEASURED — not a hygiene guard.** A `.text`
+// layout map is keyed by NAME and read by `resolveCallFixups`, so a bare last-wins `upsert` does not
+// degrade an answer, it BINDS EVERY CALL TO THE OTHER BODY. `function mrt_runtime_init() returns int`
+// in an ordinary user program compiled, linked and RAN: the user's body was laid out, the
+// hand-assembled panic-runtime chunk of the same name was laid after it, and the program's own call to
+// its own function silently reached the runtime chunk instead — **exit 127 where the source says 7**,
+// with no diagnostic anywhere. (`mrt_start` was worse only in being loud: it tripped the entry-offset
+// guard and PANICKED the compiler on a plain user program, which is not a diagnostic either.)
+//
+// ⚠ **AND `FunctionNameIndex` CANNOT COVER IT, WHICH IS WHY THE CHECK LIVES HERE.** These names are not
+// a module's function names: the chunk list is every Std function PLUS the entry stub PLUS the
+// hand-assembled runtime chunks (`mrt_*`, `__gt_*`) PLUS `__symtable` — and the last three are minted at
+// the TARGET tier, after the last index any Std pass can build. Which of them exist depends on the target
+// and on `RuntimeUsage`, so the set cannot be PREDICTED upstream; it can only be NOTICED here, at the one
+// place that decides the layout. That is A1t's lesson (a collision is something to notice, never
+// something to predict) applied one tier down.
+//
+// The count trick is `FunctionNameIndex.create`'s, for its reason: this is called with `laidOut` labels
+// already in the map, so the height IS `laidOut + 1` afterwards unless one insert collapsed two names —
+// one integer compare, and no second hash probe on a per-chunk loop.
+export function recordChunkLabel(labelOffsets FuncLabelOffsetMap, name ByteArray, offset CodeOffset, laidOut ChunkLabelCount, project Project, funcNames FunctionNameIndex) throws CompileError
+	labelOffsets.upsert(name, value: offset)
+
+	if labelOffsets.count() != laidOut + 1 'duplicateChunkName'
+		try refuseDuplicateChunkName(name, project: project, funcNames: funcNames)
+	end 'duplicateChunkName'
+end 'recordChunkLabel'
+
+// The DECLARATION that took a name the compiler lays a chunk under. It is the SAME rule and the SAME
+// diagnostic as `FunctionNameIndex`'s duplicate refusal (E4015) — a declaration collided with a symbol the
+// compiler emits — and it is reported the same way, positioned at the declaration, because the cure is
+// the same: rename it. Only the DISCRIMINATOR differs. There both sides are module functions and
+// `sourceFilePath` tells the parsed one from the synthesized one; here the compiler's side is not in the
+// module at all, so the question is instead "does the Std module define this name, and from a source
+// file?" — which the checked index answers in one lookup.
+function refuseDuplicateChunkName(name ByteArray, project Project, funcNames FunctionNameIndex) throws CompileError
+	let spelled = String.from(name)
+	let declared = try funcNames.funcNamed(name) otherwise 'noModuleFunction'
+		panic("refuseDuplicateChunkName: two chunks are laid out under '{spelled}' and NEITHER is a Std function, so both were minted at the Target tier — the entry stub, a hand-assembled runtime chunk, or `__symtable`. Each of those is appended at exactly one site, so this is an augmentation that ran twice")
+	end 'noModuleFunction'
+
+	if declared.sourceFilePath.isEmpty() 'bothSynthesized'
+		panic("refuseDuplicateChunkName: the Std function named '{spelled}' is SYNTHESIZED, and a Target-tier chunk claims the same name — an `install*Runtime` and a hand-assembled chunk both supply this symbol, which is a compiler bug rather than anything a program can cause")
+	end 'bothSynthesized'
+
+	reportPositioned(project, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{spelled}' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it", line: declared.nameLine, column: declared.nameColumn, filePath: declared.sourceFilePath)
+	throw CompileError.compileError
+end 'refuseDuplicateChunkName'
 
 // Install the OS entry point at the MODULE level. x64-windows prepends `mrt_start` as a module
 // function (all-physical registers, its own explicit frame), which concat lays out first; it runs

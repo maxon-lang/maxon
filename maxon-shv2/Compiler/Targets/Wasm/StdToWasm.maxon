@@ -66,11 +66,10 @@ typealias ScratchLocalMap = Map with (WasmValType, Wasm32Index)
 // scratch locals a phi cycle in that function could need.
 typealias PhiValTypeSet = Set with WasmValType
 
-// Callee name → its wasm function index, and → its Std return type. Both are built once per
-// module (the index from the deterministic import-then-defined ordering, the return type from
-// each function's signature) so a `call` op resolves its target and its void-ness in O(1).
-typealias CalleeFuncIdxMap = Map with (ByteArray, Wasm32Index)
-typealias CalleeReturnTypeMap = Map with (ByteArray, StdReturnType)
+// Callee name → its parameter valtypes, in declaration order. The one per-callee map this backend
+// still builds: `funcParamValTypes` FOLDS a signature into a fresh array, so memoizing it is a real
+// saving, where a map of func INDICES or of RETURN TYPES was storing something `FunctionNameIndex`
+// already answers in two O(1) steps (see `wasmFuncIdxOf` — both are gone, A2l).
 typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
 
 // An indirect call's ENCODED FUNCTYPE (its `encodeFuncType` bytes) → the interned wasm functype index for
@@ -92,8 +91,8 @@ typealias DependentLhsMap = Map with (ValueId, ValueId)
 
 // THREE functions are imported, in this fixed order — so their func indices are the constants
 // below and every DEFINED function is offset by `WasmImportCount`. `buildWasmCoreModule` MUST
-// `addImportFunc` them in exactly this order for the indices to hold; `buildCalleeFuncIdxMap`
-// assigns each defined function `WasmImportCount + position` on the same assumption. The
+// `addImportFunc` them in exactly this order for the indices to hold; `wasmFuncIdxOf`
+// derives each defined function's index as `WasmImportCount + position` on the same assumption. The
 // component embed maps imports by NAME, so their ORDER is otherwise free — only this
 // index bookkeeping must be exact.
 //   0  wasi:cli/exit@0.2.6 exit-with-code                              (param i32) -> ()
@@ -182,10 +181,8 @@ let WasmRdataAlignment = 8 as ByteCount
 // model, synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call
 // $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
 // by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
-export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool) returns ByteArray
-	let calleeFuncIdx = buildCalleeFuncIdxMap(module)
-	let calleeReturnType = buildCalleeReturnTypeMap(module)
-	let calleeParamTypes = buildCalleeParamTypesMap(module)
+export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, funcNames FunctionNameIndex) returns ByteArray
+	let calleeParamTypes = buildCalleeParamTypesMap(funcNames)
 
 	requireIndirectlyReachableParamsAreMachineWords(globalData, calleeParamTypes: calleeParamTypes)
 
@@ -226,23 +223,24 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// PE writer patches `.rdata` before writing it (`PeWriter.patchStringBufferFixups`).
 	var rdataImage = globalData.rdataImage()
 	applyStringBufferFixups(rdataImage, globalData: globalData, rdataBase: rdataBase)
-	bakeFuncTableIndexRelocs(rdataImage, globalData: globalData, calleeFuncIdx: calleeFuncIdx)
+	bakeFuncTableIndexRelocs(rdataImage, globalData: globalData, funcNames: funcNames)
 
 	// The WASI imports were added FIRST (above), in the order the `*ImportFuncIdx` constants fix, so every
-	// defined function gets the index `calleeFuncIdx` precomputed (`WasmImportCount + position`). Order
+	// defined function gets the index `wasmFuncIdxOf` computes (`WasmImportCount + position`). Order
 	// among imports is otherwise free (the component embed maps by name), but the func-index bookkeeping
 	// depends on it.
 
-	// Defined functions, in `module.functions` order — the order `calleeFuncIdx` assumes.
-	for funcIdx in 0 upto module.funcCount() 'eachFunc'
-		let func = module.getFunc(funcIdx)
-		var emitter = WasmFuncEmitter.create(module, func: func, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, calleeFuncIdx: calleeFuncIdx, calleeReturnType: calleeReturnType, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)
+	// Defined functions in the order `wasmFuncIdxOf` assumes — walked off the INDEX'S OWN ARRAY rather than
+	// the module's, so the order the func indices are DERIVED from and the order they are EMITTED in are the
+	// same array rather than two that must be kept in step (A2l).
+	for func in funcNames.functions 'eachFunc'
+		var emitter = WasmFuncEmitter.create(module, func: func, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, funcNames: funcNames, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)
 		emitter.emit()
 		let typeIdx = builder.internFuncType(funcParamValTypes(func), results: funcSignatureResultValTypes(func))
 		_ = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes())
 	end 'eachFunc'
 
-	let runFuncIdx = appendRunEntry(builder, module: module, calleeFuncIdx: calleeFuncIdx, checkLeaks: checkLeaks, initGlobals: initGlobals)
+	let runFuncIdx = appendRunEntry(builder, module: module, funcNames: funcNames, checkLeaks: checkLeaks, initGlobals: initGlobals)
 
 	// The memory must cover BOTH images; `.rdata` sits above `.data`, so `rdataBase + rdataSize`
 	// is the high-water mark (and `rdataBase >= WasmDataBaseOffset` even with no globals, so the
@@ -343,7 +341,7 @@ end 'requireIndirectlyReachableParamsAreMachineWords'
 // slot differs.** The x64 PE/ELF writers bake the target's absolute `.text` VA, because their reader
 // DEREFERENCES it (`call qword [witness + 24 + 8*i]`); wasm has no code addresses at all, so its reader is a
 // `call_indirect` through the module's one funcref table — and the value the slot must hold is therefore the
-// callee's TABLE INDEX. `table[i] == funcIdx i` (`emitElementSection`), so that index IS `calleeFuncIdx`'s
+// callee's TABLE INDEX. `table[i] == funcIdx i` (`emitElementSection`), so that index IS `wasmFuncIdxOf`'s
 // answer, known here from `module.functions` order alone with no writer-stage layout to wait for. v1 does
 // exactly this (`patchFuncAbs64InRdataWasm`).
 //
@@ -356,9 +354,9 @@ end 'requireIndirectlyReachableParamsAreMachineWords'
 // it becomes a data segment — and MUST precede `addDataSegment(rdataBase, rdataImage)`. Empty for every
 // program that conforms nothing to an interface and holds no managed-opaque-`T` array, so those stay
 // byte-identical.
-function bakeFuncTableIndexRelocs(rdataImage ByteArray, globalData GlobalDataTable, calleeFuncIdx CalleeFuncIdxMap)
+function bakeFuncTableIndexRelocs(rdataImage ByteArray, globalData GlobalDataTable, funcNames FunctionNameIndex)
 	for reloc in globalData.pendingRdataRelocs 'each'
-		let funcIdx = try calleeFuncIdx.get(reloc.funcName) otherwise panic("bakeFuncTableIndexRelocs: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references function '{String.from(reloc.funcName)}', which is in no wasm function index — it was never installed (a DCE-root gap where the slot's owner was built), so it has no table slot to name")
+		let funcIdx = try wasmFuncIdxOf(funcNames, callee: reloc.funcName) otherwise panic("bakeFuncTableIndexRelocs: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references function '{String.from(reloc.funcName)}', which is in no wasm function index — it was never installed (a DCE-root gap where the slot's owner was built), so it has no table slot to name")
 		// The slot's ADDRESS comes from the shared `rdataFuncSlotOffset` the x64 baker uses, because only the
 		// VALUE below is target-specific — see that function.
 		patchQword(rdataImage, offset: rdataFuncSlotOffset(globalData, reloc: reloc), value: funcIdx)
@@ -375,24 +373,24 @@ end 'wasmRdataBase'
 // Synthesize the component entry `wasi:cli/run@0.2.6#run() -> i32`: run `main`, hand its
 // exit code to `exit-with-code`, and leave the ok-discriminant on the stack. Returns the
 // entry's wasm function index (for the export).
-function appendRunEntry(builder WasmModuleBuilder, module StdModule, calleeFuncIdx CalleeFuncIdxMap, checkLeaks bool, initGlobals bool) returns Wasm32Index
-	let mainFuncIdx = try calleeFuncIdx.get(WasmMainFunctionName) otherwise panic("buildWasmCoreModule: no `main` function in the module — the wasm `run` entry has nothing to call")
+function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames FunctionNameIndex, checkLeaks bool, initGlobals bool) returns Wasm32Index
+	let mainFuncIdx = try wasmFuncIdxOf(funcNames, callee: WasmMainFunctionName) otherwise panic("buildWasmCoreModule: no `main` function in the module — the wasm `run` entry has nothing to call")
 	let mainReturnValType = mainReturnValueType(module)
 
 	var runBody = WasmBody.create()
 
-	appendModuleInitCall(runBody, calleeFuncIdx: calleeFuncIdx, initGlobals: initGlobals)
+	appendModuleInitCall(runBody, funcNames: funcNames, initGlobals: initGlobals)
 
 	runBody.call(mainFuncIdx)
 
-	let afterCleanupVt = appendGlobalCleanupGate(runBody, exitCodeValType: mainReturnValType, calleeFuncIdx: calleeFuncIdx, initGlobals: initGlobals)
+	let afterCleanupVt = appendGlobalCleanupGate(runBody, exitCodeValType: mainReturnValType, funcNames: funcNames, initGlobals: initGlobals)
 
 	// THE LEAK GATE — the sibling of the native backends' entry-stub gate
 	// (BackendDispatch.prependEntryStub). When the MM runtime installed `__mm_leak_check`, main's
 	// exit code is routed through it before exit; a leaked program comes back as 101. `exit-with-code`
 	// takes an i32, so the resulting code — i64 after the gate, else main's own return width — is
 	// wrapped last. `main` returns `ExitCode` (i64 in the corpus); a narrower ExitCode is already i32.
-	let exitCodeVt = appendLeakGate(runBody, exitCodeValType: afterCleanupVt, calleeFuncIdx: calleeFuncIdx, checkLeaks: checkLeaks)
+	let exitCodeVt = appendLeakGate(runBody, exitCodeValType: afterCleanupVt, funcNames: funcNames, checkLeaks: checkLeaks)
 	if exitCodeVt == WasmValType.i64 'wrap'
 		runBody.i32WrapI64()
 	end 'wrap'
@@ -409,12 +407,12 @@ end 'appendRunEntry'
 // `RuntimeUsage.usesManagedGlobals`, read for `appendLeakGate`'s stated reason: installation is decided in
 // one place, and a missing function under that bit is an impossible state that PANICS rather than silently
 // leaving every slot null.
-function appendModuleInitCall(runBody WasmBody, calleeFuncIdx CalleeFuncIdxMap, initGlobals bool)
+function appendModuleInitCall(runBody WasmBody, funcNames FunctionNameIndex, initGlobals bool)
 	if not initGlobals 'noManagedGlobals'
 		return
 	end 'noManagedGlobals'
 
-	runBody.call(try calleeFuncIdx.get(ModuleInitName) otherwise panic("appendModuleInitCall: `RuntimeUsage.usesManagedGlobals` says this program declares a managed top-level `var`, so `__module_init` must be in this module — its absence means the ROOT was pruned (see DeadFunctionElimination's root set), which would leave every managed global's slot null"))
+	runBody.call(try wasmFuncIdxOf(funcNames, callee: ModuleInitName) otherwise panic("appendModuleInitCall: `RuntimeUsage.usesManagedGlobals` says this program declares a managed top-level `var`, so `__module_init` must be in this module — its absence means the ROOT was pruned (see DeadFunctionElimination's root set), which would leave every managed global's slot null"))
 end 'appendModuleInitCall'
 
 // ⭐ **THE GLOBAL-CLEANUP GATE on the wasm exit path (P1.7 slice 2a)** — the sibling of the native stubs'
@@ -431,12 +429,12 @@ end 'appendModuleInitCall'
 // emitting no gate.
 //
 // Returns the valtype now on the stack: i64 after the gate, else the code's own valtype.
-function appendGlobalCleanupGate(runBody WasmBody, exitCodeValType WasmValType, calleeFuncIdx CalleeFuncIdxMap, initGlobals bool) returns WasmValType
+function appendGlobalCleanupGate(runBody WasmBody, exitCodeValType WasmValType, funcNames FunctionNameIndex, initGlobals bool) returns WasmValType
 	if not initGlobals 'noManagedGlobals'
 		return exitCodeValType
 	end 'noManagedGlobals'
 
-	let cleanupIdx = try calleeFuncIdx.get(GlobalCleanupName) otherwise panic("appendGlobalCleanupGate: `RuntimeUsage.usesManagedGlobals` says this program declares a managed top-level `var`, so `__maxon_global_cleanup` must be in this module — its absence means the ROOT was pruned (see DeadFunctionElimination's root set), which would leak every managed global")
+	let cleanupIdx = try wasmFuncIdxOf(funcNames, callee: GlobalCleanupName) otherwise panic("appendGlobalCleanupGate: `RuntimeUsage.usesManagedGlobals` says this program declares a managed top-level `var`, so `__maxon_global_cleanup` must be in this module — its absence means the ROOT was pruned (see DeadFunctionElimination's root set), which would leak every managed global")
 	coerceOnStack(runBody, from: exitCodeValType, to: WasmValType.i64)
 	runBody.call(cleanupIdx)
 	return WasmValType.i64
@@ -452,7 +450,7 @@ end 'appendGlobalCleanupGate'
 //
 // ⚠ **`checkLeaks` IS `RuntimeUsage.usesHeap` — THE SAME BIT THE NATIVE GATES READ, AND IT IS NOT
 // OPTIONAL HERE.** Whether a gate belongs and which func index to call are two different questions, and
-// this used to answer BOTH from `calleeFuncIdx.get(MmLeakCheckName)`: a miss silently meant "no heap, no
+// this used to answer BOTH from a func-index lookup of `__mm_leak_check`: a miss silently meant "no heap, no
 // gate". That is safe only while nothing can take an installed `__mm_leak_check` back out — the premise
 // dead-function elimination removed. Because nothing CALLS the leak check, it survives DFE only by being
 // an explicit root; had that root ever been narrowed, x64 and arm64 would have failed LOUD at their
@@ -464,12 +462,12 @@ end 'appendGlobalCleanupGate'
 // gate runs FIRST and passes the code through (P1.7 slice 2a), so this reads whatever that left.
 //
 // Returns the valtype now on the stack: i64 after the gate, else the code's own valtype.
-function appendLeakGate(runBody WasmBody, exitCodeValType WasmValType, calleeFuncIdx CalleeFuncIdxMap, checkLeaks bool) returns WasmValType
+function appendLeakGate(runBody WasmBody, exitCodeValType WasmValType, funcNames FunctionNameIndex, checkLeaks bool) returns WasmValType
 	if not checkLeaks 'noHeap'
 		return exitCodeValType
 	end 'noHeap'
 
-	let leakCheckIdx = try calleeFuncIdx.get(MmLeakCheckName) otherwise panic("appendLeakGate: `RuntimeUsage.usesHeap` says the MM runtime was installed, so `__mm_leak_check` must be in this module — its absence means the leak-gate ROOT was pruned (see DeadFunctionElimination's root set), which would silently disable the 101 leak gate on wasm")
+	let leakCheckIdx = try wasmFuncIdxOf(funcNames, callee: MmLeakCheckName) otherwise panic("appendLeakGate: `RuntimeUsage.usesHeap` says the MM runtime was installed, so `__mm_leak_check` must be in this module — its absence means the leak-gate ROOT was pruned (see DeadFunctionElimination's root set), which would silently disable the 101 leak gate on wasm")
 	coerceOnStack(runBody, from: exitCodeValType, to: WasmValType.i64)
 	runBody.call(leakCheckIdx)
 	return WasmValType.i64
@@ -493,34 +491,31 @@ end 'mainReturnValueType'
 // Module-level maps (built once, looked up O(1) — never iterated for output)
 // ==========================================================================
 
-// Callee name → wasm function index. Defined functions land at `importCount + position`
-// because `buildWasmCoreModule` adds the sole import first, then the functions in this exact
-// order — so the index is computable here without depending on `addFunction`'s return.
-function buildCalleeFuncIdxMap(module StdModule) returns CalleeFuncIdxMap
-	var map = CalleeFuncIdxMap.create()
-	for i in 0 upto module.funcCount() 'eachFunc'
-		let func = module.getFunc(i)
-		map.upsert(func.name, value: (WasmImportCount + i) as Wasm32Index)
-	end 'eachFunc'
-	return map
-end 'buildCalleeFuncIdxMap'
-
-// Callee name → Std return type, so a `call`'s result is stored only when the callee returns
-// a value (a void callee pushes nothing on the wasm stack — a `local.set` there underflows).
-function buildCalleeReturnTypeMap(module StdModule) returns CalleeReturnTypeMap
-	var map = CalleeReturnTypeMap.create()
-	for func in module.functions 'eachFunc'
-		map.upsert(func.name, value: func.returnType)
-	end 'eachFunc'
-	return map
-end 'buildCalleeReturnTypeMap'
+// ⭐⭐ **A DEFINED FUNCTION'S WASM FUNCTION INDEX — DERIVED, NOT STORED (A2l).** Defined functions land at
+// `WasmImportCount + position` because `buildWasmCoreModule` adds the imports first and then the functions
+// in `module.functions` order, so the index a `call` needs IS the position `FunctionNameIndex` already
+// resolves, plus a constant.
+//
+// It used to be a map of its own — `buildCalleeFuncIdxMap`, a bare last-wins `upsert` over the same array,
+// resting on the uniqueness guarantee `FunctionNameIndex` states without saying so. That is the most
+// dangerous of the ten sites that did: the VALUE is a POSITION, so a silent last-wins does not degrade an
+// answer, it binds every `call` to the WRONG FUNCTION. The map is gone; the offset is one addition, and the
+// key set is now provably the one the duplicate check ran over.
+function wasmFuncIdxOf(funcNames FunctionNameIndex, callee ByteArray) returns Wasm32Index throws MapError
+	return (WasmImportCount + (try funcNames.byName.get(callee))) as Wasm32Index
+end 'wasmFuncIdxOf'
 
 // callee name → its parameter valtypes, in declaration order. Used by `emitCall` to coerce each
 // argument to the width the callee's parameter declares — an `i64` literal passed to an `ExitCode`
 // (i32) parameter needs an `i32.wrap_i64`, which the native backends never emit (64-bit registers).
-function buildCalleeParamTypesMap(module StdModule) returns CalleeParamTypesMap
+//
+// The one per-callee map this backend still builds, and it takes the CHECKED index rather than the module
+// so its key set is provably the duplicate-free one (see `FunctionNameIndex`'s header). It stays a map
+// because `funcParamValTypes` builds a fresh ARRAY per callee — a real computation, read once per call op,
+// where the deleted func-index and return-type maps each stored something reachable in two O(1) steps.
+function buildCalleeParamTypesMap(funcNames FunctionNameIndex) returns CalleeParamTypesMap
 	var map = CalleeParamTypesMap.create()
-	for func in module.functions 'eachFunc'
+	for func in funcNames.functions 'eachFunc'
 		map.upsert(func.name, value: funcParamValTypes(func))
 	end 'eachFunc'
 	return map
@@ -795,8 +790,8 @@ end 'unaryResultValType'
 // The valtype of a `call`'s result — the callee's return type. A void callee still names a
 // result value in the Std IR (nothing reads it in the scalar slice); i64 is a harmless
 // placeholder for that unread local.
-function callResultValType(callee ByteArray, calleeReturnType CalleeReturnTypeMap) returns WasmValType
-	let rt = try calleeReturnType.get(callee) otherwise panic("callResultValType: no Std function named '{String.from(callee)}'")
+function callResultValType(callee ByteArray, funcNames FunctionNameIndex) returns WasmValType
+	let rt = (try funcNames.funcNamed(callee) otherwise panic("callResultValType: no Std function named '{String.from(callee)}'")).returnType
 	return match rt 'r'
 		void gives WasmValType.i64
 		value(inner) gives wasmValTypeOf(inner)
@@ -809,7 +804,7 @@ end 'callResultValType'
 // is exactly as wide as their `lhs` — are recorded as DEPENDENT and resolved afterward, so the
 // table is correct regardless of block/op order (a single forward pass would need `blockRefs`
 // to be in dominance order, which is not guaranteed here).
-function buildValtypeTable(module StdModule, func IrFunction, calleeReturnType CalleeReturnTypeMap) returns WasmValTypeArray
+function buildValtypeTable(module StdModule, func IrFunction, funcNames FunctionNameIndex) returns WasmValTypeArray
 	var valtypes = WasmValTypeArray.create()
 
 	for i in 0 upto func.paramCount 'eachParam'
@@ -828,11 +823,11 @@ function buildValtypeTable(module StdModule, func IrFunction, calleeReturnType C
 		end 'eachArg'
 
 		for opIdx in block.opRefs 'eachOp'
-			recordDefValtype(try module.ops.get(opIdx) otherwise panic("buildValtypeTable: opIdx {opIdx} not in module.ops"), valtypes: valtypes, depResult: depResult, depLhs: depLhs, calleeReturnType: calleeReturnType)
+			recordDefValtype(try module.ops.get(opIdx) otherwise panic("buildValtypeTable: opIdx {opIdx} not in module.ops"), valtypes: valtypes, depResult: depResult, depLhs: depLhs, funcNames: funcNames)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
-			recordDefValtype(try module.ops.get(block.terminatorIndex()) otherwise panic("buildValtypeTable: terminatorIndex not in module.ops"), valtypes: valtypes, depResult: depResult, depLhs: depLhs, calleeReturnType: calleeReturnType)
+			recordDefValtype(try module.ops.get(block.terminatorIndex()) otherwise panic("buildValtypeTable: terminatorIndex not in module.ops"), valtypes: valtypes, depResult: depResult, depLhs: depLhs, funcNames: funcNames)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -845,7 +840,7 @@ end 'buildValtypeTable'
 // a value to the wrong width. Terminators and the out-of-scope memory/system ops define
 // nothing this backend declares a local for (a memory/system op present at all makes the body
 // emitter panic before this table is ever consumed).
-function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueIdArray, depLhs ValueIdArray, calleeReturnType CalleeReturnTypeMap)
+function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueIdArray, depLhs ValueIdArray, funcNames FunctionNameIndex)
 	match op 'def'
 		const(resultId, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
 		binOp(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(operandType))
@@ -859,7 +854,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		branch then break 'def'
 		ret then break 'def'
 		param(resultId, _, paramType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(paramType))
-		call(resultId, callee, _) then setValtype(valtypes, v: resultId, vt: callResultValType(callee, calleeReturnType: calleeReturnType))
+		call(resultId, callee, _) then setValtype(valtypes, v: resultId, vt: callResultValType(callee, funcNames: funcNames))
 		retVoid then break 'def'
 		// ⚠ A wasm linear-memory ADDRESS IS AN i32, not the i64 pointer width the native backends
 		// carry in a 64-bit register. `globalAddr` materializes an `i32.const`, so its result local
@@ -875,7 +870,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		rdataAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		// A `tryCall` defines TWO values (like `call` plus the flag); `errorReturn`/`osExit` define
 		// none (a return terminator, a diverging exit). See `recordTryCallDefs`.
-		tryCall(resultId, errorFlagId, callee, _) then recordTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, callee: callee, calleeReturnType: calleeReturnType)
+		tryCall(resultId, errorFlagId, callee, _) then recordTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, callee: callee, funcNames: funcNames)
 		errorReturn then break 'def'
 		osExit then break 'def'
 		// P1.5-A1 non-capturing function values. A function value itself is a machine word (its Std type
@@ -911,8 +906,8 @@ end 'recordDefValtype'
 // a plain `call` (`callResultValType`) — and its error flag, always i64 (the dual-register flag the
 // native backends carry in R10/x9). A void-returning throwing callee still names an (unread) result
 // value; `callResultValType` gives it the same i64 placeholder a void `call` result gets.
-function recordTryCallDefs(valtypes WasmValTypeArray, resultId ValueId, errorFlagId ValueId, callee ByteArray, calleeReturnType CalleeReturnTypeMap)
-	setValtype(valtypes, v: resultId, vt: callResultValType(callee, calleeReturnType: calleeReturnType))
+function recordTryCallDefs(valtypes WasmValTypeArray, resultId ValueId, errorFlagId ValueId, callee ByteArray, funcNames FunctionNameIndex)
+	setValtype(valtypes, v: resultId, vt: callResultValType(callee, funcNames: funcNames))
 	setValtype(valtypes, v: errorFlagId, vt: WasmValType.i64)
 end 'recordTryCallDefs'
 
@@ -990,8 +985,11 @@ type WasmFuncEmitter
 	var globalData as GlobalDataTable
 	var dataBase as Wasm32Index
 	var rdataBase as Wasm32Index
-	var calleeFuncIdx as CalleeFuncIdxMap
-	var calleeReturnType as CalleeReturnTypeMap
+	// The module's CHECKED name index (`FunctionNameIndex`, A2l), threaded down from `buildBackend`. It
+	// answers both questions a direct `call` asks about its callee — which wasm function index to emit
+	// (`wasmFuncIdxOf`) and whether the callee returns a value at all — in place of the two maps that used
+	// to copy those facts out of the same function array without stating what made their keys unique.
+	let funcNames as FunctionNameIndex
 	var calleeParamTypes as CalleeParamTypesMap
 	// Indirect-call SIGNATURE key → its pre-interned functype index, read by `emitIndirectCallOp` (see
 	// `IndirectCallTypeIdxMap`). Module-wide; shared read-only by every emitter.
@@ -1021,8 +1019,8 @@ type WasmFuncEmitter
 	// happens to agree with it.
 	var blockDispatchById as BlockIndexById
 
-	static function create(module StdModule, func IrFunction, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, calleeFuncIdx CalleeFuncIdxMap, calleeReturnType CalleeReturnTypeMap, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
-		let valtypes = buildValtypeTable(module, func: func, calleeReturnType: calleeReturnType)
+	static function create(module StdModule, func IrFunction, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, funcNames FunctionNameIndex, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
+		let valtypes = buildValtypeTable(module, func: func, funcNames: funcNames)
 		let useDispatcher = decideDispatcher(module, func: func)
 
 		var emitter = Self{
@@ -1031,8 +1029,7 @@ type WasmFuncEmitter
 			globalData: globalData,
 			dataBase: dataBase,
 			rdataBase: rdataBase,
-			calleeFuncIdx: calleeFuncIdx,
-			calleeReturnType: calleeReturnType,
+			funcNames: funcNames,
 			calleeParamTypes: calleeParamTypes,
 			indirectCallTypeIdx: indirectCallTypeIdx,
 			valtypes: valtypes,
@@ -1659,7 +1656,7 @@ type WasmFuncEmitter
 			coerceOnStack(self.body, from: getValtype(self.valtypes, v: arg), to: paramVt)
 		end 'eachArg'
 
-		let funcIdx = try self.calleeFuncIdx.get(callee) otherwise panic("emitCall: no wasm function index for callee '{String.from(callee)}'")
+		let funcIdx = try wasmFuncIdxOf(self.funcNames, callee: callee) otherwise panic("emitCall: no wasm function index for callee '{String.from(callee)}'")
 		self.body.call(funcIdx)
 	end 'emitCallArgsAndCall'
 
@@ -1668,7 +1665,7 @@ type WasmFuncEmitter
 	function emitCall(resultId ValueId, callee ByteArray, args ValueIdArray)
 		self.emitCallArgsAndCall(callee, args: args)
 
-		let rt = try self.calleeReturnType.get(callee) otherwise panic("emitCall: no return type for callee '{String.from(callee)}'")
+		let rt = (try self.funcNames.funcNamed(callee) otherwise panic("emitCall: no return type for callee '{String.from(callee)}'")).returnType
 		if not stdReturnTypeIsVoid(rt) 'hasResult'
 			self.body.localSet(resultId as Wasm32Index)
 		end 'hasResult'
@@ -1679,7 +1676,7 @@ type WasmFuncEmitter
 	// (value-returning) or `(params) -> (i64)` (void-returning), so its results sit on the stack with the
 	// i64 error FLAG on TOP. `local.set` pops top-first, so the flag is captured FIRST, then the primary
 	// value — for a void-returning throwing callee the call pushes only the flag, so there is no value to
-	// capture (`calleeReturnType` is the callee's OWN return type, void-vs-value). The two captures never
+	// capture (the index answers with the callee's OWN return type, void-vs-value). The two captures never
 	// need the native backends' parallel-copy resolver: a wasm stack pop targets a distinct local, so
 	// there is no register-cycle to break. A `tryCall` only ever targets a THROWING callee (the parser
 	// rejects a non-throwing `try` via E3055), so the flag is always present.
@@ -1688,7 +1685,7 @@ type WasmFuncEmitter
 
 		self.body.localSet(errorFlagId as Wasm32Index)
 
-		let rt = try self.calleeReturnType.get(callee) otherwise panic("emitTryCall: no return type for callee '{String.from(callee)}'")
+		let rt = (try self.funcNames.funcNamed(callee) otherwise panic("emitTryCall: no return type for callee '{String.from(callee)}'")).returnType
 		if not stdReturnTypeIsVoid(rt) 'hasResult'
 			self.body.localSet(resultId as Wasm32Index)
 		end 'hasResult'
@@ -1696,13 +1693,13 @@ type WasmFuncEmitter
 
 	// A function VALUE (`funcAddr`, P1.5-A1): its wasm value is the callee's TABLE INDEX. The module builds
 	// one funcref table with table[i] == function i, so a function's table index equals its wasm funcIdx —
-	// exactly what `calleeFuncIdx` already holds. Materialized as an i64: a function value's Std type is a
+	// exactly what `wasmFuncIdxOf` derives. Materialized as an i64: a function value's Std type is a
 	// machine word, so it flows through params/fields/returns/block-args as i64 like every other value, and
 	// is narrowed to the i32 table-index operand only at the `call_indirect` (`emitCallIndirect`). This is
 	// the `.text`-address sibling of `emitGlobalAddr`/`emitRdataAddr`, but a value that FLOWS rather than an
 	// address consumed in place — which is why it is i64 here, not the i32 those two produce.
 	function emitFuncAddr(resultId ValueId, funcName ByteArray)
-		let funcIdx = try self.calleeFuncIdx.get(funcName) otherwise panic("emitFuncAddr: no wasm function index for function value '{String.from(funcName)}'")
+		let funcIdx = try wasmFuncIdxOf(self.funcNames, callee: funcName) otherwise panic("emitFuncAddr: no wasm function index for function value '{String.from(funcName)}'")
 		self.body.i64Const(funcIdx as ParsedInt)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitFuncAddr'

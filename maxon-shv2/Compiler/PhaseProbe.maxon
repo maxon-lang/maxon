@@ -40,6 +40,32 @@ export typealias AllocCount = int(0 to u64.max)
 export typealias AllocCountArray = Array with AllocCount
 export typealias ByteCountArray = Array with ByteCount
 
+// The phase spans this process has OPENED and not yet closed, innermost LAST.
+typealias TraceNameArray = Array with TraceName
+
+// ⭐⭐ **A TRACE SPAN IS OPENED IN ONE PLACE AND CLOSED IN ONE PLACE, AND NEITHER OF THEM IS A THROW SITE
+// (A1v).** `begin` emits the BEGIN; the two `record*Delta` writers emit the END. A stage that THROWS
+// between them never reaches its writer, so the span stays open for the rest of the trace and every event
+// after it reads as nested inside a phase that has finished — the monitor's whole nesting model, wrong from
+// that point on.
+//
+// ⚠ **MEASURED, not hypothetical.** `maxon monitor --filter=log maxon-shv2 build <missing file>` printed
+// exactly `log_phase_begin load` and nothing else: 0 dropped events, one BEGIN, no END.
+//
+// **The cure is a STACK drained at the compile boundary, not an END at each throw site.** There are four
+// throwing stages inside brackets today (`load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001,
+// and the chunk-label refusal in `link`) and the fourth was added by this very batch — which is the
+// argument: an END per throw site is one fact written once per site, and the NEXT throwing exit forgets it
+// in exactly the way the third and fourth did. A closure-based bracket would be the other shape, and this
+// language has no throwing function type, so the body could not be passed. The stack costs one push and one
+// pop per probe — the register allocator's ×7-per-function probes included — and no allocation once it has
+// reached its depth.
+//
+// ⚠ **CLOSING A SPAN IS NOT RECORDING A PHASE.** The drain emits the END only; it writes no row into the
+// timing or memory tables. An aborted phase consumed a time and a byte count that describe half a stage, and
+// a table whose rows must sum to the whole compile has no honest place to put them (see CompileTimings).
+var openPhaseSpans = TraceNameArray.create()
+
 // What one phase consumed. The unit of attribution: every phase in the report is one of
 // these, and the report's job is to prove they sum to the whole compile.
 //
@@ -105,6 +131,9 @@ export type PhaseProbe
 	// Memory counters first, clock next, CPU last — see this file's header.
 	export static function begin(name TraceName, unit TraceUnit) returns PhaseProbe
 		__DebugStream.phaseBegin(name, unit)
+		// Recorded OUTSIDE the counters, beside the emission it pairs with, so the span the stack knows
+		// about and the span the trace shows are opened by the same statement (see `openPhaseSpans`).
+		openPhaseSpans.push(name)
 		let allocTotal = totalAllocs()
 		let allocLive = liveAllocs()
 		let bytes = totalAllocBytes()
@@ -202,7 +231,7 @@ end 'recordPhase'
 export function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 	project.timings.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.addPhase(phase, delta: delta)
-	__DebugStream.phaseEnd(compilePhaseName(phase), project.traceUnit)
+	closePhaseSpan(compilePhaseName(phase), unit: project.traceUnit)
 end 'recordPhaseDelta'
 
 // Record `phase`, less whatever an INNER phase already claimed while it ran.
@@ -225,8 +254,36 @@ end 'recordRegAllocPhase'
 export function recordRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
 	project.timings.regAlloc.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.regAlloc.addPhase(phase, delta: delta)
-	__DebugStream.phaseEnd(regAllocPhaseName(phase), project.traceUnit)
+	closePhaseSpan(regAllocPhaseName(phase), unit: project.traceUnit)
 end 'recordRegAllocDelta'
+
+// Close the innermost open span, which must be `name`. ONE door for both writers above, so the stack and
+// the trace cannot be updated by two statements that could drift.
+//
+// The pop is CHECKED rather than trusted: a mismatch means two brackets INTERLEAVED instead of nesting, and
+// a trace built from interleaved spans reports a phase's events under a phase it never ran inside. That is
+// the same defect class `PhaseDelta.minus`' non-negative range traps for on the timing side, so it fails the
+// same way rather than quietly picking a spelling.
+function closePhaseSpan(name TraceName, unit TraceUnit)
+	let innermost = try openPhaseSpans.pop() otherwise panic("closePhaseSpan: a phase was recorded with no span open — every `record*Delta` closes a bracket `PhaseProbe.begin` opened, so this is a delta recorded twice or a probe that never began")
+
+	if innermost != name 'notInnermost'
+		panic("closePhaseSpan: closing trace span {name} while {innermost} is the innermost one still open — two phase brackets INTERLEAVE rather than nest, so every event inside them is attributed to a phase it did not run in")
+	end 'notInnermost'
+
+	__DebugStream.phaseEnd(name, unit)
+end 'closePhaseSpan'
+
+// Close every span a FAILED compile left open, innermost first. The one place a throwing stage's span is
+// accounted for — see `openPhaseSpans` for why it is here and not at each throw site.
+//
+// It is a no-op after a successful compile (every bracket recorded its own delta), which is what lets the
+// caller run it unconditionally on its failure path without asking which stage failed.
+export function closeOpenPhaseSpans(unit TraceUnit)
+	while openPhaseSpans.count() > 0 'drain'
+		__DebugStream.phaseEnd(try openPhaseSpans.pop() otherwise panic("closeOpenPhaseSpans: pop from a non-empty span stack"), unit)
+	end 'drain'
+end 'closeOpenPhaseSpans'
 
 // Everything a register-allocator sub-phase has claimed so far, across both tables. The
 // "before" snapshot `recordPhaseExcluding` subtracts against.

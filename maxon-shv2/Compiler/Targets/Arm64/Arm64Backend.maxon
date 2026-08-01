@@ -1336,8 +1336,6 @@ end 'appendArm64RuntimeChunks'
 // Concatenation: lay out .text, rebase fixups, resolve intra-module calls
 // ==========================================================================
 
-typealias Arm64FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
-
 // Concatenate the per-function chunks into `.text`, rebase each chunk's CHUNK-LOCAL fixups to absolute
 // offsets, resolve the intra-module `bl` calls to 26-bit displacements (`bl main` among them), rebase
 // the GOT import calls (the entry stub's `_exit`) into the writer's slot-indexed `relocations`, and
@@ -1349,19 +1347,25 @@ typealias Arm64FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
 // place that decides it. There is NO `__symtable`: x64 closes `.text` with it for the panic runtime's
 // backtrace, but the scalar core has no fault backtrace, so the table (and its `buildSymbolTableBytes`)
 // have nothing to symbolize and are omitted — they grow back with the arm64 panic runtime.
-export function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable) returns CodeResult
+export function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var relocations = RelocationArray.create()
-	var labelOffsets = Arm64FuncLabelOffsetMap.create()
+	var labelOffsets = FuncLabelOffsetMap.create()
 	var debugSymbols = DebugSymbolArray.create()
 	var rdataRelocations = RdataRelocationArray.create()
 	var funcAdrpRelocs = Arm64FuncAdrpRelocArray.create()
 	var jumpTableRelocs = JumpTableRelocArray.create()
 
+	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
+	// owns the rule and the refusal for both native backends. There is no `__symtable` claim to follow it
+	// here: the scalar core has no arm64 fault backtrace, so the table is not emitted (see this function's
+	// header).
+	var labelsLaid = 0 as ChunkLabelCount
 	for chunk in chunks 'eachChunk'
 		let funcStart = code.count()
-		labelOffsets.upsert(chunk.funcName, value: funcStart)
+		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
+		labelsLaid = labelsLaid + 1
 		debugSymbols.push(DebugSymbol.create(chunk.funcName, codeOffset: funcStart))
 		code.append(chunk.code)
 
@@ -1497,7 +1501,7 @@ end 'patchArm64FuncAdrpRelocs'
 // Patch every `bl` to the 26-bit PC-relative displacement of its named target (the arm64 twin of
 // `resolveCallFixups`). A bare stdlib-qualified/unqualified fallback is not needed this rung —
 // scalar-core calls resolve directly by name.
-function arm64ResolveCallFixups(code ByteArray, labelOffsets Arm64FuncLabelOffsetMap, callFixups CallFixupArray)
+function arm64ResolveCallFixups(code ByteArray, labelOffsets FuncLabelOffsetMap, callFixups CallFixupArray)
 	for fixup in callFixups 'resolve'
 		let targetOffset = try labelOffsets.get(fixup.targetName) otherwise panic("arm64ResolveCallFixups: bl to unknown function '{String.from(fixup.targetName)}'")
 		arm64PatchBranch26(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset)
@@ -1512,7 +1516,7 @@ end 'arm64ResolveCallFixups'
 // exactly as they add a section VMADDR to a resolved `RdataRelocation.rdataOffset`. `textOffset` is
 // written THROUGH the array's reference (`Arm64FuncAdrpReloc` is a `type`), so the by-index `var` get is
 // the same in-place mutation idiom `GlobalDataTable.layOut` uses.
-function arm64ResolveFuncAdrpRelocs(funcAdrpRelocs Arm64FuncAdrpRelocArray, labelOffsets Arm64FuncLabelOffsetMap)
+function arm64ResolveFuncAdrpRelocs(funcAdrpRelocs Arm64FuncAdrpRelocArray, labelOffsets FuncLabelOffsetMap)
 	for i in 0 upto funcAdrpRelocs.count() 'resolve'
 		var reloc = try funcAdrpRelocs.get(i) otherwise panic("arm64ResolveFuncAdrpRelocs: index {i} OOB despite the upto bound")
 		reloc.textOffset = try labelOffsets.get(reloc.funcName) otherwise panic("arm64ResolveFuncAdrpRelocs: leaFuncAddr of unknown function '{String.from(reloc.funcName)}'")
@@ -1531,12 +1535,12 @@ end 'arm64ResolveFuncAdrpRelocs'
 // TargetOp channel, so it is hand-assembled as a chunk in the encode phase (`appendArm64RuntimeChunks`)
 // and laid out first. `throws CompileError` because register allocation can fail for a real reason
 // (E5001), exactly as the x64 backend does.
-export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage) returns CodeResult throws CompileError
+export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
 	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
 	// `target` reaches the ISEL because the three OS-primitive lowerings differ per OS: macOS routes
 	// them through libSystem GOT imports, Linux through raw `svc #0` (see `arm64OsCallKind`), and the
 	// mmap anonymous-mapping flag word is a different number on each.
-	var (targetModule, valueClasses) = lowerStdToArm64(stdModule, target: target, globalData: globalData)
+	var (targetModule, valueClasses) = lowerStdToArm64(stdModule, target: target, globalData: globalData, funcNames: funcNames)
 	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
 
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
@@ -1562,7 +1566,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
-	let codeResult = concatArm64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData)
+	let codeResult = try concatArm64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
 	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
 
 	return codeResult

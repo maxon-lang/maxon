@@ -1675,9 +1675,6 @@ end 'emitFunctionChunk'
 // Concatenation: lay out .text, rebase fixups, resolve intra-module calls
 // ==========================================================================
 
-// Function name -> its start offset in the concatenated `.text`.
-typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
-
 // The runtime entry point's function name — its `.text` offset becomes the PE
 // AddressOfEntryPoint (see augmentWithRuntime, which lays it out first). Exported
 // so augmentWithRuntime builds a function under the same name the concat looks up.
@@ -1764,7 +1761,7 @@ end 'buildSymbolTableBytes'
 // calls to rel32, and package the result as a format-neutral CodeResult. Chunk
 // iteration order (which augmentWithRuntime arranges so `mrt_start` is first)
 // fixes the `.text` byte layout.
-export function concatX64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable) returns CodeResult
+export function concatX64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
 	var code = ByteArray.create()
 	var relocations = RelocationArray.create()
 	var callFixups = CallFixupArray.create()
@@ -1773,9 +1770,13 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	var rdataRelocations = RdataRelocationArray.create()
 	var jumpTableRelocs = JumpTableRelocArray.create()
 
+	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
+	// owns the rule and the refusal for both native backends.
+	var labelsLaid = 0 as ChunkLabelCount
 	for chunk in chunks 'eachChunk'
 		let funcStart = code.count()
-		labelOffsets.upsert(chunk.funcName, value: funcStart)
+		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
+		labelsLaid = labelsLaid + 1
 		debugSymbols.push(DebugSymbol.create(chunk.funcName, codeOffset: funcStart))
 		code.append(chunk.code)
 
@@ -1810,8 +1811,12 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	// + __symtable]` resolves like any other chunk reference) but deliberately NOT in
 	// `debugSymbols` — it is data, not a function, and an entry for it would let a walk
 	// symbolize a stray return address INTO the table.
+	// ⚠ It is DATA, not a function — which is why it has no chunk and no `debugSymbols` entry — but it does
+	// CLAIM A NAME in this map, so it goes through the same door and is counted like any other label. It is
+	// exempt from being a function, not from being unique: a second claim on `__symtable` would move the
+	// bound `textSize = __symtable - mrt_start` reads, silently mis-sizing every backtrace.
 	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
-	labelOffsets.upsert(SymbolTableName, value: code.count())
+	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	code.append(buildSymbolTableBytes(debugSymbols))
 
 	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
