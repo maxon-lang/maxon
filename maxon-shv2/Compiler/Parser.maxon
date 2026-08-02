@@ -643,7 +643,10 @@ export union ParseError implements Error
 	//     meaningless where every arm must yield a value, and the Pratt climber has already stopped
 	//     at the `and` (see `parseBinary`), so the arm parser meets it as a leftover, not an operator;
 	//   • a token past the end of a function SIGNATURE — `function foo() int`, the `returns` keyword
-	//     missing (see `requireSignatureLineEnd`).
+	//     missing (see `requireSignatureLineEnd`);
+	//   • a token in STATEMENT position that begins no statement — a bare `foo`, a `retur x` typo, a
+	//     `test` that meant `test()` (see `parseStatement`'s fall-through, and the arm above it for the
+	//     one shape there that is `unsupported` instead).
 	strayToken(got String, line LineNumber, column ColumnNumber)
 	// A token at FILE SCOPE where a declaration has to begin — a bare `42`, an `==`, a lone identifier.
 	// Renders as **E2001** `Expected function declaration, got '<got>'`, positioned at the token, and
@@ -12891,10 +12894,43 @@ export type Parser
 				// no-op and every existing direct-call statement lowers to the same IR.
 				_ = try self.parsePostfix(func, value: try self.parseCall(func, resultUsed: false), resultUsed: false)
 			end 'directCallStmt'
-		end 'callStmt' else 'unsupported'
+		end 'callStmt' else if self.peekKind() == TokenKind.dot 'memberExprStmt'
+			// `h.op` / `arr.managed` / `Point.create()` / `Self.make(1)` — a MEMBER ACCESS written on a line
+			// of its own. Every arm above has already declined it (no `=` to make it a store, no `(args)`
+			// shape any of the call dispatchers claims), and what is left is a WELL-FORMED EXPRESSION refused
+			// for a reason that belongs to statement position alone: a value-returning static discards a box
+			// nothing would then free, and a field read is a BORROW with no one here to borrow for.
+			//
+			// ⚠ The guard asks only what FOLLOWS, deliberately, where the `callStmt` arm above also pins the
+			// current token to an identifier. A member access's receiver is not always one — `"abc".foo()`
+			// and `Self.make(1)` both arrive here — so keying on the receiver's kind would sort a literal
+			// receiver into the arm below and change a verdict this port has no case for. Reading the
+			// lookahead alone makes the split CONSERVATIVE by construction: every token followed by `.`
+			// keeps the exact sentence it had before this arm existed, and only tokens that are not
+			// move.
+			//
+			// That is why this arm keeps E2015 while the one below does not. Both refusals are in force today,
+			// but only this one is PROVISIONAL: it stands until the ownership rung decides what a discarded
+			// box or an unclaimed borrow costs, so "a shape the compiler does not lower HERE YET" is literally
+			// what E2015 means for it — where the arm below is refused permanently, which E2015 cannot say.
+			// Four ported specs pin this sentence
+			// (`first-class-functions`, `managed-memory-methods`, `self-type-member-expression`,
+			// `static-method-statement`) and its category-not-text wording is theirs, not this port's.
+			let memberTok = self.current()
+			throw ParseError.unsupported("{memberTok.kind.rawValue} statement", line: memberTok.line, column: memberTok.column)
+		end 'memberExprStmt' else 'strayStatementToken'
+			// A bare `foo` on a line of its own, a `retur x` typo, a `test` that meant `test()`. Every arm
+			// above has declined the token and it opens no construct of its own — and no future feature makes
+			// any of these legal, which is the one verdict E2015 ("a construct this compiler does not
+			// implement yet") cannot carry. E2001 is the code the registry already claims for a token the
+			// grammar has no position for. Same fault and same fix as `dispatchTopLevel`'s fall-through
+			// (806bc0260) one scope up, and the same second defect with it: the message rendered
+			// `tok.kind.rawValue`, the token's CATEGORY, which is not a string any reader can search the file
+			// for. `tokenDisplayText` is the one reader that resolves a token's text — see its definition
+			// (`Lexer.maxon`) for why reading `.value` directly is not the same thing.
 			let tok = self.current()
-			throw ParseError.unsupported("{tok.kind.rawValue} statement", line: tok.line, column: tok.column)
-		end 'unsupported'
+			throw ParseError.strayToken(tokenDisplayText(tok), line: tok.line, column: tok.column)
+		end 'strayStatementToken'
 
 		// ⭐ **DROP THE STATEMENT'S UNCONSUMED OWNED TEMPORARIES.** `print("{x}")` created an interpolation
 		// result that `print` only BORROWED; under static single-owner it is owned by this statement and
