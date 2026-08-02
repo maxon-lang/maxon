@@ -7092,10 +7092,14 @@ export type ProgramSignatures
 	// without moving the doors. SIX of the seven were then MEASURED, one probe each, refusing a program the
 	// BOOTSTRAP compiles — `return`, reassignment, `otherwise`, a match arm's merge, a struct-literal /
 	// union-payload store, and a generic call's type-parameter argument. The seventh is overload SCORING,
-	// whose wrong `incompatible` no corpus program can observe today, because a candidate it refuses is
-	// refused a second time by every sibling candidate and the call resolves anyway — it is wired for its
-	// own stated promise (*"a candidate this function accepts cannot then be rejected downstream"*) and not
-	// because a case caught it. The shortest of the six is four lines:
+	// and ⛔ **the claim that its wrong `incompatible` was UNOBSERVABLE — "a candidate it refuses is
+	// refused a second time by every sibling candidate and the call resolves anyway" — WAS FALSE** (N2b
+	// review). When no candidate fits, the call does not resolve anyway: it resolves to the FIRST declared
+	// overload and reports the refusal against THAT one's parameter. MEASURED by putting the bare rule back
+	// into `overloadArgTypeFit` alone: `which(x Ints)` beside `which(m __ManagedMemory)`, called with a cwd
+	// buffer, stopped compiling with `expected 'Array_Integer', got 'Array___ManagedByte'` — quoting the
+	// parameter of the overload the call was never written against. All EIGHT are load-bearing and all
+	// eight are pinned. The shortest of the six is four lines:
 	//
 	//     function cwd() returns __ManagedMemory
 	//         return try __ManagedDirectory.currentPath() otherwise panic("cwd")
@@ -7109,7 +7113,8 @@ export type ProgramSignatures
 	// `namedAggregatesConflict(…) and not byteBufferBoundaryAdmits(…)` at each site instead would be the
 	// one-fact-two-answers shape this door exists to end, and is exactly how seven of them came to disagree.
 	// `specs-shv2/bytearray-element-size.md`'s `a-synthesized-buffer-crosses-every-declared-byte-buffer-door`
-	// pins all six reachable ones in one program.
+	// pins six of them in one program and
+	// `overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate` pins the eighth.
 	export function byteBufferBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
 		let declaredElement = self.arrayNamedElementName(declaredTag, nameId: declaredNameId)
 		if not isByteElementName(declaredElement) 'declaredElementIsNotNamedForAByte'
@@ -7860,18 +7865,22 @@ export type ProgramSignatures
 	// One type argument in canonical form — `mangleTypeArg`'s comparison twin. It differs in exactly one arm:
 	// a `named` leaf that names a generic-instance ALIAS becomes THAT instance's canonical name instead of
 	// the alias's bare spelling, which is what collapses the two spellings of one type.
+	//
+	// ⚠ **THE EDGE IS `denotedInstance`'S AND IS NOT SPELLED AGAIN HERE (N2b review).** "Which instance does
+	// this type argument denote?" is ONE fact with three readers — this name, the identity + (tag, nameId)
+	// pair `checkTypeParameterArgsAt` reads through `canonicalTypeArg`, and the E3091 cycle graph's edge —
+	// and it had been written out three times. A reader that learned an arm the others did not would call
+	// `Box with Bytes` and `Box with (Array with Byte)` two types where another calls them one, silently,
+	// in a name that mangled symbols are built from.
 	function canonicalTypeArgName(t MaxonType, path GenericInstanceIdArray) returns String
-		let tag = maxonTypeTag(t)
-		if tag == ValueTypeTag.genericInstance 'nested'
-			return String.from(self.canonicalNameWithin(typeNameIdOf(t), path: path))
-		end 'nested'
+		if let denoted = try self.denotedInstance(t) 'denotesAnInstance'
+			return String.from(self.canonicalNameWithin(denoted, path: path))
+		end 'denotesAnInstance'
 
-		if tag == ValueTypeTag.named 'namedLeaf'
-			let name = self.nameOfId(typeNameIdOf(t))
-			if let aliased = try self.genericAliases.get(name) 'namesAnInstance'
-				return String.from(self.canonicalNameWithin(aliased, path: path))
-			end 'namesAnInstance'
-			return String.from(name)
+		// A `named` leaf that denotes no instance is a declared aggregate or a ranged alias: its own name,
+		// which is what `mangleTypeArg` would answer for it and is spelled here without the String round trip.
+		if maxonTypeTag(t) == ValueTypeTag.named 'namedLeaf'
+			return String.from(self.nameOfId(typeNameIdOf(t)))
 		end 'namedLeaf'
 
 		return self.mangleTypeArg(t)
@@ -7962,29 +7971,66 @@ export type ProgramSignatures
 	// names; that duplicate is pre-existing and is its own rung. What matters for the comparison is the
 	// TYPE ARGUMENT's identity, and both spellings yield `N0`'s instance — the same `Box_S0`.)
 	//
-	// ⭐ **IT HANDS BACK A TYPE AND NOT A NAME, AND THAT IS WHAT KEEPS THE RESOLUTION SINGLE.** Its reader
-	// wants the argument BOTH ways — the identity name (`typeArgAggregateName`) and the (tag, nameId) pair
-	// the shared `aggregatesConflict` compares with — and a name-returning door could serve only the first.
-	// Resolved to a name, `Box with Bytes`'s argument read `Array_Byte` for the identity while its raw tag
-	// stayed `named`, so the byte-element boundary was asked about a name id that is not an instance id and
-	// answered no: MEASURED, `MemBox.create(<a cwd buffer>)` refused `expected 'Bytes'`.
+	// ⭐ **IT HANDS BACK A TYPE AND NOT A NAME, AND THAT IS WHAT KEEPS THE RESOLUTION SINGLE.**
+	// `checkTypeParameterArgsAt` wants the argument BOTH ways — the identity name (`typeArgAggregateName`)
+	// and the (tag, nameId) pair the shared `aggregatesConflict` compares with — and a name-returning door
+	// could serve only the first. Resolved to a name, `Box with Bytes`'s argument read `Array_Byte` for the
+	// identity while its raw tag stayed `named`, so the byte-element boundary was asked about a name id that
+	// is not an instance id and answered no: MEASURED, `MemBox.create(<a cwd buffer>)` refused
+	// `expected 'Bytes'`.
+	//
+	// ⭐⭐ **IT IS THE ONLY SPELLING OF THAT EDGE, AND THE EDGE HAD BEEN WRITTEN OUT THREE TIMES (N2b
+	// review).** The other two were `canonicalTypeArgName` — the canonical instance NAME, which mangled
+	// symbols and every nominal comparison are built from — and `buildInstanceArgGraph`, the E3091 cycle
+	// graph. Nothing made the three agree: an arm added to one (a tuple alias, a namespace-qualified alias
+	// name, a per-file resolution) would leave the others calling `Box with Bytes` and
+	// `Box with (Array with Byte)` two types where this one calls them one, with no compile error at any
+	// site. All three now ask here.
 	//
 	// ⚠ It cannot hang on a cyclic alias: `mangleGenericInstance` recurses only through `genericInstance`
 	// args (`mangleTypeArg` returns a `named` arg's bare NAME without resolving it), and those nest
 	// syntactically, so the recursion is bounded by source nesting depth. A cycle is refused earlier
 	// anyway, by `firstCyclicAliasDecl` (E3091), which runs before the pipeline.
 	export function canonicalTypeArg(arg MaxonType) returns MaxonType
-		// Only a `named` LEAF can spell an alias; every other tag already denotes what it is.
+		// A `genericInstance` already denotes itself, so it is handed back rather than re-boxed: the box
+		// below is minted only where a NAME had to be turned into an instance.
 		if maxonTypeTag(arg) != ValueTypeTag.named 'cannotSpellAnAlias'
 			return arg
 		end 'cannotSpellAnAlias'
 
-		if let aliased = try self.genericAliases.get(self.nameOfId(typeNameIdOf(arg))) 'namesAnInstance'
-			return MaxonType.genericInstance(aliased)
+		if let denoted = try self.denotedInstance(arg) 'namesAnInstance'
+			return MaxonType.genericInstance(denoted)
 		end 'namesAnInstance'
 
 		return arg
 	end 'canonicalTypeArg'
+
+	// ⭐⭐ **THE EDGE ITSELF: WHICH INSTANCE DOES THIS TYPE ARGUMENT DENOTE?** — its own id when it IS an
+	// instance, and the alias table's when it is a `named` leaf that names one. The `MaxonType`-returning
+	// door above is this answer BOXED, for the one reader that needs a type; the two readers that need only
+	// the id ask here and allocate nothing.
+	//
+	// ⚠ **THAT SPLIT IS WHY THERE IS A SECOND FUNCTION AND NOT A SECOND SPELLING.** Collapsing the id
+	// readers onto `canonicalTypeArg` was MEASURED at +2 allocations / +32 bytes at every rung of the scale
+	// ladder — a constant, from boxing an answer both of them immediately unwrapped. One fact, one place,
+	// and the box only where a box is wanted.
+	//
+	// `throws` is `Map.get`'s own channel: "this argument denotes no instance" is the ordinary answer for a
+	// scalar, a `String`, a struct or a plain ranged alias, and it is the caller's to interpret — the two
+	// id readers skip the edge, and `canonicalTypeArg` hands the argument back unchanged.
+	function denotedInstance(arg MaxonType) returns GenericInstanceId throws MapError
+		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'itIsAnInstance'
+			return typeNameIdOf(arg)
+		end 'itIsAnInstance'
+
+		// Only a `named` LEAF can spell an alias — a struct, a tuple and an opaque type parameter carry no
+		// alias table entry, and a primitive carries no name at all.
+		if maxonTypeTag(arg) != ValueTypeTag.named 'cannotSpellAnAlias'
+			throw MapError.keyNotFound
+		end 'cannotSpellAnAlias'
+
+		return try self.genericAliases.get(self.nameOfId(typeNameIdOf(arg)))
+	end 'denotedInstance'
 
 	// The identity of a `named` type argument that `canonicalTypeArg` has already resolved, so the generic
 	// alias arm is not restated here.
@@ -8046,9 +8092,10 @@ export type ProgramSignatures
 	end 'firstCyclicAliasDecl'
 
 	// The "instance ⇒ the instances its type arguments denote" graph, over the dense `GenericInstanceId`
-	// space — a nested `genericInstance` argument directly, and a `named` leaf through the alias table (the
-	// very edge `namedTypeArgIdentity` follows, so the cycle check and the identity read traverse ONE graph
-	// rather than two views of it).
+	// space. BOTH edge kinds — a nested `genericInstance` argument, and a `named` leaf that names an alias —
+	// are the one question `denotedInstance` answers, so this walk asks it rather than restating the alias
+	// lookup: the cycle check and the identity read traverse ONE graph rather than two views of it, and a
+	// `named` leaf the alias door starts (or stops) resolving cannot become an edge here and not there.
 	//
 	// Built through the shared counting sort (`buildCsr`) like every other adjacency in this compiler, and
 	// for the reason its header gives: a per-node array would be one refcounted heap object per instance.
@@ -8058,18 +8105,10 @@ export type ProgramSignatures
 
 		for gid in 0 upto self.genericInstances.count() 'eachInstance'
 			for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
-				let arg = self.substitutedInstanceArg(gid, position: position)
-				let tag = maxonTypeTag(arg)
-				if tag == ValueTypeTag.genericInstance 'nested'
+				if let denoted = try self.denotedInstance(self.substitutedInstanceArg(gid, position: position)) 'denotesAnInstance'
 					argOf.push(gid)
-					denotes.push(typeNameIdOf(arg))
-				end 'nested'
-				if tag == ValueTypeTag.named 'maybeAlias'
-					if let aliased = try self.genericAliases.get(self.nameOfId(typeNameIdOf(arg))) 'namesAnInstance'
-						argOf.push(gid)
-						denotes.push(aliased)
-					end 'namesAnInstance'
-				end 'maybeAlias'
+					denotes.push(denoted)
+				end 'denotesAnInstance'
 			end 'eachArg'
 		end 'eachInstance'
 

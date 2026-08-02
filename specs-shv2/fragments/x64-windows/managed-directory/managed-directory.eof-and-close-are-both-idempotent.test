@@ -1,6 +1,15 @@
 // Test: managed-directory.eof-and-close-are-both-idempotent
 function main() returns ExitCode
-	let dirPath = "test_md_empty_search"
+	// The scratch root is shared with every other case here and with every parallel spec
+	// worker, so losing the create race is ordinary — see this file's Documentation.
+	let scratchRoot = "temp"
+	try __ManagedDirectory.create(scratchRoot.toByteArray().managed) otherwise 'anotherWorkerMadeIt'
+		if not __ManagedDirectory.exists(scratchRoot.toByteArray().managed) 'noScratchRoot'
+			return 1
+		end 'noScratchRoot'
+	end 'anotherWorkerMadeIt'
+
+	let dirPath = "temp/test_md_empty_search"
 	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
 		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
 	end 'needCreate'
@@ -39,6 +48,55 @@ func @main {
     x64.pushReg r15
     x64.prologue 56
     x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __str_to_bytes
+    x64.movRegReg rcx, r12
+    x64.callDirect __md_create
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __str_to_bytes
+    x64.movRegReg rcx, r12
+    x64.callDirect __md_exists
+    x64.movRegReg rbx, r8
+    x64.xorRegImm32 rbx, r8, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc notEqual, noScratchRoot
+    x64.jmp ifcont
+  noScratchRoot:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.jmp trycont
+  trycont:
+    x64.leaRegRdata rbx, [rip + __str_rec_3]
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __arr_create
@@ -87,7 +145,7 @@ func @main {
   ifcont:
     x64.loadRegBaseDisp.word64 r12, [rbx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
-    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.leaRegRdata rax, [rip + __str_rec_5]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14

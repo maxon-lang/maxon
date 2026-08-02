@@ -356,6 +356,15 @@ function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature,
 			// accepts cannot then be rejected downstream. Spelled with the bare rule it answered
 			// `incompatible` for a `__ManagedMemory` parameter meeting a compiler-synthesized byte buffer,
 			// which `checkOneArgType` accepts — the two answers `checkOneArgType`'s header forbids.
+			//
+			// ⛔ **AND IT IS OBSERVABLE, WHICH THIS SITE WAS FILED AS NOT BEING (N2b review).** The filing
+			// argued that a candidate wrongly refused here is refused a second time by every sibling and the
+			// call resolves anyway. It does not: with NO candidate fitting, `selectOverload`'s caller falls
+			// back to the FIRST declared overload and reports against ITS parameter. MEASURED —
+			// `which(x Ints)` declared ahead of `which(m __ManagedMemory)`, called with a cwd buffer, read
+			// `expected 'Array_Integer', got 'Array___ManagedByte'`, naming a parameter the call was never
+			// written against. Pinned by `bytearray-element-size.md`'s
+			// `overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate`.
 			if programSignaturesIn(project, asker: "overloadArgTypeFit").aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), got: aggregateNameFor(project, tag: argTag, nameId: argNameId), gotTag: argTag, gotNameId: argNameId) 'aggregateMismatch'
 				return OverloadFit.incompatible
 			end 'aggregateMismatch'

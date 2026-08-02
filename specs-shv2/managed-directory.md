@@ -28,6 +28,24 @@ category: type-system
 
 - `__ManagedDirectory.exists(managed)` — Returns true if the path is an existing directory.
 
+### ⚠ WHERE THE CASES BELOW PUT THE DIRECTORIES THEY MAKE, AND WHY THEY CANNOT REMOVE THEM
+
+Six cases here CREATE a directory, and **shv2 has no directory-REMOVAL runtime entry at all** — the OS
+operations it lowers are `CreateDirectoryA`, `GetFileAttributesA`, `FindFirstFileA`/`FindNextFileA`,
+`GetCurrentDirectoryA` and `DeleteFileA`, and `DeleteFileA` refuses a directory. So a case can delete every
+FILE it wrote and cannot delete the directory that held them: whatever it makes outlives the suite run.
+
+⇒ Every one of them makes it under **`temp/`, which is gitignored**, rather than at the repo ROOT. That is
+not cosmetic: the project-root resolver walks UP, so a stray directory at the root is inside the project
+every later build resolves, and six of them were being left there on every suite run. Adding a
+`__ManagedDirectory.remove` is the real cure and is its own rung; until it exists this is the whole of what
+a spec can do.
+
+⚠ **The scratch root is SHARED** — by these six cases and by every parallel spec worker — so its creation
+must not race. Each case attempts the create and treats a LOSS as ordinary (`CreateDirectoryA` reports
+`ERROR_ALREADY_EXISTS`); the `exists` probe in the handler is the only gate. The per-case directory below it
+needs no such care: one case owns each name.
+
 ### Instance Methods (throwing)
 
 - `next()` — Advance-first iteration. Advances the cursor to the next REAL entry, skipping the `.` and `..` pseudo-entries, and returns non-zero if one was found or 0 when the iteration is complete. `openSearch` does not pre-load an entry, so callers iterate `while next() != 0 { use filename() }`. Throws `__ManagedDirectoryError.nextFailed` on OS error.
@@ -209,7 +227,16 @@ end 'createFile'
 
 function main() returns ExitCode
 	// Create a temp directory (may already exist from previous run)
-	let dirPath = "test_managed_dir_search"
+	// The scratch root is shared with every other case here and with every parallel spec
+	// worker, so losing the create race is ordinary — see this file's Documentation.
+	let scratchRoot = "temp"
+	try __ManagedDirectory.create(scratchRoot.toByteArray().managed) otherwise 'anotherWorkerMadeIt'
+		if not __ManagedDirectory.exists(scratchRoot.toByteArray().managed) 'noScratchRoot'
+			return 1
+		end 'noScratchRoot'
+	end 'anotherWorkerMadeIt'
+
+	let dirPath = "temp/test_managed_dir_search"
 	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
 		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise 'createFail'
 			print("create failed")
@@ -329,7 +356,16 @@ function writeFile(path String) throws ProbeError
 end 'writeFile'
 
 function main() returns ExitCode
-	let dirPath = "test_md_first_match"
+	// The scratch root is shared with every other case here and with every parallel spec
+	// worker, so losing the create race is ordinary — see this file's Documentation.
+	let scratchRoot = "temp"
+	try __ManagedDirectory.create(scratchRoot.toByteArray().managed) otherwise 'anotherWorkerMadeIt'
+		if not __ManagedDirectory.exists(scratchRoot.toByteArray().managed) 'noScratchRoot'
+			return 1
+		end 'noScratchRoot'
+	end 'anotherWorkerMadeIt'
+
+	let dirPath = "temp/test_md_first_match"
 	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
 		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
 	end 'needCreate'
@@ -381,7 +417,16 @@ function writeFile(path String) throws ProbeError
 end 'writeFile'
 
 function main() returns ExitCode
-	let dirPath = "test_md_filename"
+	// The scratch root is shared with every other case here and with every parallel spec
+	// worker, so losing the create race is ordinary — see this file's Documentation.
+	let scratchRoot = "temp"
+	try __ManagedDirectory.create(scratchRoot.toByteArray().managed) otherwise 'anotherWorkerMadeIt'
+		if not __ManagedDirectory.exists(scratchRoot.toByteArray().managed) 'noScratchRoot'
+			return 1
+		end 'noScratchRoot'
+	end 'anotherWorkerMadeIt'
+
+	let dirPath = "temp/test_md_filename"
 	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
 		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
 	end 'needCreate'
@@ -484,7 +529,17 @@ which is a different Win32 error, so only this one pins the catch-all.
 
 ```maxon
 function main() returns ExitCode
-	let dirPath = "test_md_already_there"
+	// The scratch root is shared with every other case here and with every parallel spec
+	// worker, so losing the create race is ordinary — see this file's Documentation. It is
+	// NOT the subject: the catch-all below is pinned on `dirPath`'s SECOND create.
+	let scratchRoot = "temp"
+	try __ManagedDirectory.create(scratchRoot.toByteArray().managed) otherwise 'anotherWorkerMadeIt'
+		if not __ManagedDirectory.exists(scratchRoot.toByteArray().managed) 'noScratchRoot'
+			return 1
+		end 'noScratchRoot'
+	end 'anotherWorkerMadeIt'
+
+	let dirPath = "temp/test_md_already_there"
 	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
 		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
 	end 'needCreate'
@@ -580,7 +635,16 @@ function writeFile(path String) throws ProbeError
 end 'writeFile'
 
 function main() returns ExitCode
-	let dirPath = "test_md_dotfiles"
+	// The scratch root is shared with every other case here and with every parallel spec
+	// worker, so losing the create race is ordinary — see this file's Documentation.
+	let scratchRoot = "temp"
+	try __ManagedDirectory.create(scratchRoot.toByteArray().managed) otherwise 'anotherWorkerMadeIt'
+		if not __ManagedDirectory.exists(scratchRoot.toByteArray().managed) 'noScratchRoot'
+			return 1
+		end 'noScratchRoot'
+	end 'anotherWorkerMadeIt'
+
+	let dirPath = "temp/test_md_dotfiles"
 	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
 		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
 	end 'needCreate'
@@ -642,7 +706,16 @@ in one program.
 
 ```maxon
 function main() returns ExitCode
-	let dirPath = "test_md_empty_search"
+	// The scratch root is shared with every other case here and with every parallel spec
+	// worker, so losing the create race is ordinary — see this file's Documentation.
+	let scratchRoot = "temp"
+	try __ManagedDirectory.create(scratchRoot.toByteArray().managed) otherwise 'anotherWorkerMadeIt'
+		if not __ManagedDirectory.exists(scratchRoot.toByteArray().managed) 'noScratchRoot'
+			return 1
+		end 'noScratchRoot'
+	end 'anotherWorkerMadeIt'
+
+	let dirPath = "temp/test_md_empty_search"
 	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
 		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
 	end 'needCreate'

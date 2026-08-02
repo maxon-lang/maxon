@@ -745,10 +745,10 @@ below also reproduce on `origin/main` with none of N2 applied, so neither is N2'
 
 The BOOTSTRAP compiles every one of them. The cure is the door asked ONCE — `aggregatesConflict` now takes
 the (tag, nameId) pair beside each side's aggregate name and folds the byte boundary in, so a site cannot
-ask the identity question without asking the boundary one. Overload scoring is the eighth site and is wired
-for its own stated promise (*"a candidate this function accepts cannot then be rejected downstream"*); no
-case below distinguishes it, because a candidate it wrongly refuses is today refused a second time by every
-sibling candidate and the call still resolves.
+ask the identity question without asking the boundary one. Overload SCORING is the eighth site, it carries
+the door for its own stated promise (*"a candidate this function accepts cannot then be rejected
+downstream"*), and it too has a distinguishing case —
+`overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate`, at the end of this file.
 
 <!-- test: a-synthesized-buffer-crosses-every-declared-byte-buffer-door -->
 <!-- targets: x64-windows -->
@@ -859,4 +859,46 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Array_Byte$0_200', got 'Array___ManagedByte'
+```
+
+### ⛔ THE EIGHTH SITE — OVERLOAD SCORING — DOES HAVE A DISTINGUISHING CASE
+
+This file, and `ProgramSignatures.byteBufferBoundaryAdmits`, both once said that `overloadArgTypeFit`'s
+answer was UNOBSERVABLE: *"a candidate it wrongly refuses is refused a second time by every sibling
+candidate and the call resolves anyway"*. **The second half is false. When NO candidate fits, the call does
+not resolve anyway — it resolves to the FIRST declared overload and reports the refusal against that one's
+parameter.**
+
+⚠ MEASURED on this branch, by putting the bare `namedAggregatesConflict` back into `overloadArgTypeFit`
+alone and rebuilding: the program below stops compiling with
+`E3005 argument type mismatch for 'x': expected 'Array_Integer', got 'Array___ManagedByte'` — quoting `x`,
+the parameter of the overload the call was never written against. With the shared door in place it compiles
+and picks the `__ManagedMemory` candidate. So the eighth site is load-bearing exactly like the other seven,
+and it is now pinned rather than argued about.
+
+<!-- test: overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate -->
+<!-- targets: x64-windows -->
+### Overload scoring picks the byte-buffer candidate for a compiler-synthesized buffer
+x64-windows only for `a-wide-byte-still-reads-a-compiler-synthesized-buffer`'s reason: `currentPath` lowers
+to `GetCurrentDirectoryA`. The `Ints` candidate is declared FIRST, so a resolver that scores the
+`__ManagedMemory` one `incompatible` reports against `x` rather than selecting it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Ints = Array with Integer
+
+function which(x Ints) returns int
+	return 11 if x.count() >= 0 else 12
+end 'which'
+
+function which(m __ManagedMemory) returns int
+	return 37 if m.length() > 0 else 12
+end 'which'
+
+function main() returns ExitCode
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	return which(cwd) as ExitCode
+end 'main'
+```
+```exitcode
+37
 ```
