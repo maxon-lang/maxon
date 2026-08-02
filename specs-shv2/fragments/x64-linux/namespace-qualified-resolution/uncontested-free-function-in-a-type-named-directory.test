@@ -1,0 +1,58 @@
+// Test: uncontested-free-function-in-a-type-named-directory
+// --- file: Point/p.maxon
+typealias Integer = int(0 to 125)
+
+export function helper() returns Integer
+	return 3
+end 'helper'
+
+// --- file: app/main.maxon
+typealias Integer = int(0 to 125)
+
+export type Point
+	export var x as Integer
+
+	export static function create() returns Integer
+		return 9
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	return (Point.create() * 10 + Point.helper()) as ExitCode
+end 'main'
+---
+ExitCode: 93
+---
+func @Point.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 9
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect Point.create
+    x64.imulRegRegImm32 rbx, r8, 10
+    x64.callDirect helper
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @helper {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+}

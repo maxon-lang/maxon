@@ -1,0 +1,23 @@
+// Test: same-directory-alias-pair-is-not-offered-as-its-own-disambiguation
+// --- file: api/a.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: api/b.maxon
+export typealias Score = int(0 to 200)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let x = 120 as Score
+	return x as ExitCode
+end 'main'
+---
+ExitCode: 120
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 120
+    x64.popReg rbp
+    x64.ret
+}
