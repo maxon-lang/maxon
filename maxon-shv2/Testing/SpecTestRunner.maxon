@@ -164,6 +164,37 @@ let WasmtimeRunSubcommand = "run"
 let WasmtimeSettingFlag = "-S"
 let WasmtimeExitWithCodeSetting = "cli-exit-with-code=y"
 
+// --- The shape of wasmtime's TRAP report (W3) ---
+//
+// When the guest traps rather than exiting, wasmtime writes its own report to the SAME stderr the
+// guest was writing to, and ends the process with its own status. `wasmPanicReport` recognizes that
+// report by these three spellings and by nothing else.
+//
+//     panic at panic.basic.test:4: something went wrong        <- the guest's own bytes
+//     Error: failed to run main module `…`                     <- WasmtimeTrapReportMarker
+//
+//     Caused by:
+//         0: failed to invoke `run` function
+//         1: error while executing at wasm backtrace:
+//         0:    0x36a - maxon!mrt_panic                        <- " - " then "!" then the name
+//         1:    0x329 - maxon!fail
+//         …
+//         2: wasm trap: wasm `unreachable` instruction executed
+//
+// The marker carries its leading newline and is matched with `findLast`, which makes the split point
+// EXACT rather than merely likely: wasmtime writes this line once and it is the last thing on the
+// stream, so any earlier occurrence can only be text the guest itself printed. (v1's
+// `convertWasmtimeStderr` takes the FIRST occurrence and would cut a panic message that quoted it.)
+//
+// A frame line is recognized by BOTH separators in order — the address separator, then the
+// module/function `!` after it. The `!` alone is not enough: it also appears in the module PATH on
+// the `failed to run main module` line, so a test whose name contained one would grow a phantom
+// frame. (This is the same class of mis-parse v1's comment warns about for `!=` inside a message,
+// answered structurally rather than by hoping the message is tame.)
+let WasmtimeTrapReportMarker = "\nError: failed to run"
+let WasmtimeFrameAddrSeparator = " - "
+let WasmtimeFrameModuleSeparator = "!"
+
 // --- OrbStack: the arm64-linux runner ---
 //
 // `orb run -m <machine> <exe>` executes a binary that lives on the MAC's filesystem inside a Linux
@@ -1444,9 +1475,15 @@ function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, s
 	// by the host, so it is run through the vendored wasmtime instead — everything checked against
 	// that one execution afterwards is IDENTICAL either way.
 	let runCommand = buildRunCommand(exePath, effectiveTarget: effectiveTarget)
-	let run = try runProcess(runCommand.exe, argv: runCommand.argv) otherwise (e) 'runSpawnFailed'
+	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv) otherwise (e) 'runSpawnFailed'
 		return TestOutcome.fail("program spawn failed: {e.displayReason()}")
 	end 'runSpawnFailed'
+
+	// What the PROGRAM said and how it ended, which under an external runner is not always what the
+	// PROCESS said and how the process ended — see `observedRun`. Every check below reads this one
+	// observation, so the three halves of a case's expectation cannot be compared against two
+	// different accounts of the same execution.
+	let run = observedRun(spawned, effectiveTarget: effectiveTarget)
 
 	// An UNPINNED exit code is "this spec says nothing about it" — not "expect 0". A `/specs` case that
 	// pins only stdout (the `init-from-literal` shape) is asserting what the program PRINTS, and holding it
@@ -1646,6 +1683,137 @@ function stripFaultRipFromLine(line String) returns String
 	let cut = try line.findFirst(FaultRipSuffixMarker) otherwise return line
 	return line.slice(line.startIndex(), endIndex: cut)
 end 'stripFaultRipFromLine'
+
+// What the program said and how it ended — which on every target but one is simply what the process
+// said and how the process ended.
+//
+// wasm32-wasi is the exception because the program does not get to end: a Maxon panic there is a wasm
+// TRAP (see `StdToWasm.appendPanicRuntime` for why it must be), and a trap is the engine refusing to
+// continue, so wasmtime — not the guest — chooses both the final status and the text that describes
+// the failure. This is the one place that knows it is looking at a wasmtime process rather than at a
+// Maxon program, so it is the place that maps the one back onto the other.
+//
+// EXHAUSTIVE over `Os` with no bare `default`: a target that grows a host wrapper of its own must
+// decide here whether that wrapper edits the program's report, rather than inheriting an answer.
+function observedRun(run ProcessCapture, effectiveTarget Target) returns ProcessCapture
+	return match effectiveTarget.os 'os'
+		wasi gives wasmPanicReport(run)
+		windows to macos gives run
+	end 'os'
+end 'observedRun'
+
+// ⭐⭐ **THE wasm PANIC REPORT: PUT BACK WHAT THE ENGINE TOOK AWAY, AND NOTHING ELSE.**
+//
+// ⚠ **PART OF A PINNED `stderr` ON THIS TARGET IS THEREFORE PRODUCED HERE AND NOT BY THE PROGRAM, AND
+// THAT DESERVES THE SCRUTINY IT LOOKS LIKE IT NEEDS.** What is real, and what this only re-spells:
+//
+//   * **The MESSAGE is the program's, byte for byte.** `mrt_panic` wrote it to stderr before trapping;
+//     it is copied out of the stream verbatim and never edited.
+//   * **The FRAMES are wasmtime's, and they are the true call stack.** The engine unwound it and named
+//     each function from the module's own "name" section. This reformats `0: 0x329 - maxon!fail` into
+//     `  in fail` — the SAME words, in `BacktraceFormat`'s layout, using `BacktraceFormat`'s own
+//     constants — because the corpus pins one trace format and the host spells it differently.
+//   * **The EXIT CODE is `PanicExitCode` because the program never got to spend it.** Every backend's
+//     panic path ends the process with that number; on this one the trap pre-empts the exit, and 134
+//     is wasmtime's status for "the guest trapped", not an answer the program gave.
+//
+// ⭐ **EXACTLY ONE FRAME IS DROPPED — FRAME 0 — AND ONLY WHEN IT IS `mrt_panic`.** That is not an
+// elision LIST and deliberately not one: it is the same rule the native runtimes implement in the
+// runtime itself. x64's walk seeds from `mrt_panic`'s OWN frame and starts printing at `[rbp+8]`, so
+// *"`mrt_panic` never appears in the trace"* (`X64Runtime.maxon:960-968`); arm64's does the same. The
+// panic runtime is not part of the program's call stack in any target's report, so removing it here
+// removes a frame **no other target shows either** — which is the whole test a normalization has to
+// pass. Nothing else is touched: `main` and `mrt_start` are printed exactly as wasmtime reported them,
+// and if a frame ever appeared that the native lanes do not show, it would appear in the output and
+// FAIL, which is what it should do.
+//
+// ⚠ **AND IT IS FRAME 0 THAT DECIDES WHETHER THIS IS A PANIC AT ALL.** A trap whose innermost frame is
+// not `mrt_panic` is not a Maxon panic — a `memory.grow` OOM, a `call_indirect` type mismatch, an
+// `unreachable` this backend emits for a rejected op — and it passes through UNCHANGED, keeping
+// wasmtime's own text and wasmtime's own 134. So this cannot launder an unrelated trap into a clean
+// `exitcode 1`, which a message-shaped or "did it write anything to stderr" test would have let it do.
+function wasmPanicReport(run ProcessCapture) returns ProcessCapture
+	let markerIdx = try run.stderr.findLast(WasmtimeTrapReportMarker) otherwise return run
+	let frames = wasmtimeBacktraceFrames(run.stderr.slice(markerIdx, endIndex: run.stderr.endIndex()))
+
+	let innermost = try frames.get(WasmPanicRuntimeFrame) otherwise return run
+	if innermost != String.from(PanicName) 'notAMaxonPanic'
+		return run
+	end 'notAMaxonPanic'
+
+	// ⚠ **THE MARKER'S LEADING NEWLINE IS THE GUEST'S, NOT wasmtime's** — it is the
+	// `PanicMessageLineTerminator` the panic line ends with (wasmtime's report starts flush at
+	// `Error:`, measured on a guest that trapped having printed nothing). So the program's region ends
+	// AFTER it; cutting at the marker instead swallows the message's own newline and runs
+	// `Stack trace:` onto the end of the message.
+	let programEnd = try run.stderr.indexAfter(markerIdx) otherwise panic("wasmPanicReport: no index after the trap marker at the very end of the stream, though the marker's own text follows it")
+
+	// Reassembled from `BacktraceFormat`'s own constants, in the order `mrt_panic` writes them on a
+	// target where it can: the message, the header, then one prefixed and terminated line per frame.
+	var report = StringBuilder.create()
+	report.append(run.stderr.slice(run.stderr.startIndex(), endIndex: programEnd))
+	report.append(String.from(BacktraceHeader))
+
+	// Frames PRINTED are capped exactly as the native walkers cap theirs (`MaxBacktraceFrames`) — one
+	// diagnostic format means one length rule too. The cap counts printed frames, so it is offset by
+	// the one runtime frame dropped ahead of them.
+	//
+	// ⚠ **IT NEVER FIRES TODAY, AND WHAT ACTUALLY TRUNCATES A DEEP wasm TRACE IS THE HOST — SILENTLY.**
+	// MEASURED on wasmtime 44.0.0 with a 41-deep panic: it reports exactly **20** frames, emits no
+	// "frames omitted" note, and offers no CLI flag or environment variable to raise it (`--help`,
+	// `WASMTIME_BACKTRACE_DETAILS`, `RUST_BACKTRACE=full` — all 20). 20 is below `MaxBacktraceFrames`
+	// (32), so this cap is unreachable while that holds. ⇒ **A panic more than ~19 program frames deep
+	// prints a SHORTER trace on wasm than on the native lanes.** That is a real cross-target divergence,
+	// it is the ENGINE's and not this harness's, and no case in the corpus is nearly deep enough to meet
+	// it. The cap stays because the LENGTH RULE is ours to state and the host's limit is not a promise:
+	// if a later wasmtime reports more, this keeps the two lanes agreeing without anyone noticing it had
+	// to be re-decided.
+	var lastFrame = frames.count()
+	if lastFrame > MaxBacktraceFrames + WasmFirstProgramFrame 'capped'
+		lastFrame = MaxBacktraceFrames + WasmFirstProgramFrame
+	end 'capped'
+
+	for i in WasmFirstProgramFrame upto lastFrame 'eachFrame'
+		let frame = try frames.get(i) otherwise panic("wasmPanicReport: frames.get OOB at {i}, inside a loop bounded by the array's own count")
+		report.append(String.from(FrameLinePrefix))
+		report.append(frame)
+		report.append(String.from(FrameLineTerminator))
+	end 'eachFrame'
+
+	return ProcessCapture.create(PanicExitCode as ExitCodeValue, stdout: run.stdout, stderr: report.build())
+end 'wasmPanicReport'
+
+// The innermost frame of a Maxon panic's trap — `mrt_panic` itself — and therefore the first frame
+// that belongs to the PROGRAM. Named because both numbers are the same fact read two ways, and the
+// cap arithmetic above depends on their relationship rather than on either value.
+let WasmPanicRuntimeFrame = 0
+let WasmFirstProgramFrame = 1
+
+// The function names in wasmtime's backtrace region, innermost first. A line that is not a frame line
+// contributes nothing — the region also carries wasmtime's `Caused by:` scaffolding and its closing
+// `wasm trap:` line, neither of which names a function.
+function wasmtimeBacktraceFrames(backtraceRegion String) returns StringArray
+	var frames = StringArray.create()
+
+	for line in backtraceRegion.split(LineSeparator) 'eachLine'
+		let name = try wasmtimeFrameName(line) otherwise 'notAFrameLine'
+			continue
+		end 'notAFrameLine'
+		frames.push(name)
+	end 'eachLine'
+
+	return frames
+end 'wasmtimeBacktraceFrames'
+
+// The function name a single frame line carries: the text after the `module!function` separator,
+// which is itself required to sit after the address separator (see the constants for why both).
+// Throws for any line that is not a frame line, which is what lets the caller skip it.
+function wasmtimeFrameName(line String) returns String throws StringError
+	let addrIdx = try line.findFirst(WasmtimeFrameAddrSeparator)
+	let afterAddr = line.slice(addrIdx, endIndex: line.endIndex())
+	let bangIdx = try afterAddr.findFirst(WasmtimeFrameModuleSeparator)
+	return afterAddr.slice(try afterAddr.indexAfter(bangIdx), endIndex: afterAddr.endIndex()).trim()
+end 'wasmtimeFrameName'
 
 // Write the compiled fragment to `fragmentPath` — `fragmentSource` and nothing else, so the bytes
 // on disk are the bytes the golden shows (see `fragmentSource`).

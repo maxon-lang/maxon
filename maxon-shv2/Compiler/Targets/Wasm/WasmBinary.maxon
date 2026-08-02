@@ -743,6 +743,12 @@ end 'WasmBody'
 // subset in this order. Ids 6 (global) and 8 (start) stay unused by this slice; ids 4 (table)
 // and 9 (element) carry the function-value funcref table (P1.5-A1); id 11 (data) carries the
 // top-level-`var` `.data` image.
+//
+// Id 0 is the CUSTOM section, and it is the one exception to the ordering rule: a custom section
+// may appear between any two others, and any number of times. `finish` emits the ONE this backend
+// produces — the "name" section (W3) — last, past the data section, which is where every other
+// producer puts it and where a reader that stops at the last known id will not trip over it.
+let wasmSectionCustom = 0
 let wasmSectionType = 1
 let wasmSectionImport = 2
 let wasmSectionFunction = 3
@@ -752,6 +758,31 @@ let wasmSectionExport = 7
 let wasmSectionElement = 9
 let wasmSectionCode = 10
 let wasmSectionData = 11
+
+// --- The "name" custom section (W3) ---
+//
+// ⭐ **IT IS WHAT MAKES A PANIC BACKTRACE READABLE ON THIS TARGET, AND IT IS THE ONLY THING THAT CAN
+// BE.** wasm has no frame-pointer chain, so the panic runtime cannot walk one (see `StdToWasm`'s
+// `appendPanicRuntime`): the frames in a wasm panic report are the HOST's — wasmtime unwinds its own
+// trap and prints one line per wasm frame. Without this section every one of those lines reads
+// `<wasm function 7>`, because a core module carries no function names anywhere else. With it they read
+// `main`, `mrt_start` — the same words `Targets/Shared/BacktraceFormat` gives the two native walkers.
+// v1 emits it for exactly this reason (`MirToWasm.maxon:1438-1495`, *"so wasmtime / Chrome devtools /
+// wasm-objdump can show them in stack traces"*).
+//
+// Format (WebAssembly Name Section spec): a custom section whose name is `name`, holding subsections in
+// ASCENDING id order — 0 = module name, 1 = a `namemap` of function names, 2 = local names (unused).
+// Each subsection is `id, ULEB byte length, payload`; a `namemap` is a ULEB COUNT of `(funcIdx, name)`
+// PAIRS followed by the pairs themselves.
+let WasmNameSectionName = b"name"
+let wasmNameSubsectionModule = 0
+let wasmNameSubsectionFunction = 1
+
+// The module's own debug name. Cosmetic — it is the `maxon` in wasmtime's `maxon!main` frame line, where
+// an unnamed module reads `<unknown>!main` — and read by nothing this project parses (the runner splits
+// a frame line on `!` and takes the text AFTER it). Emitted because a named module is what a hand-run
+// `wasm-objdump` wants, and it costs eight bytes.
+let WasmModuleDebugName = b"maxon"
 
 // A data segment's leading byte. `0x00` selects the active, memory-0, i32.const-offset form; in
 // the MVP encoding the very same byte reads as the explicit memory index 0, so this one value
@@ -937,6 +968,23 @@ export type WasmModuleBuilder
 	var funcTypeIndices as Wasm32IndexArray
 	var funcBodies as ByteArrayArray
 
+	// ⭐ **ONE DEBUG NAME PER FUNCTION, AT POSITION == ITS FUNCTION INDEX** — the "name" section's
+	// `namemap`, collected as the functions are added rather than reconstructed afterwards.
+	//
+	// ⚠ **THAT IS A DELIBERATE DIVERGENCE FROM v1, AND THE TRAP IT AVOIDS IS ONE v1 DOCUMENTS AGAINST
+	// ITSELF.** v1 writes the namemap's pair COUNT as an arithmetic guess — `namedWasiImports + funcCount
+	// + syntheticNamedFuncs`, with `let syntheticNamedFuncs = 2` and a comment warning that declaring
+	// `wasiImportCount + funcCount` instead "over-counts by the unnamed WASI imports, so a strict parser
+	// (Binaryen's `wasm-opt`) reads past the subsection to EOF" (`MirToWasm.maxon:1453-1462`). That is a
+	// count written down twice: once as a formula, once as the pairs actually emitted, with nothing
+	// making them agree — add a synthetic function and the formula is silently wrong. Here the count IS
+	// `funcDebugNames.count()`, so the two cannot differ: there is one name per `addImportFunc` /
+	// `addFunction`, and the pairs emitted ARE the array walked.
+	//
+	// The index-space contract (all imports before any defined function) is what lets ONE array serve
+	// both bands, and `requireDebugNameSlot` asserts it at every add rather than trusting it.
+	var funcDebugNames as ByteArrayArray
+
 	// Exports, in declaration order.
 	var exportEntries as WasmExportArray
 
@@ -957,7 +1005,7 @@ export type WasmModuleBuilder
 	var funcrefTable as bool
 
 	export static function create() returns WasmModuleBuilder
-		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0, dataSegments: WasmDataSegmentArray.create(), funcrefTable: false}
+		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), funcDebugNames: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0, dataSegments: WasmDataSegmentArray.create(), funcrefTable: false}
 	end 'create'
 
 	// Intern a functype, returning its (deduplicated) type index. The dedup is an O(1) map lookup on
@@ -977,19 +1025,26 @@ export type WasmModuleBuilder
 	end 'internFuncType'
 
 	// Add an imported function, returning its function index (imports precede all defined
-	// functions in the index space).
-	export function addImportFunc(moduleName ByteArray, fieldName ByteArray, typeIdx Wasm32Index) returns Wasm32Index
+	// functions in the index space). `debugName` is what a backtrace frame in this import reads as —
+	// an import has a module/field pair, but those are the WIT interface's spelling, not a name a
+	// stack trace can print, so it carries its own short alias.
+	export function addImportFunc(moduleName ByteArray, fieldName ByteArray, typeIdx Wasm32Index, debugName ByteArray) returns Wasm32Index
 		let idx = self.importModules.count() as Wasm32Index
+		self.requireDebugNameSlot(idx, what: fieldName)
 		self.importModules.push(moduleName)
 		self.importFields.push(fieldName)
 		self.importTypeIndices.push(typeIdx)
+		self.funcDebugNames.push(debugName)
 		return idx
 	end 'addImportFunc'
 
 	// Add a defined function, returning its function index. `body` is WasmBody.bytes() (raw
-	// instructions); this frames it with the local declarations and the trailing `end`.
-	export function addFunction(typeIdx Wasm32Index, localTypes WasmValTypeArray, body ByteArray) returns Wasm32Index
+	// instructions); this frames it with the local declarations and the trailing `end`. `debugName` is
+	// the name the "name" section gives this index — for a module function its own `IrFunction.name`, so
+	// a backtrace frame reads the source's word for it.
+	export function addFunction(typeIdx Wasm32Index, localTypes WasmValTypeArray, body ByteArray, debugName ByteArray) returns Wasm32Index
 		let funcIdx = (self.importModules.count() + self.funcBodies.count()) as Wasm32Index
+		self.requireDebugNameSlot(funcIdx, what: debugName)
 
 		var framed = ByteArray.create()
 		writeLocalDecls(framed, localTypes: localTypes)
@@ -998,8 +1053,21 @@ export type WasmModuleBuilder
 
 		self.funcTypeIndices.push(typeIdx)
 		self.funcBodies.push(framed)
+		self.funcDebugNames.push(debugName)
 		return funcIdx
 	end 'addFunction'
+
+	// The one assumption `funcDebugNames` rests on, checked instead of trusted: a name pushed for
+	// function `funcIdx` must land AT position `funcIdx`. That holds only while every import precedes
+	// every defined function — the index-space contract this type's header states — so an `addImportFunc`
+	// after an `addFunction` would put every subsequent name against the wrong index and every backtrace
+	// frame would print a neighbouring function's name. There is no shape of that mistake a wasm
+	// validator would catch: the module stays perfectly well-formed and only the diagnostic lies.
+	function requireDebugNameSlot(funcIdx Wasm32Index, what ByteArray)
+		if self.funcDebugNames.count() != funcIdx 'slotDrift'
+			panic("WasmModuleBuilder: adding '{String.from(what)}' as function index {funcIdx}, but {self.funcDebugNames.count()} debug names have been collected — an import was added after a defined function, so the name section would name every later function wrongly")
+		end 'slotDrift'
+	end 'requireDebugNameSlot'
 
 	export function exportFunc(name ByteArray, funcIdx Wasm32Index)
 		self.exportEntries.push(WasmExport.create(name, kind: wasmExportKindFunc, index: funcIdx))
@@ -1055,6 +1123,7 @@ export type WasmModuleBuilder
 		self.emitElementSection(module)
 		self.emitCodeSection(module)
 		self.emitDataSection(module)
+		self.emitNameSection(module)
 
 		return module
 	end 'finish'
@@ -1217,4 +1286,41 @@ export type WasmModuleBuilder
 
 		writeSectionRaw(module, sectionId: wasmSectionData, contents: contents)
 	end 'emitDataSection'
+
+	// The "name" custom section — the module's debug name and one name per function, in index order.
+	// See the constants above for why it exists and for the format.
+	//
+	// Emitted unconditionally: every module has functions, and this is the only source of the words a
+	// panic backtrace prints on this target. Both subsections are written in ascending id order, each
+	// LENGTH-PREFIXED, which is what lets a reader that does not know a subsection id skip it.
+	function emitNameSection(module ByteArray)
+		var contents = ByteArray.create()
+		writeWasmName(contents, name: WasmNameSectionName)
+
+		var moduleNamePayload = ByteArray.create()
+		writeWasmName(moduleNamePayload, name: WasmModuleDebugName)
+		writeNameSubsection(contents, subsectionId: wasmNameSubsectionModule, payload: moduleNamePayload)
+
+		// The namemap: a count of PAIRS, then each `(funcIdx, name)`. The count is the array's own —
+		// see `funcDebugNames` for why it is not an arithmetic sum of the bands.
+		var namemap = ByteArray.create()
+		writeUleb128(namemap, value: self.funcDebugNames.count() as Wasm32Index)
+		for (iter, name) in self.funcDebugNames.withIterator() 'eachName'
+			writeUleb128(namemap, value: iter.index() as Wasm32Index)
+			writeWasmName(namemap, name: name)
+		end 'eachName'
+		writeNameSubsection(contents, subsectionId: wasmNameSubsectionFunction, payload: namemap)
+
+		writeSectionRaw(module, sectionId: wasmSectionCustom, contents: contents)
+	end 'emitNameSection'
 end 'WasmModuleBuilder'
+
+// One name-section subsection: its id byte, the ULEB byte length of its payload, then the payload.
+// The same shape as `writeSectionRaw` one level down, and written separately for that reason — a
+// subsection id is not a section id, and folding the two would let a section id be passed where a
+// subsection id belongs with nothing to catch it.
+function writeNameSubsection(buf ByteArray, subsectionId MachineWord, payload ByteArray)
+	buf.push(subsectionId)
+	writeUleb128(buf, value: payload.count() as Wasm32Index)
+	buf.append(payload)
+end 'writeNameSubsection'

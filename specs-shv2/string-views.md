@@ -253,49 +253,52 @@ end 'main'
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Codepoint', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
 ```
 
-⚠ **THE FOUR RANGE-GUARD CASES BELOW COME IN PAIRS THAT PARTITION THE TARGETS, AND THE SPLIT IS A
-TARGET FACT RATHER THAN A CONVENIENCE.** A range violation EXITS 1 on every target — that is the guard
-FIRING. The message and the backtrace exist only where there is a panic runtime to print them: wasm's
-`emitRangePanic` is `i32.const 1; call $exit; unreachable`, its status the shared `PanicExitCode`
-(`Targets/Shared/PanicExitCode.maxon` — the ONE declaration all three backends read since rung A1y, and
-the file that documents why the number is 1 and why it is not a `RuntimeAbort` case), and arm64's
-`lowerRangePanic` is the same shape over the same constant. So each guard is pinned TWICE — once on
-`wasm32-wasi`, where the assertion is the exit code and stderr must be silent, and once on
-`x64-windows, x64-linux`, where the message is pinned in full.
+⚠ **THE TWO RANGE-GUARD CASES BELOW WERE FOUR, IN PAIRS THAT PARTITIONED THE TARGETS, AND THE PARTITION
+IS GONE BECAUSE ITS CAUSE IS (rung W3).** A range violation EXITS 1 on every target — that is the guard
+FIRING — but the message and the backtrace existed only where there was a panic runtime to print them.
+So each guard was pinned TWICE: once on `wasm32-wasi`, where the assertion was the exit code and stderr
+had to be silent, and once on `x64-windows, x64-linux`, where the message was pinned in full. Two cases
+over one program, differing in nothing but which half of the answer they could see.
 
-⚠ **x64-LINUX MOVED FROM THE SILENT SIDE TO THE MESSAGE SIDE (2026-07-31, rung A1j), AND THE PAIRING IS
-WHAT MADE THE MOVE CHEAP.** It was measured silent when these cases were written, and the reason was
-never the ELF lane: `mrt_panic` simply was not appended to it, while every primitive it assembles —
-the `write(2)` stderr writer, the frame walker, the frame printer, `__symtable` — already was. The
-partition is therefore by PANIC RUNTIME, not by OS, and moving a target across it is an edit to two
-`targets:` lines rather than to either case's program or expectations.
+⚠ **A TARGET CROSSED THAT LINE TWICE, AND BOTH TIMES THE PARTITION WAS THE THING THAT WAS WRONG.**
+x64-linux moved to the message side in rung A1j (2026-07-31): it was measured silent when these cases
+were written, and the reason was never the ELF lane — `mrt_panic` simply was not appended to it, while
+every primitive it assembles was. wasm32-wasi moved in rung W3 for the same shape of reason: it had no
+`mrt_panic` at all, and *"wasm cannot print a backtrace"* had been read as a property of the target when
+it was a property of the backend. It cannot walk a frame chain — there is none — so its panic runtime
+writes the message and TRAPS, and the frames come from wasmtime's own unwind, symbolized from the
+module's "name" section (`StdToWasm.appendPanicRuntime`, `SpecTestRunner.wasmPanicReport`).
 
-⚠ **A `stderr` BLOCK CANNOT BE OMITTED TO PAPER OVER THIS**: an absent block asserts the program
-printed NOTHING (`SpecTestRunner.checkRunStderr`, whose `unpinned` arm says so in as many words), which
-is TRUE on the two silent lanes and FALSE on Windows. Partitioning the targets is what lets both facts
-be stated; a single case cannot state either without lying about the other.
+⇒ **The silent halves are DELETED rather than given a `stderr` block of their own**, which would have
+made them byte-for-byte duplicates of their twins under a different `targets:` line. Nothing they
+asserted is lost: each surviving case runs the same program, pins the same `exitcode 1` — `7` is what an
+UNGUARDED build returns in both, so the exit code still separates a fired guard from a silent wrong
+answer — and now pins the message everywhere as well.
 
-MEASURED, and this is why the pairing exists rather than a `targets: x64-windows` line on the lot:
-these two guards were first written as message-only cases with no target marker, and the cross-target
-gate went red on x64-linux and wasm with an EMPTY `actual` — which READS exactly like "the guard is
-missing on this target" and is not. The identical program over a USER-declared
-`typealias Percent = int(0 to 100)`, touching neither the whitelist nor `Codepoint`, exits 1 with empty
-stderr on wasm and exits 1 with the full message on x64. So the guard fires everywhere, and asserting
-the EXIT CODE on the silent lanes is what proves it — which no case in this suite had done for a range
-guard before.
+⚠ **A `stderr` BLOCK STILL CANNOT BE OMITTED**: an absent block asserts the program printed NOTHING
+(`SpecTestRunner.checkRunStderr`, whose `unpinned` arm says so in as many words). That is exactly how
+this rung found these two cases — they went red the moment the wasm lane started speaking, which is a
+gate reporting a stale premise rather than a regression.
 
-<!-- test: whitelisted-stdlib-keeps-its-range-check -->
-<!-- targets: wasm32-wasi -->
-### A REACHABLE whitelisted stdlib function still gets its range guard
+MEASURED, and it is why these carried a target marker at all: the two guards were first written as
+message-only cases with no marker, and the cross-target gate went red on x64-linux and wasm with an
+EMPTY `actual` — which READS exactly like "the guard is missing on this target" and was not. The
+identical program over a USER-declared `typealias Percent = int(0 to 100)`, touching neither the
+whitelist nor `Codepoint`, exited 1 with empty stderr on wasm and 1 with the full message on x64.
+`targets: x64-windows, x64-linux, wasm32-wasi` is now the list of lanes with a panic runtime AND a
+runner on this host's gate; arm64 is synced separately by hand and is not named here for that reason.
+
+<!-- test: whitelisted-stdlib-range-panic-names-the-alias -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+### A REACHABLE whitelisted stdlib function still gets its range guard, and the panic names the alias
 `insertRangeChecks` skips a stdlib function no path from `main` reaches — that skip is what keeps the
 whitelist from renumbering `.rdata` for functions nobody calls. It must not be one word wider than
 that: a function the program DOES call keeps every guard it declared. `utf16LeadSurrogate` returns
 through the ranged `CodeUnit16`, and a codepoint far past the supplementary plane overflows it.
 
-The exit code is the assertion because it is the part every target shares, and it is the ONLY thing
-observable on a lane with no panic runtime. `7` is what an UNGUARDED build returns — the out-of-range
-lead surrogate, 1031794, is comfortably past `u16.max` — so this case tells a fired guard from a silent
-wrong answer on the silent lane, which a message-only case cannot.
+`7` is what an UNGUARDED build returns — the out-of-range lead surrogate, 1031794, is comfortably past
+`u16.max` — so the exit code tells a fired guard from a silent wrong answer, and the message says which
+guard fired. `targets:` for the reason stated at the head of this group.
 
 ⚠ **THE CODEPOINT ARRIVES THROUGH `widen`, AND IT HAS TO.** `utf16LeadSurrogate(1000000000)` — which is
 what this case read while a call argument's declared range went unenforced — is now the compile-time
@@ -303,28 +306,6 @@ E3005 `range-check-panic.md` promises at every position ("a literal argument nev
 check because it never builds"), measured identically on the bootstrap. The subject here is the RUNTIME
 guard on the whitelisted stdlib function's ranged `return`, so the codepoint must be a value no constant
 folds to; `widen` is the smallest way to say that.
-```maxon
-typealias Wide = int(0 to u32.max)
-
-function widen(n Wide) returns Wide
-	return n * 1000000
-end 'widen'
-
-function main() returns ExitCode
-	let lead = utf16LeadSurrogate(widen(1000))
-	return 7 if lead > 65535 else 9
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: whitelisted-stdlib-range-panic-names-the-alias -->
-<!-- targets: x64-windows, x64-linux -->
-### …and on the targets that have a panic runtime, it names the alias and the function
-The message half of the case above — same program, same reason for `widen`. `targets: x64-windows,
-x64-linux` for the reason stated at the head of this group, and the same reason every other panic-text
-case in the suite carries it.
 
 ⭐⭐ **A1f CHANGED WHICH ALIAS THIS NAMES, AND THE NEW ANSWER IS THE VIOLATION THAT ACTUALLY HAPPENED.**
 `utf16LeadSurrogate(codepoint Codepoint) returns CodeUnit16` is handed `1,000,000,000`. That is outside
@@ -406,32 +387,19 @@ lead4-two-continuations len=3 count=2 cps=[240,2008,] utf16=[240,2008,]
 well-formed-3byte len=3 count=1 cps=[20013,] utf16=[20013,]
 ```
 
-<!-- test: codepoint-return-is-range-checked -->
-<!-- targets: wasm32-wasi -->
-### `Codepoint` is a RANGE and not merely an erasure
+<!-- test: codepoint-range-panic-names-the-alias -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+### `Codepoint` is a RANGE and not merely an erasure, and the panic names it
 `Codepoint` is `int(0 to 1114111)` in `stdlib/Character.maxon`, a module shv2 cannot load — so the
 compiler declares the alias for itself rather than answering only "it erases to `integer`". Without the
 range, this sibling of the case above was silent where that one panics: `utf16DecodeSurrogates` on two
 non-surrogates computed **-56613888** and handed it back as a `Codepoint`, whose declared range starts
 at 0. One stdlib module, one kind of precondition violation, and it must not matter which alias the
 compiler happened to get from a registry and which it synthesized.
-`7` is what an UNGUARDED build returns — the answer it computes is negative — so the exit code alone
-separates a fired guard from the silent wrong answer, which is all a lane with no panic runtime has.
-```maxon
-function main() returns ExitCode
-	let cp = utf16DecodeSurrogates(0, low: 0)
-	return 7 if cp < 0 else 9
-end 'main'
-```
-```exitcode
-1
-```
 
-<!-- test: codepoint-range-panic-names-the-alias -->
-<!-- targets: x64-windows, x64-linux -->
-### …and the panic names `Codepoint`, the alias the compiler declared for itself
-The message half of the case above — and the one that shows the alias reaching the diagnostic under
-its own name, which is what a bare erasure to `integer` could never have produced.
+`7` is what an UNGUARDED build returns — the answer it computes is negative — so the exit code separates
+a fired guard from the silent wrong answer, and the message shows the alias reaching the diagnostic
+under its own name, which is what a bare erasure to `integer` could never have produced.
 ```maxon
 function main() returns ExitCode
 	let cp = utf16DecodeSurrogates(0, low: 0)

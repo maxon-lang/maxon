@@ -35,7 +35,9 @@
 // CONSTRAINED-TYPE-PARAMETER DISPATCH: a `.rdata` slot naming a function (a witness-table method, a layout
 // descriptor's `destroyFunc@40`/`copyFunc@32`) is baked with the callee's funcref-TABLE INDEX rather than the
 // `.text` VA the x64 writers bake, and the fused witness call reads it back and `call_indirect`s through it
-// (`bakeFuncTableIndexRelocs` / `emitWitnessCall`).
+// (`bakeFuncTableIndexRelocs` / `emitWitnessCall`) — and, since W3, a PANIC RUNTIME: `appendPanicRuntime`
+// writes the message to WASI stderr and traps, which is the whole of what a target with no walkable frame
+// chain can do in-program (read its header for what the host supplies and why nothing else can).
 // The allocator/refcount/String builders themselves are Std-IR runtime functions emitted through the
 // ordinary function path, not hand-written here.
 //
@@ -89,7 +91,7 @@ typealias IndirectCallTypeIdxMap = Map with (ByteArray, Wasm32Index)
 // carry on the op (see `buildValtypeTable`).
 typealias DependentLhsMap = Map with (ValueId, ValueId)
 
-// THREE functions are imported, in this fixed order — so their func indices are the constants
+// FOUR functions are imported, in this fixed order — so their func indices are the constants
 // below and every DEFINED function is offset by `WasmImportCount`. `buildWasmCoreModule` MUST
 // `addImportFunc` them in exactly this order for the indices to hold; `wasmFuncIdxOf`
 // derives each defined function's index as `WasmImportCount + position` on the same assumption. The
@@ -98,10 +100,18 @@ typealias DependentLhsMap = Map with (ValueId, ValueId)
 //   0  wasi:cli/exit@0.2.6 exit-with-code                              (param i32) -> ()
 //   1  wasi:cli/stdout@0.2.6 get-stdout                               () -> (result i32)
 //   2  wasi:io/streams@0.2.6 [method]output-stream.blocking-write-and-flush  (i32,i32,i32,i32) -> ()
-let WasmImportCount = 3 as Wasm32Index
+//   3  wasi:cli/stderr@0.2.6 get-stderr                               () -> (result i32)
+//
+// ⚠ `get-stderr` is APPENDED, not slotted in beside its stdout twin, for the reason a `StdOp` variant
+// is appended at the end of its band: the three indices above are read from a dozen emit sites and a
+// renumber is invisible at every one of them — the module would still validate and would call the
+// wrong import. Appending costs only the ONE derived offset (`WasmImportCount`), which every defined
+// function's index already goes through.
+let WasmImportCount = 4 as Wasm32Index
 let ExitImportFuncIdx = 0 as Wasm32Index
 let GetStdoutImportFuncIdx = 1 as Wasm32Index
 let BlockingWriteFlushImportFuncIdx = 2 as Wasm32Index
+let GetStderrImportFuncIdx = 3 as Wasm32Index
 
 // The canonical-ABI RETURN AREA `osWriteStdout` hands `blocking-write-and-flush` its
 // `result<_, stream-error>` into. It sits in the low scratch region BELOW the `.data` base
@@ -165,6 +175,23 @@ let WasiStdoutModuleName = b"wasi:cli/stdout@0.2.6"
 let WasiGetStdoutFieldName = b"get-stdout"
 let WasiStreamsModuleName = b"wasi:io/streams@0.2.6"
 let WasiBlockingWriteFlushFieldName = b"[method]output-stream.blocking-write-and-flush"
+
+// The Preview2 STDERR accessor (W3 — the panic runtime). Its stream is written through the SAME
+// `blocking-write-and-flush` method above: a `wasi:io/streams` output-stream is one type whichever
+// `wasi:cli` accessor handed it over, so the panic path needs a new accessor and no new writer.
+// `wasi:cli/stderr@0.2.6` is already in the WIT world the component is built against
+// (`vendor/wasi-wit/world.wit`), so nothing outside this file changes to reach it.
+let WasiStderrModuleName = b"wasi:cli/stderr@0.2.6"
+let WasiGetStderrFieldName = b"get-stderr"
+
+// The imports' backtrace names. A WIT field name is not one — `[method]output-stream.blocking-write-
+// and-flush` is an interface path, and wasmtime would print it verbatim in a frame line — so each
+// import carries a short alias for the "name" section instead. They match v1's (`MirToWasm.maxon:1470-
+// 1478`), which is what makes a wasm backtrace read the same under either compiler.
+let WasiExitDebugName = b"exit"
+let WasiGetStdoutDebugName = b"get_stdout"
+let WasiBlockingWriteFlushDebugName = b"blocking_write_and_flush"
+let WasiGetStderrDebugName = b"get_stderr"
 
 // The `.rdata` image (String-literal records + blobs) is laid in linear memory immediately
 // after the `.data` image, rounded up to 8 so every 8-byte record field lands naturally
@@ -237,9 +264,12 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 		var emitter = WasmFuncEmitter.create(module, func: func, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, funcNames: funcNames, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)
 		emitter.emit()
 		let typeIdx = builder.internFuncType(funcParamValTypes(func), results: funcSignatureResultValTypes(func))
-		_ = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes())
+		_ = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes(), debugName: func.name)
 	end 'eachFunc'
 
+	// The two SYNTHETIC functions, appended in the order `wasmPanicFuncIdx` fixes: `mrt_panic` first
+	// (its index is read by every panic site, which was emitted above), then the entry stub.
+	appendPanicRuntime(builder, funcNames: funcNames)
 	let runFuncIdx = appendRunEntry(builder, module: module, funcNames: funcNames, checkLeaks: checkLeaks, initGlobals: initGlobals)
 
 	// The memory must cover BOTH images; `.rdata` sits above `.data`, so `rdataBase + rdataSize`
@@ -258,16 +288,23 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	return builder.finish()
 end 'buildWasmCoreModule'
 
-// Add the three WASI imports in the order the `*ImportFuncIdx` constants pin: `exit-with-code`
-// (0), `get-stdout` (1), `blocking-write-and-flush` (2). `exit-with-code` takes one i32 (the
-// status) and returns nothing; `get-stdout` takes nothing and returns the i32 stream handle;
-// `blocking-write-and-flush` takes (handle, ptr, len, retArea) — four i32 — and returns nothing.
+// Add the four WASI imports in the order the `*ImportFuncIdx` constants pin: `exit-with-code`
+// (0), `get-stdout` (1), `blocking-write-and-flush` (2), `get-stderr` (3). `exit-with-code` takes one
+// i32 (the status) and returns nothing; each stream accessor takes nothing and returns the i32 stream
+// handle; `blocking-write-and-flush` takes (handle, ptr, len, retArea) — four i32 — and returns nothing.
+//
+// All four are imported UNCONDITIONALLY, including by a program that never panics and never prints. A
+// wasm import costs a name pair in the import section and nothing at run time (the host resolves it
+// whether or not a `call` reaches it), whereas making one conditional would put the `*ImportFuncIdx`
+// constants — and therefore `WasmImportCount`, and therefore EVERY defined function's index and every
+// funcref-table slot baked into `.rdata` — behind a whole-module scan for a single op.
 function appendWasiImports(builder WasmModuleBuilder)
 	let exitTypeIdx = builder.internFuncType(singletonValTypes(WasmValType.i32), results: WasmValTypeArray.create())
-	_ = builder.addImportFunc(WasiExitModuleName, fieldName: WasiExitFieldName, typeIdx: exitTypeIdx)
+	_ = builder.addImportFunc(WasiExitModuleName, fieldName: WasiExitFieldName, typeIdx: exitTypeIdx, debugName: WasiExitDebugName)
 
-	let getStdoutTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i32))
-	_ = builder.addImportFunc(WasiStdoutModuleName, fieldName: WasiGetStdoutFieldName, typeIdx: getStdoutTypeIdx)
+	// Both stream accessors have the same signature, so `internFuncType` hands them one type index.
+	let getStreamTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i32))
+	_ = builder.addImportFunc(WasiStdoutModuleName, fieldName: WasiGetStdoutFieldName, typeIdx: getStreamTypeIdx, debugName: WasiGetStdoutDebugName)
 
 	// `blocking-write-and-flush(handle, ptr, len, retArea)` — four i32 params, no result.
 	var writeFlushParams = WasmValTypeArray.create()
@@ -275,7 +312,9 @@ function appendWasiImports(builder WasmModuleBuilder)
 		writeFlushParams.push(WasmValType.i32)
 	end 'eachParam'
 	let writeFlushTypeIdx = builder.internFuncType(writeFlushParams, results: WasmValTypeArray.create())
-	_ = builder.addImportFunc(WasiStreamsModuleName, fieldName: WasiBlockingWriteFlushFieldName, typeIdx: writeFlushTypeIdx)
+	_ = builder.addImportFunc(WasiStreamsModuleName, fieldName: WasiBlockingWriteFlushFieldName, typeIdx: writeFlushTypeIdx, debugName: WasiBlockingWriteFlushDebugName)
+
+	_ = builder.addImportFunc(WasiStderrModuleName, fieldName: WasiGetStderrFieldName, typeIdx: getStreamTypeIdx, debugName: WasiGetStderrDebugName)
 end 'appendWasiImports'
 
 // Bake each String literal's `buffer@0` field into the `.rdata` image: overwrite the record's
@@ -370,6 +409,104 @@ function wasmRdataBase(dataBase Wasm32Index, dataSize ByteCount) returns Wasm32I
 	return alignUp((dataBase as ByteCount) + dataSize, alignment: WasmRdataAlignment) as Wasm32Index
 end 'wasmRdataBase'
 
+// ⭐⭐ **`mrt_panic` ON WASM — THE THIRD IMPLEMENTATION OF ONE CONTRACT, AND THE ONLY ONE THAT PRINTS
+// NO FRAMES.**
+//
+// The contract is the two native runtimes' (`X64Runtime.buildPanicChunk`,
+// `Arm64PanicRuntime.buildArm64PanicChunk`): take the address of a NUL-terminated, newline-suffixed
+// `panic at <file>:<line>: …` line, print it to stderr, print `Stack trace:` and its frames, and end
+// the process with `PanicExitCode`. This one does the FIRST half in the program and cannot do the
+// second half at all, so it hands the second half to the host and says so:
+//
+//   * **THE FRAMES.** A native walk follows the saved-frame-pointer chain the prologues build
+//     (`BacktraceFormat.FrameOffSavedFramePointer`). **wasm has no such chain and cannot be given
+//     one** — the call stack is the ENGINE's, not addressable memory, and no wasm instruction reads
+//     it. So the runtime does not walk: it executes `unreachable`, and wasmtime unwinds its own trap
+//     and prints one frame line per wasm frame, symbolized from the "name" custom section
+//     (`WasmBinary.emitNameSection`). v1 reached the identical conclusion for the identical reason —
+//     it intercepts the shared `mrt_panic` and stubs `mrt_panic_print_frame` to a literal no-op
+//     (`MirToWasm.maxon:1706-1715`, `emitWasmPanic` at `:3700`).
+//
+//   * **THE EXIT CODE.** A trap is not an exit, so this function never reaches `exit-with-code` and the
+//     process status is whatever the host spends on a trap (wasmtime: 134). `PanicExitCode` is
+//     therefore not written here — the ONE place on this target where the number cannot be spent, and
+//     the reason `SpecTestRunner.wasmPanicReport` puts it back.
+//
+// ⭐ **WHY A FUNCTION AND NOT AN INLINE SEQUENCE AT EACH SITE.** The NUL scan is a loop, and a program
+// panics from as many sites as it has range guards (`InsertRangeChecks` puts one on every ranged
+// assignment) — so inlining would copy a `block`/`loop` into every one of them and give every enclosing
+// function two more locals. The native backends have exactly one `mrt_panic` chunk for the same reason.
+//
+// The MESSAGE contract is byte-identical to theirs, which is what lets the two panic ops share this one
+// entry point: both a baked `.rdata` blob (`StringRuntime.stringBlobBytes` NUL-terminates it) and an
+// interpolated buffer (`Parser.renderedPanicMessagePointer` — the slab zeroes the byte past the payload)
+// arrive as a C string.
+function appendPanicRuntime(builder WasmModuleBuilder, funcNames FunctionNameIndex)
+	var body = WasmBody.create()
+
+	// param 0 = the message pointer; local 1 = the scan cursor, which ends at the NUL so that
+	// `cursor - ptr` IS the byte length. One extra local, no separate length counter.
+	body.localGet(WasmPanicMsgPtrLocal)
+	body.localSet(WasmPanicCursorLocal)
+
+	body.beginBlock()
+	body.beginLoop()
+	body.localGet(WasmPanicCursorLocal)
+	body.i32Load8U(0)
+	body.i32Eqz()
+	// Depth 1 is the enclosing `block` (depth 0 is the `loop`, which would re-enter): leave the scan
+	// the moment the byte under the cursor is the terminator.
+	body.brIf(WasmPanicScanBreakDepth)
+	body.localGet(WasmPanicCursorLocal)
+	body.i32Const(1)
+	body.i32Add()
+	body.localSet(WasmPanicCursorLocal)
+	body.br(WasmPanicScanContinueDepth)
+	body.endOp()
+	body.endOp()
+
+	// `blocking-write-and-flush(get-stderr(), ptr, cursor - ptr, retArea)` — the same four-operand
+	// shape and the same fire-and-forget return area as `emitOsWriteStdout`, over the stderr handle.
+	body.call(GetStderrImportFuncIdx)
+	body.localGet(WasmPanicMsgPtrLocal)
+	body.localGet(WasmPanicCursorLocal)
+	body.localGet(WasmPanicMsgPtrLocal)
+	body.i32Sub()
+	body.i32Const(WasmRetAreaBase)
+	body.call(BlockingWriteFlushImportFuncIdx)
+
+	// TRAP. This is the frame wasmtime reports as frame 0, and it is what makes every frame ABOVE it
+	// reportable at all.
+	body.unreachable()
+
+	let typeIdx = builder.internFuncType(singletonValTypes(WasmValType.i32), results: WasmValTypeArray.create())
+	let funcIdx = builder.addFunction(typeIdx, localTypes: singletonValTypes(WasmValType.i32), body: body.bytes(), debugName: PanicName)
+	if funcIdx != wasmPanicFuncIdx(funcNames) 'indexDrift'
+		panic("appendPanicRuntime: `{String.from(PanicName)}` landed at wasm function index {funcIdx}, but every panic site was emitted calling {wasmPanicFuncIdx(funcNames)} — the synthetic functions are no longer appended in the order `wasmPanicFuncIdx` derives")
+	end 'indexDrift'
+end 'appendPanicRuntime'
+
+// ⭐ **WHERE `mrt_panic` SITS, DERIVED — because its callers are emitted BEFORE it is added.** Every
+// panic site needs the index while `buildWasmCoreModule` is still walking the module's own functions,
+// so the index cannot be the one `addFunction` returns. It is the FIRST index past the defined
+// functions because `appendPanicRuntime` is the FIRST synthetic appended, and `appendPanicRuntime`
+// asserts that rather than assuming it — a silent disagreement here would call the entry stub with a
+// message pointer.
+function wasmPanicFuncIdx(funcNames FunctionNameIndex) returns Wasm32Index
+	return (WasmImportCount + funcNames.functions.count()) as Wasm32Index
+end 'wasmPanicFuncIdx'
+
+// `mrt_panic`'s locals. Local 0 is its one parameter (identity-local model: a wasm function's params
+// occupy the first local indices), local 1 the scan cursor.
+let WasmPanicMsgPtrLocal = 0 as Wasm32Index
+let WasmPanicCursorLocal = 1 as Wasm32Index
+
+// The two branch depths inside the NUL scan, relative to the innermost `loop`: 0 re-enters the loop,
+// 1 exits the `block` that wraps it. Named because a wasm branch depth is a bare integer that no
+// validator can tell from any other, and swapping these two makes the scan an infinite loop.
+let WasmPanicScanContinueDepth = 0 as Wasm32Index
+let WasmPanicScanBreakDepth = 1 as Wasm32Index
+
 // Synthesize the component entry `wasi:cli/run@0.2.6#run() -> i32`: run `main`, hand its
 // exit code to `exit-with-code`, and leave the ok-discriminant on the stack. Returns the
 // entry's wasm function index (for the export).
@@ -397,8 +534,20 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames F
 	runBody.call(ExitImportFuncIdx)
 	runBody.i32Const(RunOkResult)
 
+	// ⭐ **ITS DEBUG NAME IS `mrt_start`, AND THAT IS A DESCRIPTION, NOT A DISGUISE (W3).** Its EXPORT
+	// name is and stays `wasi:cli/run@0.2.6#run` — the component contract, checked by the host. The name
+	// section names a different thing: what the function IS, for a human reading a backtrace. And what
+	// this function is, is the entry stub — the direct sibling of `BackendDispatch.prependEntryStub`,
+	// which this one's own leak-gate comment already cites, doing the same four things in the same order
+	// (module init, call `main`, global cleanup, leak gate, exit) and sitting in the same place: the
+	// outermost frame, the one every `Stack trace:` in the corpus ends at. Calling it `run` here — v1's
+	// choice, forced because v1's wasm ALSO had a real `mrt_start` above it, so its runner had to elide
+	// `run` as "the component-model analog of `_start`" — would leave shv2's trace ending at a frame the
+	// corpus does not name and would require SYNTHESIZING the `in mrt_start` line, which would be a
+	// disguise. Reusing `EntryPointName` instead means the frame is reported, not invented, and the
+	// entry stub's name is spelled in exactly one place for all three backends.
 	let runTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i32))
-	return builder.addFunction(runTypeIdx, localTypes: WasmValTypeArray.create(), body: runBody.bytes())
+	return builder.addFunction(runTypeIdx, localTypes: WasmValTypeArray.create(), body: runBody.bytes(), debugName: EntryPointName)
 end 'appendRunEntry'
 
 // ⭐ **FILL EVERY MANAGED GLOBAL'S `.data` SLOT BEFORE `main` (P1.7 slice 2a)** — the sibling of the
@@ -1271,7 +1420,7 @@ type WasmFuncEmitter
 			// call THROUGH one (`callIndirect`). See the two emitters for the funcref-table lowering.
 			funcAddr(resultId, funcName) then self.emitFuncAddr(resultId, funcName: funcName)
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask)
-			osPanic then self.emitPanic()
+			osPanic(label) then self.emitPanicLabel(label)
 			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
 			// only — its QueryPerformanceCounter clock and Windows `Sleep` have no wasm primitive, and a
 			// `sleep` program is spec-gated to x64-windows, so neither op ever reaches the wasm emitter.
@@ -1301,9 +1450,9 @@ type WasmFuncEmitter
 			// the backstop for a compiler bug that got one past that gate, not the user-facing rejection.
 			osReadWallClock then panic("emitBodyOp: `osReadWallClock` is x64-windows only — the wall clock is x64-windows-gated at this rung")
 			osFileOpenRead to osFileAttributes then panic("emitBodyOp: the file-IO ops are x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
-			// The rendered message is DISCARDED for the same reason the baked label is: nobody has written a
-			// wasm `mrt_panic`, so both spellings exit bare (see `emitPanic`).
-			osPanicValue then self.emitPanic()
+			// The rendered message is a POINTER where the baked form names a label; both reach the one
+			// `mrt_panic` this backend synthesizes (`appendPanicRuntime`), exactly as on x64 and arm64.
+			osPanicValue(messagePtrId) then self.emitPanicValue(messagePtrId)
 		end 'body'
 	end 'emitBodyOp'
 
@@ -1873,27 +2022,41 @@ type WasmFuncEmitter
 		self.body.unreachable()
 	end 'emitOsExit'
 
-	// `osPanic` (a P1.9 range-check violation) on wasm — a BARE `exit-with-code`, no message or
-	// backtrace, over the one `PanicExitCode` every backend's panic path reads
-	// (`Targets/Shared/PanicExitCode`).
+	// `osPanic(label)` — a panic whose whole line was baked into `.rdata` at compile time (a P1.9
+	// range-check violation, or a `panic("literal")`). The label's address is a compile-time i32 on
+	// this fixed-base target, exactly as in `emitRdataAddr`, so the site is two instructions.
 	//
-	// ⚠ DO NOT RE-DERIVE THE SILENCE FROM WHAT THE SPEC SUITE PINS. The sentence that stood here
-	// justified it by "the two runtime-panic spec cases are restricted to x64-windows" — the same
-	// circular reasoning rung A1j removed from arm64's twin of this comment, and stale twice over: those
-	// cases carried that marker BECAUSE a lane printed nothing, and there are 16 of them, on both x64
-	// lanes since A1j. The real reason wasm exits bare is that nobody has written a wasm `mrt_panic`.
+	// ⚠ **THIS EMITTED A BARE `exit-with-code` AND PRINTED NOTHING UNTIL W3**, and the comment that
+	// stood here said so — correctly, at the time: *"the real reason wasm exits bare is that nobody has
+	// written a wasm `mrt_panic`."* Somebody now has (`appendPanicRuntime`), and both spellings of a
+	// panic route to it, so this lane says as much as the other four.
+	function emitPanicLabel(label ByteArray)
+		self.body.i32Const(self.rdataLabelAddress(label))
+		self.emitPanicCall()
+	end 'emitPanicLabel'
+
+	// `osPanicValue(messagePtr)` — the RENDERED twin (A3n): an interpolation assembled the whole line at
+	// run time and this is its ADDRESS. The pointer is an i64 in the Std IR (a machine word on the
+	// register backends) and an address is an i32 here, so `pushOperandAt` wraps it — the sole difference
+	// from the baked form, mirroring x64's and arm64's `lowerPanicValue`, which likewise differ from
+	// their `lowerPanic` only in how the first argument is produced.
+	function emitPanicValue(messagePtrId ValueId)
+		self.pushOperandAt(messagePtrId, targetVt: WasmValType.i32)
+		self.emitPanicCall()
+	end 'emitPanicValue'
+
+	// The call both panic spellings end on, with the message pointer already on the stack.
 	//
-	// ⚠ AND IT IS NOT DEAD CODE, WHICH THE SENTENCE HERE ALSO CLAIMED. It said every case that runs on
-	// wasm keeps its guard's value in range, so this existed "only so the guard COMPILES" — true when it
-	// was written and false since `string-views.md` grew the pair that fires a guard on the SILENT lanes:
-	// `whitelisted-stdlib-keeps-its-range-check` is `targets: wasm32-wasi`, reaches this exit under
-	// wasmtime, and asserts the code is 1 (an unguarded build returns 7). So `PanicExitCode` is pinned by
-	// EXECUTION here, not merely by compiling. Same shape as `emitOsExit` with a constant status.
-	function emitPanic()
-		self.body.i32Const(PanicExitCode as Imm32)
-		self.body.call(ExitImportFuncIdx)
+	// ⚠ **THE TRAILING `unreachable` IS FOR THE VALIDATOR, NOT FOR THE RUN.** `mrt_panic` ends in a trap
+	// and can never return, but a wasm functype cannot say so: to the validator this is an ordinary
+	// `(i32) -> ()` call, so the code after it is REACHABLE and the dead terminator the parser emits
+	// after a diverging op must still type-check against the function's declared result arity. An
+	// `unreachable` makes the stack polymorphic and it does. This is the same instruction, for the same
+	// reason, that `emitOsExit` puts after `exit-with-code`.
+	function emitPanicCall()
+		self.body.call(wasmPanicFuncIdx(self.funcNames))
 		self.body.unreachable()
-	end 'emitPanic'
+	end 'emitPanicCall'
 
 	// ----------------------------------------------------------------------
 	// Memory band: top-level `var` globals (globalAddr / loadIndirect / storeIndirect)
@@ -1966,10 +2129,17 @@ type WasmFuncEmitter
 	// `buildValtypeTable`); it reaches `__print_string`'s i64 `strPtr` param through the
 	// call-argument coercion (`i64.extend_i32`), and is wrapped back to i32 at the load base.
 	function emitRdataAddr(resultId ValueId, label ByteArray)
-		let recordOffset = self.globalData.rdataOffsetOf(String.from(label))
-		self.body.i32Const(wasmLinearAddress(self.rdataBase, byteOffset: recordOffset))
+		self.body.i32Const(self.rdataLabelAddress(label))
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitRdataAddr'
+
+	// A `.rdata` label's absolute linear-memory address. wasm is fixed-base, so this is a compile-time
+	// constant rather than the relocation the native writers file. Two callers want it for different
+	// reasons — `emitRdataAddr` puts it in a value, `emitPanicLabel` passes it straight to `mrt_panic` —
+	// and the layout arithmetic is the same fact for both.
+	function rdataLabelAddress(label ByteArray) returns Imm32
+		return wasmLinearAddress(self.rdataBase, byteOffset: self.globalData.rdataOffsetOf(String.from(label)))
+	end 'rdataLabelAddress'
 
 	// `osAllocPages(size) -> base` → `memory.grow` (v1 `emitOsAllocPages`, MirToWasm.maxon:3227,
 	// ported verbatim). The slab allocator asks for `size` bytes; wasm grows linear memory a PAGE at
