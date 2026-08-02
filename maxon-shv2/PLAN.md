@@ -2155,8 +2155,10 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   A golden records what the compiler emits, so it is a correct artifact of a wrong compiler; **re-mint it
   with `--update-required` as part of this rung and do not read it as a specification.**
 - **⬜ THE UNUSED-BINDING CHECK (E3012) DOES NOT EXIST IN shv2 AT ALL** — not for parameters, not for
-  locals. **Filed 2026-08-02 by `/spec-port`, which took the §7 DEFERRED exit on
-  `specs/unused-parameters.md` (4 of its 6 cases blocked, past the half-the-file floor).** Measured, not
+  locals. **Found 2026-08-02 by `/spec-port` on `specs/unused-parameters.md`, 4 of whose 6 cases it
+  blocks.** ⚠ That tick DEFERRED the spec, and deferring was abolished the same day (user ruling;
+  `.claude/skills/spec-port/SKILL.md` §4). `unused-parameters` is back in the loop's whitelist order and
+  **this row is the work its next tick has to do**, not a reason the spec waits. Measured, not
   inferred: `docs/error-codes.txt` E3012 carries `csharp` and `selfhosted` claims and **no `shv2` line**,
   and shv2's sources contain no emitter under any spelling (grep for both the member name and the message
   text — the check is structural, since `ErrorCode.<name>` does not compile unless the registry generated

@@ -11,8 +11,8 @@ whole tick should be minutes, not hours.
 
 **`/rung` is for a rung of `maxon-shv2/PLAN.md` — a named feature with a contract.** This skill is for
 the long tail: the specs `/specs` already has and `specs-shv2` does not, most of which are a small
-front-end gap or nothing at all. **When a spec turns out to need a whole feature, you do NOT start a
-rung here** — you land what is reachable, shelve the rest with named reasons, and say so (§7).
+front-end gap or nothing at all. **When a spec turns out to need a whole feature, you build the whole
+feature** (§7). Every case in the file passes before you land — there is no skipping and no deferring.
 
 ## The ordering is v1's whitelist, and it is the only backlog
 
@@ -28,18 +28,19 @@ sed -n '5,425p' maxon-selfhosted/Testing/SpecTestRunner.maxon \
   | sed -n 's/^[[:space:]]*"\([a-z0-9-]*\)".*/\1/p' > temp/wl.txt
 while read s; do
   [ -f "specs-shv2/$s.md" ] && continue          # already ported
-  grep -q "^| $s " docs/spec-port-log.md 2>/dev/null && continue   # DEFERRED on a past tick
   [ -f "specs/$s.md" ] || { echo "SKIP(no source): $s"; continue; }
   echo "NEXT: $s"; break
 done < temp/wl.txt
 ```
 
-Three exclusions, and each is load-bearing:
+Two exclusions, and each is load-bearing:
 - **already in `specs-shv2/`** — done, on some earlier tick.
-- **a `DEFERRED` row in `docs/spec-port-log.md`** — a past tick measured this one as needing a rung
-  (§7). Without this the loop stalls on it forever, retrying the same halt every tick.
 - **no `specs/<name>.md`** — the whitelist names a few specs that only ever existed in v1's head. Report
   the skip and move to the next; do not invent the file.
+
+⚠ **There is deliberately no third exclusion.** The selector once skipped any spec named in
+`docs/spec-port-log.md`, so that a `DEFERRED` row retired a spec from the loop permanently. Deferring is
+gone (§4), so nothing may retire a spec but porting it.
 
 `/spec-port <name>` overrides all three and takes that spec.
 
@@ -140,32 +141,29 @@ run_spec_test compiler=shv2 repoRoot=C:/Users/Eric/dev/maxon filter=<name>/
 >   `/specs` has no draft files today; the day it gets one, this is how it disappears.
 > - **A `## ` heading ENDS the active-test region** (`SpecParser.extractTests`: *"A new `## ` section
 >   (e.g. `## Deferred`) ends the active-test region"*). A `/specs` file that puts `## Notes` or
->   `## See also` after `## Tests` silently shelves every case below it. **This has already cost this
+>   `## See also` after `## Tests` silently drops every case below it. **This has already cost this
 >   project a green that tested nothing.**
 >
-> **So every tick, mechanically — TWO checks, and neither substitutes for the other:**
+> **So every tick, mechanically — THREE checks, and none substitutes for another:**
 > ```bash
 > grep -c '<!-- test:'          specs-shv2/<name>.md   # ACTIVE cases. This is the number.
-> grep -c '<!-- disabled-test:' specs-shv2/<name>.md   # shelved — informational, do NOT subtract
+> grep -c '<!-- disabled-test:' specs-shv2/<name>.md   # MUST BE 0 — see check 3
 > grep -o '<!-- \(disabled-\)\?test: [^ ]*' specs-shv2/<name>.md \
 >   | sed 's/.*test: //' | sort | uniq -d                # must print NOTHING
 > ```
 > 1. **`grep -c '<!-- test:'` MUST equal the runner's `total` for that filter.** A shortfall is a defect
 >    in the port, never a pass. Fix it by moving the `## ` heading below the cases (and say so in the
 >    commit), not by accepting the smaller number.
-> 2. **No name may appear as BOTH `test:` and `disabled-test:`** — that is a shelve that did not take.
+> 2. **No name may appear as BOTH `test:` and `disabled-test:`** — the file would read as though a case
+>    were disabled while it still runs.
+> 3. **`grep -c '<!-- disabled-test:'` MUST BE 0 in the file you are porting** (§4 — you may not write
+>    one). A non-zero count in a file you did NOT port is pre-existing debt: it is work owed, and if your
+>    mechanism unblocks it, enable it in the same tick.
 >
-> ⚠ **DO NOT SUBTRACT.** `<!-- disabled-test:` does **not** match the `<!-- test:` grep (the `<!-- `
-> prefix breaks it — verified: `echo '<!-- disabled-test: x -->' | grep -c '<!-- test:'` is `0`), so the
-> first count **already excludes** the shelved cases. Subtracting under-counts by exactly the number you
-> shelved, which makes a CORRECT port look like a defect on every tick that shelves anything. *(This
-> skill said "markers − disabled" until 2026-08-01, when tick 5 shelved one case of fourteen and the
-> formula demanded 12 against a correct 13.)*
->
-> ⚠ **Shelving REPLACES the marker, it does not accompany it.** Write `<!-- disabled-test: <name> -->`
-> **in place of** `<!-- test: <name> -->` — leave the `test:` line underneath and the case still runs,
-> silently, while the file reads as though it were shelved. Check 2 is what catches that; it is how the
-> same tick found its own botched shelve.
+> ⚠ **DO NOT SUBTRACT one count from the other.** `<!-- disabled-test:` does **not** match the
+> `<!-- test:` grep (the `<!-- ` prefix breaks it — verified: `echo '<!-- disabled-test: x -->' |
+> grep -c '<!-- test:'` is `0`), so the first count is already the active set. *(This skill said
+> "markers − disabled" until 2026-08-01, when the formula demanded 12 against a correct 13.)*
 
 Then read the failures. The MCP result is structured; when you want per-case detail use
 `spec_test_outcome filter=<name>/`. If you run the binary by hand instead, **redirect to a file** — never
@@ -195,8 +193,8 @@ with a single filtered run. The moment it needs a second hypothesis, hand it ove
 
 ⛔ **A defect this spec reaches is FIXED, not filed** — a wrong answer as much as a leak, and whether or
 not the suite is green over it. That is the CLAUDE.md rule and neither you nor the agent softens it.
-What may be shelved is a case needing a *feature that does not exist yet* (§4) — never a case that is
-broken.
+**And a case needing a feature that does not exist yet is BUILT, not skipped** (§4). Nothing in this
+loop may be left failing.
 
 **The agent runs ONLY its own spec's filter — the full suite is YOURS** (§8), and one tick runs it
 exactly once. **You** do not re-derive its diagnosis or re-run what it ran; the suite is your check.
@@ -214,7 +212,7 @@ better, one step later**:
 |---|---|
 | "enumerate every construct that could false-reject and prove each parses" | the **full unfiltered suite** (§8) — thousands of cases across closures, interfaces, generics, operators |
 | "confirm no other spec regressed" | the same run, which is the whole point of it being unfiltered |
-| "check you did not shelve anything" | the **§2 count check** |
+| "check no case was left disabled" | the **§2 count check** |
 | "confirm you stayed in bounds / the diff is minimal" | **you**, reading `git diff` and `git status` — seconds of work |
 
 ⚠ **A specific instruction in your brief OUTRANKS the agent's own standing rules.** Its definition
@@ -269,22 +267,35 @@ while `function-declaration` at position 3 sat unported. Cancelled. **Too soon i
 it spends a tick's budget on a hard spec while the cheap ones that would have exposed simpler bugs go
 unrun.**)* The one exception remains an explicit `/spec-port <name>` from the user.
 
-## 4. Shelving a case — the only legal way, and it has a floor
+## ⛔⛔ 4. THERE IS NO SHELVING. YOU IMPLEMENT UNTIL EVERY CASE PASSES.
 
-A case that needs a feature shv2 has not built yet becomes:
+**USER RULING, 2026-08-02, and it is absolute: you may not disable a case, you may not skip one, and
+you may not defer a spec. Enable the spec, implement functionality until they all pass.**
 
-```markdown
-<!-- disabled-test: <name> -->
-<!-- needs <THE MECHANISM>, which is <WHERE IT LIVES>: <why it cannot ride this port>. -->
-```
+There is no floor, no "land what is reachable", no `disabled-test:` you are permitted to write. A case
+that fails names a mechanism shv2 does not have yet ⇒ **build the mechanism.** However large. A new
+builtin, a runtime slice, a backend opcode across all three targets, spec-harness support, a stdlib
+whitelist entry — all of it is in scope, because `.claude/CLAUDE.md` has always said so:
 
-**You may not shelve a case whose gap you have not NAMED and LOCATED.** *"Fails"* is not a reason.
-*"Needs Map, which is a follow-on rung — `MapIterator.current()` returns a genuine tuple, so Map is
-sequenced after tuples"* is. If you cannot write that sentence, you have not finished diagnosing, and
-the honest move is to keep debugging.
+> *"There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it
+> properly. No workarounds."*
 
-> **⛔ THE FLOOR: if more than half the file's cases end up disabled, STOP.** Do not commit a mostly-shelved
-> spec. That file is not a port, it is a rung wearing a port's clothes — take the §7 exit.
+⚠ **This section used to say the opposite**, and that is why the ruling exists. It described shelving as
+"the only legal way" and gave a half-the-file floor, while CLAUDE.md forbade workarounds — **two
+documents disagreeing, and the more specific one won every time it was read.** A tick shelved three
+`abs.rt-*` cases for wanting argv; the ruling followed; building the argv path took four mechanisms and
+closed **eighteen** cases, six in `abs.md` and twelve more that four already-ported specs had been
+sitting on. **Size was never the obstacle it was written up as.**
+
+⚠ **`<!-- disabled-test:` markers still exist in `specs-shv2/`** — several hundred, left by the old
+process. They are **DEBT, not precedent**: each is a case this loop owes, and re-enabling one is
+finishing someone's tick, not scope creep. When your spec's mechanism unblocks cases in *other* files,
+enable those too and say so (precedent: `c18b56b11`, twelve cases restored across `ceil`/`floor`/
+`round`/`sqrt` the moment argv landed — all four files became byte-identical to `/specs` again).
+
+**The only things that still stop you are the HALT conditions at the end of this file**, and neither is
+a way to skip a case: a genuine DESIGN RULING where `/specs` and shv2 disagree about what is *correct*,
+and a change that would rewrite an existing ported expectation. Both mean *ask*, not *shelve*.
 
 ## 5. COMMIT the goldens the run minted — you do NOT have to read them
 
@@ -355,18 +366,25 @@ does not need the heaviest model in the repo either.
 report is a lead, not a verdict — this project's history is full of agent findings that measurement
 refuted, so confirm anything it claims before acting on it, and say so if you disagree.
 
-## 7. The exit for a spec that is really a rung
+## 7. A spec that is really a rung — you build the rung
 
-Some whitelist entries are whole features (`map`, `ownership`, `advent`). When §4's floor fires, or the
-first read makes it obvious:
+Some whitelist entries are whole features (`map`, `ownership`, `advent`). **That is a description of how
+much work the tick is, not permission to skip it.** There is no exit here and no DEFERRED outcome; §4 is
+absolute.
 
-1. **`git checkout -- specs-shv2/` and delete the copied file.** Land nothing half-done.
-2. **Record it in `docs/spec-port-log.md` as `DEFERRED`**, naming the mechanism and the rung that must
-   land first. That row is what stops the next tick retrying it.
-3. **Put the rung itself on `maxon-shv2/PLAN.md`** — the "Future rungs" list — per the project's
-   one-backlog rule. `docs/spec-port-log.md` records *what this loop did*; it is a trend, not a backlog,
-   and it never holds work.
-4. Report and let the loop take the next spec.
+So when the first read shows a spec needs a mechanism that does not exist:
+
+1. **Scope it before you start.** Name every gap, locate each one, and check the whole set rather than
+   the first — a spec commonly needs several. (`abs` looked like one missing intrinsic and was four
+   mechanisms; `CommandLine.args()` alone had three blockers behind it, and the second and third were
+   invisible until the first was cleared.)
+2. **Build them.** Delegate the implementation (§3); one agent per mechanism when they touch disjoint
+   files, sequentially when they do not — **never two agents in one checkout on overlapping files.**
+3. **Land it as one piece** when the pieces cannot be tested apart. `CommandLine.args()`'s intrinsics had
+   no legal caller until the stdlib module loaded, so nothing could run until all three blockers were
+   cleared.
+4. **Take the ruling to the user** if — and only if — you hit a genuine HALT condition (see the end of
+   this file). "This is large" is not one.
 
 ## 8. The gate battery, then land it
 
@@ -449,8 +467,9 @@ lane and forgot the host's.)*
 
 Then: commit, and **push**. Directly on `main` — this repo develops there; do not branch.
 
-**The commit message carries what the diff cannot:** which cases were shelved and the located reason for
-each; the before/after suite numbers.
+**The commit message carries what the diff cannot:** every mechanism you had to build and why the spec
+needed it; the before/after suite numbers; any cases you enabled in OTHER files because your mechanism
+unblocked them.
 
 ## 9. Close the tick
 
@@ -463,18 +482,19 @@ The row's shape (`docs/spec-port-log.md` mirrors `docs/optimization-log.md`'s re
 | spec | date | outcome | cases | note |
 |------|------|---------|-------|------|
 | print-function | 2026-08-01 | PORTED | 4/4 | no compiler change; interpolation already handled every case. Suite 3258 → 3262. |
-| <name> | <date> | PORTED | 9/12 | 3 shelved: 2 need Map (rung X), 1 needs the value-tuple ABI. Suite 3262 → 3271. |
-| <name> | <date> | DEFERRED | 0/31 | needs the whole ownership model — filed as PLAN.md future rung. Suite unchanged at 3271. |
+| <name> | <date> | PORTED | 12/12 | needed Map end to end — the iterator, the layout and the drop. Suite 3262 → 3274. |
 ```
 
-⚠ **This log is INFORMATIONAL and nothing may depend on it.** It is a trend a person reads, exactly like
-`docs/optimization-log.md` — write the suite figure in the row because it is useful to a reader, not
-because anything downstream consumes it. **The one exception is the `DEFERRED` first column**, which the
-§"ordering" selector reads to stop the loop retrying a spec forever; that is a name, not a measurement.
-No tick may reconstruct a number from here — if you need one, MEASURE it (§0).
+**`PORTED` is the only outcome, and `cases` is always `N/N`** — a tick that has not made every case pass
+is not finished (§4). There is no `DEFERRED` row and no partial count.
 
-Then report to the user in a few lines: which spec, the gap you closed, what you shelved and why, the
-suite delta, and what the next tick will take. **The loop's next tick re-reads the whitelist and picks
+⚠ **This log is INFORMATIONAL and NOTHING may depend on it** — not even the selector, which no longer
+reads it at all. It is a trend a person reads, exactly like `docs/optimization-log.md`: write the suite
+figure because it is useful to a reader, not because anything downstream consumes it. No tick may
+reconstruct a number from here — if you need one, MEASURE it (§0).
+
+Then report to the user in a few lines: which spec, every mechanism you built, any cases you enabled
+elsewhere, the suite delta, and what the next tick will take. **The loop's next tick re-reads the whitelist and picks
 up from the file system — it carries nothing in its head, which is what makes it restartable.**
 
 ## ⛔ HALT AND ASK
@@ -484,23 +504,23 @@ Everything above runs unattended. Stop and report, without landing, when:
 - **A gate is red and you did not cause it** — fix a pre-existing red in its own commit first (that is
   the CLAUDE.md rule: you do not care that it is pre-existing). Halt only if the fix is not yours to
   make.
-- **The floor fires (§4/§7)** — take the DEFERRED exit and say so; that is a report, not a question.
 - **A DESIGN RULING is needed** — `/specs` and shv2 disagree about what is *correct*, and the spec is
   genuinely ambiguous rather than merely unimplemented. **Do not guess, and do not "fix" the spec file
   to match the compiler.** *(A ported spec is a claim about the language. Editing the claim to match
   the implementation is how a compiler bug becomes a specification.)*
 - **The port would require changing an EXISTING `specs-shv2` expectation** — that is a behaviour change
   with a blast radius beyond this spec, and it belongs to whoever owns that behaviour.
-- **A case cannot be made to pass AND cannot be honestly shelved** — you could not name and locate the
-  gap. Report the case and what you found; do not disable it to move on.
+⚠ **"This is too big" is NOT on that list**, and neither is "I could not locate the gap". A gap you
+cannot locate is diagnosis you have not finished — keep going, or delegate it (§3). The only honest stop
+is a question the user has to answer, and neither of those is one.
 
 ## The thing this process exists to catch
 
 **A spec file that lands green having tested nothing.** Three mechanisms produce that: `status: draft`,
-a stray `## ` heading, and a `disabled-test:` written to make a case go away. §2's count catches the
-first two mechanically and §4's name-and-locate rule is the whole defence against the third. Both are
-cheap. **Do them every tick, including the ticks where the spec passed on the first run — especially
-those.**
+a stray `## ` heading, and a `disabled-test:` written to make a case go away. §2's three counts catch
+all three mechanically — the third is now simply `disabled-test: == 0`, because §4 permits none at all.
+It is cheap. **Do it every tick, including the ticks where the spec passed on the first run —
+especially those.**
 
 *(A fourth candidate — freshly minted goldens nobody read — was ruled OUT of this loop's scope on
 2026-08-01: the goldens gate codegen quality, not correctness, and the spec's own run assertions gate

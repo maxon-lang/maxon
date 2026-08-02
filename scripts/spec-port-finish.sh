@@ -23,13 +23,13 @@
 #   - full unfiltered suite reports `failed: 0`      <- the gate is ZERO FAILURES, not a total (§8)
 #   - no memory leak (exit 101)
 #   - this spec's `<!-- test:` markers == the cases that actually RAN for it   <- §2, the local check
-#   - no name is both `test:` and `disabled-test:`
+#   - no name is both `test:` and `disabled-test:`, and the ported spec has ZERO disabled cases (§4)
 #
 # The suite TOTAL is deliberately NOT a gate. A green suite is green whatever it started at, and other
 # agents commit to main between ticks; see §8's box in .claude/skills/spec-port/SKILL.md.
 #
 # USAGE
-#   scripts/spec-port-finish.sh --spec <name> --outcome PORTED|DEFERRED --cases <passed>/<markers> \
+#   scripts/spec-port-finish.sh --spec <name> --outcome PORTED --cases <N>/<N> \
 #       --note-file <f> --message-file <f> [--build-cost-note-file <f>] [--dry-run] [--no-push]
 #
 #   --note-file            prose for the docs/spec-port-log.md row's `note` column. The measured
@@ -108,11 +108,13 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$SPEC" ]      || die "--spec is required"
-[ -n "$OUTCOME" ]   || die "--outcome is required (PORTED or DEFERRED)"
+[ -n "$OUTCOME" ]   || die "--outcome is required (PORTED — the only outcome)"
 [ -n "$CASES" ]     || die "--cases is required, e.g. 30/30"
 [ -n "$NOTE_FILE" ] || die "--note-file is required"
 [ -f "$NOTE_FILE" ] || die "--note-file does not exist: $NOTE_FILE"
-case "$OUTCOME" in PORTED|DEFERRED) ;; *) die "--outcome must be PORTED or DEFERRED, got '$OUTCOME'" ;; esac
+# PORTED is the only outcome. Deferring a spec was removed by user ruling 2026-08-02 (SKILL.md §4):
+# a tick that has not made every case pass is not finished, so there is no other way for one to end.
+case "$OUTCOME" in PORTED) ;; *) die "--outcome must be PORTED — deferring a spec is not an option (SKILL.md §4), got '$OUTCOME'" ;; esac
 if [ "$DRY_RUN" = "0" ]; then
   [ -n "$MSG_FILE" ] || die "--message-file is required (omit only with --dry-run)"
   [ -f "$MSG_FILE" ] || die "--message-file does not exist: $MSG_FILE"
@@ -121,7 +123,7 @@ fi
 mkdir -p "$LOGDIR"
 cd "$REPO" || die "cannot cd to $REPO"
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || die "not on main — this repo develops directly on main"
-[ "$OUTCOME" = "DEFERRED" ] || [ -f "specs-shv2/$SPEC.md" ] || die "specs-shv2/$SPEC.md does not exist"
+[ -f "specs-shv2/$SPEC.md" ] || die "specs-shv2/$SPEC.md does not exist"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 step "1/7  Rebase onto origin/main"
@@ -227,19 +229,25 @@ ok "suite green: $PASSED passed, 0 failed"
 
 if [ "$OUTCOME" = "PORTED" ]; then
   MARKERS="$(grep -c '<!-- test:' "specs-shv2/$SPEC.md")"
-  SHELVED="$(grep -c '<!-- disabled-test:' "specs-shv2/$SPEC.md")"
+  DISABLED="$(grep -c '<!-- disabled-test:' "specs-shv2/$SPEC.md")"
   RAN="$(grep -cE "^(PASS|FAIL) $SPEC/" "$SUITE_LOG")"
 
   # §2: the count is the gate, not the colour. A spec can pass by running NOTHING — `status: draft`
   # returns zero tests for the whole file, and a stray `## ` heading ends the active-test region.
-  # DO NOT subtract the shelved cases: `<!-- disabled-test:` does not match the `<!-- test:` grep.
+  # DO NOT subtract the disabled cases: `<!-- disabled-test:` does not match the `<!-- test:` grep.
   [ "$MARKERS" = "$RAN" ] || die "COUNT MISMATCH: specs-shv2/$SPEC.md has $MARKERS \`<!-- test:\` markers but $RAN case(s) ran.
      A shortfall is a defect in the port, never a pass. Look for a \`## \` heading above the missing
      cases (it ENDS the active-test region) or \`status: draft\` in the frontmatter."
-  ok "count check: $MARKERS markers == $RAN ran ($SHELVED shelved)"
+  ok "count check: $MARKERS markers == $RAN ran"
+
+  # §4: you may not disable a case. A file you PORTED carrying one is a skipped case, not a shelve.
+  [ "$DISABLED" = "0" ] || die "specs-shv2/$SPEC.md has $DISABLED \`<!-- disabled-test:\` marker(s).
+     Disabling a case is not an option (SKILL.md §4, user ruling 2026-08-02). Implement the mechanism
+     the case needs — however large — and enable it. If you cannot locate the gap, that is unfinished
+     diagnosis, not a reason to skip."
 
   DUPES="$(grep -o '<!-- \(disabled-\)\?test: [^ ]*' "specs-shv2/$SPEC.md" | sed 's/.*test: //' | sort | uniq -d)"
-  [ -z "$DUPES" ] || die "a name is BOTH \`test:\` and \`disabled-test:\` — a shelve that did not take:
+  [ -z "$DUPES" ] || die "a name is BOTH \`test:\` and \`disabled-test:\` — the file reads as though a case were disabled while it still runs:
 $DUPES"
   ok "no name is both test: and disabled-test:"
 
