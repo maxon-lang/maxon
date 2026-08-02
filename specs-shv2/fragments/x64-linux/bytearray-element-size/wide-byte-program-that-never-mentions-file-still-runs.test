@@ -1,0 +1,81 @@
+// Test: wide-byte-program-that-never-mentions-file-still-runs
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(300)
+	made.push(700)
+	return 0 if made.count() == 2 and (try made.get(1) otherwise 0) == 700 else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 300
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 700
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_count
+    x64.cmpRegImm32 r8, 2
+    x64.movRegImm32 rax, 0
+    x64.jcc equal, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.cmpRegImm32 rax, 700
+    x64.setccReg equal, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r12, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r12, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,28 @@
+// Test: a-buffer-field-refuses-another-files-byte-at-the-construction
+// --- file: holder.maxon
+export type Holder
+	export var buf as __ManagedMemory
+
+	export static function of(b __ManagedMemory) returns Holder
+		return Holder{buf: b}
+	end 'of'
+
+	export function first() returns int
+		return try self.buf.get(0) otherwise 0
+	end 'first'
+end 'Holder'
+
+// --- file: main.maxon
+typealias Byte = int(0 to 1000)
+
+function widen(b Byte) returns int
+	return b
+end 'widen'
+
+function main() returns ExitCode
+	let h = Holder.of("ab".toByteArray())
+	return (h.first() - widen(50)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:23:10: argument type mismatch for 'b': expected 'Array_Byte$0_255', got 'Array_Byte$0_1000'

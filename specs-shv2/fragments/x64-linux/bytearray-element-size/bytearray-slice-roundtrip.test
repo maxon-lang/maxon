@@ -1,0 +1,121 @@
+// Test: bytearray-slice-roundtrip
+function main() returns ExitCode
+	let src = "Environment.inherit"
+	let bytes = src.toByteArray()
+	var out = ByteArray.create()
+	var i = 12
+	while i < bytes.count() 'copy'
+		let b = try bytes.get(i) otherwise 0
+		out.push(b)
+		i = i + 1
+	end 'copy'
+	let sliced = String.from(out)
+	return 0 if sliced == "inherit" else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __str_to_bytes
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r13, 12
+    x64.jmp whilehdr
+  whilehdr:
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_count
+    x64.cmpRegReg r13, r8
+    x64.jcc less, copy
+    x64.jmp whileexit
+  copy:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rdx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rdx, r8
+    x64.jmp trycont
+  trycont:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_from_bytes
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r14, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r14, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -390,7 +390,13 @@ end 'main'
 ```
 
 <!-- test: wide-byte-program-still-round-trips-a-file -->
+<!-- targets: x64-windows -->
 ### The stdlib's own byte buffer stays byte-PACKED while the program's `Byte` is two bytes wide
+x64-windows only, and it is the ONE case here that genuinely needs a file: it is the RUNTIME proof
+that `stdlib/File.maxon`'s own read buffer strides 1 while the caller's `Byte` strides 2, so it has
+to actually read one. `File.writeText` lowers to `__mf_open_write`, which has no x64-linux or
+wasm32-wasi implementation — see `file-io.md`'s Targets section for the whole statement of that
+gate and for what unblocks it.
 ```maxon
 typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
@@ -423,6 +429,19 @@ Hello 1
 
 <!-- test: a-byte-two-files-disagree-about-is-two-types -->
 ### Two ranges for one name are two element types, and they are not interchangeable
+`ByteArray` is `stdlib/File.maxon`'s own `export typealias ByteArray = Array with Byte`, resolved
+against the file that DECLARED it, so it is that file's `int(0 to u8.max)`; `Bytes` is this file's
+`int(0 to 1000)`. Two ranges, two element types, and the arrow between them does not exist.
+
+⚠ **IT REACHES THE STDLIB'S BYTE ARRAY THROUGH THE *TYPE*, NOT THROUGH A FILE READ, AND THAT IS THE
+POINT OF THE EDIT (N2 review).** It was written as `File.readBinary(path)`, which produces the same
+`Array_Byte$0_255` and made this a **x64-windows-only** case for no reason its own assertion needs:
+`File.writeText`/`readBinary` lower to `__mf_open_write`/`__mf_open_read`, and the two `E3104`s that
+raises off-Windows landed AHEAD of the E3005 in the captured stderr. The assertion here is a
+compile-time type identity, decided long before lowering and identical on every target — so a
+`targets:` marker would have been hiding a green lane rather than describing a red one
+(`file-io.md`'s Targets section states that rule). **The expected diagnostic is unchanged, to the
+byte.**
 ```maxon
 typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
@@ -432,18 +451,13 @@ function takesMine(b Bytes) returns ExitCode
 end 'takesMine'
 
 function main() returns ExitCode
-	let path = FilePath from "test_widebyte_notmine.txt"
-	try File.writeText(path, content: "Hi") otherwise 'writeErr'
-		return 1
-	end 'writeErr'
-	let raw = try File.readBinary(path) otherwise 'readErr'
-		return 2
-	end 'readErr'
-	return takesMine(raw)
+	var stdlibs = ByteArray.create()
+	stdlibs.push(65)
+	return takesMine(stdlibs)
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/a-byte-two-files-disagree-about-is-two-types.test:17:9: argument type mismatch for 'b': expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'
+error E3005: specs/fragments/bytearray-element-size/a-byte-two-files-disagree-about-is-two-types.test:12:9: argument type mismatch for 'b': expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'
 ```
 
 <!-- test: an-agreeing-byte-keeps-the-bare-element-name -->

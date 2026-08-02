@@ -173,9 +173,51 @@ end 'main'
 Could not delete file
 ```
 
+## Targets — the one statement of the FILESYSTEM gate
+
+⭐ **THIS SECTION IS THE HOME of the `<!-- targets: x64-windows -->` marker every `File.*` case in
+this file, in `file-info.md`, and the one filesystem case in `bytearray-element-size.md` carries.**
+Those cases point HERE rather than restating it, so the reason exists once and cannot drift into
+fourteen versions of itself. It is `async-scheduler.md`'s Targets section applied to a SECOND
+substrate, and it is deliberately not folded into that one: the green-thread gate is about a
+hand-written context switch, this one is about file descriptors, and a marker that named the wrong
+reason would be worse than none.
+
+**IT IS A RUNTIME-SUBSTRATE GATE, AND THE COMPILER — NOT THE MARKER — IS WHAT DECIDES IT.**
+`File.readText` / `writeText` / `readBinary` / `writeBinary` / `exists` / `delete` / `rename` / `info`
+lower to the runtime entries `__mf_open_read`, `__mf_open_write`, `__mf_exists`, `__mf_delete`,
+`__mf_rename` and `__mf_stat`, which are implemented for **x64-windows only** at this rung.
+`SemanticCheck.requireTargetSupportsCallee` refuses every reachable one with **E3104**, naming the
+entry and the target:
+
+```
+error E3104: ...: this construct is x64-windows only at this rung: 'File.writeText' lowers to
+the runtime entry '__mf_open_write', which has no x64-linux implementation
+```
+
+A pass elsewhere is not a thing that could be had, and the marker only spares the runner a compile
+whose answer is already known.
+
+⚠ **NOBODY HAD EVER RUN THESE CASES OFF-WINDOWS, AND A SURVEY CALLED THEM "byte-identically
+portable" (N2 review, MEASURED).** They were unreachable until the rung that whitelisted
+`stdlib/File.maxon` landed — so the claim had never been tested, and the first cross-target run after
+that whitelist read **15 failures on x64-linux and 14 on wasm32-wasi**, every one of them this gate.
+A portability claim about code nothing has executed is a guess.
+
+⚠ **IT IS NOT A PER-TARGET OPT-IN, AND THE TEST OF THAT IS WHAT CARRIES NO MARKER.** Anything
+decided BEFORE lowering is target-neutral and runs everywhere. `bytearray-element-size`'s
+`a-byte-two-files-disagree-about-is-two-types` asserts an **E3005** and was rewritten to reach it
+without touching the filesystem rather than given a marker — a marker there would have been hiding a
+green lane, not describing a red one.
+
+⚠ **UN-GATE THE MOMENT A SECOND `__mf_*` SUBSTRATE LANDS.** A stale gate is indistinguishable from
+a real one. What unblocks every case in this file is one thing: POSIX (`open`/`read`/`write`/
+`unlink`/`rename`/`stat`) and WASI Preview2 implementations of those six entries.
+
 ## Tests
 
 <!-- test: read-text-file -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	// Try to read a nonexistent file - this tests the error path
@@ -195,6 +237,7 @@ File not found
 ```
 
 <!-- test: read-nonexistent-file -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let content = try File.readText(FilePath from "nonexistent.txt") otherwise 'err'
@@ -213,6 +256,7 @@ File not found
 ```
 
 <!-- test: file-exists -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	// Test File.exists on a nonexistent file (returns false)
@@ -227,6 +271,7 @@ end 'main'
 ```
 
 <!-- test: read-binary-nonexistent -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let bytes = try File.readBinary(FilePath from "nonexistent_binary_file.bin") otherwise 'err'
@@ -245,6 +290,7 @@ File not found
 ```
 
 <!-- test: write-and-read-text -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let path = FilePath from "test_readtext.txt"
@@ -282,6 +328,7 @@ Hello World
 ```
 
 <!-- test: write-and-read-binary -->
+<!-- targets: x64-windows -->
 ```maxon
 
 function main() returns ExitCode
@@ -345,6 +392,7 @@ exists. Backed by `MoveFileEx` (Windows), `rename(2)` (POSIX), and
 **Signature:** `static function rename(from FilePath, to FilePath) throws FileRenameError`
 
 <!-- test: write-rename-and-read -->
+<!-- targets: x64-windows -->
 ```maxon
 
 function main() returns ExitCode
