@@ -662,6 +662,17 @@ export enum CalleeMint
 	// alone this callee — which is exactly the fact `requireCalleeIsNotReservedName` cannot read off a
 	// `__` name, since a `__` callee is otherwise something the author typed.
 	paramDefaultHelper
+	// ⭐ `FilePath from "C:\x.txt"` → `FilePath.init(…)`, minted by
+	// `Parser.parseStringLiteralInitConstruction` (N1a). APPENDED at the end of the enum, per the
+	// band-append invariant.
+	//
+	// It exists because the author writes NO MEMBER NAME in this form — the `init` is the
+	// `InitableFromStringLiteral` requirement the compiler dispatches to — so cross-file VISIBILITY has
+	// nothing to refuse. MEASURED: `stdlib/FilePath.maxon` declares `static function init` WITHOUT `export`
+	// (the interface it satisfies is what user code is meant to reach it through), and both references
+	// accept `FilePath from "…"` from user code while refusing a written-out `FilePath.init("…")`. The mint
+	// is what tells those two spellings apart — they build the identical callee, so no name-keyed rule can.
+	stringLiteralInit
 end 'CalleeMint'
 
 export union MaxonOp

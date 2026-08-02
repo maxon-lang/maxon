@@ -905,6 +905,17 @@ export union ParseError implements Error
 	// `DeferredNameDiagnostic` instead of throwing — see `Parser.recordHiddenCastTarget` for the whole
 	// argument, and `hiddenAliasCastTarget` for the one predicate both spellings decide by.
 	hiddenCastTargetType(line LineNumber, column ColumnNumber)
+	// ⭐ BOTH VISIBILITY MODIFIERS ON ONE DECLARATION (`export module function f()`). Renders as **E2001**,
+	// positioned at the `module` — the modifier that cannot be there is the one the message is about, and it
+	// is the oracle's anchor. The two are mutually exclusive by `specs/module-keyword.md`: `export` is
+	// program-wide and `module` is a directory subtree, so a declaration wearing both states two different
+	// answers to one question rather than a narrowing of either.
+	exportAndModuleCombined(line LineNumber, column ColumnNumber)
+	// ⭐ A FIELD READ THROUGH A VALUE WHOSE TYPE THE READING FILE MAY NOT SEE (N1a) — a `type` another file
+	// declared without `export`, or with `module` from outside its subtree. Renders as **E4006** with the
+	// reference's exact wording, positioned at the FIELD. See `Parser.requireFieldAccessible` for why the
+	// sentence says "Unknown type" rather than "not exported", and why the field is the anchor.
+	hiddenTypeName(typeName String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -2822,6 +2833,17 @@ let StringToByteArrayMethod = b"toByteArray"
 // language's String surface, but the two doors `stdlib/URL.maxon` and `stdlib/helpers/url/urlHelpers.maxon`
 // need in order to compile AS WRITTEN — which is the whole point of whitelisting a module rather than
 // transcribing it.
+// The `module` visibility modifier's spelling. It is matched as an IDENTIFIER, never as a keyword — see
+// `Parser.atModuleModifier` for the measurement that forbids a `keywordMap` entry.
+let ModuleModifierName = b"module"
+
+// Does `kind` open a DECLARATION a visibility modifier can precede? The complete list, in one place: it is
+// what makes `module` recognizable without reserving the word, and a keyword left out of it would make
+// `module <thatKeyword>` silently parse as an expression instead of as a modified declaration.
+function declarationOpensAt(kind TokenKind) returns bool
+	return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias or kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.static
+end 'declarationOpensAt'
+
 let StringAddressableBytesMethod = b"addressableBytes"
 let StringByteAtOrPanicMethod = b"byteAtOrPanic"
 
@@ -6776,9 +6798,17 @@ export type Parser
 			return Visibility.file
 		end 'atFileStart'
 
-		if self.kindAt(self.pos - 1) == TokenKind.export 'exported'
-			return Visibility.module
+		let modifier = (self.pos - 1) as TokenIndex
+		if self.kindAt(modifier) == TokenKind.export 'exported'
+			return Visibility.global
 		end 'exported'
+
+		// `moduleModifierAt`, not `atModuleModifier`: the cursor is ON the declaration keyword, so "the next
+		// token opens a declaration" is this position's own premise, and the forward test would ask it of the
+		// keyword instead of of the modifier.
+		if self.moduleModifierAt(modifier) 'moduleScoped'
+			return Visibility.module
+		end 'moduleScoped'
 
 		return Visibility.file
 	end 'scannedVisibility'
@@ -8459,22 +8489,63 @@ export type Parser
 	// alias's whole grammar is read here: the two passes must agree about what a declaration SAYS, and
 	// the fewer places that read a declaration, the fewer can disagree.
 	function recordScannedTypeAlias(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, genericAliases GenericAliasEntryArray)
-		let visibility = self.consumeOptionalExport()
+		let visibility = try self.consumeOptionalVisibility() otherwise return
 		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, recordFunctionSignature: false, visibility: visibility) otherwise return
 	end 'recordScannedTypeAlias'
 
-	// Consume an optional leading `export` and answer what it means. THE one reader of that keyword —
-	// four walks meet it (the top-level dispatch, a type member, the declaration sweep's typealias arm
-	// and its type-body scan) and each used to spell the same four lines, which is one rule written
+	// Consume an optional leading `export` / `module` modifier and answer what it means. THE one reader of
+	// those two — four walks meet it (the top-level dispatch, a type member, the declaration sweep's typealias
+	// arm and its type-body scan) and each used to spell the same four lines, which is one rule written
 	// down four times in a file where a fifth walk is always about to be added.
-	function consumeOptionalExport() returns Visibility
-		if not self.at(TokenKind.export) 'notExported'
-			return Visibility.file
-		end 'notExported'
+	//
+	// ⚠ **`export` NOW MINTS `Visibility.global`, NOT `Visibility.module` (N1a).** The two were
+	// indistinguishable while every reader asked `!= Visibility.file`; they are not once `module` names a
+	// DIRECTORY SUBTREE. See the `Visibility` enum's header.
+	//
+	// It THROWS, and the tolerant sweep's callers absorb that with `try … otherwise return` exactly as they
+	// absorb a malformed declaration: a modifier conflict is the REAL parse's to report, with a position.
+	function consumeOptionalVisibility() returns Visibility throws ParseError
+		if self.at(TokenKind.export) 'exported'
+			self.advance()
+			// The anchor is the `module` token and not the `export`: the modifier that cannot be there is the
+			// one the message is about, and it is the oracle's position (`module-keyword`'s 4:8).
+			if self.atModuleModifier() 'bothModifiers'
+				let tok = self.current()
+				throw ParseError.exportAndModuleCombined(tok.line, column: tok.column)
+			end 'bothModifiers'
 
-		self.advance()
-		return Visibility.module
-	end 'consumeOptionalExport'
+			return Visibility.global
+		end 'exported'
+
+		if self.atModuleModifier() 'moduleScoped'
+			self.advance()
+			return Visibility.module
+		end 'moduleScoped'
+
+		return Visibility.file
+	end 'consumeOptionalVisibility'
+
+	// ⭐⭐ **`module` IS A CONTEXTUAL MODIFIER, NEVER A LEXER KEYWORD, AND THAT IS A MEASUREMENT.** The word is
+	// used as an ORDINARY IDENTIFIER **6,537 times in `maxon-shv2/` alone** (`var module = try
+	// queryAllModule(project)`, `module.addFunction(…)`, `module MaxonModule` parameters) and as an enum CASE
+	// and a `match` ARM in `specs-shv2/`. D8's keyword-as-a-declared-name rule rescues the NAME positions, but
+	// not `module.addFunction(…)` in expression position — that dispatches on `TokenKind` long before any name
+	// reader is reached. A `keywordMap` entry is two lines with a four-figure blast radius, and shv2 must
+	// compile itself.
+	//
+	// The recognition is EXACT rather than heuristic: an identifier spelled `module` is the modifier iff the
+	// very next token opens a declaration. Nothing may sit between a modifier and what it modifies, and no
+	// expression begins with an identifier immediately followed by a declaration keyword.
+	function atModuleModifier() returns bool
+		return self.moduleModifierAt(self.pos) and declarationOpensAt(self.kindAt(self.pos + 1))
+	end 'atModuleModifier'
+
+	// Is the token at `index` the WORD `module`? Split from `atModuleModifier` because the sweep reads the
+	// modifier BACKWARDS, from the declaration keyword (`scannedVisibility`), where "the next token opens a
+	// declaration" is established by the position itself — re-asking it there would ask about the wrong token.
+	function moduleModifierAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.identifier and self.tokenAt(index).value.equals(ModuleModifierName)
+	end 'moduleModifierAt'
 
 	// ⭐ **AN ALIAS DECLARED IN `stdlib/` IS `global` WHATEVER IT WROTE (P1.9)** — the spec's "reachable
 	// as a cast target from any file, regardless of its source-level visibility modifier". Seven of the
@@ -8513,10 +8584,17 @@ export type Parser
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
 	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
+		// ⚠ **THE SWEEP MUST READ THE MODIFIER ITSELF**, and BACKWARDS, exactly as `recordScannedBinding`
+		// does: the caller's loop meets `export`/`module` as an ordinary token and steps over it, so the
+		// cursor arrives here already on the `type` keyword. Read forwards it would answer `file` for every
+		// declaration in the program — and the sweep's layout is the one the PARSER resolves every type name
+		// against, so the two passes disagreeing about a tier is a wrong answer about what another file may
+		// name.
+		let visibility = self.scannedVisibility()
 		let nameTok = try self.readTypeHeader() otherwise return
 		self.enterTypeScope(nameTok, isEnum: false)
 
-		var layout = StructLayout.create(nameTok.value)
+		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.filePath)
 		// `uses T` (P1.6-A) — parsed here, in the tolerant sweep, exactly as `parseTypeDeclaration` does
 		// it, so the scanned layout carries the SAME parameter list the real parse reads a field's
 		// `typeParameter(pos)` against. The cursor lands past the clause, at the type body the loop walks.
@@ -8551,7 +8629,8 @@ export type Parser
 			// Tolerant, like `readStructFieldInto`: a malformed nested alias is the real parse's to report, and
 			// stopping here leaves the remaining tokens to the robust outer walk.
 			if depth == 0 and self.atTypeAliasDeclaration() 'isInnerAlias'
-				let nested = try self.readNestedTypeAlias(self.consumeOptionalExport()) otherwise break
+				let nestedVisibility = try self.consumeOptionalVisibility() otherwise break
+				let nested = try self.readNestedTypeAlias(nestedVisibility) otherwise break
 				match nested 'nested'
 					ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingType, alias: alias))
 					genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
@@ -8703,12 +8782,15 @@ export type Parser
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
 	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, isUnion bool)
+		// Read BACKWARDS, before the keyword is consumed — see `recordScannedType` for why the sweep cannot
+		// read this modifier forwards.
+		let visibility = self.scannedVisibility()
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum) otherwise return
 		let nameTok = try self.consume(TokenKind.identifier) otherwise return
 		let conformsTo = try self.readOptionalImplementsClause() otherwise return
 		self.enterTypeScope(nameTok, isEnum: true)
 
-		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo)
+		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath)
 		var state = EnumBackingState.create()
 
 		var depth = 0 as BlockDepth
@@ -8887,9 +8969,9 @@ export type Parser
 	// scope, a type body, a function body), and a keyword taught to one spelling and not another
 	// would put two readers of one grammar a token apart.
 	function atStructFieldKeyword() returns bool
-		if self.at(TokenKind.export) 'exported'
+		if self.at(TokenKind.export) or self.atModuleModifier() 'modified'
 			return self.kindAt(self.pos + 1) == TokenKind.let or self.kindAt(self.pos + 1) == TokenKind.var
-		end 'exported'
+		end 'modified'
 		return self.atTopLevelBindingKeyword()
 	end 'atStructFieldKeyword'
 
@@ -8909,10 +8991,14 @@ export type Parser
 	// Neither `as` nor `=` is E2010 — the `consume(equals)` below reporting the token it wanted.
 	//
 	// **TWO KEYWORDS, TWO BITS, AND BOTH ARE KEPT.** `let` vs `var` decides FIELD MUTABILITY
-	// (`c.version = 2` on a `let` field is E2013 — `StructLayout.fieldMutable`); `export` decides
+	// (`c.version = 2` on a `let` field is E2013 — `StructLayout.fieldMutable`); `export`/`module` decides
 	// FIELD VISIBILITY (`v.private` from outside `type Value` is E3014 —
-	// `StructLayout.fieldExported`, read by `requireFieldAccessible`). They ride the same
+	// `StructLayout.fieldVisibility`, read by `requireFieldAccessible`). They ride the same
 	// `addField` call, which is the one writer of every column.
+	//
+	// ⚠ **THE MODIFIER IS READ THROUGH `consumeOptionalVisibility`, THE FILE'S ONE READER OF BOTH WORDS.**
+	// It used to be a bare `self.at(TokenKind.export)` here, which was a second answer to "what modifier is
+	// this?" — and it is what a `module var x` would have silently ignored (N1a).
 	//
 	// ⚠ The `export` bit was CONSUMED AND DROPPED until P1.1a wave 3, and the reason this comment
 	// gave for dropping it was false twice over. It said *"field visibility gates cross-FILE access
@@ -8922,10 +9008,7 @@ export type Parser
 	// accepted a program the language rejects. It is kept now, and the rung that reads it is the
 	// one that ported `specs/export-var-fields.md`'s two `error.unexported-field-*` cases.
 	function readStructFieldInto(layout StructLayout) throws ParseError
-		let exported = self.at(TokenKind.export)
-		if exported 'isExported'
-			self.advance()
-		end 'isExported'
+		let visibility = try self.consumeOptionalVisibility()
 
 		let mutable = self.at(TokenKind.var)
 		try self.consume(TokenKind.var if mutable else TokenKind.let)
@@ -8943,7 +9026,7 @@ export type Parser
 			let inferred = try self.readFieldDefaultLiteral()
 			// Shape 2 has no annotation at all, so no spelling can name the buffer alias (A2j); the type
 			// comes from a LITERAL, and no literal produces a `__ManagedMemory`.
-			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag), declaredSurface: sharedEmptyDeclaredSurface)
+			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag), declaredSurface: sharedEmptyDeclaredSurface)
 			return
 		end 'typeFromLiteral'
 
@@ -8962,7 +9045,7 @@ export type Parser
 		let fieldType = try self.parseTypeReference()
 
 		if not self.at(TokenKind.equals) 'noDefault'
-			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.none, declaredSurface: declaredSurface)
+			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.none, declaredSurface: declaredSurface)
 			return
 		end 'noDefault'
 
@@ -8979,7 +9062,7 @@ export type Parser
 		try self.consume(TokenKind.equals)
 		let given = try self.readFieldDefaultLiteral()
 		try self.requireFieldDefaultType(nameTok, fieldType: fieldType, given: given)
-		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(given.payload, tag: given.tag), declaredSurface: declaredSurface)
+		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(given.payload, tag: given.tag), declaredSurface: declaredSurface)
 	end 'readStructFieldInto'
 
 	// ⭐ **THE VERDICT ON A FIELD'S LITERAL DEFAULT, ASKED ONLY WHERE IT CAN BE ANSWERED.** `as Integer =
@@ -9155,11 +9238,12 @@ export type Parser
 	// through `recordTypeName`, from this one local — so the two records cannot come to disagree about
 	// what the source wrote.
 	//
-	// A `type`'s visibility is dropped for the reason a typealias's USED to be — `project.structTypes`
-	// is whole-program — which is why `parseTypeDeclaration` does not take one. Its METHODS each carry
+	// A `type`'s visibility RIDES ITS LAYOUT (N1a). It used to be dropped here for the reason a typealias's
+	// was — `project.structTypes` is whole-program — which made every declared type nameable from every file
+	// whatever it wrote. Its METHODS each carry
 	// their own, read at the member (see `parseTypeMember`), because that is where the source writes it.
 	function dispatchTopLevel() throws ParseError
-		let visibility = self.consumeOptionalExport()
+		let visibility = try self.consumeOptionalVisibility()
 
 		// ⭐ **THE ONE PLACE THAT SEES ALL FIVE TYPE-MINTING KEYWORDS**, which is why the type-name
 		// declaration record is taken here and not inside each of the five parsers: the record's whole
@@ -9178,11 +9262,11 @@ export type Parser
 			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, recordFunctionSignature: true, visibility: visibility)
 			self.recordTypeName(nameIndex, kind: form, visibility: self.typeAliasVisibility(visibility))
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
-			try self.parseTypeDeclaration()
+			try self.parseTypeDeclaration(visibility)
 			self.recordTypeName(nameIndex, kind: TypeDeclKind.structType, visibility: visibility)
 		end 'isTypeDecl' else if self.at(TokenKind.enum) or self.at(TokenKind.union) 'isEnumDecl'
 			let isUnion = self.at(TokenKind.union)
-			try self.parseEnumDeclaration(isUnion)
+			try self.parseEnumDeclaration(isUnion, visibility: visibility)
 			self.recordTypeName(nameIndex, kind: TypeDeclKind.unionType if isUnion else TypeDeclKind.enumType, visibility: visibility)
 		end 'isEnumDecl' else if self.at(TokenKind.interface) 'isInterfaceDecl'
 			try self.parseInterfaceDeclaration()
@@ -9591,9 +9675,9 @@ export type Parser
 	// WITHOUT having consumed the `export` first: the type-body scan (P1.6-C nested aliases) and the
 	// declaration sweep, whose loop treats `export` as an ordinary token.
 	function atTypeAliasDeclaration() returns bool
-		if self.at(TokenKind.export) 'exported'
+		if self.at(TokenKind.export) or self.atModuleModifier() 'modified'
 			return self.kindAt(self.pos + 1) == TokenKind.typealias
-		end 'exported'
+		end 'modified'
 		return self.at(TokenKind.typealias)
 	end 'atTypeAliasDeclaration'
 
@@ -10273,7 +10357,7 @@ export type Parser
 	// sweep, which is complete before this file's parse begins. So there is no ordering hazard, and
 	// deliberately no half-built artifact registry for a method body to race: a `type` whose fields
 	// are declared BELOW its methods parses identically to one that declares them above.
-	function parseTypeDeclaration() throws ParseError
+	function parseTypeDeclaration(visibility Visibility) throws ParseError
 		let nameTok = try self.readTypeHeader()
 		// The real parse alone rejects a reserved `type __T` or a compiler-owned `type Ordering` —
 		// `readTypeHeader` stays a pure reader shared with the tolerant sweep, which is not a validator
@@ -10282,7 +10366,7 @@ export type Parser
 		try self.requireTypeNameNotCompilerOwned(nameTok)
 		self.enterTypeScope(nameTok, isEnum: false)
 
-		var layout = StructLayout.create(nameTok.value)
+		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.filePath)
 		// `uses T` (P1.6-A) — parsed here so `parseTypeReference` recognizes `T` in the fields and
 		// methods below, and the arity check reads the list off the recorded layout.
 		self.openTypeParamScope(layout)
@@ -10428,7 +10512,7 @@ export type Parser
 			// signature and no emitted symbol for a later pass to look one up from. Its header's `uses` ARITY
 			// is the one exception, and it is one because a PARSE reads it back (R7).
 			if self.atTypeAliasDeclaration() 'associatedTypeAlias'
-				_ = try self.readNestedTypeAlias(self.consumeOptionalExport())
+				_ = try self.readNestedTypeAlias(try self.consumeOptionalVisibility())
 				continue
 			end 'associatedTypeAlias'
 
@@ -10811,7 +10895,7 @@ export type Parser
 	// prepended. What differs from a `type` is only the RECEIVER'S TYPE — `named`, not `structRef`
 	// (`enclosingSelfType`) — and that there are no FIELDS, hence no self-field aliases. A `static
 	// function` stays refused (`parseEnumMethod`).
-	function parseEnumDeclaration(isUnion bool) throws ParseError
+	function parseEnumDeclaration(isUnion bool, visibility Visibility) throws ParseError
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
@@ -10819,7 +10903,7 @@ export type Parser
 		let conformsTo = try self.readOptionalImplementsClause()
 		self.enterTypeScope(nameTok, isEnum: true)
 
-		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo)
+		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath)
 		var state = EnumBackingState.create()
 
 		// The cursor sits at the enum body start; remember it so the lazy sibling-receiver walk (#65) can
@@ -10869,7 +10953,7 @@ export type Parser
 	// has no FIELDS and no nested `typealias` (the two other members that routine reads), and `static` is
 	// an error here rather than the receiver switch it is there.
 	function parseEnumMethod(layout EnumLayout) throws ParseError
-		let visibility = self.consumeOptionalExport()
+		let visibility = try self.consumeOptionalVisibility()
 
 		if self.at(TokenKind.static) 'staticMethod'
 			let tok = self.current()
@@ -11113,7 +11197,7 @@ export type Parser
 	// a parameter named `SelfParamName` at position 0, and every later reader asks
 	// `FuncSignature.takesReceiver`, which reads that name back. See there — one fact, one home.
 	function parseTypeMember() throws ParseError
-		let visibility = self.consumeOptionalExport()
+		let visibility = try self.consumeOptionalVisibility()
 
 		let isStatic = self.at(TokenKind.static)
 		if isStatic 'staticMember'
@@ -22515,7 +22599,7 @@ export type Parser
 	// nameable tier makes this probe load-bearing again without touching this line.
 	// See `RangedAliasRegistry.nameableFromAnyFile`.
 	function everyDeclarationHidden(alias RangedTypeAlias) returns bool
-		if visibleFrom(alias, readerFilePath: self.filePath) 'thisOneIsVisible'
+		if self.signatures.aliasVisibleFrom(alias, readerFilePath: self.filePath) 'thisOneIsVisible'
 			return false
 		end 'thisOneIsVisible'
 
@@ -25455,7 +25539,10 @@ export type Parser
 		// dotted primary, and `enumOf` would box a throwaway `DeclaredEnum.undeclared` for every
 		// `Point.create(...)` (scale-test charged exactly that — see `ProgramSignatures.containsEnum`).
 		// The `enumOf` inside the guard runs only for a real enum reference, which is rare.
-		if self.signatures.containsEnum(baseTok.value) 'enumRef'
+		// ⚠ **A DECLARED ENUM THIS FILE MAY NOT NAME IS NOT AN ENUM REFERENCE HERE (N1a)** — it falls through
+		// to the hidden-base guard below, which reports the one mistake the reader can act on. The visibility
+		// probe is inside the `containsEnum` hit, so it costs nothing on the path this arm is guarded for.
+		if self.signatures.containsEnum(baseTok.value) and self.typeNameVisibleHere(baseTok.value) 'enumRef'
 			match self.signatures.enumOf(baseTok.value) 'declared'
 				declared(layout) then return try self.parseEnumLiteral(func, layout: layout)
 				undeclared then panic("parseDottedPrimary: containsEnum answered yes but enumOf answered undeclared — the two read the same enum registry, under the same key")
@@ -25465,6 +25552,16 @@ export type Parser
 		if self.kindAt(self.pos + 3) == TokenKind.leftParen 'qualifiedCall'
 			return try self.parseQualifiedCall(func, resultUsed: resultUsed)
 		end 'qualifiedCall'
+
+		// ⭐ **A BASE NAMING A TYPE THIS FILE MAY NOT SEE BINDS NOTHING HERE (N1a)** — not a value, not a type
+		// — so it is the same mistake as a misspelled name and takes the same diagnostic, which is the
+		// reference's answer for it (`export-keyword/error.non-exported-enum-cross-file`). The CALL shape
+		// never reaches this line: it went to `parseQualifiedCall`, whose `requireVisibleTypeName` reports
+		// E4006 instead, because there the name is certainly a TYPE reference and "unknown type" is the
+		// sharper sentence. Asked LAST so a visible type still takes whichever arm above claims it.
+		if not self.typeNameVisibleHere(baseTok.value) 'hiddenTypeBase'
+			throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
+		end 'hiddenTypeBase'
 
 		return try self.parseTypeQualifiedBoundExpression()
 	end 'parseDottedPrimary'
@@ -25919,6 +26016,34 @@ export type Parser
 	// so it is recorded rather than invented here. (The COUNTS that E3036 carries are inflated by
 	// the receiver, which is not this routine's doing and is not restated here — see the receiver
 	// prepend in `parseCallNamed`, the one place that causes it, for both callers.)
+	// ⭐ **IS THE NOMINAL TYPE `name` — IF THE PROGRAM DECLARES ONE AT ALL — NAMEABLE FROM THIS FILE (N1a)?**
+	//
+	// A name NO declaration binds answers `true`: "there is no such type" is a different mistake with a
+	// different diagnostic (E3004 at the mangled callee, E2004 at a bare base), and answering `false` here
+	// would collapse both into this one's wording. That is `RangedAliasRegistry.visibleFrom`'s rule, one
+	// registry over, and it is why this predicate is spelled as a question about a DECLARATION rather than as
+	// a membership test.
+	// ⚠ Both probes are gated on the NON-ALLOCATING `contains` twin, for `parseDottedPrimary`'s measured
+	// reason: `structOf`/`enumOf` box a `DeclaredStruct`/`DeclaredEnum` even to say `undeclared`, and this
+	// runs on paths where nearly every name is neither.
+	function typeNameVisibleHere(name ByteArray) returns bool
+		if self.signatures.containsStruct(name) 'declaredStruct'
+			match self.signatures.structOf(name) 'layout'
+				declared(layout) then return self.signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
+				undeclared then panic("typeNameVisibleHere: containsStruct answered yes for '{String.from(name)}' but structOf answered undeclared — the two read one registry under one key")
+			end 'layout'
+		end 'declaredStruct'
+
+		if not self.signatures.containsEnum(name) 'notANominalDeclaration'
+			return true
+		end 'notANominalDeclaration'
+
+		match self.signatures.enumOf(name) 'layout'
+			declared(layout) then return self.signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
+			undeclared then panic("typeNameVisibleHere: containsEnum answered yes for '{String.from(name)}' but enumOf answered undeclared — the two read one registry under one key")
+		end 'layout'
+	end 'typeNameVisibleHere'
+
 	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		// `Self.create(…)` reaches here as `Point.create(…)` — `consumeTypeBaseToken` resolved the keyword, so
 		// the callee mangling, the alias interceptions and the E3062 use hook below all see one spelling (D9).
@@ -28775,7 +28900,10 @@ export type Parser
 		// `rparenTok` is the LITERAL — this form writes no parenthesis, and that token is what a diagnostic
 		// about the call's tail must point at. `resultUsed: true` because a construction is an expression:
 		// `parsePrimary` only reaches here in operand position.
-		return try self.emitCall(qualifiedMethodName(typeTok.value, methodName: StringInitMethod), anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.notMinted)
+		// `stringLiteralInit`, not `notMinted`: the author wrote `FilePath from "…"` and never named `init`, and
+		// that is the only fact distinguishing this call from a written-out `FilePath.init("…")` — they build
+		// the identical callee. See `CalleeMint.stringLiteralInit`.
+		return try self.emitCall(qualifiedMethodName(typeTok.value, methodName: StringInitMethod), anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.stringLiteralInit)
 	end 'parseStringLiteralInitConstruction'
 
 	// The `Set with <elem>` instance a `Set from [<literal>]` constructs — its key type is the array literal's
@@ -31716,14 +31844,50 @@ export type Parser
 	// holds by construction. The rule is asked wherever it can be broken, which is wherever the
 	// layout came from a BINDING's type rather than from the enclosing declaration.
 	function requireFieldAccessible(layout StructLayout, index FieldIndex, fieldTok Token) throws ParseError
-		if layout.fieldIsExported(index) 'exported'
-			return
-		end 'exported'
+		// Asked FIRST because it rescues BOTH tiers below: inside the declaring type's own body the reader is
+		// the declaring file, so neither the type's visibility nor the field's can refuse it.
 		if self.namesEnclosingType(layout.name) 'insideDeclaringType'
 			return
 		end 'insideDeclaringType'
+
+		// ⭐⭐ **E4006 — THE TYPE'S OWN VISIBILITY OUTRANKS THE FIELD'S (N1a), and v1 orders the two exactly
+		// this way** (`maxon-selfhosted/Compiler/TypeResolution.maxon:8215-8224`, the only implementation of
+		// this rule in either reference): if the reader may not name the type at all, "this field is not
+		// exported" is a sentence about a type they cannot see. The message says "Unknown type" for the same
+		// reason, and it is the reference's own wording.
+		//
+		// ⚠ **THE FIELD ACCESS IS THE ANCHOR, NOT THE `Type.` THAT PRODUCED THE VALUE**, and that is measured
+		// rather than chosen: the reference reports `error.non-exported-type-cross-file` at `p.x` and not at
+		// the `InternalPoint.create(42)` two lines above. ⇒ **A hidden type's `export`ed STATIC stays
+		// callable**, which both references also permit — what a caller cannot do is reach into the value.
+		if not self.signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: self.filePath) 'typeHidden'
+			throw ParseError.hiddenTypeName(String.from(layout.name), line: fieldTok.line, column: fieldTok.column)
+		end 'typeHidden'
+
+		if self.fieldReachableFromOutsideItsType(layout, index: index) 'wideEnough'
+			return
+		end 'wideEnough'
+
 		throw ParseError.unexportedFieldAccess(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
 	end 'requireFieldAccessible'
+
+	// ⭐ **THE THREE FIELD TIERS, AND THE ONE THAT IS NOT THE ORDINARY MEANING OF ITS NAME (N1a).** A field's
+	// DEFAULT tier answers `false` here and is then rescued by the caller's enclosing-type test, so `file`
+	// means "this type's own body" for a field where it means "this file" everywhere else — which is the
+	// measurement `requireFieldAccessible`'s header records, not a choice made here. The two WIDER tiers mean
+	// exactly what they mean for every other declaration, and `module` therefore has to ask about the FILE the
+	// type was declared in, which is why `StructLayout` carries one.
+	//
+	// ⚠ It is a separate predicate rather than an inlined `match` because the caller's rescue must apply to
+	// the `module` tier too: a type's own body may read its `module` field from OUTSIDE the declaring
+	// subtree, since the body IS the declaring file.
+	function fieldReachableFromOutsideItsType(layout StructLayout, index FieldIndex) returns bool
+		return match layout.fieldTier(index) 'tier'
+			file gives false
+			module gives self.signatures.isVisibleFrom(Visibility.module, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
+			global gives true
+		end 'tier'
+	end 'fieldReachableFromOutsideItsType'
 
 	// ⭐ **A MOVED-FROM BINDING IS DEAD AT EVERY USE, AND THIS IS THE ONE PREDICATE THAT SAYS SO.** Its
 	// owned heap value was transferred to another binding by a `let u = t` / `s = t` whose RHS was a

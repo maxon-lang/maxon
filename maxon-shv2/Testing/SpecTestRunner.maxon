@@ -702,14 +702,49 @@ end 'specFilePaths'
 
 // One path the compiler may PRINT in a diagnostic, and the offset that maps that file's line
 // numbers onto the merged fragment's (see SpecSourceFile.mergedLineOffset).
+//
+// ⭐ **`replacementToken` CARRIES THE FILE'S OWN DIRECTORY, AND WITHOUT IT A MULTI-FILE TEST CANNOT
+// SAY WHICH FILE COMPLAINED.** Every staged file used to normalize to the bare `<fragment>` token, so
+// `dir_a/helper.maxon:3:1` and `dir_b/main.maxon:3:1` produced the SAME text — a spec pinning the
+// diagnostic against one file passed just as well when the other file raised it. The corpus records
+// the directory (`error E3088: dir_b/<fragment>:11:9`, `module-keyword`), which is the reference
+// runner's shape too: its rewrite matches the temp path, misses, and falls through to a bare-FILENAME
+// match that leaves the `dir_b/` in place (`TestRunner.RewriteMultiFileErrorPaths`). A file at the
+// test directory's top level carries an empty prefix, which is every multi-file expectation that
+// existed before this — so nothing already committed moves.
 type FragmentPathMapping
 	export let compiledPath as String
 	export let lineOffset as LineIndex
+	// The whole token a match is replaced by — `<dir>/<fragment>` — built ONCE at staging rather than
+	// re-joined at each of `rewriteDiagnosticLine`'s five replacement sites, which would be five places
+	// free to disagree about whether the directory rides.
+	export let replacementToken as String
 
-	static function create(compiledPath String, lineOffset LineIndex) returns FragmentPathMapping
-		return Self{compiledPath: compiledPath, lineOffset: lineOffset}
+	static function create(compiledPath String, lineOffset LineIndex, sourceDirPrefix String) returns FragmentPathMapping
+		return Self{compiledPath: compiledPath, lineOffset: lineOffset, replacementToken: "{sourceDirPrefix}{FragmentPathToken}"}
 	end 'create'
 end 'FragmentPathMapping'
+
+// The `// --- file:` name's directory part, separator included (`dir_b/main.maxon` ⇒ `dir_b/`), or
+// empty for a file at the test directory's top level.
+//
+// Reads the SPEC's spelling rather than the staged path's, so the answer is the corpus's own
+// forward-slash form on every host — the staged path is platform-separated and a diagnostic's
+// expectation is not a claim about the host that ran it. `isSafeRelativeName` normalizes the two
+// separators the same way and for the same reason.
+function sourceDirPrefixOf(fileName String) returns String
+	let segments = fileName.replace(WindowsPathSeparator, with: PathSeparator).split(PathSeparator)
+	if segments.count() < 2 'topLevel'
+		return ""
+	end 'topLevel'
+
+	var prefix = ""
+	for i in 0 upto segments.count() - 1 'eachDirectory'
+		let segment = try segments.get(i) otherwise panic("sourceDirPrefixOf: segments.get({i}) failed on a {segments.count()}-part split")
+		prefix = "{prefix}{segment}{PathSeparator}"
+	end 'eachDirectory'
+	return prefix
+end 'sourceDirPrefixOf'
 
 typealias FragmentPathMappingArray = Array with FragmentPathMapping
 
@@ -922,7 +957,7 @@ function stageTest(tempDir FilePath, test SpecTest) returns StagingResult
 	var paths = FragmentPathMappingArray.create()
 	// The compiled file IS the fragment (`fragmentSource` wrote the golden's own bytes), so its
 	// line numbers need no translation.
-	paths.push(FragmentPathMapping.create(fragmentPath.toString(), lineOffset: NoLineOffset))
+	paths.push(FragmentPathMapping.create(fragmentPath.toString(), lineOffset: NoLineOffset, sourceDirPrefix: ""))
 
 	var written = FilePathArray.create()
 	written.push(fragmentPath)
@@ -964,7 +999,7 @@ function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 			return StagingResult.failed("could not write {path.toString()}")
 		end 'writeFailed'
 
-		paths.push(FragmentPathMapping.create(path.toString(), lineOffset: file.mergedLineOffset))
+		paths.push(FragmentPathMapping.create(path.toString(), lineOffset: file.mergedLineOffset, sourceDirPrefix: sourceDirPrefixOf(file.name)))
 		written.push(path)
 	end 'eachFile'
 
@@ -1840,7 +1875,7 @@ end 'writeFragment'
 function normalizeCompilerOutput(text String, paths FragmentPathMappingArray) returns String
 	var out = text
 	for mapping in paths 'eachPath'
-		out = rewriteDiagnosticPaths(out, path: mapping.compiledPath, lineOffset: mapping.lineOffset)
+		out = rewriteDiagnosticPaths(out, path: mapping.compiledPath, lineOffset: mapping.lineOffset, token: mapping.replacementToken)
 	end 'eachPath'
 	return out
 end 'normalizeCompilerOutput'
@@ -1850,17 +1885,20 @@ end 'normalizeCompilerOutput'
 // `<fragment>` already and passes through untouched.
 function referencePathMapping(specName String, testName String) returns FragmentPathMappingArray
 	var paths = FragmentPathMappingArray.create()
-	paths.push(FragmentPathMapping.create(referenceFragmentPath(specName, testName: testName), lineOffset: NoLineOffset))
+	// No directory prefix: an expectation ported from `/specs` carries its own (`dir_b/<fragment>`) in
+	// the corpus text, ahead of the fragment path this replaces, and passes through untouched.
+	paths.push(FragmentPathMapping.create(referenceFragmentPath(specName, testName: testName), lineOffset: NoLineOffset, sourceDirPrefix: ""))
 	return paths
 end 'referencePathMapping'
 
-// Rewrite every `<path>:<line>:<col>` to `<fragment>:<line + lineOffset>:<col>`.
+// Rewrite every `<path>:<line>:<col>` to `<token>:<line + lineOffset>:<col>`, where `token` is the
+// mapping's `<dir>/<fragment>` (see FragmentPathMapping).
 //
 // With no offset the path is all that moves, and a whole-text replace does it — that is every
 // single-file test, and it is the path this function had before multi-file tests existed.
-function rewriteDiagnosticPaths(text String, path String, lineOffset LineIndex) returns String
+function rewriteDiagnosticPaths(text String, path String, lineOffset LineIndex, token String) returns String
 	if lineOffset == NoLineOffset 'linesAlreadyMatch'
-		return text.replace(path, with: FragmentPathToken)
+		return text.replace(path, with: token)
 	end 'linesAlreadyMatch'
 
 	// An explicit if/else, NOT `rewritten if first else "{out}\n{rewritten}"`. Both arms happen to be
@@ -1870,7 +1908,7 @@ function rewriteDiagnosticPaths(text String, path String, lineOffset LineIndex) 
 	var out = ""
 	var first = true
 	for line in text.split(LineSeparator) 'eachLine'
-		let rewritten = rewriteDiagnosticLine(line, path: path, lineOffset: lineOffset)
+		let rewritten = rewriteDiagnosticLine(line, path: path, lineOffset: lineOffset, token: token)
 		if first 'firstLine'
 			out = rewritten
 			first = false
@@ -1888,14 +1926,14 @@ end 'rewriteDiagnosticPaths'
 // does not have the expected shape falls back to replacing the path and nothing else: a line that
 // names the file without a `line:col` has no line number to renumber, and guessing one is worse
 // than leaving it.
-function rewriteDiagnosticLine(line String, path String, lineOffset LineIndex) returns String
+function rewriteDiagnosticLine(line String, path String, lineOffset LineIndex, token String) returns String
 	if not line.contains(path) 'noPath'
 		return line
 	end 'noPath'
 
 	let halves = line.split(path)
 	if halves.count() != PathSplitHalves 'notNamedExactlyOnce'
-		return line.replace(path, with: FragmentPathToken)
+		return line.replace(path, with: token)
 	end 'notNamedExactlyOnce'
 
 	let prefix = try halves.get(0) otherwise panic("rewriteDiagnosticLine: halves.get(0) failed on a {halves.count()}-part split")
@@ -1904,16 +1942,16 @@ function rewriteDiagnosticLine(line String, path String, lineOffset LineIndex) r
 
 	let fields = tail.split(PositionSeparator)
 	if fields.count() < MinPositionFields 'notPositioned'
-		return line.replace(path, with: FragmentPathToken)
+		return line.replace(path, with: token)
 	end 'notPositioned'
 
 	let beforePosition = try fields.get(0) otherwise panic("rewriteDiagnosticLine: fields.get(0) failed on a {fields.count()}-field split")
 	if not beforePosition.isEmpty() 'pathNotFollowedByPosition'
-		return line.replace(path, with: FragmentPathToken)
+		return line.replace(path, with: token)
 	end 'pathNotFollowedByPosition'
 
 	let lineText = try fields.get(1) otherwise panic("rewriteDiagnosticLine: fields.get(1) failed on a {fields.count()}-field split")
-	let sourceLine = try int.fromString(lineText) otherwise return line.replace(path, with: FragmentPathToken)
+	let sourceLine = try int.fromString(lineText) otherwise return line.replace(path, with: token)
 	let column = try fields.get(2) otherwise panic("rewriteDiagnosticLine: fields.get(2) failed on a {fields.count()}-field split")
 
 	// The message can itself contain the separator (`type mismatch: 'cannot compare int with bool'`),
@@ -1925,7 +1963,7 @@ function rewriteDiagnosticLine(line String, path String, lineOffset LineIndex) r
 		message = "{message}{PositionSeparator}{field}"
 	end 'rejoinMessage'
 
-	return "{prefix}{FragmentPathToken}{PositionSeparator}{sourceLine + lineOffset}{PositionSeparator}{column}{message}"
+	return "{prefix}{token}{PositionSeparator}{sourceLine + lineOffset}{PositionSeparator}{column}{message}"
 end 'rewriteDiagnosticLine'
 
 // The path a /specs expectation names for this very test — RECONSTRUCTED, not pattern-matched

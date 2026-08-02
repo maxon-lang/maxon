@@ -1,0 +1,24 @@
+// Test: module-var-same-directory
+// --- file: feature/state.maxon
+module var counter = 42
+
+// --- file: feature/main.maxon
+function main() returns ExitCode
+	return counter
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_counter@0 = i64 42
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_counter
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.popReg rbp
+    x64.ret
+}

@@ -22,11 +22,109 @@ export typealias BoolArray = Array with bool
 // Visibility tier of a top-level declaration. Stamped by the parser at
 // declaration time; consumed by cross-file name resolution and the unused-export
 // check. `file` is the default (positively widened to `module`/`global`).
+//
+// ⭐ **THREE TIERS, AND THE MODIFIER THAT SELECTS EACH (N1a, `specs/module-keyword.md`):**
+//   • `file`   — no modifier. Visible only inside the declaring FILE.
+//   • `module` — the `module` modifier. Visible to every file in the declaring file's DIRECTORY and
+//                in every subdirectory of it — i.e. every file whose NAMESPACE is the declaring
+//                file's namespace or a descendant of it.
+//   • `global` — the `export` modifier. Visible everywhere.
+// `export` and `module` are mutually exclusive (E2001, `Parser.consumeOptionalVisibility`).
+//
+// ⚠ **`export` USED TO MINT `Visibility.module`**, back when the enum had three cases and the
+// language had two: every reader asked `!= Visibility.file` and the middle case merely happened to
+// be the one `export` produced. It now means what its name says, and the ONE place a tier is turned
+// into an answer is `ProgramSignatures.isVisibleFrom`.
+//
+// ⚠ **A FIELD'S `file` TIER MEANS ITS DECLARING TYPE, NOT ITS DECLARING FILE**, and that asymmetry
+// is measured rather than chosen — see `Parser.requireFieldAccessible`, whose gate is the TYPE.
 export enum Visibility
 	file
 	module
 	global
 end 'Visibility'
+
+// What joins a namespace's segments. A directory name cannot contain one on any host the compiler
+// targets, so a `.`-joined namespace decomposes back into directories — which is what makes
+// `namespaceContains` a SEGMENT test rather than a character-prefix test.
+let NamespaceSeparator = "."
+// Both spellings are replaced, not just the host's: `FilePath` normalizes to the platform separator on
+// construction, but a path handed in already-normalized on the OTHER platform (a spec fixture's
+// `// --- file: feature/sub/deep.maxon`) must derive the same namespace on either host.
+let WindowsPathSeparatorText = "\\"
+let PosixPathSeparatorText = "/"
+
+// ⭐ **A FILE'S NAMESPACE IS ITS DIRECTORY, RELATIVE TO ITS COMPILE ANCHOR, `.`-JOINED** —
+// `specs/namespaces.md`: `math.maxon` at root ⇒ `""`, `utils/helpers.maxon` ⇒ `utils`,
+// `stdlib/fmt/integer.maxon` ⇒ `stdlib.fmt`.
+//
+// Ported from v1's `deriveNamespace` (`maxon-selfhosted/Compiler/Queries.maxon:88-102`), including its
+// `notUnderRoot` fallback: a file outside its declared anchor falls back to its immediate parent's NAME,
+// so a misconfigured anchor can never produce a `..` segment in a namespace. shv2 reaches that arm for
+// every stdlib file of a user build — `namespaceRootFor` gives stdlib its own anchor, so the arm covers
+// only a genuinely misconfigured caller.
+//
+// ⚠ **THE ANCHOR IS THE ARGUMENT, AND GETTING IT WRONG IS SILENT** — every file would get a plausible
+// namespace and the wrong one. `Queries.namespaceRootFor` is its single producer, and states the three
+// anchors it derives.
+export function deriveNamespace(filePath FilePath, rootPath FilePath) returns String
+	let relative = try filePath.relativeTo(rootPath) otherwise 'notUnderRoot'
+		let parent = try filePath.parent() otherwise return ""
+		return parent.filename()
+	end 'notUnderRoot'
+
+	// No separator left in the relative path ⇒ the file sits AT the anchor, which is the global namespace.
+	let directory = try relative.parent() otherwise return ""
+	return directory.toString().replace(WindowsPathSeparatorText, with: NamespaceSeparator).replace(PosixPathSeparatorText, with: NamespaceSeparator)
+end 'deriveNamespace'
+
+// ⭐ **IS `inner` THE SAME MODULE AS `outer`, OR ONE BENEATH IT?** — the whole of what `Visibility.module`
+// means, asked on namespaces rather than on paths.
+//
+// ⚠ **THE SEPARATOR IN THE PREFIX IS THE POINT, and v1 flags the same line as the fragile one**
+// (`readerFileIsInModuleSubtree`, `maxon-selfhosted/Compiler/Project.maxon:213-227`): without it
+// `feature` would contain `featureX`, a sibling directory that merely shares a character prefix. shv2
+// spells the test on NAMESPACES instead of on parent PATHS for two reasons — it is the same string
+// qualified references will resolve against, so "which module is this file in?" has one answer in the
+// compiler rather than two; and it is derived ONCE PER FILE, where v1's version calls `FilePath.parent()`
+// on both sides of every ask (a slice, a String and a FilePath per call, per side).
+//
+// The empty namespace is the ROOT directory, and every file in the program is under the root — so a
+// `module` declaration in a root-level file is visible program-wide, which is what "same directory and
+// every subdirectory" says when the directory is the root.
+export function namespaceContains(outer String, inner String) returns bool
+	if outer.isEmpty() 'rootIsEveryFilesModule'
+		return true
+	end 'rootIsEveryFilesModule'
+
+	if inner.equals(outer) 'sameDirectory'
+		return true
+	end 'sameDirectory'
+
+	return inner.startsWith("{outer}{NamespaceSeparator}")
+end 'namespaceContains'
+
+// A `Visibility` as a small dense number, for the one reader that must MIX a tier into a content hash
+// (`ProgramSignatures.recordAlias`) rather than branch on it. Spelled here, beside the enum, so a fourth
+// tier is one arm in one place instead of a silently stale literal in a hashing routine.
+export function tierOrdinal(visibility Visibility) returns VisibilityTier
+	return match visibility 'tier'
+		file gives 0
+		module gives 1
+		global gives 2
+	end 'tier'
+end 'tierOrdinal'
+
+export typealias VisibilityTier = int(0 to 2)
+
+// One `Visibility` per struct field, in declaration order. See `StructLayout.fieldVisibility`.
+export typealias VisibilityArray = Array with Visibility
+
+// The declaring file of a type NO FILE DECLARES — the compiler-synthesized layouts (`StringIndex`,
+// `CharacterSet`, a tuple, `__ManagedFile`, `__ManagedDirectory`, `Ordering`, the builtin error enums).
+// Each is `Visibility.global`, so no tier ever reads this path; it is the same "empty path means the
+// compiler built it" statement `IrFunction.SourcePosition.synthesized` makes, spelled once for layouts.
+let CompilerOwnedDeclFilePath = FilePath from ""
 
 // Ordinal of a union case (and, for a payload binding, the field index within
 // that case's payload). Bounded by the max cases a union may declare.
@@ -460,16 +558,10 @@ end 'builtinStdlibAlias'
 // `convert` ops and nothing else). A hidden alias written as a PARAMETER or FIELD type still
 // resolves; widening that is a cross-file name-resolution rung, not a line here, because the message
 // this reports names the `as` and there is no ported wording for the other positions.
-// A FREE function, not a registry method: it reads the declaration and the reader's path and nothing
-// else, so it needs no registry state — and the parser, which is what asks it, holds an alias but no
-// registry.
-export function visibleFrom(alias RangedTypeAlias, readerFilePath FilePath) returns bool
-	if nameableFromAnywhere(alias) 'exportedOrGlobal'
-		return true
-	end 'exportedOrGlobal'
-
-	return alias.declFilePath.toString().equals(readerFilePath.toString())
-end 'visibleFrom'
+// ⚠ **IT WAS A FREE FUNCTION AND IS NOW A `ProgramSignatures` METHOD** (`aliasVisibleFrom`), because the
+// `module` tier needs the DECLARING FILE'S NAMESPACE and a namespace is derived once per file into that
+// index. Spelling the tier walk here as well would be the second copy of a rule whose two copies
+// disagreeing is exactly `A1f-aliasclash` restored — see `nameableFromAnywhere` below.
 
 // ⭐⭐ **TIER 2 OF `visibleFrom`, SPELLED ONCE — "may ANY file write this declaration's name down?"**
 // `RangedAliasRegistry.record` asks it to decide membership of `nameable`, and `visibleFrom` asks it as
@@ -483,8 +575,14 @@ end 'visibleFrom'
 // says it may not name — which is `A1f-aliasclash` itself, restored, and SILENT: the range would be
 // wrong and E2003 would agree with whichever copy was wrong, because it reads the same map.
 // `Visibility` has three cases today (`file`/`module`/`global`) and a fourth is the edit this guards.
+//
+// ⚠ **IT IS `== global`, NOT `!= file` (N1a).** The two were the same sentence while `export` minted
+// `Visibility.module`; they are not once `module` means a DIRECTORY SUBTREE, because "may ANY file name
+// this?" is false for a subtree-scoped declaration. Membership of `nameable` is unchanged for every
+// program that existed before the `module` modifier — an `export`ed alias is now `global` and still in,
+// a plain one is still out — so this is a widening of the QUESTION, not a change of the answer.
 export function nameableFromAnywhere(alias RangedTypeAlias) returns bool
-	return alias.visibility != Visibility.file
+	return alias.visibility == Visibility.global
 end 'nameableFromAnywhere'
 
 export type RangedAliasRegistry
@@ -1455,7 +1553,7 @@ export type StructLayout
 	export var name as ByteArray
 	// Parallel arrays, in DECLARATION order: field `i` is called `fieldNames[i]`, is declared
 	// `fieldTypes[i]`, accepts a write iff `fieldMutable[i]`, is reachable from outside the type
-	// iff `fieldExported[i]`, and defaults to `fieldDefaults[i]`.
+	// iff `fieldVisibility[i]` admits the reader, and defaults to `fieldDefaults[i]`.
 	// The declared type is NOT a resolved one — the sweep that records it cannot resolve anything
 	// (the alias it names may be in a file not yet folded), and the parser resolves it at the use
 	// site through the same `aliasOf` door the shift rule already asks.
@@ -1468,11 +1566,16 @@ export type StructLayout
 	export var fieldNames as ByteArrayArray
 	export var fieldTypes as MaxonTypeArray
 	export var fieldMutable as BoolArray
-	// `export var n` vs `var n` — the visibility column, read by `Parser.requireFieldAccessible`
-	// (E3014). It is the twin of `fieldMutable` in every respect: one bit per field, off the
-	// declaring keyword, written only by `addField`, and read only through an accessor that
-	// decodes it for one `FieldIndex`.
-	export var fieldExported as BoolArray
+	// `export var n` / `module var n` / `var n` — the visibility column, read by
+	// `Parser.requireFieldAccessible` (E3014). It is the twin of `fieldMutable` in every respect: one entry
+	// per field, off the declaring keyword, written only by `addField`, and read only through an accessor
+	// that decodes it for one `FieldIndex`.
+	//
+	// ⚠ **A FIELD'S `file` TIER IS ITS DECLARING TYPE, NOT ITS DECLARING FILE**, and that is measured rather
+	// than chosen: `type B` reading `type A`'s unexported field is E3014 on the bootstrap IN THE SAME FILE
+	// (see `Parser.requireFieldAccessible`). So this column reuses `Visibility` for its two WIDER tiers,
+	// whose meanings are the ordinary ones, and reads the default tier against the enclosing TYPE.
+	export var fieldVisibility as VisibilityArray
 	export var fieldDefaults as FieldDefaultArray
 	// ⭐ **THE FIELD's PRE-ERASURE SPELLING (A2j / A2m): where did it name `__ManagedMemory`?** It is a
 	// column and not a property of `fieldTypes[i]` because `parseTypeReference` folds that spelling into the
@@ -1500,13 +1603,30 @@ export type StructLayout
 	// pointer per entry here, index-aligned. It rides the layout (which travels whole-program) for
 	// `typeParamNames`' reason — the E3017 instantiation check reads it straight off `structOf`.
 	export var whereConstraints as WhereConstraintArray
+	// ⭐ **THE DECLARATION'S OWN VISIBILITY (N1a)** — `type Point` vs `module type Point` vs
+	// `export type Point`. Read by `Parser.requireVisibleTypeName`, the door a source-written type NAME goes
+	// through, and by the field gate's `module` tier, which needs the declaring file below.
+	//
+	// ⚠ It is `global` for every COMPILER-SYNTHESIZED layout (`StringIndex`, `CharacterSet`, a tuple,
+	// `__ManagedFile`, `__ManagedDirectory`): those are not written in any file, so no file may be refused
+	// them — and `declFilePath` is correspondingly empty, which no tier but `file` ever reads.
+	export var visibility as Visibility
+	// The file this type was declared in — the anchor both wider tiers measure a reader against. Empty for a
+	// compiler-synthesized layout, whose `visibility` is `global` and never consults it.
+	export var declFilePath as FilePath
 
 	// An EMPTY layout, filled by `addField` (and, for a generic type, `recordTypeParams`). It does not
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
-	export static function create(name ByteArray) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldExported: BoolArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints}
+	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, visibility: visibility, declFilePath: declFilePath}
 	end 'create'
+
+	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
+	// once so the five synthesis sites cannot come to disagree about which tier a builtin wears.
+	export static function createCompilerOwned(name ByteArray) returns StructLayout
+		return StructLayout.create(name, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath)
+	end 'createCompilerOwned'
 
 	// Record the type's `uses` parameter names, in declaration order (P1.6-A). Replaces the column
 	// wholesale rather than appending per name — the whole list is known at once (the `uses` clause is
@@ -1536,11 +1656,11 @@ export type StructLayout
 
 	// Append one declared field. THE one writer of the columns — every column, one push, so they
 	// cannot drift.
-	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, exported bool, defaultValue FieldDefault, declaredSurface DeclaredSurface)
+	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, tier Visibility, defaultValue FieldDefault, declaredSurface DeclaredSurface)
 		self.fieldNames.push(fieldName)
 		self.fieldTypes.push(declaredType)
 		self.fieldMutable.push(mutable)
-		self.fieldExported.push(exported)
+		self.fieldVisibility.push(tier)
 		self.fieldDefaults.push(defaultValue)
 		self.fieldDeclaredSurfaces.push(declaredSurface)
 	end 'addField'
@@ -1562,9 +1682,9 @@ export type StructLayout
 	// Is field `index` reachable from outside this type? `export var n` is; a bare `var n` is not,
 	// and `v.n` from anywhere but `type Value`'s own body is E3014 (see
 	// `Parser.requireFieldAccessible`). The gate is the TYPE, not the file.
-	export function fieldIsExported(index FieldIndex) returns bool
-		return try self.fieldExported.get(index) otherwise panic("StructLayout.fieldIsExported: fieldExported.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
-	end 'fieldIsExported'
+	export function fieldTier(index FieldIndex) returns Visibility
+		return try self.fieldVisibility.get(index) otherwise panic("StructLayout.fieldTier: fieldVisibility.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
+	end 'fieldTier'
 
 	// What field `index` defaults to when a `Self{…}` literal omits it.
 	export function fieldDefault(index FieldIndex) returns FieldDefault
@@ -1729,10 +1849,22 @@ export type EnumLayout
 	// against a requirement. What is recorded here is the DECLARATION only — the nominal fact a narrowing
 	// asks for — which is exactly what the clause means for an error enum.
 	export var conformsTo as ByteArrayArray
+	// ⭐ **THE DECLARATION'S OWN VISIBILITY (N1a)** — `enum Color` vs `module enum Color` vs
+	// `export enum Color`, with `declFilePath` the anchor both wider tiers measure a reader against. The
+	// `StructLayout` twin in every respect, including `global` + an empty path for the compiler-owned
+	// layouts (`Ordering`, the builtin error enums), which no file declares and none may be refused.
+	export var visibility as Visibility
+	export var declFilePath as FilePath
 
-	export static function create(name ByteArray, isUnion bool, conformsTo ByteArrayArray) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo}
+	export static function create(name ByteArray, isUnion bool, conformsTo ByteArrayArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
+		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath}
 	end 'create'
+
+	// The `EnumLayout` twin of `StructLayout.createCompilerOwned`, for the same reason and with the same
+	// tier: a builtin enum is declared in no file, so no file may be refused it.
+	export static function createCompilerOwned(name ByteArray, conformsTo ByteArrayArray) returns EnumLayout
+		return EnumLayout.create(name, isUnion: false, conformsTo: conformsTo, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath)
+	end 'createCompilerOwned'
 
 	// Does this enum/union declare `implements interfaceName`? Nominal and direct, matching
 	// `ConformanceCheck.typeDeclaresInterface`'s model for a `type`: shv2's conformance is DECLARED,
@@ -1880,7 +2012,7 @@ export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 // user `enum` gets, so every downstream reader (a qualified case value, a `match` scrutinee, TypeResolution's
 // erase-to-`integer`, the aggregate-identity check) sees an ordinary enum and needs no arm of its own.
 export function builtinOrderingEnum() returns EnumLayout
-	var layout = EnumLayout.create(OrderingTypeName, isUnion: false, conformsTo: sharedEmptyEnumConformances)
+	var layout = EnumLayout.createCompilerOwned(OrderingTypeName, conformsTo: sharedEmptyEnumConformances)
 	addBuiltinEnumCase(layout, caseName: OrderingLessThanCaseName)
 	addBuiltinEnumCase(layout, caseName: OrderingEqualToCaseName)
 	addBuiltinEnumCase(layout, caseName: OrderingGreaterThanCaseName)
@@ -1925,7 +2057,7 @@ end 'builtinOrderingEnum'
 // Seeded UNCONDITIONALLY beside the other two builtin error enums for their stated reason: `createEnumRegistry`
 // is the one door that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`.
 export function builtinArrayErrorEnum() returns EnumLayout
-	var layout = EnumLayout.create(ArrayErrorTypeName, isUnion: false, conformsTo: builtinErrorConformance())
+	var layout = EnumLayout.createCompilerOwned(ArrayErrorTypeName, conformsTo: builtinErrorConformance())
 	addBuiltinEnumCase(layout, caseName: ManagedMemoryIndexOutOfBoundsCaseName)
 	addBuiltinEnumCase(layout, caseName: ManagedMemoryEmptySlotCaseName)
 	return layout
@@ -1943,7 +2075,7 @@ end 'builtinArrayErrorEnum'
 // Seeded UNCONDITIONALLY beside the other four for their stated reason: `createEnumRegistry` is the one door
 // that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`.
 export function builtinDivisionByZeroErrorEnum() returns EnumLayout
-	var layout = EnumLayout.create(DivisionByZeroErrorTypeName, isUnion: false, conformsTo: builtinErrorConformance())
+	var layout = EnumLayout.createCompilerOwned(DivisionByZeroErrorTypeName, conformsTo: builtinErrorConformance())
 	addBuiltinEnumCase(layout, caseName: DivisionByZeroCaseName)
 	return layout
 end 'builtinDivisionByZeroErrorEnum'

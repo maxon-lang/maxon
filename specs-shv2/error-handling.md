@@ -1039,10 +1039,10 @@ end 'main'
 // --- file: zzz.maxon
 typealias Code = int(i64.min to i64.max)
 
-type Payload
+export type Payload
 	export var mass as Code
 
-	static function create(m Code) returns Self
+	export static function create(m Code) returns Self
 		return Self{mass: m}
 	end 'create'
 end 'Payload'
@@ -1098,10 +1098,10 @@ end 'main'
 // --- file: zzz.maxon
 typealias Code = int(i64.min to i64.max)
 
-type Payload
+export type Payload
 	export var mass as Code
 
-	static function create(m Code) returns Self
+	export static function create(m Code) returns Self
 		return Self{mass: m}
 	end 'create'
 end 'Payload'

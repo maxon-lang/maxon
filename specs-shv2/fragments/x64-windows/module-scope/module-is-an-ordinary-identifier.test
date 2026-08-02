@@ -1,0 +1,86 @@
+// Test: module-is-an-ordinary-identifier
+typealias Integer = int(i64.min to i64.max)
+
+let module = 5
+
+type Holder
+	export var module as Integer
+
+	export static function create(module Integer) returns Self
+		return Self{module: module}
+	end 'create'
+end 'Holder'
+
+function twice(module Integer) returns Integer
+	var doubled = module
+	doubled = doubled + module
+	return doubled
+end 'twice'
+
+function main() returns ExitCode
+	let h = Holder.create(16)
+	var module = 5
+	module = module + 1
+	return (twice(module) + h.module + module) as ExitCode
+end 'main'
+---
+ExitCode: 34
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @twice {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegReg r8, rcx, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 16
+    x64.callDirect Holder.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 5
+    x64.leaRegRegImm32 r12, rax, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect twice
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg rax, r8, rax
+    x64.leaRegRegReg r12, rax, r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

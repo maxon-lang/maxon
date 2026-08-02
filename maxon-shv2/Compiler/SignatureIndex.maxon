@@ -676,6 +676,11 @@ export type TopLevelDecl
 	// makes `let A = [1, 2]` / `let B = A` E2004 in BOTH declaration orders (measured against the oracle),
 	// and it is what keeps the forward reference `let TOTAL = FIRST + SECOND` above `let FIRST = 30` working.
 	export var hasStorage as bool
+	// ⭐ **THE TIER THE DECLARATION WROTE (N1a)** — kept ALONGSIDE `storageKey`, which is derived from it, and
+	// not merely folded into it: the key answers "which declaration is this?" and separates the file-private
+	// ones, while a `module` declaration shares the bare key with an exported one and is told apart only by
+	// asking the READER's file. `declFor` needs both.
+	export var visibility as Visibility
 	export var declFilePath as FilePath
 	export var tokens as TokenArray
 	export var initStart as TokenIndex
@@ -702,6 +707,7 @@ export type TopLevelDecl
 		return Self{
 			storageKey: topLevelStorageKey(name, visibility: visibility, declFilePath: declFilePath),
 			name: name,
+			visibility: visibility,
 			mutable: mutable,
 			hasStorage: mutable,
 			declFilePath: declFilePath,
@@ -1828,9 +1834,9 @@ let StringIndexBytePosFieldName = b"bytePosition"
 // constants. The assertions below are what make that pair a checked invariant rather than a promise —
 // `buildStringRecordBytes`'s `appendRecordField` discipline, applied to a struct box.
 function stringIndexLayout() returns StructLayout
-	var layout = StructLayout.create(StringIndexTypeName)
-	layout.addField(StringIndexCharIdxFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
-	layout.addField(StringIndexBytePosFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+	var layout = StructLayout.createCompilerOwned(StringIndexTypeName)
+	layout.addField(StringIndexCharIdxFieldName, declaredType: MaxonType.integer, mutable: false, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+	layout.addField(StringIndexBytePosFieldName, declaredType: MaxonType.integer, mutable: false, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 
 	if layout.offsetOfField(StringIndexCharIdxFieldIndex) != StringIndexCharIdxOffset or layout.offsetOfField(StringIndexBytePosFieldIndex) != StringIndexBytePosOffset 'offsetDrift'
 		panic("stringIndexLayout: the struct layout puts `charIdx`/`bytePosition` at {layout.offsetOfField(StringIndexCharIdxFieldIndex)}/{layout.offsetOfField(StringIndexBytePosFieldIndex)} but `__strix_make` writes them at {StringIndexCharIdxOffset}/{StringIndexBytePosOffset} — the parser's field reads and the runtime's field writes have drifted")
@@ -2481,9 +2487,9 @@ end 'isTupleTypeName'
 // (`Parser.bufferSurfaceSlots`), and `error.a-tuple-of-byte-arrays-keeps-the-array-surface` is what holds
 // this shut.
 export function tupleStructLayout(name ByteArray, elements MaxonTypeArray) returns StructLayout
-	var layout = StructLayout.create(name)
+	var layout = StructLayout.createCompilerOwned(name)
 	for i in 0 upto elements.count() 'eachElement'
-		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, exported: true, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, tier: Visibility.global, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 	end 'eachElement'
 	return layout
 end 'tupleStructLayout'
@@ -3006,6 +3012,8 @@ end 'splitQualifiedName'
 // `LiveGlobalLabelSet`, `InterfaceNameSet` — rather than a list plus a linear scan, which is what makes
 // "linear in the graph" a fact about this walk rather than a hope.
 typealias StructNameSet = Set with ByteArray
+// Source-file path (stringified) ⇒ that file's namespace. See `ProgramSignatures.fileNamespaces`.
+typealias FileNamespaceMap = Map with (String, String)
 
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
@@ -3306,10 +3314,71 @@ export type ProgramSignatures
 	// every program that shadows nothing, which is the whole existing corpus — and that emptiness is what
 	// makes this mechanism byte-neutral rather than merely cheap (see `Parser.shadowRenamedTokens`).
 	var stdlibShadowRenames as StdlibShadowRenameMap
+	// ⭐ **EVERY SOURCE FILE'S NAMESPACE (N1a)** — path ⇒ its directory, `.`-joined (see
+	// `deriveNamespace`). Written once per file by `Queries.foldOneFileInto`, which is the one place that
+	// holds both the file and the anchor it is measured from; read by `isVisibleFrom`'s `module` arm and by
+	// every `Parser.create`, which stamps it onto the functions the file declares.
+	//
+	// Keyed by the path's STRING for `RangedAliasRegistry.multiplyDeclared`'s measured reason: `FilePath.hash`
+	// case-folds and allocates on Windows, and the whole value of an index is that a probe costs one hash of a
+	// string that already exists.
+	var fileNamespaces as FileNamespaceMap
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileNamespaces: FileNamespaceMap.create()}
 	end 'create'
+
+	// --- NAMESPACES and the ONE visibility decision (N1a) ---
+
+	// File this file's namespace. Called once per file by `Queries.foldOneFileInto`, before the file's
+	// declarations are folded, so `isVisibleFrom` can answer about any declaration the moment the sweep ends.
+	// LAST-WINS is unreachable rather than tolerated: the sweep visits each path exactly once.
+	export function recordFileNamespace(path FilePath, namespace String)
+		self.fileNamespaces.upsert(path.toString(), value: namespace)
+	end 'recordFileNamespace'
+
+	// The namespace of a file the sweep folded. A MISS IS A COMPILER BUG, not a file at the root: the root's
+	// namespace is the empty string and is recorded like any other, so an absent entry means a path reached a
+	// visibility question without ever having been swept — and answering `""` would silently place that file
+	// in the global module, where every `module` declaration in the program is visible to it.
+	export function namespaceOf(path FilePath) returns String
+		return try self.fileNamespaces.get(path.toString()) otherwise panic("ProgramSignatures.namespaceOf: '{path.toString()}' has no namespace — every source path is stamped by `Queries.foldOneFileInto` before any declaration of it is folded")
+	end 'namespaceOf'
+
+	// ⭐⭐ **MAY `readerFilePath` NAME A DECLARATION MADE IN `declFilePath` AT TIER `visibility`?** — the ONE
+	// place a `Visibility` becomes an answer, for every kind of declaration there is: a function, a nominal
+	// type, a ranged typealias, a top-level binding, a field.
+	//
+	// Ported from v1's `isVisibleFrom` (`maxon-selfhosted/Compiler/Project.maxon:161-167`), tier for tier. The
+	// `module` arm is the one that diverges: v1 compares stringified PARENT PATHS with a separator-guarded
+	// prefix test, shv2 compares NAMESPACES — see `namespaceContains` for why, and for the shared reason the
+	// guard exists at all.
+	//
+	// ⚠ **A DECLARATION'S OWN FILE ALWAYS MAY**, in every tier — visibility governs who ELSE may see a
+	// declaration, never whether it is in scope where it was written. That is not a fourth arm: `file` says it
+	// directly, and both wider tiers contain their own file by construction.
+	export function isVisibleFrom(visibility Visibility, declFilePath FilePath, readerFilePath FilePath) returns bool
+		match visibility 'tier'
+			global then return true
+			file then return declFilePath.toString().equals(readerFilePath.toString())
+			module then return namespaceContains(self.namespaceOf(declFilePath), inner: self.namespaceOf(readerFilePath))
+		end 'tier'
+	end 'isVisibleFrom'
+
+	// ⭐ **MAY `readerFilePath` NAME THIS RANGED ALIAS (P1.9)?** The alias-shaped face of `isVisibleFrom`, kept
+	// as its own name because the two answers it separates are the point: a hidden alias is still FOUND, which
+	// is what tells "no declaration binds this name anywhere" (E3011, at the `as`) from "one does, elsewhere,
+	// and did not export it" (E2003, at the target name). Folding the test into `lookup` would collapse the two
+	// into the sharper one's wording and report the wrong mistake.
+	//
+	// ⚠ **AND IT IS ASKED ONLY AT AN `as` CAST TARGET TODAY** (`Parser.hiddenAliasCastTarget`), which is the
+	// position the corpus pins and the position v1 checks (`validateNamedTypeVisibility` walks `convert` ops and
+	// nothing else). A hidden alias written as a PARAMETER or FIELD type still resolves; widening that is a
+	// cross-file name-resolution rung, not a line here, because the message this reports names the `as` and
+	// there is no ported wording for the other positions.
+	export function aliasVisibleFrom(alias RangedTypeAlias, readerFilePath FilePath) returns bool
+		return self.isVisibleFrom(alias.visibility, declFilePath: alias.declFilePath, readerFilePath: readerFilePath)
+	end 'aliasVisibleFrom'
 
 	// --- The stdlib/user SHADOW CONTEST (A1s wave 2). See `StdlibShadowRenameMap`. ---
 
@@ -4213,10 +4282,12 @@ export type ProgramSignatures
 		// whether this file's own declaration can be reported unused (E3062, `recordTypeName`). Both are
 		// decisions a memoized parse of a DIFFERENT file bakes in, so both must move its memo key.
 		//
-		// ONE BIT, not the three-valued enum: every reader asks only `!= Visibility.file`, and `global` is
-		// a property of which directory the file was loaded from rather than of anything its text says —
-		// so a hash that distinguished `module` from `global` would be keying on a fact no edit can change.
-		let exported = (1 as ContentHash) if alias.visibility != Visibility.file else (0 as ContentHash)
+		// ⚠ **THE WHOLE TIER, NOT ONE BIT (N1a).** It was one bit while every reader asked `!= Visibility.file`
+		// and the only way to get `global` was to be a stdlib file, which no edit can change. Now `module` is a
+		// modifier a user writes, and `module typealias Score` vs `export typealias Score` is a different answer
+		// to another file's `as Score` — so the two tiers must key different parses. The ordinal is used rather
+		// than a second bit because it is what a tier IS; a fourth case rides automatically.
+		let exported = tierOrdinal(alias.visibility) as ContentHash
 
 		let named = mixBytes(mix(self.hash, value: DeclShapeAlias), bytes: alias.name)
 		self.hash = mix(mix(mix(named, value: low), value: high), value: exported)
@@ -4415,7 +4486,7 @@ export type ProgramSignatures
 		// no method dispatch at all, so the gate has no site to fire at either. This walk never asks the
 		// project for a path, and giving it a reason to would put a `Directory.currentPath()` probe on the
 		// per-declaration path to answer a question nothing here can pose.
-		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: "", signatures: self, isStdlibSource: false, declaresCompilerInternalNames: false, livesUnderStdlibDirectory: false)
+		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: self.namespaceOf(decl.declFilePath), signatures: self, isStdlibSource: false, declaresCompilerInternalNames: false, livesUnderStdlibDirectory: false)
 		let folded = try parser.evalConstInitializer(decl, stack: stack) otherwise (err) 'noValue'
 			return self.recordFailure(decl, error: err)
 		end 'noValue'
@@ -4857,12 +4928,20 @@ export type ProgramSignatures
 			return self.lookupIfKind(scoped, wanted: wanted)
 		end 'filePrivate'
 
-		// The BARE key holds only EXPORTED declarations (`topLevelStorageKey`), so a hit here is
-		// visible BY CONSTRUCTION and there is no second visibility test to get wrong. v1 needs one
-		// (`isVisibleFrom`) because it files module- and global-visible constants under the bare key
-		// and must tell them apart; shv2 has a single exported visibility until namespaces land, and
-		// gains that test on the day it gains the distinction.
+		// ⭐ **THE BARE KEY HOLDS EVERY NON-FILE-PRIVATE DECLARATION, WHICH IS NO LONGER ONE TIER (N1a)** —
+		// `module let LIMIT` and `export let LIMIT` both file here, and only the second is visible to every
+		// reader. So the second test this comment used to say was unnecessary is now exactly what v1 needs
+		// `isVisibleFrom` for, and it arrives the day the distinction did.
+		//
+		// A hidden declaration answers `notFound` rather than a refusal of its own: the reader gets
+		// `Undefined constant 'LIMIT'`, which is the reference's answer for it
+		// (`module-keyword/error.module-let-different-directory`) and the true one — from outside the
+		// subtree, no declaration binds the name.
 		if let exported = try self.declIndex.get(name) 'exported'
+			if not self.isVisibleFrom(self.declAt(exported).visibility, declFilePath: self.declAt(exported).declFilePath, readerFilePath: readerFilePath) 'outOfScope'
+				return TopLevelDeclLookup.notFound
+			end 'outOfScope'
+
 			return self.lookupIfKind(exported, wanted: wanted)
 		end 'exported'
 
@@ -5504,9 +5583,9 @@ export type ProgramSignatures
 	// discipline, for the same reason: the front end states this type's shape here and `__cs_make` writes it
 	// through `CharacterSetRuntime`'s constants, and two readers of one shape is the pair that drifts.
 	function characterSetLayout(charsInstance GenericInstanceId) returns StructLayout
-		var layout = StructLayout.create(CharacterSetTypeName)
-		layout.addField(CharacterSetCharsFieldName, declaredType: MaxonType.genericInstance(charsInstance), mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
-		layout.addField(CharacterSetMaskFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+		var layout = StructLayout.createCompilerOwned(CharacterSetTypeName)
+		layout.addField(CharacterSetCharsFieldName, declaredType: MaxonType.genericInstance(charsInstance), mutable: false, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+		layout.addField(CharacterSetMaskFieldName, declaredType: MaxonType.integer, mutable: false, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 
 		if layout.offsetOfField(CharacterSetCharsFieldIndex) != CharSetCharsOffset or layout.offsetOfField(CharacterSetMaskFieldIndex) != CharSetMaskOffset 'offsetDrift'
 			panic("characterSetLayout: the struct layout puts `chars`/`categoryMask` at {layout.offsetOfField(CharacterSetCharsFieldIndex)}/{layout.offsetOfField(CharacterSetMaskFieldIndex)} but `__cs_make` writes them at {CharSetCharsOffset}/{CharSetMaskOffset} — the front end's shape and the runtime's field writes have drifted")
@@ -5565,8 +5644,8 @@ export type ProgramSignatures
 	// drifts. ⚠ Both references register an 8-byte handle struct whose runtime block is a DIFFERENT size,
 	// with nothing tying the two; this check is what keeps that from being repeated here.
 	function managedFileLayout() returns StructLayout
-		var layout = StructLayout.create(ManagedFileTypeName)
-		layout.addField(ManagedFileHandleFieldName, declaredType: MaxonType.integer, mutable: true, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+		var layout = StructLayout.createCompilerOwned(ManagedFileTypeName)
+		layout.addField(ManagedFileHandleFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 
 		if layout.offsetOfField(ManagedFileHandleFieldIndex) != ManagedFileHandleOffset 'offsetDrift'
 			panic("managedFileLayout: the struct layout puts `_handle` at {layout.offsetOfField(ManagedFileHandleFieldIndex)} but the runtime reads it at {ManagedFileHandleOffset} — the front end's shape and the runtime's field access have drifted")
@@ -5604,8 +5683,8 @@ export type ProgramSignatures
 	// is 336, with nothing tying any of the three together. This is the pair that keeps shv2's front-end
 	// shape and its `__mm_alloc` from becoming a fourth combination.
 	function managedDirectoryLayout() returns StructLayout
-		var layout = StructLayout.create(ManagedDirectoryTypeName)
-		layout.addField(ManagedDirectoryBlockFieldName, declaredType: MaxonType.integer, mutable: true, exported: false, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+		var layout = StructLayout.createCompilerOwned(ManagedDirectoryTypeName)
+		layout.addField(ManagedDirectoryBlockFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 
 		if layout.offsetOfField(ManagedDirectoryBlockFieldIndex) != ManagedDirectoryBlockOffset 'offsetDrift'
 			panic("managedDirectoryLayout: the struct layout puts `_block` at {layout.offsetOfField(ManagedDirectoryBlockFieldIndex)} but the runtime reads it at {ManagedDirectoryBlockOffset} — the front end's shape and the runtime's field access have drifted")

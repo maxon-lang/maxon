@@ -325,11 +325,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: error.non-exported-function-cross-file -->
-<!-- export VISIBILITY is not enforced: shv2's parser records `Visibility` on every
-     declaration and no pass has ever read it, so a non-exported callee is reachable
-     from any file. Not on the P1 ladder — it belongs with cross-file NAME RESOLUTION
-     (namespaces), which the whole-program signature index is now the natural home for. -->
+<!-- test: error.non-exported-function-cross-file -->
 ```maxon
 // --- file: helper.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -389,8 +385,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: error.non-exported-type-cross-file -->
-<!-- P1.1 structs + export visibility (see error.non-exported-function-cross-file) -->
+<!-- test: error.non-exported-type-cross-file -->
 ```maxon
 // --- file: point.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -437,8 +432,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: error.non-exported-enum-cross-file -->
-<!-- P1.1 enums + export visibility -->
+<!-- test: error.non-exported-enum-cross-file -->
 ```maxon
 // --- file: status.maxon
 enum InternalStatus

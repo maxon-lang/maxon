@@ -2942,7 +2942,7 @@ it.
 typealias Int = int(i64.min to i64.max)
 typealias BufArray = Array with __ManagedMemory
 
-function seed(x BufArray) returns Int
+export function seed(x BufArray) returns Int
 	return x.count() as Int
 end 'seed'
 
@@ -2995,7 +2995,7 @@ end 'main'
 typealias Int = int(i64.min to i64.max)
 typealias BufArray = Array with __ManagedMemory
 
-function seed(x BufArray) returns Int
+export function seed(x BufArray) returns Int
 	return x.count() as Int
 end 'seed'
 ```
@@ -3016,7 +3016,7 @@ works at the PARAMETER door only) rather than a coin toss between the gap and th
 typealias Int = int(i64.min to i64.max)
 typealias BufArray = Array with __ManagedMemory
 
-function seed(x BufArray) returns Int
+export function seed(x BufArray) returns Int
 	return x.count() as Int
 end 'seed'
 
@@ -3060,7 +3060,7 @@ end 'main'
 typealias Int = int(i64.min to i64.max)
 typealias BufArray = Array with __ManagedMemory
 
-function seed(x BufArray) returns Int
+export function seed(x BufArray) returns Int
 	return x.count() as Int
 end 'seed'
 ```
