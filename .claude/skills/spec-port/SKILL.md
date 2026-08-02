@@ -221,6 +221,12 @@ Nothing here is optional, and none of it needs permission:
 | test-count check (§2) | stop |
 | every new `.test` **committed** (§5 — not read, committed) | stop |
 
+**If compiler source changed, add a row to `maxon-shv2/build-cost-log.md`** — build seconds, exe bytes,
+suite seconds + test count. Its three numbers all fall out of the build and the full-suite run this
+battery just did, so it costs nothing but the row. It is a trend, not a gate: **size is exact, the two
+times carry a measured ~5% noise band, and a movement inside it is not a datapoint.** See
+`.claude/CLAUDE.md`, which makes this binding for *any* compiler change, not just a tick of this loop.
+
 ⚠ **The full suite is the gate, not the filtered run.** A front-end change that fixes your spec and
 breaks four others reads green under `--filter`.
 

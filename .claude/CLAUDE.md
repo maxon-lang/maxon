@@ -119,6 +119,31 @@ There is **no `maxon clean` command** — it prints usage and exits 1. To force 
 
 **shv2 does less, and the tools say so rather than pretending.** Its runner implements only `--filter`, `--update-required`, and `--log`; `mmTrace`, `target`, and `dumpStages` are REJECTED with an `invalidParams` error naming the gap, never silently dropped. It has no `fmt` and no `--dump-stages`. Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite.
 
+## ⭐ EVERY COMMIT THAT CHANGES COMPILER SOURCE RECORDS A ROW IN `maxon-shv2/build-cost-log.md`
+
+Three numbers, and **they cost nothing to collect** — every one falls out of the build and the suite run
+the commit already had to do:
+
+| number | where it comes from |
+|---|---|
+| **shv2 build time** | `build target=shv2` → `durationMs` |
+| **shv2 exe size** (and the `code bytes` the build reports) | `stat -c '%s' maxon-shv2/.maxon/maxon-shv2.exe`, plus the build's own `Wrote <N> bytes code, …` line |
+| **full spec-suite time** | `run_spec_test compiler=shv2` → `durationMs` (record `total` beside it — a suite time means nothing without the test count) |
+
+⚠ **The three are not the same kind of number, and the log's header says so at length. In short: SIZE
+is exact and bit-reproducible, so any movement is real; the two TIMES are wall clock, whose noise band
+was MEASURED at ~5%** (three runs of one unchanged binary read 48.0 / 48.9 / 50.4 s). **A time movement
+inside that band is not a datapoint** — do not explain it, and do not report it as a regression.
+
+**Record the build of the tree you are COMMITTING.** A stale binary's numbers belong to a different
+commit — this repo has already logged a scale row measured on the wrong tree.
+
+This is a **trend, not a gate**: nothing here passes or fails, and a surprising row is a reading to
+explain. It does **not** replace `run_scale_test` / `docs/optimization-log.md`, which remain the only
+honest answer for per-phase memory and CPU scaling; these three answer the different question *"is the
+compiler still cheap to build, to ship and to test?"*, where a 10× regression is worth catching however
+noisy the floor.
+
 ## Building and Testing
 
 Binary names differ by host OS: Windows produces `maxon.exe` / `maxon-shv2.exe`, Linux and macOS produce `maxon` / `maxon-shv2` (no extension). Commands below show the Windows form; drop the `.exe` on Linux/macOS.
