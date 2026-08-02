@@ -308,6 +308,13 @@ export let EmptySourceText = b""
 // text its KIND already implies carries `EmptySourceText`, and for those the kind's own
 // spelling IS the text (`TokenKind.leftParen` is `"("`).
 //
+// ⚠ "the kind's own spelling" holds for every PUNCTUATOR and OPERATOR, and NOT for the two
+// LAYOUT kinds that also carry `EmptySourceText`: `TokenKind.newline`.rawValue is the NAME
+// `"newline"` and `eof`'s is the phrase `"end of file"`, neither of which appears in the source.
+// That is correct for the E2001 sites this fills — they name a token that IS there — and wrong for
+// an operand position, which is the whole reason `expressionOperandDisplayText` below exists. Do
+// not "unify" the two on the strength of the sentence above; it describes the majority, not the set.
+//
 // ⚠ It is ONE definition because `EmptySourceText`'s contract — "an empty value means the kind
 // says the text" — is a fact about `Token`, and a second copy of it does not fail loudly if it
 // drifts: it quietly names the offending token something the source never wrote. It had two
@@ -320,6 +327,53 @@ export function tokenDisplayText(token Token) returns String
 
 	return String.from(token.value)
 end 'tokenDisplayText'
+
+// What E2004 prints in place of a token when the source wrote no operand AT ALL. A cross-compiler
+// WIRE VALUE rather than a phrasing choice: `specs/expected-expression-error.md` pins these exact
+// bytes, and each compiler is tested against its own copy of that file (shv2's is
+// `specs-shv2/expected-expression-error.md`, byte-identical to it).
+let AbsentOperandText = "(empty)"
+
+// How the E2004 EXPRESSION path names the token standing where an operand belongs. A SECOND renderer
+// beside `tokenDisplayText`, which is what both references keep for this path too
+// (`formatExpressionTokenValue`, maxon-selfhosted/Compiler/Parser.maxon:20922;
+// `FormatTokenValueForError`, maxon-sharp/Compiler/2-Parser.cs:18076) — and it is second because the
+// QUESTION is different, not because the answer is. Everywhere else a diagnostic names a token the
+// author WROTE; here it may have to name the fact that the author wrote NOTHING. `let x =` has no
+// operand at all, and quoting the layout token that closed the line ("newline") names something the
+// reader will not find in the file.
+//
+// ⚠ THE TWO REFERENCES KEY ON THE TOKEN'S VALUE BEING EMPTY AND shv2 CANNOT, because in shv2 every
+// punctuator and operator carries `EmptySourceText` as well (see `Token.value`) — so `- -x` would
+// report `(empty)` for its second `-`. shv2 keys on the KIND, which is the thing that actually
+// decides whether `rawValue` is the source spelling (`TokenKind.star` is `"*"`) or a NAME for a
+// position in the stream (`TokenKind.newline` is `"newline"`).
+//
+// ⚠ EOF IS DELIBERATELY NOT IN THAT SET, and the references agree with that by CONSTRUCTION rather
+// than by omission: the bootstrap raises its own `ParserUnexpectedEof` before this renderer is ever
+// reached (2-Parser.cs:18070), so `(empty)` was never EOF's answer there and there is no convention
+// to mirror. What shv2 should report when an operand runs into the end of the file is a separate
+// open question — see maxon-shv2/PLAN.md:2423 — and not this renderer's to settle.
+//
+// ⚠ THE REST OF THE "rawValue IS A NAME" FAMILY IS OUT ON PURPOSE, and for a reason that is NOT
+// "no red case reached it": `AbsentOperandText` asserts THE AUTHOR WROTE NOTHING THERE, which is
+// true of a line that ended and false of every other member. `stringInterpStart`/`stringInterpEnd`
+// (`"interpolation start"`) stand for real bytes the author typed; so do `identifier` and the five
+// literal kinds (`intLiteral` is `"integer literal"`). Reporting `(empty)` for any of them would be
+// a WRONG ANSWER, not a missing one — so this is one exception, not the first arm of a table.
+// What those kinds *should* print is a separate question this renderer does not answer: they render
+// as their category NAME, where both references render the token's TEXT (`'5'`, not
+// `'integer literal'`) because their renderers pass the token VALUE through. Reachable at
+// `resolveEnumArmCase` — and NO spec on either side pins it, which is what makes it a corner the
+// language has not specified rather than a divergence from it. It needs no note and no rung: the
+// spec that settles it will say so when the port order reaches it, and that is the only backlog.
+export function expressionOperandDisplayText(token Token) returns String
+	if token.kind == TokenKind.newline 'lineEndedWithNoOperand'
+		return AbsentOperandText
+	end 'lineEndedWithNoOperand'
+
+	return token.kind.rawValue
+end 'expressionOperandDisplayText'
 
 // The two characters the lexer hands to the parser as IDENTIFIERS so that it, not the
 // lexer, reports them: neither is legal Maxon, and the parser quotes the offending text

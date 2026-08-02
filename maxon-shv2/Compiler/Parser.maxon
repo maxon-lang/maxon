@@ -118,6 +118,10 @@ export union ParseError implements Error
 	// it renders as E2004 `Expected expression but got '<got>'` (no quotes around
 	// `expression`), the exact text `unary-operators.md`'s double-negation gates on
 	// — `- -x` fails at the second `-`, since a unary operand is a PRIMARY.
+	//
+	// ⚠ `got` is `expressionOperandDisplayText`'s at EVERY raiser, never `kind.rawValue` inlined: this
+	// path names a MISSING operand as `(empty)` where the general renderer would name the layout token,
+	// and a rendering read off the token at each of the five raisers is one fact written five times.
 	expectedExpression(got String, line LineNumber, column ColumnNumber)
 	unexpectedEof(line LineNumber, column ColumnNumber)
 	// An integer literal whose magnitude does not fit an i64. `literal` is the token's RAW TEXT —
@@ -20593,7 +20597,7 @@ export type Parser
 			throw ParseError.unsupported("a match pattern naming '{String.from(firstTok.value)}' (only literal, range, and 'or' patterns over a scalar are supported; enum-case patterns arrive in a later wave)", line: firstTok.line, column: firstTok.column)
 		end 'enumCasePattern'
 
-		throw ParseError.expectedExpression(firstTok.kind.rawValue, line: firstTok.line, column: firstTok.column)
+		throw ParseError.expectedExpression(expressionOperandDisplayText(firstTok), line: firstTok.line, column: firstTok.column)
 	end 'emitPatternValue'
 
 	// The value after a pattern's `-`: a negated int, or `0.0 - x` for a float. Any other token
@@ -20816,7 +20820,7 @@ export type Parser
 			throw ParseError.unsupported("a match pattern naming '{String.from(firstTok.value)}' (only literal, range, and 'or' patterns over a scalar are supported; enum-case patterns arrive in a later wave)", line: firstTok.line, column: firstTok.column)
 		end 'enumCasePattern'
 
-		throw ParseError.expectedExpression(firstTok.kind.rawValue, line: firstTok.line, column: firstTok.column)
+		throw ParseError.expectedExpression(expressionOperandDisplayText(firstTok), line: firstTok.line, column: firstTok.column)
 	end 'decodeScalarPatternBound'
 
 	// A pattern bound must be comparable to the scrutinee — the interval twin of `checkPatternType`,
@@ -21144,7 +21148,7 @@ export type Parser
 	function resolveEnumArmCase(layout EnumLayout) returns CaseIndex throws ParseError
 		let caseTok = self.current()
 		if not tokenCanBeAName(caseTok) 'notACaseName'
-			throw ParseError.expectedExpression(caseTok.kind.rawValue, line: caseTok.line, column: caseTok.column)
+			throw ParseError.expectedExpression(expressionOperandDisplayText(caseTok), line: caseTok.line, column: caseTok.column)
 		end 'notACaseName'
 
 		if self.kindAt(self.pos + 1) == TokenKind.dot 'qualified'
@@ -24337,7 +24341,7 @@ export type Parser
 		end 'namedPrimary'
 
 		let tok = self.current()
-		throw ParseError.expectedExpression(tok.kind.rawValue, line: tok.line, column: tok.column)
+		throw ParseError.expectedExpression(expressionOperandDisplayText(tok), line: tok.line, column: tok.column)
 	end 'parsePrimary'
 
 	// ⭐ **IS THE KEYWORD AT THE CURSOR A NAME HERE, in OPERAND position (D8)?** A keyword-named PARAMETER
@@ -34512,7 +34516,7 @@ export type Parser
 		end 'namedPrimary'
 
 		let tok = self.current()
-		throw ConstEvalError.defective(ParseError.expectedExpression(tok.kind.rawValue, line: tok.line, column: tok.column))
+		throw ConstEvalError.defective(ParseError.expectedExpression(expressionOperandDisplayText(tok), line: tok.line, column: tok.column))
 	end 'evalConstPrimary'
 
 	function evalConstIntLiteral() returns ConstValue throws ConstEvalError
