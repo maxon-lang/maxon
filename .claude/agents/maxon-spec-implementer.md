@@ -85,7 +85,7 @@ blocks.
 if you find yourself shelving more than half the file, **STOP and report** — that spec is a rung wearing
 a port's clothes, and the loop has a different exit for it.
 
-## Iterate filtered; prove it whole once
+## ⛔ RUN ONLY YOUR OWN SPEC. The full battery is the LOOP's, and running it twice is the waste.
 
 ```
 run_spec_test compiler=shv2 filter=<spec>/          # your loop, ~1-2 s
@@ -93,16 +93,24 @@ spec_test_outcome filter=<spec>/<case>              # per-case detail
 run_program compiler=shv2 | compiler=csharp         # discovery, and the oracle
 ```
 
+**That is the whole list.** Specifically, do **NOT**:
+
+- **run the suite UNFILTERED** (~50 s). The loop runs it as its own gate the moment you report, and it
+  will not take your word for it either way — so your run buys nothing and costs a minute.
+- **run any OTHER TARGET.** No `target=x64-linux`, no `wasm32-wasi`, no cross-target gate. Those lanes
+  are the loop's business (and mostly the cross-target sweep's, not even the loop's).
+- **regenerate goldens outside your spec**, and never `--update-required` unfiltered — it rewrites the
+  whole suite.
+
 ⚠ **`filter` is a SUBSTRING, so `panic/` also matches `range-check-panic/`.** Read the names in the
 result, not just the counts.
 
-**Before you report, run the suite UNFILTERED once** (`run_spec_test compiler=shv2`, ~50 s) and check
-`memoryLeak: false`. A front-end change that fixes your spec and breaks four others reads green under
-`--filter`, and finding that here costs one run instead of a whole round trip through the loop.
-
-⚠ **A golden mismatch in an UNRELATED spec is a finding, not noise** — your change moved that codegen.
-Regenerate only after you can say *why* it moved, and put the reason in your report. Do not run
-`--update-required` unfiltered; it rewrites the whole suite.
+**If your change plausibly moves codegen beyond your own spec** — a lowering, a runtime chunk, an op
+that other programs also emit — **say so in your report and say WHY.** That sentence is worth far more
+than a run: the loop is going to run the full suite anyway, and what it cannot derive for itself is your
+reasoning about the blast radius. *(Tick 2's panic fix moved 338 goldens; the useful artifact was the
+one-line explanation — stdlib panics, so every program carrying stdlib carries the shrunken block — not
+the agent's own copy of the suite result.)*
 
 ## Report — short, and load-bearing
 
@@ -112,8 +120,9 @@ The loop reads your report and nothing else. Give it, in a few lines each:
 2. **What you changed** — files, and the shape of the change.
 3. **What you took from v1 / the bootstrap, and what you DEPARTED from, with the reason.**
 4. **Cases: passing / shelved.** Every shelved one with its named-and-located reason verbatim.
-5. **Suite numbers** — filtered, then the unfiltered run, and the leak flag.
-6. **Anything you tripped over and did NOT fix**, and why it was not yours. Be explicit; the loop
+5. **Your filtered numbers only** — `<spec>/` passed/failed. Nothing else; you did not run anything else.
+6. **Blast radius** — whether your change can move codegen or behaviour beyond this spec, and why.
+7. **Anything you tripped over and did NOT fix**, and why it was not yours. Be explicit; the loop
    decides what happens to it, and a silent omission here is how a defect gets lost.
 
 **Do not paste transcripts, file dumps, or your search path.** If a detail is not something the loop

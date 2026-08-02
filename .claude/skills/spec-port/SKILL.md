@@ -128,8 +128,14 @@ not the suite is green over it. That is the CLAUDE.md rule and neither you nor t
 What may be shelved is a case needing a *feature that does not exist yet* (§4) — never a case that is
 broken.
 
-**Then verify its claims yourself.** Its report is a lead: re-run the filtered suite and the full one,
-and read its diff. This project's history is full of agent findings that measurement refuted.
+**The agent runs ONLY its own spec's filter — the full battery is YOURS** (§8), and one tick must run it
+exactly once. It is not the agent's job to pre-verify what you are about to verify anyway: a second full
+suite, a second `x64-linux` lane and a second wasm lane cost minutes per tick and tell you nothing you
+were not about to measure. What you cannot derive yourself is its reasoning about **blast radius**, so
+that is what its report owes you instead.
+
+**Then verify its claims yourself.** Its report is a lead: run the full battery once and read its diff.
+This project's history is full of agent findings that measurement refuted.
 
 ## 4. Shelving a case — the only legal way, and it has a floor
 
