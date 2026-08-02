@@ -1271,8 +1271,11 @@ export type RangedAliasRegistry
 	// ⚠ **A NAME ONLY ONE FILE DECLARES CANNOT REACH HERE AT ALL**, because `multiplyDeclared` holds only
 	// the names two or more files declare — and a name every declaration of which agrees about the range
 	// falls out on the `< 2` test. That is the ENTIRE existing corpus: `int(0 to 255)` and `int(0 to u8.max)`
-	// mint the identical spelling, so the seven `stdlib/` files declaring `Byte` and the eighty spec files
-	// declaring it are one claimant between them, this map stays EMPTY, and no element name anywhere moves.
+	// mint the identical spelling — `u8.max` is resolved to its value before the mint is spelled — so every
+	// `stdlib/` file declaring `Byte` and every spec file declaring it are one claimant between them, this
+	// map stays EMPTY, and no element name anywhere moves. (The corpus counts are deliberately NOT written
+	// down: they move with every ported spec, and `grep -rho 'typealias Byte *= *[^ ]*([^)]*)' specs-shv2/`
+	// answers the question that actually matters — how many DISTINCT ranges, not how many files.)
 	//
 	// ⚠ **THE CONTEST IS COLLECTED BEFORE ANY MINT IS RECORDED**, because `record` writes into the very map
 	// this walks.
@@ -1290,8 +1293,19 @@ export type RangedAliasRegistry
 	// CONTESTED. Gating the walk on an accumulator `record` maintains was tried and buys ~2%: the array this
 	// pass allocates per name is not the cost, the iteration is. It is left as a single readable structure
 	// rather than split into a write-side flag and a read-side answer.
+	// ⚠⚠ **THE CONTEST MAP IS PUBLISHED LAST, AFTER THE MINTS IT GUARDS ARE IN THE REGISTRY (N2 review).**
+	// `anyRangeContest()` — hence `rangeScopedInstance`, hence every qualified element name in the compiler —
+	// is exactly the test `self.rangeContested.count() > 0`. The moment that answers true, a reader may ask
+	// for `Byte$0_1000`, and a `Byte$0_1000` the registry does not hold answers the WIDTH FALLBACK
+	// (`undeclaredNamedElementStorageBytes`), which — since `isByteElementName` asks about the BASE name —
+	// hands a 2-byte element a ONE-BYTE stride with no diagnostic. Building into a LOCAL and assigning at the
+	// end makes "the mints exist before anything can name them" a property of the code rather than of the
+	// fact that nothing currently runs between the two loops.
 	export function settleRangeContests()
 		var mints = RangedTypeAliasArray.create()
+		// Starts as the shared empty handle and is replaced by a real map on the FIRST contest, so an
+		// uncontested program — the whole corpus — still allocates no index. NEVER mutated while shared.
+		var settled = sharedEmptyRangeContests
 		for (name, byFile) in self.multiplyDeclared 'eachMultiplyDeclaredName'
 			var claimants = RangedTypeAliasArray.create()
 			for (_, alias) in byFile 'eachDeclaration'
@@ -1311,12 +1325,14 @@ export type RangedAliasRegistry
 				mints.push(rangeQualifiedMint(claimant, spelling: spelling))
 			end 'eachDistinctRange'
 
-			if self.rangeContested is sharedEmptyRangeContests 'stillShared'
-				self.rangeContested = RangeContestedAliasMap.create()
+			if settled is sharedEmptyRangeContests 'stillShared'
+				settled = RangeContestedAliasMap.create()
 			end 'stillShared'
-			self.rangeContested.upsert(name, value: spellings)
+			settled.upsert(name, value: spellings)
 		end 'eachMultiplyDeclaredName'
 
+		// ⚠ RECORDED BEFORE THE PUBLISH BELOW, and separately from the walk above because `record` writes
+		// `multiplyDeclared` — the very map that walk iterates.
 		for mint in mints 'eachMint'
 			// The outcome is `record`'s cross-file E3105 answer, and a mint can never be the right thing to
 			// blame for one: two claimants of ONE spelling share a range, hence a primitive, and the only way
@@ -1324,6 +1340,12 @@ export type RangedAliasRegistry
 			// which the BASE name has already earned E3105 for, against the line the author wrote.
 			_ = self.record(mint)
 		end 'eachMint'
+
+		// The PUBLISH. Guarded on `count()` so an uncontested program never reassigns the field at all — it
+		// keeps the shared handle it was born with, rather than being handed the same handle a second time.
+		if settled.count() > 0 'someNameIsContested'
+			self.rangeContested = settled
+		end 'someNameIsContested'
 	end 'settleRangeContests'
 
 	// ⭐ **DOES ANY NAME IN THIS PROGRAM HAVE DECLARATIONS THAT DISAGREE ABOUT THE RANGE?** The ONE bool

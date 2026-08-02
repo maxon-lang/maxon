@@ -88,10 +88,10 @@
 //      and gained 24 `.data` slots. `StdlibFacts.unreachable` is what closes it, and it is stated as
 //      reachability rather than as membership precisely because the fix outlives this file.
 //
-// ⛔⛔ **THE INVARIANT IS ABOUT CODE, AND IT CANNOT BE ABOUT EXPORTED NAMES — MEASURED WHEN `File.maxon`
+// ⛔⛔ **THE INVARIANT IS ABOUT CODE, AND IT CANNOT BE ABOUT DECLARED NAMES — MEASURED WHEN `File.maxon`
 // WAS LISTED (R4.7 / N2).** Both mechanisms above prune what a program does not CALL. Neither can prune
-// what a program does not SPELL, because a name is resolved before there is any code to eliminate: an
-// `export typealias` in a listed module is nameable from every program the moment the entry lands, and
+// what a program does not SPELL, because a name is resolved before there is any code to eliminate: a
+// `typealias` in a listed module is nameable from every program the moment the entry lands, and
 // SO IS ITS RANGE. `stdlib/File.maxon:45` writes `export typealias Byte = int(0 to u8.max)` and is the
 // FIRST listed module to declare `Byte` at all (checked at the source against the nine entries before it
 // — `helpers/url/urlHelpers.maxon`'s is `ByteValue`, a different name). A `b"…"` literal's element is
@@ -104,11 +104,25 @@
 // above says they may not.
 //
 // ⇒ **READ IT AS: adding a module changes nothing for a program that does not use it, EXCEPT through the
-// names it EXPORTS — and an exported name is not something a program opts into.** That is not a loophole
+// names it DECLARES — and a declared name is not something a program opts into.** That is not a loophole
 // to route around; it is the same door that supplies `ByteArray` to `byte-string-literal.top-level-let`,
 // which this rung deliberately used. An entry may not be weighed on its FUNCTIONS alone: weigh every
-// `export` it carries, and expect a golden to move when one of them is a name the COMPILER ITSELF mints
-// instances of.
+// DECLARATION it carries, and expect a golden to move when one of them is a name the COMPILER ITSELF
+// mints instances of.
+//
+// ⛔⛔ **AND `export` IS NOT THE DISCRIMINATOR — SAYING IT WAS IS A RULE THE NEXT ENTRY WOULD FAIL BY
+// (N2 review). MEASURED: delete the `export` from `stdlib/File.maxon:45` and the moved golden below is
+// still emitted, byte-identically.** Two independent mechanisms make the keyword unreadable here, and
+// either one alone is enough:
+//   • `Parser.typeAliasVisibility` hands EVERY `typealias` in a stdlib source file `Visibility.global`,
+//     `export`ed or not — so for a LISTED module the keyword is never consulted at all.
+//   • The whole-program folds that actually carried the golden — `RangedAliasRegistry.widenStorageBytesFor`
+//     ⇒ `storageBytesInEveryFile` (the stride) and `record`'s `multiplyDeclared` ⇒ `settleRangeContests`
+//     (the range contest) — are keyed on the NAME and consult visibility NOWHERE. They fold every
+//     declaration in the program, private ones included. This half holds for a USER file too.
+// ⇒ **weigh every ranged `typealias` a candidate module declares, `export`ed or not.** An entry audited on
+// its `export`s alone would wave a file-private `typealias Byte = int(0 to 1000)` straight through, and it
+// would move exactly the same goldens.
 //
 // ⭐ THE COLLISION RULE FOR ADDING AN ENTRY. A listed module must declare no name a user program
 // declares and no builtin type/name.
@@ -512,10 +526,13 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     and it is a miss: it declares `FilePath` and `FilePathError`, neither of which this module declares.
 	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: none of the ten is a builtin. The `__Managed*`
 	//     names this module CALLS are builtins and are `__`-reserved, and it declares no name beginning `__`.
-	//   • ⚠⚠ **`FileSize`, `Timestamp` and `Byte` ARE RANGED typealiases AND ALL THREE ARE `export`ed
-	//     (`:23`, `:24`, `:45`) — SO THE "file-local per alias FORM" ARGUMENT EVERY ENTRY SINCE `Clock` HAS
-	//     LEANED ON DOES NOT APPLY TO THEM, AND SAYING IT DID IS WHAT MADE A MOVED GOLDEN LOOK LIKE A
-	//     SURPRISE.** An `export`ed ranged alias is nameable from every program; MEASURED, a user program that
+	//   • ⚠⚠ **`FileSize`, `Timestamp` and `Byte` ARE RANGED typealiases (`:23`, `:24`, `:45`) — SO THE
+	//     "file-local per alias FORM" ARGUMENT EVERY ENTRY SINCE `Clock` HAS LEANED ON DOES NOT APPLY TO
+	//     THEM, AND SAYING IT DID IS WHAT MADE A MOVED GOLDEN LOOK LIKE A SURPRISE.** ⚠ It is that they are
+	//     DECLARED and not that they are `export`ed: all three happen to carry the keyword, but it is not
+	//     read here (MEASURED, N2 review — see the loader header's second ⛔ paragraph, which names the two
+	//     mechanisms that ignore it). A ranged alias a listed module declares is nameable from every program
+	//     and its bounds join the whole-program folds either way; MEASURED, a user program that
 	//     writes `function widen(b Byte) returns Byte` and mentions nothing else of this module compiles under
 	//     BOTH compilers and answers identically, which is the agreement listing it buys. `FileSize` and
 	//     `Timestamp` cost nothing beyond the name — no compiler-minted instance has their element — but
