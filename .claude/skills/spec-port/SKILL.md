@@ -132,6 +132,36 @@ broken.
 exactly once. Do not re-derive its diagnosis, re-audit its diff, or re-run what it ran. **The suite is
 the check.** If it is green, the tick is good.
 
+## ⛔⛔ 3b. THERE IS NO SUCH THING AS AN ACCEPTED DIVERGENCE. That is what the spec files are FOR.
+
+**Never file a "known divergence from `/specs`". Never write one into `PLAN.md`. Never record one in the
+log.** A `/specs` file is not a description of what the compiler happens to do — it is **the definition
+of the language**, and shv2 differing from it is a BUG, full stop. The moment you catch yourself writing
+*"measured divergence, filed as accepted"*, you are converting a defect into documentation.
+
+**Every difference you find is in exactly one of two states, and there is no third:**
+
+1. **A spec that IS ported says otherwise** ⇒ it is a **live bug and you fix it now.** It is on your
+   acceptance path by definition — the case is red.
+2. **No ported spec covers it** ⇒ it is simply **NOT DONE YET**, and the spec file that will catch it is
+   sitting on the whitelist waiting for its tick. **That is a queue position, not a decision, and it
+   needs no note anywhere** — the whitelist already tracks it, which is the whole reason the whitelist
+   is the backlog.
+
+⚠ **State 2 is the one that gets mis-filed**, because a gap you can *describe* feels like a finding
+worth recording. It is not. Writing it into `PLAN.md`'s "Future rungs" claims it needs its own numbered
+rung with a contract, when all it needs is for the loop to reach its spec — and a note that says
+"accepted" about something nobody accepted is worse than silence.
+
+*(Precedent, 2026-08-01: tick 2 left an interpolated `panic("{n}")` rendering the hole as `{}` and filed
+it as an accepted divergence. It was neither accepted nor a divergence — `/specs/panic.md` tests only
+literals, so **all 4 ported cases passed and nothing diverged**; the behaviour is pinned by
+`/specs/panic-interpolation.md`, a SEPARATE unported spec, 6 cases, whitelist position 229. The entry
+was deleted and that spec ported instead.)*
+
+⇒ **If a gap bothers you enough to write it down, port the spec that catches it instead.** Taking it out
+of whitelist order is allowed and is the right call when the gap is one your own tick just created.
+
 ## 4. Shelving a case — the only legal way, and it has a floor
 
 A case that needs a feature shv2 has not built yet becomes:
