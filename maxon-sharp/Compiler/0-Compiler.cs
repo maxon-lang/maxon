@@ -1330,8 +1330,18 @@ public static class StdlibLoader {
     var exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
     Logger.Debug(LogCategory.Compiler, $"StdlibLoader: exeDir={exeDir}");
     if (string.IsNullOrEmpty(exeDir)) return null;
+    return FindStdlibPath(exeDir);
+  }
 
-    var path = exeDir;
+  /// <summary>
+  /// The same upward walk, from a directory the CALLER names. One other asker: <see cref="TreeLock"/>
+  /// needs the checkout containing the path a command WRITES INTO — the project directory, the spec
+  /// directory — not the one this executable's own stdlib came from. Those two answers are the same
+  /// directory in every ordinary invocation and are not required to be; the walk is what both of them
+  /// mean by "the checkout", so it is written once.
+  /// </summary>
+  public static string? FindStdlibPath(string startDir) {
+    var path = startDir;
     while (path != null) {
       var stdlibPath = Path.Combine(path, "stdlib");
       Logger.Debug(LogCategory.Compiler, $"StdlibLoader: checking {stdlibPath}");

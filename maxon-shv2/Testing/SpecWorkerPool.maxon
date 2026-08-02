@@ -1161,6 +1161,13 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 	var lastProgressMs = Clock.nowMs()
 
 	while true 'dispatchLoop'
+		// This loop turning is what the tree lock's heartbeat means by "the holder is still there" —
+		// so it is refreshed HERE, at the top, rather than at the three places progress happens. A
+		// suite parked on its last slow spec is still a live holder, and one placed on completions
+		// alone would age out under exactly that tail. The write is throttled to one every few
+		// seconds, so a poll loop pays a clock read (see `touchTreeLock`).
+		touchTreeLock()
+
 		// Feed the pool before draining it: the parallelism does not exist until every worker has a
 		// job, so an idle slot always outranks a ready answer.
 		if let idleSlot = try findIdleSlot(busy, cursor: dispatchCursor) 'haveIdleWorker'

@@ -18,6 +18,17 @@
 // (resolved against the process cwd — the runner is invoked from the repo root).
 let DefaultSpecDir = "specs-shv2"
 
+// ⭐ **THE EXIT CODE THAT MEANS "NOTHING RAN".** Distinct from 1 (a command that RAN and reported
+// failures) and from 101 (a leak) on purpose: "nothing ran" and "something failed" are different
+// facts, and a caller reading only the exit code — a shell script, CI, the rung gate battery — must be
+// able to tell them apart. Same number and same meaning as `cross-target-gate.sh`'s own refusal.
+//
+// TWO refusals return it, and they belong to one family: a binary older than the sources it was built
+// from (`refuseIfStale`) and a checkout another command is already writing (`acquireTreeLock`). Both
+// say the same thing to the reader — the tree is not in a state to be measured, fix that and re-run —
+// so the number is declared once, HERE, where the driver's exit codes are decided.
+export let NothingRanExitCode = 2
+
 // The CLI spellings the spec-test WORKER POOL has to re-emit, because a worker is this same
 // executable re-launched with this same command line (see SpecWorkerPool). Named here — where the
 // parser that reads them back also lives — so the two halves of that command line cannot drift
@@ -146,6 +157,47 @@ function runBuild(args MaxonArgs) returns ExitCode
 		resolved(t) then target = t
 		unrecognized(spec) then return reportUnknownTarget(spec)
 	end 'targetSel'
+
+	let lockExit = acquireBuildTreeLock(inputPath, outputOverride: args.outputOverride)
+	if lockExit != 0 'busyTree'
+		return lockExit
+	end 'busyTree'
+
+	let buildExit = compileAndReport(inputPath, target: target, args: args)
+	releaseTreeLock()
+	return buildExit
+end 'runBuild'
+
+// ⭐ **WHICH BUILDS ARE TREE-LEVEL, and therefore take this checkout's lock: a PROJECT build that was
+// not told where to put its output.** That is `maxon build maxon-shv2` — the invocation that writes
+// `<project>/.maxon/` and the one that actually raced (see `TreeLock`).
+//
+// ⚠ **AND IT IS WHAT KEEPS THE SUITE OFF THE LOCK.** The spec runner compiles every selected test
+// through a real `build` subprocess and the scale runner one per rung — thousands of them, in
+// parallel, INSIDE a run that already holds the lock. Every one of those passes `-o`, because the
+// harness owns the output path; so `-o` is exactly the line between "put it where the tree keeps its
+// products" and "put it where I said", and locking only the former is what makes a nested build a
+// non-event rather than a deadlock.
+//
+// A FILE build takes nothing either, for the same reason from the other end: it writes beside the file
+// it was handed, which is a scratch directory whenever it matters.
+function acquireBuildTreeLock(inputPath FilePath, outputOverride String) returns ExitCode
+	if not Directory.isDirectory(inputPath) 'singleFileBuild'
+		return 0
+	end 'singleFileBuild'
+
+	if not outputOverride.isEmpty() 'callerOwnsTheOutput'
+		return 0
+	end 'callerOwnsTheOutput'
+
+	return acquireTreeLock(inputPath)
+end 'acquireBuildTreeLock'
+
+// The build itself, split out so `runBuild` has ONE exit through which the tree lock is released.
+// Maxon has no `defer`, and a release written at each of two returns is a release the third one
+// forgets — the lock would then survive its holder and be broken 60 s later as abandoned, which is
+// correct behaviour covering for a bug.
+function compileAndReport(inputPath FilePath, target Target, args MaxonArgs) returns ExitCode
 	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
@@ -153,7 +205,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 
 	print("Compiled -> {outputPath}\n")
 	return 0
-end 'runBuild'
+end 'compileAndReport'
 
 // The M2 warm-rebuild gate: assert the query spine is deterministic and
 // incremental for `<file>`. Exit 0 iff both properties hold. On a file/IO error
@@ -264,6 +316,36 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// runs: a check nobody runs is exactly the drift it exists to catch, one level up (see LadderIndex).
 	requireLadderIndexComplete()
 
+	// ⭐ **AND WHETHER ANY OTHER COMMAND IS ALREADY WRITING THIS TREE.** Two suites share
+	// `<specDir>/.spec-tmp`, so one deletes what the other is compiling — a measured FALSE RED — and a
+	// build running alongside replaces the very binary this run is drawing verdicts from. Asked here,
+	// after every question that costs nothing, so a refusal is instant and before a worker exists.
+	//
+	// ⚠ A HARNESS FIXTURE SUB-RUN TAKES NO LOCK: it is spawned BY a parent suite that holds this same
+	// tree (see `requireHarnessRefusalsFire`), so acquiring here would refuse against its own parent.
+	// The predicate is the one the self-test already uses to recognise itself.
+	let lockExit = acquireSuiteTreeLock(specDir)
+	if lockExit != 0 'busyTree'
+		return lockExit
+	end 'busyTree'
+
+	let suiteExit = runSpecSuite(args, specDir: specDir, workerExe: workerExe, compilerExe: compilerExe, effectiveTarget: effectiveTarget)
+	releaseTreeLock()
+	return suiteExit
+end 'runSpecTest'
+
+// The tree lock for a suite run — taken for every run except a fixture sub-run, whose parent holds it.
+function acquireSuiteTreeLock(specDir FilePath) returns ExitCode
+	if isHarnessFixtureSubRun(specDir) 'parentHoldsIt'
+		return 0
+	end 'parentHoldsIt'
+
+	return acquireTreeLock(specDir)
+end 'acquireSuiteTreeLock'
+
+// The suite itself, split out so `runSpecTest` has ONE exit through which the tree lock is released —
+// see `compileAndReport` for why that shape rather than a release at each of five returns.
+function runSpecSuite(args MaxonArgs, specDir FilePath, workerExe FilePath, compilerExe FilePath, effectiveTarget Target) returns ExitCode
 	let run = try runSpecPool(compilerExe, workerExe: workerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return 1
@@ -287,9 +369,19 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// `SuiteCpuTally.reportLine`, which is the only place this line is spelled.
 	printError("{run.cpu.reportLine(run.poolSize)}\n")
 
+	// ⭐ **DOES THIS TREE OWE GOLDENS?** Asked AFTER the verdicts, because it is a fact about the tree
+	// rather than about any test and must not displace the reason a test failed — and asked on every
+	// run, filtered included, because a filtered run is exactly where an agent mints a new spec's
+	// goldens and never sees that they are untracked. See `GoldenTracking`.
+	let goldenExit = reportUntrackedGoldens(specDir)
+
 	if testsExit != 0 'someTestFailed'
 		return testsExit
 	end 'someTestFailed'
+
+	if goldenExit != 0 'goldensOwed'
+		return goldenExit
+	end 'goldensOwed'
 
 	// Every test passed — and a worker that exited NON-ZERO is still a suite failure. A worker is
 	// itself a leak-gated Maxon program, so exit 101 means the harness leaked memory while
@@ -300,7 +392,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	end 'workerFailed'
 
 	return 0
-end 'runSpecTest'
+end 'runSpecSuite'
 
 // The trailing ` matching --filter=<pattern>` clause of the "no tests selected"
 // message, omitted entirely when no filter was given (an empty spec directory and

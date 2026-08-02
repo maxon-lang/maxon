@@ -559,7 +559,7 @@ project. **Manual testing is the slowest possible way to check the same thing tw
 |---|---|
 | Build | exit 0, zero warnings |
 | shv2 suite | all green, **including every pre-existing test** |
-| Fragments | `git status --short specs-shv2/fragments/` — **additions only**. An **`M`** is a codegen change: justify or fix. Empty diff after a spec run **proves byte-identical codegen** |
+| Fragments | `git status --short specs-shv2/fragments/` — **additions only**. An **`M`** is a codegen change: justify or fix. Empty diff after a spec run **proves byte-identical codegen**. ⚙ **THE UNTRACKED HALF IS NOW MACHINE-CHECKED AND NEEDS NO STEP HERE:** every `spec-test` run, filtered or not, asks git whether any golden under `specs-shv2/fragments/` is untracked and **FAILS the run** naming each one (`maxon-shv2/Testing/GoldenTracking.maxon`). That is the hole three rungs closed green through — *a MISSING golden never fails*, so an owed one was invisible until a later rung's baseline found it. `git add` is enough to satisfy it; the **`M`** column above is still yours to justify, because "this codegen change is intended" is not a question a machine can answer |
 | `scale-test` | ⚠ **NOT A GATE — it is an INSTRUMENT with no verdict.** Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and **read it**: the per-rung memory numbers are exact and bit-for-bit reproducible, so any movement is real. **Explain and attribute what moved**, and record the reason in `docs/optimization-log.md` — the trend table is the deliverable. There is nothing to "pass"; do not chase one, and never touch the instrument to make a number look better |
 | If `maxon-sharp/` was touched | C# suite green (**2883+**) **AND codegen neutrality**: `git status --short specs/ specs-shv2/` EMPTY |
 | Leak gate | no run exits **101** — **and no reachable leak, including one found only by adversarial PROBING** (a `let m = f()` no committed test runs). A probed/latent leak is FIXED, or the leak-causing construct cleanly REJECTED, before merge — **never deferred as a live leak** (see the HALT list — *"leaks are not ok"*). A green suite is not proof of no leak; it is proof no *committed test* leaks. ⇒ **and the probe that found it becomes a COMMITTED SPEC** — see step 8. That is what turns this gate's one-off discovery into coverage the next rung inherits |
@@ -591,11 +591,18 @@ have built (it checks — it does not take your word for it), and `--skip-host` 
 **`PRIOR`**, not `SKIP`, naming what covered it. Drop both flags if you are running this gate on its own
 rather than after a step-8 battery.
 
-⚠ **NEVER run two suites in one tree at once** — not two lanes, not a gate alongside a hand-run suite.
-The runner shares `.spec-tmp`, and a race there produces a **FALSE RED** in a lane that is actually
-green. *(Measured while building this very gate path: an overlapping second run turned x64-linux into
-`FAIL exit 1`; run alone, the same tree and binary passed 1816/0.)* A red lane is a rung-halting gate,
-so a false one is expensive — if a lane goes red, **re-run that lane alone before reporting it.**
+⚙ **TWO COMMANDS IN ONE TREE ARE NOW REFUSED BY THE BINARIES, NOT BY THIS SENTENCE.** `build`,
+`spec-test` and `scale-test` take a **tree lock** on the checkout they write into
+(`maxon-shv2/Compiler/TreeLock.maxon`, `maxon-sharp/TreeLock.cs`), and the second one exits **2**
+immediately, naming the holder's pid, argv and how long ago it last made progress. Worktrees hold
+separate locks and never block each other; a lock whose holder died is broken automatically after
+60 s with a printed line saying so. **You no longer have to remember this — but know what it is when
+you see it**, because the failure it replaces was expensive both ways: two suites sharing `.spec-tmp`
+produced a **FALSE RED** in a lane that was actually green *(an overlapping run turned x64-linux into
+`FAIL exit 1`; run alone, the same tree and binary passed 1816/0)*, and two builds sharing
+`maxon-shv2/.maxon/` produced a **12-minute build and a silent exit 1** that a reviewer read as a
+compile-time regression in the code under review. A red lane is still a rung-halting gate, so if one
+goes red, **re-run that lane alone before reporting it.**
 
 It builds both compilers, then runs the shv2 suite **per target**, each behind the runner that target
 needs — natively for the host, WSL for the Linux ELF, the vendored wasmtime for the wasm component. It
@@ -714,7 +721,7 @@ coverage.** Run them once when a phase closes (or when a rung family finishes):
 | **The optimizer SWEEP** | One `maxon-rung-optimizer` over everything the phase landed — it sees cross-rung interactions a per-rung pass structurally cannot. Per-rung, the agent runs only on a **step 6b trigger**; the 20 s ladder READ stays per rung, always |
 | **The PLAN.md index table** | Regenerated in one pass from the detail rows (step 12) |
 | **The REMOTE arm64/Mac sync** | `scripts/cross-target-gate.sh --mac --require-mac` — already manual and periodic (step 10). A phase boundary is the natural moment. **A red lane here is a real defect, fixed, not filed as "the sync was red"** |
-| **The stale-golden sweep** | The measured rot: 288 stale + ~489 *absent* x64-linux goldens, and 317 stale arm64 C#-suite goldens. ⚠ **A MISSING golden never fails** — absence is invisible to every gate, so it can only be found by going to look |
+| **The stale-golden sweep** | The measured rot: 288 stale + ~489 *absent* x64-linux goldens, and 317 stale arm64 C#-suite goldens. ⚠ **A MISSING golden never fails** — absence is invisible to every gate, so it can only be found by going to look. ⚙ **HALF of that is now machine-checked and half is NOT, and the difference is exactly which lane RAN:** a golden the suite MINTED is caught the moment it exists, untracked, by the run that minted it (see the Fragments gate). A golden that is absent because **nobody ran that lane** is still invisible — nothing mints it, so there is nothing to be untracked — and a STALE one on an unrun lane likewise. **This sweep is what covers those two, and it still has to be run** |
 
 ⚠ **Nothing that catches a DEFECT batches.** The reviewer, the leak/probe gate, the RED spec baseline,
 the host suite and the ladder read all stay per rung — a rung that lands wrong is the one failure this

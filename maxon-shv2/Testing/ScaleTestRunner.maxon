@@ -342,7 +342,31 @@ end 'parseRepeatCount'
 // Entry point
 // ===========================================================================================
 
+// The command, wrapped so the checkout's TREE LOCK is taken for its whole duration and released
+// through ONE exit — `measureScaleLadder` below has a dozen returns, and a release written at each of
+// them is a release the next one forgets (see `Main.compileAndReport`).
+//
+// A scale run compiles a generated ladder with the in-tree binary and writes its corpus into the
+// checkout, so it contends with a `build` (which replaces that binary mid-ladder) and with a suite
+// (which is the other thing sizing the machine) exactly as those two contend with each other. And its
+// numbers are the reason it matters most: a rung measured against a machine running somebody else's
+// suite is a recorded row of noise, and a recorded row is permanent.
 export function runScaleTest(args MaxonArgs) returns ExitCode
+	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
+		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
+	end 'badCorpus'
+
+	let lockExit = acquireTreeLock(corpusRoot)
+	if lockExit != 0 'busyTree'
+		return lockExit
+	end 'busyTree'
+
+	let runExit = measureScaleLadder(args, corpusRoot: corpusRoot)
+	releaseTreeLock()
+	return runExit
+end 'runScaleTest'
+
+function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCode
 	// `--update-required` is GONE from this command, and saying so is worth four lines. It rewrote
 	// committed memory goldens; there are no goldens. It is still a spec-test flag, and the driver
 	// parses the command line before it knows which command is running — so without this it would be
@@ -378,10 +402,6 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	if freshnessExit != 0 'staleBinary'
 		return freshnessExit
 	end 'staleBinary'
-
-	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
-		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
-	end 'badCorpus'
 
 	// Resolved to an absolute path for the comparison's sake, not for the compiler's: the compiler is
 	// still handed the RELATIVE rung path (see `CorpusRelativeRoot`), and this is the string that says
@@ -430,6 +450,11 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	printRungHeader()
 	var results = RungResultArray.create()
 	for rung in ladder 'eachRung'
+		// One rung compiled is this run's unit of progress, and the tree lock's heartbeat is what
+		// says the holder is still making it. The compiles themselves are CHILD processes, so none
+		// of the compiler's own phase heartbeats reach this record — the ladder has to say so itself.
+		touchTreeLock()
+
 		var result = try compileRung(compilerExe, root: corpusRoot, rung: rung) otherwise (error) 'rungFailed'
 			// A rung that would not compile is a broken run, not a slow one: every later rung is a
 			// superset of this one's shapes, so there is nothing left to measure and nothing the rungs
@@ -490,7 +515,7 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	end 'perTypePass'
 
 	return 0
-end 'runScaleTest'
+end 'measureScaleLadder'
 
 // The ONE way this instrument fails: the RUN broke — it could not measure, or could not deliver what
 // it measured. It says so in those words, so that a reader can never mistake it for a judgement about

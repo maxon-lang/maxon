@@ -66,12 +66,6 @@
 // wedges an entire suite for a rebuild measured in minutes. Same question, different price on being
 // wrong, so a different tie-break — not a rule that drifted.
 
-// The exit code a refusal returns. Distinct from 1 (a suite that RAN and had failures) and from 101
-// (a leak) on purpose: "nothing ran" and "something failed" are different facts, and a caller reading
-// only the exit code — a shell script, CI, the rung gate battery — must be able to tell them apart.
-// Same number and same meaning as `cross-target-gate.sh`'s own staleness refusal.
-let StaleBinaryExitCode = 2
-
 // `maxon build` writes a project's executable into `<project>/.maxon/`, so a binary whose parent
 // directory is NOT that one was not built in place and has no project above it to compare against.
 // It is also what a file the compiler WROTE lives under, at any depth, and such a file is not a
@@ -114,7 +108,7 @@ union StalenessVerdict
 end 'StalenessVerdict'
 
 // Refuse this command if `binary` is older than a source it was built from. Returns the exit code the
-// command should return: 0 to go ahead, `StaleBinaryExitCode` to stop.
+// command should return: 0 to go ahead, `NothingRanExitCode` to stop.
 //
 // `role` names the executable in the message, because a `spec-test` run has TWO of them (see
 // `refuseIfSpecTestStale`) and "which binary is stale" is the first thing the reader needs.
@@ -274,5 +268,5 @@ function reportStale(binary FilePath, role String, newerSource FilePath) returns
 	printError("  newer:  {newerSource.toString()}\n")
 	printError("  Rebuild it (`maxon build maxon-shv2`) and re-run. Nothing was run: every verdict below\n")
 	printError("  this line would have been about code that is not in that binary.\n")
-	return StaleBinaryExitCode
+	return NothingRanExitCode
 end 'reportStale'

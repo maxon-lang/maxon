@@ -704,6 +704,26 @@ class Program {
       return 1;
     }
 
+    // ⭐ **A PROJECT BUILD IS TREE-LEVEL, AND A SINGLE-FILE BUILD IS NOT.** From here down this writes
+    // `<project>/.maxon/`, which is the checkout's own output directory and the one two concurrent
+    // `maxon build maxon-shv2` runs corrupted — a 12-minute build and a silent exit 1 (see
+    // `TreeLock`). The single-file arm above writes beside the file it was handed, which is a scratch
+    // directory whenever it matters, so it stays free of the lock: that arm is what the spec runner
+    // spawns thousands of, inside a run that already holds it.
+    var buildLockExit = TreeLock.Acquire(path);
+    if (buildLockExit != 0) return buildLockExit;
+    try {
+      return RunProjectBuild(path, target, emitIr, dumpStages, useCache);
+    } finally {
+      TreeLock.Release();
+    }
+  }
+
+  /// <summary>
+  /// The directory arm of <c>build</c>, split out so the tree lock is released through ONE exit — this
+  /// body has a dozen returns, and a release written at each of them is a release the next one forgets.
+  /// </summary>
+  static int RunProjectBuild(string path, Compiler.CompileTarget target, bool emitIr, bool dumpStages, bool useCache) {
     // Directory: check for build.maxon with a build() function
     var buildFile = Path.Combine(path, Compiler.SourceCollector.BuildManifestFileName);
     if (File.Exists(buildFile)) {
@@ -1236,6 +1256,21 @@ class Program {
 
     Compiler.CompileError.ProjectRoot = projectDir;
 
+    // The suite rewrites this checkout's goldens and stages its work under the tree's own directories,
+    // so two of them in one tree race exactly as two builds do — and a build alongside one replaces
+    // the compiler underneath it. One lock covers all three pairings; see `TreeLock`.
+    var suiteLockExit = TreeLock.Acquire(specDir);
+    if (suiteLockExit != 0) return suiteLockExit;
+    try {
+      return RunSpecTestSuite(specDir, fragmentDir, tempDir, projectDir, filter, workers, updateRequired, target, verbose, noBatch, includeNetwork);
+    } finally {
+      TreeLock.Release();
+    }
+  }
+
+  static int RunSpecTestSuite(string specDir, string fragmentDir, string tempDir, string projectDir,
+      string? filter, int? workers, bool updateRequired, Compiler.CompileTarget target,
+      bool verbose, bool noBatch, bool includeNetwork) {
     var runner = new TestRunner(specDir, fragmentDir, tempDir, projectDir, filter, workers, updateRequired, target, verbose, noBatch, includeNetwork);
     var summary = runner.RunAllSpecTests();
 

@@ -56,7 +56,21 @@ let MaxStdlibSearchDepth = 64
 // user must see, not a `Clock.nowMs()` that mysteriously reports E3004.
 export function locateStdlibDir() returns FilePath throws CompileError
 	let exePath = try Process.executablePath() otherwise throw CompileError.stdlibNotFound
-	var dir = try exePath.parent() otherwise throw CompileError.stdlibNotFound
+	let exeDir = try exePath.parent() otherwise throw CompileError.stdlibNotFound
+	return try stdlibDirAbove(exeDir)
+end 'locateStdlibDir'
+
+// The same walk, from a directory the CALLER names — which is a different question from the one above
+// and has one other asker: `TreeLock` needs the checkout containing the path a command WRITES INTO
+// (the project directory, the spec directory, the scale corpus), not the one the compiler's own
+// sources came from. Those two answers are the same file in every ordinary invocation and are not
+// required to be: the walk is what both of them mean by "the checkout", so it is written once.
+//
+// It THROWS rather than answering "none" for `locateStdlibDir`'s reason there; `TreeLock` reads the
+// throw as "no checkout above this path", which is a real and ordinary answer for a program compiled
+// in a temp directory.
+export function stdlibDirAbove(start FilePath) returns FilePath throws CompileError
+	var dir = start
 
 	var depth = 0
 	while depth < MaxStdlibSearchDepth 'search'
@@ -73,7 +87,7 @@ export function locateStdlibDir() returns FilePath throws CompileError
 	end 'search'
 
 	throw CompileError.stdlibNotFound
-end 'locateStdlibDir'
+end 'stdlibDirAbove'
 
 // A set of function names, for O(1) membership. Used for both "unreachable from `main`" and "declared in
 // stdlib source", exactly like `DestructorSet`.

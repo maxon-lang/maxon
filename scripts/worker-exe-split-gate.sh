@@ -95,8 +95,11 @@ FAILURES=0
 pass() { printf '  PASS  %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n         saw: %s\n' "$1" "$2"; FAILURES=$((FAILURES + 1)); }
 
-# ⚠ ONE SUITE AT A TIME IN ONE TREE. The runner shares `.spec-tmp`, so two overlapping runs produce
-# a FALSE RED in a lane that is actually green. Every check below is sequential and blocking.
+# ⚠ ONE SUITE AT A TIME IN ONE TREE — every check below is sequential and blocking. The runner shares
+# `.spec-tmp`, so two overlapping runs produce a FALSE RED in a lane that is actually green. That is
+# now ENFORCED rather than merely observed (`maxon-shv2/Compiler/TreeLock.maxon`): a second suite in
+# this tree exits 2 naming the holder. This gate's runs would therefore FAIL rather than interleave,
+# which is the point — but sequential is still what it wants, not what it is rescued into.
 run_suite() { "$HARNESS" spec-test "--filter=$FILTER" "$@" > "$WORK/out.log" 2>&1; echo "$?"; }
 summary()   { grep -E '^[0-9]+ passed, [0-9]+ failed' "$WORK/out.log" | tail -1; }
 

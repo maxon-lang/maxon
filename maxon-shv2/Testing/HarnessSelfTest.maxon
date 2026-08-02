@@ -72,12 +72,11 @@ let ExpectRefusalMarker = "<!-- expect-refusal:"
 // refusal in the IR printer, which a target emitting no Target IR (wasm32) never runs at all. Under a
 // cross-target suite run, forwarding the target would turn those two into false reds about nothing.
 export function requireHarnessRefusalsFire(workerExe FilePath, compilerExe FilePath, specDir FilePath)
-	let root = try FilePath.from(FixturesRelativeDir) otherwise panic("HarnessSelfTest: '{FixturesRelativeDir}' is not a valid path")
-
-	if isFixtureCaseDir(specDir, root: root) 'thisIsAFixtureSubRun'
+	if isHarnessFixtureSubRun(specDir) 'thisIsAFixtureSubRun'
 		return
 	end 'thisIsAFixtureSubRun'
 
+	let root = try FilePath.from(FixturesRelativeDir) otherwise panic("HarnessSelfTest: '{FixturesRelativeDir}' is not a valid path")
 	let cases = try Directory.list(root) otherwise panic("HarnessSelfTest: could not list {FixturesRelativeDir} — it holds the deliberately-malformed specs that prove the harness's own refusals still fire. Run the suite from the repo root.")
 
 	// EVERY fixture is run and every failure is reported TOGETHER, rather than stopping at the first.
@@ -128,6 +127,17 @@ end 'FixtureVerdict'
 // How many fixture cases one sweep proved. Named because it is the count the empty-corpus refusal
 // reads, not a loop counter.
 typealias FixtureTally = int(0 to u64.max)
+
+// ⭐ **IS THIS PROCESS A FIXTURE SUB-RUN?** Asked by TWO callers with quite different stakes, which is
+// why it is exported rather than folded into the guard above: `requireHarnessRefusalsFire` asks it to
+// avoid an unbounded 8-ary fan-out, and `Main.runSpecTest` asks it because a sub-run must NOT take the
+// tree lock its own parent is already holding — the one nested case in this driver, and the ⛔ that
+// would otherwise turn a lock into a refusal against itself. One question, one answer; two spellings
+// of "am I a fixture" is precisely the drift this function's own warning below is about.
+export function isHarnessFixtureSubRun(specDir FilePath) returns bool
+	let root = try FilePath.from(FixturesRelativeDir) otherwise panic("HarnessSelfTest: '{FixturesRelativeDir}' is not a valid path")
+	return isFixtureCaseDir(specDir, root: root)
+end 'isHarnessFixtureSubRun'
 
 // Is `specDir` one of the fixture case directories — i.e. is this process a fixture sub-run? A fixture
 // case is driven by spawning this harness at `<root>/<case>`, so the question is whether `specDir`'s

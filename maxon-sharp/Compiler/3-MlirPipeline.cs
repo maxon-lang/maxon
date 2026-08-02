@@ -27,6 +27,14 @@ public class IrPipeline {
     target ??= CompileTarget.Default;
     Logger.Debug(LogCategory.Ir, "Starting IR pipeline");
 
+    // ⭐ A CLOSED PIPELINE STAGE IS THE PROOF OF PROGRESS THE TREE LOCK'S HEARTBEAT NEEDS, and these
+    // three boundaries are where a compile produces one on EVERY path — outside the `StageTimer`
+    // branches (which only run under `--timing`) and outside the per-target arms (which would be two
+    // copies that could drift). ONE site serves both holders: a long `maxon build <project>`, and a
+    // `spec-test` whose thousands of compiles all run in-process through here. The write is throttled
+    // to one every few seconds, so a per-compile call costs a tick read (see `TreeLock.Touch`).
+    TreeLock.Touch();
+
     StringBuilder? irBuilder = returnIr ? new() : null;
 
     // Hoist the timing-enabled check once; inside each branch the passes are
@@ -89,6 +97,8 @@ public class IrPipeline {
       }
     }
 
+    TreeLock.Touch();
+
     IrModule<StandardOp> stdModule;
     if (timings != null) {
       var sw = new System.Diagnostics.Stopwatch();
@@ -121,6 +131,8 @@ public class IrPipeline {
         File.WriteAllText($"{dumpStagesBasePath}.2-standard.ir", IrPrinter.Print(stdModule));
       }
     }
+
+    TreeLock.Touch();
 
     if (target.Arch == "arm64") {
       IrModule<ARM64Op> arm64Module;

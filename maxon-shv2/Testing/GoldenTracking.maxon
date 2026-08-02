@@ -1,0 +1,147 @@
+// GoldenTracking — the suite REFUSES to report green while this tree owes goldens it never committed.
+//
+// ⭐ **"A MISSING GOLDEN NEVER FAILS" WAS WRITTEN DOWN, AND NOTHING ENFORCED IT.** Absence is
+// invisible to every gate — `checkTestFragment` MINTS a golden the first time it sees a new test and
+// passes, because a first run that failed for want of a file it cannot have would be a rite rather
+// than a gate — so an owed golden can only be found by GOING TO LOOK. It was found three times in one
+// session, every time by a LATER rung's baseline rather than by the rung that created the debt:
+//
+//   * `A3e` left ONE stale golden that was pinning the very bug it had just fixed, plus NINE that
+//     never existed — nine cases running with no codegen gate at all;
+//   * the `panic-interpolation` port shipped its fragments untracked;
+//   * `A3n` closed a rung adding a whole new spec with ZERO of its three goldens.
+//
+// **TWO INDEPENDENT HOLES LET IT THROUGH, and both are about the same missing question.** The rung
+// gate battery asked that `git status specs-shv2/fragments/` show *additions only* and made a MODIFIED
+// golden justify itself — but never asked that the additions be COMMITTED, so an untracked `??` passed
+// silently. And an agent iterating under `--filter` never materialises the goldens the rest of the
+// suite would mint, so the absence is not even on screen.
+//
+// ============================================================================================
+// WHY THE QUESTION IS ASKED HERE, AND WHY IT IS ASKED OF GIT
+// ============================================================================================
+//
+// **The suite is the one thing every rung runs**, and it is the only process that knows a golden was
+// written — so the check rides it, exactly as `requireLadderIndexComplete` and
+// `requireHarnessRefusalsFire` do for their tree-level properties. A `scripts/` gate would be a second
+// thing to remember to run, which is the failure mode this row is about: the doc already said it.
+//
+// ⚠ **AND IT ASKS "IS IT TRACKED", NOT "DID THIS RUN MINT ONE".** Failing the run that mints a golden
+// would look equivalent and is not: the debt would survive the re-run, because the second run finds
+// the golden already on disk and mints nothing. Tracked-ness is a property of the TREE, so it stays
+// true until somebody actually pays it, and it catches a golden minted by an earlier run, by another
+// lane, or by an agent who has since moved on. It is also satisfiable the moment the files are STAGED
+// (`git add`), which is what keeps it off the inner loop: one `git add` per new spec, not a commit per
+// iteration.
+//
+// ⚠ **IT COVERS EVERY LANE'S GOLDENS, not this run's target.** `fragments/x64-linux` and
+// `fragments/arm64-macos` have the identical hole and are worse, because those goldens can only be
+// minted by a lane the rung never runs — the measured rot is ~489 ABSENT x64-linux goldens. Untracked
+// is untracked whoever minted it, so the first run on any lane in a tree that owes goldens says so.
+//
+// ⚠ **A DISABLED OR TARGET-GATED CASE PRODUCES NO GOLDEN, and that is not a debt.** This asks only
+// that what EXISTS be tracked; it has no idea what ought to exist, and cannot acquire one without a
+// second model of which cases are pinnable — which is the harness itself.
+
+// What `git` is asked. `ls-files --others` lists untracked files INDIVIDUALLY (a bare
+// `git status --porcelain` collapses a wholly-untracked directory to one line, which would name a
+// directory where the reader needs the files), and `--exclude-standard` keeps `.gitignore`d scratch
+// out of the answer.
+let GitExecutableName = "git"
+let GitDirFlag = "-C"
+let GitListFilesCommand = "ls-files"
+let GitUntrackedFlag = "--others"
+let GitRespectIgnoresFlag = "--exclude-standard"
+let GitPathspecSeparator = "--"
+
+// ⭐ Refuse a green suite that leaves goldens uncommitted. Returns the exit code the run should add to
+// its own: 0 when this tree owes nothing, 1 when it does — the same code a failed test returns,
+// because this IS a failure of the run rather than a refusal to start it.
+//
+// Called by the PARENT, after the results are reported, so the tests' own verdicts are read first and
+// this lands underneath them rather than on top.
+export function reportUntrackedGoldens(specDir FilePath) returns ExitCode
+	let fragmentsRoot = specDir.join("{FragmentsSubdir}")
+	if not Directory.exists(fragmentsRoot) 'noGoldensAtAll'
+		// A spec directory that pins no codegen — every harness fixture sub-run, for one. There is
+		// nothing to owe.
+		return 0
+	end 'noGoldensAtAll'
+
+	return match untrackedGoldensIn(specDir) 'answer'
+		unavailable(reason) gives reportUnchecked(reason)
+		tracked gives 0
+		untracked(paths) gives reportOwed(specDir, paths: paths)
+	end 'answer'
+end 'reportUntrackedGoldens'
+
+// What git had to say about the goldens.
+//
+// `unavailable` is a THIRD arm rather than a silent pass because the two failures read differently to
+// a reader and must not be folded together: "this tree owes nothing" and "nobody asked" are the
+// distinction this whole file exists over, one level up.
+union GoldenTrackingAnswer
+	unavailable(reason String)
+	tracked
+	untracked(paths StringArray)
+end 'GoldenTrackingAnswer'
+
+// Ask git which goldens are untracked, `-C`-anchored at the spec directory so the answer does not
+// depend on where the runner was invoked from — and so the paths come back RELATIVE to it, which is
+// how a reader would type them.
+function untrackedGoldensIn(specDir FilePath) returns GoldenTrackingAnswer
+	var argv = StringArray.create()
+	argv.push(GitDirFlag)
+	argv.push(specDir.toString())
+	argv.push(GitListFilesCommand)
+	argv.push(GitUntrackedFlag)
+	argv.push(GitRespectIgnoresFlag)
+	argv.push(GitPathspecSeparator)
+	argv.push(FragmentsSubdir)
+
+	let run = try runProcess(Executable.name(GitExecutableName), argv: argv) otherwise (e) 'gitMissing'
+		return GoldenTrackingAnswer.unavailable("git could not be run: {e.displayReason()}")
+	end 'gitMissing'
+
+	if run.exitCode != 0 'gitRefused'
+		return GoldenTrackingAnswer.unavailable("git exited {run.exitCode}: {run.stderr.trim()}")
+	end 'gitRefused'
+
+	var paths = StringArray.create()
+	for line in run.stdout.split("\n") 'eachPath'
+		let path = line.trim()
+		if path.isEmpty() 'blank'
+			continue
+		end 'blank'
+		paths.push(path)
+	end 'eachPath'
+
+	if paths.count() == 0 'nothingOwed'
+		return GoldenTrackingAnswer.tracked
+	end 'nothingOwed'
+
+	return GoldenTrackingAnswer.untracked(paths)
+end 'untrackedGoldensIn'
+
+// ⭐ The refusal. It names every owed file rather than a count: the reader's next act is `git add`, and
+// a count sends them off to re-derive the list this already had.
+function reportOwed(specDir FilePath, paths StringArray) returns ExitCode
+	printError("error: {paths.count()} golden fragment(s) under {specDir.toString()}/{FragmentsSubdir} are NOT TRACKED BY GIT:\n")
+	for path in paths 'eachPath'
+		printError("    {path}\n")
+	end 'eachPath'
+	printError("  The suite MINTS a golden the first time it sees a pinnable case, and an ABSENT golden never fails — so a\n")
+	printError("  rung can close green while owing every one of these, and three did. REVIEW them (they are this tree's only\n")
+	printError("  record of what the compiler emits for those cases) and `git add` them. Staged is enough; this asks that they\n")
+	printError("  be under version control, not that they be committed yet.\n")
+	return 1
+end 'reportOwed'
+
+// git could not answer. Reported LOUDLY and not as a failure: the check is about version control, and
+// a tree that has none — an export, a machine without git — owes nothing to it. Saying so out loud is
+// what keeps "we chose not to check" from reading as "we checked", which is the cross-target gate's
+// own rule for a skipped lane and is right for the same reason.
+function reportUnchecked(reason String) returns ExitCode
+	printError("warning: the golden-tracking gate did NOT run — {reason}. This run cannot say whether the suite left goldens uncommitted.\n")
+	return 0
+end 'reportUnchecked'

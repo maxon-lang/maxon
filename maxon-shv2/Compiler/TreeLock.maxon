@@ -1,0 +1,418 @@
+// TreeLock — ONE ADVISORY LOCK PER CHECKOUT, held by the commands that write the checkout's SHARED
+// build products, so two of them can never run in one tree at once.
+//
+// ⭐ **THE RULE THIS REPLACES WAS PROSE, AND PROSE IS NOT A GATE.** `.claude/CLAUDE.md` and the rung
+// skill both carried a sentence — *"NEVER run two suites in one tree at once"* — that a second agent
+// cannot see and a timed-out MCP call cannot honour. Two races were MEASURED against it in one
+// session:
+//
+//   1. **Two suites → `specs-shv2/.spec-tmp` → a FALSE RED.** Both runs stage their fragments under
+//      the same per-spec scratch directory, so one deletes what the other is compiling and a lane
+//      that is green reports `FAIL exit 1`.
+//   2. **Two builds → `maxon-shv2/.maxon/` → a FALSE SLOW, then a silent `exit 1`.** A 12-minute
+//      build printing nothing but `error-codes: OK` — and it made a reviewer report the change under
+//      review as a compile-time regression. **A race that manifests as SLOW is worse than one that
+//      manifests as WRONG, because slow gets attributed to the change under test.**
+//
+// The project had already reasoned its way to the cure one level up and stopped there: the slice
+// board's *"`git push` IS THE LOCK"* is a real, contended, machine-checked lock for the BOARD. This
+// is the same thing for the TREE.
+//
+// ============================================================================================
+// WHAT IT LOCKS, AND WHO TAKES IT
+// ============================================================================================
+//
+// **ONE lock per CHECKOUT, covering `build` AND the two harnesses together.** Not per output
+// directory — a suite RUNS the binary a build REPLACES, so the two contend even though they write
+// different directories, which is exactly the pairing `E6002`'s message already names as its likeliest
+// cause. Not per machine either: every worktree carries its own `stdlib/`, `bin/` and `.maxon/`, so
+// worktrees must never block each other (that is the whole point of working in one).
+//
+// **The checkout is the one CONTAINING THE PATH THE COMMAND WRITES INTO** — the project directory, the
+// spec directory, the scale corpus root — found by the same upward walk for `stdlib/` that locates the
+// compiler's own source (`stdlibDirAbove`). A path with no checkout above it has nothing shared to
+// guard, and takes no lock: `maxon-shv2 build /tmp/scratch.maxon` is not a tree-level command.
+//
+// Three commands take it (`Main`): `build <directory>` with no `-o`, `spec-test`, `scale-test`. What
+// they have in common is that they write the tree's own output directories; everything else — a
+// one-off file build, a `-o` build, `fmt`, `error-codes` — writes where the CALLER said and takes
+// nothing. That distinction is what keeps the suite's thousands of child `build … -o …` compiles free
+// of it, and it is the ⛔ that would otherwise be a deadlock rather than a lock.
+//
+// ⚠ **THE OTHER NESTED CASE IS THE HARNESS SELF-TEST, and it is excluded by the path it is GIVEN, not
+// by a flag.** `requireHarnessRefusalsFire` proves the harness's refusals by SPAWNING this harness at
+// a fixture case directory; that sub-run reaches `runSpecTest` like any other and would refuse against
+// its own parent. `isHarnessFixtureSubRun` answers it from the spec dir — the same predicate the
+// self-test already uses to recognise itself, and for the reason its header gives: *a flag is a second
+// way of saying which directory this is, and the directory already says it.*
+//
+// ============================================================================================
+// LIVENESS IS A HEARTBEAT, NOT A PID PROBE. THIS IS A DELIBERATE DIVERGENCE.
+// ============================================================================================
+//
+// A stale lock that outlives its holder blocks every later command forever, and the orphan case is
+// GUARANTEED rather than hypothetical: **the MCP `build` tool times out at 300 s and a timed-out call
+// does not kill the process** — that is precisely how one pid came to hold this tree for 12 minutes
+// after its caller was gone.
+//
+// So the record is REWRITTEN while its holder works (`touchTreeLock`, throttled to one write every
+// `TouchIntervalMs`), and its FILE MTIME is the liveness signal: a lock nothing has touched for
+// `AbandonedAfterSeconds` is broken automatically, with a printed line saying so.
+//
+// ⚠ **A PID PROBE WAS THE OBVIOUS DESIGN AND IT IS THE WRONG ONE HERE, twice over.** The pid itself is
+// free (`__Builtins.currentProcessId`) and IS recorded, because a reader needs it to end the holder.
+// Testing it is what this does not do:
+//
+//   * **Neither the stdlib nor the emitted runtime can ask "is pid N alive".** `subprocessKill` and
+//     `subprocessSendSignal` take a subprocess HANDLE, which nobody has for a process they did not
+//     spawn. Adding the primitive means hand-written assembly in four runtime emitters — wholly
+//     disproportionate to a lock file.
+//   * **And it would answer the wrong question anyway.** A pid is REUSED, so "alive" can be a
+//     stranger; and this repo has a documented history of WEDGED `maxon` processes (`STAT=UE`,
+//     unkillable) for which "alive" is true forever and progress has stopped for good. The heartbeat
+//     asks the question that actually matters — *is the holder still getting anywhere?* — and answers
+//     it correctly for both.
+//
+// ⚠ **THE MTIME IS A WALL CLOCK, AND A WALL CLOCK CAN STEP BACKWARDS** (NTP, a timezone change, a VM
+// resuming from a snapshot — see `WallClock`'s header). That is forced, not chosen: two processes
+// share no monotonic origin, so a timestamp one writes and another reads can only be wall time. A
+// backwards step is clamped to "no time has passed", which errs toward keeping a live lock rather than
+// breaking it.
+//
+// ============================================================================================
+// THE RECORD IS ECHOED, NOT RE-DERIVED — because a second compiler reads it
+// ============================================================================================
+//
+// The bootstrap writes and reads this same file (`maxon-sharp/TreeLock.cs`); `maxon build maxon-shv2`
+// is a BOOTSTRAP command, and it is the one that raced. Two languages therefore share this format, so
+// the refusal QUOTES the record it found rather than reformatting parsed fields: a field added on one
+// side is displayed by the other with no edit, and the only thing either side must parse is the one
+// key it acts on. Both write plain `key=value` lines and neither may reorder them for prettiness.
+
+// Where the record lives, relative to the checkout root: at the top, visibly, under a name that says
+// what it is. Gitignored (`/.maxon-tree.lock`).
+let LockFileName = ".maxon-tree.lock"
+
+// The record's fields. `heldSeconds` is computed BY THE HOLDER — which knows when it started — so a
+// reader needs no clock arithmetic and no decimal parser to say how long this has been going on.
+let PidField = "pid"
+let TokenField = "token"
+let SinceField = "sinceUnix"
+let HeldField = "heldSeconds"
+let ArgvField = "argv"
+let FieldSeparator = "="
+let RecordLineSeparator = "\n"
+
+// How often the holder rewrites the record, and how long without one before it is treated as
+// abandoned. The gap between them is the whole margin: the interval must be far smaller than the
+// window so ordinary jitter — a slow phase, a busy disk — never reads as a dead holder, and the window
+// must be small enough that a KILLED holder does not wedge the tree for long. 5 s against 60 s is a
+// factor of twelve, and both directions of being wrong are cheap and visible: a break that should not
+// have happened prints a line saying it broke a lock, and a wait that should not have happened is
+// bounded by one minute.
+let TouchIntervalMs = 5000
+let AbandonedAfterSeconds = 60
+
+// The pause between writing the record and reading it back — see `takeLock`.
+let AcquireVerifyDelayMs = 20
+
+// Whole seconds a lock has been held, or has gone untouched. A duration, not an instant: it is what
+// the refusal prints and what the abandonment window compares against.
+typealias LockSeconds = int(0 to u64.max)
+
+// The lock this process WROTE. It is not "the lock this process is running under": a run that found no
+// checkout above its operand, and a harness fixture sub-run whose parent holds the tree, both own
+// nothing — there is nothing for either to keep alive and nothing for either to remove.
+type OwnedLock
+	export let path as FilePath
+	export let token as String
+	export let sinceUnix as UnixSeconds
+
+	static function create(path FilePath, token String, sinceUnix UnixSeconds) returns OwnedLock
+		return Self{path: path, token: token, sinceUnix: sinceUnix}
+	end 'create'
+end 'OwnedLock'
+
+typealias OwnedLockArray = Array with OwnedLock
+
+// ⚠ **AT MOST ONE ELEMENT, AND THE ARRAY IS THE OPTIONAL** — the shape a module-level global can
+// actually hold. A global's initializer must be a CONSTANT EXPRESSION (E2045), so no struct- or
+// union-valued global can be constructed at module scope; an empty `Array.create()` is one, and from
+// then on the state is MUTATED in place rather than reassigned. That is the same shape
+// `PhaseProbe.openPhaseSpans` uses for the same reason, and it is why the emptiness test below reads
+// as a count.
+//
+// ⚠ It also steers clear of a MEASURED bootstrap defect: assigning a union value to a global stores
+// the WRONG SSA value (`std.global_store_i64 @g %1` picks up `mm_alloc`'s size argument instead of the
+// box), which is a silent wrong answer on both x64 and arm64 and an `E9001` crash whenever the stale
+// id has no home in the storing function. Reported separately with a 24-line repro; do not "simplify"
+// this into a `union` global until that is fixed.
+var ownedLocks = OwnedLockArray.create()
+
+// When the record was last rewritten, on the MONOTONIC clock — the right instrument for "how long
+// since", as opposed to the wall clock stamped INTO the record, which is the right one for "when".
+//
+// It starts at zero rather than at `Clock.nowMs()`, which is both what a module-level initializer can
+// express and the right value anyway: a process holding no lock never reads it, and the first touch
+// after one is taken rewrites a record `takeLock` has just written.
+var lastTouchMs = 0 as InstantMs
+
+// What one read of the lock file found. `present` carries the record's own bytes (echoed verbatim by
+// the refusal) and how long ago it was last touched (the liveness signal, read from the mtime rather
+// than from anything inside it).
+union LockRecord
+	absent
+	present(text String, untouchedSeconds LockSeconds)
+end 'LockRecord'
+
+// ⭐ Take this checkout's tree lock, or REFUSE. Returns the exit code the command should return: 0 to
+// go ahead, `NothingRanExitCode` to stop — the same contract, and the same code, as
+// `refuseIfStale`, because both mean the identical thing to a caller reading only the number:
+// NOTHING RAN.
+//
+// A refusal is IMMEDIATE and never a wait. A silent wait is exactly the 12-minute mystery this exists
+// to end: it converts a fast, legible error into a hang indistinguishable from a wedge.
+export function acquireTreeLock(operand FilePath) returns ExitCode
+	let lockPath = try lockPathFor(operand) otherwise 'noCheckout'
+		// Nothing shared to guard. `operand` has no `stdlib/` above it, so no other command in any
+		// tree writes what this one is about to write.
+		return 0
+	end 'noCheckout'
+
+	return match readLockRecord(lockPath) 'existing'
+		absent gives takeLock(lockPath)
+		present(text, untouchedSeconds) gives claimOverExisting(lockPath, record: text, untouchedSeconds: untouchedSeconds)
+	end 'existing'
+end 'acquireTreeLock'
+
+// ⭐ Say the holder is still working. Cheap enough to call from anywhere that runs regularly — the
+// write is throttled to one every `TouchIntervalMs`.
+//
+// It is called from the places that are BOTH periodic and load-bearing: every compile phase
+// (`recordPhaseDelta`), every turn of the spec pool's dispatch loop, every scale rung. Those are the
+// sites at which "this process is still getting somewhere" is genuinely true, which is what the record
+// claims.
+//
+// ⚠ **THE OWNERSHIP TEST COMES FIRST, AND THAT ORDER IS THE COST.** Almost every caller of this holds
+// NO lock — every one of the suite's thousands of child compiles reaches `recordPhaseDelta` — so the
+// common path must be the cheap one: a lookup on an empty array, and no clock read at all. Measured:
+// `scale-test` reports allocations IDENTICAL to the digit at all six rungs against the row logged
+// before this existed, so the unlocked path allocates nothing.
+export function touchTreeLock()
+	let lock = try ownedLocks.get(0) otherwise return
+
+	if Clock.elapsedMs(lastTouchMs) < TouchIntervalMs 'tooSoon'
+		return
+	end 'tooSoon'
+
+	refreshRecord(lock)
+end 'touchTreeLock'
+
+// Give the lock up. A no-op for a process that never took one, so every command may call it on the way
+// out without asking whether it holds anything.
+//
+// ⚠ **IT REMOVES THE FILE ONLY IF THE FILE IS STILL MINE.** A holder that stalled long enough to be
+// declared abandoned has had its lock broken and RETAKEN by somebody else; deleting the path blindly
+// would then delete a stranger's live lock and hand the tree to a third process. The token is what
+// distinguishes them, and it is the reason the record carries one at all.
+export function releaseTreeLock()
+	let held = try ownedLocks.get(0) otherwise return
+	// CLONED out of the array, because `removeOwnRecord` empties the array the borrow would otherwise
+	// pin (E3070) — the same reason the spec pool clones a job out of its in-flight slot.
+	let owned = held.clone()
+	removeOwnRecord(owned)
+end 'releaseTreeLock'
+
+// The lock file for the checkout containing `operand`, or a throw when there is no checkout above it.
+//
+// `operand` is RESOLVED against the working directory first: `scale-test`'s corpus root is the
+// relative `.scale-tmp` and a `build maxon-shv2` names its project relatively too, and a relative
+// single-component path has no parent to walk up from — so an unresolved one would silently answer
+// "not in a checkout" for the very commands this lock exists for.
+function lockPathFor(operand FilePath) returns FilePath throws CompileError
+	let absolute = operand.resolve(Directory.currentPath())
+	let stdlibDir = try stdlibDirAbove(absolute)
+	let checkoutRoot = try stdlibDir.parent() otherwise throw CompileError.stdlibNotFound
+	let name = try FilePath.from(LockFileName) otherwise panic("TreeLock: '{LockFileName}' is not a valid path component")
+	return checkoutRoot.join(name)
+end 'lockPathFor'
+
+// Read the record, and how long ago it was last touched.
+//
+// The mtime is read AFTER the text and a failure to read it is reported as `absent` — that pairing is
+// a race with another process breaking or releasing the lock between the two calls, and "it went away"
+// is the honest reading of it.
+function readLockRecord(lockPath FilePath) returns LockRecord
+	let text = try File.readText(lockPath) otherwise return LockRecord.absent
+	let info = try File.info(lockPath) otherwise return LockRecord.absent
+	return LockRecord.present(text, untouchedSeconds: secondsSince(info.modifiedTime))
+end 'readLockRecord'
+
+// A record is already there: refuse to the holder, or break it if it has stopped moving.
+function claimOverExisting(lockPath FilePath, record String, untouchedSeconds LockSeconds) returns ExitCode
+	if untouchedSeconds <= AbandonedAfterSeconds 'stillMoving'
+		return reportBusy(lockPath, record: record, untouchedSeconds: untouchedSeconds)
+	end 'stillMoving'
+
+	// ⭐ **BREAKING A LOCK IS EXPLICIT AND LOGGED, NEVER SILENT** — the slice board's own rule for a
+	// stale claim, and for its reason: if this ever breaks a lock whose holder was merely slow, the
+	// line below is the only evidence that would explain the two runs that followed.
+	printError("warning: breaking an ABANDONED tree lock at {lockPath.toString()} — nothing has touched it for {untouchedSeconds} s (a live holder rewrites it every {TouchIntervalMs} ms), so the process that took it is gone or has stopped making progress. It said:\n{indentedRecord(record)}\n")
+	return takeLock(lockPath)
+end 'claimOverExisting'
+
+// Write this process's record, then read it back to make sure it is the one that stuck.
+//
+// ⚠ **THE READ-BACK IS THE MUTUAL EXCLUSION, AND THE PAUSE IS WHAT MAKES IT WORK.** Neither the stdlib
+// nor the emitted runtime offers an exclusive create (`O_EXCL`), an `flock`, or a `rename` that fails
+// on an existing target, so two processes that both find the path free will both write it. Writing,
+// PAUSING, and then reading resolves that: the later writer's bytes are what both of them read, so the
+// later writer wins and the earlier one backs off — exactly one survivor, never two.
+//
+// The residual is stated rather than hidden: a process that stalls for longer than
+// `AcquireVerifyDelayMs` BETWEEN finding the path free and writing it can still overwrite a lock the
+// winner has already verified. That window is microseconds wide and the contention this guards is
+// human-scale — two agents, two MCP calls, seconds to minutes apart. Closing it needs an atomic
+// primitive that does not exist here, and the failure it leaves is the status quo (two runs), never a
+// worse one.
+function takeLock(lockPath FilePath) returns ExitCode
+	let sinceUnix = WallClock.nowUnixSeconds()
+	let pid = __Builtins.currentProcessId()
+	// Unique across every process that could contend: a pid cannot be shared by two live processes,
+	// and the two clocks separate a REUSED pid from the one that held this lock before it.
+	let token = "{pid}-{sinceUnix}-{Clock.nowNanos()}"
+
+	if not writeRecord(lockPath, token: token, sinceUnix: sinceUnix, heldSeconds: 0) 'unwritable'
+		printError("error: could not write this checkout's tree lock at {lockPath.toString()}. It guards the shared output directories two commands would otherwise corrupt, so nothing was run.\n")
+		return NothingRanExitCode
+	end 'unwritable'
+
+	sleep(AcquireVerifyDelayMs)
+
+	if not recordCarriesToken(lockPath, token: token) 'lostTheRace'
+		printError("error: another maxon command claimed this checkout's tree lock at the same instant, and it won. Nothing was run — re-run once it has finished.\n")
+		return NothingRanExitCode
+	end 'lostTheRace'
+
+	ownedLocks.push(OwnedLock.create(lockPath, token: token, sinceUnix: sinceUnix))
+	lastTouchMs = Clock.nowMs()
+	return 0
+end 'takeLock'
+
+// Rewrite the record with a fresh mtime and a fresh `heldSeconds`. A failed write is IGNORED: the tree
+// lock is an advisory guard against two developers' commands, and failing a twelve-minute build over
+// one unwritable heartbeat would cost far more than the race it prevents. The consequence of a
+// swallowed failure is bounded and self-correcting — the lock ages out and the next command breaks it,
+// loudly.
+function refreshRecord(lock OwnedLock)
+	_ = writeRecord(lock.path, token: lock.token, sinceUnix: lock.sinceUnix, heldSeconds: secondsSince(lock.sinceUnix))
+	lastTouchMs = Clock.nowMs()
+end 'refreshRecord'
+
+// Remove the record, but only while it still carries this process's token — see `releaseTreeLock`.
+function removeOwnRecord(lock OwnedLock)
+	if not recordCarriesToken(lock.path, token: lock.token) 'brokenAndRetaken'
+		return
+	end 'brokenAndRetaken'
+
+	try File.delete(lock.path) otherwise ignore
+	ownedLocks.clear()
+end 'removeOwnRecord'
+
+// The record's bytes. `argv` is the whole command line, because "which of my four terminals is this?"
+// is the question a reader actually has, and a bare command name does not answer it.
+function writeRecord(lockPath FilePath, token String, sinceUnix UnixSeconds, heldSeconds LockSeconds) returns bool
+	let pid = __Builtins.currentProcessId()
+	var text = StringBuilder.create()
+	appendField(text, key: PidField, value: "{pid}")
+	appendField(text, key: TokenField, value: token)
+	appendField(text, key: SinceField, value: "{sinceUnix}")
+	appendField(text, key: HeldField, value: "{heldSeconds}")
+	appendField(text, key: ArgvField, value: joinArgs())
+
+	try File.writeText(lockPath, content: text.build()) otherwise return false
+	return true
+end 'writeRecord'
+
+// One `key=value` line. A `StringBuilder` rather than repeated interpolation for the reason every
+// accumulator in this project gives: a `String` owns exactly the bytes it holds, and appending to one
+// recopies all of them.
+function appendField(text StringBuilder, key String, value String)
+	text.append("{key}{FieldSeparator}{value}{RecordLineSeparator}")
+end 'appendField'
+
+// This process's command line as one line. Newlines in an argument would forge a record field, so they
+// are flattened to spaces — an argument holding one is not a thing this compiler's CLI accepts, and a
+// record whose fields can be forged by an argument is not a record.
+function joinArgs() returns String
+	var out = StringBuilder.create()
+	for (iter, arg) in CommandLine.args().withIterator() 'each'
+		if iter.index() > 0 'separator'
+			out.append(" ")
+		end 'separator'
+		out.append(arg.replace(RecordLineSeparator, with: " "))
+	end 'each'
+	return out.build()
+end 'joinArgs'
+
+// Does the record at `lockPath` still name `token` as its holder? The ONE field either compiler parses
+// out of the other's record — everything else is echoed.
+function recordCarriesToken(lockPath FilePath, token String) returns bool
+	let text = try File.readText(lockPath) otherwise return false
+	return fieldValue(text, key: TokenField) == token
+end 'recordCarriesToken'
+
+// The value of one `key=` line, or the empty String when the record does not carry that key. Empty is
+// a real answer here rather than a sentinel: the only caller compares it against a token that is never
+// empty, so a truncated or foreign record answers "not yours", which is the correct reading of it.
+//
+// `replaceFirst` off a line already known to START with the key, rather than `split("=")` and part 1 —
+// which is the text between the FIRST and SECOND `=`, so any value containing one is silently
+// truncated. `argv` routinely contains several (`--filter=…`, `--compiler=…`), and
+// `CommandLine.optionValue` carries the scar from making exactly that mistake.
+function fieldValue(text String, key String) returns String
+	let prefix = "{key}{FieldSeparator}"
+	for line in text.split(RecordLineSeparator) 'eachLine'
+		if line.startsWith(prefix) 'found'
+			return line.replaceFirst(prefix, with: "")
+		end 'found'
+	end 'eachLine'
+	return ""
+end 'fieldValue'
+
+// Whole seconds from a past wall-clock stamp to now, clamped at zero — see this file's header on why a
+// wall clock is forced here and what it does when it steps backwards.
+function secondsSince(stamp UnixSeconds) returns LockSeconds
+	let now = WallClock.nowUnixSeconds()
+	if now <= stamp 'clockWentBackwards'
+		return 0
+	end 'clockWentBackwards'
+	return now - stamp
+end 'secondsSince'
+
+// ⭐ The refusal. It names the holder, says how long it has been going and when it last moved, quotes
+// the record whole, and says what to do about it — the four things a reader needs and the four a bare
+// "locked" sends them off to re-derive. `refuseIfStale` is the model: a refusal that says only that it
+// refused is a second problem, not a diagnosis.
+function reportBusy(lockPath FilePath, record String, untouchedSeconds LockSeconds) returns ExitCode
+	printError("error: this checkout is BUSY — another maxon command holds its tree lock, and two of them in one tree corrupt each other's output directories. Nothing was run.\n")
+	printError("  lock:  {lockPath.toString()}\n")
+	printError("  held by:\n{indentedRecord(record)}\n")
+	printError("  last progress: {untouchedSeconds} s ago (a live holder rewrites the record every {TouchIntervalMs} ms)\n")
+	printError("  Wait for it to finish, or end that process. A holder that stops making progress for {AbandonedAfterSeconds} s is treated as abandoned and its lock is broken automatically, with a line saying so.\n")
+	return NothingRanExitCode
+end 'reportBusy'
+
+// The record, indented under the line that introduces it. Its own trailing newline is dropped so the
+// caller's `\n` is the only one — a record ends with one, and two would put a blank line inside the
+// message.
+function indentedRecord(record String) returns String
+	var out = StringBuilder.create()
+	for line in record.split(RecordLineSeparator) 'eachLine'
+		if line.isEmpty() 'blank'
+			continue
+		end 'blank'
+		out.append("    {line}{RecordLineSeparator}")
+	end 'eachLine'
+	return out.build().trimEnd()
+end 'indentedRecord'

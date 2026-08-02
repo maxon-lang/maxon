@@ -232,6 +232,15 @@ export function recordPhaseDelta(project Project, phase CompilePhase, delta Phas
 	project.timings.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.addPhase(phase, delta: delta)
 	closePhaseSpan(compilePhaseName(phase), unit: project.traceUnit)
+
+	// A CLOSED PHASE IS THE PROOF OF PROGRESS THE TREE LOCK'S HEARTBEAT NEEDS, and this is the only
+	// place a compile produces one. A `build maxon-shv2` that stops writing here has stopped getting
+	// anywhere, which is exactly what a second command must be allowed to conclude — and the write
+	// itself is throttled to one every few seconds, so the per-phase call costs a clock read (see
+	// `touchTreeLock`). The register allocator's own per-FUNCTION probes deliberately do not ride
+	// this: they go through `recordRegAllocDelta`, and one heartbeat per compile phase is already
+	// twelve times finer than the window it feeds.
+	touchTreeLock()
 end 'recordPhaseDelta'
 
 // Record `phase`, less whatever an INNER phase already claimed while it ran.
