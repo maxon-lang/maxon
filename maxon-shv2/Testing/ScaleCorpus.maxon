@@ -1704,11 +1704,21 @@ end 'structReaderName'
 //
 // ⚠ IT DOES NOT DEPEND ON THE `closeBlock` LEAK, WHICH IS THE FIRST THING A READER WILL SUSPECT.
 // `closeBlock` (Parser.maxon:2343) drains the binding and deliberately emits NO drop, so a struct in
-// a block leaks today (exit 101, a stated P1.4 gap this instrument never observes because it COMPILES
-// these programs and never RUNS them). That leak is not what bounds the live range, and the knob does
-// not want it to be: when P1.4 emits the drop at the block's END, the live range is bounded by the
-// block either way. Correct before the fix and after it — which is the only reason it is safe to lean
-// on a construct with a known gap in it.
+// a block was STATED to leak (exit 101, a P1.4 gap this instrument never observes because it COMPILES
+// these programs and never RUNS them).
+//
+// ⚠⚠ **THAT CONSEQUENCE DID NOT REPRODUCE WHEN SOMEBODY FINALLY WENT AND RAN IT, 2026-08-02.** BATCH9's
+// review BUILT and RAN two shapes — a struct with a `String` field created inside an `if`, and an
+// `Array with String` plus a heap `String` across two blocks — and both exit **0**, with
+// `___mm_leak_check` confirmed present in each entry stub by `otool -tV`, so the gate was live and
+// silent rather than absent. Either P1.4 closed it, or the claim was always narrower than its wording.
+// It is QUALIFIED here rather than deleted because two probes are not a proof of absence, and the
+// measurement is recorded at the one moment it is known.
+//
+// ⇒ **AND NOTHING BELOW DEPENDS ON WHICH WAY IT WENT**, which is the point of the paragraph: that leak
+// is not what bounds the live range, and the knob does not want it to be. When the drop is emitted at
+// the block's END, the live range is bounded by the block either way. Correct before the fix and after
+// it — which is the only reason it is safe to lean on a construct carrying a claimed gap.
 //
 // The `if` is SCOPE SCAFFOLDING, not a CFG dimension — `deepBlocks` owns that one, and this adds ~1
 // branch per site against its ~3 blocks per if/else. `pressuredLoops` uses `while` the same way, for
