@@ -4856,6 +4856,49 @@ not ported from v1's `.mxc`.
 
 ### Bootstrap (`maxon-sharp`) oracle bugs — silent wrong answers to fix when the subsystem is next touched
 
+- **🔴🔴 TWO FILES' SAME-NAMED `typealias` SHARE ONE GENERIC SPECIALIZATION, AND WHICHEVER THE
+  FILESYSTEM ENUMERATES FIRST SILENTLY WINS THE STRIDE FOR BOTH — TRUNCATING DATA WITH NO DIAGNOSTIC OF
+  ANY KIND.** Found 2026-08-02 surveying **`N1`**. **REPRODUCED on the shipped `bin/maxon.exe`, both
+  directions, with the IR to prove the mechanism** — this is a demonstration, not a hypothesis.
+  `narrow/n.maxon` declares `typealias Byte = int(0 to 255)` + `typealias Bytes = Array with Byte` and
+  pushes `200`; `wide/w.maxon` declares `Byte = int(0 to 100000)` + its own `Bytes` and pushes `90000`:
+  ```
+  $ maxon build testD           && ./main.exe   ⇒  n=200 w=90000     (correct)
+  $ MAXON_SOURCE_ORDER=reverse maxon build testD && ./main.exe   ⇒  n=200 w=144
+  ```
+  **`90000` becomes `144` — `90000 mod 256` — with no compile error, no range-check panic, nothing.**
+  `--emit-ir` names the cause exactly: there is ONE shared `@Bytes.create`, called from both files, whose
+  element-size literal is `maxon.literal {value = 4}` in the first run and `{value = 1}` in the second.
+  The per-call-site RANGE checks are still correctly inlined from each file's own bound, which is
+  precisely why nothing catches it — `wide`'s check asks `0 <= x <= 100000` and **144 passes**.
+  ⇒ **The stride is a single shared constant chosen by pre-scan order, i.e. by FILESYSTEM ENUMERATION
+  ORDER** (`SourceCollector.cs:168-173` already warns about that order class: sorted on NTFS,
+  hash-ordered on APFS).
+  ⭐⭐ **THIS IS WHY shv2's E3005 AT `stdlib/File.maxon:74` IS RIGHT AND MUST NOT BE SUPPRESSED, AND IT
+  IS THE SAME DEFECT FAMILY AS `A1s-typealias` ONE SCOPE OVER** — user↔user rather than user↔stdlib.
+  **shv2 is strictly better here and should stay that way**: its whole-program MAX
+  (`widenStorageBytesFor`) at least takes the WIDEST, so it never truncates, and it then REFUSES; the
+  bootstrap takes whichever came first and silently corrupts. ⚠ **Do not "fix" shv2 toward the oracle on
+  this axis.**
+- **🔴 `E3063` IS ARCHITECTURALLY UNREACHABLE IN THE BOOTSTRAP, AND `specs/typealias-collision.md` SAYS
+  OTHERWISE.** Same survey. The spec asserts *"the C# bootstrap reports an equivalent E3063 at the same
+  point in the pipeline but with a slightly different candidate-ordering guarantee"*. **Measured: it does
+  not report it at all.** The spec's own repro (`api/`+`legacy/` both exporting `Score`, bare use from
+  `app/`) **compiles clean and runs, exit 50** — in forward order, in `MAXON_SOURCE_ORDER=reverse`, with
+  directories renamed to force `app` last alphabetically, and through a parameter annotation as well as a
+  cast. **Cause, traced:** `PreScanTypeAliasesOnly` (`2-Parser.cs:1168-1247`) writes straight into the
+  SHARED accumulator with no ambiguity bookkeeping, and the later full-parse `Merge()` — the only writer
+  of `AmbiguousTypeNames` (`MlirModule.cs:661-668`) — never receives the colliding entries, because
+  `CopyTypeAliasesToModule`'s "already seeded" skip (`:1646-1647`) suppresses a file's **own**
+  declaration once pre-scan reflected it back through `SeedFromModule`. The E3063 throw site
+  (`2-Parser.cs:7854-7875`) is real, complete and dead. ⚠ It is invisible to the bootstrap's own runner
+  because every E3063 case in that spec is tagged **`SelfhostedOnly`** — *the tags hide the gap they
+  describe*. ⇒ **`maxon-sharp` CANNOT SERVE AS THE RUNNABLE ORACLE FOR `N1`**: `dir.Name` qualified
+  TYPEALIAS syntax is also entirely unimplemented there (measured: `error E2003: Unknown type:
+  'api.Score'`, and `Unknown type: api` in parameter position — the only place that string shape is even
+  constructed is the E3063 message text). **v1 is the sole reference for this rung**, which is exactly
+  what the `SelfhostedOnly` tags on 5 of 7 cases already imply. ⚠ The spec sentence should be corrected
+  when someone owns that file.
 - **🔴 A USER `typealias` SILENTLY OVERWRITES A STDLIB TYPE OF THE SAME NAME, CORRUPTING A COMPILE-TIME
   ELEMENT-SIZE CONSTANT INSIDE THE STDLIB — NO DIAGNOSTIC, WRONG ANSWER AT RUNTIME.** Found 2026-08-02
   surveying **`A1s-typealias`** (which is the shv2 half of the same defect — shv2 catches it as `E3005`,
