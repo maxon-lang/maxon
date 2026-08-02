@@ -1,0 +1,20 @@
+// Test: directives.os-linux-alone
+function main() returns ExitCode
+	#if os(Linux)
+		this_function_does_not_exist_and_should_not_be_parsed()
+	#else
+		return 23
+	#endif
+end 'main'
+---
+ExitCode: 23
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #23
+    arm64.ret
+  }
+}
+---

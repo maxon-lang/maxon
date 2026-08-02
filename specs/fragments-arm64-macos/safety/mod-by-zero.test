@@ -25,25 +25,34 @@ module {
     arm64.mov x0, #0
     arm64.bl opaque
     arm64.mov x1, #5
-    arm64.mov x2, #0
-    arm64.cmp x0, x2
-    arm64.cset x3, eq
     arm64.mov x2, #1
+    arm64.add x3, x0, x2
+    arm64.mov x2, #0
+    arm64.sub x4, x2, x3
+    arm64.orr x2, x3, x4
+    arm64.mov x3, #63
+    arm64.asrv x4, x2, x3
+    arm64.and x2, x1, x4
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x3, eq
+    arm64.mov x1, #1
     arm64.mov x4, #0
     arm64.cmp x3, #0
-    arm64.csel x5, x2, x4, ne
+    arm64.csel x5, x1, x4, ne
     arm64.str x5, [x29, #-8]
-    arm64.mov x2, #0
-    arm64.str x2, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
     arm64.cmp x3, #0
     arm64.str x0, [x29, #-40]
+    arm64.str x2, [x29, #-48]
     arm64.b.ne main.__div_zero_0
     arm64.b main.__div_ok_0
   __div_zero_0:
     arm64.b main.__div_merge_0
   __div_ok_0:
     arm64.ldr x0, [x29, #-40]
-    arm64.mov x1, #5
+    arm64.ldr x1, [x29, #-48]
     arm64.cmp x0, #0
     arm64.b.ne main.__div_ok_0
     arm64.bl mrt_div_by_zero
