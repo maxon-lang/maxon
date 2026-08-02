@@ -1,0 +1,58 @@
+// Test: byte-to-float
+
+typealias Float = float(f64.min to f64.max)
+typealias Byte = int(0 to u8.max)
+
+function toFloat(b Byte) returns Float
+	return b + 0.0
+end 'toFloat'
+
+function main() returns ExitCode
+	let b = 50 as Byte
+	let f = toFloat(b)
+	return trunc(f)
+end 'main'
+---
+ExitCode: 50
+---
+func @toFloat {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.cvtsi2sdRegReg xmm1, rcx
+    x64.addsdRegReg xmm1, xmm1, xmm0
+    x64.movRegReg xmm0, xmm1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 50
+    x64.callDirect toFloat
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
