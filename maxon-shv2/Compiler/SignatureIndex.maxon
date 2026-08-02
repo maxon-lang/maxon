@@ -3733,9 +3733,12 @@ export type ProgramSignatures
 		// there only until this file's own fold overwrites them, which is the very next thing that happens.
 		// One line later and the incumbent's return type, throws clause and defaults would be this file's.
 		// The file's OWN entries are moved at the END of the fold, where they exist to be moved.
+		// Rendered ONCE per file, not once per declaration: it is a property of the file, and building it in
+		// the loop below would allocate a namespace string for every free function in the program.
+		let namespace = namespaceForModuleDirectory(moduleDirectory)
 		for bareName in freeFunctionNames 'eachFreeFunction'
-			if not moduleDirectory.isEmpty() 'namespacedFile'
-				self.recordNamespaceQualifiedFunction(namespaceQualifiedName(namespaceForModuleDirectory(moduleDirectory), name: bareName))
+			if not namespace.isEmpty() 'namespacedFile'
+				self.recordNamespaceQualifiedFunction(namespaceQualifiedName(namespace, name: bareName))
 			end 'namespacedFile'
 
 			match self.noteFreeFunctionDeclaration(bareName, moduleDirectory: moduleDirectory) 'contest'

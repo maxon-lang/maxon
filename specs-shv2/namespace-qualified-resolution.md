@@ -454,3 +454,32 @@ end 'main'
 ```maxoncstderr
 error E3006: beta/specs/fragments/namespace-qualified-resolution/error.two-main-declarations-in-different-directories-still-collide.test:8:10: duplicate definition of function 'main'
 ```
+
+
+<!-- test: same-directory-alias-pair-is-not-offered-as-its-own-disambiguation -->
+The edge E3063's candidate list must not lie about. Two files in ONE directory legally export
+`Score` over two RANGES (a cross-file ranged pair is legal; only a cross-file PRIMITIVE pair is
+refused, above). A third file's bare `Score` therefore has two reachable declarations that render
+the SAME candidate — and `api.Score` is contested between exactly those two files, so offering it
+as the fix would be offering a fix that changes nothing.
+
+The candidate list is a SET, so the two collapse to one, no ambiguity is claimed, and resolution
+proceeds as it did before directory-as-module named the collision. `120` is in range for the wider
+declaration and out of range for the narrower, so this case also RECORDS which one a stranger
+resolves to rather than leaving it unstated.
+```maxon
+// --- file: api/a.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: api/b.maxon
+export typealias Score = int(0 to 200)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let x = 120 as Score
+	return x as ExitCode
+end 'main'
+```
+```exitcode
+120
+```

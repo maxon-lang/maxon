@@ -182,9 +182,14 @@ end 'scopeAdmits'
 // which reads as a typo rather than as "declared at the root".
 let RootNamespaceDisplay = "(root)"
 
-// ⭐ **ONE CANDIDATE, AS THE USER WOULD HAVE TO WRITE IT** — `api.Score`, `lib.fmt.Score`, `(root).Score`.
-// Shared by BOTH ambiguity diagnostics (E3063 and E3095), because "the qualified spelling of a declaration
-// made in this directory" is one fact and the two messages differ only in what they call the thing.
+// ⭐ **ONE E3063 CANDIDATE, AS THE USER WOULD HAVE TO WRITE IT** — `api.Score`, `lib.fmt.Score`,
+// `(root).Score`.
+//
+// ⚠ **E3095 DOES NOT USE THIS, and the asymmetry is the shapes' asymmetry.** A contested FUNCTION already
+// carries its qualified spelling as its registration NAME (`ProgramSignatures.contestedFreeFunctions`), so
+// its candidate list is read off the index; a contested ALIAS is filed under its bare name and the qualified
+// form has to be RENDERED from the declaring file's directory. Handing the function side this renderer would
+// have it re-derive a string it is already holding, and the two could then disagree.
 export function qualifiedCandidateName(moduleDirectory String, bare ByteArray) returns String
 	let namespace = namespaceForModuleDirectory(moduleDirectory)
 	let shown = RootNamespaceDisplay if namespace.isEmpty() else namespace
@@ -201,6 +206,19 @@ end 'qualifiedCandidateName'
 // is pinned by a golden. A diagnostic a user reads twice must read the same way twice; sorting is the
 // cheapest property that makes that true of a set the compiler discovered in an arbitrary order.
 //
+// ⭐⭐ **AND THE LIST IS A SET: AN EXACT DUPLICATE IS DROPPED, WHICH IS A CORRECTNESS RULE AND NOT A TIDY-UP.**
+// Two declarations can render the SAME candidate, and both diagnostics can reach it:
+//
+//   • **E3063** — two files in ONE directory may legally export one alias name over two RANGES, so a third
+//     file's bare reference has two candidates that both spell `api.Score`. A message reading
+//     *"Candidates: api.Score, api.Score"* would offer a fix that is not one: the qualified form is
+//     contested between those same two files, so writing it changes nothing. Deduped, the count falls to
+//     one, no ambiguity is claimed, and resolution proceeds exactly as it did before this rung — a case
+//     this rung leaves where it found it rather than lying about. (v1 renders the doubled list.)
+//   • **E3095** — a name contested across directories that is ALSO declared twice inside one of them files
+//     that directory's spelling once per declaration. Whether it did so depended on the order the two
+//     files were swept in, which is the filesystem's.
+//
 // Insertion sort into an array of at most a handful of entries, on a path that has already decided to fail
 // the build — so the `toByteArray()` per comparison is paid only by a program that is about to be
 // rejected, and never by one that compiles.
@@ -209,6 +227,10 @@ export function insertCandidateName(candidates StringArray, candidate String)
 	while at < candidates.count() and candidateNamePrecedes(try candidates.get(at) otherwise panic("insertCandidateName: get OOB at {at} inside its own count()"), later: candidate) 'findPosition'
 		at = at + 1
 	end 'findPosition'
+
+	if at < candidates.count() and (try candidates.get(at) otherwise panic("insertCandidateName: get OOB at {at} inside its own count()")).equals(candidate) 'alreadyOffered'
+		return
+	end 'alreadyOffered'
 
 	candidates.insert(at, value: candidate)
 end 'insertCandidateName'
