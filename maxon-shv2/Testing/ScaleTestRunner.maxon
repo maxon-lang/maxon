@@ -420,6 +420,13 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 		return 0
 	end 'corpusOnly'
 
+	// AND SAY WHAT THE COMPILER'S OWN INPUT WAS — the corpus is only half of what each rung compiles.
+	// Asked here rather than beside the manifest above because it describes the COMPILES, and the
+	// `--emit-corpus` run just above this line makes none.
+	try printStdlibWalkCensus() otherwise (error) 'noStdlibWalk'
+		return brokenRun("the checkout's stdlib/ could not be walked", detail: scaleErrorText(error))
+	end 'noStdlibWalk'
+
 	printRungHeader()
 	var results = RungResultArray.create()
 	for rung in ladder 'eachRung'
@@ -1089,6 +1096,51 @@ end 'signedDeltaText'
 // the logged run's columns), which is NOT the same thing as `RungIndex`: those arrays may be shorter
 // than the ladder the log recorded, and that is exactly the case the delta report has to handle.
 export typealias LadderIndex = int(0 to u64.max)
+
+// ⭐ WHAT THE COMPILER'S OWN SOURCE WALK ACTUALLY TOUCHED — the files it found and the directories it
+// listed, under the `stdlib/` every rung of this run compiles against.
+//
+// ⚠ **GIT CANNOT SEE IGNORED CONTENT AND THIS WALK CAN, so two checkouts of ONE COMMIT need not be one
+// tree.** `collectMaxonSources` recurses into every subdirectory of `stdlib/`, dot-directories
+// included, and `stdlib/` is walked once per compile — so a gitignored directory present in the main
+// checkout and absent from every `git worktree add` adds a FLAT constant to `phase:load` at every rung,
+// which is exactly the shape a real code change is read as. One did: an empty `stdlib/.maxon`, v1's
+// orphaned cache, for weeks (PLAN.md A2y). It cost two separate investigations and it put a WRONG
+// CONCLUSION in the trend log before anyone found it.
+//
+// ⭐ **THE COUNT IS HERE BECAUSE THE DELTA CANNOT BE DECODED WITHOUT IT.** An operator staring at a flat
+// +12 allocations cannot turn that into "one stray directory" without already knowing this host's
+// per-directory cost — which is the bisect the number is supposed to replace. And that cost is neither
+// portable nor constant: measured at 12 allocations / 4,879 bytes per stray directory on arm64-macOS
+// against A2y's 14 / 829 on its own host, because `Directory.list` is `FindFirstFile` on Windows and
+// `opendir`/`readdir` here, and because the byte column carries the path-length term
+// `printWithheldBytesReason` already documents. The COUNT is the only signal that survives the move.
+//
+// It is a number a reader COMPARES against the checkout a logged row was minted at, and nothing more.
+// No threshold, no baseline, no refusal — this instrument renders no verdicts (see this file's header),
+// and a census that refused would be the deleted gate apparatus growing back.
+//
+// The one thing that IS a refusal is being unable to walk at all, which is a BROKEN RUN in the ordinary
+// sense: every rung compile resolves stdlib the same way and would fail the same way, so saying it here
+// beats reporting it as "rung 0 FAILED to compile".
+function printStdlibWalkCensus() throws ScaleError
+	// The same resolution every spawned rung compile makes — this runner IS the compiler it spawns
+	// (`compilerExe` is its own path), so asking it here asks about the very directory they will load.
+	let stdlibDir = try locateStdlibDir() otherwise throw ScaleError.reason("stdlib/ could not be located by walking up from the running compiler's own path — every rung would fail to load it")
+
+	var sources = MaxonSourcePathArray.create()
+	let directories = try collectMaxonSources(stdlibDir, into: sources) otherwise throw ScaleError.reason("{stdlibDir.toString()} could not be listed")
+
+	print("{padRight(StdlibWalkLabel, width: StdlibWalkLabelWidth)}{groupDigits(sources.count() as Delta)} source file(s) in {groupDigits(directories as Delta)} directory(ies) under {stdlibDir.toString()}\n")
+	print("{padRight("", width: StdlibWalkLabelWidth)}git cannot see IGNORED content and this walk can, so compare these two counts against\n")
+	print("{padRight("", width: StdlibWalkLabelWidth)}the checkout a logged row was minted at before reading a flat delta as a code change.\n")
+end 'printStdlibWalkCensus'
+
+// Indented to the same column as every other line of the report. The label carries no trailing space
+// of its own: the width is what separates it from the counts AND what the two continuation lines are
+// padded to, so the label and its hanging indent cannot drift apart.
+let StdlibWalkLabel = "  stdlib walk:"
+let StdlibWalkLabelWidth = 15 as ColumnWidth
 
 // The corpus self-check's own numbers. They are PRINTED, not merely consulted: a reader looking at a
 // set of tidy proportional memory numbers is entitled to see the evidence that they are numbers about

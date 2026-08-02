@@ -655,7 +655,7 @@ end 'loadSourceFiles'
 // Load every Maxon source file under `dir`.
 function loadSourceDirectory(project Project, dir FilePath) throws CompileError
 	var paths = MaxonSourcePathArray.create()
-	try collectMaxonSources(dir, into: paths)
+	_ = try collectMaxonSources(dir, into: paths)
 
 	for path in paths 'each'
 		try loadOneSourceFile(project, path: path)
@@ -676,11 +676,24 @@ end 'loadSourceDirectory'
 // It COLLECTS rather than loading, because the callers do different things with the answer: the user
 // walk registers every path it is given, while the stdlib loader filters first and records what it
 // kept.
-export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray) throws CompileError
+//
+// ⚠ IT RETURNS THE DIRECTORIES IT LISTED, WHICH IS A FACT ONLY THE WALK HOLDS. The files it found are
+// in `into`, and the parents of those files are NOT the same set: an EMPTY directory is walked, costs
+// a `Directory.list`, and contributes no path anybody outside can see. `scale-test` reports both
+// numbers so that an ignored directory — invisible to git, visible here — cannot go on being an
+// unattributed constant in the trend log (see `printStdlibWalkCensus`), and the count is returned from
+// the recursion rather than re-derived by a second traversal because a second traversal would be free
+// to disagree the moment this one grows an exclusion.
+export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray) returns DirectoryWalkCount throws CompileError
 	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
+
+	// `dir` itself was listed, so a leaf directory answers 1 and never 0.
+	var walked = 1 as DirectoryWalkCount
+
 	for entry in entries 'each'
 		if Directory.isDirectory(entry) 'isSubdir'
-			try collectMaxonSources(entry, into: into)
+			let below = try collectMaxonSources(entry, into: into)
+			walked = walked + below
 		end 'isSubdir' else 'isFile'
 			let name = entry.filename()
 			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) 'isSource'
@@ -688,6 +701,8 @@ export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray) thr
 			end 'isSource'
 		end 'isFile'
 	end 'each'
+
+	return walked
 end 'collectMaxonSources'
 
 // Read one source file and register its content with the query system. Exported so stdlib modules
@@ -712,6 +727,14 @@ let MaxonSourceExtension = ".maxon"
 // `type Directory` and so does not resolve from every compiler file (`DiagnosticArray`, the same
 // `Array with T` shape under a unique name, resolves cross-file fine — the name is the difference).
 export typealias MaxonSourcePathArray = Array with FilePath
+
+// How many directories one `collectMaxonSources` call LISTED — itself plus everything it recursed
+// into. Named for that rather than for a tree's shape: it is the walk's own reach, which is what an
+// instrument comparing two checkouts needs, and not "how many directories exist" (a walk that grows an
+// exclusion stops answering that question and keeps answering this one).
+//
+// From 1: a call always lists the directory it was handed, so 0 is not a value the walk can report.
+export typealias DirectoryWalkCount = int(1 to u64.max)
 
 // The same paths where the question is MEMBERSHIP rather than order, so it is answered by one hash
 // instead of a scan — and each pair a scan would compare is about four String allocations, because
