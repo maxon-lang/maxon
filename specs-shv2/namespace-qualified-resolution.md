@@ -21,7 +21,9 @@ DISCRIMINATE, each case here having been found by probing the mechanism rather t
 - the qualifier is a NAME LOOKUP and never a visibility bypass — `export`, `module` and file-private each
   answer at the qualified spelling exactly as they answer at the bare one;
 - a `Type.method` reading of the same tokens always wins, so a directory may be named after a type
-  without moving a single call.
+  without moving a single call;
+- the CALL position and the TYPE position read one and the same namespace, segment for segment — a
+  directory name is a filesystem name and owes the grammar nothing.
 
 ## Tests
 
@@ -172,6 +174,34 @@ end 'main'
 ```
 ```exitcode
 22
+```
+
+
+<!-- test: keyword-named-directory-segment-resolves-in-both-positions -->
+A namespace segment whose name is a KEYWORD (`lib/from/`). A directory name is a FILESYSTEM name and owes
+the grammar nothing, so the two positions that walk a dotted chain — the call door and the type door —
+must admit the same segments. They did not: they were two separate walks, one asking `tokenCanBeAName`
+and one demanding a plain identifier, so `lib.from.helper()` compiled and ran while `5 as lib.from.Score`
+was refused `E3011: Unknown type 'lib'` — a wrong rejection quoting a fragment of the name the author
+wrote, for a declaration filed under exactly that key. Both spellings appear here, in one program.
+```maxon
+// --- file: lib/from/h.maxon
+typealias Integer = int(0 to 125)
+
+export typealias Score = int(0 to 100)
+
+export function helper() returns Integer
+	return 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let s = 5 as lib.from.Score
+	return (lib.from.helper() + (s as int)) as ExitCode
+end 'main'
+```
+```exitcode
+12
 ```
 
 

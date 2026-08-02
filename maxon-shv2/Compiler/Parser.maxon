@@ -1738,6 +1738,16 @@ let DetachedBlockLabel = b"detached"
 // builds the callee of `Point.create(3, y: 4)`). Written twice, a change to the mangling would
 // leave every method declared under one name and called under another — and the failure would be
 // E3004 "call to undefined function 'Point.create'", pointing at a call that is perfectly correct.
+//
+// ⚠⚠ **SINCE N1b IT MUST ALSO SPELL THE SAME BYTE AS `SignatureIndex.QualifiedAliasSeparator`, AND THAT
+// COUPLING IS NEW.** `parseQualifiedCall` probes `resolvesAsNamespaceQualifiedFunction` with the
+// `declaredCallee` it mangled through THIS constant, against a set keyed by `namespaceQualifiedName` →
+// `joinQualifiedName`, which spells the OTHER one. The two remain separate facts — this one is the byte an
+// emitted SYMBOL carries and both reference compilers pin it; that one is the byte the SOURCE writes between
+// two name segments — but they are no longer free to move independently.
+// What keeps them from drifting silently is not this note: it is that every one-dot `dir.fn()` case in
+// `specs-shv2/namespaces.md` goes RED the moment they disagree, with an E3004 naming a callee that is
+// perfectly correct. The check exists; this says which one it is.
 let MethodNameSeparator = "."
 
 // The same separator as a BYTE, for the join's INVERSE (`isQualifiedUnderTypeName`), which compares one
@@ -12471,6 +12481,10 @@ export type Parser
 		end 'selfType'
 
 		if self.at(TokenKind.identifier) 'named'
+			// The head's INDEX, taken before the cursor moves: the dotted-chain walk below is indexed from
+			// the head, exactly as the CALL door's is, so both ask `dottedChainLengthAt` the same question
+			// about the same token.
+			let headIndex = self.pos
 			let tok = try self.consume(TokenKind.identifier)
 			// Recorded HERE, above every arm, rather than in the arm that finally decides what the name
 			// denotes: a name written in a type position is a USE whichever way it resolves, and hooking
@@ -12494,19 +12508,32 @@ export type Parser
 			// needed: the one-dot version already consumed a dot unconditionally, so the only inputs this
 			// touches are chains of THREE or more segments — and every one of those was already a parse that
 			// minted `named("a.b")` and then met a dangling `.c` with no rule for it. There is no type position
-			// in the grammar where a type reference may legally be followed by `.identifier`: an `as` cast is
+			// in the grammar where a type reference may legally be followed by `.<name>`: an `as` cast is
 			// not a postfix operator here (`parseCast` loops only on another `as`), and a return clause, a
 			// parameter, a field and a generic argument are each closed by their own follower.
-			if self.at(TokenKind.dot) and self.kindAt(self.pos + 1) == TokenKind.identifier 'qualifiedMember'
-				// The first pair is read outside the loop so the accumulator starts as the OWNED result of a
-				// join rather than as a borrowed token field, which a `var` may not adopt (E3078) and which a
-				// `.clone()` would only paper over. The `if` guarantees there is one.
-				try self.consume(TokenKind.dot)
-				var qualified = joinQualifiedName(tok.value, member: (try self.consume(TokenKind.identifier)).value)
-				while self.at(TokenKind.dot) and self.kindAt(self.pos + 1) == TokenKind.identifier 'eachSegment'
+			//
+			// ⭐⭐ **IT IS THE *SAME* WALK THE CALL DOOR USES — ONE `dottedChainLengthAt`, ONE
+			// `assembleDottedChainAt` (N1b review), AND IT WAS TWO.** A hand-rolled loop here demanded
+			// `TokenKind.identifier` of every segment while the call walk asked `tokenCanBeAName`, and the two
+			// spelled the same rule differently with nothing to make them agree. ⛔ MEASURED on the divergence:
+			// with a module directory `lib/from/`, `lib.from.helper()` COMPILED AND RAN while
+			// `21 as lib.from.Score` was refused `E3011: Unknown type 'lib'` — a wrong REJECTION quoting a
+			// fragment of the name, for a declaration `pushNamespaceQualifiedAlias` had filed under exactly the
+			// key the author wrote. A directory name is a FILESYSTEM name and owes the lexer nothing, so the
+			// segments of a namespace are `tokenCanBeAName`'s question in BOTH positions or the mirror is
+			// reachable from one of them only. Pinned by
+			// `namespace-qualified-resolution/keyword-named-directory-segment-resolves-in-both-positions`.
+			let qualifierDots = self.dottedChainLengthAt(headIndex)
+			if qualifierDots > 0 'qualifiedMember'
+				let qualified = self.assembleDottedChainAt(headIndex, dots: qualifierDots)
+
+				// Stops PAST the final segment, unlike `parseNamespaceQualifiedCall`'s twin loop: nothing
+				// downstream of a type reference consumes that token, where a call hands it to `parseCallNamed`.
+				// `advance` and not `consume(identifier)` — a segment may be a keyword standing as a name (D8),
+				// which is the whole point of sharing the walk above.
+				for _ in 0 upto qualifierDots 'eachSegment'
 					try self.consume(TokenKind.dot)
-					let memberTok = try self.consume(TokenKind.identifier)
-					qualified = joinQualifiedName(qualified, member: memberTok.value)
+					self.advance()
 				end 'eachSegment'
 				return MaxonType.named(self.artifact.typeNames.intern(qualified))
 			end 'qualifiedMember'
@@ -25897,6 +25924,13 @@ export type Parser
 	// How many `.<name>` pairs follow the identifier at `index` — the peek-only, allocation-free half of the
 	// walk above. `0` for a bare name and for anything that is not an identifier at all.
 	//
+	// ⭐⭐ **TWO POSITIONS ASK IT, AND THEY ARE ONE QUESTION (N1b review)**: the CALL door above, and
+	// `parseTypeReference`'s `Instance.Member` / `dir.Name` arm. It was written twice — once here and once as
+	// an inline loop in the type arm that demanded `TokenKind.identifier` per segment — and the copies had
+	// already come apart: `lib.from.helper()` compiled while `21 as lib.from.Score` did not. Two spellings of
+	// "where does a dotted name end" can only ever agree by accident, and neither site reads as wrong on its
+	// own. See `parseTypeReference` for the measurement.
+	//
 	// ⚠ **THE HEAD MUST BE A PLAIN IDENTIFIER AND THE SEGMENTS AFTER IT NEED ONLY BE NAMEABLE (D8)**, which
 	// is the asymmetry v1 also draws (`tokenIsIdentifierLike`, `maxon-selfhosted/Compiler/Parser.maxon:14577`).
 	// A trailing segment is the FUNCTION'S OWN NAME, and D8 lets a declaration take a keyword — `export
@@ -25917,8 +25951,10 @@ export type Parser
 	end 'dottedChainLengthAt'
 
 	// The `a.b.c` NAME a chain of `dots` pairs at `index` spells, built through `joinQualifiedName` so the
-	// registry is asked about the same bytes `namespaceQualifiedName` filed it under. Called only once the
-	// shape has already been accepted, so the joins are paid by a real dotted call and by nothing else.
+	// registry is asked about the same bytes `namespaceQualifiedName` filed it under. Called only once
+	// `dottedChainLengthAt` has accepted the shape, so the joins are paid by a real dotted call or a real
+	// dotted TYPE reference and by nothing else — the two callers of the walk above, sharing its assembly for
+	// the same reason they share its predicate.
 	function assembleDottedChainAt(index TokenIndex, dots ElementCount) returns ByteArray
 		// The first pair is joined outside the loop so the accumulator starts OWNED (a `var` may not adopt a
 		// borrowed token field — E3078); the caller's `dots > 0` guarantees there is one, and a one-dot chain

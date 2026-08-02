@@ -3005,10 +3005,17 @@ end 'joinQualifiedName'
 // separators come from `namespaceForModuleDirectory` (which renders the `/`-joined module directory), and
 // this adds the LAST one — which is exactly the one `splitQualifiedName` divides at.
 //
-// ⚠ The caller must have established that `namespace` is non-empty. A root-level file's namespace is `""`
-// and `.helper` names nothing; there is no qualified spelling of a root declaration, because the root IS the
-// unqualified namespace.
+// ⚠ **THE NON-EMPTY PRECONDITION IS CHECKED HERE AND NOT MERELY WRITTEN DOWN**, because it is a rule with
+// TWO INDEPENDENT GUARDS in front of it — `Parser.recordScannedSignature`'s `not self.namespace.isEmpty()`
+// and `Parser.pushNamespaceQualifiedAlias`'s `self.namespace.isEmpty()` — and a third caller that forgot
+// would file a declaration under `.helper`, a key no call site can ever spell, with nothing red anywhere.
+// A root-level file's namespace is `""`; there is no qualified spelling of a root declaration, because the
+// root IS the unqualified namespace. Once per DECLARATION, so the test is free.
 export function namespaceQualifiedName(namespace String, name ByteArray) returns ByteArray
+	if namespace.isEmpty() 'noNamespaceToQualifyWith'
+		panic("namespaceQualifiedName: '{String.from(name)}' was asked for its directory-qualified spelling with an EMPTY namespace — a root-level declaration has none, and every caller must have gated on that before reaching here")
+	end 'noNamespaceToQualifyWith'
+
 	return joinQualifiedName(namespace.toByteArray(), member: name)
 end 'namespaceQualifiedName'
 
@@ -3434,7 +3441,11 @@ export type ProgramSignatures
 		return try self.fileModuleDirectories.get(path.toString()) otherwise panic("ProgramSignatures.moduleDirectoryOf: '{path.toString()}' has no module directory — every source path is stamped by `Queries.foldOneFileInto` before any declaration of it is folded")
 	end 'moduleDirectoryOf'
 
-	// The `.`-joined NAMESPACE a file is shown as — what `Parser.create` stamps onto `IrFunction.namespace`.
+	// The `.`-joined NAMESPACE a file is shown as — what `Parser.create` stamps onto `Parser.namespace`, from
+	// which a declaration's qualified spelling is minted (`namespaceQualifiedName`). ⚠ It used to say
+	// `IrFunction.namespace`, and that FIELD IS GONE (N1b deleted it as write-only — see its tombstone);
+	// nothing downstream of the parser holds a namespace, because a `dir.fn()` reference resolves to the bare
+	// declared name at parse time.
 	// Rendered from the stored directory rather than stored beside it: two fields would be two chances to
 	// disagree, and only the directory can be inverted back into segments.
 	export function namespaceOf(path FilePath) returns String
