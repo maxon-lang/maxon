@@ -272,7 +272,10 @@ export type Token
 	//
 	// A token whose text is implied by its KIND — every punctuator, `newline`, EOF —
 	// carries `EmptySourceText`, one shared empty slice, and so costs no allocation at
-	// all. Only identifiers, numbers, string literals and directives carry a span.
+	// all. Identifiers, numbers, string literals and directives carry a span — and so do
+	// KEYWORDS, which are lexed as identifiers and only then classified, so they reach
+	// `emitWithSource` carrying their own bytes exactly like any other word token.
+	// ⇒ `tokenDisplayText` is the one reader that resolves which of the two a caller wants.
 	export let value as ByteArray
 	export let line as LineNumber
 	export let column as ColumnNumber
@@ -299,6 +302,24 @@ end 'Token'
 // Exported because every name-shaped field downstream (VarInfo's inert payload names)
 // wants the same "no source text" value rather than minting its own empty.
 export let EmptySourceText = b""
+
+// How a DIAGNOSTIC names one token. A word or literal token carries its own source text
+// (`int`, `Integer`, `42`) and that is what the reader has to find in the file; a token whose
+// text its KIND already implies carries `EmptySourceText`, and for those the kind's own
+// spelling IS the text (`TokenKind.leftParen` is `"("`).
+//
+// ⚠ It is ONE definition because `EmptySourceText`'s contract — "an empty value means the kind
+// says the text" — is a fact about `Token`, and a second copy of it does not fail loudly if it
+// drifts: it quietly names the offending token something the source never wrote. It had two
+// readers before it had a name (`tokenTextFrom`'s span renderer, and the E2001 `unexpected
+// token: '<x>'` sites, whose `got` field this fills).
+export function tokenDisplayText(token Token) returns String
+	if token.value.isEmpty() 'kindImpliesTheText'
+		return token.kind.rawValue
+	end 'kindImpliesTheText'
+
+	return String.from(token.value)
+end 'tokenDisplayText'
 
 // The two characters the lexer hands to the parser as IDENTIFIERS so that it, not the
 // lexer, reports them: neither is legal Maxon, and the parser quotes the offending text

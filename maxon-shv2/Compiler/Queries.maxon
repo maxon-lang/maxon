@@ -1055,10 +1055,14 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		localShadowsSelfField(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
 		unexportedFieldAccess(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
 		immutableMutatingCall(name, functionName, line, column) then reportPositioned(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(name, paramName: SelfParamDisplayName, functionName: functionName), line: line, column: column, filePath: path)
+		// Byte-for-byte the reference compilers' E2001 sentence, gated exactly by the `maxoncstderr`
+		// goldens in `match-statements.md`/`match-simple.md` and `function-declaration.md`. Its raisers
+		// are listed on the union arm and deliberately not here — the variant exists to have several,
+		// so that list is the one thing certain to grow, and a copy of it here would go stale silently.
+		strayToken(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token: '{got}'", line: line, column: column, filePath: path)
 		// The scalar-match arms (P1.1b wave A). Each carries the code its meaning is registered under
 		// in `docs/error-codes.txt`, and each message is byte-for-byte the reference compilers' — the
 		// `maxoncstderr` goldens in `match-statements.md`/`match-simple.md` gate them exactly.
-		matchExpressionStrayToken(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token: '{got}'", line: line, column: column, filePath: path)
 		matchFallthroughWithReturn(line, column) then reportPositioned(project, code: ErrorCode.matchFallthroughWithReturn, message: "match fallthrough with return: 'cannot combine 'fallthrough' with 'return''", line: line, column: column, filePath: path)
 		matchNotExhaustive(subject, line, column) then reportPositioned(project, code: ErrorCode.matchNotExhaustive, message: "{subject} is not exhaustive: add a 'default' arm", line: line, column: column, filePath: path)
 		matchDuplicatePattern(pattern, line, column) then reportPositioned(project, code: ErrorCode.matchDuplicatePattern, message: "duplicate pattern in match: '{pattern}'", line: line, column: column, filePath: path)

@@ -61,4 +61,46 @@ the exception: it measures a tree that already existed.)
 | date | commit | change | build s | exe bytes | code bytes | suite s | tests |
 |------|--------|--------|---------|-----------|------------|---------|-------|
 | 2026-08-01 | `f3a208b5b` | baseline — the tree `/spec-port` was built against (no compiler change of its own) | 19.7 | 10,076,672 | 9,002,998 | 48.0 / 48.9 / 50.4 | 3262 |
-| 2026-08-01 | `spec-port: tick 2 — panic` | `panic("…")` routed to the `mrt_panic` runtime (`StdOp.osPanic`), message baked at parse time. Exe +4,096 B (one page); emitted panic BLOCKS shrank 4 instructions → 2 everywhere, but the compiler gained the parse-time baking, so `code bytes` is +3,093. Both times inside the ~5% band ⇒ no reading. | 19.0 | 10,080,768 | 9,006,091 | 49.6 | 3266 |
+| 2026-08-01 | `spec-port: tick 2 — panic` | `panic("…")` routed to the `mrt_panic` runtime (`StdOp.osPanic`), message baked at parse time. Exe +4,096 B (one page); emitted panic BLOCKS shrank 4 instructions → 2 everywhere, but the compiler gained the parse-time baking, so `code bytes` is +3,093. Both times inside the ~5% band ⇒ no reading. ⚠ **ITS TWO SIZE NUMBERS DO NOT DESCRIBE ITS OWN TREE — see the tick-4 row and do not diff against them.** | 19.0 | 10,080,768 | 9,006,091 | 49.6 | 3266 |
+| 2026-08-01 | `spec-port: tick 4 — function-declaration` | A function SIGNATURE now has to end at its line (`requireSignatureLineEnd`), so `function foo() int` — the `returns` keyword missing — is E2001 at the `int` instead of falling into the body as `E2015 Unsupported: int statement`. Deduplicating the "token's text, or its kind's spelling" fact into one `tokenDisplayText` (3 open-coded readers → 1) paid for the new check and more: **exe −4,608 B, code −4,827 B.** ⚠ **Those deltas are against a MEASURED CONTROL, not against the row above** — see the note under the table. Build and suite times are not comparable to earlier rows either (different bootstrap); both are unremarkable on their own. | 18.9 | 10,212,352 | 9,118,910 | 43.4 | 3272 |
+
+## ⛔ 2026-08-01 — the first TWO rows' SIZE columns are not comparable to later ones
+
+**Measured, not inferred.** Tick 4 read `exe 10,212,352 / code 9,118,910` where the tick-2 row above
+records `10,080,768 / 9,006,091` — a step of **+131,584 / +112,819** that no change could account for,
+so it was treated as a reading to explain before anything was written down.
+
+**The control settles it.** `git stash` → build the immediate predecessor tree (`ddefd957e`) → measure:
+
+```
+CONTROL (ddefd957e, none of tick 4's work)   exe 10,216,960   code 9,123,737
+tick 4  (the tree being committed)           exe 10,212,352   code 9,118,910
+                                                  -4,608          -4,827
+```
+
+**No commit between the tick-2 row and that control touched `stdlib/` or `maxon-shv2/Compiler/`** (all
+five are skill/doc commits), and the bootstrap binary that compiles shv2 was untouched across them. So
+the control tree and tick 2's tree must produce the *same* shv2 binary — and the control says that
+binary is `9,123,737`, not the `9,006,091` the row claims. ⇒ **The tick-2 row's size columns describe
+some other build.** The baseline row above it is low by the same ~117 KB, so both predate whatever
+changed.
+
+**Most likely cause, stated as the hypothesis it is:** `bin/maxon.exe` — the bootstrap that *emits*
+shv2 — has an mtime of **16:08**, while the rows were written in the evening. A bootstrap refresh
+changes shv2's emitted size without a line of shv2 changing, which is the trap already recorded for
+`docs/optimization-log.md`. Unverified, because reproducing it means rebuilding the old bootstrap; the
+*consequence* needs no verification and is what matters here.
+
+⇒ **Two rules this buys, both cheap:**
+1. **A size step you cannot account for gets a CONTROL before it gets a sentence** — stash, build the
+   predecessor, measure. It costs one build (~19 s) and it is the only thing that separates "my change
+   did this" from "this row is measuring a different compiler."
+2. **`exe bytes` / `code bytes` are only comparable across rows built by the SAME bootstrap.** When the
+   bootstrap moves, the size columns restart; say so in the row rather than reading the step as a
+   regression.
+
+⚠ **Separately, and worth someone's attention:** that bootstrap binary is **older than its own source**
+— `bin/maxon.exe` is 16:08, while the last commit touching `maxon-sharp/` (`e4c654236`) is 19:55. Every
+shv2 build in this log since then was emitted by a stale bootstrap. That is not this tick's to fix, and
+it does not threaten any correctness gate (the suite is green and the goldens are the compiler's own
+output either way), but the next `maxon-sharp` change should rebuild it before recording a row.

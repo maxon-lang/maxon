@@ -631,15 +631,22 @@ export union ParseError implements Error
 	// message are identical, so the code and words are the same. functionName rides along for the
 	// (in ...) suffix, which names the enclosing function.
 	immutableMutatingCall(name String, functionName String, line LineNumber, column ColumnNumber)
+	// A token left over where a construct has FINISHED — it opens nothing, continues nothing, and
+	// the grammar has no position for it here. Renders as **E2001** `unexpected token: '<got>'`,
+	// positioned at the stray token; `got` is always `tokenDisplayText`'s, so the message quotes what
+	// the source wrote. Both reference compilers spend E2001 on exactly this shape, and each reaches
+	// it from more than one place (2-Parser.cs:8307 + :16403; v1 `reportUnexpectedToken`), so it is
+	// ONE variant with several raisers rather than one variant per raiser — a second variant would be
+	// the same code and the same sentence written down twice. Its raisers:
+	//
+	//   • the `and` of an `and fallthrough` after a match EXPRESSION's `gives` arm — fallthrough is
+	//     meaningless where every arm must yield a value, and the Pratt climber has already stopped
+	//     at the `and` (see `parseBinary`), so the arm parser meets it as a leftover, not an operator;
+	//   • a token past the end of a function SIGNATURE — `function foo() int`, the `returns` keyword
+	//     missing (see `requireSignatureLineEnd`).
+	strayToken(got String, line LineNumber, column ColumnNumber)
 	// --- The scalar-match arms (P1.1b wave A) ---
 	//
-	// A stray token where a match EXPRESSION arm has finished — the `and` of an `and fallthrough`
-	// after a `gives` arm. Renders as **E2001** `unexpected token: '<got>'`, positioned at the
-	// stray token, exactly as both reference compilers reject it (v1
-	// `rejectFallthroughInMatchExpression`; 2-Parser.cs:14860-14864): fallthrough is meaningless
-	// where every arm must yield a value, and the Pratt climber has already stopped at the `and`
-	// (see `parseBinary`), so the arm parser meets it as a leftover rather than as an operator.
-	matchExpressionStrayToken(got String, line LineNumber, column ColumnNumber)
 	// An arm body that both `return`s and falls through (`1 then return 10 and fallthrough`).
 	// Renders as **E2025**, positioned at the `and`. The two cannot combine: a `return` has already
 	// left the arm, so there is nothing for the fallthrough to carry control out of.
@@ -11156,6 +11163,8 @@ export type Parser
 		// and the lowering (`ret` → `errorReturn` inside a throwing function) can read it off `func`.
 		let throwsClause = try self.parseOptionalThrowsClause()
 
+		try self.requireSignatureLineEnd()
+
 		// ⭐ **THE NAME EVERY REGISTRY BELOW IS KEYED BY** — the source name for the first declaration of it,
 		// a mangled variant for a later overload (D7). Decided HERE: the parameter list is complete and
 		// struct-resolved, and nothing has yet been recorded under a name.
@@ -12015,6 +12024,33 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 		return ThrowsClause.throwing(String.from(nameTok.value))
 	end 'parseOptionalThrowsClause'
+
+	// ⛔ **A FUNCTION SIGNATURE ENDS AT THE END OF ITS LINE.** Both clauses that may follow the
+	// parameter list are optional and both have just been offered (`returns T`, then `throws E`), so a
+	// token still standing here belongs to no part of the header — and the body has not started, because
+	// a body starts on the next line. `function foo() int` is the shape this names: the `returns` keyword
+	// omitted, which the two optional readers cannot see, since "no `returns`" is also how a VOID function
+	// is spelled.
+	//
+	// ⚠ **THE REASON IT IS A CHECK HERE AND NOT A REFUSAL INSIDE `parseOptionalReturnType`:** that reader
+	// runs BEFORE the `throws` clause, so to leave `function f() throws E` alone it would have to know the
+	// follow set of `)` — the grammar's order, written down a second time, in the one routine that is not
+	// reading it. It is also shared with the TOLERANT declaration sweep, whose `otherwise return` would
+	// swallow the refusal and report nothing; the sweep's contract is to record what it can, and a
+	// judgement it can only discard does not belong in it. The real parse holds the position and reports.
+	//
+	// Without it the `int` fell through to the statement dispatcher and was rejected as `E2015 Unsupported:
+	// int statement` — a true sentence about the wrong thing, pointing at a body that does not exist and
+	// never naming the missing keyword. EOF is admitted so a source truncated mid-declaration keeps
+	// reaching the missing-`end` diagnostic, which says more about it than "unexpected token".
+	function requireSignatureLineEnd() throws ParseError
+		if self.at(TokenKind.newline) or self.isEof() 'headerComplete'
+			return
+		end 'headerComplete'
+
+		let tok = self.current()
+		throw ParseError.strayToken(tokenDisplayText(tok), line: tok.line, column: tok.column)
+	end 'requireSignatureLineEnd'
 
 	// The optional `implements <Interface>` clause on an enum/union declaration — error enums declare
 	// `implements Error` (P1.4b). Shared by the tolerant declaration sweep and the real parse, exactly as
@@ -19489,7 +19525,7 @@ export type Parser
 			// already stopped at the `and` (see parseBinary), so it sits here as a stray token.
 			if self.at(TokenKind.and) 'strayAnd'
 				let andTok = self.current()
-				throw ParseError.matchExpressionStrayToken(andTok.kind.rawValue, line: andTok.line, column: andTok.column)
+				throw ParseError.strayToken(tokenDisplayText(andTok), line: andTok.line, column: andTok.column)
 			end 'strayAnd'
 			return MatchArmBody.create(false, reachesMerge: not exitBlock.isTerminated(), exitBlock: exitBlock, exitVals: self.snapshotBindings(carried), give: MatchGiveValue.value(value))
 		end 'givesArm'
@@ -33384,7 +33420,7 @@ export type Parser
 	// alternative is threading the source buffer through the parser for a diagnostic.
 	//
 	// ⚠ **A TOKEN'S `value` IS ITS LEXEME ONLY WHERE THE KIND DOES NOT ALREADY IMPLY ONE.** The lexer
-	// fills it for identifiers and literals and leaves it EMPTY for punctuation and keywords, whose
+	// fills it for words and literals — keywords included — and leaves it EMPTY for punctuation, whose
 	// spelling is `TokenKind.rawValue` (the same text `consume` puts in a mismatch). Reading `value`
 	// alone therefore printed NOTHING for a leftover made of punctuation — `var xs = [1]]` and
 	// `var a = 1)` both reported `''`, a diagnostic that promises to name the text it could not
@@ -33405,7 +33441,7 @@ export type Parser
 				cursor = cursor + 1
 			end 'padToItsColumn'
 
-			let spelling = tok.kind.rawValue if tok.value.isEmpty() else String.from(tok.value)
+			let spelling = tokenDisplayText(tok)
 			text = "{text}{spelling}"
 			cursor = cursor + spelling.count()
 		end 'each'
