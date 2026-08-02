@@ -1,6 +1,6 @@
 ---
 name: spec-port
-description: Port ONE spec file from /specs into specs-shv2 and make it pass — the rapid-iteration loop. Takes the next spec off the v1 whitelist order (maxon-selfhosted/Testing/SpecTestRunner.maxon), copies it byte-identical, runs it, implements the gaps, reviews the goldens it minted, and lands it. One spec per invocation, designed for `/loop /spec-port`. Invoke as `/spec-port <name>` to take a specific spec instead of the next one.
+description: Port ONE spec file from /specs into specs-shv2 and make it pass — the rapid-iteration loop. Takes the next spec off the v1 whitelist order (maxon-selfhosted/Testing/SpecTestRunner.maxon), copies it byte-identical, runs it, implements the gaps, and lands it. A passing spec is good enough — the minted goldens are committed, not audited. One spec per invocation, designed for `/loop /spec-port`. Invoke as `/spec-port <name>` to take a specific spec instead of the next one.
 ---
 
 # Port one spec, make it pass, land it
@@ -132,34 +132,28 @@ the honest move is to keep debugging.
 > **⛔ THE FLOOR: if more than half the file's cases end up disabled, STOP.** Do not commit a mostly-shelved
 > spec. That file is not a port, it is a rung wearing a port's clothes — take the §7 exit.
 
-## 5. ⛔ REVIEW THE GOLDENS THE RUN JUST MINTED. Nothing else will.
+## 5. COMMIT the goldens the run minted — you do NOT have to read them
 
-**This is the step the loop exists to not skip.** `checkTestFragment`:
+**A passing case is good enough** (user ruling, 2026-08-01). The spec's own ```exitcode / ```stdout /
+```stderr blocks are the CORRECTNESS gate and they are checked on every run; the `.test` fragment is a
+CODEGEN-QUALITY gate — it pins register allocation, spills, coalescing — and holding a rapid-iteration
+loop open to hand-audit register choices is not what this loop is for. **Do not read the minted
+fragments. If the spec passes, land them.**
 
-> *"No committed fragment yet — a NEW test. Record it; there is nothing to compare against, and a first
-> run that failed for want of a golden it cannot have would be a rite, not a gate."*
+What that trades away, so it is a decision and not an accident: a freshly ported spec is the one moment
+the IR gate is off (`checkTestFragment` mints a missing golden and passes — *"a first run that failed
+for want of a golden it cannot have would be a rite, not a gate"*), so whatever it records becomes the
+baseline every later change is measured against. A suboptimal allocation ported in this way is pinned,
+not caught. That is accepted: it costs code quality, never correctness, and the moment anyone *changes*
+that codegen the fragment goes red and gets looked at then.
 
-⇒ **Every case in a freshly ported spec mints its golden and PASSES, unreviewed.** A newly ported spec
-is the one moment in this compiler's life when the IR gate is switched off, and the goldens you commit
-now become the gate that every later change is measured against. **A wrong golden committed today is a
-wrong answer pinned forever, and the suite will defend it.**
+⛔ **What you MUST still do is `git add` them.** A minted golden left untracked is invisible to the
+summary line and to `git status` noise alike — that is precisely how the baseline of this loop's first
+tick was found at 3257/1 with eight unminted fragments and one stale one sitting in the tree.
 
 ```bash
-git status --short specs-shv2/fragments/     # every new .test file is an UNREVIEWED assertion
+git status --short specs-shv2/fragments/     # every one of these gets committed with the spec
 ```
-
-**Read them.** Not skim — read, against what the case claims:
-- the emitted IR computes what the spec's prose says, in the registers the ABI requires;
-- a managed value's `__mm_incref` / `__destruct_*` pairing is *there* and *balanced*;
-- an `error.*` case pins the diagnostic you meant, at the right code and position;
-- **where two cases assert an equivalence (`-either-order`, `-cross-file-*`, two spellings of one type),
-  the goldens must actually agree.** Sorting both bodies and diffing proves it in one line, and it is
-  exactly the check that caught `d45cb0007`:
-  ```bash
-  diff <(tail -n +<hdr> A.test | sort) <(tail -n +<hdr> B.test | sort)   # equal ⇒ differ only in emission order
-  ```
-
-Say in the commit message what you checked. A golden you did not read is one you are asserting on faith.
 
 ## 6. The agents — a judgement call, and here is the call
 
@@ -205,7 +199,7 @@ Nothing here is optional, and none of it needs permission:
 | **full** `run_spec_test compiler=shv2` (unfiltered) ≥ baseline + this spec's cases | stop |
 | `memoryLeak: false` / no exit **101** | stop |
 | test-count check (§2) | stop |
-| every new `.test` reviewed (§5) | stop |
+| every new `.test` **committed** (§5 — not read, committed) | stop |
 
 ⚠ **The full suite is the gate, not the filtered run.** A front-end change that fixes your spec and
 breaks four others reads green under `--filter`.
@@ -220,7 +214,7 @@ lane and forgot the host's.)*
 Then: commit, and **push**. Directly on `main` — this repo develops there; do not branch.
 
 **The commit message carries what the diff cannot:** which cases were shelved and the located reason for
-each; what you actually checked in the minted goldens; the before/after suite numbers.
+each; the before/after suite numbers.
 
 ## 9. Close the tick
 
@@ -258,8 +252,12 @@ Everything above runs unattended. Stop and report, without landing, when:
 
 ## The thing this process exists to catch
 
-**A spec file that lands green having tested nothing.** Three independent mechanisms can produce that —
-`status: draft`, a stray `## ` heading, and a `disabled-test:` written to make a case go away — and the
-fourth, quieter one is a hundred freshly minted goldens nobody read. §2's count and §5's read are the
-whole defence, and they are cheap. **Do them every tick, including the ticks where the spec passed on
-the first run — especially those.**
+**A spec file that lands green having tested nothing.** Three mechanisms produce that: `status: draft`,
+a stray `## ` heading, and a `disabled-test:` written to make a case go away. §2's count catches the
+first two mechanically and §4's name-and-locate rule is the whole defence against the third. Both are
+cheap. **Do them every tick, including the ticks where the spec passed on the first run — especially
+those.**
+
+*(A fourth candidate — freshly minted goldens nobody read — was ruled OUT of this loop's scope on
+2026-08-01: the goldens gate codegen quality, not correctness, and the spec's own run assertions gate
+correctness on every run. See §5.)*
