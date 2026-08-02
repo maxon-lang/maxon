@@ -126,11 +126,12 @@ export let OutputFlagName = "-o"
 // ⚠ AND IT DOES NOT KEEP THE CHECKOUT OUT OF THE BYTE COLUMN, which this comment claimed until it was
 // measured. The COMPILER resolves each source path against `Directory.currentPath()` itself — per file,
 // per compile, in `Queries.isStdlibSourceFile` — so the working directory's length lands in the byte
-// column whatever this side hands it. MEASURED: one binary at one executable path, two working
-// directories 44 characters apart, +34,515 bytes at rung 0 rising to +203,310 at rung 5, against exactly
-// 0 allocations. Keeping this relative still removes the ARGV copy of it and is still right; the trend
-// log's byte column is comparable across two runs only when the working directory matches too, which is
-// why `mintedAtCell` records both.
+// column whatever this side hands it. The reading that showed it is ScaleHistory's header, under (2),
+// and it is deliberately NOT copied here: the copy that lived on this line said "against exactly 0
+// allocations", which was the general rule an implementer then lost most of a session to, and a fourth
+// site is a fourth place to leave saying the old thing. Keeping this relative still removes the ARGV
+// copy of the path and is still right; the trend log's byte column is comparable across two runs only
+// when the working directory matches too, which is why `mintedAtCell` records both.
 export let CorpusRelativeRoot = ".scale-tmp"
 
 // Everything in the scale suite that can go wrong at RUN time: a rung that would not compile, a
@@ -991,8 +992,13 @@ end 'topRungGrowth'
 // asymmetry this report has to carry. The byte term GROWS with the program, so against a row minted
 // elsewhere the byte delta is WITHHELD rather than printed. The allocation term is a CONSTANT at every
 // rung, so that delta IS printed — a flat offset cancels out of every ratio and out of any delta that
-// grows per rung, so its shape survives — under a caveat that its constant term does not. ScaleHistory's
-// header holds the readings, and it is the only place they are written down.
+// grows per rung, so its shape survives — under a caveat that its constant term does not.
+//
+// ScaleHistory's header holds the readings. They appear in exactly one other place — the paragraph
+// `printMintedElsewhereReason` PRINTS, which is operator-facing and has to carry its own numbers — and
+// no comment anywhere restates them. That is not tidiness: the claim these paragraphs replaced was
+// written down in four files, so correcting it meant four hand-edits and three chances to leave one
+// saying `path-independent`.
 function printMemoryTrend(results RungResultArray, trend LoggedMemory, mintedAt String, bytes ByteDelta, moved bool)
 	print("\n")
 	match trend 'm'
