@@ -98,11 +98,23 @@ export let Arm64LinuxSyscallExitGroup = 94
 //     brk  #0                                  brk  #0
 //
 // NO FRAME, and the reason differs per OS but the conclusion does not. The stub never touches sp, so
-// the OS's 16-byte-aligned entry sp survives to the `bl` by construction, and the scalar core has no
-// backtrace that would need x29/x30 chained. On macOS dyld enters through a call-like path; on Linux
-// the kernel enters `_start` with **x30 UNDEFINED** — there is no return address — so the stub must
-// never `ret`. It does not: both routes end in a non-returning exit, and the `brk #0` catches the
-// impossible fall-through rather than letting execution run off into the next function.
+// the OS's 16-byte-aligned entry sp survives to the `bl` by construction. On macOS dyld enters through
+// a call-like path; on Linux the kernel enters `_start` with **x30 UNDEFINED** — there is no return
+// address — so the stub must never `ret`. It does not: both routes end in a non-returning exit, and
+// the `brk #0` catches the impossible fall-through rather than letting execution run off into the next
+// function.
+//
+// ⚠ **THE SECOND HALF OF THAT ARGUMENT USED TO BE "the scalar core has no backtrace that would need
+// x29/x30 chained", AND SINCE A3n THERE IS ONE** (`Arm64PanicRuntime.buildArm64WalkFramesChunk`). The
+// stub stays frameless anyway, but for a DIFFERENT reason, and the difference matters to anyone editing
+// either side: `mrt_start` is never a LINK in the chain, only its last symbolized NAME. `main`'s own
+// frame record carries the return address INTO this stub at `[x29+8]`, which is what prints `in
+// mrt_start`; the walk then follows `[x29+0]`, which is whatever the loader left in x29 because this
+// stub never writes it. Two INDEPENDENT things stop it there, and neither is the chain: the walk's
+// TEXT GUARD rejects any return address outside `[mrt_start, __symtable)` (measured on macOS — dyld's
+// x29 is a live stack address, the load succeeds, and the address above it is not this image's code),
+// and a `cbz` catches a null frame pointer (Linux, where execve zeroes the GPRs). Give this stub a
+// frame record, or drop either guard, and the walk's termination changes.
 //
 // ⚠ argv IS NOT AVAILABLE THE WAY macOS MAKES IT AVAILABLE — a landmine for whoever wires it later.
 // dyld hands macOS `mrt_start` argc/argv in **x0/x1**. The Linux kernel does NOT: it enters with

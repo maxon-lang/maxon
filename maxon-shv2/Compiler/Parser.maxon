@@ -12640,13 +12640,24 @@ export type Parser
 		// dies here. A binding transferred its result out already (`parseBinding` cleared it), so a `let s =
 		// "{x}"` drains nothing — `s` drops at scope exit instead.
 		//
-		// ⚠ Guarded on the block NOT being terminated, and that is the fail-safe: `return`/`break`/`continue`
-		// have already ended the block, and a `__mm_decref` emitted after a terminator would sit on a dead
-		// path (a leak the gate would shout, not a wrong answer). A TERMINATING statement that creates a
-		// temporary drops it BEFORE the terminator itself — `return wrap("v{x}")` builds an owned
-		// interpolation as a call argument, and `parseReturnStatement` drains it ahead of the `ret` — so by
-		// the time control reaches here the block is terminated and its temporaries are already gone. This
-		// skip is therefore correct, not a hole: `break`/`continue` carry no expression and so no temporary.
+		// ⚠ Guarded on the block NOT being terminated, and that is the fail-safe: a terminating statement
+		// has already ended the block, and a `__mm_decref` emitted after a terminator would sit on a dead
+		// path — which is NOT merely a leak. The release lands in the NEXT block the parser opens, and if
+		// the temporary's definitions do not dominate that block the program is WRONG: measured on
+		// `panic("v{x}")` inside an `if`, where x64 spilled the String and decref'd an UNINITIALIZED SLOT on
+		// the path the `if` did not take, and arm64 kept it in a register and the allocator refused it
+		// (`seedInUse`, several passes later). See `drainPendingTemps`' region list.
+		//
+		// ⇒ **THE OBLIGATION THIS SKIP HANDS TO EVERY TERMINATING STATEMENT THAT CARRIES AN EXPRESSION: DRAIN
+		// YOUR OWN TEMPORARIES BEFORE YOUR TERMINATOR.** All FOUR do, and the list is the whole argument, so
+		// keep it complete when a fifth arrives:
+		//   • `return wrap("v{x}")` — `parseReturnStatement` → `emitHandoffExitDrops`, ahead of the `ret`.
+		//   • `throw E.p(len("v{x}"))` — `emitThrowError` → the same routine, ahead of the `throwError`.
+		//   • `panic("v{x}")` — `parsePanicStatement`, ahead of the abort op. NOT via `emitHandoffExitDrops`:
+		//     it drains from the statement's own FLOOR (a match arm's scrutinee temporary sits below it and
+		//     must survive) and emits no scope drops at all, control never leaving `mrt_panic`.
+		//   • `break`/`continue` — nothing to drain: they carry no expression, so they build no temporary.
+		// The A3n bug was this list being written down as `break`/`continue` alone, with `panic` missing.
 		//
 		// The `count() > 0` half is what keeps a statement that produced NO temporary — every statement in a
 		// program with no interpolation — from paying anything: `drainPendingTemps` reallocates the list, so

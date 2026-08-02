@@ -86,10 +86,12 @@ type Arm64RuntimeAsm
 		return self.finishChunk(name)
 	end 'finishFunction'
 
-	// Close a DIVERGING function — one that ends in a process exit and a `brk`, so restoring the frame
-	// would be reachable only if the exit primitive returned, and RETURNING there is strictly worse
-	// than trapping. Split from `finishFunction` rather than passing a flag: the two differ in whether
-	// the frame is torn down at all, which is the whole of what a closer does.
+	// Resolve the branches and seal the chunk — the tail `finishFunction` runs after its epilogue, and
+	// ALSO the whole closer for a DIVERGING function, one that ends in a process exit and a `brk`. Such a
+	// function tears down no frame: restoring it would be reachable only if the exit primitive returned,
+	// and RETURNING there is strictly worse than trapping. A diverging chunk therefore calls this
+	// directly rather than passing `finishFunction` a flag — whether the frame comes down at all is the
+	// whole of what a closer decides.
 	export function finishChunk(name ByteArray) returns FunctionCodeChunk
 		arm64ResolveBlockBranches(self.code, blockOffsets: self.labelOffsets, fixups: self.branchFixups)
 

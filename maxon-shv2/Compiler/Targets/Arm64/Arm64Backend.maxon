@@ -1579,12 +1579,14 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
 	var chunks = FunctionCodeChunkArray.create()
-	// The arm64 runtime is just the entry stub `mrt_start` — the scalar core needs no panic handler
-	// and no MM/scheduler floor. It is hand-assembled (its macOS `_exit` GOT call has no TargetOp
+	// The entry stub `mrt_start`. It is hand-assembled (its macOS `_exit` GOT call has no TargetOp
 	// channel — see Arm64Runtime) and appended FIRST so it LEADS `.text` and the image's entry offset
 	// is 0, exactly as x64's `mrt_start` leads `.text`. There is NO module-level `augmentWithRuntime`
 	// step here — the stub is a chunk, not a module function, so it cannot be prepended to the module
 	// the way x64's is; it is assembled in the encode phase alongside the user chunks.
+	//
+	// ⚠ It is no longer the WHOLE arm64 runtime: the panic runtime below is the rest of it, and this
+	// comment said "the scalar core needs no panic handler" until A3n landed one three lines away.
 	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, os: target.os)
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func))
