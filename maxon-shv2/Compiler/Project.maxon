@@ -691,6 +691,12 @@ typealias NameableAliasMap = Map with (ByteArray, RangedTypeAlias)
 // every mangled symbol and every committed golden where it was.
 typealias RangeContestedAliasMap = Map with (ByteArray, ByteArrayArray)
 
+// ⭐ THE ONE EMPTY contest map every registry is born holding — so a program with no contest, which is every
+// program in the corpus, allocates NO index for a question whose answer is "none". Measured: a real map per
+// registry cost a FLAT ~432 allocations per compile in `phase:load`, paid by every build. Copy-on-write off
+// this handle at the single writer (`settleRangeContests`); NEVER mutated.
+let sharedEmptyRangeContests = RangeContestedAliasMap.create()
+
 
 // What ONE `typealias` declaration conflicted with when it was filed — `RangedAliasRegistry.record`'s
 // answer, and the ONLY thing that decides whether E3105 is raised.
@@ -960,7 +966,7 @@ export type RangedAliasRegistry
 	// `recordAlias`, one level up). The seed is identical in every program, so it distinguishes nothing —
 	// hashing it would invalidate every parse memo in the project to record a constant.
 	export static function create() returns RangedAliasRegistry
-		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), nameable: NameableAliasMap.create(), rangeContested: RangeContestedAliasMap.create()}
+		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), nameable: NameableAliasMap.create(), rangeContested: sharedEmptyRangeContests}
 		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath))
 		_ = registry.record(builtinStdlibAlias(ElementCountAliasName, low: ElementCountAliasLow, high: ElementCountAliasHigh, declPathText: ElementCountAliasDeclPath))
 		return registry
@@ -1271,29 +1277,45 @@ export type RangedAliasRegistry
 	//
 	// ⚠ **THE CONTEST IS COLLECTED BEFORE ANY MINT IS RECORDED**, because `record` writes into the very map
 	// this walks.
+	//
+	// ⚠ **AND NOT ONE NAME IS SPELLED UNTIL A CONTEST IS PROVEN, WHICH IS A MEASURED COST AND NOT A STYLE.**
+	// The dedup below compares the BOUNDS; spelling each declaration to compare the STRINGS reads the same
+	// and cost **+100/+164/+292/+548/+1,060/+2,084 allocations** across the scale ladder (A/B, both binaries
+	// swapped into ONE path) — a `ByteArray` per declaration of every multiply-declared name, exactly
+	// DOUBLING per rung. Every one of them was thrown away, because the corpus contests nothing.
+	//
+	// ⚠ **WHAT IS LEFT IS THE WALK ITSELF, AND IT IS MEASURED RATHER THAN ARGUED AWAY: +18…+266 allocations
+	// over the same ladder, 0.0014% of the compile at rung 5, DEAD LINEAR.** Iterating a `Map` costs an entry
+	// tuple per entry, so this is the price of looking at every multiply-declared name once — and the corpus
+	// has plenty of those (`stdlib/`'s seven `Byte` declarations are one of them) even though none is
+	// CONTESTED. Gating the walk on an accumulator `record` maintains was tried and buys ~2%: the array this
+	// pass allocates per name is not the cost, the iteration is. It is left as a single readable structure
+	// rather than split into a write-side flag and a read-side answer.
 	export function settleRangeContests()
 		var mints = RangedTypeAliasArray.create()
 		for (name, byFile) in self.multiplyDeclared 'eachMultiplyDeclaredName'
-			var spellings = ByteArrayArray.create()
 			var claimants = RangedTypeAliasArray.create()
 			for (_, alias) in byFile 'eachDeclaration'
-				let spelling = rangeQualifiedAliasName(name, low: alias.low, high: alias.high)
-				if not holdsSpelling(spellings, spelling: spelling) 'aRangeNoEarlierDeclarationClaimed'
-					spellings.push(spelling)
+				if not holdsRange(claimants, low: alias.low, high: alias.high) 'aRangeNoEarlierDeclarationClaimed'
 					claimants.push(alias)
 				end 'aRangeNoEarlierDeclarationClaimed'
 			end 'eachDeclaration'
 
-			if spellings.count() < 2 'everyDeclarationAgreesAboutTheRange'
+			if claimants.count() < 2 'everyDeclarationAgreesAboutTheRange'
 				continue
 			end 'everyDeclarationAgreesAboutTheRange'
 
-			self.rangeContested.upsert(name, value: spellings)
-			for i in 0 upto claimants.count() 'eachDistinctRange'
-				let claimant = try claimants.get(i) otherwise panic("RangedAliasRegistry.settleRangeContests: claimants.get OOB at {i} below count {claimants.count()}")
-				let spelling = try spellings.get(i) otherwise panic("RangedAliasRegistry.settleRangeContests: spellings.get OOB at {i} — spellings and claimants are pushed in lockstep")
+			var spellings = ByteArrayArray.create()
+			for claimant in claimants 'eachDistinctRange'
+				let spelling = rangeQualifiedAliasName(name, low: claimant.low, high: claimant.high)
+				spellings.push(spelling)
 				mints.push(rangeQualifiedMint(claimant, spelling: spelling))
 			end 'eachDistinctRange'
+
+			if self.rangeContested is sharedEmptyRangeContests 'stillShared'
+				self.rangeContested = RangeContestedAliasMap.create()
+			end 'stillShared'
+			self.rangeContested.upsert(name, value: spellings)
 		end 'eachMultiplyDeclaredName'
 
 		for mint in mints 'eachMint'
@@ -1370,17 +1392,19 @@ function rangeQualifiedMint(claimant RangedTypeAlias, spelling ByteArray) return
 	return RangedTypeAlias.create(spelling, underlying: claimant.underlying, low: claimant.low, high: claimant.high, visibility: Visibility.global, declFilePath: claimant.declFilePath, nameLine: claimant.nameLine, nameColumn: claimant.nameColumn)
 end 'rangeQualifiedMint'
 
-// Is `spelling` already in the list? A LINEAR scan and not a set, because the list holds one entry per
-// DISTINCT range of one name — two or three in any program that has a contest at all — and a `Set` would
-// cost an allocation per contested name to spare a comparison of two.
-function holdsSpelling(spellings ByteArrayArray, spelling ByteArray) returns bool
-	for held in spellings 'each'
-		if held.equals(spelling) 'alreadyClaimed'
+// Has an earlier claimant already taken this RANGE? A LINEAR scan and not a set, because the list holds one
+// entry per DISTINCT range of one name — one for nearly every name in any program, two or three where there
+// is a contest at all — and a `Set` would cost an allocation per multiply-declared name to spare a
+// comparison of two. It compares the BOUNDS and never a rendered name, which is what keeps the uncontested
+// walk allocation-free (see `settleRangeContests`).
+function holdsRange(claimants RangedTypeAliasArray, low ParsedInt, high ParsedInt) returns bool
+	for held in claimants 'each'
+		if held.low == low and held.high == high 'alreadyClaimed'
 			return true
 		end 'alreadyClaimed'
 	end 'each'
 	return false
-end 'holdsSpelling'
+end 'holdsRange'
 
 // --- The TYPE-NAME namespace: one name, one declaration ---
 
