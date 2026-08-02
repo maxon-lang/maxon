@@ -73,8 +73,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: sqrt.rt-basic -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: sqrt.rt-basic -->
 <!-- Args: 16.0 -->
 ```maxon
 function main() returns ExitCode
@@ -87,8 +86,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: sqrt.rt-precision -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: sqrt.rt-precision -->
 <!-- Args: 2.0 -->
 ```maxon
 function main() returns ExitCode
@@ -102,8 +100,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: sqrt.rt-zero -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: sqrt.rt-zero -->
 <!-- Args: 0.0 -->
 ```maxon
 function main() returns ExitCode

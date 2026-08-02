@@ -75,8 +75,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: floor.rt-positive -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: floor.rt-positive -->
 <!-- Args: 3.9 -->
 ```maxon
 function main() returns ExitCode
@@ -89,8 +88,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: floor.rt-negative -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: floor.rt-negative -->
 <!-- Args: -3.2 -->
 ```maxon
 function main() returns ExitCode
@@ -103,8 +101,7 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: floor.rt-with-ceil -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: floor.rt-with-ceil -->
 <!-- Args: 3.7 -->
 ```maxon
 function main() returns ExitCode

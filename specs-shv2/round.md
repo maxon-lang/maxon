@@ -74,8 +74,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: round.rt-basic -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: round.rt-basic -->
 <!-- Args: 3.7 -->
 ```maxon
 function main() returns ExitCode
@@ -88,8 +87,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: round.rt-negative -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: round.rt-negative -->
 <!-- Args: -2.3 -->
 ```maxon
 function main() returns ExitCode
@@ -102,8 +100,7 @@ end 'main'
 8
 ```
 
-<!-- disabled-test: round.rt-halfway -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — this case needs BOTH: shv2's Testing/SpecParser has no handler for `<!-- Args: … -->` and SpecTestRunner spawns the program with an empty argv, and `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`). `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: round.rt-halfway -->
 <!-- Args: 2.5 -->
 ```maxon
 function main() returns ExitCode
