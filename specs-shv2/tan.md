@@ -1,0 +1,122 @@
+---
+feature: tan
+status: stable
+keywords: tan, tangent, trigonometry, math, radians
+category: math-intrinsic
+---
+# tan
+
+## Documentation
+
+Calculate the tangent of an angle (in radians).
+
+**Signature:** `Math.tan(x float) float`
+
+**Parameters:**
+- `x` - The angle in radians
+
+**Returns:** The tangent of the input angle
+
+**Example:**
+
+```maxon
+var x = 0.0
+var y = Math.tan(x)       // 0.0
+
+var quarterPi = 0.785398  // π/4
+var z = Math.tan(quarterPi)    // 1.0 (approximately)
+```
+**Notes:**
+- The function works with radians, not degrees
+- To convert degrees to radians: `radians = degrees * (π / 180)`
+- `Math.tan(0.0)` returns exactly `0.0`
+- `Math.tan(π/4)` returns approximately `1.0`
+- The tangent function has vertical asymptotes at odd multiples of π/2
+
+## Tests
+
+<!-- test: tan.zero -->
+```maxon
+function main() returns ExitCode
+	let result = Math.tan(0.0)
+	if result == 0.0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: tan.multiple-values -->
+⚠ **THE `stdout` BLOCK IS RETRACTED, FOR THE REASON `specs-shv2/sin.md` SETS OUT AT LENGTH — see that
+file rather than a second copy here.** In short: `/specs` renders floats in the bootstrap's
+fixed-6-decimal format, whose carry never reaches the integer part; shv2 prints the **shortest
+round-trip** representation by user ruling, which makes that whole class of defect unreachable. Every
+`/specs` file that prints a float needs this same retraction; it is one decision, not a per-file
+judgement.
+
+⭐ **It changes the RENDERING, not the numbers, and you can check that here without running anything:**
+each old value is exactly the fixed-6-decimal rendering of the double replacing it — `0.5463024898437905`
+→ `0.546302`, `1.5574077246549025` → `1.557408`, `1.0000036732118494` → `1.000004`, `0.0` → `0.0`. The
+two blocks describe the same four doubles.
+
+Verified per file, because a shortest digit string is only correct for the exact double it came from:
+`Math.tan` is **bit-identical under both compilers** here — the four RESULTS are the doubles with bit
+patterns `0`, `4603095874924660554`, `4609692760021066663`, `4607182435342692924` — so only the
+rendering differs.
+```maxon
+function main() returns ExitCode
+	let x1 = Math.tan(0.0)
+	let x2 = Math.tan(0.5)
+	let x3 = Math.tan(1.0)
+	let x4 = Math.tan(0.7854)
+	print("{x1}\n")
+	print("{x2}\n")
+	print("{x3}\n")
+	print("{x4}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0.0
+0.5463024898437905
+1.5574077246549025
+1.0000036732118494
+```
+
+<!-- test: tan.quarter-pi -->
+```maxon
+function main() returns ExitCode
+	let quarterPi = 0.785398163
+	let result = Math.tan(quarterPi)
+	// Should be approximately 1.0
+	let diff = abs(result - 1.0)
+	if diff < 0.01 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: tan.with-int-promotion -->
+```maxon
+function main() returns ExitCode
+	let x = 0  // int
+	let result = Math.tan(x)  // x promoted to 0.0
+	if result == 0.0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
