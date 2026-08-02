@@ -52,6 +52,13 @@ the fixed one.
 The reduced repro, and the case that crashed the compiler outright on arm64.
 
 <!-- test: panic-interpolation-in-a-block -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+wasm32-wasi has no `mrt_panic` — `StdOp.osPanicValue` discards the message pointer and exits
+bare, a gap stated at `StdToWasm.maxon:1875` — so a `stderr` pin cannot pass there. A TECHNICAL
+RESTRICTION, not an opt-in. Note that `not-taken-path-releases-nothing` below is deliberately
+left UNRESTRICTED and does run on wasm: the silently-miscompiled half of this defect is
+target-independent, and that is the half no message can reveal.
+
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -103,6 +110,13 @@ The interpolation holds a heap `String` the panic path itself built, so the drai
 happen late enough to render it and early enough not to outlive its block.
 
 <!-- test: owned-temporary-in-the-message -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+wasm32-wasi has no `mrt_panic` — `StdOp.osPanicValue` discards the message pointer and exits
+bare, a gap stated at `StdToWasm.maxon:1875` — so a `stderr` pin cannot pass there. A TECHNICAL
+RESTRICTION, not an opt-in. Note that `not-taken-path-releases-nothing` below is deliberately
+left UNRESTRICTED and does run on wasm: the silently-miscompiled half of this defect is
+target-independent, and that is the half no message can reveal.
+
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
