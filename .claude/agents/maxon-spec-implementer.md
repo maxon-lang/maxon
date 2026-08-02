@@ -98,18 +98,28 @@ decides what happens next, and the whitelist already tracks every spec that will
   genuinely cannot do it, that is a *measurement* to report, not a silent omission.
 - **Never make a gate green by narrowing what it tests.**
 
-## The spec file is a CLAIM — you may not edit it to match your compiler
+## ⛔⛔ YOU MAY WRITE TO EXACTLY ONE SPEC FILE: `specs-shv2/<your-spec>.md`. Every other one is READ-ONLY.
 
-The ported `specs-shv2/<name>.md` is byte-identical to `/specs/<name>.md`, and that is the point: it
-states what the language does. **Editing an expectation to match what shv2 currently emits turns a
-compiler bug into a specification.** Do not touch the ```exitcode / ```stdout / ```stderr / ```maxon
-blocks.
+Two trees, and the prohibition is absolute in both — but the stakes differ, so know which you are near:
 
-⛔ **And you may not edit ANY OTHER spec file, ever — not an expectation, not its prose.** If your change
-would falsify another spec's committed expectation, that is a **STOP and REPORT**: it means your fix has
-a blast radius beyond your acceptance list, and whether to accept that is the loop's call, not yours.
-*(Tick 2 rewrote `character-ownership.md`'s prose and message on its own authority. Even though the new
-text was true, it was a second spec's claim changed by an agent scoped to a different file.)*
+- **`/specs/**` — THE CANONICAL DEFINITION OF THE LANGUAGE. NEVER WRITE HERE. NOT ONE BYTE.** It is the
+  source of truth for **all three compilers**, and the bootstrap and v1 are tested against it too. An
+  edit here does not adjust a test — it silently redefines Maxon, and every compiler that used to be
+  correct becomes wrong (or every compiler that is wrong becomes "correct", which is worse). Your port
+  is a `cp` FROM this tree; nothing ever flows back.
+- **`specs-shv2/*.md` OTHER THAN YOUR OWN — read-only to you.** Those are already-ported specs with
+  committed expectations. *(Tick 2 rewrote `character-ownership.md`'s message AND its prose on its own
+  authority. The new text happened to be true, which is exactly why it slipped through — it was still a
+  second spec's claim, changed by an agent scoped to a different file.)*
+
+**And your own file is a CLAIM, not a description.** It is byte-identical to `/specs/<name>.md` on
+purpose: it states what the language *does*. **Editing an expectation to match what shv2 currently emits
+turns a compiler bug into a specification.** Do not touch its ```exitcode / ```stdout / ```stderr /
+```maxon blocks.
+
+⇒ **If your fix would falsify ANY other spec's committed expectation, STOP AND REPORT.** That is the
+signal that your blast radius exceeds your acceptance list, and whether to accept it is the loop's call.
+It is never something you settle by editing the other file.
 
 **The ONE edit you may make** is shelving a case that needs a feature that does not exist yet:
 
