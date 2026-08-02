@@ -11,7 +11,13 @@
 
 // The entrypoint function's unqualified name — a contract shared with the parser
 // (which keeps `main` unqualified) and the backend (whose entry stub calls it).
-let MainFunctionName = b"main"
+//
+// ⚠ **EXPORTED SINCE N1c, because the parser now has to STATE the contract rather than merely keep it.**
+// A free function whose bare name is declared in two directories is registered under its namespace-qualified
+// spelling; `main` is the one exception, and the exclusion is written where the exclusion happens
+// (`Parser.recordScannedSignature`) against this constant — not against a second `b"main"` that could drift
+// from the name `checkMainFunction` looks the entry point up by.
+export let MainFunctionName = b"main"
 
 // The exact spec-gated diagnostic text (`specs-shv2/basics.md`). Named constants
 // so the wire format lives in one place.
@@ -2001,6 +2007,28 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 	end 'compilerOwnCall'
 
 	if not project.funcSignatures.contains(callee) 'unknownFn'
+		// ⭐⭐ **E3095, AND IT IS A SECOND PASS RE-EXAMINING A RESOLUTION ALREADY MADE — DELIBERATELY NOT
+		// E3063's SHAPE (N1c).**
+		//
+		// The typealias twin is a candidate-set computation baked INTO the lookup: the alias registry holds
+		// every declaration of a contested name under one bare key, so the ambiguity is discovered while
+		// resolving. Nothing of the sort is true here. A contested free function has NO bare declaration —
+		// each was registered under its own directory-qualified spelling — so by the time this pass runs the
+		// parser has already resolved the bare callee, already failed to give it a local meaning
+		// (`Parser.parseCallNamed`'s local-namespace tier), and is one line away from being told there is no
+		// such function. The candidate set has to be RECONSTRUCTED from the contest index, against a decision
+		// that has already been taken. That is the same relationship v1 draws between its two diagnostics
+		// (`TypeResolution.maybeEmitAmbiguousCrossFileCall` runs after `qualifyCalleeForContextWithType` has
+		// silently picked a first match) reached by shv2's own structure rather than copied from it.
+		//
+		// ⚠ **IT SITS INSIDE THE `unknownFn` ARM, WHICH IS THE POINT.** "There is no function of this name"
+		// and "there are two and you must say which" are answers to one question, and only one of them may be
+		// given. Reporting E3095 ahead of the arm would leave E3004 to fire as well; reporting it after would
+		// never reach it.
+		if reportAmbiguousCrossFileCall(project, signatures: signatures, funcNames: funcNames, callee: callee, callRange: callRange, filePath: filePath) 'ambiguousAcrossDirectories'
+			return
+		end 'ambiguousAcrossDirectories'
+
 		reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{String.from(noun)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'unknownFn'
@@ -2051,6 +2079,44 @@ function calleeVisibleFrom(signatures ProgramSignatures, funcNames FunctionNameI
 
 	return signatures.isVisibleFrom(declared.visibility, declFilePath: declared.sourceFilePath, readerFilePath: readerFilePath)
 end 'calleeVisibleFrom'
+
+// ⭐⭐ **E3095 — A BARE CALL THAT COULD MEAN MORE THAN ONE DIRECTORY'S DECLARATION (N1c).** Answers whether
+// it reported, so `validateCall` can suppress the "no such function" it would otherwise give the same call.
+//
+// **THE CANDIDATE SET IS RECONSTRUCTED, NOT LOOKED UP**, which is the whole shape difference from E3063.
+// It walks every qualified spelling the contest index recorded for the bare name and keeps the ones that are
+// (a) really declared and (b) visible from this file — the second test being the one that stops a
+// file-private or out-of-subtree declaration from being offered as a fix the user cannot take. FEWER THAN
+// TWO survivors is not an ambiguity: with one, the caller's real mistake is that it did not qualify a name
+// it could have; with none, `validateCall`'s own E3004 is the honest answer and this stays quiet.
+//
+// ⚠ **`CalleeMint.notMinted` IS PASSED TO `calleeVisibleFrom` AND IT IS NOT A GUESS**: a contested name is
+// one a USER declared as a free function in two directories, so every candidate is a name the author wrote.
+// A minted callee is never in the contest index at all.
+//
+// Sorted through the shared `insertCandidateName`, so E3063 and E3095 order their candidates by one rule —
+// see there for why shv2 cannot inherit v1's unordered rendering.
+function reportAmbiguousCrossFileCall(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, callRange SourceRange, filePath FilePath) returns bool
+	var candidates = StringArray.create()
+	for spelling in signatures.contestedFreeFunctionSpellings(callee) 'eachSpelling'
+		if not project.funcSignatures.contains(spelling) 'noSuchDeclarationAfterAll'
+			continue
+		end 'noSuchDeclarationAfterAll'
+
+		if not calleeVisibleFrom(signatures, funcNames: funcNames, callee: spelling, mint: CalleeMint.notMinted, readerFilePath: filePath) 'notAFixThisFileCouldTake'
+			continue
+		end 'notAFixThisFileCouldTake'
+
+		insertCandidateName(candidates, candidate: String.from(spelling))
+	end 'eachSpelling'
+
+	if candidates.count() < 2 'notAnAmbiguity'
+		return false
+	end 'notAnAmbiguity'
+
+	reportPositioned(project, code: ErrorCode.semanticAmbiguousCrossFileCall, message: "Ambiguous bare-name call to '{String.from(callee)}': multiple visible definitions found. Qualify with a directory name. Candidates: {renderCandidateList(candidates)}", line: callRange.line, column: callRange.column, filePath: filePath)
+	return true
+end 'reportAmbiguousCrossFileCall'
 
 // The two refusals, told apart by the TIER the declaration wrote — E3008 for a file-private callee, E3088
 // for one scoped to a directory subtree the caller is outside of. Both messages are the reference

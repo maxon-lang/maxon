@@ -3083,6 +3083,27 @@ typealias FileModuleDirectoryMap = Map with (String, String)
 // Every FREE function's namespace-qualified spelling (N1b). See
 // `ProgramSignatures.namespaceQualifiedFunctions`.
 typealias NamespaceQualifiedFunctionSet = Set with ByteArray
+// Bare free-function name ⇒ the module directory of the file that FIRST declared it (N1c). See
+// `ProgramSignatures.freeFunctionDirectories`.
+typealias FreeFunctionDirectoryMap = Map with (ByteArray, String)
+// Bare free-function name ⇒ every namespace-qualified spelling of it, for the names more than one
+// DIRECTORY declares (N1c). See `ProgramSignatures.contestedFreeFunctions`.
+typealias ContestedFreeFunctionMap = Map with (ByteArray, ByteArrayArray)
+
+// ⭐ **WHAT ONE FREE-FUNCTION DECLARATION DID TO ITS BARE NAME (N1c)** — the answer
+// `ProgramSignatures.noteFreeFunctionDeclaration` gives the fold, and the reason the fold has anything to do
+// at all. `newlyContested` carries the INCUMBENT's registration name because that declaration's sweep
+// entries were written under the bare key back when it was the only one, and only this moment knows where
+// they now belong.
+union FreeFunctionContest
+	uncontested
+	newlyContested(incumbentRegistrationName ByteArray)
+	alreadyContested
+end 'FreeFunctionContest'
+
+// ⭐ THE ONE EMPTY spelling list every UNCONTESTED free-function name answers with — so the E3095 probe
+// costs one map miss and no allocation on every call the compiler validates. NEVER mutated.
+let sharedEmptyContestedSpellings = ByteArrayArray.create()
 
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
@@ -3419,6 +3440,28 @@ export type ProgramSignatures
 	// `utils.Point.create` entry would be a second spelling of a name that already has one, competing with
 	// the type reading of the same tokens for nothing.
 	var namespaceQualifiedFunctions as NamespaceQualifiedFunctionSet
+	// ⭐⭐ **THE MODULE DIRECTORY OF THE FILE THAT FIRST DECLARED EACH BARE FREE-FUNCTION NAME (N1c)** — the
+	// whole input to the cross-namespace contest, and one entry per free function name in the program.
+	//
+	// It stores only the FIRST directory because that is all the contest needs: a second declaration either
+	// matches it (same namespace ⇒ an ordinary duplicate, which `commitFuncSignatures` still refuses) or does
+	// not (⇒ contested, and from then on the answer lives in `contestedFreeFunctions`). A per-name array of
+	// every directory would allocate for every free function in the program to record a fact almost no name
+	// has.
+	var freeFunctionDirectories as FreeFunctionDirectoryMap
+	// ⭐⭐ **THE BARE NAMES DECLARED AS A FREE FUNCTION IN MORE THAN ONE DIRECTORY ⇒ EVERY QUALIFIED SPELLING
+	// OF THEM (N1c).** EMPTY for every program in the corpus and for the compiler's own source, which is what
+	// makes this mechanism byte-neutral: a name nobody contests is registered under exactly the bytes it was
+	// before, so no committed fragment moves.
+	//
+	// ⭐ **MEMBERSHIP IS THE FLAG AND THE VALUE IS THE CANDIDATE LIST — one structure, not two.** A separate
+	// "is contested" set beside a "spellings" map would be the same fact filed twice, which is the shape every
+	// cross-file defect in this compiler has had.
+	//
+	// ⚠ **A ROOT-LEVEL DECLARATION CONTRIBUTES NO SPELLING**, because it has none: the root IS the
+	// unqualified namespace. Its entries keep the BARE key, so a bare call still resolves to it — which is the
+	// nearest-enclosing rule (the root encloses every reader) reached by construction rather than by a test.
+	var contestedFreeFunctions as ContestedFreeFunctionMap
 
 	// ⚠ **THE SEEDED ALIASES' DECLARING FILES ARE STAMPED HERE, AND NOTHING ELSE CAN DO IT (N1c).**
 	// `RangedAliasRegistry.create` supplies two declarations of files the sweep never visits, so
@@ -3436,7 +3479,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -3666,7 +3709,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, namespaceQualifiedFuncNames ByteArrayArray, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// ⭐ **THE USER HALF OF THE SHADOW CONTEST (A1s wave 2)** — recorded from the SAME declaration arrays
 		// the registries below are built from, so "what the user declared" and "what the index holds" are one
 		// walk. Every KIND is noted, not just the four nominal ones: the contest is asymmetric on purpose (see
@@ -3680,13 +3723,30 @@ export type ProgramSignatures
 			self.recordAlias(alias)
 		end 'eachAlias'
 
-		// Namespace-qualified FREE-FUNCTION spellings (N1b) travel by NAME and carry no ids, so they fold
-		// here beside the aliases, ahead of the interner reconciliation. EMPTY for every root-level file —
-		// the root is the global namespace and a root declaration has no qualifier to be named by — which
-		// is why a single-directory program pays nothing for this.
-		for qualifiedName in namespaceQualifiedFuncNames 'eachNamespaceQualifiedFunction'
-			self.recordNamespaceQualifiedFunction(qualifiedName)
-		end 'eachNamespaceQualifiedFunction'
+		// ⭐⭐ **THE FREE-FUNCTION NAMESPACE PASS, AND IT RUNS BEFORE ANY PER-FUNCTION TABLE IS FOLDED (N1c).**
+		// It does two jobs off one walk: it files each free function's directory-qualified spelling (N1b's
+		// set, which a dotted callee asks through), and it decides whether the bare name is now declared in
+		// more than one DIRECTORY.
+		//
+		// ⚠ **THE POSITION IS LOAD-BEARING, not tidiness.** When this file is the one that makes a name
+		// contested, the INCUMBENT's sweep entries have to be moved off the bare key — and they are readable
+		// there only until this file's own fold overwrites them, which is the very next thing that happens.
+		// One line later and the incumbent's return type, throws clause and defaults would be this file's.
+		// The file's OWN entries are moved at the END of the fold, where they exist to be moved.
+		for bareName in freeFunctionNames 'eachFreeFunction'
+			if not moduleDirectory.isEmpty() 'namespacedFile'
+				self.recordNamespaceQualifiedFunction(namespaceQualifiedName(namespaceForModuleDirectory(moduleDirectory), name: bareName))
+			end 'namespacedFile'
+
+			match self.noteFreeFunctionDeclaration(bareName, moduleDirectory: moduleDirectory) 'contest'
+				uncontested then continue
+				// Already contested ⇒ the incumbent was moved when the SECOND directory appeared, and a third
+				// has nothing left to move. This file's own entries are moved at the end of the fold, where
+				// they exist.
+				alreadyContested then continue
+				newlyContested(incumbentRegistrationName) then self.refileContestedFreeFunction(bareName, registrationName: incumbentRegistrationName)
+			end 'contest'
+		end 'eachFreeFunction'
 
 		// Inner ranged typealiases (P1.6-C) travel by NAME (a ranged alias's underlying is the `int`/
 		// `float` keyword — no ids), so they fold alongside the ranged aliases, before the interner
@@ -3801,12 +3861,31 @@ export type ProgramSignatures
 			for entry in scanned 'eachUnmapped'
 				self.record(entry.name, returnType: entry.returnType, declaredSurface: entry.declaredSurface)
 			end 'eachUnmapped'
-			return
-		end 'idsUnchanged'
+		end 'idsUnchanged' else 'idsMoved'
+			for entry in scanned 'eachRemapped'
+				self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface)
+			end 'eachRemapped'
+		end 'idsMoved'
 
-		for entry in scanned 'eachRemapped'
-			self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface)
-		end 'eachRemapped'
+		// ⭐⭐ **THIS FILE'S OWN CONTESTED FREE FUNCTIONS, MOVED OFF THE BARE KEY (N1c)** — the second half of
+		// the pass that opened this fold, and it has to be HERE because it moves entries the loops above have
+		// only just written. The scan that wrote them ran before the contest was known and could not have
+		// named them anything else.
+		//
+		// ⚠ **THE `idsUnchanged` BRANCH USED TO `return`, AND THIS IS WHY IT NO LONGER DOES.** An early return
+		// there would have skipped this for exactly the files whose interner ids happened not to move — a
+		// condition with nothing whatever to do with namespaces, so the bug would have been a function of
+		// which type names a file mentions.
+		//
+		// A program with no contested name does not enter the loop body at all: `isContestedFreeFunction` is
+		// a miss on an empty map for every name.
+		for bareName in freeFunctionNames 'eachFreeFunctionOfThisFile'
+			if not self.isContestedFreeFunction(bareName) 'keepsItsBareName'
+				continue
+			end 'keepsItsBareName'
+
+			self.refileContestedFreeFunction(bareName, registrationName: freeFunctionRegistrationName(bareName, moduleDirectory: moduleDirectory))
+		end 'eachFreeFunctionOfThisFile'
 	end 'foldFile'
 
 	// Add one declaration to the index AND fold it into the hash. The one write, so the table and the
@@ -4451,6 +4530,127 @@ export type ProgramSignatures
 	// `recordAlias`'s discipline, one write, so the set and the hash that keys every parse memo on it cannot
 	// disagree about what the index contains. See `namespaceQualifiedFunctions` for why the set carries the
 	// spelling alone and `DeclShapeNamespaceQualifiedFunction` for why it must ride the hash at all.
+	// ⭐⭐ **NOTE ONE FREE-FUNCTION DECLARATION, AND ANSWER WHAT THE FOLD OWES IT (N1c).**
+	//
+	// **THE RULE THIS IMPLEMENTS:** two declarations of one bare name in DIFFERENT directories are both
+	// accepted, and each is registered under its own namespace-qualified spelling — exactly as a method is
+	// registered `Type.method`. Two in the SAME directory keep the bare name and collide as they always did
+	// (`commitFuncSignatures`, E3006). ⇒ **a flat root-level pair still collides**, because root is one
+	// directory; the relaxation reaches only pairs a directory tells apart.
+	//
+	// ⚠ **IT IS DECIDED ON MODULE DIRECTORIES AND NEVER ON RENDERED NAMESPACES**, for N1a's measured reason:
+	// `namespaceForModuleDirectory` is not injective (`my/dir` and `my.dir` both render `my.dir`), so a
+	// contest decided on the rendered form would merge two structurally different directories into one
+	// namespace — the same defect the `.`-joined store produced for `Visibility.module`.
+	//
+	// It is v1's rule reached by a different route. v1 qualifies EVERY free function's key with its namespace
+	// (`maxon-selfhosted/Compiler/Parser.maxon:2062-2074`), so cross-namespace pairs land in different slots
+	// and never meet. shv2 qualifies ONLY a contested name, which gives the identical acceptance and identical
+	// refusals while leaving every uncontested function — that is, every function in the corpus, in `stdlib/`
+	// and in this compiler — registered under exactly the bytes it had before. Adopting v1's blanket
+	// qualification would rename every symbol in every namespaced file to buy nothing this does not.
+	export function noteFreeFunctionDeclaration(bareName ByteArray, moduleDirectory String) returns FreeFunctionContest
+		if self.contestedFreeFunctions.contains(bareName) 'alreadyContested'
+			self.addContestedSpelling(bareName, moduleDirectory: moduleDirectory)
+			return FreeFunctionContest.alreadyContested
+		end 'alreadyContested'
+
+		let incumbentDirectory = try self.freeFunctionDirectories.get(bareName) otherwise 'firstDeclarationOfThisName'
+			self.freeFunctionDirectories.upsert(bareName, value: moduleDirectory)
+			return FreeFunctionContest.uncontested
+		end 'firstDeclarationOfThisName'
+
+		if incumbentDirectory.equals(moduleDirectory) 'sameDirectoryIsAnOrdinaryDuplicate'
+			return FreeFunctionContest.uncontested
+		end 'sameDirectoryIsAnOrdinaryDuplicate'
+
+		// The INCUMBENT is filed alongside the newcomer, and its registration name is handed back so the fold
+		// can move the entries it already wrote — the same "every declaration or none" invariant
+		// `RangedAliasRegistry.record` keeps for a contested alias, and for the same reason: an index holding
+		// only the newcomer's would answer with the WRONG declaration for the incumbent's own callers.
+		// The INCUMBENT is filed BEFORE the newcomer so the candidate list reads in declaration order, and its
+		// registration name is handed back so the fold can move the entries it already wrote.
+		self.addContestedSpelling(bareName, moduleDirectory: incumbentDirectory)
+		self.addContestedSpelling(bareName, moduleDirectory: moduleDirectory)
+
+		return FreeFunctionContest.newlyContested(freeFunctionRegistrationName(bareName, moduleDirectory: incumbentDirectory))
+	end 'noteFreeFunctionDeclaration'
+
+	// File one contested declaration's qualified spelling.
+	//
+	// ⚠ **A ROOT DECLARATION CONTRIBUTES NONE, and the entry may therefore be created by the SECOND call** —
+	// which is why the flag is the entry's existence and the two calls above are unconditional. A root
+	// declaration has no qualified spelling to offer a user and no qualified key for a call to route
+	// through; its entries keep the bare key, and a bare call finds it.
+	function addContestedSpelling(bareName ByteArray, moduleDirectory String)
+		if moduleDirectory.isEmpty() 'theRootHasNoQualifiedSpelling'
+			return
+		end 'theRootHasNoQualifiedSpelling'
+
+		var spellings = try self.contestedFreeFunctions.get(bareName) otherwise ByteArrayArray.create()
+		spellings.push(namespaceQualifiedName(namespaceForModuleDirectory(moduleDirectory), name: bareName))
+		self.contestedFreeFunctions.upsert(bareName, value: spellings)
+	end 'addContestedSpelling'
+
+	// Is this bare name declared as a free function in more than one directory? The one flag every reader
+	// asks — the parser's declaration mint, its call doors, and `SemanticCheck`'s E3095.
+	export function isContestedFreeFunction(bareName ByteArray) returns bool
+		return self.contestedFreeFunctions.contains(bareName)
+	end 'isContestedFreeFunction'
+
+	// Every qualified spelling of a contested bare name, in DECLARATION order. `SemanticCheck` filters it by
+	// what the reader may actually see before rendering E3095's candidate list.
+	export function contestedFreeFunctionSpellings(bareName ByteArray) returns ByteArrayArray
+		return try self.contestedFreeFunctions.get(bareName) otherwise sharedEmptyContestedSpellings
+	end 'contestedFreeFunctionSpellings'
+
+	// ⭐ **THE NAME A FREE FUNCTION DECLARED IN `moduleDirectory` IS REGISTERED UNDER once its bare name is
+	// contested** — and the BARE name when that directory is the root, which is not a fallback but the rule:
+	// the root is the unqualified namespace, so a root declaration has no qualifier to be named by.
+	export function freeFunctionRegistrationName(bareName ByteArray, moduleDirectory String) returns ByteArray
+		if moduleDirectory.isEmpty() 'theRootIsTheUnqualifiedNamespace'
+			return bareName
+		end 'theRootIsTheUnqualifiedNamespace'
+
+		return namespaceQualifiedName(namespaceForModuleDirectory(moduleDirectory), name: bareName)
+	end 'freeFunctionRegistrationName'
+
+	// ⭐⭐ **MOVE ONE ALREADY-FOLDED FREE FUNCTION'S SWEEP ENTRIES FROM THE BARE KEY TO ITS QUALIFIED ONE
+	// (N1c).** Called by `foldFile` at the moment a name becomes contested (for the INCUMBENT, whose entries
+	// were written when it was the only declaration) and at the end of a contested file's own fold (for
+	// ITSELF, whose entries were written under the bare key by a scan that could not yet know).
+	//
+	// ⚠ **THE BARE ENTRIES ARE COPIED, NOT MOVED, AND THAT IS DELIBERATE.** A bare name whose declarations
+	// all moved must still ANSWER "some declaration binds this name" — that is what lets `SemanticCheck`
+	// report E3095 ("declared, twice, qualify it") where a removal would leave it reporting E3004 ("no such
+	// function"), the blunter and wrong answer. Which of the stale bare entries survives does not matter: the
+	// only call that reads one is a bare call to a contested name, and that call is E3095.
+	//
+	// ⚠ **NO HASH MIXING.** Every fact copied here was already mixed into the parse-memo hash under its bare
+	// name by the record function that wrote it, and the qualified key is DERIVED from declarations that hash
+	// already covers — mixing again would make the memo key depend on the copy rather than on the program.
+	export function refileContestedFreeFunction(bareName ByteArray, registrationName ByteArray)
+		if registrationName.equals(bareName) 'aRootDeclarationKeepsTheBareKey'
+			return
+		end 'aRootDeclarationKeepsTheBareKey'
+
+		if let returnType = try self.returnTypes.get(bareName) 'hasReturnType'
+			self.returnTypes.upsert(registrationName, value: returnType)
+		end 'hasReturnType'
+		if let surface = try self.declaredReturnSurfaces.get(bareName) 'namesTheBufferAlias'
+			self.declaredReturnSurfaces.upsert(registrationName, value: surface)
+		end 'namesTheBufferAlias'
+		if let consumes = try self.funcParamConsumes.get(bareName) 'consumesAParameter'
+			self.funcParamConsumes.upsert(registrationName, value: consumes)
+		end 'consumesAParameter'
+		if let defaults = try self.funcParamDefaults.get(bareName) 'hasParameterDefaults'
+			self.funcParamDefaults.upsert(registrationName, value: defaults)
+		end 'hasParameterDefaults'
+		if let clause = try self.funcThrows.get(bareName) 'throws'
+			self.funcThrows.upsert(registrationName, value: clause)
+		end 'throws'
+	end 'refileContestedFreeFunction'
+
 	function recordNamespaceQualifiedFunction(qualifiedName ByteArray)
 		self.namespaceQualifiedFunctions.insert(qualifiedName)
 		self.hash = mixBytes(mix(self.hash, value: DeclShapeNamespaceQualifiedFunction), bytes: qualifiedName)
@@ -5028,16 +5228,35 @@ export type ProgramSignatures
 	// file-qualified key makes the guard a pure FILE comparison (equal names). Two distinct declarations
 	// in one file cannot share a source position, so a differing `(line, column)` is exactly a
 	// redeclaration.
+	// ⭐⭐ **IS THIS THE SECOND DECLARATION OF A TOP-LEVEL NAME? — asked of the WHOLE PROGRAM, not of one
+	// file (N1c).**
+	//
+	// **A GLOBAL'S NAME IS FLAT AND PROJECT-WIDE, and that is the ruling rather than an implementation
+	// detail.** Namespacing scopes typealiases (E3063) and free functions (E3095); it deliberately does NOT
+	// scope top-level bindings, because neither reference gives a binding a directory-qualified spelling at
+	// all — v1 keys a module-scope `let` under its ENCLOSING TYPE (empty at file scope) and never under its
+	// namespace, and `dir.CONSTANT` is not a form the language has. ⇒ two `export let LIMIT` are one name
+	// declared twice, wherever the two files sit.
+	//
+	// ⛔ **THIS USED TO EXEMPT EXACTLY THAT CASE, AND THE EXEMPTION WAS A SILENT WRONG ANSWER.** An arm
+	// labelled `crossFileExported` returned `false` whenever the winner's file differed from this
+	// declaration's — so `alpha/` and `beta/` each exporting `LIMIT` compiled clean and every reader in the
+	// program got ALPHA's value, `recordDecl` being first-wins. MEASURED at 42 where `beta`'s 34 was
+	// unreachable; v1 refuses the same program outright (`reportDuplicateConstant`).
+	//
+	// ⚠ **AND DELETING IT COSTS THE FILE-PRIVATE RULE NOTHING, which is why the exemption was never needed.**
+	// A file-private binding is filed under a FILE-SCOPED storage key (`topLevelStorageKey`), so two files'
+	// private `counter`s never share a winner and never reach this comparison — `recordedDeclFor` hands each
+	// file its own. The exemption only ever fired for declarations that DID share a key, which is precisely
+	// the collision it was letting through. `file-private-same-name-cross-file-var` is the control, and it
+	// stays green.
+	//
+	// The position comparison is what tells a SECOND declaration from the winner itself: `recordedDeclFor`
+	// answers with the first declaration of the key, so a decl that is not at the winner's position is a
+	// later one.
 	export function isRedeclaredBinding(decl TopLevelDecl) returns bool
 		let winner = self.recordedDeclFor(decl)
-
-		let winnerFileKey = fileScopedDeclKey(winner.name, declFilePath: winner.declFilePath)
-		let declFileKey = fileScopedDeclKey(decl.name, declFilePath: decl.declFilePath)
-		if not winnerFileKey.equals(declFileKey) 'crossFileExported'
-			return false
-		end 'crossFileExported'
-
-		return winner.nameLine != decl.nameLine or winner.nameColumn != decl.nameColumn
+		return winner.nameLine != decl.nameLine or winner.nameColumn != decl.nameColumn or not winner.declFilePath.toString().equals(decl.declFilePath.toString())
 	end 'isRedeclaredBinding'
 
 	function resolvedValueOf(index TopLevelDeclIndex) returns TopLevelConstantLookup

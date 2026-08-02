@@ -470,8 +470,10 @@ export union ParseError implements Error
 	// `reportParseError`) because the /specs codepoint-range spec pins a message-only expected with no
 	// `<file>:line:col:` prefix, so there is no line/column to carry.
 	byteStringCodepointRange(message String)
-	// A top-level name DECLARED more than once in one file — `let A = 1` then `let A = 2`, or a
-	// `let`/`var` collision on one name. Unlike the constant-evaluator arms below (raised during the
+	// A top-level name DECLARED more than once in the PROGRAM — `let A = 1` then `let A = 2` in one file, a
+	// `let`/`var` collision on one name, or (since N1c) two files that each `export let LIMIT`. A global's
+	// name is flat and project-wide: namespacing scopes typealiases and functions, never bindings, because
+	// neither reference gives a binding a directory-qualified spelling. Unlike the constant-evaluator arms below (raised during the
 	// sweep, recorded on the decl, re-thrown), this is raised DIRECTLY by the real parse when it reaches
 	// the later declaration (`raiseBindingFailure` via `ProgramSignatures.isRedeclaredBinding`). Renders
 	// as E3006, positioned at the LATER declaration's name — the top-level twin of the duplicate-FUNCTION
@@ -6405,7 +6407,7 @@ export type Parser
 		// ⭐ Every FREE function's DIRECTORY-QUALIFIED spelling (N1b) — `utils.helper` for a `helper` declared
 		// in `utils/` — so a `utils.helper()` written in another file can be told from a `Type.method` call of
 		// the same token shape. Empty for a root-level file, which is every file in a single-directory program.
-		var namespaceQualifiedFuncNames = ByteArrayArray.create()
+		var freeFunctionNames = ByteArrayArray.create()
 
 		let resume = self.pos
 		self.pos = 0
@@ -6541,7 +6543,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, namespaceQualifiedFuncNameOut: namespaceQualifiedFuncNames)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
 				continue
 			end 'isFunction'
 
@@ -6563,7 +6565,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, methodInnerAliasParamOut: methodInnerAliasParams, namespaceQualifiedFuncNameOut: namespaceQualifiedFuncNames)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
 				continue
 			end 'isTypeDecl'
 
@@ -6573,7 +6575,7 @@ export type Parser
 			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
 			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
 			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
-				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, namespaceQualifiedFuncNameOut: namespaceQualifiedFuncNames, isUnion: self.at(TokenKind.union))
+				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
 
@@ -6590,7 +6592,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, namespaceQualifiedFuncNames: namespaceQualifiedFuncNames, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
 		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
@@ -6980,7 +6982,7 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, namespaceQualifiedFuncNameOut ByteArrayArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		let nameTok = self.current()
 		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so its modifier —
 		// if any — is the token before that, and `static` is what marks a receiver-less method. Read after the
@@ -7004,17 +7006,31 @@ export type Parser
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		let funcName = self.declaredMethodName(nameTok)
 		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface))
-		// ⭐ **THE DIRECTORY-QUALIFIED SPELLING OF A FREE FUNCTION (N1b)** — recorded here, from the SAME token
-		// walk that records its return type, because it answers a question a CALL SITE in ANOTHER FILE asks: is
-		// `utils.helper(…)` a directory-qualified free call, or a static on a `type utils`? Only the
-		// whole-program index can say, and only this walk knows which file the declaration is in.
+		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME (N1b's qualified-spelling record, re-cut by N1c)** — recorded
+		// here, from the SAME token walk that records its return type, because it answers two questions only
+		// the whole-program index can: is `utils.helper(…)` a directory-qualified free call or a static on a
+		// `type utils` (N1b), and is this bare name declared as a free function in more than one directory
+		// (N1c)?
+		//
+		// ⚠ **IT USED TO PUSH THE QUALIFIED SPELLING AND NOW PUSHES THE BARE NAME, WHICH IS STRICTLY MORE
+		// INFORMATION FOR STRICTLY LESS WORK.** `foldFile` mints the qualified spelling from the file's module
+		// directory, which it needs anyway to decide the contest — so the join happens once, there, instead of
+		// once here and again there. And the ROOT-level gate is gone with it: a root declaration has no
+		// qualified spelling but it is still a free function that CONTESTS a bare name, and excluding it here
+		// made the contest blind to exactly the declaration that wins it.
 		//
 		// A METHOD is excluded by the `enclosingType` test, not by inspecting `funcName`: it is already keyed
 		// `Type.method`, whole-program and namespace-free, in both references. See
 		// `ProgramSignatures.namespaceQualifiedFunctions`.
-		if self.enclosingType.isEmpty() and not self.namespace.isEmpty() 'aFreeFunctionInANamespace'
-			namespaceQualifiedFuncNameOut.push(namespaceQualifiedName(self.namespace, name: funcName))
-		end 'aFreeFunctionInANamespace'
+		//
+		// ⚠ **`main` IS EXCLUDED, and it is v1's one exception too** (`maxon-selfhosted/Compiler/
+		// Parser.maxon:2062-2074` keys it bare rather than by namespace). The entry point is ONE name for the
+		// whole program: qualifying it would let two directories each declare a `main` and turn a hard
+		// duplicate into two silently-accepted entry points, neither of which `checkMainFunction` would find
+		// under the name it looks for.
+		if self.enclosingType.isEmpty() and not funcName.equals(MainFunctionName) 'aFreeFunction'
+			freeFunctionNameOut.push(funcName)
+		end 'aFreeFunction'
 		// ⭐ Whether the declaration takes a receiver decides where its own parameters sit in a CALL's
 		// argument list, so it is read here, once, and shared by the default scan below and the consume scan
 		// at the end of this routine — the two facts that are recorded CALL-ALIGNED.
@@ -8407,11 +8423,30 @@ export type Parser
 	// the key the index records and the key the `IrFunction` carries are one name derived one way.
 	// The alternative — the sweep recording `create` and the parse declaring `Point.create` — is
 	// not a subtle failure: every call would report E3004 against a name nothing declared.
+	// ⭐⭐ **AND A FREE FUNCTION WHOSE BARE NAME IS CONTESTED ACROSS DIRECTORIES IS DECLARED UNDER ITS
+	// DIRECTORY-QUALIFIED SPELLING (N1c)** — `alpha.duplicate` for a `duplicate` in `alpha/` when `beta/`
+	// declares one too. It is the same construction a method gets and lands in the same flat name space, so
+	// the two declarations have distinct signatures, distinct `IrFunction`s and distinct emitted symbols
+	// rather than one of them silently winning.
+	//
+	// ⚠ **GATED ON `allFilesFolded`, and the two passes MUST answer differently here.** The declaration sweep
+	// is what DISCOVERS the contest, so during it the answer is always the bare name — and `foldFile` moves
+	// the sweep's own entries onto the qualified key at the moment it learns better. The real parse runs
+	// against a complete index and mints the final name. Without the gate the answer would depend on how far
+	// the sweep had got, which is a property of the filesystem's walk order.
+	//
+	// ⚠ **`main` IS NEVER CONTESTED**, so it never reaches the qualifying arm — `recordScannedSignature`
+	// keeps the entry point out of the contest entirely, which is what leaves two `main`s a hard duplicate.
 	function declaredMethodName(nameTok Token) returns ByteArray
-		if self.enclosingType.isEmpty() 'freeFunction'
-			return nameTok.value
-		end 'freeFunction'
-		return qualifiedMethodName(self.enclosingType, methodName: nameTok.value)
+		if not self.enclosingType.isEmpty() 'method'
+			return qualifiedMethodName(self.enclosingType, methodName: nameTok.value)
+		end 'method'
+
+		if self.signatures.allFilesFolded and self.signatures.isContestedFreeFunction(nameTok.value) 'contestedAcrossDirectories'
+			return self.signatures.freeFunctionRegistrationName(nameTok.value, moduleDirectory: self.signatures.moduleDirectoryOf(self.filePath))
+		end 'contestedAcrossDirectories'
+
+		return nameTok.value
 	end 'declaredMethodName'
 
 	// ⭐⭐ **THE REGISTRATION NAME A DECLARATION CLAIMS — bare for the first of its name, MANGLED for a
@@ -8762,7 +8797,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, namespaceQualifiedFuncNameOut ByteArrayArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		// ⚠ **THE SWEEP MUST READ THE MODIFIER ITSELF**, and BACKWARDS, exactly as `recordScannedBinding`
 		// does: the caller's loop meets `export`/`module` as an ordinary token and steps over it, so the
 		// cursor arrives here already on the `type` keyword. Read forwards it would answer `file` for every
@@ -8845,7 +8880,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, namespaceQualifiedFuncNameOut: namespaceQualifiedFuncNameOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 				continue
 			end 'isMethod'
 
@@ -8960,7 +8995,7 @@ export type Parser
 	// followed by a character literal — byte-for-byte what `enumBodyEndsAt` recognizes as the ENUM's
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
-	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, namespaceQualifiedFuncNameOut ByteArrayArray, isUnion bool)
+	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, isUnion bool)
 		// Read BACKWARDS, before the keyword is consumed — see `recordScannedType` for why the sweep cannot
 		// read this modifier forwards.
 		let visibility = self.scannedVisibility()
@@ -8989,7 +9024,7 @@ export type Parser
 				self.pos = self.enumMethodKeywordIndex(self.pos)
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, namespaceQualifiedFuncNameOut: namespaceQualifiedFuncNameOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 				continue
 			end 'method'
 
@@ -26032,6 +26067,17 @@ export type Parser
 		// would count a chain that is one segment shorter every time round.
 		let qualifierDots = self.dottedChainLengthAt(self.pos)
 
+		// ⭐⭐ **THE WRITTEN QUALIFIER IS THE CALLEE WHEN THE BARE NAME IS CONTESTED (N1c).** Assembled BEFORE
+		// the cursor moves, for the same reason `qualifierDots` is.
+		//
+		// Ordinarily a directory qualifier is a ROUTE and the call resolves onto the bare declared name —
+		// N1b's thesis, and what keeps `utils.helper()` and `helper()` byte-identical. That holds precisely
+		// because a bare name names ONE function. Once two directories declare it, each is registered under
+		// its own qualified spelling (`declaredMethodName`), and the qualifier stops being a route and starts
+		// being the name: `alpha.duplicate()` must reach ALPHA's, and dropping the qualifier here would send
+		// it to whichever declaration happened to keep the bare key.
+		let writtenName = self.assembleDottedChainAt(self.pos, dots: qualifierDots)
+
 		// Stops ON the final segment rather than past it: `parseCallNamed` consumes that token itself (it may
 		// be a keyword standing as a name, D8) and then the `(`.
 		for _ in 0 upto qualifierDots 'eachQualifierSegment'
@@ -26039,7 +26085,9 @@ export type Parser
 			try self.consume(TokenKind.dot)
 		end 'eachQualifierSegment'
 
-		return try self.parseCallNamed(func, callee: self.current().value, anchor: headTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		let bareName = self.current().value
+		let callee = writtenName if self.signatures.isContestedFreeFunction(bareName) else bareName
+		return try self.parseCallNamed(func, callee: callee, anchor: headTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 	end 'parseNamespaceQualifiedCall'
 
 	// `Color.red` — the value of an enum/union case: its TAG, as an i64 `literal` (the raw value for
@@ -35109,8 +35157,41 @@ export type Parser
 
 		// A free call has no receiver and constructs no generic instance: there is no value to its left, and
 		// a generic type is instantiated only through a `Type.method` qualified call.
-		return try self.parseCallNamed(func, callee: calleeTok.value, anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		return try self.parseCallNamed(func, callee: self.freeCallCallee(calleeTok.value), anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 	end 'parseCall'
+
+	// ⭐⭐ **A BARE FREE CALL TO A CONTESTED NAME MEANS THIS DIRECTORY'S DECLARATION, IF THERE IS ONE (N1c)** —
+	// the "local namespace wins" tier both references have, and the reason a file in `alpha/` goes on calling
+	// `duplicate()` unqualified after `beta/` declares one too.
+	//
+	// ⚠ **IT IS APPLIED AT THE FREE-CALL DOOR AND NOT INSIDE `parseCallNamed`, WHICH IS WHERE IT WAS FIRST
+	// WRITTEN.** That funnel also carries a sibling method (already mangled `Type.method`), a static call, a
+	// primitive-static mint and a receiver call, and a rewrite there is one condition away from moving one of
+	// them. Here the input is a bare identifier the author wrote with nothing to its left — the only shape
+	// this rule is about.
+	//
+	// ⛔ **THE FIRST VERSION ASKED THE WRONG INDEX AND WAS MEASURED WRONG.** It guarded on
+	// `not declaresCallee(bare)` — "rewrite only a name that resolves to nothing" — but the SWEEP's bare entry
+	// SURVIVES a contest by design (`refileContestedFreeFunction` copies rather than moves, so E3095 can be
+	// told from E3004), while the name a call must actually reach is decided by the MERGE registry. So the
+	// guard read `true` and the rewrite never ran: a bare `pick()` inside `alpha/`, next to `alpha/`'s own
+	// `export function pick`, was reported AMBIGUOUS. One fact, two indexes, two answers.
+	//
+	// ⚠ **THE PROBE IS ONE LEVEL AND DOES NOT WALK UP THE DIRECTORY CHAIN**, which is v1's behaviour too
+	// (`qualifyName(currentNamespace, bare)`, a single probe): a file in `alpha/sub/` does not see `alpha/`'s
+	// contested declaration bare and must qualify. Widening that is a resolution rule neither reference has
+	// and no case pins.
+	//
+	// A ROOT reader's local name IS the bare name, so both arms return the same bytes and the stale bare
+	// entry cannot change the answer.
+	function freeCallCallee(bareName ByteArray) returns ByteArray
+		if not self.signatures.isContestedFreeFunction(bareName) 'oneMeaningEverywhere'
+			return bareName
+		end 'oneMeaningEverywhere'
+
+		let local = self.signatures.freeFunctionRegistrationName(bareName, moduleDirectory: self.signatures.moduleDirectoryOf(self.filePath))
+		return local if self.signatures.declaresCallee(local) else bareName
+	end 'freeCallCallee'
 
 	// The call parser proper, taking the callee's NAME rather than reading it — because two call
 	// syntaxes produce one call, and only the name differs. `greet()` is its own token's text;

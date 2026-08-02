@@ -234,7 +234,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: specs/fragments/namespaces/error.cross-file-bare-name-ambiguous.test:16:9: Ambiguous bare-name call to 'duplicate': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.duplicate, beta.duplicate
+error E3095: app/specs/fragments/namespaces/error.cross-file-bare-name-ambiguous.test:18:9: Ambiguous bare-name call to 'duplicate': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.duplicate, beta.duplicate
 ```
 
 <!-- test: bare-sibling-instance-method-call-injects-self -->

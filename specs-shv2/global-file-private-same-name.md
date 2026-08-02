@@ -66,3 +66,54 @@ end 'main'
 ```exitcode
 118
 ```
+
+
+<!-- test: error.exported-global-in-two-directories -->
+The INVERSE of the rule above, and the reason that rule needs the word "file-private". An
+`export`ed top-level binding is ONE name for the whole program — there is no directory-qualified
+spelling of a global in either reference compiler — so two files that each `export let LIMIT`
+are declaring one name twice, and the second is refused wherever it sits.
+
+Two DIRECTORIES are used deliberately: namespacing scopes typealiases and functions, and it
+would be an easy mistake to extend it to bindings, where neither reference does. A reader would
+then get whichever declaration was folded first, silently.
+
+MEASURED before this was refused: the program below compiled clean and exited **42** — `alpha`'s
+declaration won and `beta`'s 34 was unreachable — where the same program is a hard duplicate in
+the self-hosted reference (`reportDuplicateConstant`).
+```maxon
+// --- file: alpha/a.maxon
+export let LIMIT = 42
+
+// --- file: beta/b.maxon
+export let LIMIT = 34
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return LIMIT as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3006: beta/<fragment>:6:12: duplicate definition of 'LIMIT'
+```
+
+
+<!-- test: error.exported-global-in-two-files-one-directory -->
+The same refusal with both declarations in ONE directory, pinning that it is not a directory
+rule wearing a duplicate's clothes: a global's name is flat and project-wide, so the two files'
+relative position never enters into it.
+```maxon
+// --- file: lib/a.maxon
+export let LIMIT = 42
+
+// --- file: lib/b.maxon
+export let LIMIT = 34
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return LIMIT as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3006: lib/<fragment>:6:12: duplicate definition of 'LIMIT'
+```

@@ -299,3 +299,158 @@ end 'main'
 ```maxoncstderr
 error E3105: api/specs/fragments/namespace-qualified-resolution/error.same-directory-underlying-conflict-is-reported-once.test:6:18: Typealias 'Score' is declared over 'float' here and over 'int' in another file — two files may declare one alias name over different RANGES, but not over different underlying types
 ```
+
+
+<!-- test: contested-free-function-pair-routes-each-qualifier-to-its-own -->
+The FUNCTION half of directory-as-module, and the case a bare-name registry cannot express: two
+directories each `export function pick`, and BOTH are callable through their own qualifier.
+
+The two answers are deliberately distinct and combined positionally (`a * 10 + b`), so neither
+direction of aliasing can pass by coincidence: correct is 35; both calls reaching `alpha`'s gives
+33, both reaching `beta`'s gives 55. That is exactly the wrong answer a compiler produces if it
+accepts the two declarations at decl time — which the language requires — but leaves them sharing
+one bare registration name, so a qualifier is a route rather than a name.
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 3
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 5
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick() * 10 + beta.pick()) as ExitCode
+end 'main'
+```
+```exitcode
+35
+```
+
+
+<!-- test: contested-free-function-bare-call-means-its-own-directory -->
+"Local namespace wins": once a name is contested, a file that declares one of the competitors goes
+on calling it UNQUALIFIED and means its own. Without this tier a directory would be forced to
+qualify its own declarations the moment an unrelated directory happened to pick the same name — and
+the diagnostic it would get instead is E3095, an ambiguity that is not one.
+
+Same 3/5/35 discrimination as the case above, reached through a bare call in each declaring file.
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 3
+end 'pick'
+
+export function localCaller() returns Integer
+	return pick()
+end 'localCaller'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 5
+end 'pick'
+
+export function localCaller() returns Integer
+	return pick()
+end 'localCaller'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.localCaller() * 10 + beta.localCaller()) as ExitCode
+end 'main'
+```
+```exitcode
+35
+```
+
+
+<!-- test: error.free-function-pair-in-one-directory-still-collides -->
+The boundary of the relaxation above, from the inside: two files in ONE directory share one
+namespace, so their `pick` declarations are one name declared twice and stay a hard duplicate. The
+reader qualifies with `dir.` and there is still only one thing that could mean.
+```maxon
+// --- file: dir/a.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 3
+end 'pick'
+
+// --- file: dir/b.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 5
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return dir.pick() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3006: dir/specs/fragments/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.test:12:17: duplicate definition of function 'pick'
+```
+
+
+<!-- test: error.flat-root-level-free-function-pair-still-collides -->
+The same boundary from the other side, and the one every pre-existing cross-file collision case in
+this suite stands on: ROOT is a directory — the global namespace — so two root-level files declaring
+`pick` share a namespace and collide exactly as they always did. A relaxation that keyed the contest
+on "different FILE" rather than "different DIRECTORY" would un-collide the whole of
+`type-name-collision.md` and `stdlib-user-shadows.md`, whose fixtures are all flat and root-level.
+```maxon
+// --- file: a.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 3
+end 'pick'
+
+// --- file: b.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 5
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return pick() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3006: specs/fragments/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.test:12:17: duplicate definition of function 'pick'
+```
+
+
+<!-- test: error.two-main-declarations-in-different-directories-still-collide -->
+`main` is the ONE free function never qualified by its directory, in both this compiler and the
+self-hosted reference: the entry point is one name for the whole program. Qualifying it would turn a
+hard duplicate into two silently-accepted entry points, neither of which the entry-point check would
+find under the name it looks for.
+```maxon
+// --- file: alpha/m.maxon
+function main() returns ExitCode
+	return 1
+end 'main'
+
+// --- file: beta/m.maxon
+function main() returns ExitCode
+	return 2
+end 'main'
+```
+```maxoncstderr
+error E3006: beta/specs/fragments/namespace-qualified-resolution/error.two-main-declarations-in-different-directories-still-collide.test:8:10: duplicate definition of function 'main'
+```
