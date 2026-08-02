@@ -453,8 +453,8 @@ end 'moduleTargetCpu'
 // holds at least one of these. Exhaustive, so a new op variant is a compile error, not a mis-classify.
 function opIsArm64Band(op TargetOp) returns bool
 	return match op 'p'
-		prologue to leaRegRdata gives false
-		arm64Ret to arm64Syscall gives true
+		prologue to minsdRegReg gives false
+		arm64Ret to arm64Fcsel gives true
 		// P1.5-A1: the x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
 		// arm64 band (band-append), but they are x64 ops, so `false` — a module is NOT arm64 for holding them.
 		leaRegFunc to x64Syscall gives false
@@ -551,6 +551,11 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		// The LABEL is printed for the same reason `leaRegGlobal`'s is: a fragment showing which
 		// `.rdata` record a `lea` names makes a wrong record a reviewable diff.
 		leaRegRdata(dest, label) gives "leaRegRdata {vregName(dest)}, [rip + {String.from(label)}]"
+		// `minsd` prints its real mnemonic, unlike `absF64RegReg` above: it IS one instruction, so
+		// there is no encoder expansion for a golden to leak. Both operands are shown because the
+		// ORDER is semantic here — `minsd` answers with its second source on a NaN — so a fragment
+		// that showed only the destination could not catch a swap.
+		minsdRegReg(dest, lhs, rhs) gives "minsd {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// Each arm64 operand prints through `arm64VregName` (its `RegNum` mapped to an arm64 register
@@ -615,6 +620,11 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		arm64FpLoadRdata(dest, label) gives "fpLoadRdata {arm64VregName(dest)}, [rdata + {String.from(label)}]"
 		arm64ImportCall(slotIndex) gives "importCall {slotIndex}"
 		arm64Syscall(number) gives "syscall {number}"
+		// `fcsel` prints its condition, like `arm64Cset` and unlike `arm64Frint` (whose mode is part of
+		// its mnemonic). The condition is the whole NaN argument for `min` on this target — `mi` is what
+		// makes an unordered compare pick the second operand — so a fragment that hid it could not catch
+		// the one substitution that silently changes the answer.
+		arm64Fcsel(dest, ifTrue, ifFalse, cond) gives "fcsel {arm64VregName(dest)}, {arm64VregName(ifTrue)}, {arm64VregName(ifFalse)}, {cond.name}"
 		leaRegFunc(dest, funcName) gives "leaRegFunc {vregName(dest)}, [rip + {String.from(funcName)}]"
 		callReg(reg) gives "callReg {vregName(reg)}"
 		x64Syscall(number) gives "x64Syscall {number}"

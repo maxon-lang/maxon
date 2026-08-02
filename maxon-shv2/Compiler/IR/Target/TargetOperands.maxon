@@ -329,6 +329,13 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// The `.rdata` address `lea` (P1.2 wave A) — one plain def, no uses, exactly like
 		// `leaRegGlobal`: a RIP-relative `lea` reads no allocatable register.
 		leaRegRdata(dest, _) then pushDef(buf, vreg: dest)
+		// `minsd` (specs/min.md) is TWO-ADDRESS like the four SSE ALU ops, not a plain def like
+		// `sqrtsd` beside it: it computes `dest < src ? dest : src`, so `dest` must arrive holding
+		// `lhs` and reads its own previous value. Declaring a plain def here would let the allocator
+		// give `dest` a register `lhs` does not occupy and emit no copy, and the op would compare
+		// whatever happened to be there. ⚠ The two uses are ORDERED — `minsd` is not commutative on a
+		// NaN, so `lhs` and `rhs` are not interchangeable (see `TargetOp.minsdRegReg`).
+		minsdRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// The COMPLETE operand model for the arm64 arms — the contract wave 1's encoder + allocator
@@ -397,6 +404,11 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// `arm64BranchLink` do (both `break` above). The Linux `svc` additionally writes x8, which the
 		// same call clobber already covers.
 		arm64ImportCall to arm64Syscall then break 'operands'
+		// `fcsel` (specs/min.md) — a 3-address PLAIN def with two uses, `arm64Fadd`'s shape exactly.
+		// It additionally READS the flags a preceding `arm64Fcmp` set, which no operand model on this
+		// target expresses (`arm64Cset` reads them too and is likewise a bare def); the isel emits the
+		// pair back to back and nothing between them writes NZCV.
+		arm64Fcsel(dest, ifTrue, ifFalse, _) then pushDefTwoUse(buf, dest: dest, a: ifTrue, b: ifFalse)
 		// P1.5-A1 (x64): `leaRegFunc` is ONE plain def, no uses — exactly like `leaRegRdata`. `callReg`
 		// carries ONE use, the callee register (unlike `callDirect`/`iatCall`, which have no explicit
 		// operand); its caller-saved clobber is metadata (`implicitDefs`), applied to values live ACROSS

@@ -4125,7 +4125,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// relocation — and there is no `movsd xmm, imm64` to rebuild it with even if the IEEE bits
 		// ARE an integer the compiler holds. `constValueOfDef` would panic. When someone
 		// generalizes remat to "an op with no register inputs", it buys BOTH of these at once.
-		andRegReg to leaRegRdata gives false
+		andRegReg to minsdRegReg gives false
 		// The arm64 band. `arm64MovImm` IS the arm64 constant materialization (the `movz`/`movk` ladder),
 		// so it is rematerializable exactly as x64's `movRegImm`/`movRegImm32` are — `constDefInfo` reads
 		// its immediate and `freshConstOp` re-emits a fresh `arm64MovImm`. Every other arm64 op reads a
@@ -4133,7 +4133,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// x64 ALU band above is not.
 		arm64Ret to arm64Cbnz gives false
 		arm64MovImm gives true
-		arm64Prologue to arm64Syscall gives false
+		arm64Prologue to arm64Fcsel gives false
 		// The P1.5-A1 function-value band (x64). `leaRegFunc` is the third instance of the
 		// `leaRegGlobal`/`leaRegRdata`/`movsdRegRip` `false`: it reads no register and its `.text` address
 		// cannot change, but it lives behind a relocation, not an integer `constValueOfDef` holds, so this
@@ -4900,9 +4900,9 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		movRegImm32(_, value) gives (value, false)
 		arm64MovImm(_, value) gives (value, true)
 		prologue to jcc panic("constDefInfo: def is not a constant materialization")
-		movRegReg to leaRegRdata panic("constDefInfo: def is not a constant materialization")
+		movRegReg to minsdRegReg panic("constDefInfo: def is not a constant materialization")
 		arm64Ret to arm64Cbnz panic("constDefInfo: def is not a constant materialization")
-		arm64Prologue to arm64Syscall panic("constDefInfo: def is not a constant materialization")
+		arm64Prologue to arm64Fcsel panic("constDefInfo: def is not a constant materialization")
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not const materializations —
 		// `opIsConstMaterialization` answers false for all, so none reaches here; named rather than swallowed.
 		leaRegFunc to x64Syscall panic("constDefInfo: def is not a constant materialization")
@@ -5039,6 +5039,10 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		// The `.rdata` address `lea` (P1.2 wave A) — substitutes its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(substituteVReg(dest, from: from, to: to), label: label)
+		// `minsd` substitutes all three XMM operands, keeping `lhs` and `rhs` in their own slots: the op
+		// is not commutative on a NaN, so a rewrite that treated the two sources as interchangeable
+		// would change the program's answer.
+		minsdRegReg(dest, lhs, rhs) then return TargetOp.minsdRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// The SAME `substituteVReg`-per-operand rewrite the x64 arms use — neutral over `TargetVReg`, so
@@ -5098,6 +5102,9 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// No register operand to substitute — both OS-call forms take their args pre-moved into x0..
 		// (like `arm64BranchLink` and `iatCall`).
 		arm64ImportCall to arm64Syscall then return op
+		// `fcsel` substitutes its three FP operands and carries its condition through. ⚠ `ifTrue` and
+		// `ifFalse` keep their own slots — exchanging them turns `min` into `max`.
+		arm64Fcsel(dest, ifTrue, ifFalse, cond) then return TargetOp.arm64Fcsel(substituteVReg(dest, from: from, to: to), ifTrue: substituteVReg(ifTrue, from: from, to: to), ifFalse: substituteVReg(ifFalse, from: from, to: to), cond: cond)
 		// P1.5-A1 (x64): `leaRegFunc` has one def to rewrite (like `leaRegRdata`); `callReg` has one use,
 		// the callee register (unlike `callDirect`/`iatCall`, which have no explicit operand and `return op`).
 		leaRegFunc(dest, funcName) then return TargetOp.leaRegFunc(substituteVReg(dest, from: from, to: to), funcName: funcName)

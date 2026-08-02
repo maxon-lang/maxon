@@ -210,6 +210,60 @@ end 'OpRole'
 //
 // ⚠ `binOp(div)` with an INTEGER `operandType` is ILLEGAL and the validator throws on it —
 // it would declare a trapping instruction pure. Integer division stays `StdOp.div`.
+//
+// ⭐⭐⭐ `min` (specs/min.md) IS APPENDED PAST `div`, AS THE SECOND FLOAT-ONLY MEMBER — same
+// membership argument as `div`'s: two operands, one result, all f64, and it cannot fault. What it
+// does NOT share with `div` is a single agreed hardware meaning, and that is what the rest of this
+// block is about.
+//
+// ⭐⭐ **THE DEFINITION: `min(a, b)` IS `a` WHEN `a < b`, AND `b` OTHERWISE.** One sentence, and it
+// settles NaN and signed zero at the same time, because `a < b` is FALSE whenever either operand is
+// NaN (IEEE-754's unordered rule) and FALSE for `+0.0 < -0.0` (they compare EQUAL). So:
+//
+//   min(nan, 5.0) = 5.0     min(5.0, nan) = nan     min(+0.0, -0.0) = -0.0     min(-0.0, +0.0) = +0.0
+//
+// ⇒ **IT IS DELIBERATELY NOT COMMUTATIVE.** That is not a defect of the definition, it is what any
+// definition reachable in one or two instructions on all three targets looks like; see below.
+// `binOpcodeIsCommutative` answers `false` for it, and so does v1's `CommuteForCoalescing` for the
+// same opcode. **A pass that swaps a `binOp(min)`'s operands changes its answer on NaN input.**
+//
+// ⭐⭐ **WHY THIS DEFINITION AND NOT IEEE'S `minimum` — THE THREE TARGET INSTRUCTIONS DISAGREE WITH
+// EACH OTHER, AND THAT IS A MEASURED FACT ABOUT BOTH REFERENCE COMPILERS, NOT A RISK.** The obvious
+// lowering is one native instruction per target, and the obvious lowering is WRONG:
+//
+//   • x64  `minsd xmm1, xmm2`  — returns SRC2 when the operands are unordered OR are both zeros.
+//                                It IS `a < b ? a : b`, exactly.
+//   • arm64 `fmin d0, d1, d2`  — IEEE NaN-PROPAGATING: a NaN in either operand gives a NaN, in
+//                                either order, and `fmin(+0,-0)` is `-0` in either order.
+//   • wasm  `f64.min`          — same as arm64's, and unlike x64's.
+//
+// **The bootstrap and v1 BOTH emit exactly those three, unreconciled**, so each of them answers
+// `min(nan, 5.0)` differently depending on which target it compiled for. Measured on the bootstrap's
+// x64 host: `min(nan, 5.0)` is `5.0` and `min(5.0, nan)` is `nan` — the `minsd` reading. Nothing in
+// `specs/min.md` exercises a NaN or a signed zero, so no suite on either compiler can see the split;
+// it is a wrong answer waiting for a corpus, and 'both references do it' is how it survived.
+//
+// ⇒ **shv2 PICKS ONE MEANING AND MAKES ALL THREE TARGETS EMIT IT.** The x64 reading is the one
+// picked, for three reasons, in order: it is the only one of the two that the OTHER two targets can
+// reproduce EXACTLY (see the lowerings — `fcmp`+`fcsel mi` and `f64.lt`+`select` are bit-for-bit
+// `a < b ? a : b`, whereas rebuilding NaN-propagation on x64 costs three SSE ops and still cannot
+// promise a NaN PAYLOAD); it keeps shv2 bit-identical to the bootstrap on the host target, where the
+// spec suite and the oracle both live; and it is one sentence a reader can implement, where IEEE's
+// `minimum` is a table.
+//
+// ⚠ THE PRICE, NAMED: `min` is then not commutative, and `min(a, b)` is not `-max(-a, -b)`. Both
+// follow from `a < b` being false on unordered, both are properties of the definition rather than of
+// any one target, and neither is observable by a program that never makes a NaN. `max` is not
+// implemented (it is its own spec at its own whitelist position); when it lands it takes the mirror
+// definition — `a` when `b < a`, else `b` — or the pair will disagree about NaN.
+//
+// ⚠ APPENDED AT THE END, PAST `div`, per the band-append invariant — and here that invariant did
+// real work: every `match` over this enum that carried a `div` arm had to gain a `min` arm, because
+// no range could swallow it. `div` and `min` are adjacent, so those arms mostly widened to
+// `div to min`; that adjacency is a convenience of the current order and NOT the definition of the
+// set. `stdBinOpcodeIsFloatOnly` is where the set is named, so a third float-only opcode that cannot
+// be appended adjacent to these two changes that one function rather than being silently misjudged
+// by a range whose endpoints happened to work.
 export enum StdBinOpcode
 	add
 	sub
@@ -221,7 +275,32 @@ export enum StdBinOpcode
 	shr
 	shrLogical
 	div
+	min
 end 'StdBinOpcode'
+
+// ⭐⭐ **THE STD BINARY OPCODES WITH NO INTEGER FORM** — THE one place that set is stated, for the
+// same reason `stdUnaryOperandIsFloat` exists beside `StdUnaryOpcode`: it is a property OF THE
+// OPCODE and not of any one backend, and it already had three would-be copies.
+//
+// `div` is float-only because the INTEGER division that shares its spelling traps (`idiv` faults on
+// a zero divisor and on `i64.min / -1`) and so needs `StdOp.div`'s own `isPure: false` — a `binOp`
+// carrying it would declare a trapping instruction pure. `min` is float-only because the language
+// has no integer `min` at all: `specs/min.md` types it `min(a float, b float) float` and the parser
+// promotes both operands before emitting the op.
+//
+// Its one CALLER is the boundary that must not CREATE an illegal op
+// (`LowerMaxonToStd.appendStdBinOp`), which is the only place the question can still be answered
+// before the op exists. The three backends' integer paths refuse the same opcodes through exhaustive
+// `match` arms rather than by calling this — a `match` over `StdBinOpcode` has to name them anyway,
+// and an arm that named them AND asked this would be the same fact stated twice. What they take from
+// here is the NAME: each panic points at this function instead of re-arguing which opcodes are
+// float-only, which is what the `div`-era messages did in three different sets of words.
+export function stdBinOpcodeIsFloatOnly(opcode StdBinOpcode) returns bool
+	return match opcode 'k'
+		add to shrLogical gives false
+		div to min gives true
+	end 'k'
+end 'stdBinOpcodeIsFloatOnly'
 
 // The Std-tier unary-operation opcodes carried by `StdOp.unaryOp`. M3 lands `neg`
 // (integer negate). A separate opcode set from StdBinOpcode because a unary op has

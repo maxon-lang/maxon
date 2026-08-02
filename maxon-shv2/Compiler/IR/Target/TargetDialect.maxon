@@ -893,6 +893,34 @@ export union TargetOp
 	// until it is consciously extended to `andRegReg to leaRegRdata`, exactly where `leaRegGlobal`
 	// already sits inside it.
 	leaRegRdata(dest TargetVReg, label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `minsd xmm1, xmm2/m64` (F2 0F 5D /r) — the `min` intrinsic (specs/min.md), and the ONE target
+	// where the language's definition of `min` is a single native instruction.
+	//
+	// ⭐⭐ **THE HARDWARE'S RULE IS THE LANGUAGE'S RULE HERE, WHICH IS WHY THIS IS THE READING shv2
+	// ADOPTED ON ALL THREE TARGETS.** `minsd dest, src` computes `dest < src ? dest : src` — it returns
+	// its SECOND source whenever that compare is not strictly true, which covers BOTH the unordered
+	// case (a NaN in either operand) and two zeros of opposite sign. That is exactly what
+	// `StdBinOpcode.min` defines `min` to be, so on x64 there is nothing to correct. arm64 and wasm are
+	// the targets that have to BUILD it, out of a compare and a select, because their native
+	// `fmin`/`f64.min` mean something else — read that header for why the choice went this way.
+	//
+	// ⚠ **NOT COMMUTATIVE — `lhs` AND `rhs` MAY NOT BE SWAPPED.** The two-address reuse makes `lhs` the
+	// operand that survives into `dest`, and `minsd` answers with its SECOND source on unordered input,
+	// so swapping the pair changes the answer for a NaN. `binOpcodeIsCommutative` is the only pass that
+	// would, and it says so.
+	//
+	// Genuinely two-address like the four SSE ALU ops (SSE has no 3-operand form without AVX), so —
+	// unlike `sqrtsd`/`roundsd`/`movq` above — `dest` is a REUSE-of-`lhs` def and the ALLOCATOR, not
+	// ISel, supplies `movsd dest, lhs` when `lhs` outlives the op. It writes no EFLAGS. An ordinary
+	// two-byte SSE form, so it shares `encodeSseRegReg` with `addsd` and friends.
+	//
+	// ⚠ APPENDED AT THE END OF THE x64 SSE BAND — past `leaRegRdata`, exactly where `sqrtsd`/`roundsd`/
+	// `movqGprXmm`/`absF64RegReg` went and for the reason their comments give, NOT beside `divsdRegReg`
+	// whose operand model it shares. Grouping it with the ALU ops it resembles would sit it INSIDE any
+	// future range arm meaning "the four SSE ALU ops"; the band's documented append point is the one
+	// position no existing or future range silently swallows. Every `andRegReg to leaRegRdata` arm was
+	// re-read and extended when this landed.
+	minsdRegReg(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// --- arm64-macOS SCALAR-CORE band (USER RULING 2026-07-17) ---
 	//
 	// APPENDED AT THE END OF THE UNION, one contiguous band, per the band-append invariant every
@@ -1074,6 +1102,36 @@ export union TargetOp
 	// `let`, so the mask is inline (`assertArm64CallClobbers` holds it equal to
 	// `arm64CallerSavedMask`).
 	arm64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F8000FFFF}
+	// `FCSEL Dd, Dn, Dm, cond` (0x1E600C00 | Rm<<16 | cond<<12 | Rn<<5 | Rd) — pick `ifTrue` when the
+	// flags a preceding `arm64Fcmp` set satisfy `cond`, else `ifFalse`. It exists for exactly one
+	// caller: the `min` intrinsic (specs/min.md).
+	//
+	// ⭐⭐ **arm64 HAS `fmin` AND shv2 DELIBERATELY DOES NOT EMIT IT.** `fmin d0, d1, d2` is IEEE
+	// NaN-PROPAGATING and treats −0.0 as less than +0.0 in either operand order, which is a DIFFERENT
+	// FUNCTION from the one `StdBinOpcode.min` defines (`a` when `a < b`, else `b` — see there for why
+	// that definition, and for the measurement showing both reference compilers ship the split). So
+	// arm64 spells `min` as `fcmp` + `fcsel …, mi`, two instructions, and the pair is EXACT rather than
+	// approximate: `fcmp` leaves N=0 on an unordered result, and `mi` tests N==1, so the condition is
+	// false whenever either operand is a NaN and false for `+0.0 < -0.0` — picking `ifFalse` in every
+	// one of those cases, which is precisely what x64's `minsd` returns. This is the same `mi` the float
+	// `<` comparison already lowers to (see `Arm64CondCode`), so the NaN rule is stated once for the
+	// target and read twice, never decided twice.
+	//
+	// ⚠ IT READS FLAGS AND SO MUST STAY ADJACENT TO ITS `arm64Fcmp`. That is not a new hazard: `fcmp` +
+	// `arm64Cset` is the existing shape for every materialised compare on this target, and the arm64
+	// spill/reload ops (`ldr`/`str`) do not write NZCV. The isel emits the two back to back.
+	//
+	// A 3-address PLAIN def with TWO uses (`arm64Fadd`'s operand shape) — `dest` is independent of both
+	// sources, so no seed copy. `cond` is an operand, not a separate op per condition, exactly as
+	// `arm64Frint` carries its rounding mode.
+	//
+	// ⚠ APPENDED AT THE END OF THE ARM64 BAND — after `arm64Syscall`, before the P1.5-A1 x64 ops, so the
+	// band stays CONTIGUOUS and `opIsArm64Band` still routes it to the arm64 encoder. Every
+	// `arm64Ret to arm64Syscall` range arm therefore failed to compile until it was consciously extended
+	// to `arm64Ret to arm64Fcsel`, which is the invariant working exactly as this band's header
+	// describes. Appending past the x64 tail instead would have left an arm64 op outside the range that
+	// DEFINES the arm64 band.
+	arm64Fcsel(dest TargetVReg, ifTrue TargetVReg, ifFalse TargetVReg, cond Arm64CondCode) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// --- P1.5-A1: x64 non-capturing function values ---
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past the arm64 band, per the band-append invariant every

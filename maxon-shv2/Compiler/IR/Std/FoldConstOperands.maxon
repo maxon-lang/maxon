@@ -280,10 +280,15 @@ function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
 		sub gives false
 		bitAnd to bitXor gives true
 		shl to shrLogical gives false
-		// Float division. Unreachable — `tryFoldBinOp` returns early for a float operand
-		// type, and `div` is float-only — but the answer is stated rather than defaulted:
-		// `a / b` is not `b / a`.
-		div gives false
+		// The two FLOAT-ONLY opcodes. Unreachable — `tryFoldBinOp` returns early for a float
+		// operand type — but the answer is stated rather than defaulted, and for `min` it is
+		// load-bearing rather than merely correct:
+		//   • `div` — `a / b` is not `b / a`.
+		//   • `min` — `min(a, b)` is `a` when `a < b` and `b` otherwise, and `a < b` is FALSE on
+		//     unordered, so `min(nan, 5.0)` is `5.0` while `min(5.0, nan)` is `nan`. A swap changes
+		//     the answer. v1 excludes its own `minF64` from commuting for exactly this reason
+		//     (`CommuteForCoalescing.maxon:269`). See `StdBinOpcode.min`.
+		div to min gives false
 	end 'o'
 end 'binOpcodeIsCommutative'
 
@@ -343,10 +348,11 @@ function constFitsBinOpImmediate(v ParsedInt, opcode StdBinOpcode) returns bool
 		sub gives fitsImm32(v) and v != i32.min
 		bitAnd to bitXor gives fitsImm32(v)
 		shl to shrLogical gives shiftCountIsUnguarded(v)
-		// Float division — NO constant fits, because there is no `divsd` form that takes an
-		// immediate at all. Unreachable (the float guard in `tryFoldBinOp` returns first),
-		// and `false` is the answer that stays correct if it ever stops being unreachable.
-		div gives false
+		// The two FLOAT-ONLY opcodes — NO constant fits either, because no SSE/NEON/wasm form of
+		// `divsd`/`minsd` takes an encoded immediate at all. Unreachable (the float guard in
+		// `tryFoldBinOp` returns first), and `false` is the answer that stays correct if it ever
+		// stops being unreachable.
+		div to min gives false
 	end 'o'
 end 'constFitsBinOpImmediate'
 

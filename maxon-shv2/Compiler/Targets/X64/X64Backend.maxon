@@ -197,6 +197,12 @@ let OpcodeCvttsd2si = 0x2C
 // has already selected scalar-double.
 let OpcodeSqrtsd = 0x51
 
+// minsd xmm, xmm/m64 (F2 0F 5D /r) — another ordinary two-byte scalar-double form, so it too shares
+// `encodeSseRegReg`. NO REX.W: both operands are XMM and the mandatory F2 has already selected
+// scalar-double. It computes `dest < src ? dest : src`, which is the language's whole definition of
+// `min` — see `TargetOp.minsdRegReg`.
+let OpcodeMinsd = 0x5D
+
 // movq r/m64, xmm (66 REX.W 0F 7E /r) — reg field = XMM SOURCE, r/m = GPR DEST. The BIT
 // REINTERPRETATION `float.hash` rests on: the same 64 bits, moved to the other register file, with
 // no conversion and no rounding.
@@ -1608,10 +1614,16 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// The `.rdata` address `lea` (P1.2 wave A) — `leaRegGlobal`'s twin, GPR dest, its label filed
 		// as an `.rdata` relocation. See `encodeLeaRegRdata`.
 		leaRegRdata(dest, label) then encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)
+		// `minsd` is a two-address SSE form like `addsd`, so `lhs` is deliberately unused for the same
+		// reason `absF64RegReg` ignores its `src`: the REUSE def means coloring has already made `dest`
+		// and `lhs` the same register, and naming `lhs` here would be a second claim about a fact the
+		// allocator established. `rhs` is the encoded source — and it is the operand `minsd` returns on
+		// an unordered compare, which is what makes `min`'s NaN behaviour come out right.
+		minsdRegReg(dest, _, rhs) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeMinsd, dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
 		// The arm64 band is encoded by the arm64 backend (`Arm64Backend`, wave 1), never here — the
 		// x64 encoder only ever sees x64 ops (`buildBackend` dispatches on `target.cpu`). The
 		// band-append invariant forced this arm; a panic keeps the ISA boundary loud.
-		arm64Ret to arm64Syscall then panic("emitTargetOp: an arm64 op reached the x64 encoder — the arm64 backend (wave 1) encodes the arm64 band")
+		arm64Ret to arm64Fcsel then panic("emitTargetOp: an arm64 op reached the x64 encoder — the arm64 backend (wave 1) encodes the arm64 band")
 		// The dense-match jump table: the full cmp/jae/lea/movsxd/lea/jmp sequence, its default-edge rel32
 		// and table-address rdata reloc filed inline, its per-slot block-address relocs recorded in
 		// `jumpTables` (resolved after the block loop). The arm64 jump table never reaches the x64 encoder.

@@ -119,3 +119,25 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: abs.error-arg-named -->
+The positional-argument rule is the MATH BUILTIN FAMILY's, not `min`'s alone: `abs`
+has no declaration either, so its one argument has no parameter for `x:` to name.
+Arity is irrelevant to the reason — a builtin has nothing to label at any position —
+so the arity-1 intrinsics answer with the same E2067 the arity-2 `min` does rather
+than with E2052, whose wording ("only the second and later arguments take 'name:'
+labels") would invite the nonsense repair `abs(1.0, x: ...)` on a one-argument callee.
+
+⚠ shv2-authored and ADDITIVE — not in `/specs/abs.md`, and no expectation is retracted.
+Measured: the bootstrap answers this program `E2004: Undefined variable 'x'`, reading
+the label as a variable reference, so the divergence is shv2 naming the real defect
+where the bootstrap names a consequence of it.
+```maxon
+function main() returns ExitCode
+	let x = abs(x: 1.0)
+	return trunc(x)
+end 'main'
+```
+```maxoncstderr
+error E2067: <fragment>:3:14: a builtin's arguments are all positional and cannot be named ('name:' labels a parameter, and a builtin has no declaration to have one)
+```

@@ -1014,6 +1014,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		unknownLoopLabel(keyword, targets, label, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing {targets} with label '{label}'", line: line, column: column, filePath: path)
 		firstArgNamed(line, column) then reportPositioned(project, code: ErrorCode.callFirstArgNamed, message: "the first argument cannot be named; only the second and later arguments take 'name:' labels", line: line, column: column, filePath: path)
 		argMissingLabel(line, column) then reportPositioned(project, code: ErrorCode.callArgMissingLabel, message: "the second and later arguments must be named ('name: value')", line: line, column: column, filePath: path)
+		// The THIRD label verdict, and the one neither sentence above can carry: both of them promise
+		// that SOME argument position takes a 'name:' label, which is false for a callee that has no
+		// declaration and therefore no parameters to name. See `Parser.calleeTakesPositionalArgsOnly`.
+		builtinArgNamed(line, column) then reportPositioned(project, code: ErrorCode.builtinArgNamed, message: "a builtin's arguments are all positional and cannot be named ('name:' labels a parameter, and a builtin has no declaration to have one)", line: line, column: column, filePath: path)
 		// P1.7a slice 2b-vi. The three codes AND the three messages are the ones a DIRECT call's slotting
 		// failure gets (`SemanticCheck.validateCall`), because it is the same rule met at a witness
 		// dispatch — see the `ParseError` arms' header for why the parser is what raises them.

@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "7d84f7615d84b37f",
+  "sourceHash": "ccf446ad3069dc3a",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -505,6 +505,15 @@
       "stage": "parser",
       "doc": "A conformance's PARENTHESIZED 'with (...)' list binds more arguments than the interface\ndeclares 'uses' names -- 'type Holder implements One with (Integer, Float)' against\n'interface One uses A', which bound A := Integer, silently DROPPED Float and compiled clean\n(measured, exit 42): a typo nothing reported.\nDELIBERATELY ASYMMETRIC, and the asymmetry IS the rule. The same surplus written WITHOUT\nparentheses is still ignored, because the two spellings are not the same claim: parentheses\nmake the list explicit, so its LENGTH is something the author asserted and can be wrong\nabout, while unparenthesized the length is decided by the interface's 'uses' arity and a\ntrailing comma legitimately belongs to the outer 'implements' list. Both references consume\nexactly 'arity' items in the unparenthesized form, and 'surplus-conformance-argument-is-\nignored' pins it.\nNOT E2056 GenericArityMismatch, which is a different construct with a different rule. That\none is a generic INSTANTIATION ('Pair with Integer' as a type reference) and its arity is\nSYMMETRIC -- too few is the same error as too many. Here too FEW is a different diagnostic\nentirely (E3016, naming the first UNBOUND associated type, raised whole-program by\nConformanceCheck), and too many is refused only in one of the two spellings. One code over\ntwo rules that agree on neither symmetry nor spelling would document neither.\nIt is NOT raised when the interface name resolves to nothing: a name no file declares has no\narity to be surplus of, and the program's real error is E3015 'implements unknown interface'.",
       "emittedBy": {"shv2": "conformanceWithArgSurplus"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 2067,
+      "tag": "E2067",
+      "name": "ParserBuiltinArgNamed",
+      "stage": "parser",
+      "doc": "A call to a bare compiler BUILTIN labels one of its arguments -- 'min(3.0, b: 5.0)'.\nA builtin's arguments are ALL POSITIONAL, at every index, because a 'name:' label names a\nPARAMETER OF A DECLARATION and a builtin has no declaration to have parameters. Nothing\ndownstream could check such a label either: a builtin emits no call op, so it never reaches\nthe slotting that validates a label against a callee's parameter names.\nNOT E2052/E2053, and that is the whole reason this code exists rather than reusing one of\nthem. Both of those state the ORDINARY call rule -- 'only the second and later arguments\ntake name: labels' -- which is FALSE for a builtin at every position. Reusing E2052 here\nwould answer a labelled second argument with a sentence saying second arguments may be\nlabelled.\nIt fires only for callees whose arguments this compiler decides are positional\n('Parser.calleeTakesPositionalArgsOnly') -- the MATH intrinsics 'trunc', 'floor', 'ceil',\n'round', 'sqrt', 'abs' and 'min'. Each of those IS a machine instruction and will never\nacquire a declaration to take labels from. It covers the arity-1 six as well as 'min',\nbecause the same wrong noun would otherwise survive one door over: 'abs(x: 1.0)' would keep\nanswering E2052, whose sentence invites the nonsense fix 'abs(1.0, x: ...)'.\nIt is NOT 'every builtin'. TWELVE bare builtins stay on the ordinary E2052/E2053 rule:\n'print', 'runProcess', 'spawnReadLine', the seven 'subp*' streaming-subprocess builtins, and\nthe two UAX #29 classifiers 'graphemeBreakProperty' / 'isExtendedPictographic'. Every one is\na STAND-IN for a stdlib declaration that will have real, labellable parameters --\n'subpWriteLine(h, line: s)' already LABELS its second argument on purpose, written the way\nthe eventual method call will be written, and the two classifiers are named in\n'Parser.maxon' as what must be retired first once the grapheme module can be loaded.\n⚠ THE BOOTSTRAP DOES NOT AGREE, AND CANNOT. Measured: it answers all three of\n'min(3.0, b: 5.0)', 'min(a: 3.0, 5.0)' and 'abs(x: 1.0)' with E2004 \"Undefined variable\",\nbecause its builtin path parses arguments with a bare expression parser and reads the label\nas a variable reference. That names the wrong thing entirely -- the defect is the label, not\na missing binding -- which is the clearest argument for shv2 registering its own code here.",
+      "emittedBy": {"shv2": "builtinArgNamed"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

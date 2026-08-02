@@ -284,6 +284,16 @@ let Arm64FrintRmodeNearest = 0  // frintn — to nearest, TIES TO EVEN
 let Arm64FrintRmodeUp = 1  // frintp — toward +inf (`ceil`)
 let Arm64FrintRmodeDown = 2  // frintm — toward -inf (`floor`)
 
+// `FCSEL Dd, Dn, Dm, cond` 0x1E600C00 — the double-precision conditional select, and the second half
+// of `min` on this target (`fcmp` sets the flags, this reads them). Its condition sits in the SAME
+// 4-bit field at bit 12 that `CSET` uses, so it reuses `Arm64CondFieldShift` — but UNLIKE `CSET` it
+// does NOT invert: `fcsel` picks `Dn` when the condition HOLDS, which is the direct reading, so the
+// isel's `mi` is encoded verbatim. Getting that backwards would answer `max`.
+//
+// ⚠ shv2 emits this pair where both reference compilers emit the single `fmin` (0x1E605800), and that
+// is deliberate: `fmin` computes a different function on NaN and on ±0. See `TargetOp.arm64Fcsel`.
+let Arm64OpFcselD = 0x1E600C00
+
 // Vector EOR (8B) — a scratch-free three-instruction register SWAP for a SIMD pair, the `xchg`
 // cycle-break's float arm (AArch64 has no `fmov`-based swap and no reserved FP scratch, exactly as
 // x64 has no `xchg xmm` and swaps XMMs with a triple-xorpd).
@@ -955,7 +965,8 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		loadRegBaseDisp(dest, base, disp, width) then arm64EmitDataLoad(code, dest: dest, base: arm64GprField(base), disp: disp, width: width)
 		storeBaseDispReg(base, disp, src, width) then arm64EmitDataStore(code, base: arm64GprField(base), disp: disp, src: src, width: width)
 		// --- x64-only SSE band ---
-		addsdRegReg to leaRegRdata then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
+		addsdRegReg to minsdRegReg then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
+		// `minsd` is inside the range above; the arm64 spelling of `min` is `fcmp` + `fcsel`, not one op.
 		// --- arm64 band ---
 		arm64Ret then emitArm64Insn(code, insn: Arm64OpRet)
 		arm64Branch(targetBlockId) then arm64EmitBranch(code, fixups: branchFixups, targetBlock: targetBlockId)
@@ -1007,6 +1018,10 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		arm64Fsqrt(dest, src) then emitArm64Rr(code, opcode: Arm64OpFsqrtD, rd: arm64FpField(dest), rn: arm64FpField(src))
 		arm64Fabs(dest, src) then emitArm64Rr(code, opcode: Arm64OpFabsD, rd: arm64FpField(dest), rn: arm64FpField(src))
 		arm64Frint(dest, src, mode) then emitArm64Rr(code, opcode: arm64FrintOpcode(mode), rd: arm64FpField(dest), rn: arm64FpField(src))
+		// `fcsel` is an ordinary FP 3-register form once its condition is folded into the opcode word,
+		// so it rides `emitArm64Rrr` unchanged — the same trick `arm64Frint` uses for its rounding mode.
+		// `ifTrue` is `Rn` and `ifFalse` is `Rm`, matching `FCSEL Dd, Dn, Dm, cond`'s "Dn when cond".
+		arm64Fcsel(dest, ifTrue, ifFalse, cond) then emitArm64Rrr(code, opcode: Arm64OpFcselD or ((cond.rawValue as MachineWord) shl Arm64CondFieldShift), rd: arm64FpField(dest), rn: arm64FpField(ifTrue), rm: arm64FpField(ifFalse))
 		arm64FpLoadRdata(dest, label) then arm64EmitFpLoadRdata(code, rdataRelocs: rdataRelocs, dest: arm64FpField(dest), label: label)
 		// The GOT-indirect libSystem import call (`osAllocPages`→mmap, `osWriteStdout`→write). The same
 		// `arm64EmitImportCall` the hand-assembled entry stub uses for `_exit`, so a call inside a

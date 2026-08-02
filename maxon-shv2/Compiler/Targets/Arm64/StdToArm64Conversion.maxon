@@ -220,7 +220,7 @@ function arm64ShiftInstrOf(opcode StdBinOpcode) returns Arm64ShiftInstr
 		shr gives Arm64ShiftInstr.asr
 		shrLogical gives Arm64ShiftInstr.lsr
 		add to bitXor panic("arm64ShiftInstrOf: {opcode.rawValue} is not a shift — only `shl`/`shr`/`shrLogical` name a variable-shift instruction")
-		div panic("arm64ShiftInstrOf: `div` is float division, not a shift")
+		div to min panic("arm64ShiftInstrOf: `{opcode.name}` is a FLOAT-ONLY opcode, not a shift")
 	end 'o'
 end 'arm64ShiftInstrOf'
 
@@ -623,7 +623,7 @@ type StdToArm64Lowering
 			shl to shrLogical then self.lowerShiftReg(dest, lhsReg: lhsReg, rhsReg: rhsReg, instr: arm64ShiftInstrOf(opcode), dstRef: dstRef)
 			// Integer `binOp(div)` is illegal — integer division traps and is `StdOp.div`; only FLOAT
 			// division (which cannot fault) rides the pure arith band. Reaching here is a lowering bug.
-			div then panic("lowerBinOp: `binOp(div)` with an INTEGER operand type — integer division is `StdOp.div` (it can fault); only float division is a pure `binOp`")
+			div to min then panic("lowerBinOp: `binOp({opcode.name})` with an INTEGER operand type — both are FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`). Integer division is `StdOp.div` (it can fault); `min` has no integer form and its operands are promoted by the parser")
 		end 'op'
 	end 'lowerBinOp'
 
@@ -640,8 +640,28 @@ type StdToArm64Lowering
 			mul then self.emit(dstRef, op: TargetOp.arm64Fmul(dest, lhs: lhsReg, rhs: rhsReg))
 			div then self.emit(dstRef, op: TargetOp.arm64Fdiv(dest, lhs: lhsReg, rhs: rhsReg))
 			bitAnd to shrLogical then panic("lowerFloatBinOp: {opcode.rawValue} has no float form — the bitwise/shift operators are integer-only and a float operand is rejected at the Maxon tier")
+			// ⭐ THE ONE FLOAT BINARY OPCODE THAT IS NOT ONE INSTRUCTION HERE — `fmin` exists and is
+			// deliberately not used, because it computes a DIFFERENT function (see `TargetOp.arm64Fcsel`).
+			min then self.lowerFloatMin(dest, lhsReg: lhsReg, rhsReg: rhsReg, dstRef: dstRef)
 		end 'op'
 	end 'lowerFloatBinOp'
+
+	// ⭐⭐ `min(a, b)` AS A COMPARE-AND-SELECT, WHICH IS THE LANGUAGE'S DEFINITION SPELLED LITERALLY:
+	// `fcmp a, b` then `fcsel dest, a, b, mi` — "take `a` if `a < b`, else `b`" (`StdBinOpcode.min`).
+	//
+	// The `mi` condition is what makes it EXACT rather than approximate, and it is the same condition
+	// the float `<` comparison already uses: `fcmp` leaves N=0 on an UNORDERED result, and `mi` tests
+	// N==1, so a NaN in either operand selects `b` — matching x64's `minsd`, which returns its second
+	// source on unordered. `+0.0 < -0.0` compares EQUAL (Z=1, N=0), so it likewise selects `b`. Neither
+	// case needs a correction; the condition code already carries IEEE's unordered rule, which is why
+	// `Arm64CondCode` states it once for the whole target.
+	//
+	// The two ops are emitted BACK TO BACK because `fcsel` reads the flags `fcmp` set — the same
+	// adjacency `lowerCmp`'s `fcmp` + `cset` already relies on.
+	function lowerFloatMin(dest TargetVReg, lhsReg TargetVReg, rhsReg TargetVReg, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64Fcmp(lhsReg, rhs: rhsReg))
+		self.emit(dstRef, op: TargetOp.arm64Fcsel(dest, ifTrue: lhsReg, ifFalse: rhsReg, cond: Arm64CondCode.mi))
+	end 'lowerFloatMin'
 
 	// Variable-count shift: arm64's `lslv`/`asrv`/`lsrv` take the count in an ordinary GPR (no fixed CL
 	// like x64), so the count stays a virtual and no register is pinned — 3-address, plain def.
@@ -713,7 +733,7 @@ type StdToArm64Lowering
 			mul then self.lowerMulImm(dest, src: src, imm: imm, dstRef: dstRef)
 			bitAnd to bitXor then self.lowerLogicalImm(dest, src: src, imm: imm, opcode: opcode, dstRef: dstRef)
 			shl to shrLogical then self.lowerShiftImm(dest, src: src, imm: imm, instr: arm64ShiftInstrOf(opcode), dstRef: dstRef)
-			div then panic("lowerBinOpImm: `div` is float division and no NEON form takes an immediate — foldConstOperands must never produce this")
+			div to min then panic("lowerBinOpImm: `{opcode.name}` is FLOAT-ONLY and no NEON form takes an immediate — foldConstOperands must never produce this")
 		end 'op'
 	end 'lowerBinOpImm'
 
