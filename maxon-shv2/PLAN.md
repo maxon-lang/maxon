@@ -2078,6 +2078,22 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   is the env slot's WIDTH; this is `closureReturns` threading through a NESTED env, which is P1.5-A2's
   mechanism and wants its own survey of how a lifted closure's file-local return type reaches an inner
   closure's call site.
+- **⬜ E3036 HAS TWO HAND-WRITTEN SENTENCES, AND THE HELPER THAT EXISTS TO PREVENT THAT SAYS SO IN ITS OWN
+  HEADER.** **Filed 2026-08-02 by `/spec-port`'s review of `stdlib-autodiscovery`.** One arity fact, two
+  spellings, nothing making them agree: `Project.argArityMismatchMessage` (`:2721`) renders *"'{callee}'
+  expects {expected} argument(s) but {got} were provided"*, and `Queries.maxon:991`'s `builtinArity` arm
+  hardcodes *"'{name}' takes exactly {expected} argument, but {got} were given"* — same
+  `ErrorCode.callArgCountMismatch`, different words, different grammar. The helper's header argues the
+  principle explicitly (*"Two mechanisms, one rule — so the text lives here rather than at either site"*),
+  which is what makes the third raiser bypassing it a drift rather than a choice.
+  ⚠ **No spec will ever surface this**, so the port whitelist will never reach it: BOTH spellings are
+  pinned green — the helper's by six live cases (`functions.md`, `method-calls.md`, `where-clauses.md` ×2,
+  `first-class-functions.md`, `implicit-self-methods.md`, `parsable-interface.md`), the hardcoded one by
+  `builtins-clock.md` and `builtins-sleep.md`. That is precisely why it needs a row rather than a queue
+  position.
+  ⚠ **It needs a RULING before a fix**: unifying moves two already-ported specs' expectations, which is
+  out of bounds for a port tick (`/spec-port` HALT). Decide which sentence wins, then re-mint the two
+  goldens with it.
 - **⬜⬜ A `bool` COMPUTED FROM A FLOAT COMPARISON AND HELD ACROSS A LOOP READS BACK FALSE — A SILENT
   WRONG ANSWER ON PLAIN USER CODE.** **Found 2026-08-02 by `/spec-port` while listing `stdlib/Math.maxon`;
   PRE-EXISTING and nothing to do with that entry.** ⭐ **Reproduced minimally, with an oracle control —
