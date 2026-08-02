@@ -728,6 +728,16 @@ function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDi
 	let irPath = exePath.changeExtension(IrFileExtension)
 	// `--metrics` writes where it is TOLD, so unlike the sidecar this path is chosen here rather than
 	// derived by the compiler — sited beside the exe so one `cleanup` removes everything one test made.
+	//
+	// ⚠ THIS PATH IS UNIQUE BY EXECUTION ORDER, NOT BY CONSTRUCTION, and only off Windows.
+	// `executableExtension` is `""` on linux AND macos (`Target.maxon`), and `changeExtension` cuts at
+	// the LAST DOT of the filename — but 1,271 of the suite's 3,248 test names CONTAIN dots, so there
+	// `async-linearity.error.double-await` and `…double-await-in-loop` both land on
+	// `async-linearity.error.metrics`. It is safe today for reasons that are all about WHEN, never about
+	// the name: a spec's tests run strictly sequentially inside ONE worker, each spec gets its own
+	// `tempDir`, and this file is deleted BOTH before the compile and again in `cleanup`. Make any of
+	// those three parallel or shared and two tests start reading each other's CPU — silently, since a
+	// well-formed file from the wrong test panics nothing. Pre-existing for `.ir`, inherited here.
 	let metricsPath = exePath.changeExtension(MetricsFileExtension)
 
 	match stageTest(tempDir, test: test) 'staging'
@@ -830,7 +840,7 @@ function readCompileCpu(path FilePath) returns CompileCpu
 
 		let fields = trimmed.split(MetricsColumnSep)
 		if fields.count() != MetricsFieldCount 'malformed'
-			panic("readCompileCpu: {path.toString()} has a row with {fields.count()} tab-separated fields, not {MetricsFieldCount} — this harness and MetricsEmit disagree about the metrics format: '{trimmed}'")
+			panic("readCompileCpu: {path.toString()} has a row with {fields.count()} tab-separated fields, not {MetricsFieldCount} — either this harness and MetricsEmit disagree about the metrics format, or the file is TRUNCATED: `writeMetrics` deliberately swallows a write failure (a full disk must not fail a build), so a partial file is reachable and arrives here looking like a format drift: '{trimmed}'")
 		end 'malformed'
 
 		let kind = try fields.get(MetricsKindField) otherwise panic("readCompileCpu: kind field OOB after the count check")
@@ -849,7 +859,7 @@ function readCompileCpu(path FilePath) returns CompileCpu
 		return CompileCpu.reported(ticks)
 	end 'eachRow'
 
-	panic("readCompileCpu: {path.toString()} carries no `{MetricsKindTotal}` row — MetricsEmit writes one first on every metrics build")
+	panic("readCompileCpu: {path.toString()} carries no `{MetricsKindTotal}` row — MetricsEmit writes one first on every metrics build, so either the format drifted or the file is TRUNCATED (`writeMetrics` swallows a write failure by design, so a zero-length or partial file is reachable). An ABSENT file is not this: it is `CompileCpu.unreported`, counted and reported, never a panic.")
 end 'readCompileCpu'
 
 // The `--emit-ir-runtime=` value for a case's ```RequiredRuntime names. A `StringBuilder` rather than
