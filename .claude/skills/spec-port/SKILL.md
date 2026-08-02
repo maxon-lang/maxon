@@ -428,8 +428,8 @@ suite → gates → write the log rows → commit → push.**
   found it. **A non-zero exit means the tick is NOT done** — read the message.
 - `--dry-run` runs every gate and writes nothing. `--no-push` stops after the commit.
 
-It refuses to run if it has uncommitted changes itself, because it stashes the working tree and bash
-reads a script incrementally — stashing its own bytes mid-run does not fail cleanly, it fails weirdly.
+It re-execs itself from a gitignored copy in `temp/` before touching anything, because it stashes the
+working tree and bash reads a script incrementally — stashing its own bytes mid-run fails weirdly.
 
 **If compiler source changed, add a row to `maxon-shv2/build-cost-log.md`** — build seconds, exe bytes,
 suite seconds + test count. Its three numbers all fall out of the build and the full-suite run this

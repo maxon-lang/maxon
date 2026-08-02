@@ -41,7 +41,27 @@
 #
 set -o pipefail
 
-readonly REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ⭐ RUN FROM A COPY OUTSIDE THE INDEX, BEFORE TOUCHING ANYTHING.
+#
+# This script stashes the working tree, and bash reads a script INCREMENTALLY — so if its own file is
+# among what gets stashed, the bytes bash has not read yet are replaced underneath it. That does not
+# fail cleanly, it fails weirdly. (Caught on the first run, 2026-08-02: it stashed and restored itself
+# and survived only because bash had buffered far enough ahead.)
+#
+# Re-exec from `temp/`, which is gitignored — and `git stash -u` does NOT touch ignored files (that is
+# `-a`). So the running bytes are permanently out of reach of anything below. This is why there is no
+# "commit the script first" refusal: it would have made every edit to this file cost a commit before it
+# could be tested, to solve a problem a copy solves outright.
+if [ -z "${SPEC_PORT_FINISH_REPO:-}" ]; then
+  _repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  mkdir -p "$_repo/temp" || { echo "cannot create $_repo/temp" >&2; exit 1; }
+  _copy="$_repo/temp/.spec-port-finish.running.sh"
+  cp "${BASH_SOURCE[0]}" "$_copy" || { echo "cannot copy self to $_copy" >&2; exit 1; }
+  export SPEC_PORT_FINISH_REPO="$_repo"
+  exec bash "$_copy" "$@"
+fi
+
+readonly REPO="$SPEC_PORT_FINISH_REPO"
 readonly SHV2="$REPO/maxon-shv2/.maxon/maxon-shv2.exe"
 readonly BOOTSTRAP="$REPO/bin/maxon.exe"
 readonly LOGDIR="$REPO/temp"
@@ -106,16 +126,6 @@ cd "$REPO" || die "cannot cd to $REPO"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 step "1/7  Rebase onto origin/main"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-# ⚠ THIS SCRIPT STASHES THE WORKING TREE, SO IT MUST NOT BE PART OF IT. bash reads a script
-# incrementally, so stashing its own file mid-run replaces the bytes it is still reading — which does
-# not fail cleanly, it fails WEIRDLY. Refuse instead. (Caught 2026-08-02, on the script's first run:
-# it stashed and restored itself and survived only because bash had buffered far enough ahead.)
-SELF_REL="${BASH_SOURCE[0]#$REPO/}"
-if [ -n "$(git status --porcelain -- "$SELF_REL" 2>/dev/null)" ]; then
-  die "$SELF_REL has uncommitted changes, and this script stashes the working tree — it would stash
-     ITSELF while bash is still reading it. Commit the script first, then re-run."
-fi
-
 if [ -n "$(git status --porcelain)" ]; then
   git stash push -u --quiet -m "spec-port-finish: $SPEC" || die "git stash failed"
   STASHED=1
@@ -164,10 +174,18 @@ BUILD_S=$(awk "BEGIN{printf \"%.1f\", $BUILD_MS/1000}")
 # throwaway `.maxon-run.exe` in the cache. Select by the destination naming maxon-shv2.exe, not by
 # position — "the last one" is true today and is not a contract.
 CODE_BYTES="$(grep 'bytes code' "$LOGDIR/finish-build.log" | grep 'maxon-shv2.exe' | tail -1 | grep -oE 'Wrote [0-9]+' | grep -oE '[0-9]+')"
-[ -n "$CODE_BYTES" ] || warn "could not parse 'code bytes' from the build log — the cost row will say ?"
 [ -x "$SHV2" ] || die "shv2 binary missing after a successful build: $SHV2"
 EXE_BYTES="$(stat -c '%s' "$SHV2")"
-ok "shv2 built in ${BUILD_S}s — exe $(commafy "$EXE_BYTES") bytes, code $(commafy "${CODE_BYTES:-0}") bytes"
+
+# A build with nothing to do emits no `Wrote …` line at all. That is fine for the gates — the binary is
+# current either way — but it means there is NO code-bytes measurement, and a cost row is a trend that
+# gets read: a silent 0 there is worse than no row. Say so now, and refuse the row later (§5).
+if [ -n "$CODE_BYTES" ]; then
+  ok "shv2 built in ${BUILD_S}s — exe $(commafy "$EXE_BYTES") bytes, code $(commafy "$CODE_BYTES") bytes"
+else
+  ok "shv2 up to date in ${BUILD_S}s (nothing to rebuild) — exe $(commafy "$EXE_BYTES") bytes"
+  warn "no 'code bytes' figure: this build did no work, so there was nothing to measure"
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 step "3/7  Full unfiltered spec suite"
@@ -253,6 +271,14 @@ if [ "$COMPILER_CHANGED" = "0" ] && [ -n "$COST_NOTE_FILE" ]; then
   die "--build-cost-note-file was given but no compiler source changed — that row would be noise"
 fi
 [ -z "$COST_NOTE_FILE" ] || [ -f "$COST_NOTE_FILE" ] || die "--build-cost-note-file does not exist: $COST_NOTE_FILE"
+
+# Refuse to write a cost row with a fabricated size. `code bytes` is EXACT and bit-reproducible, which
+# is the whole reason the log trusts it over the two wall-clock times — a 0 standing in for "not
+# measured" would be indistinguishable from a real reading.
+if [ -n "$COST_NOTE_FILE" ] && [ -z "$CODE_BYTES" ]; then
+  die "a cost row was asked for, but this build did no work so there is no 'code bytes' measurement.
+     Force a real build and re-run:  rm -f '$SHV2' && $0 <same args>"
+fi
 
 TODAY="$(date +%Y-%m-%d)"
 NOTE="$(tr '\n' ' ' < "$NOTE_FILE" | sed 's/  */ /g; s/^ //; s/ $//; s/|/\\|/g')"
