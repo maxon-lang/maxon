@@ -4620,6 +4620,16 @@ export type ProgramSignatures
 		return self.contestedFreeFunctions.contains(bareName)
 	end 'isContestedFreeFunction'
 
+	// Is this MANGLED name one a contested free function was filed under? Two readers, and they want it for
+	// opposite reasons: `resolvesAsNamespaceQualifiedFunction`, so the type-reading veto does not decline the
+	// free function's own registration name; and `commitFuncSignatures`, so a duplicate reported against such
+	// a name can say WHERE the name came from — the user wrote neither `Point` nor `.` next to `create`, and
+	// a bare "duplicate definition of function 'Point.create'" names a symbol that appears nowhere in the
+	// source.
+	export function isContestedRegistrationName(mangled ByteArray) returns bool
+		return self.contestedRegistrationNames.contains(mangled)
+	end 'isContestedRegistrationName'
+
 	// Every qualified spelling of a contested bare name, in DECLARATION order. `SemanticCheck` filters it by
 	// what the reader may actually see before rendering E3095's candidate list.
 	export function contestedFreeFunctionSpellings(bareName ByteArray) returns ByteArrayArray
@@ -4659,6 +4669,30 @@ export type ProgramSignatures
 		end 'aRootDeclarationKeepsTheBareKey'
 
 		self.contestedRegistrationNames.insert(registrationName)
+
+		// ⛔⛔ **A REGISTRATION NAME ANOTHER DECLARATION ALREADY OWNS IS NOT TAKEN — IT IS LEFT TO BE REPORTED
+		// (N1c review).** A contested free function is filed as `<directory>.<name>`, which is the SAME
+		// construction — and the same flat key space — a method is filed under. So a `create` declared in a
+		// directory called `Point/` claims the exact key `type Point`'s static factory holds, and until this
+		// guard the refile OVERWROTE it.
+		//
+		// ⛔ **THAT OVERWRITE IS WHAT MADE THE COLLISION LOOK LIKE SOMETHING ELSE.** `commitFuncSignatures`
+		// catches the duplicate at merge either way (MEASURED: E3006 for both the field-less program and the
+		// one that never calls the name) — but the clobbered RETURN TYPE is read during the earlier PARSE, so
+		// `let p = Point.create()` typed `p` as the free function's `int` and `p.x` died first, as
+		// `E2015: a field access on 'p', which is declared 'int' and not a struct type`. A true refusal,
+		// pre-empted by a false symptom of its own cause, and the position it named was the innocent line.
+		//
+		// Leaving the incumbent's entry alone lets the parse type that call correctly, so the ONLY diagnostic
+		// the program gets is the duplicate — which `commitFuncSignatures` reports with both declarations'
+		// positions and, for this case, its own sentence. The name still enters `contestedRegistrationNames`
+		// above: the contest happened, and both the call door and that sentence have to know it.
+		//
+		// It cannot fire for an ordinary contest — `alpha.pick` is a name only `alpha/`'s declaration mints —
+		// so a directory named after no type pays one map probe and keeps every entry.
+		if self.returnTypes.contains(registrationName) 'anotherDeclarationAlreadyOwnsThisKey'
+			return
+		end 'anotherDeclarationAlreadyOwnsThisKey'
 
 		if let returnType = try self.returnTypes.get(bareName) 'hasReturnType'
 			self.returnTypes.upsert(registrationName, value: returnType)

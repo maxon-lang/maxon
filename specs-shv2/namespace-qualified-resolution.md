@@ -709,23 +709,21 @@ error E3004: app/specs/fragments/namespace-qualified-resolution/error.contested-
 
 
 <!-- test: error.contested-free-function-in-a-directory-named-after-a-type -->
-⛔ **A SECOND RECORDED WRONG ANSWER: A CONTESTED SPELLING AND A `Type.method` KEY ARE THE SAME
-BYTES.** N1c registers a contested free function as `<directory>.<name>` — deliberately "the same
-construction a method gets, in the same flat name space". That is also the collision: a directory
-named `Point/` holding a contested `create` claims the exact key `type Point`'s static factory is
-declared under, and the two meet as a duplicate.
+**A CONTESTED SPELLING AND A `Type.method` KEY ARE THE SAME BYTES, AND THE PROGRAM IS REFUSED FOR IT.**
+N1c registers a contested free function as `<directory>.<name>` — deliberately the same construction,
+in the same flat key space, a method is filed under. That is also a collision waiting to happen: a
+directory called `Point/` holding a contested `create` claims the exact key `type Point`'s static
+factory is declared under. Neither declaration is wrong on its own, and no rename of the *bare* name
+fixes it, so the refusal has to say which two things met and what to do — the quoted name is one the
+author wrote no part of.
 
-This breaks a guarantee N1b states outright — "a directory may be named after a type and no
-existing call moves" (`ProgramSignatures.resolvesAsNamespaceQualifiedFunction`). The refusal below
-is at least loud and names the right file. It is not always: with the two declarations returning
-DIFFERENT types the duplicate went unreported and `Point.create()` bound to the free function,
-surfacing downstream as `E2015: a field access on 'p', which is declared 'int' and not a struct
-type`.
-
-The cure is a contested registration name that cannot enter the `Type.method` space — a join on a
-separator outside the identifier alphabet, as `__paramDefault#f#0` already uses. That changes the
-emitted symbol of every contested function (the goldens above show `func @alpha.pick`), so it is a
-rung and not a review edit.
+⛔ **THE REFUSAL WAS ALREADY THERE; WHAT WAS WRONG IS THAT ITS OWN CAUSE COULD PRE-EMPT IT.** The
+refile used to OVERWRITE the method's return type with the free function's, and the parse reads that
+entry long before merge reports the duplicate — so `let p = Point.create()` typed `p` as `int` and the
+program died on `E2015: a field access on 'p', which is declared 'int' and not a struct type`, blaming
+a line that was correct. The refile now declines a key another declaration owns
+(`ProgramSignatures.refileContestedFreeFunction`), so the call types correctly and this is the only
+diagnostic any variant produces.
 ```maxon
 // --- file: Point/p.maxon
 typealias Integer = int(0 to 125)
@@ -745,7 +743,50 @@ end 'create'
 typealias Integer = int(0 to 125)
 
 export type Point
-	var x as Integer
+	export var x as Integer
+
+	export static function create() returns Self
+		return Self{x: 9}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create()
+	return p.x as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type.test:5:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+```
+
+
+<!-- test: error.contested-free-function-collides-with-a-fieldless-method -->
+**THE VARIANT WITH NO WITNESS.** The case above only ever produced a visible symptom because the
+caller touched a FIELD. Here the method returns a plain `Integer`, so nothing downstream would ever
+have noticed which of the two `Point.create`s it reached — this is the shape that would have to be a
+silent wrong answer if the duplicate check were the thing at fault. It is not: `commitFuncSignatures`
+sees both declarations claim one key whatever they return, and refuses. Pinned so that the claim
+"nothing downstream notices" is tested rather than assumed.
+```maxon
+// --- file: Point/p.maxon
+typealias Integer = int(0 to 125)
+
+export function create() returns Integer
+	return 3
+end 'create'
+
+// --- file: other/o.maxon
+typealias Integer = int(0 to 125)
+
+export function create() returns Integer
+	return 5
+end 'create'
+
+// --- file: app/main.maxon
+typealias Integer = int(0 to 125)
+
+export type Point
+	export var x as Integer
 
 	export static function create() returns Integer
 		return 9
@@ -757,8 +798,81 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type.test:5:17: duplicate definition of function 'Point.create'
+error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-collides-with-a-fieldless-method.test:5:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
 ```
+
+
+<!-- test: contested-free-function-in-a-type-named-directory-that-collides-with-nothing -->
+**THE REFUSAL ABOVE MUST NOT BE A RULE ABOUT DIRECTORY NAMES.** `Point/` is still named after a type
+and its `helper` is still contested with `other/`'s — but `type Point` declares no `helper`, so
+`Point.helper` collides with nothing and both spellings resolve: the type's `create` through the
+static-call door, the directory's `helper` through the namespace door, in one expression. 9*10+3.
+```maxon
+// --- file: Point/p.maxon
+typealias Integer = int(0 to 125)
+
+export function helper() returns Integer
+	return 3
+end 'helper'
+
+// --- file: other/o.maxon
+typealias Integer = int(0 to 125)
+
+export function helper() returns Integer
+	return 5
+end 'helper'
+
+// --- file: app/main.maxon
+typealias Integer = int(0 to 125)
+
+export type Point
+	export var x as Integer
+
+	export static function create() returns Integer
+		return 9
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	return (Point.create() * 10 + Point.helper()) as ExitCode
+end 'main'
+```
+```exitcode
+93
+```
+
+
+<!-- test: uncontested-free-function-in-a-type-named-directory -->
+The same shape with NO contest at all — one declaration of `helper`, in a directory named after a
+type. It keeps its bare registration name and never goes near the `Type.method` space, so this is the
+case the guard must not be able to reach however the contest logic changes.
+```maxon
+// --- file: Point/p.maxon
+typealias Integer = int(0 to 125)
+
+export function helper() returns Integer
+	return 3
+end 'helper'
+
+// --- file: app/main.maxon
+typealias Integer = int(0 to 125)
+
+export type Point
+	export var x as Integer
+
+	export static function create() returns Integer
+		return 9
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	return (Point.create() * 10 + Point.helper()) as ExitCode
+end 'main'
+```
+```exitcode
+93
+```
+
 
 
 <!-- test: error.three-way-ambiguous-bare-call -->

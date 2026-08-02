@@ -940,12 +940,36 @@ end 'commitFuncReturnTypes'
 function commitFuncSignatures(project Project, artifact FileParseArtifact)
 	for entry in artifact.funcSignatures 'each'
 		if project.funcSignatures.contains(entry.name) 'duplicate'
-			reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of function '{String.from(entry.name)}'", line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
+			reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: entry.name), line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
 			continue
 		end 'duplicate'
 		project.funcSignatures.upsert(entry.name, value: entry.signature)
 	end 'each'
 end 'commitFuncSignatures'
+
+// ⭐⭐ **WHY ONE NAME HAS TWO DECLARATIONS — and the CONTESTED case earns its own sentence because the name
+// the message quotes is one NEITHER declaration wrote (N1c review).**
+//
+// E3006 already carries a sentence per KIND of duplicate, each at the site that owns that kind; this is the
+// same discipline applied to the one kind whose name is SYNTHESIZED. A free function contested across
+// directories is filed as `<directory>.<name>` — the same construction, and the same flat key space, a
+// method is filed under — so a `create` in a directory called `Point/` collides with `type Point`'s own
+// `create`. Told only "duplicate definition of function 'Point.create'", the author searches for a string
+// that appears nowhere in their source and finds two declarations that do not look like duplicates of each
+// other. The fix is a rename on either side, and it has to be said, because it is not inferable from the
+// name.
+//
+// ⚠ The index is taken through the memo `compileToCodeResult` fills before the pipeline runs — merge is
+// downstream of it, so this can only ever be the hit, exactly as `SemanticCheck.programSignaturesIn` argues
+// for its own three askers.
+function duplicateFunctionMessage(project Project, name ByteArray) returns String
+	let signatures = try queryProgramSignatures(project) otherwise panic("duplicateFunctionMessage: queryProgramSignatures failed during merge — the whole-program index is computed and memoized before the pipeline runs, so a merge-time ask cannot fail fresh")
+	if not signatures.isContestedRegistrationName(name) 'anOrdinaryDuplicate'
+		return "duplicate definition of function '{String.from(name)}'"
+	end 'anOrdinaryDuplicate'
+
+	return "duplicate definition of function '{String.from(name)}' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function"
+end 'duplicateFunctionMessage'
 
 // Commit this file's overload sets (D7). One independent upsert per overloaded bare name, so — unlike every
 // other commit here — it needs no reset to survive a warm rebuild and the KEY iteration order decides
