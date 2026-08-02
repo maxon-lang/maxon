@@ -225,6 +225,14 @@ while what the case actually pins never moved: an unknown static is refused **at
 than mangled into a `String.create` callee no file declares. A test whose NAME claims one fact and whose
 BODY pins another is this project's signature bug wearing a filename, and the count is the half that is
 not load-bearing. ⇒ the name now says what the body checks, and it will survive the next static too.
+
+⭐ **AND SINCE A3g THE SENTENCE IS DERIVED RATHER THAN WRITTEN, so this case pins the ROSTER and not a
+paragraph.** `from` and `init` are rendered from the two constants the parser's arms match on
+(`stringStaticMemberNames`), a gate ahead of those arms refuses anything off the list, and the
+fall-through past them is a PANIC naming the list — so an arm added without a roster line is unreachable
+and a roster line added without an arm cannot ship. What one static's name is called is therefore now
+one fact in one place, which the prose above — *"the reference exports two, `from(bytes)` and
+`init(managed)`"* — was not.
 ```maxon
 function main() returns ExitCode
 	let s = String.create()
@@ -232,7 +240,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:17: Unsupported: `String` static 'create' — the reference exports two, `from(bytes)` and `init(managed)`, and `fromOwnedBytes` is deliberately not exported
+error E2015: <fragment>:3:17: Unsupported: `String` static 'create' — the reference provides from/init; `fromOwnedBytes` is deliberately not exported — trusting arbitrary bytes is not a promise the stdlib lets any caller make — and there is no `from(codepoints)` at all
 ```
 
 <!-- test: error.codepoint-is-a-compiler-owned-type-name -->
