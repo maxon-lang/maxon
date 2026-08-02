@@ -1771,6 +1771,19 @@ export function qualifiedMethodName(typeName ByteArray, methodName ByteArray) re
 	return "{String.from(typeName)}{MethodNameSeparator}{String.from(methodName)}".toByteArray()
 end 'qualifiedMethodName'
 
+// ⭐ **HOW MANY DOTS A `Type.method` NAME CARRIES — EXACTLY ONE (N1b).** It is the boundary between the two
+// readings of a dotted callee: a chain with one dot has a TYPE reading and must be offered to it first
+// (`aStaticCallClaimsDottedChain`), while a longer chain has none, because `declaredMethodName` joins one
+// type name to one method name and neither may hold a ".". Named rather than written as a bare `1` beside
+// `TokensPerQualifierSegment`'s `2`, where it would read as arithmetic instead of as a rule.
+let MethodQualifierDots = 1 as ElementCount
+
+// The two tokens one qualifier segment costs — the `.` and the identifier after it. Named because the
+// dotted-chain walk indexes by it three times (the length probe, the assemble, and the `(` lookahead that
+// terminates them both), and a bare `2` beside `MethodQualifierDots`' `1` would be two unrelated quantities
+// wearing bare literals.
+let TokensPerQualifierSegment = 2 as ElementCount
+
 // ⭐⭐ **`int.fromString(s)` IS `__int_fromString(s)` — THE ONE STATIC-CALL BASE THAT NAMES NO DECLARED
 // TYPE.** A primitive has no `type` declaration to hang a `static function` on, so its statics live in the
 // reserved space as free functions and the PARSER is what joins the two spellings. `stdlib/Builtins.maxon`
@@ -6369,6 +6382,10 @@ export type Parser
 		// Score, Weight` conformance both resolve whether `Duo` is declared above, below, or in another file.
 		// A POSITION, not the declaration: see `recordScannedInterface`.
 		var interfaceSites = InterfaceDeclSiteArray.create()
+		// ⭐ Every FREE function's DIRECTORY-QUALIFIED spelling (N1b) — `utils.helper` for a `helper` declared
+		// in `utils/` — so a `utils.helper()` written in another file can be told from a `Type.method` call of
+		// the same token shape. Empty for a root-level file, which is every file in a single-directory program.
+		var namespaceQualifiedFuncNames = ByteArrayArray.create()
 
 		let resume = self.pos
 		self.pos = 0
@@ -6504,7 +6521,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, namespaceQualifiedFuncNameOut: namespaceQualifiedFuncNames)
 				continue
 			end 'isFunction'
 
@@ -6526,7 +6543,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, methodInnerAliasParamOut: methodInnerAliasParams)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, methodInnerAliasParamOut: methodInnerAliasParams, namespaceQualifiedFuncNameOut: namespaceQualifiedFuncNames)
 				continue
 			end 'isTypeDecl'
 
@@ -6536,7 +6553,7 @@ export type Parser
 			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
 			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
 			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
-				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, isUnion: self.at(TokenKind.union))
+				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, namespaceQualifiedFuncNameOut: namespaceQualifiedFuncNames, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
 
@@ -6553,7 +6570,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, namespaceQualifiedFuncNames: namespaceQualifiedFuncNames, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
 		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
@@ -6943,7 +6960,7 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, namespaceQualifiedFuncNameOut ByteArrayArray)
 		let nameTok = self.current()
 		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so its modifier —
 		// if any — is the token before that, and `static` is what marks a receiver-less method. Read after the
@@ -6967,6 +6984,17 @@ export type Parser
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		let funcName = self.declaredMethodName(nameTok)
 		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface))
+		// ⭐ **THE DIRECTORY-QUALIFIED SPELLING OF A FREE FUNCTION (N1b)** — recorded here, from the SAME token
+		// walk that records its return type, because it answers a question a CALL SITE in ANOTHER FILE asks: is
+		// `utils.helper(…)` a directory-qualified free call, or a static on a `type utils`? Only the
+		// whole-program index can say, and only this walk knows which file the declaration is in.
+		//
+		// A METHOD is excluded by the `enclosingType` test, not by inspecting `funcName`: it is already keyed
+		// `Type.method`, whole-program and namespace-free, in both references. See
+		// `ProgramSignatures.namespaceQualifiedFunctions`.
+		if self.enclosingType.isEmpty() and not self.namespace.isEmpty() 'aFreeFunctionInANamespace'
+			namespaceQualifiedFuncNameOut.push(namespaceQualifiedName(self.namespace, name: funcName))
+		end 'aFreeFunctionInANamespace'
 		// ⭐ Whether the declaration takes a receiver decides where its own parameters sit in a CALL's
 		// argument list, so it is read here, once, and shared by the default scan below and the consume scan
 		// at the end of this routine — the two facts that are recorded CALL-ALIGNED.
@@ -8714,7 +8742,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, namespaceQualifiedFuncNameOut ByteArrayArray)
 		// ⚠ **THE SWEEP MUST READ THE MODIFIER ITSELF**, and BACKWARDS, exactly as `recordScannedBinding`
 		// does: the caller's loop meets `export`/`module` as an ordinary token and steps over it, so the
 		// cursor arrives here already on the `type` keyword. Read forwards it would answer `file` for every
@@ -8797,7 +8825,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, namespaceQualifiedFuncNameOut: namespaceQualifiedFuncNameOut)
 				continue
 			end 'isMethod'
 
@@ -8912,7 +8940,7 @@ export type Parser
 	// followed by a character literal — byte-for-byte what `enumBodyEndsAt` recognizes as the ENUM's
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
-	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, isUnion bool)
+	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, namespaceQualifiedFuncNameOut ByteArrayArray, isUnion bool)
 		// Read BACKWARDS, before the keyword is consumed — see `recordScannedType` for why the sweep cannot
 		// read this modifier forwards.
 		let visibility = self.scannedVisibility()
@@ -8941,7 +8969,7 @@ export type Parser
 				self.pos = self.enumMethodKeywordIndex(self.pos)
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, namespaceQualifiedFuncNameOut: namespaceQualifiedFuncNameOut)
 				continue
 			end 'method'
 
@@ -9763,10 +9791,44 @@ export type Parser
 		try self.requireRepresentableRange(primitiveTok, low: low, high: high, isFloat: isFloat)
 
 		let underlying = MaxonType.float if isFloat else MaxonType.integer
-		rangedOut.push(RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low.value, high: high.value, visibility: self.typeAliasVisibility(visibility), declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
+		let tier = self.typeAliasVisibility(visibility)
+		rangedOut.push(RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low.value, high: high.value, visibility: tier, declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
+		self.pushNamespaceQualifiedAlias(rangedOut, nameTok: nameTok, underlying: underlying, low: low.value, high: high.value, tier: tier)
 
 		return TypeDeclKind.rangedAlias
 	end 'readTypeAliasDeclaration'
+
+	// ⭐⭐ **THE DIRECTORY-QUALIFIED MIRROR OF A RANGED TYPEALIAS (N1b)** — `api/types.maxon`'s `Score` is
+	// filed a SECOND time under `api.Score`, which is what makes `50 as api.Score` resolve to THAT
+	// declaration's range rather than to whichever same-named one the bare lookup happened to win with.
+	//
+	// ⭐ **IT IS A SECOND DECLARATION IN THE SAME ARRAY, AND THAT IS THE WHOLE DESIGN.** `readTypeAliasDeclaration`
+	// is the ONE reader of the typealias grammar — the tolerant sweep and the real parse both come through it —
+	// so one push here reaches BOTH ranged-alias registries (`ProgramSignatures.typeAliases` via `foldFile`,
+	// `Project.typeAliases` via `commitTypeAliases`) and every door they already have answers for the qualified
+	// key with no new code: the scoped `lookup`, the visibility test `aliasVisibleFrom`, the erasure
+	// `underlyingInAnyFile`, the whole-program stride `storageBytesInEveryFile`, the parse-memo hash. A
+	// dedicated qualified index would have had to re-implement each of those, and would have been free to
+	// disagree with them. It is v1's answer, in shv2's idiom (`maxon-selfhosted/Compiler/Parser.maxon:4794-4806`,
+	// "register under the qualified key `{namespace}.{name}` whenever the declaration is observable").
+	//
+	// ⚠ **GATED ON `visibility != file`, WHICH IS v1's GATE AND IS NOT THE FUNCTION SIDE'S.** A file-private
+	// alias can be named from nowhere but its own file, where the BARE name already reaches it — so a
+	// qualified mirror would be an entry no program can legally use, bought for every private alias in every
+	// namespaced file. (The function side deliberately does NOT gate, because a call's tier is decided by a
+	// check that runs AFTER resolution and would report the wrong mistake if resolution swallowed it; a cast
+	// target's tier is decided by `everyDeclarationHidden` on the resolved alias, which needs the alias found
+	// first — and a private alias's own file finds it bare.)
+	//
+	// ⚠ **THE MIRROR IS NOT A DUPLICATE DECLARATION.** `commitTypeNameDecls` owns E3061 and reads a different
+	// array, and `commitTypeAliases`'s E3105 is suppressed for the mirror — see `mirrorsANamespaceQualifiedAlias`.
+	function pushNamespaceQualifiedAlias(rangedOut RangedTypeAliasArray, nameTok Token, underlying MaxonType, low ParsedInt, high ParsedInt, tier Visibility)
+		if tier == Visibility.file or self.namespace.isEmpty() 'noQualifiedSpelling'
+			return
+		end 'noQualifiedSpelling'
+
+		rangedOut.push(RangedTypeAlias.create(namespaceQualifiedName(self.namespace, name: nameTok.value), underlying: underlying, low: low, high: high, visibility: tier, declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
+	end 'pushNamespaceQualifiedAlias'
 
 	// ⭐ **CAN A SINGLE 64-BIT TYPE HOLD THIS DECLARED RANGE?** The two ways it cannot, checked at the
 	// declaration — which is the only place the answer is still knowable, because `RangedTypeAlias`
@@ -11612,7 +11674,6 @@ export type Parser
 		// safe because both are re-created (not cleared) for the next function, so nothing aliases
 		// these afterwards. See IrFunction.valueTags / valueNameIds for what the columns are FOR.
 		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, returnLine: nameTok.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: nameTok), throwsTypeName: throwsClause)
-		func.namespace = self.namespace
 		func.visibility = visibility
 
 		// ⭐ **THE FUNCTION IS PUSHED UP FRONT, NOT AT THE END, AND THAT IS WHAT MAKES ValueOrigin CORRECT
@@ -12099,7 +12160,6 @@ export type Parser
 		self.rangeCheckParamSites = sharedEmptyParamSites
 
 		var helper = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, returnLine: anchor.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: anchor), throwsTypeName: ThrowsClause.none)
-		helper.namespace = self.namespace
 		// ⭐ GLOBAL, unlike a lifted closure's `file`: a defaulted parameter of an `export function` is
 		// omitted by call sites in OTHER files, and each of them emits a call to this helper by name.
 		helper.visibility = Visibility.global
@@ -12424,10 +12484,31 @@ export type Parser
 			// registry, so the tolerant sweep and the real parse answer identically while the index is still
 			// building. TypeResolution erases a registered per-instance `X.Y` to `integer` (keeping the nominal
 			// name in the value column) and reports an unregistered one as E3011.
+			//
+			// ⭐⭐ **THE WALK IS GREEDY AND CONSUMES EVERY `.identifier` PAIR (N1b), which is what admits a
+			// MULTI-SEGMENT NAMESPACE — `lib.fmt.Score`.** It stays purely SYNTACTIC, asking no registry, so
+			// the tolerant sweep and the real parse still answer identically; `TypeResolution` decides what the
+			// assembled name denotes (a per-instance `X.Y`, a directory-qualified alias, or E3011).
+			//
+			// ⚠ **GREEDY CANNOT CHANGE A PROGRAM THAT ALREADY COMPILED**, and that is why no lookahead gate is
+			// needed: the one-dot version already consumed a dot unconditionally, so the only inputs this
+			// touches are chains of THREE or more segments — and every one of those was already a parse that
+			// minted `named("a.b")` and then met a dangling `.c` with no rule for it. There is no type position
+			// in the grammar where a type reference may legally be followed by `.identifier`: an `as` cast is
+			// not a postfix operator here (`parseCast` loops only on another `as`), and a return clause, a
+			// parameter, a field and a generic argument are each closed by their own follower.
 			if self.at(TokenKind.dot) and self.kindAt(self.pos + 1) == TokenKind.identifier 'qualifiedMember'
+				// The first pair is read outside the loop so the accumulator starts as the OWNED result of a
+				// join rather than as a borrowed token field, which a `var` may not adopt (E3078) and which a
+				// `.clone()` would only paper over. The `if` guarantees there is one.
 				try self.consume(TokenKind.dot)
-				let memberTok = try self.consume(TokenKind.identifier)
-				return MaxonType.named(self.artifact.typeNames.intern(joinQualifiedName(tok.value, member: memberTok.value)))
+				var qualified = joinQualifiedName(tok.value, member: (try self.consume(TokenKind.identifier)).value)
+				while self.at(TokenKind.dot) and self.kindAt(self.pos + 1) == TokenKind.identifier 'eachSegment'
+					try self.consume(TokenKind.dot)
+					let memberTok = try self.consume(TokenKind.identifier)
+					qualified = joinQualifiedName(qualified, member: memberTok.value)
+				end 'eachSegment'
+				return MaxonType.named(self.artifact.typeNames.intern(qualified))
 			end 'qualifiedMember'
 
 			// The `String` BUILTIN — recognized SYNTACTICALLY, like `Self` below, so it needs no registry
@@ -12878,7 +12959,25 @@ export type Parser
 			// so widening the statement door widens no name, it only routes them to the same answer
 			// expression position already gives.
 			_ = try self.parseQualifiedCall(func, resultUsed: false)
-		end 'voidStaticStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+		end 'voidStaticStmt' else if self.namespaceQualifiedCallDotsAt(self.pos) > 0 'namespaceQualifiedCallStmt'
+			// ⭐ **`utils.shout()` / `lib.inner.shout()` ON A LINE OF ITS OWN (N1b)** — a FREE call written with
+			// a directory qualifier, and a free call is exactly what `callStmt` below already admits: the
+			// result is discarded, `resultUsed: false` is what makes a VOID one legal here, and the
+			// statement's `drainPendingTemps` tail releases an owned result nothing took. Without this arm the
+			// canonical spelling died as `E2015: Unsupported: identifier statement` — `callStmt`'s lookahead
+			// is `identifier (`, which a qualifier's `.` fails — so a namespaced module could declare a void
+			// function nobody outside its own directory could call. Found by probing this rung's own
+			// mechanism; pinned by `namespaces/namespace-qualified-void-call-statement`.
+			//
+			// ⚠ **IT IS NOT `Point.create()`'s CASE, AND THE RECOGNIZER IS WHAT KEEPS THEM APART.** A static
+			// call as a statement stays refused (it would discard a box nothing then frees — see
+			// `methodCallsAt`), because `aStaticCallClaimsDottedChain` hands any chain a `Type.method` key
+			// wears straight back and this arm never sees it.
+			// Through `parsePostfix` for `directCallStmt`'s reason: a call whose RESULT is a function value can
+			// carry a trailing `(args)`, which the postfix loop applies as an indirect call. A plain direct
+			// call leaves none, so this is a no-op for every ordinary namespace-qualified statement.
+			_ = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, resultUsed: false), resultUsed: false)
+		end 'namespaceQualifiedCallStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
 			// HERE and nowhere else: this is the position that wants no value.
@@ -25713,6 +25812,22 @@ export type Parser
 			end 'declared'
 		end 'enumRef'
 
+		// ⭐⭐ **`utils.helper()` / `lib.inner.deepHelper()` — A DIRECTORY-QUALIFIED FREE CALL (N1b), AND THE
+		// FOURTH CLAIMANT ON THIS `.` IS WHAT MADE IT NEED AN ARM AT ALL.** The `Type.method` arm below is a
+		// fixed THREE-TOKEN lookahead, so a longer chain fell past it to the LAST-RESORT bound arm and was
+		// refused as a malformed `u64.max` (`E2010: Expected ''min' or 'max'' but got 'inner'`) — the
+		// SIZED-BOUND grammar, which is the claimant this rung's plan had not counted.
+		//
+		// ⚠ **THE CLAIMANTS ARE SEPARATED BY ORDER AND BY A REGISTRY, AND NEVER BY "IS THE HEAD A
+		// NAMESPACE?"** A value base and an enum reference are claimed above; the recognizer then demands a
+		// trailing `(` (which a bound has not) AND a registered directory-qualified free function (which a
+		// bound's `u64` is not) AND that no `Type.method` key wear the same mangling (which is what leaves
+		// every static call exactly where it was). Anything it declines falls through untouched to the two
+		// arms that have always followed.
+		if self.namespaceQualifiedCallDotsAt(self.pos) > 0 'namespaceQualifiedFreeCall'
+			return try self.parseNamespaceQualifiedCall(func, resultUsed: resultUsed)
+		end 'namespaceQualifiedFreeCall'
+
 		if self.kindAt(self.pos + 3) == TokenKind.leftParen 'qualifiedCall'
 			return try self.parseQualifiedCall(func, resultUsed: resultUsed)
 		end 'qualifiedCall'
@@ -25734,6 +25849,131 @@ export type Parser
 
 		return try self.parseTypeQualifiedBoundExpression()
 	end 'parseDottedPrimary'
+
+	// ⭐ **HOW MANY `.identifier` PAIRS AT `index` FORM A MULTI-SEGMENT DIRECTORY-QUALIFIED CALLEE (N1b)** —
+	// `0` when the tokens are anything else, which is every dotted expression in every program that does not
+	// use the form.
+	//
+	// The walk is v1's, character for character in its shape (`maxon-selfhosted/Compiler/Parser.maxon:14570-14603`):
+	// assemble the whole chain, then ask the registry about the ASSEMBLED name. What shv2 does not port is
+	// v1's LONGEST-PREFIX memory — v1 needs it because its type-position walk must stop where a registered
+	// name ends and leave the rest to a per-instance member; a CALL's chain is terminated by the `(` instead,
+	// so the whole chain either names a function or does not.
+	//
+	// PEEK-ONLY: the cursor is untouched, so a `0` leaves every arm after this one looking at the tokens it
+	// expects.
+	//
+	// ⭐ **IT IS THE ONE RECOGNIZER FOR BOTH POSITIONS AND FOR EVERY SEGMENT COUNT.** `utils.helper()` and
+	// `lib.inner.deepHelper()` are one form written with one or more qualifiers, and an EXPRESSION and a
+	// STATEMENT differ only in whether the result is wanted — so `parseDottedPrimary` and `parseStatement`
+	// ask this, and nothing else decides it. A second "is this a namespace call?" test at either door is how
+	// the two would come to disagree about a program that compiles in one position and not the other.
+	//
+	// ⚡ **NOT ONE BYTE IS JOINED UNTIL THE SHAPE AND THE PROGRAM BOTH ADMIT ONE.** This is asked at EVERY
+	// dotted call in the program — `Point.create(…)` included — and at every `u64.max`, so an eager assemble
+	// would cost a join per site, linear in the program: the shape of cost `MethodNameSeparatorBytes`' header
+	// measured on the scale ladder and refused. The token walk is allocation-free, and
+	// `declaresANamespaceQualifiedFunction` is an O(1) count that is FALSE for every program whose files all
+	// sit at the compile anchor — which is every single-directory program and the whole scale corpus.
+	function namespaceQualifiedCallDotsAt(index TokenIndex) returns ElementCount
+		if not self.signatures.declaresANamespaceQualifiedFunction() 'noDirectoryDeclaresOne'
+			return 0
+		end 'noDirectoryDeclaresOne'
+
+		let dots = self.dottedChainLengthAt(index)
+		if dots == 0 or self.kindAt(index + dots * TokensPerQualifierSegment + 1) != TokenKind.leftParen 'notADottedCall'
+			return 0
+		end 'notADottedCall'
+
+		if not self.signatures.namesNamespaceQualifiedFunction(self.assembleDottedChainAt(index, dots: dots)) 'noSuchQualifiedFunction'
+			return 0
+		end 'noSuchQualifiedFunction'
+
+		return 0 if self.aStaticCallClaimsDottedChain(index, dots: dots) else dots
+	end 'namespaceQualifiedCallDotsAt'
+
+	// ⭐ **THE TYPE READING WINS WHEREVER THERE IS ONE**, which is what keeps a `type utils` with a `static
+	// helper` owning `utils.helper()` exactly as it did before this rung, however a directory is named.
+	//
+	// It asks the SAME mangled name `parseQualifiedCall` links by — through `qualifiedCallBaseName`, so a
+	// generic-instance alias still dispatches to its base struct — because "a static claims this" and "which
+	// static it links" must not be two spellings. A chain of TWO OR MORE qualifiers has no type reading at
+	// all: `Type.method` is exactly one dot, and a mangled method name therefore holds exactly one.
+	function aStaticCallClaimsDottedChain(index TokenIndex, dots ElementCount) returns bool
+		if dots != MethodQualifierDots 'noStaticReading'
+			return false
+		end 'noStaticReading'
+
+		return self.signatures.declaresCallee(qualifiedMethodName(self.qualifiedCallBaseName(self.tokenAt(index).value), methodName: self.tokenAt(index + 2).value))
+	end 'aStaticCallClaimsDottedChain'
+
+	// How many `.<name>` pairs follow the identifier at `index` — the peek-only, allocation-free half of the
+	// walk above. `0` for a bare name and for anything that is not an identifier at all.
+	//
+	// ⚠ **THE HEAD MUST BE A PLAIN IDENTIFIER AND THE SEGMENTS AFTER IT NEED ONLY BE NAMEABLE (D8)**, which
+	// is the asymmetry v1 also draws (`tokenIsIdentifierLike`, `maxon-selfhosted/Compiler/Parser.maxon:14577`).
+	// A trailing segment is the FUNCTION'S OWN NAME, and D8 lets a declaration take a keyword — `export
+	// function from()` is legal and `declaredMethodName` files its qualified spelling under `lib.from`, so a
+	// walk that demanded `identifier` there would register a name no call could ever reach. The HEAD is held
+	// to `identifier` because it is the position every other arm of `parseDottedPrimary` reads its base from,
+	// and widening it would offer this arm keyword bases (`int.`, `Self.`) that those arms own.
+	function dottedChainLengthAt(index TokenIndex) returns ElementCount
+		if self.kindAt(index) != TokenKind.identifier 'notADottedName'
+			return 0
+		end 'notADottedName'
+
+		var dots = 0 as ElementCount
+		while self.kindAt(index + dots * TokensPerQualifierSegment + 1) == TokenKind.dot and tokenCanBeAName(self.tokenAt(index + dots * TokensPerQualifierSegment + 2)) 'walk'
+			dots = dots + 1
+		end 'walk'
+		return dots
+	end 'dottedChainLengthAt'
+
+	// The `a.b.c` NAME a chain of `dots` pairs at `index` spells, built through `joinQualifiedName` so the
+	// registry is asked about the same bytes `namespaceQualifiedName` filed it under. Called only once the
+	// shape has already been accepted, so the joins are paid by a real dotted call and by nothing else.
+	function assembleDottedChainAt(index TokenIndex, dots ElementCount) returns ByteArray
+		// The first pair is joined outside the loop so the accumulator starts OWNED (a `var` may not adopt a
+		// borrowed token field — E3078); the caller's `dots > 0` guarantees there is one, and a one-dot chain
+		// simply runs the loop zero times.
+		var assembled = joinQualifiedName(self.tokenAt(index).value, member: self.tokenAt(index + 2).value)
+		for i in 1 upto dots 'eachFurtherSegment'
+			assembled = joinQualifiedName(assembled, member: self.tokenAt(index + i * TokensPerQualifierSegment + 2).value)
+		end 'eachFurtherSegment'
+		return assembled
+	end 'assembleDottedChainAt'
+
+	// `utils.helper(…)` / `lib.inner.deepHelper(…)` — consume the qualifier chain and emit the ORDINARY direct
+	// call it names. Reached only through `namespaceQualifiedCallDotsAt`, from the EXPRESSION door and the
+	// STATEMENT door alike.
+	//
+	// ⭐ **THE CALLEE IS THE FINAL SEGMENT, AND THAT IS WHY THE EMITTED CODE IS UNTOUCHED.** shv2's function
+	// registry is bare-name and whole-program (a second declaration of one name is E3006), so `utils.helper`
+	// and `helper` are necessarily the same function: the qualified spelling is a ROUTE to it, not a second
+	// symbol, and the call op, the linked name and the golden are byte-identical to a bare call's. It also
+	// puts the tier decision back on the ordinary path — `SemanticCheck.calleeVisibleFrom` refuses
+	// `utils.hidden()` with E3008/E3088, naming the mistake the reader can act on. v1 goes the other way,
+	// making `{ns}.{name}` the SYMBOL and the bare form the fallback (`maxon-selfhosted/Compiler/Parser.maxon:2071`),
+	// which changes what a function is CALLED throughout the backend and is not what this slice is for.
+	//
+	// The chain length is re-read rather than passed in: `dottedChainLengthAt` is a pure token walk that
+	// allocates nothing and cannot disagree with the recognizer, and an `else if` predicate has nowhere to
+	// bind a value for its own body.
+	function parseNamespaceQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
+		let headTok = self.current()
+		// Bound BEFORE the loop, which moves the cursor: re-reading it from `self.pos` on each iteration
+		// would count a chain that is one segment shorter every time round.
+		let qualifierDots = self.dottedChainLengthAt(self.pos)
+
+		// Stops ON the final segment rather than past it: `parseCallNamed` consumes that token itself (it may
+		// be a keyword standing as a name, D8) and then the `(`.
+		for _ in 0 upto qualifierDots 'eachQualifierSegment'
+			self.advance()
+			try self.consume(TokenKind.dot)
+		end 'eachQualifierSegment'
+
+		return try self.parseCallNamed(func, callee: self.current().value, anchor: headTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+	end 'parseNamespaceQualifiedCall'
 
 	// `Color.red` — the value of an enum/union case: its TAG, as an i64 `literal` (the raw value for
 	// an int backing, the IEEE-754 bit pattern for a float). Named `Color.green` for a case the enum
@@ -32415,7 +32655,21 @@ export type Parser
 			return
 		end 'compilerReserved'
 
-		_ = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise throw ParseError.unknownTypeName(String.from(name), line: tok.line, column: tok.column)
+		// ⚠ **THE ANSWER IS CHECKED RATHER THAN `_ =`-DISCARDED, AND THE REASON IS A BOOTSTRAP RULE, NOT A
+		// TASTE.** `denotedNamedType` reads registries and writes nothing, so `PurityAnalysisPass` calls it
+		// PURE — and E3064 refuses `_ = <pure call>` as dead code. This call is not dead: what this site wants
+		// is the FAILURE, and the purity rule does not model the `throws` channel (a function that can throw
+		// has an observable effect its RETURN type cannot express). It became pure at N1b, when
+		// `splitQualifiedName` stopped routing through `String.split` in order to lift its two-segment cap.
+		//
+		// ⭐ So the answer is spent on the ONE claim its own header makes and nothing enforced: that the
+		// cascade ERASES — every arm returns `exitCode`, `structRef`, `integer` or a ranged alias's
+		// `int`/`float` underlying, and an arm that handed the `named` REFERENCE back would put this routine
+		// (and `denotedCastTargetTag`, which reads a tag off the same call) into an unbounded resolve.
+		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise throw ParseError.unknownTypeName(String.from(name), line: tok.line, column: tok.column)
+		if maxonTypeTag(denoted) == ValueTypeTag.named 'cascadeDidNotErase'
+			panic("requireDeclaredBaseTypeName: `denotedNamedType` answered `named` for '{String.from(name)}' — every arm of its cascade erases to a concrete type or throws, so a `named` answer means a new arm hands its own input back")
+		end 'cascadeDidNotErase'
 	end 'requireDeclaredBaseTypeName'
 
 	// The BASE struct name a method/field base resolves to: the struct itself for a `structRef`, or the
@@ -33594,7 +33848,6 @@ export type Parser
 		// carry the trailing `__env`. File-private (a closure is never callable across files by name), and it
 		// NEVER throws (the closure grammar has no throws clause).
 		var lifted = IrFunction.create(closureName, maxonReturnType: MaxonReturnType.value(MaxonType.unresolved), paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, returnLine: givesTok.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: functionTok))
-		lifted.namespace = self.namespace
 		lifted.visibility = Visibility.file
 
 		// Push up front — reserving the closure's index AFTER the enclosing function's (which was pushed at

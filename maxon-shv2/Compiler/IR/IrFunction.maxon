@@ -121,20 +121,18 @@ export type IrFunction
 	// A zero-copy slice of the source, straight off the declaring token. It stays bytes all
 	// the way to the COFF symbol table, which writes it as bytes anyway.
 	export var name as ByteArray
-	// The DIRECTORY this function was declared in, `.`-joined (`stdlib`, `stdlib.helpers.url`, `""` at the
-	// root) — `namespaceForModuleDirectory` applied to `deriveModuleDirectory`'s answer. Stamped by the
-	// parser from `Parser.namespace`, which carried `""` at every call site until N1a derived one per file.
+	// ⛔ **`namespace` LIVED HERE AND IS GONE (N1b).** It was stamped at three sites, read by NOWHERE, and
+	// carried a header claiming `LowerMaxonToStd` consumed it — a claim inherited from v1, in a file that
+	// contains the word zero times. N1a left it standing on the one open question its own header posed:
+	// *"this field is the per-function mirror QUALIFIED REFERENCES (`dir.fn()`) are expected to want. If that
+	// rung does not want it, DELETE it rather than leaving one fact in two homes."*
 	//
-	// ⚠ **STILL WRITE-ONLY, AND ITS HEADER USED TO SAY OTHERWISE**: it claimed `LowerMaxonToStd` consumed
-	// it to resolve bare callees, and that file contains the word `namespace` ZERO times. The claim was
-	// v1's, carried across with the field. The authoritative copy of this fact is
-	// `ProgramSignatures.fileModuleDirectories`, which `isVisibleFrom` reads and which is keyed by the path
-	// a caller already holds; this field is the per-function mirror QUALIFIED REFERENCES (`dir.fn()`) are
-	// expected to want. If that rung does not want it, DELETE it rather than leaving one fact in two homes.
-	//
-	// ⚠ **IT IS THE RENDERED SPELLING, AND NOTHING MAY ASK A VISIBILITY QUESTION OF IT** — `my.dir/` and
-	// `my/dir/` render alike. See `ModuleDirectorySeparator`.
-	export var namespace as String
+	// **The rung does not want it.** A `dir.fn()` reference is resolved at PARSE time, against
+	// `ProgramSignatures.namespaceQualifiedFunctions`, and it resolves to the BARE declared name — so by the
+	// time an `IrFunction` exists there is no namespace left to consult, and the emitted symbol is the one a
+	// bare call already produced. The authoritative copy of a file's directory is
+	// `ProgramSignatures.fileModuleDirectories`, keyed by the path every asker already holds, and unlike this
+	// field it is the INVERTIBLE `/`-joined form a visibility question may actually be asked of.
 	// ⭐ **THE VISIBILITY TIER THE DECLARATION WROTE — READ, since N1a, by the call door**
 	// (`SemanticCheck.calleeVisibleFrom` ⇒ E3008 / E3088). It was written at three sites and consulted at
 	// none for the whole of P1: any file could call any other file's non-exported function.
@@ -353,7 +351,6 @@ export type IrFunction
 	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,
-			namespace: "",
 			visibility: Visibility.file,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
@@ -399,7 +396,6 @@ export type IrFunction
 		let declaredAt = SourcePosition.synthesized()
 		return Self{
 			name: name,
-			namespace: "",
 			visibility: Visibility.global,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
@@ -440,7 +436,6 @@ export type IrFunction
 	export static function shallowCopy(src IrFunction) returns IrFunction
 		return Self{
 			name: src.name,
-			namespace: src.namespace,
 			visibility: src.visibility,
 			sourceFilePath: src.sourceFilePath,
 			paramCount: src.paramCount,

@@ -291,6 +291,15 @@ let DeclShapeParamDefault = 63 as ContentHash
 let DefaultBitSet = 64 as ContentHash
 let DefaultBitClear = 65 as ContentHash
 
+// ⭐ A free function's NAMESPACE-QUALIFIED SPELLING (N1b) — `utils.helper` for a `helper` declared in
+// `utils/`. Its own discriminator for `DeclShapeAlias`'s reason, and load-bearing for a reason NO other
+// entry in this table carries: it is the one fact keyed on a file's DIRECTORY rather than on its bytes.
+// MOVING `utils/helper.maxon` to `tools/helper.maxon` changes not one byte of any file, yet it decides
+// whether another file's `utils.helper()` resolves at all — so without this the reader's parse memo would
+// survive an edit that changes what the reader compiles to. The bare name rides through `record`; only the
+// qualified spelling can carry the directory.
+let DeclShapeNamespaceQualifiedFunction = 66 as ContentHash
+
 // A `throws` clause's PRESENCE discriminators (R8) — the two arms of `ThrowsClause`, so `none` and
 // `throwing(E)` cannot hash alike in a position where both are possible. `mixThrowsClause` is the one place a
 // throws clause enters a content hash; before it existed the only mixer recorded THROWING clauses alone, where
@@ -2949,20 +2958,35 @@ let QualifiedAliasSeparator = "."
 // `containsQualifier`. Named so the byte and the string form of the separator cannot drift.
 let QualifiedAliasSeparatorByte = 46
 
+// ⭐ **THE INDEX OF THE LAST QUALIFIER BYTE IN `name`, or `name.count()` when it holds none** — the ONE
+// scan both the membership question and the split are answered from, so "does it divide?" and "where?"
+// cannot come to disagree about which byte the separator is.
+//
+// ⚠ **THE *LAST*, NOT THE FIRST, AND THAT IS WHAT LIFTED THE TWO-SEGMENT CAP (N1b).** A namespace is a
+// DIRECTORY CHAIN — `lib.fmt.Score`, `lib.inner.deepHelper` — so the qualifier is everything before the
+// final separator and the member is the final segment. For the two-segment names that were the only ones
+// before this rung (`Wrapper.Idx`, `Point.create`) first and last are the same byte, so no existing answer
+// moves; for a three-segment one the last is the only split that names the member the author wrote.
+//
+// An INDEX loop over a byte range, not `for b in name`: this is a per-named-value-coercion hot path, and an
+// index range allocates no iterator object where the collection form might.
+function lastQualifierIndex(name ByteArray) returns ElementCount
+	var found = name.count()
+	for i in 0 upto name.count() 'scan'
+		if (try name.get(i) otherwise panic("lastQualifierIndex: get OOB despite i < count()")) == QualifiedAliasSeparatorByte 'here'
+			found = i
+		end 'here'
+	end 'scan'
+	return found
+end 'lastQualifierIndex'
+
 // ⭐ Does `name` contain the qualifier byte at all? The cheap, ALLOCATION-FREE guard that keeps the
 // per-instance machinery off the plain-alias hot path (P1.6-C): a plain name (`Score`) has no ".", so this
-// scans its bytes and returns false WITHOUT the `String.from(...).split(...)` that `splitQualifiedName`
-// would otherwise allocate on every named-type resolution and every aggregate coercion. Every qualified
-// per-instance/inner name contains exactly one ".".
+// returns false WITHOUT the two slices `splitQualifiedName` would otherwise allocate on every named-type
+// resolution and every aggregate coercion. Derived from `lastQualifierIndex` rather than scanning for
+// itself, so the byte this asks about and the byte the split divides on are one line of code.
 export function containsQualifier(name ByteArray) returns bool
-	// An INDEX loop over a byte range, not `for b in name`: this is a per-named-value-coercion hot path, and an
-	// index range allocates no iterator object where the collection form might.
-	for i in 0 upto name.count() 'scan'
-		if (try name.get(i) otherwise panic("containsQualifier: get OOB despite i < count()")) == QualifiedAliasSeparatorByte 'found'
-			return true
-		end 'found'
-	end 'scan'
-	return false
+	return lastQualifierIndex(name) < name.count()
 end 'containsQualifier'
 
 // `prefix.member` — the base-qualified name of an inner alias ("Wrapper.Idx") and the qualified name of a
@@ -2972,6 +2996,21 @@ end 'containsQualifier'
 export function joinQualifiedName(prefix ByteArray, member ByteArray) returns ByteArray
 	return "{String.from(prefix)}{QualifiedAliasSeparator}{String.from(member)}".toByteArray()
 end 'joinQualifiedName'
+
+// ⭐ **`{namespace}.{name}` — THE DIRECTORY-QUALIFIED SPELLING OF A DECLARATION (N1b).** `utils` + `helper`
+// ⇒ `utils.helper`; `lib.fmt` + `Score` ⇒ `lib.fmt.Score`.
+//
+// It routes through `joinQualifiedName` rather than spelling a separator of its own, so the JOIN and the
+// SPLIT stay one fact however many segments the namespace brought with it: a namespace's own internal
+// separators come from `namespaceForModuleDirectory` (which renders the `/`-joined module directory), and
+// this adds the LAST one — which is exactly the one `splitQualifiedName` divides at.
+//
+// ⚠ The caller must have established that `namespace` is non-empty. A root-level file's namespace is `""`
+// and `.helper` names nothing; there is no qualified spelling of a root declaration, because the root IS the
+// unqualified namespace.
+export function namespaceQualifiedName(namespace String, name ByteArray) returns ByteArray
+	return joinQualifiedName(namespace.toByteArray(), member: name)
+end 'namespaceQualifiedName'
 
 // The TYPE half of a `Type.method` callee, or the callee itself when it names a free function. Written
 // through `splitQualifiedName` rather than as a second scan for the separator, so the one inverse of
@@ -2983,28 +3022,47 @@ export function qualifiedCalleeHead(callee ByteArray) returns ByteArray
 	end 'shape'
 end 'qualifiedCalleeHead'
 
-// The (prefix, member) of a `prefix.member` name, or `notQualified`. An identifier carries no ".", so a
-// two-segment split is EXACT: a plain alias (`Score`) or a name that never was qualified yields
-// `notQualified`, and a genuine per-instance/inner name yields its two parts.
+// The (prefix, member) of a `prefix.member` name, or `notQualified`. An identifier carries no ".", so the
+// split at the LAST separator is EXACT: a plain alias (`Score`) yields `notQualified`, a per-instance/inner
+// name (`Wrapper.Idx`) yields its two parts, and a namespace-qualified one (`lib.fmt.Score`) yields the
+// whole directory chain and the member — which is what every reader of this union wants (the unqualified
+// name for a diagnostic, the receiver half for a per-instance probe).
 export union QualifiedNameParts
 	parts(prefix ByteArray, member ByteArray)
 	notQualified
 end 'QualifiedNameParts'
 
+// ⚠ **IT USED TO REFUSE ANYTHING BUT EXACTLY TWO SEGMENTS, AND THAT WAS A SILENT WRONG ANSWER ONCE N1b
+// MADE THREE REACHABLE.** A three-segment name answered `notQualified` — so `BorrowCheck.calleeDisplayName`
+// would have quoted `lib.inner.deepHelper` where the user reads `deepHelper`, and every "is this qualified?"
+// probe would have said no about a name that plainly is. The cap was correct only while the sole producers
+// joined two identifiers; the split is now the inverse of the join for any number of them.
 export function splitQualifiedName(name ByteArray) returns QualifiedNameParts
-	// The allocation-free short-circuit: a name with no "." is not qualified, so it never reaches the
-	// `String.from(...).split(...)` allocation — the plain-alias hot path pays only the byte scan.
-	if not containsQualifier(name) 'notQualified'
+	// The allocation-free short-circuit: a name with no "." is not qualified, so it never reaches the two
+	// slices below — the plain-alias hot path pays only the byte scan.
+	let split = lastQualifierIndex(name)
+	if split == name.count() 'notQualified'
 		return QualifiedNameParts.notQualified
 	end 'notQualified'
-	let segments = String.from(name).split(QualifiedAliasSeparator)
-	if segments.count() != 2 'notTwoSegments'
-		return QualifiedNameParts.notQualified
-	end 'notTwoSegments'
-	let prefix = try segments.get(0) otherwise panic("splitQualifiedName: segment count is 2 but get(0) failed")
-	let member = try segments.get(1) otherwise panic("splitQualifiedName: segment count is 2 but get(1) failed")
-	return QualifiedNameParts.parts(prefix.toByteArray(), member: member.toByteArray())
+
+	let prefix = try name.slice(0, endIndex: split) otherwise panic("splitQualifiedName: slice [0, {split}) of a {name.count()}-byte name is in range by the index `lastQualifierIndex` just found")
+	let member = try name.slice(split + 1, endIndex: name.count()) otherwise panic("splitQualifiedName: slice [{split + 1}, {name.count()}) is in range by the index `lastQualifierIndex` just found")
+	return QualifiedNameParts.parts(prefix, member: member)
 end 'splitQualifiedName'
+
+// ⭐ **IS THIS RANGED-ALIAS ENTRY THE NAMESPACE-QUALIFIED MIRROR RATHER THAN A DECLARATION THE USER WROTE
+// (N1b)?** — the ONE test, so the two readers that must tell them apart (`commitTypeAliases`, which owes
+// E3105 exactly once per real pair, and `ProgramSignatures.noteUserDeclaredTypeNames`, whose set is defined
+// as the names a user file DECLARES) decide it the same way.
+//
+// ⚠ **THE DOT IS EXACT HERE, NOT A HEURISTIC**, and the argument is the same one `joinQualifiedName`'s header
+// makes: a source-written typealias name is an IDENTIFIER, which cannot hold a "." — the lexer never puts one
+// in an identifier token — and the OTHER dotted ranged aliases in the tree (a generic type's inner alias,
+// `Wrapper.Idx`) travel in `innerAliasEntries`, a different array with a different fold. So a dotted name in a
+// `RangedTypeAliasArray` is exactly and only the mirror `Parser.pushNamespaceQualifiedAlias` minted.
+export function mirrorsANamespaceQualifiedAlias(alias RangedTypeAlias) returns bool
+	return containsQualifier(alias.name)
+end 'mirrorsANamespaceQualifiedAlias'
 
 // A set of declared type NAMES, for a walk that has to recognize a name it has already reached
 // (`ProgramSignatures.structIsConstructibleWithin`). The `Set with ByteArray` the compiler's other
@@ -3015,6 +3073,9 @@ typealias StructNameSet = Set with ByteArray
 // Source-file path (stringified) ⇒ that file's MODULE DIRECTORY. See
 // `ProgramSignatures.fileModuleDirectories`.
 typealias FileModuleDirectoryMap = Map with (String, String)
+// Every FREE function's namespace-qualified spelling (N1b). See
+// `ProgramSignatures.namespaceQualifiedFunctions`.
+typealias NamespaceQualifiedFunctionSet = Set with ByteArray
 
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
@@ -3328,9 +3389,32 @@ export type ProgramSignatures
 	// case-folds and allocates on Windows, and the whole value of an index is that a probe costs one hash of a
 	// string that already exists.
 	var fileModuleDirectories as FileModuleDirectoryMap
+	// ⭐⭐ **EVERY FREE FUNCTION'S NAMESPACE-QUALIFIED SPELLING (N1b)** — `utils.helper` for a `helper`
+	// declared in `utils/`, `lib.inner.deepHelper` for one in `lib/inner/`. THE door a dotted CALLEE asks
+	// through to be read as a directory-qualified free call rather than as `Type.method`.
+	//
+	// ⭐ **IT IS A SET AND NOT A MAP, BECAUSE THE ANSWER IS ALREADY IN THE NAME.** shv2's function registry is
+	// bare-name and whole-program (`commitFuncSignatures` makes a second declaration of one name E3006), so
+	// `utils.helper` and bare `helper` are necessarily the SAME function — the qualified spelling ROUTES a
+	// call, it never names a different callee. The rewrite target is therefore the last segment, which
+	// `splitQualifiedName` already hands back, and the emitted symbol is byte-identical to the one a bare
+	// call emits.
+	//
+	// ⚠ **IT CARRIES NO VISIBILITY, ON PURPOSE.** A qualified call is resolved to the bare declared name and
+	// then meets `SemanticCheck.calleeVisibleFrom` exactly as a bare call does — so `utils.hidden()` is
+	// refused by the tier the declaration wrote, in that check's own words (E3008 / E3088), rather than
+	// silently becoming "no such function" here. Gating this set on the tier would move ONE decision into TWO
+	// places and make the blunter message win. (v1 gates its qualified typealias key on `visibility != file`
+	// for a registry that has no second check behind it; shv2's does.)
+	//
+	// ⚠ **METHODS ARE ABSENT AND MUST STAY ABSENT.** A method is already keyed `Type.method`, whole-program
+	// and namespace-free, in both references (`maxon-selfhosted/Compiler/Parser.maxon:2062`) — so a
+	// `utils.Point.create` entry would be a second spelling of a name that already has one, competing with
+	// the type reading of the same tokens for nothing.
+	var namespaceQualifiedFunctions as NamespaceQualifiedFunctionSet
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create()}
 	end 'create'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -3403,8 +3487,14 @@ export type ProgramSignatures
 	//
 	// Unfiltered on purpose; the field's own header says which reader owns the legality question and why.
 	function noteUserDeclaredTypeNames(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, interfaceSites InterfaceDeclSiteArray)
+		// The namespace-qualified MIRROR is skipped: this set's contract is "every type name ONE user file
+		// DECLARES", and no file declares `api.Score` — the compiler minted it. A dotted name could never
+		// contest a stdlib one anyway (no stdlib type name holds a "."), so the filter buys correctness of the
+		// set's stated meaning, not a different answer.
 		for alias in aliases 'eachAlias'
-			self.userDeclaredTypeNames.insert(alias.name)
+			if not mirrorsANamespaceQualifiedAlias(alias) 'aDeclarationTheUserWrote'
+				self.userDeclaredTypeNames.insert(alias.name)
+			end 'aDeclarationTheUserWrote'
 		end 'eachAlias'
 		for functionAlias in functionAliases 'eachFunctionAlias'
 			self.userDeclaredTypeNames.insert(functionAlias.name)
@@ -3550,7 +3640,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, namespaceQualifiedFuncNames ByteArrayArray, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// ⭐ **THE USER HALF OF THE SHADOW CONTEST (A1s wave 2)** — recorded from the SAME declaration arrays
 		// the registries below are built from, so "what the user declared" and "what the index holds" are one
 		// walk. Every KIND is noted, not just the four nominal ones: the contest is asymmetric on purpose (see
@@ -3563,6 +3653,14 @@ export type ProgramSignatures
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
+
+		// Namespace-qualified FREE-FUNCTION spellings (N1b) travel by NAME and carry no ids, so they fold
+		// here beside the aliases, ahead of the interner reconciliation. EMPTY for every root-level file —
+		// the root is the global namespace and a root declaration has no qualifier to be named by — which
+		// is why a single-directory program pays nothing for this.
+		for qualifiedName in namespaceQualifiedFuncNames 'eachNamespaceQualifiedFunction'
+			self.recordNamespaceQualifiedFunction(qualifiedName)
+		end 'eachNamespaceQualifiedFunction'
 
 		// Inner ranged typealiases (P1.6-C) travel by NAME (a ranged alias's underlying is the `int`/
 		// `float` keyword — no ids), so they fold alongside the ranged aliases, before the interner
@@ -4322,6 +4420,15 @@ export type ProgramSignatures
 		let named = mixBytes(mix(self.hash, value: DeclShapeInnerAlias), bytes: qualified)
 		self.hash = mix(mix(named, value: low), value: high)
 	end 'recordInnerAlias'
+
+	// Add one FREE function's namespace-qualified spelling to the index AND fold it into the hash (N1b) —
+	// `recordAlias`'s discipline, one write, so the set and the hash that keys every parse memo on it cannot
+	// disagree about what the index contains. See `namespaceQualifiedFunctions` for why the set carries the
+	// spelling alone and `DeclShapeNamespaceQualifiedFunction` for why it must ride the hash at all.
+	function recordNamespaceQualifiedFunction(qualifiedName ByteArray)
+		self.namespaceQualifiedFunctions.insert(qualifiedName)
+		self.hash = mixBytes(mix(self.hash, value: DeclShapeNamespaceQualifiedFunction), bytes: qualifiedName)
+	end 'recordNamespaceQualifiedFunction'
 
 	// Add one FUNCTION typealias to the index AND fold it into the hash — the one write, for
 	// `recordAlias`'s reason. The RETURN type rides the hash (its tag, then its name): a caller that
@@ -7997,6 +8104,30 @@ export type ProgramSignatures
 	export function declaresCallee(callee ByteArray) returns bool
 		return self.returnTypes.contains(callee)
 	end 'declaresCallee'
+
+	// ⭐ **IS `written` A DIRECTORY-QUALIFIED SPELLING OF A DECLARED FREE FUNCTION (N1b)?** — asked of the
+	// WHOLE assembled dotted name (`utils.helper`, `lib.inner.deepHelper`), never of its head alone.
+	//
+	// ⛔ **ASKING ABOUT THE HEAD IS THE DESIGN THAT DOES NOT WORK, and it is worth stating because it is the
+	// obvious one.** "Is `utils` a known namespace?" invents an ambiguity neither reference has — a directory
+	// `feature/` beside a `type feature` would then have two readings of `feature.f()` with nothing to choose
+	// between them. The assembled name has ONE reading: it is either a key here or it is not, exactly as
+	// `Wrapper.Idx` and `api.Score` are keys in one map and never compete. v1 settles it the same way
+	// (`maxon-selfhosted/Compiler/Parser.maxon:14600`, `project.funcReturnTypes.contains(assembled)`).
+	export function namesNamespaceQualifiedFunction(written ByteArray) returns bool
+		return self.namespaceQualifiedFunctions.contains(written)
+	end 'namesNamespaceQualifiedFunction'
+
+	// ⚡ **DOES THE PROGRAM CONTAIN A DIRECTORY-QUALIFIED FREE FUNCTION AT ALL?** — the O(1) door the parser's
+	// dotted-call recognizer opens with, so a program whose files all sit at the compile anchor pays NOTHING
+	// for this rung: the set is empty, and the recognizer returns before assembling a name.
+	//
+	// It matters because the recognizer is asked at EVERY dotted call in the program, `Point.create(…)`
+	// included, and assembling the chain costs a join per site — linear in the program, which is the shape of
+	// cost `Parser.MethodNameSeparatorBytes`' header measured on the scale ladder and refused.
+	export function declaresANamespaceQualifiedFunction() returns bool
+		return self.namespaceQualifiedFunctions.count() > 0
+	end 'declaresANamespaceQualifiedFunction'
 
 	function adoptReturnType(rt MaxonReturnType, into TypeNameInterner) returns MaxonReturnType
 		return match rt 'r'

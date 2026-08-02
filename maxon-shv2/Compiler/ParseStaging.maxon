@@ -819,6 +819,12 @@ end 'commitRangeChecks'
 // E3006, and not in the parser — a file-local check cannot see a forward reference or a second file,
 // and this project has already paid for that lesson once (the value-merge rung, #81). The parser
 // records positions and nothing else.
+//
+// ⚠ **THE NAMESPACE-QUALIFIED MIRROR IS RECORDED BUT NEVER REPORTED ON (N1b).** `api/a.maxon`'s `int Score`
+// beside `api/b.maxon`'s `float Score` is ONE mistake, and it is already named against the bare key; the
+// mirror is a second entry for the same pair, so letting it report too would print the identical sentence
+// twice with a compiler-minted name in it. The registry still records it — the mirror must resolve — only
+// the diagnostic is the bare declaration's.
 function commitTypeAliases(project Project, artifact FileParseArtifact)
 	for alias in artifact.typeAliases 'each'
 		match project.typeAliases.record(alias) 'conflict'
@@ -829,11 +835,21 @@ function commitTypeAliases(project Project, artifact FileParseArtifact)
 			// once, in the position the runner rewrites to `<fragment>`; a second path inside the
 			// message would be an absolute temp path in every spec golden, machine-dependent and
 			// unmatchable. The alias name and the two underlying types are what makes it actionable.
-			conflictingUnderlying(prior) then reportPositioned(project, code: ErrorCode.semanticTypeAliasUnderlyingConflict, message: "Typealias '{String.from(prior.name)}' is declared over '{maxonTypeName(alias.underlying, typeNames: project.typeNames)}' here and over '{maxonTypeName(prior.underlying, typeNames: project.typeNames)}' in another file — two files may declare one alias name over different RANGES, but not over different underlying types", line: alias.nameLine, column: alias.nameColumn, filePath: alias.declFilePath)
+			conflictingUnderlying(prior) then reportUnderlyingConflict(project, alias: alias, prior: prior)
 			accepted then break 'conflict'
 		end 'conflict'
 	end 'each'
 end 'commitTypeAliases'
+
+// E3105's one wording and one anchor — split out of the loop above so the mirror suppression is a guard on a
+// named function rather than a condition inside a `match` arm.
+function reportUnderlyingConflict(project Project, alias RangedTypeAlias, prior RangedTypeAlias)
+	if mirrorsANamespaceQualifiedAlias(alias) 'theBareKeyAlreadySaidIt'
+		return
+	end 'theBareKeyAlreadySaidIt'
+
+	reportPositioned(project, code: ErrorCode.semanticTypeAliasUnderlyingConflict, message: "Typealias '{String.from(prior.name)}' is declared over '{maxonTypeName(alias.underlying, typeNames: project.typeNames)}' here and over '{maxonTypeName(prior.underlying, typeNames: project.typeNames)}' in another file — two files may declare one alias name over different RANGES, but not over different underlying types", line: alias.nameLine, column: alias.nameColumn, filePath: alias.declFilePath)
+end 'reportUnderlyingConflict'
 
 // Commit the artifact's FUNCTION typealiases into the project registry (P1.5-A1) — the twin of
 // `commitTypeAliases`, a plain upsert and remap-free (a function alias carries no interner ids).

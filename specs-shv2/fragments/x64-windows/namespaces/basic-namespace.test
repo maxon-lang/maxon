@@ -1,0 +1,35 @@
+// Test: basic-namespace
+
+typealias Integer = int(i64.min to i64.max)
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function main() returns ExitCode
+	return add(10, b: 20)
+end 'main'
+---
+ExitCode: 30
+---
+func @add {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegReg r8, rcx, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 10
+    x64.movRegImm32 rdx, 20
+    x64.callDirect add
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
