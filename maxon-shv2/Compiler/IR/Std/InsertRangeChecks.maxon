@@ -1046,8 +1046,15 @@ type RangeCheckEmitter
 	// says; the `panic at <file>:<line>: ` prefix and the trailing newline are `panicMessageLine`'s, so
 	// this message and a user `panic("…")`'s cannot drift into two formats. `mrt_panic` prints the
 	// result verbatim, then the `Stack trace:` block, then exits `PanicExitCode`.
+	//
+	// ⚠ **THE ALIAS IS QUOTED AS *SOURCE* SPELLS IT (N2 review)** — the same `sourceSpelledAliasName` the
+	// compile-time twin (`literalOutOfRangeMessage`) applies, so a range-contested program cannot panic
+	// naming a typealias no file declares. It also ends an inconsistency the mint created between the two
+	// SLOTS one alias can guard: a value flowing into an array ELEMENT carried the qualified spelling while
+	// the identical alias on a plain PARAMETER carried the bare one, because only an instance's element is
+	// ever qualified — one alias, two spellings, decided by where the value happened to land.
 	function rangeCheckMessage(filePath FilePath, line LineNumber, aliasName ByteArray) returns ByteArray
-		return panicMessageLine(filePath, line: line, text: "Range check failed: value outside typealias '{String.from(aliasName)}'")
+		return panicMessageLine(filePath, line: line, text: "Range check failed: value outside typealias '{String.from(sourceSpelledAliasName(aliasName))}'")
 	end 'rangeCheckMessage'
 
 	// Map each `const` result value id to its constant — the literals whose out-of-range use is the

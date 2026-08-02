@@ -1293,8 +1293,15 @@ end 'rangeCoversRange'
 // the top-level const-cast path (`Parser.applyConstCast`, via the re-raised ParseError). The two
 // report the same defect from different tiers and must not phrase it two ways; the bounds spell
 // through `formatRangeDisplay`, the one place a range renders.
+//
+// ⚠ **THE ALIAS IS QUOTED AS *SOURCE* SPELLS IT (N2 review), because a RANGE-CONTESTED name reaches here
+// wearing the compiler's mint.** `sourceSpelledAliasName` is applied at this one site rather than at each
+// tier, so neither can quote a declaration the program does not contain — MEASURED as
+// `outside the range of 'Byte$0_1000' (int(0 to 1000))`, which names no line the author wrote and prints
+// the real bounds beside the suffix that was supposed to carry them.
 export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
-	return "Value {formatBound(value, isFloat: isFloat)} is outside the range of '{aliasName}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
+	let spelled = String.from(sourceSpelledAliasName(aliasName.toByteArray()))
+	return "Value {formatBound(value, isFloat: isFloat)} is outside the range of '{spelled}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
 end 'literalOutOfRangeMessage'
 
 // A single range bound (or the offending value) as source text — the SIGNED spelling.

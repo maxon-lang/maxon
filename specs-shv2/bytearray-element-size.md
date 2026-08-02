@@ -463,3 +463,201 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/bytearray-element-size/an-agreeing-byte-keeps-the-bare-element-name.test:10:9: argument type mismatch for 'b': expected 'Array_Byte', got 'int'
 ```
+
+### ⚠ THE READER'S OWN `Byte` DECIDES, AND THE MINT IS NEVER QUOTED BACK AT THE AUTHOR
+
+**EVERY CASE ABOVE IS SINGLE-FILE, AND A SINGLE-FILE PROGRAM CANNOT TELL THE TWO RULES APART.** When
+the only user declaration of `Byte` is the one the literal is written beside, the reader's range and
+the whole-program fold (`RangedAliasRegistry.storageBytesInEveryFile`, the MAX over every
+declaration) are the SAME number — so the two wide-`Byte` refusals above pass identically against a
+compiler that scopes the stride to the reader and against one that folds it, and neither pins which
+is running. The four cases here are the two-file shapes that separate them, and they are the ones
+that would go quiet if `Parser.byteElementDeclaredStride` ever stopped resolving through
+`ProgramSignatures.internArrayByteInstance(readerFilePath)`.
+
+<!-- test: readers-own-byte-decides-the-literal-not-the-whole-program-fold -->
+### A `b"…"` in a file with no `Byte` of its own stays packed while a SIBLING file is wide
+`main.maxon` declares no `Byte`, so it means `stdlib/File.maxon`'s `int(0 to u8.max)` and its literal
+is legal. Under a whole-program fold `wide.maxon`'s `int(0 to 1000)` would widen the one shared
+`Array with Byte` to stride 2 and this program would be E2015 — the exact "adding a declaration
+breaks a file that never mentions it" failure the scoping exists to end, in its smallest form.
+```maxon
+// --- file: wide.maxon
+typealias Byte = int(0 to 1000)
+
+export function widen(b Byte) returns int
+	return b
+end 'widen'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var a = b"hi"
+	let n = try a.get(0) otherwise 0
+	return (n - widen(56)) as ExitCode
+end 'main'
+```
+```exitcode
+48
+```
+
+<!-- test: the-wide-files-own-byte-literal-is-still-refused -->
+### …and the WIDE file's own `b"…"` is still refused, in the same program
+The other half, and the half that proves the case above is not simply a lost refusal: the identical
+literal moved into `wide.maxon` meets the wall its own declaration builds. One program, two files,
+two answers — which is precisely what "one instance cannot have two strides" buys once the two
+instances are distinct.
+```maxon
+// --- file: wide.maxon
+typealias Byte = int(0 to 1000)
+
+export function widen() returns int
+	var a = b"hi"
+	return try a.get(0) otherwise 0
+end 'widen'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return widen() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:10: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 2-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 2 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
+```
+
+<!-- test: a-buffer-field-strides-its-declaring-files-byte -->
+### A `__ManagedMemory` FIELD strides its DECLARING file's `Byte`, not its reader's
+`ProgramSignatures.declaredSlotType` resolves a slot's compiler-minted alias against the file that
+DECLARED the slot. `holder.maxon` declares no `Byte`, so `Holder.buf` is a byte-PACKED buffer for
+every reader — including `main.maxon`, whose own `Byte` is two bytes wide. Scoped to the reader
+instead, `main.maxon` would read a record `holder.maxon` stamped at stride 1 as though it strode 2,
+with no diagnostic anywhere; `first()` returning `a` is what says it did not.
+```maxon
+// --- file: holder.maxon
+export type Holder
+	export var buf as __ManagedMemory
+
+	export static function ofText(t String) returns Holder
+		return Holder{buf: t.toByteArray()}
+	end 'ofText'
+
+	export function first() returns int
+		return try self.buf.get(0) otherwise 0
+	end 'first'
+end 'Holder'
+
+// --- file: main.maxon
+typealias Byte = int(0 to 1000)
+
+function widen(b Byte) returns int
+	return b
+end 'widen'
+
+function main() returns ExitCode
+	let h = Holder.ofText("ab")
+	return (h.first() - widen(50)) as ExitCode
+end 'main'
+```
+```exitcode
+47
+```
+
+<!-- test: a-buffer-field-refuses-another-files-byte-at-the-construction -->
+### …and the disagreement lands LOUDLY, at the construction
+The same two files with the buffer handed IN rather than built inside `holder.maxon`. `main.maxon`'s
+`"ab".toByteArray()` is its OWN `Byte`, two bytes wide, and the field is one byte wide — so the two
+files meet nominally, at the line that hands the record over, instead of silently striding one
+record two ways. This is the refusal that pays for the case above.
+```maxon
+// --- file: holder.maxon
+export type Holder
+	export var buf as __ManagedMemory
+
+	export static function of(b __ManagedMemory) returns Holder
+		return Holder{buf: b}
+	end 'of'
+
+	export function first() returns int
+		return try self.buf.get(0) otherwise 0
+	end 'first'
+end 'Holder'
+
+// --- file: main.maxon
+typealias Byte = int(0 to 1000)
+
+function widen(b Byte) returns int
+	return b
+end 'widen'
+
+function main() returns ExitCode
+	let h = Holder.of("ab".toByteArray())
+	return (h.first() - widen(50)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:23:10: argument type mismatch for 'b': expected 'Array_Byte$0_255', got 'Array_Byte$0_1000'
+```
+
+### The MINT is an internal spelling, and no diagnostic may quote it
+
+`Byte$0_255` is the compiler's name for ONE declaration of `Byte`; it is unspellable in source
+(`SignatureIndex.RangeQualifiedAliasSeparator`) and no author ever wrote it. A TYPE-IDENTITY message
+must still show it — `expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'` above is the whole
+content of that refusal, and the bare spelling would read `expected 'Array_Byte', got 'Array_Byte'`.
+A RANGE message must not: it quotes a `typealias` back at the author, and its bounds are printed in
+the same sentence, so the suffix carried nothing the reader had not already been told.
+
+⛔ **MEASURED (N2 review) before `SignatureIndex.sourceSpelledAliasName` existed**, on the two cases
+below: `Value 2000 is outside the range of 'Byte$0_1000' (int(0 to 1000))` and
+`value outside typealias 'Byte$0_1000'` — naming a declaration the program does not contain. It was
+also inconsistent with itself, because only a generic instance's ELEMENT is ever qualified: the very
+same alias guarding a plain PARAMETER printed the bare `Byte`. One alias, two spellings, decided by
+which slot the value happened to flow into.
+
+<!-- test: a-contested-alias-is-quoted-as-source-spells-it -->
+### The compile-time narrowing quotes the name the file declares
+The program declares `Byte` and so does `stdlib/File.maxon`, over a different range — so the element
+of `Bytes` is a mint. The diagnostic is about the RANGE, and the range belongs to the declaration on
+line 1.
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(2000)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:7: Value 2000 is outside the range of 'Byte' (int(0 to 1000))
+```
+
+<!-- test: a-contested-alias-panics-under-the-name-source-spells -->
+<!-- targets: x64-windows, x64-linux -->
+### …and so does the runtime guard, through the same speller
+`InsertRangeChecks.rangeCheckMessage` and the compile-time twin apply the one strip, so a program
+cannot be refused under one spelling and panic under another.
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function feed(v int) returns int
+	var made = Bytes.create()
+	made.push(v)
+	return try made.get(0) otherwise 0
+end 'feed'
+
+function main() returns ExitCode
+	return feed(2000) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-contested-alias-panics-under-the-name-source-spells.test:7: Range check failed: value outside typealias 'Byte'
+Stack trace:
+  in feed
+  in main
+  in mrt_start
+```

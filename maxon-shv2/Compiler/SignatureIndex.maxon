@@ -1817,7 +1817,7 @@ end 'undeclaredNamedElementStorageBytes'
 // sides are asked the same way so a mint can never be on the roster from one side and off it from the other
 // — the asymmetry R4.7 already paid for once, in the other direction.
 function isByteElementName(name ByteArray) returns bool
-	let base = baseElementName(name)
+	let base = sourceSpelledAliasName(name)
 	return base.equals(ByteElementTypeName) or base.equals(SynthesizedByteElementName)
 end 'isByteElementName'
 
@@ -3042,35 +3042,50 @@ let QualifiedAliasSeparator = "."
 // `containsQualifier`. Named so the byte and the string form of the separator cannot drift.
 let QualifiedAliasSeparatorByte = 46
 
-// ⭐ **THE INDEX OF THE LAST QUALIFIER BYTE IN `name`, or `name.count()` when it holds none** — the ONE
-// scan both the membership question and the split are answered from, so "does it divide?" and "where?"
-// cannot come to disagree about which byte the separator is.
+// The byte a compound NAME is divided at — the argument `lastSeparatorIndex` takes so the two divided
+// namespaces this file mints ("." for a namespace chain, "$" for a range-qualified element) share one scan.
+// ASCII by construction: both separators are punctuation the lexer can spell, and a name is UTF-8, so a
+// separator is never a continuation byte.
+typealias NameSeparatorByte = int(0 to 127)
+
+// ⭐ **THE INDEX OF THE LAST `separator` BYTE IN `name`, or `name.count()` when it holds none** — the ONE
+// scan EVERY separator-divided name in this file is answered from, so "does it divide?", "where?" and
+// "what is the part before it?" cannot come to disagree about which byte the separator is.
+//
+// ⚠ **IT TAKES THE SEPARATOR RATHER THAN NAMING ONE, BECAUSE THIS FILE MINTS TWO DIVIDED NAMESPACES AND
+// THE SECOND ARRIVED AS A COPY OF THIS SCAN (N2 review).** The "." divides a namespace-qualified name
+// (`lib.fmt.Score`) and the "$" divides a range-qualified element (`Byte$0_255`); they are two separators,
+// not two algorithms, and a second hand-rolled "find the byte, slice before it" is exactly the shape whose
+// copies drift into a WRONG ANSWER rather than a compile error — the split silently lands one byte off and
+// a name roster quietly stops matching.
 //
 // ⚠ **THE *LAST*, NOT THE FIRST, AND THAT IS WHAT LIFTED THE TWO-SEGMENT CAP (N1b).** A namespace is a
 // DIRECTORY CHAIN — `lib.fmt.Score`, `lib.inner.deepHelper` — so the qualifier is everything before the
 // final separator and the member is the final segment. For the two-segment names that were the only ones
-// before this rung (`Wrapper.Idx`, `Point.create`) first and last are the same byte, so no existing answer
+// before that rung (`Wrapper.Idx`, `Point.create`) first and last are the same byte, so no existing answer
 // moves; for a three-segment one the last is the only split that names the member the author wrote.
+// For the "$" reader the two coincide unconditionally: a mint's base is a name `multiplyDeclared` holds,
+// and a mint itself is never contested (it has exactly one declaration), so no name carries two of them.
 //
 // An INDEX loop over a byte range, not `for b in name`: this is a per-named-value-coercion hot path, and an
 // index range allocates no iterator object where the collection form might.
-function lastQualifierIndex(name ByteArray) returns ElementCount
+function lastSeparatorIndex(name ByteArray, separator NameSeparatorByte) returns ElementCount
 	var found = name.count()
 	for i in 0 upto name.count() 'scan'
-		if (try name.get(i) otherwise panic("lastQualifierIndex: get OOB despite i < count()")) == QualifiedAliasSeparatorByte 'here'
+		if (try name.get(i) otherwise panic("lastSeparatorIndex: get OOB despite i < count()")) == separator 'here'
 			found = i
 		end 'here'
 	end 'scan'
 	return found
-end 'lastQualifierIndex'
+end 'lastSeparatorIndex'
 
 // ⭐ Does `name` contain the qualifier byte at all? The cheap, ALLOCATION-FREE guard that keeps the
 // per-instance machinery off the plain-alias hot path (P1.6-C): a plain name (`Score`) has no ".", so this
 // returns false WITHOUT the two slices `splitQualifiedName` would otherwise allocate on every named-type
-// resolution and every aggregate coercion. Derived from `lastQualifierIndex` rather than scanning for
+// resolution and every aggregate coercion. Derived from `lastSeparatorIndex` rather than scanning for
 // itself, so the byte this asks about and the byte the split divides on are one line of code.
 export function containsQualifier(name ByteArray) returns bool
-	return lastQualifierIndex(name) < name.count()
+	return lastSeparatorIndex(name, separator: QualifiedAliasSeparatorByte) < name.count()
 end 'containsQualifier'
 
 // `prefix.member` — the base-qualified name of an inner alias ("Wrapper.Idx") and the qualified name of a
@@ -3131,13 +3146,13 @@ end 'QualifiedNameParts'
 export function splitQualifiedName(name ByteArray) returns QualifiedNameParts
 	// The allocation-free short-circuit: a name with no "." is not qualified, so it never reaches the two
 	// slices below — the plain-alias hot path pays only the byte scan.
-	let split = lastQualifierIndex(name)
+	let split = lastSeparatorIndex(name, separator: QualifiedAliasSeparatorByte)
 	if split == name.count() 'notQualified'
 		return QualifiedNameParts.notQualified
 	end 'notQualified'
 
-	let prefix = try name.slice(0, endIndex: split) otherwise panic("splitQualifiedName: slice [0, {split}) of a {name.count()}-byte name is in range by the index `lastQualifierIndex` just found")
-	let member = try name.slice(split + 1, endIndex: name.count()) otherwise panic("splitQualifiedName: slice [{split + 1}, {name.count()}) is in range by the index `lastQualifierIndex` just found")
+	let prefix = try name.slice(0, endIndex: split) otherwise panic("splitQualifiedName: slice [0, {split}) of a {name.count()}-byte name is in range by the index `lastSeparatorIndex` just found")
+	let member = try name.slice(split + 1, endIndex: name.count()) otherwise panic("splitQualifiedName: slice [{split + 1}, {name.count()}) is in range by the index `lastSeparatorIndex` just found")
 	return QualifiedNameParts.parts(prefix, member: member)
 end 'splitQualifiedName'
 
@@ -3186,25 +3201,32 @@ export function rangeQualifiedAliasName(name ByteArray, low ParsedInt, high Pars
 	return "{String.from(name)}{RangeQualifiedAliasSeparator}{low}_{high}".toByteArray()
 end 'rangeQualifiedAliasName'
 
-// ⭐ **THE BASE NAME A RANGE-QUALIFIED ELEMENT NAME WAS MINTED FROM** — `Byte$0_255` ⇒ `Byte`, and any
-// other name UNCHANGED, handed back by reference so an unqualified name costs one byte scan and no
-// allocation. That is what lets a name ROSTER (`isByteElementName`) keep asking about `Byte` after the
-// element it names has been qualified, without the roster learning about ranges.
-function baseElementName(name ByteArray) returns ByteArray
-	var split = name.count()
-	for i in 0 upto name.count() 'scan'
-		if (try name.get(i) otherwise panic("baseElementName: get OOB despite i < count()")) == RangeQualifiedAliasSeparatorByte 'here'
-			split = i
-			break
-		end 'here'
-	end 'scan'
-
+// ⭐⭐ **THE NAME AS *SOURCE* SPELLS IT** — `Byte$0_255` ⇒ `Byte`, and any name the compiler never
+// qualified handed back UNCHANGED, by reference, so an unqualified name costs one byte scan and no
+// allocation. `rangeQualifiedAliasName`'s exact inverse, spelled through the same `lastSeparatorIndex`
+// the "." reader uses, so the mint and the strip cannot come to disagree about where a name divides.
+//
+// **ITS TWO READERS WANT THE SAME THING FOR TWO REASONS, AND THAT IS WHY THERE IS ONE FUNCTION:**
+//
+//   • A name ROSTER (`isByteElementName`) asks about `Byte`, and must go on getting a yes after the
+//     element it names has been qualified — without the roster learning anything about ranges.
+//   • A DIAGNOSTIC quotes a typealias back at the author, and a mint is a name NO SOURCE LINE HOLDS.
+//     ⛔ MEASURED (N2 review) before this door existed, on a program declaring `typealias Byte =
+//     int(0 to 1000)`: the compile-time narrowing said `Value 2000 is outside the range of
+//     'Byte$0_1000' (int(0 to 1000))` and the runtime guard panicked `value outside typealias
+//     'Byte$0_1000'` — quoting a declaration the program does not contain, with the real bounds printed
+//     in the very same sentence, so the suffix carried nothing but the compiler's bookkeeping. Worse, it
+//     was INCONSISTENT with itself: the identical alias guarding a plain PARAMETER printed the bare
+//     `Byte`, because only a generic instance's element is ever qualified. One alias, two spellings,
+//     decided by which slot the value happened to flow into.
+export function sourceSpelledAliasName(name ByteArray) returns ByteArray
+	let split = lastSeparatorIndex(name, separator: RangeQualifiedAliasSeparatorByte)
 	if split == name.count() 'notRangeQualified'
 		return name
 	end 'notRangeQualified'
 
-	return try name.slice(0, endIndex: split) otherwise panic("baseElementName: slice [0, {split}) of a {name.count()}-byte name is in range by the index the scan just found")
-end 'baseElementName'
+	return try name.slice(0, endIndex: split) otherwise panic("sourceSpelledAliasName: slice [0, {split}) of a {name.count()}-byte name is in range by the index `lastSeparatorIndex` just found")
+end 'sourceSpelledAliasName'
 
 // A set of declared type NAMES, for a walk that has to recognize a name it has already reached
 // (`ProgramSignatures.structIsConstructibleWithin`). The `Set with ByteArray` the compiler's other
@@ -6570,7 +6592,7 @@ export type ProgramSignatures
 	// tuple therefore means what a file declaring no `Byte` means by it; a file whose own `Byte` disagrees
 	// meets that at the tuple's CONSTRUCTION, nominally, rather than by striding a record two ways.
 	function canonicalTupleElement(element MaxonType) returns MaxonType
-		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames, declFilePath: CompilerOwnedDeclFilePath))
+		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames, slotScopeFilePath: CompilerOwnedDeclFilePath))
 		if maxonTypeTag(resolved) != ValueTypeTag.named 'notNamed'
 			return self.canonicalTupleStructRef(resolved)
 		end 'notNamed'
@@ -8436,7 +8458,7 @@ export type ProgramSignatures
 	export function fieldTypeOf(layout StructLayout, index FieldIndex, into TypeNameInterner) returns MaxonType
 		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(layout.name)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
 
-		return self.declaredSlotType(declared, into: into, declFilePath: layout.declFilePath)
+		return self.declaredSlotType(declared, into: into, slotScopeFilePath: layout.declFilePath)
 	end 'fieldTypeOf'
 
 	// ⭐ **THE PRE-ERASURE `__ManagedMemory` SPELLING OF FIELD `index` (A2j / A2m)** — `fieldTypeOf`'s twin
@@ -8494,17 +8516,34 @@ export type ProgramSignatures
 	// a function meeting an int slot and refused a program both compilers accept. A rule with two homes
 	// drifts, and only the newer home's obligations reveal which half the older one was missing.
 	//
-	// ⚠⚠ **`declFilePath` IS THE SLOT'S DECLARING FILE, NEVER THE READER'S (N2), AND THE DIFFERENCE IS A
-	// SILENT WRONG ANSWER.** The generic-alias arm below resolves a compiler-minted alias — `__ManagedMemory`
-	// — whose element is the reader's `Byte` by design, so a range-contested program has two answers to
-	// choose from. A FIELD's type must be ONE type program-wide: scoped to the reader, file X could build
-	// `Holder{buf: <a stride-1 buffer>}` and file Y read `h.buf.get(0)` at stride 2 over that very record,
-	// with no diagnostic anywhere. Scoped to the declaration, the two files disagree at the CONSTRUCTION —
-	// nominally, loudly — and every read of the slot strides the way the record was stamped.
-	// A COMPILER-SYNTHESIZED layout carries the EMPTY path here, which is the same probe a file declaring
-	// none of a contested name makes: a type declared in no file resolves like a stranger, which is the one
-	// answer that is the same for all of them.
-	export function declaredSlotType(declared MaxonType, into TypeNameInterner, declFilePath FilePath) returns MaxonType
+	// ⚠⚠ **`slotScopeFilePath` IS WHICHEVER FILE *FIXES* THIS SLOT'S TYPE, AND FOR A FIELD THAT IS ITS
+	// DECLARING FILE AND NEVER A READER'S (N2) — the difference there is a SILENT WRONG ANSWER.** The
+	// generic-alias arm below resolves a compiler-minted alias — `__ManagedMemory` — whose element is the
+	// reader's `Byte` by design, so a range-contested program has two answers to choose from.
+	//
+	// **THE THREE ASKERS, AND WHY ONE PARAMETER SERVES ALL THREE.** They are not three policies; they are
+	// three answers to the one question *"whose reading of a contested alias is this slot's identity?"*:
+	//
+	//   • **A struct FIELD** (`fieldTypeOf`) passes `StructLayout.declFilePath`. A field's type must be ONE
+	//     type program-wide: scoped to the reader, file X could build `Holder{buf: <a stride-1 buffer>}` and
+	//     file Y read `h.buf.get(0)` at stride 2 over that very record, with no diagnostic anywhere. Scoped
+	//     to the declaration, the two files disagree at the CONSTRUCTION — nominally, loudly (MEASURED, N2
+	//     review, both directions: `E3005 … expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'` at the
+	//     construction line, and the narrow declarer's own read striding 1 correctly) — and every read of
+	//     the slot strides the way the record was stamped.
+	//   • **An `Array` ELEMENT** (`Parser.arrayElementValueType`, `Parser.requireArrayElementType`) passes
+	//     the PARSING FILE — which reads as "the reader's" and is not that at all. An array INSTANCE is
+	//     declared in no file, so it has no declaring one to ask; what it has is the file its `giid` was
+	//     already range-scoped FOR, one line earlier in the same parser, and that file is `self.filePath`.
+	//     Passing anything else would let an element disagree with the very instance it was read out of.
+	//   • **A TUPLE element and a COMPILER-SYNTHESIZED layout** carry `CompilerOwnedDeclFilePath`, the same
+	//     probe a file declaring none of a contested name makes: a type declared in no file resolves like a
+	//     stranger, which is the one answer that is the same for all of them.
+	//
+	// ⚠ The parameter is NOT named `declFilePath`, deliberately: two of its five call sites have no
+	// declaration to name, and a parameter whose name is true at three sites and false at two is the kind of
+	// contract a later edit satisfies literally and breaks in fact.
+	export function declaredSlotType(declared MaxonType, into TypeNameInterner, slotScopeFilePath FilePath) returns MaxonType
 		// A FUNCTION-typed slot (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
 		// recorded its declaration ran before the function alias was known — so it is re-tagged `function`
 		// HERE, over this index's own function-alias registry (P1.5-A1). One place, so every reader (a
@@ -8522,7 +8561,7 @@ export type ProgramSignatures
 			// construction check, the array method dispatch, the drop cascade) sees the instance and not an
 			// `int`. The gid is this index's own, needing no interner remap.
 			if self.isGenericAlias(name) 'genericAlias'
-				return MaxonType.genericInstance(self.genericAliasInstanceFrom(name, readerFilePath: declFilePath))
+				return MaxonType.genericInstance(self.genericAliasInstanceFrom(name, readerFilePath: slotScopeFilePath))
 			end 'genericAlias'
 			// ⭐ A TUPLE-ALIAS-typed slot (`export var p as Pair`, `typealias Pair = (Int, Int)`) arrives as a
 			// `named` for the reason the arms around it do, and is re-tagged to the tuple's own `structRef`
