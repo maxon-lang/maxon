@@ -624,11 +624,22 @@ end 'markerAllowsTarget'
 // `File.*` cases in `file-io.md` DO carry a marker and that is the opposite situation: there the
 // filesystem IS the subject.
 //
-// ⚠ **MEASURED, not assumed: the derivation holds over the WHOLE corpus.** All 51 `Args:` cases in
-// `/specs` reach a `__cl_*` entry — including `builtins-type.command-line-arg-out-of-bounds`, which
-// spells it `__Builtins.commandLineArg` and would defeat a source-text search for `CommandLine`. The
-// residual risk is a future case that writes `Args:` and never reads argv, and gating that one costs
-// nothing: its marker already does nothing.
+// ⚠ **MEASURED, and the measurement RUNS ONE WAY ONLY: `Args:` is SUFFICIENT for "this case needs
+// argv", never NECESSARY.** All 51 `Args:` cases in `/specs` do reach a `__cl_*` entry — including
+// `builtins-type.command-line-arg-out-of-bounds`, which spells it `__Builtins.commandLineArg` and
+// would defeat a source-text search for `CommandLine`. But the CONVERSE is ALREADY FALSE in that same
+// corpus, and the counterexample is on the port whitelist rather than hypothetical:
+// `command-line-args.args-length-no-extra` reads `CommandLine.args()` and carries NO `Args:` marker,
+// because the property it pins is that argv[0] arrives ALONE. `command-line-args.executable-path` is
+// the same shape one substrate over (`Process.executablePath`).
+//
+// ⭐ **THAT ASYMMETRY IS THE SAFE ONE, which is why the gate is written on the marker anyway.** A case
+// this gate MISSES is not skipped, it is RUN — and `requireTargetSupportsCallee` refuses it with E3104
+// at its own span, so the suite goes RED and names the entry. The fix when that day comes is to WIDEN
+// this gate to the whole substrate question, never to hand-mark the case. The other direction — an
+// `Args:` on a case that never reads argv — is the expensive one, because it is a SILENT skip on every
+// non-Windows target rather than a red; nothing in the corpus does it, and a case that did would be
+// carrying a delivery marker its own program ignores.
 //
 // ⭐ **IT UN-GATES ITSELF.** The expression is the compiler's own refusal, assembled from the two
 // exported predicates: "would `__cl_count` be refused on this target?" The day a POSIX/WASI argv
