@@ -1,0 +1,21 @@
+// Test: a-byte-two-files-disagree-about-is-two-types
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function takesMine(b Bytes) returns ExitCode
+	return b.count()
+end 'takesMine'
+
+function main() returns ExitCode
+	let path = FilePath from "test_widebyte_notmine.txt"
+	try File.writeText(path, content: "Hi") otherwise 'writeErr'
+		return 1
+	end 'writeErr'
+	let raw = try File.readBinary(path) otherwise 'readErr'
+		return 2
+	end 'readErr'
+	return takesMine(raw)
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:17:9: argument type mismatch for 'b': expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'

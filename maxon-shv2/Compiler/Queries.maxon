@@ -250,6 +250,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// `Parser.foldDeclaredSignaturesInto`) and keeps this memo cacheable: a query that reported would
 	// have to suppress on a hit, exactly as `queryParseOps` must.
 	let constProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
+	// ⭐ **AND WHICH NAMES ARE RANGE-CONTESTED (N2) — FIRST of the whole-program steps, because the three
+	// below all READ a generic instance and this is what decides which instance a file means.** A name
+	// declared over two different ranges by two files is two element TYPES, so its instances are split here,
+	// once, with every declaration in and no file yet parsed. See `settleRangeScopedInstances` for the three
+	// distinct problems it settles, and for why an uncontested program — the whole corpus — leaves it after
+	// one walk of an empty map.
+	signatures.settleRangeScopedInstances()
 	// ⭐ And the `Array with <every declared struct/union>` over-interning a `[<identifier>…]` array literal
 	// needs (P1.7 slice 3) — HERE, for the same "the whole program is known now" reason, and because doing it
 	// at each such file re-walked tables that were still growing: O(files × types), measured at ×3.03
@@ -624,6 +631,16 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 		mergeArtifact(project, target: merged, artifact: artifact)
 		recordPhase(project, phase: CompilePhase.merge, probe: mergeProbe)
 	end 'eachFile'
+
+	// ⭐ **THE PROJECT'S RANGED-ALIAS REGISTRY GETS THE SAME RANGE-CONTEST SETTLEMENT `ProgramSignatures`'
+	// DID (N2), and it has to be settled HERE because this is where its last declaration lands.** The two
+	// registries are built from the same per-file arrays by two different folds, and both are asked about a
+	// range-qualified element: the signature index for the whole-program STRIDE (`arrayElementSize`), this
+	// one for the ERASURE (`TypeResolution.resolveNamedType`) and the BOUNDS (`InsertRangeChecks`). Settled
+	// by the one function, so a mint the parser's instances name is a mint the range checks can find — a
+	// second derivation would be free to disagree, which is the shape `RangedAliasRegistry.create`'s seed
+	// comment already refuses one door over.
+	project.typeAliases.settleRangeContests()
 
 	project.db.allModuleCache = ModuleMemo.create(merged, keyHash: compositeSourceHash(project), computed: true)
 	return merged

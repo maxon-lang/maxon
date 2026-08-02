@@ -321,7 +321,14 @@ export typealias VisibilityArray = Array with Visibility
 // `CharacterSet`, a tuple, `__ManagedFile`, `__ManagedDirectory`, `Ordering`, the builtin error enums).
 // Each is `Visibility.global`, so no tier ever reads this path; it is the same "empty path means the
 // compiler built it" statement `IrFunction.SourcePosition.synthesized` makes, spelled once for layouts.
-let CompilerOwnedDeclFilePath = FilePath from ""
+//
+// ⭐ **IT IS ALSO HOW A READER THAT DECLARES NOTHING ASKS (N2), and that is the same fact rather than a
+// second use.** `RangedAliasRegistry.lookup` probes its by-file index with the reader's path, so an EMPTY
+// path matches no declaration and falls through to the nameable tier and then to the bare one — which is
+// exactly the rule a non-declaring file resolves a contested name by. A type the compiler built is a
+// reader with no file, so it resolves like one; spelling a second empty path for that would be the same
+// value written down twice.
+export let CompilerOwnedDeclFilePath = FilePath from ""
 
 // Ordinal of a union case (and, for a payload binding, the field index within
 // that case's payload). Bounded by the max cases a union may declare.
@@ -678,6 +685,13 @@ typealias MultiplyDeclaredAliasMap = Map with (ByteArray, RangedAliasByDeclaring
 // shape every cross-file alias defect in this file has had.
 typealias NameableAliasMap = Map with (ByteArray, RangedTypeAlias)
 
+// The names whose declarations disagree about the RANGE -> every distinct range-qualified spelling of each
+// (N2). A strict SUBSET of `MultiplyDeclaredAliasMap`'s keys, and EMPTY for every program in the corpus —
+// see `RangedAliasRegistry.settleRangeContests` for why that emptiness is what keeps every element name,
+// every mangled symbol and every committed golden where it was.
+typealias RangeContestedAliasMap = Map with (ByteArray, ByteArrayArray)
+
+
 // What ONE `typealias` declaration conflicted with when it was filed — `RangedAliasRegistry.record`'s
 // answer, and the ONLY thing that decides whether E3105 is raised.
 //
@@ -908,6 +922,11 @@ export type RangedAliasRegistry
 	//
 	// ⭐ **AND IT IS ALSO THE DOOR A THIRD FILE RESOLVES A CONTESTED NAME THROUGH** — see `lookup`.
 	var nameable as NameableAliasMap
+	// ⭐⭐ **THE NAMES WHOSE DECLARATIONS DISAGREE ABOUT THE RANGE (N2)** — a THIRD derived index over the
+	// same declarations, and the only one that cannot be maintained by `record`: it is a fact about ALL of a
+	// name's declarations at once, so it is settled in one pass after the last one lands
+	// (`settleRangeContests`). Empty until then, and empty forever in a program with no contest.
+	var rangeContested as RangeContestedAliasMap
 
 	// ⭐⭐ **EVERY REGISTRY IS BORN HOLDING `Codepoint`, AND THAT IS WHAT GIVES IT A RANGE (P1.8 Slice E
 	// review).** `Codepoint` is declared, verbatim and with these bounds, in `stdlib/Character.maxon` —
@@ -941,7 +960,7 @@ export type RangedAliasRegistry
 	// `recordAlias`, one level up). The seed is identical in every program, so it distinguishes nothing —
 	// hashing it would invalidate every parse memo in the project to record a constant.
 	export static function create() returns RangedAliasRegistry
-		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), nameable: NameableAliasMap.create()}
+		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), nameable: NameableAliasMap.create(), rangeContested: RangeContestedAliasMap.create()}
 		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath))
 		_ = registry.record(builtinStdlibAlias(ElementCountAliasName, low: ElementCountAliasLow, high: ElementCountAliasHigh, declPathText: ElementCountAliasDeclPath))
 		return registry
@@ -1221,7 +1240,147 @@ export type RangedAliasRegistry
 			self.storageBytes.upsert(alias.name, value: width)
 		end 'wider'
 	end 'widenStorageBytesFor'
+
+	// ⭐⭐ **DECIDE WHICH NAMES ARE RANGE-CONTESTED, AND MINT THE QUALIFIED DECLARATION EACH DISTINCT RANGE
+	// GETS (N2)** — the answer the door above cannot give, made once, after every declaration is in.
+	//
+	// `widenStorageBytesFor`'s header states the constraint this settles: a generic instance is interned on
+	// the element's NAME, so `Array with Byte` is ONE instance with ONE `element_size@24` however many files
+	// declare `Byte`, and the fold to the widest is the only honest width for it. That is correct and it is
+	// not enough — `stdlib/File.maxon` BUILDS a byte buffer through that instance (`__ManagedMemory.create(n,
+	// 1)`), so a user's `typealias Byte = int(0 to 1000)` made the stdlib's own buffer stride two and
+	// `file.read(managed, …)` refuse it (E3005 at `stdlib/File.maxon:74`, on a program that never mentions
+	// `File`). **No width rule can fix that: the two `Array with Byte` must become two INSTANCES.**
+	//
+	// ⇒ a name whose declarations disagree about the range gets one MINTED declaration per distinct range —
+	// `Byte$0_255` beside `Byte$0_1000` — and an instance's element is spelled with the mint its READER
+	// resolves to (`rangeScopedName`).
+	//
+	// ⭐ **THE MINT IS AN ORDINARY REGISTRY DECLARATION, AND THAT IS THE WHOLE DESIGN.** Every door this
+	// registry already has then answers for the qualified name with no new code and no special case: the
+	// whole-program width (`storageBytesInEveryFile`, which now folds ONE range and so reads 1 for the
+	// stdlib's element and 2 for the user's), the erasure (`underlyingInAnyFile`), the scoped `lookup` a
+	// range check resolves through. A bare synthesized STRING would miss all of them — measured in the
+	// design: `undeclaredNamedElementStorageBytes` would stride the stdlib's byte array at 8.
+	//
+	// ⚠ **A NAME ONLY ONE FILE DECLARES CANNOT REACH HERE AT ALL**, because `multiplyDeclared` holds only
+	// the names two or more files declare — and a name every declaration of which agrees about the range
+	// falls out on the `< 2` test. That is the ENTIRE existing corpus: `int(0 to 255)` and `int(0 to u8.max)`
+	// mint the identical spelling, so the seven `stdlib/` files declaring `Byte` and the eighty spec files
+	// declaring it are one claimant between them, this map stays EMPTY, and no element name anywhere moves.
+	//
+	// ⚠ **THE CONTEST IS COLLECTED BEFORE ANY MINT IS RECORDED**, because `record` writes into the very map
+	// this walks.
+	export function settleRangeContests()
+		var mints = RangedTypeAliasArray.create()
+		for (name, byFile) in self.multiplyDeclared 'eachMultiplyDeclaredName'
+			var spellings = ByteArrayArray.create()
+			var claimants = RangedTypeAliasArray.create()
+			for (_, alias) in byFile 'eachDeclaration'
+				let spelling = rangeQualifiedAliasName(name, low: alias.low, high: alias.high)
+				if not holdsSpelling(spellings, spelling: spelling) 'aRangeNoEarlierDeclarationClaimed'
+					spellings.push(spelling)
+					claimants.push(alias)
+				end 'aRangeNoEarlierDeclarationClaimed'
+			end 'eachDeclaration'
+
+			if spellings.count() < 2 'everyDeclarationAgreesAboutTheRange'
+				continue
+			end 'everyDeclarationAgreesAboutTheRange'
+
+			self.rangeContested.upsert(name, value: spellings)
+			for i in 0 upto claimants.count() 'eachDistinctRange'
+				let claimant = try claimants.get(i) otherwise panic("RangedAliasRegistry.settleRangeContests: claimants.get OOB at {i} below count {claimants.count()}")
+				let spelling = try spellings.get(i) otherwise panic("RangedAliasRegistry.settleRangeContests: spellings.get OOB at {i} — spellings and claimants are pushed in lockstep")
+				mints.push(rangeQualifiedMint(claimant, spelling: spelling))
+			end 'eachDistinctRange'
+		end 'eachMultiplyDeclaredName'
+
+		for mint in mints 'eachMint'
+			// The outcome is `record`'s cross-file E3105 answer, and a mint can never be the right thing to
+			// blame for one: two claimants of ONE spelling share a range, hence a primitive, and the only way
+			// two ranges could mint one spelling is an `int`/`float` pair whose bounds share a bit pattern —
+			// which the BASE name has already earned E3105 for, against the line the author wrote.
+			_ = self.record(mint)
+		end 'eachMint'
+	end 'settleRangeContests'
+
+	// ⭐ **DOES ANY NAME IN THIS PROGRAM HAVE DECLARATIONS THAT DISAGREE ABOUT THE RANGE?** The ONE bool
+	// every scoping door short-circuits on, so an uncontested program — the whole corpus, and the compiler's
+	// own source — pays a single map-emptiness test and nothing else, and no interned element name, no
+	// mangled symbol and no committed golden can move.
+	export function anyRangeContest() returns bool
+		return self.rangeContested.count() > 0
+	end 'anyRangeContest'
+
+	// ⭐⭐ **WHAT `name` IS CALLED AS A GENERIC-INSTANCE ELEMENT WHEN READ FROM `readerFilePath` (N2)** —
+	// the bare name for every name in an uncontested program, and the reader's OWN claimant's mint for a
+	// contested one.
+	//
+	// ⭐ **IT RESOLVES THROUGH `lookup`, NOT THROUGH A SECOND RULE.** Which declaration a file means is
+	// already decided in exactly one place, with its own precedence (own file, then a nameable one, then the
+	// bare fallback) and its own measured wrong answers behind it. Deriving the element spelling from that
+	// answer is what keeps "which `Byte` does this file mean?" and "which `Array with Byte` does it build?"
+	// one question — the shape the whole rung exists to restore.
+	// ⭐⭐ **EVERY DISTINCT READING ENVIRONMENT A RANGE-CONTESTED PROGRAM HAS (N2)** — one path per file that
+	// declares a contested name, plus the EMPTY path, which is how a file that declares none of them reads
+	// (`lookup` falls through `readersOwnFile` to the nameable tier and then to the bare one, and that answer
+	// is the same for every such file).
+	//
+	// ⭐ **IT EXISTS SO THE PARSE CAN STAY A PURE READ.** A file's parse may not be the first to intern an
+	// instance — the shared registry is written by the sweep and by nothing that fans out — so every
+	// (instance, environment) pair a parse could ask for is interned in one pass beforehand
+	// (`ProgramSignatures.settleRangeScopedInstances`), and this is the list that makes that pass COMPLETE:
+	// a reader's answer is one of these declarations or the stranger's, and there is no third case.
+	export function rangeContestEnvironments() returns FilePathArray
+		var environments = FilePathArray.create()
+		environments.push(CompilerOwnedDeclFilePath)
+		for (name, _) in self.rangeContested 'eachContestedName'
+			for (_, alias) in self.contestedDeclarations(name) 'eachDeclaration'
+				environments.push(alias.declFilePath)
+			end 'eachDeclaration'
+		end 'eachContestedName'
+		return environments
+	end 'rangeContestEnvironments'
+
+	export function rangeScopedName(name ByteArray, readerFilePath FilePath) returns ByteArray
+		if not self.rangeContested.contains(name) 'everyDeclarationAgreesAboutTheRange'
+			return name
+		end 'everyDeclarationAgreesAboutTheRange'
+
+		match self.lookup(name, readerFilePath: readerFilePath) 'resolved'
+			// Unreachable while `rangeContested` is derived from `multiplyDeclared`, whose every entry is a
+			// declaration `lookup` can find — but stated rather than assumed, because a contested name with
+			// no declaration would mean the two indexes had come apart.
+			undeclared then panic("RangedAliasRegistry.rangeScopedName: '{String.from(name)}' is range-contested but resolves to no declaration from '{readerFilePath.toString()}'")
+			declared(alias) then return rangeQualifiedAliasName(name, low: alias.low, high: alias.high)
+		end 'resolved'
+	end 'rangeScopedName'
 end 'RangedAliasRegistry'
+
+// One MINTED declaration of a contested name's range — the same `underlying`, bounds and declaring file as
+// the claimant it qualifies, under the qualified spelling.
+//
+// ⚠ **ITS TIER IS `global`, WHERE THE CLAIMANT'S MAY BE `file`.** The claimant is whichever declaration of
+// this range `settleRangeContests` reached first, which is a map's iteration order; carrying its tier would
+// make an unobservable field depend on that order. `global` is also the honest answer — a mint is
+// compiler-supplied, exactly like the seeds `builtinStdlibAlias` builds, and its NAME is unspellable in
+// source (`RangeQualifiedAliasSeparator`), so no reader can be admitted or refused by the tier anyway.
+function rangeQualifiedMint(claimant RangedTypeAlias, spelling ByteArray) returns RangedTypeAlias
+	return RangedTypeAlias.create(spelling, underlying: claimant.underlying, low: claimant.low, high: claimant.high, visibility: Visibility.global, declFilePath: claimant.declFilePath, nameLine: claimant.nameLine, nameColumn: claimant.nameColumn)
+end 'rangeQualifiedMint'
+
+// Is `spelling` already in the list? A LINEAR scan and not a set, because the list holds one entry per
+// DISTINCT range of one name — two or three in any program that has a contest at all — and a `Set` would
+// cost an allocation per contested name to spare a comparison of two.
+function holdsSpelling(spellings ByteArrayArray, spelling ByteArray) returns bool
+	for held in spellings 'each'
+		if held.equals(spelling) 'alreadyClaimed'
+			return true
+		end 'alreadyClaimed'
+	end 'each'
+	return false
+end 'holdsSpelling'
 
 // --- The TYPE-NAME namespace: one name, one declaration ---
 

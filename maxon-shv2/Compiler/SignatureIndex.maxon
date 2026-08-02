@@ -1808,8 +1808,17 @@ end 'undeclaredNamedElementStorageBytes'
 // compiler's to state, and `byteBufferBoundaryAdmits`, because a door that read the width instead admitted a
 // String's byte 223 into an element declared `int(0 to 200)` (MEASURED, R4.7 review, exit 223 with no
 // diagnostic).
+//
+// ⚠⚠ **IT ASKS ABOUT THE *BASE* NAME, AND WITHOUT THAT THE ROSTER SHUTS THE STDLIB'S OWN DOOR (N2).** Once
+// a contested `Byte` is qualified per claimant, the stdlib's element is spelled `Byte$0_255` — literally
+// equal to neither roster entry — so `stdlib/File.maxon:140`'s `FileWriter.open(path.path.addressableBytes())`
+// would stop compiling in exactly the program this scoping exists to fix. `Byte$0_255` IS `Byte`; the suffix
+// says WHICH declaration of it, and a roster is a question about the name, never about the range. The two
+// sides are asked the same way so a mint can never be on the roster from one side and off it from the other
+// — the asymmetry R4.7 already paid for once, in the other direction.
 function isByteElementName(name ByteArray) returns bool
-	return name.equals(ByteElementTypeName) or name.equals(SynthesizedByteElementName)
+	let base = baseElementName(name)
+	return base.equals(ByteElementTypeName) or base.equals(SynthesizedByteElementName)
 end 'isByteElementName'
 
 // ⭐⭐ **THE ELEMENT OF EVERY COMPILER-SYNTHESIZED BYTE BUFFER — AND WHY IT IS NOT `Byte`.**
@@ -2621,6 +2630,11 @@ end 'requireTupleElementType'
 export typealias GenericInstanceIndexMap = Map with (ByteArray, GenericInstanceId)
 export typealias GenericAliasMap = Map with (ByteArray, GenericInstanceId)
 
+// Generic-instance alias name -> the file whose declaration of it `GenericAliasMap` holds (N2). Built and
+// consumed inside `ProgramSignatures.rekeyDeclaredGenericAliases`, which is the only question it answers:
+// which file's `Byte` an already-interned `ByteArray` was written against.
+typealias GenericAliasFileMap = Map with (ByteArray, FilePath)
+
 // Base type-name id ⇒ the instances interned for THAT base — the second index on the instance registry,
 // beside the payload⇒id one above. It exists for the per-instantiation GATES
 // (`genericTypeFieldHas{Managed,CoOwnedTrivial,Uncopyable}Instantiation`), which ask "does any instance OF
@@ -3140,6 +3154,57 @@ end 'splitQualifiedName'
 export function mirrorsANamespaceQualifiedAlias(alias RangedTypeAlias) returns bool
 	return containsQualifier(alias.name)
 end 'mirrorsANamespaceQualifiedAlias'
+
+// ⭐⭐ **THE "$" THAT DIVIDES A RANGE-QUALIFIED ELEMENT NAME FROM ITS BASE (N2)** — `Byte$0_255`.
+//
+// ⚠ **IT MAY NOT BE THE "." ABOVE, AND THAT IS NOT A PREFERENCE.** `splitQualifiedName` reads a dotted name
+// as `<directory chain>.<member>`, so a mint spelled `Byte.0_255` would present itself to every
+// qualified-name reader in the compiler as the member `0_255` of a namespace `Byte` — including
+// `mirrorsANamespaceQualifiedAlias` directly above, whose whole claim is that a dotted alias name is
+// EXACTLY the namespace mirror.
+//
+// ⭐ **AND NO SOURCE CAN COLLIDE WITH A MINT.** The lexer's identifier run admits letters, digits, `_` and
+// `.` and nothing else, so a `$` cannot appear in a declared name at all: the minted half of the element
+// namespace and the declarable half are disjoint BY CONSTRUCTION rather than by a check, which is the
+// property `ReservedTypeNamePrefix` buys one namespace over.
+let RangeQualifiedAliasSeparator = "$"
+
+// The BYTE value of `RangeQualifiedAliasSeparator` (ASCII '$'), for the allocation-free scan below. Named
+// so the byte and the string form cannot drift — `QualifiedAliasSeparatorByte`'s discipline.
+let RangeQualifiedAliasSeparatorByte = 36
+
+// ⭐⭐ **THE RANGE-QUALIFIED SPELLING OF ONE DECLARATION OF A CONTESTED ALIAS (N2)** — `Byte` +
+// `int(0 to 255)` ⇒ `Byte$0_255`. The ONE speller, so the MINT that registers the declaration
+// (`rangeQualifiedMint`) and the READ that resolves an element to it (`rangeScopedName`) build the same
+// bytes; a second spelling would be a name the registry holds and no instance ever asks for.
+//
+// ⭐ **IT IS DERIVED FROM THE RANGE AND NOT FROM AN ORDINAL, WHICH IS WHAT MAKES IT ORDER-FREE.** An
+// ordinal would depend on which claimant the sweep reached first — filesystem enumeration order, which
+// `StdlibLoader`'s header forbids relying on. Two files declaring the same range mint the same name, which
+// is exactly right: they are the same element type, and the corpus is entirely of that shape.
+export function rangeQualifiedAliasName(name ByteArray, low ParsedInt, high ParsedInt) returns ByteArray
+	return "{String.from(name)}{RangeQualifiedAliasSeparator}{low}_{high}".toByteArray()
+end 'rangeQualifiedAliasName'
+
+// ⭐ **THE BASE NAME A RANGE-QUALIFIED ELEMENT NAME WAS MINTED FROM** — `Byte$0_255` ⇒ `Byte`, and any
+// other name UNCHANGED, handed back by reference so an unqualified name costs one byte scan and no
+// allocation. That is what lets a name ROSTER (`isByteElementName`) keep asking about `Byte` after the
+// element it names has been qualified, without the roster learning about ranges.
+function baseElementName(name ByteArray) returns ByteArray
+	var split = name.count()
+	for i in 0 upto name.count() 'scan'
+		if (try name.get(i) otherwise panic("baseElementName: get OOB despite i < count()")) == RangeQualifiedAliasSeparatorByte 'here'
+			split = i
+			break
+		end 'here'
+	end 'scan'
+
+	if split == name.count() 'notRangeQualified'
+		return name
+	end 'notRangeQualified'
+
+	return try name.slice(0, endIndex: split) otherwise panic("baseElementName: slice [0, {split}) of a {name.count()}-byte name is in range by the index the scan just found")
+end 'baseElementName'
 
 // A set of declared type NAMES, for a walk that has to recognize a name it has already reached
 // (`ProgramSignatures.structIsConstructibleWithin`). The `Set with ByteArray` the compiler's other
@@ -5190,7 +5255,7 @@ export type ProgramSignatures
 			// ⭐ A MANAGED `var` (P1.7 slice 2a) reads exactly as a scalar one does — the slot is real, it
 			// is just a POINTER rather than a value. Its type is the literal's own, so a read of the name
 			// and a use of the literal it was initialized from are the same type by construction.
-			managedValue(_, kind) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.managedConstValueType(kind), mutable: decl.mutable)
+			managedValue(_, kind) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.managedConstValueType(kind, elementFilePath: decl.declFilePath), mutable: decl.mutable)
 			// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reads as a managed `var` does — a POINTER slot holding the
 			// heap record `__module_init` built. It is the one arm `mutable` can arrive `false` from, and that
 			// bit is the whole of what makes `Live.push(1)` an E3019 and `Live = […]` an E2013.
@@ -5207,10 +5272,18 @@ export type ProgramSignatures
 	// A METHOD rather than a free function because a byte string's type is the CONCRETE `Array with Byte`
 	// instance, and an instance is a gid only the interner can mint — the very `internArrayByteInstance` the
 	// literal path uses, so `b"…"` has ONE type however it is reached.
-	export function managedConstValueType(kind ManagedConstKind) returns MaxonType
+	//
+	// ⚠ **WHOSE `Byte` THE ELEMENT IS DEPENDS ON WHICH OF THE TWO STORAGE MODELS THE CALLER IS IN (N2), so
+	// the file is the caller's to state.** A STORED binding is one record, built once by `__module_init`
+	// from its declaring file's literal, so its `.data` slot, its initializer and every load of it pass
+	// `TopLevelDecl.declFilePath`. An INLINED `let` re-materializes the literal AT THE USE
+	// (`Parser.emitManagedConstant`), under the reading file's own byte-string gate, so it passes the
+	// READER's path — which is what makes the synthetic receiver's `varType` and the value the same emit
+	// site produced one type rather than two.
+	export function managedConstValueType(kind ManagedConstKind, elementFilePath FilePath) returns MaxonType
 		return match kind 'k'
 			string gives MaxonType.string
-			byteArray gives MaxonType.genericInstance(self.internArrayByteInstance())
+			byteArray gives MaxonType.genericInstance(self.internArrayByteInstance(elementFilePath))
 		end 'k'
 	end 'managedConstValueType'
 
@@ -5293,7 +5366,7 @@ export type ProgramSignatures
 				// point at cannot be baked into a constant image — a data→data pointer has no compile-time VA
 				// under ASLR (`specs/static-variables.md:729-730`) — so the bytes are zero here and
 				// `__module_init` writes the address before `main` runs.
-				managedValue(_, kind) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(self.managedConstValueType(kind)), name: decl.name), value: ManagedGlobalInitialSlot))
+				managedValue(_, kind) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(self.managedConstValueType(kind, elementFilePath: decl.declFilePath)), name: decl.name), value: ManagedGlobalInitialSlot))
 				// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reserves the SAME null POINTER slot, for the same reason
 				// and now for a `let` too — its record is built, so there is even less to bake than a String's.
 				arrayValue(_, element) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(self.constArrayValueType(element)), name: decl.name), value: ManagedGlobalInitialSlot))
@@ -5325,7 +5398,7 @@ export type ProgramSignatures
 			end 'noReachableSlot'
 			match decl.outcome 'state'
 				value to poisoned then continue
-				managedValue(bytes, kind) then entries.push(self.managedGlobalEntry(decl, initializer: managedLiteralInitializer(bytes, kind: kind), valueType: self.managedConstValueType(kind)))
+				managedValue(bytes, kind) then entries.push(self.managedGlobalEntry(decl, initializer: managedLiteralInitializer(bytes, kind: kind), valueType: self.managedConstValueType(kind, elementFilePath: decl.declFilePath)))
 				// ⭐ AN ARRAY BINDING (P1.7 slice 2b) is a managed global whichever keyword declared it — its
 				// record is built before `main` and released after, and `let` refuses only the WRITE.
 				arrayValue(elements, element) then entries.push(self.managedGlobalEntry(decl, initializer: self.arrayRecordInitializer(elements, element: element), valueType: self.constArrayValueType(element)))
@@ -6255,7 +6328,12 @@ export type ProgramSignatures
 		// a `ByteArray` argument assignable to a `__ManagedMemory` parameter.
 		// Upserted before the early return below because the two registrations are independent: the alias
 		// must exist even on a second call that finds the layout already there.
-		self.genericAliases.upsert(ManagedMemoryTypeName, value: self.internArrayByteInstance())
+		// ⚠ **THE BARE INSTANCE, DELIBERATELY (N2).** This entry has no declaring file — the compiler minted
+		// it, not a source line — so it is the one generic alias whose element must stay UNSCOPED in the
+		// table: `__ManagedMemory` means "a raw byte buffer as the READER's `Byte` is declared", and the
+		// reader's spelling is applied at the read (`genericAliasInstanceFrom`). Scoping it here would pick
+		// one file's `Byte` for every file in the program, which is the whole defect being repaired.
+		self.genericAliases.upsert(ManagedMemoryTypeName, value: self.bareArrayByteInstance())
 
 		// ⭐ **BOTH `__ManagedMemory` ELEMENT INSTANCES ARE INTERNED HERE, BY THE SWEEP (R4.4)** — the
 		// machine-word one alongside the byte one, because `__ManagedMemory.create(n, elementSize: 8)` picks
@@ -6302,7 +6380,7 @@ export type ProgramSignatures
 	// ⚠ The `__ManagedMemory` ALIAS itself is `registerManagedFileType`'s to upsert and is not repeated here:
 	// a file that annotates one has written the name, which is what that probe matches on.
 	export function registerManagedDirectoryType()
-		_ = self.internArrayByteInstance()
+		_ = self.bareArrayByteInstance()
 
 		if self.structTypes.contains(ManagedDirectoryTypeName) 'alreadyRegistered'
 			return
@@ -6484,8 +6562,15 @@ export type ProgramSignatures
 	// stand at the bottom of this function, it then reaches `canonicalTupleStructRef` and a NESTED-tuple
 	// element spelled by name canonicalizes like every other `structRef`. A `named` denoting an enum/union
 	// stays `named`, which is the tag a union value carries.
+	//
+	// ⚠ **IT RESOLVES A COMPILER-MINTED ALIAS LIKE A STRANGER (N2), AND A TUPLE HAS NO OTHER HONEST FILE.**
+	// A tuple TYPE is compiler-synthesized and declared in no file — its layout carries
+	// `CompilerOwnedDeclFilePath` for exactly that reason — while its canonical name is a WHOLE-PROGRAM key,
+	// so it must be one string however many files spell the same element list. `__ManagedMemory` inside a
+	// tuple therefore means what a file declaring no `Byte` means by it; a file whose own `Byte` disagrees
+	// meets that at the tuple's CONSTRUCTION, nominally, rather than by striding a record two ways.
 	function canonicalTupleElement(element MaxonType) returns MaxonType
-		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames))
+		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames, declFilePath: CompilerOwnedDeclFilePath))
 		if maxonTypeTag(resolved) != ValueTypeTag.named 'notNamed'
 			return self.canonicalTupleStructRef(resolved)
 		end 'notNamed'
@@ -6663,10 +6748,32 @@ export type ProgramSignatures
 		return self.genericAliases.contains(name)
 	end 'isGenericAlias'
 
-	// The `GenericInstanceId` a generic-instance alias names. Precondition: `isGenericAlias(name)`.
+	// The `GenericInstanceId` a generic-instance alias names, AS THE TABLE HOLDS IT. Precondition:
+	// `isGenericAlias(name)`.
+	//
+	// ⚠ **THIS IS THE FILE-LESS DOOR, AND SINCE N2 IT IS THE NARROWER OF TWO.** A SOURCE-declared alias is
+	// already scoped by its own declaring file here (`rekeyDeclaredGenericAliases`), so this answers exactly
+	// what `genericAliasInstanceFrom` would for every alias a program writes. What it does NOT scope is the
+	// handful of COMPILER-MINTED entries that have no declaring file and mean "the reader's" —
+	// `__ManagedMemory` above all — so a reader that HAS a file must ask through the door below.
+	//
+	// Its remaining callers are the ones that structurally cannot: the drop/clone cascades and the
+	// layout-field probes, which read an instance's SHAPE (is it an `Array`? is its element managed? what is
+	// its base?) and never its stride. A range qualifier changes only which DECLARATION of one element name
+	// is meant — never the tag, the base or the managed-ness — so those answers are identical either way.
 	export function genericAliasInstance(name ByteArray) returns GenericInstanceId
 		return try self.genericAliases.get(name) otherwise panic("ProgramSignatures.genericAliasInstance: '{String.from(name)}' is not a generic-instance alias — every caller asks isGenericAlias first")
 	end 'genericAliasInstance'
+
+	// ⭐⭐ **THE INSTANCE A GENERIC-INSTANCE ALIAS NAMES, AS `readerFilePath` MEANS IT (N2)** — the door the
+	// PARSER asks through, at every one of its alias resolutions, so a file's `__ManagedMemory`, its
+	// `ByteArray.create()` and its `b"…"` literal cannot come to mean three different strides.
+	//
+	// It is the composition and not a second rule: WHICH entry is `genericAliasInstance`'s answer, and WHOSE
+	// element spelling is `rangeScopedInstance`'s. Both are identities in an uncontested program.
+	export function genericAliasInstanceFrom(name ByteArray, readerFilePath FilePath) returns GenericInstanceId
+		return self.rangeScopedInstance(self.genericAliasInstance(name), readerFilePath: readerFilePath)
+	end 'genericAliasInstanceFrom'
 
 	// The base STRUCT name a generic-instance id refers to (`Box` for `Box with Integer`) — what
 	// `Parser.parseQualifiedCall` rewrites `IntBox.create` to `Box.create` through. The instance's
@@ -7011,7 +7118,23 @@ export type ProgramSignatures
 	// ⚠ MEMOIZED — see `arrayByteInstance` for why the answer is stable and why the flag is a flag rather
 	// than a sentinel. The first ask is still the WRITE that mints the instance, so the registry contents
 	// (and every id derived from them) are exactly what they were before the memo existed.
-	export function internArrayByteInstance() returns GenericInstanceId
+	// ⚠⚠ **AND IT IS SCOPED TO THE READER (N2), WHICH IS WHAT KEEPS E2015 HONEST.** `Byte` is a name a USER
+	// program may declare, so "the `Array with Byte` instance" is not one thing in a program whose
+	// declarations of `Byte` disagree about the range: `stdlib/File.maxon`'s byte buffer must stride 1 while
+	// the reader that declared `int(0 to 1000)` must still meet the wall its own declaration builds. Pointing
+	// this at a stride-1 compiler byte instead would make `Parser.byteElementDeclaredStride` — which IS this
+	// function, one call away — answer 1 in every program, and `bytearray-element-size.md`'s two wide-`Byte`
+	// refusals would go green by losing their premise rather than by being fixed.
+	export function internArrayByteInstance(readerFilePath FilePath) returns GenericInstanceId
+		return self.rangeScopedInstance(self.bareArrayByteInstance(), readerFilePath: readerFilePath)
+	end 'internArrayByteInstance'
+
+	// The UNSCOPED instance the scoped answers above are all derived from — what the declaration SWEEP mints,
+	// and the only form it can mint: the sweep is what DECIDES the contest, so it runs before there is a
+	// reader's answer to give. Its two callers are the sweep's own registrations
+	// (`Parser.foldDeclaredSignaturesInto`, `registerManagedFileType`/`registerManagedDirectoryType`); every
+	// reader goes through `internArrayByteInstance` and gets its own file's.
+	export function bareArrayByteInstance() returns GenericInstanceId
 		if self.arrayByteInstanceComputed 'alreadyMinted'
 			return self.arrayByteInstance
 		end 'alreadyMinted'
@@ -7021,7 +7144,130 @@ export type ProgramSignatures
 		self.arrayByteInstance = self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
 		self.arrayByteInstanceComputed = true
 		return self.arrayByteInstance
-	end 'internArrayByteInstance'
+	end 'bareArrayByteInstance'
+
+	// ⭐⭐ **THE SAME INSTANCE, WITH EVERY CONTESTED ELEMENT SPELLED THE WAY `readerFilePath` MEANS IT (N2)**
+	// — the ONE place a generic instance becomes a reader's instance, so no door grows a qualifier step of
+	// its own. `mangleGenericInstance` and `canonicalInstanceName` are structural over the args, so both
+	// inherit the qualified spelling for free and neither learns anything about ranges.
+	//
+	// ⭐ **AN UNCONTESTED PROGRAM RETURNS ON THE FIRST LINE — no walk, no `MaxonTypeArray`, no intern.** That
+	// is the whole existing corpus and the compiler's own source, which is why not one interned instance,
+	// mangled symbol or committed golden moves.
+	//
+	// ⚠ **IT IS A PURE READ BY THE TIME A PARSE ASKS IT**, and that is a property `settleRangeScopedInstances`
+	// buys rather than one this function has: `intern` returns an existing id without mutating, so every
+	// (instance, reader environment) pair being pre-interned is what keeps a per-file parse from writing the
+	// shared registry. The rescope is also IDEMPOTENT — a minted name is never itself contested, having
+	// exactly one declaration by construction — so asking it of an already-scoped instance answers with the
+	// same id and interns nothing.
+	export function rangeScopedInstance(id GenericInstanceId, readerFilePath FilePath) returns GenericInstanceId
+		if not self.typeAliases.anyRangeContest() 'noNameInThisProgramIsContested'
+			return id
+		end 'noNameInThisProgramIsContested'
+
+		return self.genericInstances.intern(self.genericInstances.instanceBaseId(id), args: self.rangeScopedArgs(self.genericInstances.instanceArgs(id), readerFilePath: readerFilePath))
+	end 'rangeScopedInstance'
+
+	function rangeScopedArgs(args MaxonTypeArray, readerFilePath FilePath) returns MaxonTypeArray
+		var scoped = MaxonTypeArray.create()
+		for arg in args 'eachArg'
+			scoped.push(self.rangeScopedArg(arg, readerFilePath: readerFilePath))
+		end 'eachArg'
+		return scoped
+	end 'rangeScopedArgs'
+
+	// One type argument, scoped. A NESTED instance recurses — `Array with (Array with Byte)`'s inner element
+	// is as much this reader's as the outer one is — and every other tag passes through: only a `named` leaf
+	// can name a ranged alias (a struct, a tuple and an opaque type parameter carry no range, and a primitive
+	// carries no name).
+	function rangeScopedArg(arg MaxonType, readerFilePath FilePath) returns MaxonType
+		let tag = maxonTypeTag(arg)
+		if tag == ValueTypeTag.genericInstance 'nested'
+			return MaxonType.genericInstance(self.rangeScopedInstance(typeNameIdOf(arg), readerFilePath: readerFilePath))
+		end 'nested'
+
+		if tag != ValueTypeTag.named 'carriesNoAliasName'
+			return arg
+		end 'carriesNoAliasName'
+
+		let name = self.nameOfId(typeNameIdOf(arg))
+		let scoped = self.typeAliases.rangeScopedName(name, readerFilePath: readerFilePath)
+		if scoped.equals(name) 'thisReaderNamesTheBareDeclaration'
+			return arg
+		end 'thisReaderNamesTheBareDeclaration'
+
+		return MaxonType.named(self.typeNames.intern(scoped))
+	end 'rangeScopedArg'
+
+	// ⭐⭐ **SETTLE THE RANGE CONTEST, RE-KEY EVERY DECLARED ALIAS TO ITS OWN FILE'S INSTANCE, AND INTERN
+	// EVERY SCOPED VARIANT A PARSE COULD ASK FOR (N2)** — one pass, at the one moment the whole program is
+	// known and nothing has read an instance yet.
+	//
+	// **THE THREE STEPS ARE THREE DIFFERENT PROBLEMS, AND ONLY THE FIRST IS A REGISTRY QUESTION:**
+	//
+	//   1. **The CONTEST** (`settleRangeContests`) — which names have declarations that disagree, and the
+	//      minted declaration each distinct range gets. Everything below reads its answer.
+	//   2. **THE ORDERING HAZARD.** `recordGenericAlias` runs DURING the sweep, so `typealias ByteArray =
+	//      Array with Byte` was interned with the BARE element before any contest could be known. It is
+	//      re-keyed here to the instance its OWN DECLARING FILE means — which is the whole reason
+	//      `genericAliasDecls` retains every entry. ⭐ The COMPILER-MINTED aliases are deliberately NOT in
+	//      that array and so keep their bare element: `__ManagedMemory` has no declaring file and means "the
+	//      READER's byte array", which is exactly what an unscoped entry plus a scoped read gives it.
+	//   3. **The PARSE MUST NOT WRITE.** Every (instance, reader environment) pair is interned here, so
+	//      `rangeScopedInstance` is a pure lookup from every parallel per-file parse.
+	//
+	// ⚠ **ON EVERY PROGRAM IN THE CORPUS THIS IS A NO-OP AFTER STEP 1**, and step 1 is one walk of a map
+	// that is EMPTY unless two files declare one name. That is not an optimization — it is the proof that
+	// nothing this rung does can move a golden.
+	export function settleRangeScopedInstances()
+		self.typeAliases.settleRangeContests()
+		if not self.typeAliases.anyRangeContest() 'noNameInThisProgramIsContested'
+			return
+		end 'noNameInThisProgramIsContested'
+
+		self.rekeyDeclaredGenericAliases()
+		self.rescopeGenericAliasSites()
+
+		// The snapshot is taken BEFORE the loop because the loop interns: the pairs worth minting are those
+		// over the instances the sweep produced, and a variant is never itself contested (see
+		// `rangeScopedInstance`), so a second pass over the grown registry would mint nothing new.
+		let swept = self.genericInstances.count()
+		for environment in self.typeAliases.rangeContestEnvironments() 'eachEnvironment'
+			for id in 0 upto swept 'eachSweptInstance'
+				_ = self.rangeScopedInstance(id, readerFilePath: environment)
+			end 'eachSweptInstance'
+		end 'eachEnvironment'
+	end 'settleRangeScopedInstances'
+
+	// Re-key every SOURCE-DECLARED generic-instance alias to the instance its declaring file means. The
+	// declaring file is taken LAST-WINS, out of the retained declarations, because that is exactly how
+	// `genericAliases` itself resolves a name two files declare — so the entry and the file it is scoped by
+	// name one declaration, and a rekey cannot silently adopt a different file's range than the entry it is
+	// rewriting came from.
+	function rekeyDeclaredGenericAliases()
+		var declaringFiles = GenericAliasFileMap.create()
+		for entry in self.genericAliasDecls 'eachDeclaration'
+			declaringFiles.upsert(entry.aliasName, value: entry.filePath)
+		end 'eachDeclaration'
+
+		for (aliasName, filePath) in declaringFiles 'eachAlias'
+			if let recorded = try self.genericAliases.get(aliasName) 'interned'
+				self.genericAliases.upsert(aliasName, value: self.rangeScopedInstance(recorded, readerFilePath: filePath))
+			end 'interned'
+		end 'eachAlias'
+	end 'rekeyDeclaredGenericAliases'
+
+	// The E3017 instantiation SITES, scoped by the file each site was written in — which each one carries,
+	// so this needs no last-wins rule of its own. Rebuilt rather than mutated because a site's `gid` is a
+	// `let`: the instance a site names is decided once, here.
+	function rescopeGenericAliasSites()
+		var scoped = GenericInstantiationSiteArray.create()
+		for site in self.genericAliasSites 'eachSite'
+			scoped.push(GenericInstantiationSite.create(self.rangeScopedInstance(site.gid, readerFilePath: site.filePath), nameLine: site.nameLine, nameColumn: site.nameColumn, filePath: site.filePath))
+		end 'eachSite'
+		self.genericAliasSites = scoped
+	end 'rescopeGenericAliasSites'
 
 	// ⭐ **THE `__ManagedMemory` INSTANCE EVERY COMPILER-SYNTHESIZED BYTE BUFFER WEARS.**
 	// `internArrayByteInstance`'s twin, differing only in its element — see `SynthesizedByteElementName` for
@@ -7056,9 +7302,15 @@ export type ProgramSignatures
 	// ⚠⚠ **PRECONDITION: `managedMemoryElementSizeIsTypeable`.** It has no arm for a width shv2 has no element
 	// type of, because there is no honest one — see that predicate for the wrong answer the missing `else`
 	// used to give.
-	export function managedMemoryInstanceForElementSize(elementSize ParsedInt) returns GenericInstanceId
+	//
+	// ⚠ **THE BYTE ARM IS SCOPED TO THE FILE THAT WROTE THE `create` (N2)**, which is what lets
+	// `stdlib/File.maxon:71`'s `__ManagedMemory.create(size + extraBytes, 1)` be a genuinely byte-PACKED
+	// buffer in a program whose own `Byte` is two bytes wide. Before it, the whole-program width made that
+	// buffer stride 2 and `file.read(managed, …)` three lines later refused it — in a program that never
+	// mentions `File`.
+	export function managedMemoryInstanceForElementSize(elementSize ParsedInt, readerFilePath FilePath) returns GenericInstanceId
 		if elementSize == ByteStringElementSize 'bytePacked'
-			return self.internArrayByteInstance()
+			return self.internArrayByteInstance(readerFilePath)
 		end 'bytePacked'
 
 		return self.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
@@ -8184,7 +8436,7 @@ export type ProgramSignatures
 	export function fieldTypeOf(layout StructLayout, index FieldIndex, into TypeNameInterner) returns MaxonType
 		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(layout.name)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
 
-		return self.declaredSlotType(declared, into: into)
+		return self.declaredSlotType(declared, into: into, declFilePath: layout.declFilePath)
 	end 'fieldTypeOf'
 
 	// ⭐ **THE PRE-ERASURE `__ManagedMemory` SPELLING OF FIELD `index` (A2j / A2m)** — `fieldTypeOf`'s twin
@@ -8241,7 +8493,18 @@ export type ProgramSignatures
 	// check (`Parser.requireArrayElementType`) did, that `named` would have read a pushed function VALUE as
 	// a function meeting an int slot and refused a program both compilers accept. A rule with two homes
 	// drifts, and only the newer home's obligations reveal which half the older one was missing.
-	export function declaredSlotType(declared MaxonType, into TypeNameInterner) returns MaxonType
+	//
+	// ⚠⚠ **`declFilePath` IS THE SLOT'S DECLARING FILE, NEVER THE READER'S (N2), AND THE DIFFERENCE IS A
+	// SILENT WRONG ANSWER.** The generic-alias arm below resolves a compiler-minted alias — `__ManagedMemory`
+	// — whose element is the reader's `Byte` by design, so a range-contested program has two answers to
+	// choose from. A FIELD's type must be ONE type program-wide: scoped to the reader, file X could build
+	// `Holder{buf: <a stride-1 buffer>}` and file Y read `h.buf.get(0)` at stride 2 over that very record,
+	// with no diagnostic anywhere. Scoped to the declaration, the two files disagree at the CONSTRUCTION —
+	// nominally, loudly — and every read of the slot strides the way the record was stamped.
+	// A COMPILER-SYNTHESIZED layout carries the EMPTY path here, which is the same probe a file declaring
+	// none of a contested name makes: a type declared in no file resolves like a stranger, which is the one
+	// answer that is the same for all of them.
+	export function declaredSlotType(declared MaxonType, into TypeNameInterner, declFilePath FilePath) returns MaxonType
 		// A FUNCTION-typed slot (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
 		// recorded its declaration ran before the function alias was known — so it is re-tagged `function`
 		// HERE, over this index's own function-alias registry (P1.5-A1). One place, so every reader (a
@@ -8259,7 +8522,7 @@ export type ProgramSignatures
 			// construction check, the array method dispatch, the drop cascade) sees the instance and not an
 			// `int`. The gid is this index's own, needing no interner remap.
 			if self.isGenericAlias(name) 'genericAlias'
-				return MaxonType.genericInstance(self.genericAliasInstance(name))
+				return MaxonType.genericInstance(self.genericAliasInstanceFrom(name, readerFilePath: declFilePath))
 			end 'genericAlias'
 			// ⭐ A TUPLE-ALIAS-typed slot (`export var p as Pair`, `typealias Pair = (Int, Int)`) arrives as a
 			// `named` for the reason the arms around it do, and is re-tagged to the tuple's own `structRef`

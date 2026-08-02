@@ -317,9 +317,10 @@ record strides two, and the door refuses there).
 Producing an `Array with __StringByte` at all requires `String.addressableBytes()`, which
 `Parser.requireStdlibOnlyStringMethod` refuses to any file not physically under `stdlib/`, and the spec
 runner stages every fragment outside `stdlib/`. So the three measurements above were made by building
-purpose-written files under `stdlib/`, and the suite can only reach the door once `stdlib/File.maxon` is
-whitelisted — which is the acceptance half of R4.7, held behind namespace-scoped generic-instance identity.
-The case below is the part that IS reachable: it pins that two byte-packed aliases are still two types.
+purpose-written files under `stdlib/`, and the suite could only reach the door once `stdlib/File.maxon` was
+whitelisted — which is the acceptance half of R4.7, and which landed with the RANGE-scoped generic-instance
+identity below. The case below is the part that IS reachable: it pins that two byte-packed aliases are
+still two types.
 
 <!-- test: byte-packed-alias-is-not-interchangeable-with-byte -->
 ### Two byte-packed aliases are still two types
@@ -341,4 +342,124 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/bytearray-element-size/byte-packed-alias-is-not-interchangeable-with-byte.test:14:9: argument type mismatch for 'b': expected 'Array_Byte', got 'Array_Small'
+```
+
+### ⚠ A `Byte` TWO FILES DISAGREE ABOUT IS TWO ELEMENT TYPES, NOT ONE WIDE ONE
+
+`Array with Byte` is interned on the element's NAME, so one interned instance carries one
+`element_size@24` — which is why the whole-program stride is a fold over every declaration
+(`RangedAliasRegistry.storageBytesInEveryFile`, "a record created in one file is pushed, appended, read
+and dropped in another, and they must stride identically"). That fold is correct and it is not enough.
+
+**MEASURED**: with `stdlib/File.maxon` on the whitelist, a program declaring `typealias Byte = int(0 to
+1000)` and **never mentioning `File` at all** was REFUSED — `E3005 stdlib/File.maxon:74:28: argument type
+mismatch for 'managed': expected '__ManagedMemory', got 'Array_Byte'`. The stdlib builds its read buffer
+with `__ManagedMemory.create(size + extraBytes, 1)` (`stdlib/File.maxon:71`), i.e. through the very
+instance the user's alias had widened to two bytes, and `file.read(managed, …)` three lines later requires
+a byte-PACKED one. **No width rule can fix that**: the two `Array with Byte` have to become two INSTANCES.
+It also broke `StdlibLoader`'s own stated invariant — *"adding a module changes NOTHING for a program that
+does not use it"* — in the loudest possible way, on programs whose only sin was the word `Byte`.
+
+⇒ **A name whose declarations disagree about the RANGE gets one element type per distinct range**, spelled
+`Byte$0_255` / `Byte$0_1000`, and an instance's element is spelled the way its READER resolves the name
+(`RangedAliasRegistry.rangeScopedName`, which routes through the same file-scoped `lookup` a cast or a
+parameter resolves through). The suffix is derived from the RANGE and not from a declaration ordinal,
+which is what keeps it free of filesystem enumeration order; `$` is unspellable in an identifier, so the
+minted half of the element namespace and the declarable half are disjoint by construction.
+
+⚠ **AN AGREEING NAME IS NOT CONTESTED, AND THAT IS THE LOAD-BEARING HALF.** `int(0 to 255)` and
+`int(0 to u8.max)` are one range, so the seven `stdlib/` files that declare `Byte` and the eighty spec
+files that declare it are ONE claimant between them: the element keeps its bare name, `Array_Byte` stays
+`Array_Byte`, and no emitted symbol moves. The last two cases below pin both directions of that.
+
+<!-- test: wide-byte-program-that-never-mentions-file-still-runs -->
+### A wide `Byte` does not break a program that never touches the stdlib's byte buffers
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(300)
+	made.push(700)
+	return 0 if made.count() == 2 and (try made.get(1) otherwise 0) == 700 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: wide-byte-program-still-round-trips-a-file -->
+### The stdlib's own byte buffer stays byte-PACKED while the program's `Byte` is two bytes wide
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(300)
+
+	let path = FilePath from "test_widebyte_roundtrip.txt"
+	try File.writeText(path, content: "Hello") otherwise 'writeErr'
+		return 1
+	end 'writeErr'
+	let content = try File.readText(path) otherwise 'readErr'
+		return 2
+	end 'readErr'
+	try File.delete(path) otherwise 'delErr'
+		return 3
+	end 'delErr'
+
+	print("{content} {made.count()}")
+	return 0 if content.count() == 5 else 4
+end 'main'
+```
+```stdout
+Hello 1
+```
+```exitcode
+0
+```
+
+<!-- test: a-byte-two-files-disagree-about-is-two-types -->
+### Two ranges for one name are two element types, and they are not interchangeable
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function takesMine(b Bytes) returns ExitCode
+	return b.count()
+end 'takesMine'
+
+function main() returns ExitCode
+	let path = FilePath from "test_widebyte_notmine.txt"
+	try File.writeText(path, content: "Hi") otherwise 'writeErr'
+		return 1
+	end 'writeErr'
+	let raw = try File.readBinary(path) otherwise 'readErr'
+		return 2
+	end 'readErr'
+	return takesMine(raw)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/bytearray-element-size/a-byte-two-files-disagree-about-is-two-types.test:17:9: argument type mismatch for 'b': expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'
+```
+
+<!-- test: an-agreeing-byte-keeps-the-bare-element-name -->
+### One range for one name is one element type, under the bare name
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function takesMine(b Bytes) returns ExitCode
+	return b.count()
+end 'takesMine'
+
+function main() returns ExitCode
+	return takesMine(7)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/bytearray-element-size/an-agreeing-byte-keeps-the-bare-element-name.test:10:9: argument type mismatch for 'b': expected 'Array_Byte', got 'int'
 ```

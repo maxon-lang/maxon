@@ -6770,7 +6770,7 @@ export type Parser
 		// `foldFile`, exactly as the int-array literal instance above, so its giid follows the file's named
 		// generic instances (a stable, source-path-ordered assignment).
 		if hasByteStringLiteral or hasByteViewCall 'internByteStrLiteral'
-			_ = index.internArrayByteInstance()
+			_ = index.bareArrayByteInstance()
 		end 'internByteStrLiteral'
 
 		// Intern the managed-element literal instances — `Array with String` for a `["…"]`, plus every declared
@@ -7757,7 +7757,7 @@ export type Parser
 		if not self.signatures.isGenericAlias(qualified) 'notAlias'
 			return false
 		end 'notAlias'
-		let giid = self.signatures.genericAliasInstance(qualified)
+		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
 		return self.signatures.isArrayInstance(giid) and self.signatures.arrayElementIsOpaque(giid)
 	end 'opaqueArrayCreateAt'
 
@@ -12948,7 +12948,7 @@ export type Parser
 			if self.enclosingInnerAliases.contains(tok.value) 'innerAlias'
 				let qualifiedInner = joinQualifiedName(self.enclosingType, member: tok.value)
 				if self.signatures.allFilesFolded and self.signatures.isGenericAlias(qualifiedInner) 'genericInnerAlias'
-					return MaxonType.genericInstance(self.signatures.genericAliasInstance(qualifiedInner))
+					return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(qualifiedInner, readerFilePath: self.filePath))
 				end 'genericInnerAlias'
 				return MaxonType.named(self.artifact.typeNames.intern(qualifiedInner))
 			end 'innerAlias'
@@ -12996,7 +12996,7 @@ export type Parser
 				// A GENERIC-INSTANCE ALIAS (P1.6-A) — `IntBox` where `typealias IntBox = Box with Integer`.
 				// It resolves to `genericInstance(giid)`, the read-side twin of the function-alias arm below.
 				if self.signatures.isGenericAlias(tok.value) 'genericAlias'
-					return MaxonType.genericInstance(self.signatures.genericAliasInstance(tok.value))
+					return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(tok.value, readerFilePath: self.filePath))
 				end 'genericAlias'
 
 				// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one (P1.5-A1) — so
@@ -13159,7 +13159,7 @@ export type Parser
 			return MaxonType.function(id)
 		end 'fa'
 		if self.signatures.isGenericAlias(name) 'genericAlias'
-			return MaxonType.genericInstance(self.signatures.genericAliasInstance(name))
+			return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
 		end 'genericAlias'
 		// ⭐ A TUPLE-ALIAS return (`returns Pair`) — the `named` the sweep recorded resolved to the tuple's own
 		// CANONICAL `structRef`, so `let t = make()` binds a struct the caller adopts and `t.0` resolves.
@@ -25377,7 +25377,7 @@ export type Parser
 	function emitByteStringLiteralValue(bytes ByteArray, range SourceRange) returns ValueId throws ParseError
 		try self.requireByteStringBlobStridesLikeItsType(range)
 
-		let giid = self.signatures.internArrayByteInstance()
+		let giid = self.signatures.internArrayByteInstance(self.filePath)
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.byteStringLiteral(result, bytes: bytes), range: range)
 		self.trackOwnedTemp(result)
@@ -25415,7 +25415,7 @@ export type Parser
 	// carries, so the gate's antecedent is the number every other `Array with Byte` record is stamped with and
 	// not a second reading of the same declaration.
 	function byteElementDeclaredStride() returns ParsedInt
-		return self.signatures.arrayElementSize(self.signatures.internArrayByteInstance()) as ParsedInt
+		return self.signatures.arrayElementSize(self.signatures.internArrayByteInstance(self.filePath)) as ParsedInt
 	end 'byteElementDeclaredStride'
 
 	// ⭐⭐ **`"prefix {x} suffix"` — WHERE THE FIRST OWNED HEAP STRING IS BUILT.** An interpolation lowers to
@@ -26964,15 +26964,15 @@ export type Parser
 		// `IntArray.create()` — a static call on an `Array` instance alias (P1.7 slice 1). Intercepted before
 		// the generic-alias → base rewrite below (which would mangle it to `Array.create`, a callee no file
 		// declares): `Array` has no base struct, so its statics lower to the array runtime, not a user method.
-		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.isArrayInstance(self.signatures.genericAliasInstance(typeTok.value)) 'arrayStatic'
-			return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: typeTok.value, giid: self.signatures.genericAliasInstance(typeTok.value))
+		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.isArrayInstance(self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath)) 'arrayStatic'
+			return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: typeTok.value, giid: self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath))
 		end 'arrayStatic'
 
 		// `IntSet.create()` — a static call on a `Set` instance alias (P1.7b slice A), intercepted before the
 		// generic-alias → base rewrite (which would mangle it to `Set.create`, a callee no file declares):
 		// `Set` has no base struct, so its statics lower to the set runtime, not a user method.
-		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.isSetInstance(self.signatures.genericAliasInstance(typeTok.value)) 'setStatic'
-			return try self.parseSetStaticCall(typeTok, giid: self.signatures.genericAliasInstance(typeTok.value))
+		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.isSetInstance(self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath)) 'setStatic'
+			return try self.parseSetStaticCall(typeTok, giid: self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath))
 		end 'setStatic'
 
 		// `ElementArray.create()` — a static call on a NESTED generic-instance alias inside the enclosing
@@ -26982,8 +26982,8 @@ export type Parser
 		// same reason the top-level `arrayStatic` case is: `Array` has no base struct to mangle a `.create` onto.
 		if self.enclosingInnerAliases.contains(typeTok.value) 'innerAlias'
 			let qualified = joinQualifiedName(self.enclosingType, member: typeTok.value)
-			if self.signatures.isGenericAlias(qualified) and self.signatures.isArrayInstance(self.signatures.genericAliasInstance(qualified)) 'innerArrayStatic'
-				return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: qualified, giid: self.signatures.genericAliasInstance(qualified))
+			if self.signatures.isGenericAlias(qualified) and self.signatures.isArrayInstance(self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)) 'innerArrayStatic'
+				return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: qualified, giid: self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath))
 			end 'innerArrayStatic'
 		end 'innerAlias'
 
@@ -27063,7 +27063,7 @@ export type Parser
 	// which is sound: the sweep's artifact is discarded).
 	function constructorInstanceOf(baseName ByteArray) returns ConstructorInstance
 		if self.signatures.isGenericAlias(baseName) 'genericAlias'
-			return ConstructorInstance.instance(self.signatures.genericAliasInstance(baseName))
+			return ConstructorInstance.instance(self.signatures.genericAliasInstanceFrom(baseName, readerFilePath: self.filePath))
 		end 'genericAlias'
 		return ConstructorInstance.none
 	end 'constructorInstanceOf'
@@ -27084,7 +27084,7 @@ export type Parser
 			return
 		end 'notBaseStruct'
 
-		let gid = self.signatures.genericAliasInstance(aliasName)
+		let gid = self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.filePath)
 		let baseId = self.artifact.typeNames.intern(self.signatures.genericInstanceBaseName(gid))
 		let resultNameId = try self.valueNameIds.get(result) otherwise panic("retypeGenericAliasConstructorResult: result v{result} has no name-id — the two type columns are dense and in lockstep")
 		if resultNameId != baseId 'notThisBase'
@@ -27103,7 +27103,7 @@ export type Parser
 	// equivalent monomorphic call. Every other name (a plain struct, `Self`) is already its own base.
 	function qualifiedCallBaseName(name ByteArray) returns ByteArray
 		if self.signatures.isGenericAlias(name) 'genericAlias'
-			return self.signatures.genericInstanceBaseName(self.signatures.genericAliasInstance(name))
+			return self.signatures.genericInstanceBaseName(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
 		end 'genericAlias'
 		return name
 	end 'qualifiedCallBaseName'
@@ -27221,7 +27221,7 @@ export type Parser
 		// A `let`'s literal is re-materialized at the use, exactly as a bare reference to it would be.
 		if self.managedTopLevelBaseAt(self.pos) 'managedTopLevelBase'
 			match self.managedReceiverBindingOf(baseTok) 'binding'
-				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(baseTok)), varType: self.signatures.managedConstValueType(kind), mutable: false, resultUsed: resultUsed)
+				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(baseTok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed)
 				global(label, valueType, mutable) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)), varType: valueType, mutable: mutable, resultUsed: resultUsed)
 				none then break 'binding'
 			end 'binding'
@@ -28313,7 +28313,7 @@ export type Parser
 	// `for b in x.bytes()` then work through machinery that already exists, at one allocation and one copy.
 	// The result is an OWNED temp whose `__arr_decref` frees the record and its buffer.
 	function parseByteView(record ValueId, range SourceRange) returns ValueId throws ParseError
-		return try self.parseMaterializedView(record, giid: self.signatures.internArrayByteInstance(), callee: StrToBytesName, range: range)
+		return try self.parseMaterializedView(record, giid: self.signatures.internArrayByteInstance(self.filePath), callee: StrToBytesName, range: range)
 	end 'parseByteView'
 
 	// ⭐ **`.codepoints()` AND `.utf16()` — the two DECODING views (P1.8 Slice E), `.bytes()`'s siblings.**
@@ -28598,6 +28598,16 @@ export type Parser
 	// '__ManagedMemory', got 'Array_Byte'` — in a program that never mentions `CommandLine`, because a
 	// whitelisted module is parsed by every program. `SynthesizedByteElementName` carries the full argument
 	// and the two occasions this exact defect has been measured on.
+	//
+	// ⛔ **AND SCOPING IT TO A *FILE* IS NOT THE WEAKER FORM OF THE SAME CURE — IT IS A SILENT WRONG ANSWER
+	// (N2 reconciliation).** All three producers build their record through
+	// `ManagedDirectoryRuntime.emitCStringToManaged`, which stamps `element_size@24` from the LITERAL
+	// `ByteStringElementSize` (`:334`), so the record's stride is 1 whoever is parsing. There is therefore
+	// nothing here for a file to decide: `internArrayByteInstance(self.filePath)` would answer the parsing
+	// file's `Byte`, and `specs/managed-directory.md` writes `dir.filename()` in USER programs — so a user
+	// declaring `typealias Byte = int(0 to 1000)` would get a static type striding 2 over a record stamped 1,
+	// with no diagnostic. A per-file element makes the two `Array with Byte` honest about each other; it
+	// cannot make either of them honest about a record neither describes.
 	function emitOwnedManagedMemoryResult(callee ByteArray, args ValueIdArray, range SourceRange) returns ValueId
 		let result = self.emitOwnedRuntimeResult(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)
 		self.markBufferSurface(result)
@@ -28813,7 +28823,7 @@ export type Parser
 			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}.{String.from(ManagedMemoryCreateMethod)}`'s `{String.from(ManagedMemoryElementSizeParamName)}` is {size}, and shv2 has no element TYPE of that width — a buffer must be byte-packed ({ByteStringElementSize}) or machine-word ({primitiveTypeByteSize(ValueTypeTag.integer)}). Typing it as a word anyway would check `get`/`set` against a range the buffer's stride cannot hold, and store the value truncated.", line: self.tokenAt(argStart).line, column: self.tokenAt(argStart).column)
 		end 'noElementTypeIsThatWide'
 
-		return self.signatures.managedMemoryInstanceForElementSize(size)
+		return self.signatures.managedMemoryInstanceForElementSize(size, readerFilePath: self.filePath)
 	end 'requireManagedMemoryElementSize'
 
 	// The argument to `String.from` must be an `Array with Byte` — the instance a `b"…"` literal and a
@@ -29789,7 +29799,7 @@ export type Parser
 	// the whole-program index, which is complete in the real parse; during the tolerant sweep every alias
 	// answers no, which is sound because the sweep's artifact is discarded.
 	function namesSetInstanceAlias(name ByteArray) returns bool
-		return self.signatures.isGenericAlias(name) and self.signatures.isSetInstance(self.signatures.genericAliasInstance(name))
+		return self.signatures.isGenericAlias(name) and self.signatures.isSetInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
 	end 'namesSetInstanceAlias'
 
 	function parseSetFromConstruction(func IrFunction) returns ValueId throws ParseError
@@ -29808,7 +29818,7 @@ export type Parser
 		// would infer `Array with integer` and a `Set with int` of byte values. The ALIAS states the key type
 		// the elements cannot, so the bracket list is read as members directly and each element adopts
 		// `Character` the way every other Character-expecting position makes a literal adopt it.
-		if self.namesSetInstanceAlias(setTok.value) and self.signatures.genericAliasInstance(setTok.value) == self.signatures.setInstanceForCharacter() 'characterKeyed'
+		if self.namesSetInstanceAlias(setTok.value) and self.signatures.genericAliasInstanceFrom(setTok.value, readerFilePath: self.filePath) == self.signatures.setInstanceForCharacter() 'characterKeyed'
 			return try self.parseCharacterMemberSetLiteral(func, range: SourceRange.ofToken(setTok))
 		end 'characterKeyed'
 
@@ -31673,7 +31683,7 @@ export type Parser
 	// A FLOAT element cannot reach `payloadValueTypeOf`'s float panic: `Array with Float` and
 	// `Array with float` are both E2062 at the type ARGUMENT, one gate earlier.
 	function arrayElementValueType(giid GenericInstanceId) returns MaxonType
-		let declared = self.signatures.declaredSlotType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames)
+		let declared = self.signatures.declaredSlotType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames, declFilePath: self.filePath)
 		let tag = maxonTypeTag(declared)
 		if tag == ValueTypeTag.genericInstance 'instance'
 			return declared
@@ -31681,7 +31691,7 @@ export type Parser
 		if tag == ValueTypeTag.named 'named'
 			let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("arrayElementValueType: an adopted `named` element type's id is not in this file's interner")
 			if self.signatures.isGenericAlias(name) 'genericAlias'
-				return MaxonType.genericInstance(self.signatures.genericAliasInstance(name))
+				return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
 			end 'genericAlias'
 			// ⭐⭐ **A RANGED-ALIAS ELEMENT KEEPS ITS NAME, AND THAT IS A TYPE-IDENTITY FIX, NOT A REFINEMENT
 			// (P1.8 Slice E).** `classifyUnionPayload` below answers a STORAGE question — what width does this
@@ -31771,7 +31781,7 @@ export type Parser
 			return value
 		end 'opaqueInSharedBody'
 
-		let declared = self.signatures.declaredSlotType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames)
+		let declared = self.signatures.declaredSlotType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames, declFilePath: self.filePath)
 		let element = try self.characterizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared)
 		if payloadClassIsManaged(class) 'managed'
