@@ -28471,13 +28471,20 @@ export type Parser
 		throw ParseError.builtinArgumentType(String.from(paramName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
 	end 'requireManagedMemoryValue'
 
-	// Is `value` the `Array with Byte` instance — the one `__ManagedMemory` is bound to, the one a `b"…"`
-	// literal has and the one `.toByteArray()` produces? The shared PREDICATE behind the two rules above:
-	// they test the same thing and differ only in what they SAY. Any other `Array` instance would be read at
-	// ITS element stride, so a path handed to the OS (or a String built from it) would be whichever bytes
-	// fell on the stride boundaries — a silent wrong answer, refused at the argument.
+	// Is `value` a BYTE-PACKED buffer — the instance `__ManagedMemory` is bound to, the one a `b"…"` literal
+	// has, the one `.toByteArray()` produces, and the compiler-owned one a String's byte VIEW wears? The
+	// shared PREDICATE behind the two rules above: they test the same thing and differ only in what they SAY.
+	// Any other `Array` instance would be read at ITS element stride, so a path handed to the OS (or a String
+	// built from it) would be whichever bytes fell on the stride boundaries — a silent wrong answer, refused
+	// at the argument.
+	//
+	// ⚠ **THE STRIDE QUESTION ITSELF IS `ProgramSignatures.isBytePackedArrayInstance` AND IS NOT SPELLED HERE
+	// (R4.7).** The DECLARED-function argument door asks the identical question one tier up
+	// (`SemanticCheck.checkOneArgType`), and a builtin parameter and a declared one disagreeing about what a
+	// byte buffer is IS the defect that rung exists to close. This adapter only puts a `ValueId`'s two type
+	// columns in front of it.
 	function valueIsByteArray(value ValueId) returns bool
-		return self.tagOf(value) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(value)) and self.signatures.arrayElementSize(self.valueNameId(value)) == ByteStringElementSize
+		return self.signatures.isBytePackedArrayInstance(self.tagOf(value), nameId: self.valueNameId(value))
 	end 'valueIsByteArray'
 
 	// How a value's type is SPELLED in a diagnostic — its tag, resolved through the aggregate name behind it.

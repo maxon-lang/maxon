@@ -2933,7 +2933,17 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	if not expectedAggregate.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
 		let gotAggregate = aggregateNameFor(project, tag: argTag, nameId: argNameId)
-		if namedAggregatesConflict(expectedAggregate, got: gotAggregate) 'aggregateArgMismatch'
+		// ⭐⭐ **THE BYTE-ELEMENT BOUNDARY (R4.7) — the one place two DIFFERENT named aggregates denote one
+		// record, and the reason the DECLARED-function door has to ask what the BUILTIN door already asks.**
+		// shv2 has two byte element types on purpose (`ProgramSignatures.isBytePackedArrayInstance`), and a
+		// builtin's `__ManagedMemory` parameter admits either because `Parser.valueIsByteArray` asks the
+		// STRIDE. An ordinary declared parameter is compared NOMINALLY, so `stdlib/File.maxon`'s
+		// `FileWriter.open(path __ManagedMemory)` refused the very `String.addressableBytes()` view its own
+		// callers hand it — one fact, two answers. `byteBufferBoundaryAdmits` is that fact, asked once.
+		//
+		// Asked only AFTER the names have already disagreed, so the agreeing path — every argument of every
+		// call in the program — pays nothing for it.
+		if namedAggregatesConflict(expectedAggregate, got: gotAggregate) and not programSignaturesIn(project, asker: "checkOneArgType").byteBufferBoundaryAdmits(paramTag, declaredNameId: typeNameIdOf(paramType), gotTag: argTag, gotNameId: argNameId) 'aggregateArgMismatch'
 			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: String.from(expectedAggregate) if not expectedAggregate.isEmpty() else typeTagName(paramTag), got: aggregateArgDisplay(gotAggregate, tag: argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'

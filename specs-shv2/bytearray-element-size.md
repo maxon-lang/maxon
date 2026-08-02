@@ -293,3 +293,40 @@ end 'main'
 ```exitcode
 0
 ```
+
+### ⚠ A ONE-BYTE SLOT IS NOT A BYTE — the stride is what the RECORD says, the RANGE is what it does not
+
+`rangedAliasStorageBytes` gives EVERY non-negative range that fits `u8.max` a one-byte slot, so `Byte` is
+not the only byte-packed element a program can have: `typealias Small = int(0 to 200)` makes
+`Array with Small` stride 1 as well. MEASURED — `String.from(<a Smalls>)`, a BUILTIN parameter checked by
+the stride rule alone (`Parser.valueIsByteArray`), accepts one and prints its two bytes straight back.
+
+That is right for a builtin `__ManagedMemory` parameter, which means *"a raw byte buffer"*. It is NOT right
+for an ordinary DECLARED parameter, where the element's name is part of the type: a `Smalls` passed where a
+`Bytes` is declared could be handed a 250 through the wider parameter and read back through the narrower
+alias. So the byte-element boundary door R4.7 opened for `String.addressableBytes()` admits exactly ONE
+arriving element — the compiler-owned, `__`-reserved `__StringByte`, which no source can declare and which
+carries no range of its own — and NOT "anything that strides one"
+(`ProgramSignatures.byteBufferBoundaryAdmits`). The case below is what holds that shut.
+
+<!-- test: byte-packed-alias-is-not-interchangeable-with-byte -->
+### Two byte-packed aliases are still two types
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Small = int(0 to 200)
+typealias Bytes = Array with Byte
+typealias Smalls = Array with Small
+
+function takesBytes(b Bytes) returns ExitCode
+	return b.count()
+end 'takesBytes'
+
+function main() returns ExitCode
+	var s = Smalls.create()
+	s.push(7)
+	return takesBytes(s)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/bytearray-element-size/byte-packed-alias-is-not-interchangeable-with-byte.test:14:9: argument type mismatch for 'b': expected 'Array_Byte', got 'Array_Small'
+```
