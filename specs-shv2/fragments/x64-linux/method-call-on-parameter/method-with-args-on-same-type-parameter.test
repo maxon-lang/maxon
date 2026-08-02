@@ -1,0 +1,105 @@
+// Test: method-with-args-on-same-type-parameter
+
+typealias Integer = int(i64.min to i64.max)
+
+type Adder
+	var value as Integer
+	
+	function addTo(n Integer) returns Integer
+		return value + n
+	end 'addTo'
+	
+	function delegateAdd(other Adder, n Integer) returns Integer
+		return other.addTo(n)
+	end 'delegateAdd'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Adder'
+
+function main() returns ExitCode
+	let a = Adder.create(100)
+	let b = Adder.create(50)
+	return a.delegateAdd(b, n: 7)
+end 'main'
+---
+ExitCode: 57
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Adder.addTo {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg r8, rax, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Adder.delegateAdd {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect Adder.addTo
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Adder.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 100
+    x64.callDirect Adder.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 50
+    x64.callDirect Adder.create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 7
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Adder.delegateAdd
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
