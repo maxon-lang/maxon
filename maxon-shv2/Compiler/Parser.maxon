@@ -948,6 +948,16 @@ export union ParseError implements Error
 	// reference's exact wording, positioned at the FIELD. See `Parser.requireFieldAccessible` for why the
 	// sentence says "Unknown type" rather than "not exported", and why the field is the anchor.
 	hiddenTypeName(typeName String, line LineNumber, column ColumnNumber)
+	// ⭐⭐ A BARE TYPE NAME THAT MORE THAN ONE VISIBLE DECLARATION COULD MEAN (N1c). Renders as **E3063**,
+	// positioned at the NAME — the token the user has to rewrite. Two files in different directories may
+	// both `export typealias Score`; that is accepted at declaration time and is an error only HERE, where
+	// a reference could mean either. The candidate list is the fix, spelled out.
+	//
+	// ⚠ It carries the RENDERED list rather than the declarations, because the whole set is decided in one
+	// place (`ProgramSignatures.ambiguousAliasCandidates`) and this variant's only job is to carry the
+	// verdict to the position. Both raise sites — a type reference and an `as` cast target — hand it the
+	// same two strings.
+	ambiguousTypeAlias(name String, candidates String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -12662,6 +12672,9 @@ export type Parser
 				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(tok.value)))
 			end 'tupleAlias'
 
+			// ⭐⭐ **THE LAST ARM IS WHERE A BARE RANGED-ALIAS NAME LANDS, SO IT IS WHERE E3063 IS DECIDED (N1c).**
+			try self.requireUnambiguousTypeName(tok)
+
 			return MaxonType.named(self.artifact.typeNames.intern(tok.value))
 		end 'named'
 		if self.at(TokenKind.int) 'primInt'
@@ -22890,6 +22903,36 @@ export type Parser
 	// `lookup` picked — the two must not be re-coupled, and an E3063 rung that narrows `lookup`'s
 	// nameable tier makes this probe load-bearing again without touching this line.
 	// See `RangedAliasRegistry.nameableFromAnyFile`.
+	// ⭐⭐ **REFUSE A BARE TYPE NAME MORE THAN ONE VISIBLE DECLARATION COULD MEAN — E3063 (N1c).**
+	//
+	// ⭐ **ONE RAISE SITE COVERS ALL THREE POSITIONS v1 NEEDS TWO FOR**, because shv2 reads a cast TARGET
+	// through `parseTypeReference` like any other type reference (`parseCast` calls it directly). So a
+	// parameter, a field, a return clause, a body `as` and a top-level constant's `as` all arrive here, and
+	// the anchor is the NAME token — the one the user has to rewrite, and v1's anchor
+	// (`maxon-selfhosted/Compiler/Parser.maxon:1416-1430`).
+	//
+	// ⚠ **GATED ON `allFilesFolded`, and that is the only correct answer rather than a defensive one**: the
+	// tolerant declaration sweep reads declared types through this same routine while the very index this
+	// verdict is taken from is still being built, so a refusal there would be a fact about how far the sweep
+	// had got — the identical argument the alias-registry arms above it make for themselves.
+	//
+	// ⚠ **A QUALIFIED REFERENCE NEVER REACHES IT AND NEEDS NO TEST.** `api.Score` is consumed by the dotted
+	// arm far above and, were it not, `api.Score` is a registry key ONE file declares — so it is not
+	// contested and the candidate set is empty. The qualified spelling is the CURE this diagnostic
+	// prescribes; it cannot also be a case of the disease.
+	function requireUnambiguousTypeName(tok Token) throws ParseError
+		if not self.signatures.allFilesFolded 'theIndexIsStillBeingBuilt'
+			return
+		end 'theIndexIsStillBeingBuilt'
+
+		let candidates = self.signatures.ambiguousAliasCandidates(tok.value, readerFilePath: self.filePath)
+		if candidates.count() == 0 'exactlyOneMeaning'
+			return
+		end 'exactlyOneMeaning'
+
+		throw ParseError.ambiguousTypeAlias(String.from(tok.value), candidates: renderCandidateList(candidates), line: tok.line, column: tok.column)
+	end 'requireUnambiguousTypeName'
+
 	function everyDeclarationHidden(alias RangedTypeAlias) returns bool
 		if self.signatures.aliasVisibleFrom(alias, readerFilePath: self.filePath) 'thisOneIsVisible'
 			return false

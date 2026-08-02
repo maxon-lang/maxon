@@ -3420,9 +3420,24 @@ export type ProgramSignatures
 	// the type reading of the same tokens for nothing.
 	var namespaceQualifiedFunctions as NamespaceQualifiedFunctionSet
 
+	// ⚠ **THE SEEDED ALIASES' DECLARING FILES ARE STAMPED HERE, AND NOTHING ELSE CAN DO IT (N1c).**
+	// `RangedAliasRegistry.create` supplies two declarations of files the sweep never visits, so
+	// `moduleDirectoryOf` — whose miss is deliberately a panic — has a hole exactly where a seed is.
+	// Stamping in the one constructor that builds both indexes closes it for every reader, present and
+	// future; `seededStdlibAliasDeclFiles` records what measured the hole.
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create()}
+		var signatures = ProgramSignatures.freshIndexes()
+		for declFile in seededStdlibAliasDeclFiles() 'eachSeededAliasDeclaringFile'
+			signatures.recordFileModuleDirectory(declFile, moduleDirectory: seededStdlibAliasModuleDirectory(declFile))
+		end 'eachSeededAliasDeclaringFile'
+		return signatures
 	end 'create'
+
+	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
+	// is; this is its one caller.
+	static function freshIndexes() returns ProgramSignatures
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create()}
+	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
 
@@ -5309,6 +5324,93 @@ export type ProgramSignatures
 	export function aliasNameableFromAnyFile(name ByteArray) returns bool
 		return self.typeAliases.nameableFromAnyFile(name)
 	end 'aliasNameableFromAnyFile'
+
+	// ⭐⭐ **THE DECLARATIONS A BARE `name` COULD MEAN FROM `readerFilePath` — E3063's candidate set, and
+	// NON-EMPTY ONLY WHEN IT IS AMBIGUOUS (N1c).** Two files in different directories may both `export
+	// typealias Score`; that is legal at declaration time and becomes an error only where a reference could
+	// mean either. This is the "could mean either" question, and the answer is the list the user is told to
+	// qualify with (`api.Score`, `legacy.Score`).
+	//
+	// ⭐ **THE FOUR NARROWING RULES, IN v1's ORDER** (`reachableTypealiasDefinitions`,
+	// `maxon-selfhosted/Compiler/Project.maxon:2558-2706`), each of which is a case the corpus pins:
+	//
+	//   1. **THE READER'S OWN FILE WINS OUTRIGHT.** A file that declares the name means its own
+	//      declaration, whatever anyone else exported — the same first probe `RangedAliasRegistry.lookup`
+	//      makes, asked here so the verdict and the resolution cannot part company. (v1 spells this as a
+	//      separate `hasLocalShadow` scan because its candidates are a flat array; shv2's are already
+	//      keyed by declaring file, so it is one probe.)
+	//   2. **VISIBILITY.** A declaration the reader may not name was never a candidate —
+	//      `exported-typealias-file-private-doesnt-collide`.
+	//   3. **PROVENANCE.** A stdlib declaration is dropped before the count, so a project export shadows
+	//      it — `project-export-shadows-stdlib-export`. See `isStdlibModuleDirectory`.
+	//   4. **NEAREST ENCLOSING SCOPE.** If any surviving candidate's directory CONTAINS the reader's, only
+	//      the deepest such candidates remain: a `Compiler/Coverage/` export is not a competitor from
+	//      `Compiler/`'s point of view — `nested-export-shadowed-by-enclosing-dir`. If none encloses the
+	//      reader (the `api/` vs `legacy/` read from `app/` shape) every candidate survives, which is what
+	//      makes that case ambiguous at all.
+	//
+	// ⭐ **DEDUPLICATION BY DECLARING FILE IS STRUCTURAL HERE AND IS A LOOP IN v1** — `contestedDeclarations`
+	// is keyed by path, so one file cannot contribute two candidates. (A same-file redeclaration is E3061
+	// and never reaches this map; `RangedAliasRegistry.record` says why.)
+	//
+	// ⚠ **TWO PASSES, AND THE FIRST ALLOCATES NOTHING** — which is what keeps this affordable at every named
+	// type reference in the program. A name only one file declares misses the map; a contested name whose
+	// reader declares it, or whose competitors are all hidden, all stdlib, or fewer than two, returns the
+	// shared empty before a single candidate string is built. `Byte` and `Codepoint` are contested inside
+	// `stdlib/` in every compile there is, so that is the path that must stay free.
+	export function ambiguousAliasCandidates(name ByteArray, readerFilePath FilePath) returns StringArray
+		let contested = self.typeAliases.contestedDeclarations(name)
+		if contested.contains(readerFilePath.toString()) 'theReadersOwnDeclarationIsWhatItMeans'
+			return sharedEmptyCandidateNames
+		end 'theReadersOwnDeclarationIsWhatItMeans'
+
+		let readerDirectory = self.moduleDirectoryOf(readerFilePath)
+		var reachable = 0 as ElementCount
+		var scope = EnclosingScope.none
+		for (_, alias) in contested 'countReachable'
+			if not self.candidateIsReachable(alias, readerFilePath: readerFilePath) 'hiddenOrLibrary'
+				continue
+			end 'hiddenOrLibrary'
+
+			reachable = reachable + 1
+			scope = deeperEnclosingScope(scope, declDirectory: self.moduleDirectoryOf(alias.declFilePath), readerDirectory: readerDirectory)
+		end 'countReachable'
+
+		if reachable < 2 'atMostOneMeaning'
+			return sharedEmptyCandidateNames
+		end 'atMostOneMeaning'
+
+		var candidates = StringArray.create()
+		for (_, alias) in contested 'renderSurvivors'
+			if not self.candidateIsReachable(alias, readerFilePath: readerFilePath) 'hiddenOrLibrary'
+				continue
+			end 'hiddenOrLibrary'
+
+			let declDirectory = self.moduleDirectoryOf(alias.declFilePath)
+			if not scopeAdmits(scope, declDirectory: declDirectory) 'aFartherScopeLosesToTheNearestOne'
+				continue
+			end 'aFartherScopeLosesToTheNearestOne'
+
+			insertCandidateName(candidates, candidate: qualifiedCandidateName(declDirectory, bare: name))
+		end 'renderSurvivors'
+
+		if candidates.count() < 2 'oneScopeWon'
+			return sharedEmptyCandidateNames
+		end 'oneScopeWon'
+
+		return candidates
+	end 'ambiguousAliasCandidates'
+
+	// May `readerFilePath` mean this declaration at all — rules 2 and 3 of `ambiguousAliasCandidates`, in
+	// ONE predicate because both passes must apply exactly the same ones. A pass that filtered differently
+	// from the pass that COUNTED would render a list whose length disagrees with its own verdict.
+	function candidateIsReachable(alias RangedTypeAlias, readerFilePath FilePath) returns bool
+		if not self.isVisibleFrom(alias.visibility, declFilePath: alias.declFilePath, readerFilePath: readerFilePath) 'hidden'
+			return false
+		end 'hidden'
+
+		return not isStdlibModuleDirectory(self.moduleDirectoryOf(alias.declFilePath))
+	end 'candidateIsReachable'
 
 	// ⭐ **THE TYPE NAMES A FILE'S TOP-LEVEL CONSTANT INITIALIZERS CAST TO (P1.9) — a `use` the real
 	// parse structurally cannot see.**

@@ -210,8 +210,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: error.cross-file-bare-name-ambiguous -->
-<!-- N1c E3095 SemanticAmbiguousCrossFileCall -->
+<!-- test: error.cross-file-bare-name-ambiguous -->
 <!-- SelfhostedOnly -->
 When two different directories both export a function with the same bare name, a third file's unqualified call is ambiguous. E3095 instructs the user to qualify the call with the appropriate directory namespace. The C# bootstrap reports an equivalent E3007 overload-ambiguity at a different point in the pipeline; this test pins the self-hosted diagnostic.
 ```maxon

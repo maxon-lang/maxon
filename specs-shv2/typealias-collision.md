@@ -31,8 +31,7 @@ This mirrors **E3095** for function-name ambiguity — same model, different reg
 
 ## Tests
 
-<!-- disabled-test: error.exported-typealias-collision -->
-<!-- N1c E3063 SemanticAmbiguousTypeAlias -->
+<!-- test: error.exported-typealias-collision -->
 <!-- SelfhostedOnly -->
 Two files in different directories both export `Score`. A bare reference from a third file is rejected with E3063. The self-hosted compiler emits the diagnostic at the parse site; the C# bootstrap reports an equivalent E3063 at the same point in the pipeline but with a slightly different candidate-ordering guarantee, so this test pins the self-hosted message.
 ```maxon
@@ -49,7 +48,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: specs/fragments/typealias-collision/error.exported-typealias-collision.test:10:11: Ambiguous typealias 'Score': multiple visible definitions found. Qualify with a directory name. Candidates: api.Score, legacy.Score
+error E3063: app/specs/fragments/typealias-collision/error.exported-typealias-collision.test:10:16: Ambiguous typealias 'Score': multiple visible definitions found. Qualify with a directory name. Candidates: api.Score, legacy.Score
 ```
 
 

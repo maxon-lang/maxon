@@ -42,7 +42,13 @@ end 'isStdlibFunction'
 // shallow (`<root>/maxon-shv2/.maxon/maxon-shv2.exe` is three levels under the `stdlib/` that sits at
 // `<root>`), so 64 is far more than enough while still terminating on a pathological path rather than
 // looping forever.
-let StdlibDirName = "stdlib"
+//
+// ⚠ **EXPORTED BECAUSE IT IS ALSO THE STDLIB'S MODULE DIRECTORY (N1c)** — `Queries.namespaceAnchorFor`
+// anchors a stdlib file at this directory's PARENT, so every stdlib file's module directory is this name
+// or a descendant of it. `Project.isStdlibModuleDirectory` is the one reader, and it reads this rather
+// than a second `"stdlib"` literal so a rename cannot leave the two disagreeing about where the library
+// layer is.
+export let StdlibDirName = "stdlib"
 let MaxStdlibSearchDepth = 64
 
 // Locate the checkout's `stdlib/` by walking UP from the COMPILER's own executable directory.

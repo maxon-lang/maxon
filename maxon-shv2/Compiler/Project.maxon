@@ -136,6 +136,138 @@ export function moduleDirectoryContains(outer String, inner String) returns bool
 	return inner.startsWith("{outer}{ModuleDirectorySeparator}")
 end 'moduleDirectoryContains'
 
+// ⭐⭐ **THE NEAREST CANDIDATE DIRECTORY THAT ENCLOSES THE READER — OR THAT NONE DOES**, which are two
+// different answers and not one answer with a sentinel (N1c). The ROOT module is the empty string and is a
+// perfectly good enclosing scope, so "no candidate encloses the reader" cannot be spelled `""`.
+//
+// The distinction is the whole of v1's `restrictToNearestEnclosingScope` (`maxon-selfhosted/Compiler/
+// Project.maxon:2677-2706`): when SOME candidate encloses the reader, only the deepest such candidates
+// survive; when NONE does, every candidate survives — and it is that second arm that makes `api/` versus
+// `legacy/`, read from `app/`, ambiguous at all.
+export union EnclosingScope
+	none
+	nearest(directory String)
+end 'EnclosingScope'
+
+// Fold one candidate's directory into the running "nearest enclosing scope".
+//
+// ⚠ **DEEPEST IS LONGEST, and that is sound only because every candidate compared here already ENCLOSES
+// the reader** — such directories form a nested chain, so the deeper one's string is strictly an extension
+// of the shallower one's. v1 ranks by the same byte length and its `declarerDirLength` states the same
+// precondition. Comparing lengths across directories that do NOT nest would be meaningless, which is why
+// the containment test gates the comparison rather than sitting beside it.
+export function deeperEnclosingScope(current EnclosingScope, declDirectory String, readerDirectory String) returns EnclosingScope
+	if not moduleDirectoryContains(declDirectory, inner: readerDirectory) 'notEnclosing'
+		return current
+	end 'notEnclosing'
+
+	match current 'sofar'
+		none then return EnclosingScope.nearest(declDirectory)
+		nearest(directory) then return EnclosingScope.nearest(declDirectory) if declDirectory.byteLength() > directory.byteLength() else EnclosingScope.nearest(directory)
+	end 'sofar'
+end 'deeperEnclosingScope'
+
+// Does a candidate survive the nearest-enclosing narrowing? Everything survives when nothing encloses the
+// reader; otherwise only the deepest enclosing directory's own declarations do — and TWO declarations in
+// that one directory both survive, which keeps a genuine same-directory contest ambiguous.
+export function scopeAdmits(scope EnclosingScope, declDirectory String) returns bool
+	return match scope 'scope'
+		none gives true
+		nearest(directory) gives declDirectory.equals(directory)
+	end 'scope'
+end 'scopeAdmits'
+
+// How a root-level declaration is shown in an ambiguity candidate list. v1's spelling
+// (`renderTypealiasCandidateList`), and it exists because the alternative is a leading bare `.Score`,
+// which reads as a typo rather than as "declared at the root".
+let RootNamespaceDisplay = "(root)"
+
+// ⭐ **ONE CANDIDATE, AS THE USER WOULD HAVE TO WRITE IT** — `api.Score`, `lib.fmt.Score`, `(root).Score`.
+// Shared by BOTH ambiguity diagnostics (E3063 and E3095), because "the qualified spelling of a declaration
+// made in this directory" is one fact and the two messages differ only in what they call the thing.
+export function qualifiedCandidateName(moduleDirectory String, bare ByteArray) returns String
+	let namespace = namespaceForModuleDirectory(moduleDirectory)
+	let shown = RootNamespaceDisplay if namespace.isEmpty() else namespace
+	return "{shown}{NamespaceSeparator}{String.from(bare)}"
+end 'qualifiedCandidateName'
+
+// ⭐⭐ **CANDIDATES ARE RENDERED IN LEXICOGRAPHIC ORDER, AND THAT IS A DELIBERATE DIVERGENCE FROM v1**,
+// which renders in map-iteration order with no sort and whose own spec records that the bootstrap has "a
+// slightly different candidate-ordering guarantee".
+//
+// ⚠ **shv2 CANNOT INHERIT "unordered": its `Map` is OPEN-ADDRESSED, so iteration is SLOT order — a
+// function of the hashes of two file paths.** An unsorted list would therefore reorder itself when a
+// directory is renamed, when the table grows, or on a host whose paths hash differently, and the message
+// is pinned by a golden. A diagnostic a user reads twice must read the same way twice; sorting is the
+// cheapest property that makes that true of a set the compiler discovered in an arbitrary order.
+//
+// Insertion sort into an array of at most a handful of entries, on a path that has already decided to fail
+// the build — so the `toByteArray()` per comparison is paid only by a program that is about to be
+// rejected, and never by one that compiles.
+export function insertCandidateName(candidates StringArray, candidate String)
+	var at = 0 as ElementCount
+	while at < candidates.count() and candidateNamePrecedes(try candidates.get(at) otherwise panic("insertCandidateName: get OOB at {at} inside its own count()"), later: candidate) 'findPosition'
+		at = at + 1
+	end 'findPosition'
+
+	candidates.insert(at, value: candidate)
+end 'insertCandidateName'
+
+// Byte-wise `<` over two candidate spellings. `String` declares no `Comparable` conformance and the byte
+// door that would avoid these two conversions (`String.byteAt`) is `module`-scoped inside `stdlib/`, so the
+// comparison is made on the byte arrays — see `insertCandidateName` for why that cost is acceptable here
+// and would not be on any path a compiling program takes.
+function candidateNamePrecedes(earlier String, later String) returns bool
+	let a = earlier.toByteArray()
+	let b = later.toByteArray()
+	var i = 0 as ElementCount
+	while i < a.count() and i < b.count() 'compareByte'
+		let left = try a.get(i) otherwise panic("candidateNamePrecedes: get OOB at {i} inside its own count()")
+		let right = try b.get(i) otherwise panic("candidateNamePrecedes: get OOB at {i} inside its own count()")
+		if left != right 'decided'
+			return left < right
+		end 'decided'
+		i = i + 1
+	end 'compareByte'
+
+	return a.count() < b.count()
+end 'candidateNamePrecedes'
+
+// The `", "`-joined candidate trailer both ambiguity messages end with. One renderer, because the two
+// diagnostics say the identical sentence about a different kind of declaration.
+export function renderCandidateList(candidates StringArray) returns String
+	var out = ""
+	var first = true
+	for candidate in candidates 'each'
+		out = "{candidate}" if first else "{out}, {candidate}"
+		first = false
+	end 'each'
+	return out
+end 'renderCandidateList'
+
+// ⭐ THE ONE EMPTY `StringArray` every UNAMBIGUOUS name answers with — so the common path allocates
+// nothing. NEVER mutated: the only writer builds a fresh array.
+export let sharedEmptyCandidateNames = StringArray.create()
+
+// ⭐⭐ **IS THIS DECLARATION A LIBRARY LAYER'S? — the one ambiguity rule that is about PROVENANCE rather
+// than about scope (N1c).** A stdlib declaration is dropped from an ambiguity candidate set OUTRIGHT,
+// before the count, so a project `export typealias StringArray` SHADOWS `stdlib/Json.maxon`'s rather than
+// colliding with it (`typealias-collision/project-export-shadows-stdlib-export`). Ported from v1's
+// `dropStdlibTypealiasCandidates` / `isStdlibNamespace` (`maxon-selfhosted/Compiler/Project.maxon:201-206,
+// 2653-2662`), which states the same rule and gives the same reason: the bootstrap seeds stdlib aliases as
+// a separate lower-precedence layer and never lets them enter an ambiguity set at all.
+//
+// ⚠ **IT IS THE SAME SEGMENT-GUARDED TEST `Visibility.module` IS DECIDED BY, not a second one.** v1 asks
+// `namespace == "stdlib" or namespace.startsWith("stdlib.")` — literally `moduleDirectoryContains` with the
+// separator changed — so spelling it again here would be the one-fact-twice bug with `stdlib` as the fact.
+// A user directory genuinely NAMED `stdlib/` is therefore read as the library layer; v1 has that exact
+// property, and the alternative (a per-file provenance bit threaded to every candidate) buys nothing the
+// anchor does not already give: `Queries.namespaceAnchorFor` puts the real stdlib at `stdlib` and nowhere
+// else.
+export function isStdlibModuleDirectory(moduleDirectory String) returns bool
+	return moduleDirectoryContains(StdlibDirName, inner: moduleDirectory)
+end 'isStdlibModuleDirectory'
+
 // A `Visibility` as a small dense number, for the one reader that must MIX a tier into a content hash
 // (`ProgramSignatures.recordAlias`) rather than branch on it. Spelled here, beside the enum, so a fourth
 // tier is one arm in one place instead of a silently stale literal in a hashing routine.
@@ -439,6 +571,11 @@ export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
 // `record`'s same-file test, which must agree or a redeclaration is missed.
 typealias RangedAliasByDeclaringFile = Map with (String, RangedTypeAlias)
 
+// ⭐ THE ONE EMPTY `RangedAliasByDeclaringFile` every uncontested name answers with — so
+// `RangedAliasRegistry.contestedDeclarations` costs one map probe and NO allocation for the names that
+// are not contested, which is nearly every name in any program. NEVER mutated: its only reader iterates.
+let sharedEmptyContestedDeclarations = RangedAliasByDeclaringFile.create()
+
 // One name ⇒ the WIDEST storage width any file's declaration of it needs — the file-INDEPENDENT half of
 // this registry, maintained by `record` alongside `multiplyDeclared`. See `storageBytesInEveryFile` for
 // why the answer must be a fold over every declaration rather than a probe of one.
@@ -561,13 +698,55 @@ let ElementCountAliasHigh = U64MaxBound
 let ElementCountAliasName = b"ElementCount"
 let ElementCountAliasDeclPath = "stdlib/Array.maxon"
 
+// ⭐⭐ **THE DECLARING FILES OF THE ALIASES THE COMPILER SUPPLIES ON THE STDLIB'S BEHALF — the files the
+// SWEEP NEVER VISITS (N1c).** `RangedAliasRegistry.create` seeds `Codepoint` and `ElementCount` as
+// declarations of two real `stdlib/` modules, but it SUPPLIES them rather than parsing them, so
+// `Queries.foldOneFileInto` never stamps their module directory and every index keyed on a declaring path
+// has a hole exactly where a seed is.
+//
+// ⛔ **MEASURED, and it surfaced as a PANIC rather than a wrong answer.** The first reader to ask a
+// declaring-path question of a seed (`ProgramSignatures.ambiguousAliasCandidates`, which has to know
+// whether a candidate is a library layer's) took `moduleDirectoryOf` straight into its "reached a
+// visibility question without ever having been swept" panic — on three tests whose only sin is mentioning
+// `Codepoint`. **That panic is correct and stays**; what was missing is the stamp, and stamping it in the
+// one constructor closes the hole for every future reader rather than for this one caller.
+//
+// Listed here, beside the seeds themselves, so a third seed cannot be added without this list.
+export function seededStdlibAliasDeclFiles() returns FilePathArray
+	var files = FilePathArray.create()
+	files.push(seedDeclFile(CodepointAliasDeclPath))
+	files.push(seedDeclFile(ElementCountAliasDeclPath))
+	return files
+end 'seededStdlibAliasDeclFiles'
+
+// ⭐ **THE MODULE DIRECTORY A SEED'S DECLARING FILE SITS IN — DERIVED from the path, and SELF-CHECKING.**
+// It refuses a seed that is not directly under `stdlib/`, because such a seed would stop being the library
+// layer: `isStdlibModuleDirectory` would answer `false` for it and a compiler-supplied declaration would
+// start COMPETING with a user's declaration of the same name instead of being shadowed by it. Deriving
+// beats asserting `StdlibDirName` beside each path, which would be the same fact written twice.
+export function seededStdlibAliasModuleDirectory(declPath FilePath) returns String
+	let parent = try declPath.parent() otherwise panic("seededStdlibAliasModuleDirectory: seed path '{declPath.toString()}' has no parent directory — a seed's path is `stdlib/<file>.maxon` and names one by construction")
+	let directory = parent.toString().replace(WindowsPathSeparatorText, with: ModuleDirectorySeparator)
+	if not directory.equals(StdlibDirName) 'notTheLibraryLayer'
+		panic("seededStdlibAliasModuleDirectory: seed path '{declPath.toString()}' derives module directory '{directory}', not '{StdlibDirName}' — a compiler-supplied alias outside the library layer would COMPETE with a user declaration of its name instead of being shadowed by it (see `isStdlibModuleDirectory`)")
+	end 'notTheLibraryLayer'
+
+	return directory
+end 'seededStdlibAliasModuleDirectory'
+
+// The `FilePath` behind one seed's literal path text — shared by the seed itself and by the declaring-file
+// list above, so the alias and its module-directory stamp can never be built from two different paths.
+function seedDeclFile(pathText String) returns FilePath
+	return try FilePath.from(pathText) otherwise panic("seedDeclFile: '{pathText}' is a literal relative path with no invalid character in it")
+end 'seedDeclFile'
+
 // One seed. Positions are 0: there is no source line in THIS program to blame, and the only diagnostics
 // that read them (E3061 same-file redeclaration, E3105 cross-file primitive conflict) cannot fire against
 // one — a user redeclaring the name is in a different file, and over `int`, which is a seed's primitive too.
 function builtinStdlibAlias(name ByteArray, low ParsedInt, high ParsedInt, declPathText String) returns RangedTypeAlias
 	// Bound to a local rather than written inline as the argument: the bootstrap mislowers a
 	// `try … otherwise panic(…)` in argument position (E9001, "not in valueMap" against the pin temp).
-	let declPath = try FilePath.from(declPathText) otherwise panic("builtinStdlibAlias: '{declPathText}' is a literal relative path with no invalid character in it")
+	let declPath = seedDeclFile(declPathText)
 
 	return RangedTypeAlias.create(name, underlying: MaxonType.integer, low: low, high: high, visibility: Visibility.global, declFilePath: declPath, nameLine: 0, nameColumn: 0)
 end 'builtinStdlibAlias'
@@ -869,6 +1048,21 @@ export type RangedAliasRegistry
 
 		return DeclaredAlias.undeclared
 	end 'lookup'
+
+	// ⭐⭐ **EVERY DECLARATION OF A NAME MORE THAN ONE FILE DECLARES — the set an AMBIGUITY question is
+	// decided on (N1c).** A name only one file declares answers the SHARED EMPTY map, and that is a
+	// COMPLETE answer rather than a cheap one: one declaration is never ambiguous.
+	//
+	// ⭐ **IT HANDS BACK THE VERY ENTRY `lookup` SHORT-CIRCUITS ON**, so the ambiguity verdict and the
+	// resolution it overrides read ONE index and cannot come to disagree about which declarations exist —
+	// the coupling `lookup`'s own header asks for where it names the E3063 boundary it stops at.
+	//
+	// ⚠ **THE NARROWING IS NOT HERE, and could not be**: the two precedence rules are decided on MODULE
+	// DIRECTORIES, which this registry does not hold and must not learn — see
+	// `ProgramSignatures.ambiguousAliasCandidates`, which holds both indexes.
+	export function contestedDeclarations(name ByteArray) returns RangedAliasByDeclaringFile
+		return try self.multiplyDeclared.get(name) otherwise sharedEmptyContestedDeclarations
+	end 'contestedDeclarations'
 
 	// ⚠ **THE BARE PROBE, for the readers that HAVE no file to ask from** — type resolution's erasure
 	// of a `named` to its primitive (`resolveNamedType`, reached for a `StructLayout` field type,

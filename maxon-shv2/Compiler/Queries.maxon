@@ -1119,6 +1119,9 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// the reference's text, which `module-keyword/error.module-and-export-conflict` gates exactly.
 		exportAndModuleCombined(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "'export' and 'module' cannot be combined", line: line, column: column, filePath: path)
 		hiddenTypeName(typeName, line, column) then reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: "Unknown type '{typeName}' in field access chain", line: line, column: column, filePath: path)
+		// Byte-for-byte v1's E3063 sentence (`maxon-selfhosted/Compiler/Parser.maxon:1416-1430`), which
+		// `typealias-collision/error.exported-typealias-collision` gates exactly.
+		ambiguousTypeAlias(name, candidates, line, column) then reportPositioned(project, code: ErrorCode.semanticAmbiguousTypeAlias, message: "Ambiguous typealias '{name}': multiple visible definitions found. Qualify with a directory name. Candidates: {candidates}", line: line, column: column, filePath: path)
 		// The scalar-match arms (P1.1b wave A). Each carries the code its meaning is registered under
 		// in `docs/error-codes.txt`, and each message is byte-for-byte the reference compilers' — the
 		// `maxoncstderr` goldens in `match-statements.md`/`match-simple.md` gate them exactly.
