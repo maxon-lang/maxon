@@ -88,6 +88,28 @@
 //      and gained 24 `.data` slots. `StdlibFacts.unreachable` is what closes it, and it is stated as
 //      reachability rather than as membership precisely because the fix outlives this file.
 //
+// ⛔⛔ **THE INVARIANT IS ABOUT CODE, AND IT CANNOT BE ABOUT EXPORTED NAMES — MEASURED WHEN `File.maxon`
+// WAS LISTED (R4.7 / N2).** Both mechanisms above prune what a program does not CALL. Neither can prune
+// what a program does not SPELL, because a name is resolved before there is any code to eliminate: an
+// `export typealias` in a listed module is nameable from every program the moment the entry lands, and
+// SO IS ITS RANGE. `stdlib/File.maxon:45` writes `export typealias Byte = int(0 to u8.max)` and is the
+// FIRST listed module to declare `Byte` at all (checked at the source against the nine entries before it
+// — `helpers/url/urlHelpers.maxon`'s is `ByteValue`, a different name). A `b"…"` literal's element is
+// that same user-visible `Byte` BY DESIGN (`SignatureIndex.isByteElementName`'s roster), so on that day a
+// byte literal's element acquired declared BOUNDS for the first time and `a.set(0, value: n)` gained the
+// narrowing check it had been missing — moving ONE committed golden,
+// `byte-string-literal.detached-literal-drops-clean`, in a program that never mentions `File`. The move
+// is a PURE INSERTION and the program's meaning is unchanged (its `n` is 0…4 against `0 to 255`, so the
+// guard cannot fire; same stdout, same exit code) — but the emitted bytes DID move, and the sentence
+// above says they may not.
+//
+// ⇒ **READ IT AS: adding a module changes nothing for a program that does not use it, EXCEPT through the
+// names it EXPORTS — and an exported name is not something a program opts into.** That is not a loophole
+// to route around; it is the same door that supplies `ByteArray` to `byte-string-literal.top-level-let`,
+// which this rung deliberately used. An entry may not be weighed on its FUNCTIONS alone: weigh every
+// `export` it carries, and expect a golden to move when one of them is a name the COMPILER ITSELF mints
+// instances of.
+//
 // ⭐ THE COLLISION RULE FOR ADDING AN ENTRY. A listed module must declare no name a user program
 // declares and no builtin type/name.
 //   • FREE-FUNCTION-name collisions — a user `function sleep` against `Sleep.maxon`'s, or two stdlib
@@ -490,11 +512,16 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     and it is a miss: it declares `FilePath` and `FilePathError`, neither of which this module declares.
 	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: none of the ten is a builtin. The `__Managed*`
 	//     names this module CALLS are builtins and are `__`-reserved, and it declares no name beginning `__`.
-	//   • `FileSize`, `Timestamp` and `Byte` are RANGED typealiases, file-local per alias FORM, so they reserve
-	//     nothing from a user program. `Byte = int(0 to u8.max)` is the canonical byte and moves no width;
-	//     `FileSize`/`Timestamp` share the `int(0 to u64.max)` FORM four of `Clock.maxon`'s aliases already
-	//     carry under other names, which is the same same-form-different-name shape every entry since Clock has
-	//     had.
+	//   • ⚠⚠ **`FileSize`, `Timestamp` and `Byte` ARE RANGED typealiases AND ALL THREE ARE `export`ed
+	//     (`:23`, `:24`, `:45`) — SO THE "file-local per alias FORM" ARGUMENT EVERY ENTRY SINCE `Clock` HAS
+	//     LEANED ON DOES NOT APPLY TO THEM, AND SAYING IT DID IS WHAT MADE A MOVED GOLDEN LOOK LIKE A
+	//     SURPRISE.** An `export`ed ranged alias is nameable from every program; MEASURED, a user program that
+	//     writes `function widen(b Byte) returns Byte` and mentions nothing else of this module compiles under
+	//     BOTH compilers and answers identically, which is the agreement listing it buys. `FileSize` and
+	//     `Timestamp` cost nothing beyond the name — no compiler-minted instance has their element — but
+	//     `Byte` is the element the compiler mints `Array with Byte` over, so its BOUNDS reach a `b"…"`
+	//     literal in a program that never opens this file. That is the golden below, and the loader header's
+	//     ⛔ paragraph is the general statement of it.
 	//   • ⚠⚠ **`ByteArray` IS THE ONE NAME WORTH STOPPING ON, AND IT COINCIDES WITH THE COMPILER RATHER THAN
 	//     COLLIDING WITH IT.** `export typealias ByteArray = Array with Byte` names the EXACT instance
 	//     `__ManagedMemory` is already bound to — `parseTypeReference` folds the reserved spelling into the very
@@ -511,13 +538,20 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// MEASURED before listing, which is the check this file's rule prescribes:
 	// `maxon-shv2 build stdlib/File.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING ELSE.
 	//
-	// ⚠ **IT IS THE THIRD LISTED MODULE TO CONTAIN LITERALS, AND EXACTLY ONE COMMITTED GOLDEN MOVES — a
-	// `b"…"` CASE THAT NEVER MENTIONS `File`.** `byte-string-literal.detached-literal-drops-clean` gains three
-	// instructions, and the cause is this module's `Byte` alias rather than anything it emits: with `Byte`
-	// UNDECLARED a `b"…"` literal's element has no declared range, so `a.set(0, value: n)` got NO narrowing
-	// check; `export typealias Byte = int(0 to u8.max)` (`:45`) finally gives it one, and the slot that held
-	// `movRegReg rcx, r12` now holds `cmpRegImm32 rbx, 0` / `cmpRegImm32 rbx, 255` / `mrt_panic`. A missing
-	// check now EMITTED, not a codegen change — the measurement is written into that case's own prose.
+	// ⚠ **EXACTLY ONE COMMITTED GOLDEN MOVES, AND IT IS A `b"…"` CASE THAT NEVER MENTIONS `File` — AN EXPORTED
+	// NAME, NOT A LITERAL THIS MODULE EMITS.** `byte-string-literal.detached-literal-drops-clean` gains three
+	// instructions: with `Byte` UNDECLARED a `b"…"` literal's element has no declared range, so
+	// `a.set(0, value: n)` got NO narrowing check; `export typealias Byte = int(0 to u8.max)` (`:45`) finally
+	// gives it one, and the slot that held `movRegReg rcx, r12` now holds `cmpRegImm32 rbx, 0` /
+	// `cmpRegImm32 rbx, 255` / `mrt_panic`. A missing check now EMITTED, and the run is unchanged — that case's
+	// own prose carries the A/B.
+	//
+	// ⚠ **THE ROUTE IS THE EXPORT AND NOT THE LITERALS, WHICH MATTERS BECAUSE THE LITERAL BOOKKEEPING WOULD
+	// HAVE ACQUITTED THIS ENTRY.** `Builtins.maxon`, `Math.maxon` and `CommandLine.maxon` all carry literals
+	// and `Math.maxon` measured ZERO moved goldens, which is the `StdlibFacts.unreachable` repair working
+	// exactly as recorded. It works here too — no `.rdata` of this module's displaces anyone — and the golden
+	// moved anyway, through a door that mechanism does not stand in. See the ⛔ paragraph in this file's
+	// header.
 	try listWhitelistedModule(stdlibDir, relative: "File.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'

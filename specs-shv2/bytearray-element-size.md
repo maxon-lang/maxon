@@ -427,6 +427,44 @@ Hello 1
 0
 ```
 
+<!-- test: a-wide-byte-still-reads-a-compiler-synthesized-buffer -->
+<!-- targets: x64-windows -->
+### A buffer the COMPILER minted answers to no file's `Byte` — not even the file that asked for it
+The case above proves a WHITELISTED MODULE's buffer survives a wide `Byte`. This one proves the
+harder half: a buffer that no source line describes at all. `__ManagedDirectory.currentPath()` is a
+`mm_alloc`'d run of bytes whose `element_size@24` is stamped from the literal `ByteStringElementSize`
+(`ManagedDirectoryRuntime.emitCStringToManaged`), so its stride is 1 in every program ever compiled —
+there is nothing here for a declaration to decide, and it wears the compiler's own
+`__ManagedByte` element for exactly that reason.
+
+⚠ **PER-FILE SCOPING IS NOT THE WEAKER FORM OF THAT CURE, IT IS A DIFFERENT ANSWER, AND IT IS WRONG.**
+Contest-scoping the element to the PARSING file relocates the defect rather than removing it: this
+program is the user's own file, so the buffer would take the user's `Byte` and
+`String.init(managed)` refuses it — MEASURED, with only that one call site changed:
+`E3005 argument type mismatch for 'managed': expected '__ManagedMemory', got 'Array_Byte$0_1000'`,
+the same sentence `stdlib/CommandLine.maxon` raised when the element was whole-program, moved one
+file over. Only an element the program cannot name at all ends it.
+
+x64-windows only for `managed-directory.md`'s reason: `currentPath` lowers to `GetCurrentDirectoryA`.
+The cwd differs per machine, so the assertion is on its LENGTH, which is all this case needs — the
+failure it guards is a refusal to compile.
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(300)
+
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	let cwdStr = String.init(cwd)
+	return 0 if cwdStr.count() > 0 and made.count() == 1 else 2
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: a-byte-two-files-disagree-about-is-two-types -->
 ### Two ranges for one name are two element types, and they are not interchangeable
 `ByteArray` is `stdlib/File.maxon`'s own `export typealias ByteArray = Array with Byte`, resolved

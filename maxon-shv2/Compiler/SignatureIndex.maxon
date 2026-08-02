@@ -6958,10 +6958,10 @@ export type ProgramSignatures
 	//
 	// ⚠ **IT IS A STRIDE FACT AND NOT A NAME FACT, BECAUSE shv2 HAS TWO NAMES FOR A BYTE AND THE USER RULING
 	// KEEPS THEM DISTINCT.** `Byte` is the user-visible element a `b"…"` literal, a `ByteArray` and
-	// `__ManagedMemory` share; `__ManagedByte` is the compiler-owned element a String's byte VIEW wears (see
-	// `SynthesizedByteElementName` for the measurement that minted it). They are two instances on purpose — a
-	// user may declare `Byte`, and a view's stride may not follow — and they meet at a BOUNDARY, which is what
-	// this predicate lets a door recognize.
+	// `__ManagedMemory` share; `__ManagedByte` is the compiler-owned element EVERY compiler-synthesized byte
+	// buffer wears (see `SynthesizedByteElementName` for the two measurements that minted it). They are two
+	// instances on purpose — a user may declare `Byte`, and a compiler-minted buffer's stride may not follow —
+	// and they meet at a BOUNDARY, which is what this predicate lets a door recognize.
 	//
 	// The (tag, id) pair is asked through `isArrayInstanceAt`, which is where the tag half's reason lives.
 	export function isBytePackedArrayInstance(tag ValueTypeTag, nameId TypeNameId) returns bool
@@ -6975,7 +6975,7 @@ export type ProgramSignatures
 	// answers true for an empty name. One walk, asked once per side, so the two sides cannot come to disagree
 	// about where an element's name is read from.
 	//
-	// ⚠ It reads the element NAME rather than comparing the instance against `internStringByteViewInstance()`,
+	// ⚠ It reads the element NAME rather than comparing the instance against `internSynthesizedByteInstance()`,
 	// because that function WRITES: asking it would mint the view instance into `genericInstances` in every
 	// program whose only reason to ask is a diagnostic it is about to raise, and an instance the sweep never
 	// interned is one no mangled-name or witness walk expects to find.
@@ -7031,21 +7031,32 @@ export type ProgramSignatures
 	// nominal distinction `namedAggregatesConflict` refuses today. The stride is what the RECORD says; the
 	// element's declared RANGE is what it does not, and a 1-byte element is not a byte just because it fits in
 	// one. `specs-shv2/bytearray-element-size.md`'s `byte-packed-alias-is-not-interchangeable-with-byte` pins it.
-	// ⇒ what may cross is exactly ONE thing: `__ManagedByte`, which is `__`-RESERVED, is minted only by
-	// `String.addressableBytes()`, and carries no range of its own for a declared `Byte` to contradict — the
-	// bytes of a String are bytes (`SynthesizedByteElementName`).
+	// ⇒ what may cross is exactly ONE thing: `__ManagedByte`, which is `__`-RESERVED and carries no range of
+	// its own for a declared `Byte` to contradict — a compiler-minted byte buffer is bytes
+	// (`SynthesizedByteElementName`).
 	//
-	// ⛔ **THE SYMMETRIC TWINS ARE DELIBERATELY NOT GIVEN THIS DOOR, AND THE ASYMMETRY IS ONE-WAY SAFE.**
-	// `aggregatesConflict` (return, reassignment, `otherwise`, match arm, payload store) and
-	// `SemanticCheck.overloadArgTypeFit` both still compare names alone. No source can DECLARE `__ManagedByte`,
-	// and `addressableBytes()` is stdlib-only, so the pair can only arise where a stdlib module RETURNS a
-	// String's view through a declared `__ManagedMemory` or OVERLOADS on one — neither of which any stdlib
-	// module does. Both twins are strictly NARROWER than this door, so neither can accept what this refuses:
-	// the worst either can do is refuse a program nobody can write, never admit one it should not. MEASURED
-	// (R4.7 review) by writing the two programs nobody has written yet, under `stdlib/`: the return twin
-	// answers `Cannot return 'Array___ManagedByte' from function declared to return 'Array_Byte'` and the
-	// reassignment twin `cannot assign 'Array___ManagedByte' to variable 'b' of type 'Array_Byte'` — both
-	// refusals, neither an admission.
+	// ⛔⛔ **THE SYMMETRIC TWINS ARE NOT GIVEN THIS DOOR, THE ASYMMETRY IS STILL ONE-WAY SAFE — AND THE
+	// ARGUMENT THAT NOBODY COULD NOTICE IS NOW FALSE. IT REFUSES A LEGAL PROGRAM.** `aggregatesConflict`
+	// (return, reassignment, `otherwise`, match arm, payload store) and `SemanticCheck.overloadArgTypeFit`
+	// still compare names alone, so they remain strictly NARROWER than this door and can never admit what it
+	// refuses. What has changed is who can reach the pair. R4.7's safety argument was that `__ManagedByte` is
+	// minted only by `String.addressableBytes()`, which is stdlib-only, so the pair could arise only inside a
+	// stdlib module — "a program nobody can write". The command-line rung widened the element to EVERY
+	// compiler-synthesized byte buffer, and three of its producers are parsed out of ORDINARY USER SOURCE
+	// (`__ManagedDirectory.filename`/`currentPath`, `__Builtins.commandLineArg`), so the premise no longer
+	// holds and the refusal is reachable in four lines:
+	//
+	//     function cwd() returns __ManagedMemory
+	//         return try __ManagedDirectory.currentPath() otherwise panic("cwd")
+	//     end 'cwd'
+	//
+	// ⚠ MEASURED (N2 reconciliation) — shv2 answers `E3005 Cannot return 'Array___ManagedByte' from function
+	// declared to return 'Array_Byte'` while the BOOTSTRAP compiles the same program and prints the path's
+	// length. Measured identically on `origin/main` with none of N2 applied, so it is the command-line rung's
+	// and not this one's, and it is REPORTED rather than repaired here: the cure is one aggregate-coercion
+	// door asked with (tag, nameId) at all six sites, which is a rung — three separate producers spell the
+	// aggregate NAME these sites compare, and folding the byte boundary into a six-argument predicate at each
+	// of them would be the very one-fact-two-answers shape this door exists to end.
 	export function byteBufferBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
 		let declaredElement = self.arrayNamedElementName(declaredTag, nameId: declaredNameId)
 		if not isByteElementName(declaredElement) or not self.isBytePackedArrayInstance(declaredTag, nameId: declaredNameId) 'declaredIsNotAByteBuffer'
