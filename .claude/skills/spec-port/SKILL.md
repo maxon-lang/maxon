@@ -159,8 +159,15 @@ literals, so **all 4 ported cases passed and nothing diverged**; the behaviour i
 `/specs/panic-interpolation.md`, a SEPARATE unported spec, 6 cases, whitelist position 229. The entry
 was deleted and that spec ported instead.)*
 
-⇒ **If a gap bothers you enough to write it down, port the spec that catches it instead.** Taking it out
-of whitelist order is allowed and is the right call when the gap is one your own tick just created.
+⇒ **So when you find one: write NOTHING, and take the next spec in whitelist order.**
+
+⛔ **And do NOT jump the queue to go close it.** The gap's spec has a position, and that position is the
+answer — the whitelist is ordered easiest-first for a reason, and a spec 200 places down is 200 places
+down because everything above it is cheaper and more foundational. *(Precedent, same day: on finding the
+`{}` gap the loop queued `panic-interpolation` — **whitelist position 229** — as the very next tick,
+while `function-declaration` at position 3 sat unported. Cancelled. **Too soon is a real failure mode:
+it spends a tick's budget on a hard spec while the cheap ones that would have exposed simpler bugs go
+unrun.**)* The one exception remains an explicit `/spec-port <name>` from the user.
 
 ## 4. Shelving a case — the only legal way, and it has a floor
 
