@@ -1,6 +1,6 @@
 ---
 name: spec-port
-description: Port ONE spec file from /specs into specs-shv2 and make it pass — the rapid-iteration loop. Takes the next spec off the v1 whitelist order (maxon-selfhosted/Testing/SpecTestRunner.maxon), copies it byte-identical, runs it, implements the gaps, and lands it. A passing spec is good enough — the minted goldens are committed, not audited. One spec per invocation, designed for `/loop /spec-port`. Invoke as `/spec-port <name>` to take a specific spec instead of the next one.
+description: Port ONE spec file from /specs into specs-shv2 and make it pass — the rapid-iteration loop. Takes the next spec off the v1 whitelist order (maxon-selfhosted/Testing/SpecTestRunner.maxon), copies it byte-identical, runs it, implements the gaps, and lands it, with an independent review as the last step before the commit. The minted goldens are committed, not audited. One spec per invocation, designed for `/loop /spec-port`. Invoke as `/spec-port <name>` to take a specific spec instead of the next one.
 ---
 
 # Port one spec, make it pass, land it
@@ -129,8 +129,9 @@ What may be shelved is a case needing a *feature that does not exist yet* (§4) 
 broken.
 
 **The agent runs ONLY its own spec's filter — the full suite is YOURS** (§8), and one tick runs it
-exactly once. Do not re-derive its diagnosis, re-audit its diff, or re-run what it ran. **The suite is
-the check.** If it is green, the tick is good.
+exactly once. **You** do not re-derive its diagnosis or re-run what it ran; the suite is your check.
+**Auditing its diff is the REVIEWER's job (§6), not yours** — that is the division, and it is why you
+can stay cheap without the diff going unread.
 
 ## ⛔⛔ 3b. THERE IS NO SUCH THING AS AN ACCEPTED DIVERGENCE. That is what the spec files are FOR.
 
@@ -209,20 +210,35 @@ tick was found at 3257/1 with eight unminted fragments and one stale one sitting
 git status --short specs-shv2/fragments/     # every one of these gets committed with the spec
 ```
 
-## 6. ⛔ NO REVIEW AGENT, NO LADDER READ. This process is EXPEDITED ON PURPOSE.
+## 6. REVIEW — the last step before you commit. Everything ELSE stays cut.
 
-**Do not spawn `maxon-rung-reviewer`. Do not run `run_scale_test`. Do not run other targets. Do not
-re-audit the implementer's diff.** A tick is: copy, run, fix, full suite, land.
+**Run `maxon-rung-reviewer` on the working diff, after the suite is green and BEFORE `git commit`.**
+It is the one piece of thoroughness this loop keeps, and the order matters: a review that lands after
+the commit is a bug report, while a review that lands before it is a gate.
 
-**This is a deliberate division of labour, not a gap** (user, 2026-08-01). The long tail of `/specs` is
-hundreds of files, and a tick that costs an hour of ceremony never gets through them. **The thorough
-passes are REAL and they are SOMEBODY ELSE'S** — `/rung` for anything with a contract, `/code-review`
-and the multi-agent cloud review over the branch, and the optimizer's ladder when a rung touches a pass.
-Those run against this code later, with more eyes than a tick can afford.
+**Still cut, and still deliberate** (the process is expedited on purpose): **no `run_scale_test` ladder
+read, no other targets, no cross-target gate, no re-auditing the implementer's diagnosis yourself, no
+reading the minted goldens.** `/rung`, `/code-review` and the multi-agent cloud review are the deep
+passes and they are somebody else's; this is one focused look by someone who did not write the code.
 
-⇒ **What this loop owes is a green suite and an honest spec file. Nothing more.** The one thing it must
-never do is manufacture that green by testing less — hence §2's count and §4's floor, which cost a grep
-apiece and are the only guards that survive.
+**Brief it for THIS loop's failure modes, not a rung's.** Duplication is its standing top priority, and
+on top of that ask it explicitly to check that **the implementer stayed in bounds** — because that is
+what actually goes wrong here, twice in the first two ticks:
+
+- **Did it edit any spec file other than `specs-shv2/<the ported one>`?** `/specs/**` is the canonical
+  definition of the language and is never written to; other `specs-shv2/*.md` are read-only. *(Tick 2
+  rewrote `character-ownership.md`'s message and prose.)*
+- **Did it change behaviour no red case required?** *(Tick 2 rebuilt interpolated panics, which no case
+  tested.)* The acceptance list is the boundary.
+- **Is the diff MINIMAL for the cases it turned green** — no widened rules, no "while I'm here"
+  cleanups, no deleted-because-now-unused?
+- **Did it weaken any expectation to make a case pass**, in its own spec or elsewhere?
+- Plus the ordinary questions: is it correct, does it duplicate something that already exists, does a
+  new refusal false-reject.
+
+**Findings are FIXED BEFORE THE COMMIT**, then the suite re-run. Do not commit and follow up. ⚠ But its
+report is a lead, not a verdict — this project's history is full of agent findings that measurement
+refuted, so confirm anything it claims before acting on it, and say so if you disagree.
 
 ## 7. The exit for a spec that is really a rung
 
@@ -248,6 +264,11 @@ Nothing here is optional, and none of it needs permission:
 | `memoryLeak: false` / no exit **101** | stop |
 | test-count check (§2) | stop |
 | every new `.test` **committed** (§5 — not read, committed) | stop |
+| **`maxon-rung-reviewer` run and its findings resolved (§6)** — the LAST thing before `git commit` | stop |
+
+**The order is fixed: build → full suite → REVIEW → fix any findings → re-run the suite → commit →
+push.** A review after the commit is a bug report; a review before it is a gate. That is the whole
+reason it sits here and not one step later.
 
 **If compiler source changed, add a row to `maxon-shv2/build-cost-log.md`** — build seconds, exe bytes,
 suite seconds + test count. Its three numbers all fall out of the build and the full-suite run this
