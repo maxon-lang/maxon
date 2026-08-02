@@ -20,8 +20,12 @@
 // debugger reading an exit code lands in the right runtime function — and they are picked from the free
 // space ABOVE 70 so that an abort is distinguishable from a program that merely returned. This number
 // is the opposite on both counts: every panic shares it *deliberately* (there is no reason to read
-// back), and it is not pickable at all — `specs-shv2/string-views.md` fixes it at a plain 1 so the lanes
-// with no panic runtime can assert on the exit code alone. Filing a spec-mandated, reason-free number in
+// back), and it is not pickable at all — `specs-shv2/string-views.md` fixes it at a plain 1.
+// ⚠ ITS ORIGINAL REASON IS SPENT: that sentence used to end "so the lanes with no panic runtime can
+// assert on the exit code alone", and after W3 there is no such lane — every target prints a message.
+// The number is still NOT pickable, for a reason that outlived the first: the wasm case pins it through
+// the HARNESS (a trap pre-empts the guest's exit, so `wasmPanicReport` supplies `PanicExitCode` itself),
+// so renumbering here silently changes what that lane asserts. Filing a spec-mandated, reason-free number in
 // a registry whose stated rule is "take the next free number above 70" would tell the next reader it
 // could be renumbered, which is the one thing it cannot be.
 //

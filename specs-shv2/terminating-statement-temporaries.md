@@ -52,12 +52,13 @@ the fixed one.
 The reduced repro, and the case that crashed the compiler outright on arm64.
 
 <!-- test: panic-interpolation-in-a-block -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-wasm32-wasi has no `mrt_panic` — `StdOp.osPanicValue` discards the message pointer and exits
-bare, a gap stated at `StdToWasm.maxon:1875` — so a `stderr` pin cannot pass there. A TECHNICAL
-RESTRICTION, not an opt-in. Note that `not-taken-path-releases-nothing` below is deliberately
-left UNRESTRICTED and does run on wasm: the silently-miscompiled half of this defect is
-target-independent, and that is the half no message can reveal.
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+⭐ **W3 REMOVED THE REASON THIS LINE EXISTED, AND THE LINE IS KEPT ONLY TO SAY SO.** When A3n wrote
+this pin, wasm had no `mrt_panic` at all and a `stderr` expectation could not pass there. W3 built
+one, and these cases were **measured green on wasm with their existing goldens, unedited** — so the
+restriction is now a list of every target, which is the honest spelling of "no restriction". It is
+written out rather than deleted because a `targets:` line that names everything is falsifiable: add
+a target and this line is visibly wrong, where an absent line would silently mean "all".
 
 ```maxon
 function main() returns ExitCode
@@ -110,12 +111,13 @@ The interpolation holds a heap `String` the panic path itself built, so the drai
 happen late enough to render it and early enough not to outlive its block.
 
 <!-- test: owned-temporary-in-the-message -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-wasm32-wasi has no `mrt_panic` — `StdOp.osPanicValue` discards the message pointer and exits
-bare, a gap stated at `StdToWasm.maxon:1875` — so a `stderr` pin cannot pass there. A TECHNICAL
-RESTRICTION, not an opt-in. Note that `not-taken-path-releases-nothing` below is deliberately
-left UNRESTRICTED and does run on wasm: the silently-miscompiled half of this defect is
-target-independent, and that is the half no message can reveal.
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+⭐ **W3 REMOVED THE REASON THIS LINE EXISTED, AND THE LINE IS KEPT ONLY TO SAY SO.** When A3n wrote
+this pin, wasm had no `mrt_panic` at all and a `stderr` expectation could not pass there. W3 built
+one, and these cases were **measured green on wasm with their existing goldens, unedited** — so the
+restriction is now a list of every target, which is the honest spelling of "no restriction". It is
+written out rather than deleted because a `targets:` line that names everything is falsifiable: add
+a target and this line is visibly wrong, where an absent line would silently mean "all".
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
