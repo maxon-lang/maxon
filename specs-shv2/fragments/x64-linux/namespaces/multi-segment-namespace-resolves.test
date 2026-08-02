@@ -1,0 +1,34 @@
+// Test: multi-segment-namespace-resolves
+// --- file: lib/inner/leaf.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function deepHelper() returns Integer
+	return 42
+end 'deepHelper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return lib.inner.deepHelper()
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect deepHelper
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @deepHelper {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

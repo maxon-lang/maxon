@@ -12959,7 +12959,7 @@ export type Parser
 			// so widening the statement door widens no name, it only routes them to the same answer
 			// expression position already gives.
 			_ = try self.parseQualifiedCall(func, resultUsed: false)
-		end 'voidStaticStmt' else if self.namespaceQualifiedCallDotsAt(self.pos) > 0 'namespaceQualifiedCallStmt'
+		end 'voidStaticStmt' else if self.namespaceQualifiedCallDotsAt(self.pos, minimumDots: MethodQualifierDots) > 0 'namespaceQualifiedCallStmt'
 			// ⭐ **`utils.shout()` / `lib.inner.shout()` ON A LINE OF ITS OWN (N1b)** — a FREE call written with
 			// a directory qualifier, and a free call is exactly what `callStmt` below already admits: the
 			// result is discarded, `resultUsed: false` is what makes a VOID one legal here, and the
@@ -12971,8 +12971,10 @@ export type Parser
 			//
 			// ⚠ **IT IS NOT `Point.create()`'s CASE, AND THE RECOGNIZER IS WHAT KEEPS THEM APART.** A static
 			// call as a statement stays refused (it would discard a box nothing then frees — see
-			// `methodCallsAt`), because `aStaticCallClaimsDottedChain` hands any chain a `Type.method` key
-			// wears straight back and this arm never sees it.
+			// `methodCallsAt`), because `resolvesAsNamespaceQualifiedFunction` declines any chain a
+			// `Type.method` key already wears and this arm never sees it. This is also why ONE dot is admitted
+			// here and not in expression position: no arm at this door owns the shape.
+			//
 			// Through `parsePostfix` for `directCallStmt`'s reason: a call whose RESULT is a function value can
 			// carry a trailing `(args)`, which the postfix loop applies as an indirect call. A plain direct
 			// call leaves none, so this is a no-op for every ordinary namespace-qualified statement.
@@ -25812,21 +25814,23 @@ export type Parser
 			end 'declared'
 		end 'enumRef'
 
-		// ⭐⭐ **`utils.helper()` / `lib.inner.deepHelper()` — A DIRECTORY-QUALIFIED FREE CALL (N1b), AND THE
-		// FOURTH CLAIMANT ON THIS `.` IS WHAT MADE IT NEED AN ARM AT ALL.** The `Type.method` arm below is a
-		// fixed THREE-TOKEN lookahead, so a longer chain fell past it to the LAST-RESORT bound arm and was
-		// refused as a malformed `u64.max` (`E2010: Expected ''min' or 'max'' but got 'inner'`) — the
-		// SIZED-BOUND grammar, which is the claimant this rung's plan had not counted.
+		// ⭐⭐ **`lib.inner.deepHelper()` — A MULTI-SEGMENT DIRECTORY-QUALIFIED FREE CALL (N1b), AND THE FOURTH
+		// CLAIMANT ON THIS `.` IS WHAT MADE IT NEED AN ARM AT ALL.** The `Type.method` arm below is a fixed
+		// THREE-TOKEN lookahead, so a longer chain fell past it to the LAST-RESORT bound arm and was refused as
+		// a malformed `u64.max` (`E2010: Expected ''min' or 'max'' but got 'inner'`) — the SIZED-BOUND grammar,
+		// which is the claimant this rung's plan had not counted.
+		//
+		// ⚠ **THE ONE-DOT SHAPE IS DELIBERATELY NOT ASKED FOR HERE** (`MethodQualifierDots + 1`): it belongs to
+		// `parseQualifiedCall` below, which asks the SAME door about the SAME rule with a name it has already
+		// built. See `namespaceQualifiedCallDotsAt` for what asking twice measured.
 		//
 		// ⚠ **THE CLAIMANTS ARE SEPARATED BY ORDER AND BY A REGISTRY, AND NEVER BY "IS THE HEAD A
-		// NAMESPACE?"** A value base and an enum reference are claimed above; the recognizer then demands a
-		// trailing `(` (which a bound has not) AND a registered directory-qualified free function (which a
-		// bound's `u64` is not) AND that no `Type.method` key wear the same mangling (which is what leaves
-		// every static call exactly where it was). Anything it declines falls through untouched to the two
-		// arms that have always followed.
-		if self.namespaceQualifiedCallDotsAt(self.pos) > 0 'namespaceQualifiedFreeCall'
+		// NAMESPACE?"** A value base and an enum reference are claimed above; this then demands a trailing `(`
+		// (which a bound has not) AND a registered directory-qualified free function (which a bound's `u64` is
+		// not). Anything it declines falls through untouched to the two arms that have always followed.
+		if self.namespaceQualifiedCallDotsAt(self.pos, minimumDots: MethodQualifierDots + 1) > 0 'multiSegmentNamespaceCall'
 			return try self.parseNamespaceQualifiedCall(func, resultUsed: resultUsed)
-		end 'namespaceQualifiedFreeCall'
+		end 'multiSegmentNamespaceCall'
 
 		if self.kindAt(self.pos + 3) == TokenKind.leftParen 'qualifiedCall'
 			return try self.parseQualifiedCall(func, resultUsed: resultUsed)
@@ -25850,9 +25854,8 @@ export type Parser
 		return try self.parseTypeQualifiedBoundExpression()
 	end 'parseDottedPrimary'
 
-	// ⭐ **HOW MANY `.identifier` PAIRS AT `index` FORM A MULTI-SEGMENT DIRECTORY-QUALIFIED CALLEE (N1b)** —
-	// `0` when the tokens are anything else, which is every dotted expression in every program that does not
-	// use the form.
+	// ⭐ **HOW MANY `.<name>` PAIRS AT `index` FORM A DIRECTORY-QUALIFIED CALLEE (N1b)** — `0` when the tokens
+	// are anything else, which is every dotted expression in every program that does not use the form.
 	//
 	// The walk is v1's, character for character in its shape (`maxon-selfhosted/Compiler/Parser.maxon:14570-14603`):
 	// assemble the whole chain, then ask the registry about the ASSEMBLED name. What shv2 does not port is
@@ -25860,52 +25863,36 @@ export type Parser
 	// name ends and leave the rest to a per-instance member; a CALL's chain is terminated by the `(` instead,
 	// so the whole chain either names a function or does not.
 	//
+	// ⭐ **ONE RULE, ASKED THROUGH ONE DOOR** — `ProgramSignatures.resolvesAsNamespaceQualifiedFunction`, which
+	// `parseQualifiedCall` also asks. This routine's whole job is turning TOKENS into the name that door
+	// answers about; it decides nothing itself.
+	//
+	// ⚡⚡ **`minimumDots` IS NOT A TUNING KNOB — IT IS THE CALLER SAYING WHICH SHAPE ANOTHER ARM AT ITS OWN
+	// POSITION ALREADY OWNS, AND IT WAS PUT THERE BY A MEASUREMENT.** In EXPRESSION position the one-dot shape
+	// belongs to `parseQualifiedCall`, which mangles `Type.method` for its own reasons and can therefore ask
+	// the door with a name it ALREADY HOLDS; assembling that same name here first cost a join at every
+	// `Point.create(…)` in the program. **MEASURED, two binaries swapped into one path at `--repeat=1`:
+	// +297 / +461 / +693 / +1,221 / +2,277 / +4,421 allocations across the doubling ladder — ratios 1.55,
+	// 1.50, 1.76, 1.86, 1.94, converging on 2.00 from below, which is a LINEAR term and not the flat install
+	// cost it was meant to be.** In STATEMENT position no arm owns any dotted call (a static call on a line of
+	// its own stays refused), so nothing there has a name in hand and one dot is admitted.
+	//
+	// ⚠ **AN EMPTY-SET SHORT-CIRCUIT WOULD NOT HAVE FIXED IT, WHICH IS WHY THERE ISN'T ONE.** It was written
+	// first — `namespaceQualifiedFunctions` is empty for a program whose files all sit at the compile anchor —
+	// and the numbers above are what it MEASURED: `stdlib/` and its seven subdirectories are namespaced in
+	// every compile there is, so the set is never empty and the guard never fired.
+	//
 	// PEEK-ONLY: the cursor is untouched, so a `0` leaves every arm after this one looking at the tokens it
-	// expects.
-	//
-	// ⭐ **IT IS THE ONE RECOGNIZER FOR BOTH POSITIONS AND FOR EVERY SEGMENT COUNT.** `utils.helper()` and
-	// `lib.inner.deepHelper()` are one form written with one or more qualifiers, and an EXPRESSION and a
-	// STATEMENT differ only in whether the result is wanted — so `parseDottedPrimary` and `parseStatement`
-	// ask this, and nothing else decides it. A second "is this a namespace call?" test at either door is how
-	// the two would come to disagree about a program that compiles in one position and not the other.
-	//
-	// ⚡ **NOT ONE BYTE IS JOINED UNTIL THE SHAPE AND THE PROGRAM BOTH ADMIT ONE.** This is asked at EVERY
-	// dotted call in the program — `Point.create(…)` included — and at every `u64.max`, so an eager assemble
-	// would cost a join per site, linear in the program: the shape of cost `MethodNameSeparatorBytes`' header
-	// measured on the scale ladder and refused. The token walk is allocation-free, and
-	// `declaresANamespaceQualifiedFunction` is an O(1) count that is FALSE for every program whose files all
-	// sit at the compile anchor — which is every single-directory program and the whole scale corpus.
-	function namespaceQualifiedCallDotsAt(index TokenIndex) returns ElementCount
-		if not self.signatures.declaresANamespaceQualifiedFunction() 'noDirectoryDeclaresOne'
-			return 0
-		end 'noDirectoryDeclaresOne'
-
+	// expects. The token walk allocates nothing; only a chain that has already passed the shape test is
+	// assembled.
+	function namespaceQualifiedCallDotsAt(index TokenIndex, minimumDots ElementCount) returns ElementCount
 		let dots = self.dottedChainLengthAt(index)
-		if dots == 0 or self.kindAt(index + dots * TokensPerQualifierSegment + 1) != TokenKind.leftParen 'notADottedCall'
+		if dots < minimumDots or self.kindAt(index + dots * TokensPerQualifierSegment + 1) != TokenKind.leftParen 'notADottedCall'
 			return 0
 		end 'notADottedCall'
 
-		if not self.signatures.namesNamespaceQualifiedFunction(self.assembleDottedChainAt(index, dots: dots)) 'noSuchQualifiedFunction'
-			return 0
-		end 'noSuchQualifiedFunction'
-
-		return 0 if self.aStaticCallClaimsDottedChain(index, dots: dots) else dots
+		return dots if self.signatures.resolvesAsNamespaceQualifiedFunction(self.assembleDottedChainAt(index, dots: dots)) else 0
 	end 'namespaceQualifiedCallDotsAt'
-
-	// ⭐ **THE TYPE READING WINS WHEREVER THERE IS ONE**, which is what keeps a `type utils` with a `static
-	// helper` owning `utils.helper()` exactly as it did before this rung, however a directory is named.
-	//
-	// It asks the SAME mangled name `parseQualifiedCall` links by — through `qualifiedCallBaseName`, so a
-	// generic-instance alias still dispatches to its base struct — because "a static claims this" and "which
-	// static it links" must not be two spellings. A chain of TWO OR MORE qualifiers has no type reading at
-	// all: `Type.method` is exactly one dot, and a mangled method name therefore holds exactly one.
-	function aStaticCallClaimsDottedChain(index TokenIndex, dots ElementCount) returns bool
-		if dots != MethodQualifierDots 'noStaticReading'
-			return false
-		end 'noStaticReading'
-
-		return self.signatures.declaresCallee(qualifiedMethodName(self.qualifiedCallBaseName(self.tokenAt(index).value), methodName: self.tokenAt(index + 2).value))
-	end 'aStaticCallClaimsDottedChain'
 
 	// How many `.<name>` pairs follow the identifier at `index` — the peek-only, allocation-free half of the
 	// walk above. `0` for a bare name and for anything that is not an identifier at all.
@@ -25944,8 +25931,9 @@ export type Parser
 	end 'assembleDottedChainAt'
 
 	// `utils.helper(…)` / `lib.inner.deepHelper(…)` — consume the qualifier chain and emit the ORDINARY direct
-	// call it names. Reached only through `namespaceQualifiedCallDotsAt`, from the EXPRESSION door and the
-	// STATEMENT door alike.
+	// call it names. Reached only through `namespaceQualifiedCallDotsAt`: from the STATEMENT door at any
+	// segment count, and from the EXPRESSION door at TWO OR MORE (a one-dot expression is `parseQualifiedCall`'s,
+	// which reaches the same rule through the same door with a name it had already built — see there).
 	//
 	// ⭐ **THE CALLEE IS THE FINAL SEGMENT, AND THAT IS WHY THE EMITTED CODE IS UNTOUCHED.** shv2's function
 	// registry is bare-name and whole-program (a second declaration of one name is E3006), so `utils.helper`
@@ -26573,6 +26561,20 @@ export type Parser
 
 			try requirePrimitiveStaticIsResolvable(typeTok, memberTok: memberTok, declaredCallee: declaredCallee)
 		end 'primitiveStatic'
+
+		// ⭐⭐ **`utils.helper()` — A DIRECTORY-QUALIFIED FREE CALL (N1b), DECIDED HERE BECAUSE THE NAME IS
+		// ALREADY BUILT.** `declaredCallee` is the mangling this routine links a static by, and it is exactly
+		// the name the namespace index is keyed on — so the one-dot shape costs this arm a probe and not a
+		// join. `parseDottedPrimary`'s multi-segment arm therefore starts at TWO dots on purpose; assembling
+		// this name a second time up there measured a linear term (see `namespaceQualifiedCallDotsAt`).
+		//
+		// The rule itself is `resolvesAsNamespaceQualifiedFunction`'s — the TYPE reading wins wherever there is
+		// one — asked here and by the multi-segment arm and nowhere else. The callee it resolves TO is the bare
+		// member: see `parseNamespaceQualifiedCall` for why that leaves the emitted code untouched and the
+		// visibility decision where it already was.
+		if self.signatures.resolvesAsNamespaceQualifiedFunction(declaredCallee) 'namespaceQualifiedFreeCall'
+			return try self.parseCallNamed(func, callee: memberTok.value, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		end 'namespaceQualifiedFreeCall'
 
 		let result = try self.parseCallNamed(func, callee: declaredCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.notMinted)
 		self.retypeGenericAliasConstructorResult(result, aliasName: typeTok.value)

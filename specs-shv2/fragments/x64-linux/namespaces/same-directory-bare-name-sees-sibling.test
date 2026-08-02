@@ -1,0 +1,57 @@
+// Test: same-directory-bare-name-sees-sibling
+// --- file: utils/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function siblingProducer() returns Integer
+	return 21
+end 'siblingProducer'
+
+// --- file: utils/b.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function siblingConsumer() returns Integer
+	return siblingProducer() + siblingProducer()
+end 'siblingConsumer'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return siblingConsumer()
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect siblingConsumer
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @siblingProducer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 21
+    x64.popReg rbp
+    x64.ret
+}
+
+func @siblingConsumer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect siblingProducer
+    x64.movRegReg rbx, r8
+    x64.callDirect siblingProducer
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

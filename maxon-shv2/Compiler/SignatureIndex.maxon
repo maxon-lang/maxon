@@ -8105,29 +8105,26 @@ export type ProgramSignatures
 		return self.returnTypes.contains(callee)
 	end 'declaresCallee'
 
-	// ⭐ **IS `written` A DIRECTORY-QUALIFIED SPELLING OF A DECLARED FREE FUNCTION (N1b)?** — asked of the
-	// WHOLE assembled dotted name (`utils.helper`, `lib.inner.deepHelper`), never of its head alone.
+	// ⭐⭐ **DOES `written` RESOLVE AS A DIRECTORY-QUALIFIED FREE CALL — THE WHOLE RULE, IN ONE PLACE (N1b)?**
+	// It is asked of the WHOLE assembled dotted name (`utils.helper`, `lib.inner.deepHelper`), never of its
+	// head alone. Two
+	// arms ask it (`Parser.namespaceQualifiedCallDotsAt` for a chain it has just assembled, and
+	// `Parser.parseQualifiedCall` for the `Type.method` name it had already built), and they must not be able
+	// to disagree about a program that compiles in one position and not the other.
 	//
-	// ⛔ **ASKING ABOUT THE HEAD IS THE DESIGN THAT DOES NOT WORK, and it is worth stating because it is the
-	// obvious one.** "Is `utils` a known namespace?" invents an ambiguity neither reference has — a directory
-	// `feature/` beside a `type feature` would then have two readings of `feature.f()` with nothing to choose
-	// between them. The assembled name has ONE reading: it is either a key here or it is not, exactly as
-	// `Wrapper.Idx` and `api.Score` are keys in one map and never compete. v1 settles it the same way
-	// (`maxon-selfhosted/Compiler/Parser.maxon:14600`, `project.funcReturnTypes.contains(assembled)`).
-	export function namesNamespaceQualifiedFunction(written ByteArray) returns bool
-		return self.namespaceQualifiedFunctions.contains(written)
-	end 'namesNamespaceQualifiedFunction'
-
-	// ⚡ **DOES THE PROGRAM CONTAIN A DIRECTORY-QUALIFIED FREE FUNCTION AT ALL?** — the O(1) door the parser's
-	// dotted-call recognizer opens with, so a program whose files all sit at the compile anchor pays NOTHING
-	// for this rung: the set is empty, and the recognizer returns before assembling a name.
+	// **THE TYPE READING WINS WHEREVER THERE IS ONE**, which is the `declaresCallee` half: a `type utils` with
+	// a `static helper` keeps `utils.helper()`, so a directory may be named after a type and no existing call
+	// moves.
 	//
-	// It matters because the recognizer is asked at EVERY dotted call in the program, `Point.create(…)`
-	// included, and assembling the chain costs a join per site — linear in the program, which is the shape of
-	// cost `Parser.MethodNameSeparatorBytes`' header measured on the scale ladder and refused.
-	export function declaresANamespaceQualifiedFunction() returns bool
-		return self.namespaceQualifiedFunctions.count() > 0
-	end 'declaresANamespaceQualifiedFunction'
+	// ⛔ **ASKING ABOUT THE HEAD ALONE IS THE DESIGN THAT DOES NOT WORK, and it is worth stating because it is
+	// the obvious one.** "Is `utils` a known namespace?" invents an ambiguity neither reference has — a
+	// directory `feature/` beside a `type feature` would then have two readings of `feature.f()` with nothing
+	// to choose between them. The ASSEMBLED name has one reading: it is either a key here or it is not,
+	// exactly as `Wrapper.Idx` and `api.Score` are keys in one map and never compete. v1 settles it the same
+	// way (`maxon-selfhosted/Compiler/Parser.maxon:14600`, `project.funcReturnTypes.contains(assembled)`).
+	export function resolvesAsNamespaceQualifiedFunction(written ByteArray) returns bool
+		return not self.declaresCallee(written) and self.namespaceQualifiedFunctions.contains(written)
+	end 'resolvesAsNamespaceQualifiedFunction'
 
 	function adoptReturnType(rt MaxonReturnType, into TypeNameInterner) returns MaxonReturnType
 		return match rt 'r'
