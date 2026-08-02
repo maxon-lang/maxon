@@ -120,14 +120,29 @@ run_spec_test compiler=shv2 repoRoot=C:/Users/Eric/dev/maxon filter=<name>/
 >   `## See also` after `## Tests` silently shelves every case below it. **This has already cost this
 >   project a green that tested nothing.**
 >
-> **So every tick, mechanically:**
+> **So every tick, mechanically — TWO checks, and neither substitutes for the other:**
 > ```bash
-> grep -c '<!-- test:' specs-shv2/<name>.md      # markers in the file
-> grep -c '<!-- disabled-test:' specs-shv2/<name>.md
+> grep -c '<!-- test:'          specs-shv2/<name>.md   # ACTIVE cases. This is the number.
+> grep -c '<!-- disabled-test:' specs-shv2/<name>.md   # shelved — informational, do NOT subtract
+> grep -o '<!-- \(disabled-\)\?test: [^ ]*' specs-shv2/<name>.md \
+>   | sed 's/.*test: //' | sort | uniq -d                # must print NOTHING
 > ```
-> **markers − disabled MUST equal the runner's `total` for that filter.** A shortfall is a defect in
-> the port, never a pass. Fix it by moving the `## ` heading below the cases (and say so in the commit),
-> not by accepting the smaller number.
+> 1. **`grep -c '<!-- test:'` MUST equal the runner's `total` for that filter.** A shortfall is a defect
+>    in the port, never a pass. Fix it by moving the `## ` heading below the cases (and say so in the
+>    commit), not by accepting the smaller number.
+> 2. **No name may appear as BOTH `test:` and `disabled-test:`** — that is a shelve that did not take.
+>
+> ⚠ **DO NOT SUBTRACT.** `<!-- disabled-test:` does **not** match the `<!-- test:` grep (the `<!-- `
+> prefix breaks it — verified: `echo '<!-- disabled-test: x -->' | grep -c '<!-- test:'` is `0`), so the
+> first count **already excludes** the shelved cases. Subtracting under-counts by exactly the number you
+> shelved, which makes a CORRECT port look like a defect on every tick that shelves anything. *(This
+> skill said "markers − disabled" until 2026-08-01, when tick 5 shelved one case of fourteen and the
+> formula demanded 12 against a correct 13.)*
+>
+> ⚠ **Shelving REPLACES the marker, it does not accompany it.** Write `<!-- disabled-test: <name> -->`
+> **in place of** `<!-- test: <name> -->` — leave the `test:` line underneath and the case still runs,
+> silently, while the file reads as though it were shelved. Check 2 is what catches that; it is how the
+> same tick found its own botched shelve.
 
 Then read the failures. The MCP result is structured; when you want per-case detail use
 `spec_test_outcome filter=<name>/`. If you run the binary by hand instead, **redirect to a file** — never
