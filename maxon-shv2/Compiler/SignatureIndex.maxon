@@ -1062,7 +1062,12 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		named then break 'kind'
 	end 'kind'
 
-	let name = try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("classifyUnionPayload: a payload field's named type id is not in the interner it was resolved against — pass the interner the layout's ids live in")
+	// Resolved through `denotedAggregateName` for the reason that door states: a payload spelled with a TUPLE
+	// typealias (`some(v Pair)`) reaches here as a bare alias name whenever the sweep read the declaration
+	// before the alias's own file was walked, and `Pair` is a registered nothing — the struct arm below missed
+	// it and the binding stayed `named`, which TypeResolution then rejected as `E3011 Unknown type 'Pair'` on a
+	// program the other walk order compiled and ran.
+	let name = signatures.denotedAggregateName(try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("classifyUnionPayload: a payload field's named type id is not in the interner it was resolved against — pass the interner the layout's ids live in"))
 
 	// A ranged-int alias is a scalar of its underlying width; a float-underlying alias would be a float
 	// payload (none are declarable yet).
@@ -1086,8 +1091,11 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 	// `named` the field was spelled with: `maxonTypeToStdType` panics on a `named` (an op's type must be
 	// concrete by lowering), and a struct BINDING's field access (`b.mass`) requires the `structRef`
 	// tag (`requireStructBase`). An undeclared name is a user error TypeResolution reports as E3011.
+	// The id is re-interned from the RESOLVED name rather than reused off `fieldType`: for a struct spelled by
+	// its own name the two are the same id (the name is already in this table), and for a tuple alias they are
+	// not — the alias's id spells `Pair`, which names no struct for `requireStructBase` to resolve.
 	match signatures.structOf(name) 'asStruct'
-		declared then return PayloadClass.managed(MaxonType.structRef(typeNameIdOf(fieldType)), isString: false)
+		declared then return PayloadClass.managed(MaxonType.structRef(typeNames.intern(name)), isString: false)
 		undeclared then return PayloadClass.undeclaredName
 	end 'asStruct'
 end 'classifyUnionPayload'
@@ -1503,6 +1511,18 @@ end 'managedFieldDropCallee'
 // index's OWN interner. It USED to thread the caller's `typeNames` through to the union arm, which is how a
 // `signatures` layout came to be resolved against `project.typeNames` — see `unionHasManagedPayload`.
 function managedNameDropCallee(signatures ProgramSignatures, name ByteArray) returns ByteArray
+	// ⭐⭐ **A TUPLE TYPEALIAS NAMES THE TUPLE'S OWN STRUCT AND NOTHING ELSE (A3e), so it is resolved
+	// ONCE at the head rather than at one of the two lookups below.** A tuple alias mints no identity of its
+	// own, so its drop IS the canonical tuple's; and it arrives here under the ALIAS spelling whenever the
+	// declaration SWEEP recorded the position before the alias's own file was walked. Every question below
+	// is keyed by the name, so resolving here is what keeps the struct arm and the union arm from having to
+	// know about aliases at all.
+	//
+	// ⚠ **MEASURED, A3e** — `typeIsManaged` must call a tuple-alias field MANAGED (a tuple is a struct box,
+	// and without that the field is dropped by nobody and the program exits 101 on the leak gate). Widening it
+	// and leaving this alone turned that leak into the `undeclared` PANIC at the bottom of this function, on a
+	// program the other walk order compiled and ran — a strictly worse answer than either.
+	let declaredName = signatures.denotedAggregateName(name)
 	// ⭐ **A `CharacterSet` IS A COMPILER-OWNED AGGREGATE AND TAKES A COMPILER-OWNED DROP** (P1.8 Slice D),
 	// exactly as an `Array` takes `__arr_decref` and a `Set` takes `__set_decref`. Asked BEFORE the
 	// declared-struct lookup: its layout IS registered (it needs a nominal identity) and it DOES own a
@@ -1510,7 +1530,7 @@ function managedNameDropCallee(signatures ProgramSignatures, name ByteArray) ret
 	// `installStructDestructors` never builds, because it walks `project.structTypes` and a synthesized type
 	// is in no file's declarations. A link failure rather than a wrong answer, but the honest fix is to say
 	// which drop this type takes.
-	if name.equals(CharacterSetTypeName) 'characterSet'
+	if declaredName.equals(CharacterSetTypeName) 'characterSet'
 		return CharSetDecrefName
 	end 'characterSet'
 	// ⭐⭐ **A `__ManagedFile` OWNS AN OS HANDLE, WHICH IS NOT MEMORY — SO ITS DROP MUST CLOSE, NOT JUST
@@ -1529,7 +1549,7 @@ function managedNameDropCallee(signatures ProgramSignatures, name ByteArray) ret
 	// handle for the process lifetime, invisibly to the exit-101 gate, because a handle is not memory.
 	// ONE line covers both doors: a `var f as __ManagedFile` FIELD through the struct cascade, and a
 	// top-level `let f = __ManagedFile.openRead(…)` through `Parser.decrefCalleeFor`'s `structRef` arm.
-	if name.equals(ManagedFileTypeName) 'managedFile'
+	if declaredName.equals(ManagedFileTypeName) 'managedFile'
 		return ManagedFileDestructName
 	end 'managedFile'
 	// ⭐ **A `__ManagedDirectory` OWNS A SEARCH HANDLE *AND* A SECOND ALLOCATION (R4.3)** — so its drop must
@@ -1540,12 +1560,12 @@ function managedNameDropCallee(signatures ProgramSignatures, name ByteArray) ret
 	// zero the handle to stay idempotent. `__md_destruct(box)` is the refcount-checked teardown that does
 	// all three. Answering `MmDecrefName` here would free eight bytes and leak BOTH the 336-byte block and
 	// the OS search handle — the second of which the exit-101 gate cannot see at all.
-	if name.equals(ManagedDirectoryTypeName) 'managedDirectory'
+	if declaredName.equals(ManagedDirectoryTypeName) 'managedDirectory'
 		return ManagedDirectoryDestructName
 	end 'managedDirectory'
-	if signatures.containsStruct(name) 'struct'
-		if signatures.structHasManagedField(name) 'managedStruct'
-			return destructorSymbol(name)
+	if signatures.containsStruct(declaredName) 'struct'
+		if signatures.structHasManagedField(declaredName) 'managedStruct'
+			return destructorSymbol(declaredName)
 		end 'managedStruct'
 		return MmDecrefName
 	end 'struct'
@@ -1553,11 +1573,11 @@ function managedNameDropCallee(signatures ProgramSignatures, name ByteArray) ret
 	// union's scope-exit drop takes, so a union FIELD and a union BINDING cannot be dropped through
 	// different callees. See `unionHasManagedPayload` for the reachable compiler panic the layout-and-
 	// foreign-interner spelling this replaces produced.
-	match signatures.enumOf(name) 'union'
-		declared then return signatures.unionBoxDropCallee(name)
+	match signatures.enumOf(declaredName) 'union'
+		declared then return signatures.unionBoxDropCallee(declaredName)
 		// A managed field that is neither struct nor enum cannot occur: `structFieldIsManaged` classified it
 		// managed, and its only managed non-String forms are a declared struct and a boxed union.
-		undeclared then panic("managedNameDropCallee: managed field '{String.from(name)}' is neither a declared struct nor a declared enum/union — the caller classified it managed")
+		undeclared then panic("managedNameDropCallee: managed field '{String.from(declaredName)}' is neither a declared struct nor a declared enum/union — the caller classified it managed")
 	end 'union'
 end 'managedNameDropCallee'
 
@@ -1601,7 +1621,10 @@ export function managedFieldCloneStrategy(signatures ProgramSignatures, typeName
 	if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
 		panic("managedFieldCloneStrategy: a field of tag '{typeTagName(tag)}' is not a managed heap reference — every caller classifies the field managed first")
 	end 'notManagedRef'
-	let name = try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldCloneStrategy: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in")
+	// Resolved through `denotedAggregateName` for `managedFieldDropCallee`'s reason, and it must be the SAME
+	// resolution: a value cloned by this strategy is dropped by the callee that one returns, so a name the two
+	// resolved differently would clone one type and drop another.
+	let name = signatures.denotedAggregateName(try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldCloneStrategy: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in"))
 	if signatures.isGenericAlias(name) 'genericAlias'
 		return instanceCloneStrategy(signatures, id: signatures.genericAliasInstance(name))
 	end 'genericAlias'
@@ -3643,7 +3666,7 @@ export type ProgramSignatures
 	//
 	// It reads the `named` the SWEEP recorded and not a resolved type, and that is the whole mechanism: the
 	// sweep runs before any alias is interned, so an alias-typed slot arrives as a bare `named` carrying the
-	// name (this is the very property `declaredSlotType`'s three re-tags exist to undo). A slot that is
+	// name (this is the very property `declaredSlotType`'s re-tags exist to undo). A slot that is
 	// already a `genericInstance` was written with a spelling that is not an alias name at all, and there is
 	// nothing left in it to ask — which is correct, because `Array with __ManagedMemory` and
 	// `Array with ByteArray` ARE that one instance.
@@ -5680,6 +5703,17 @@ export type ProgramSignatures
 			return memoized
 		end 'alreadyDerived'
 
+		// ⚠⚠ **SEEDED WITH ITSELF BEFORE THE WALK — THE MEMO IS ALSO THIS WALK'S RE-ENTRY MARKER (A3e).**
+		// Every other element this walk descends into strips one nesting level off a type written in finite
+		// source, which is the argument `canonicalTupleStructRef` terminates on. A tuple-ALIAS element does
+		// not: `declaredSlotType` resolves it to its target, and an alias NAME can name the very tuple being
+		// canonicalized — `typealias P = (P, Int)` registers `__Tuple2.P.int`, whose element 0 is `named("P")`,
+		// whose target is `__Tuple2.P.int`. Re-entry therefore resolves that element to the SWEEP spelling it
+		// already carries, which is the answer it had before the element door could follow an alias at all, and
+		// the infinite type is refused downstream by the return check instead of by the stack running out. The
+		// real answer replaces the seed below, and a walk that never re-enters never reads it.
+		self.tupleCanonicalNames.upsert(name, value: name)
+
 		let layout = try self.structTypes.get(name) otherwise panic("ProgramSignatures.canonicalTupleName: `{String.from(name)}` is not registered — every tuple `structRef` in the compiler was minted by `internTupleType`, which registers the layout before it hands the name back")
 		var canonical = MaxonTypeArray.create()
 		for element in layout.fieldTypes 'eachElement'
@@ -5703,6 +5737,22 @@ export type ProgramSignatures
 	export function isTupleAlias(name ByteArray) returns bool
 		return self.tupleAliases.contains(name)
 	end 'isTupleAlias'
+
+	// ⭐⭐ **THE NAME A DECLARED POSITION'S `named` TYPE ACTUALLY DENOTES — a tuple typealias answered as the
+	// tuple's own canonical name, every other name as itself (A3e). THE one home of that resolution.**
+	//
+	// A tuple alias mints no identity, so `Pair` is not a registered anything: `containsStruct` says no,
+	// `enumOf` says no, and every classifier that reads a RAW layout field type (`typeIsManaged`, the drop
+	// callee, the clone strategy, the deep-clone gate) reached its `undeclared` arm on it. It arrives under
+	// the alias spelling exactly when the declaration SWEEP recorded the position before the alias's own file
+	// was walked — which is a fact about the filesystem's walk order and not about the program.
+	//
+	// ⚠ It is written ONCE and asked at each classifier rather than resolved into the layout, because those
+	// classifiers are deliberately allocation-free over the index's own interner (see `structFieldIsManaged`)
+	// and a rewritten layout would be a second copy of the declaration that could drift from the first.
+	export function denotedAggregateName(name ByteArray) returns ByteArray
+		return self.tupleAliasTarget(name) if self.isTupleAlias(name) else name
+	end 'denotedAggregateName'
 
 	// The tuple type `name` aliases, CANONICAL. Precondition: `isTupleAlias(name)`.
 	export function tupleAliasTarget(name ByteArray) returns ByteArray
@@ -7164,7 +7214,7 @@ export type ProgramSignatures
 	// FIELD and an `Array` ELEMENT both come out of, ADOPTED into `into` (the calling file's own artifact
 	// interner) exactly as `returnTypeOf` does.
 	//
-	// Every one of the three re-tags below exists for the same reason: the DECLARATION SWEEP that recorded
+	// Every re-tag below exists for the same reason: the DECLARATION SWEEP that recorded
 	// the slot ran before any alias was interned, so an alias-typed slot arrives as a bare `named` and the
 	// registries are the only thing that can say what it is. Leaving one unresolved is not a cosmetic loss
 	// — `named` reads as an INTEGER (`tagIsIntegral`), so a function slot admits an int, a generic-instance
@@ -7197,6 +7247,20 @@ export type ProgramSignatures
 			if self.isGenericAlias(name) 'genericAlias'
 				return MaxonType.genericInstance(self.genericAliasInstance(name))
 			end 'genericAlias'
+			// ⭐ A TUPLE-ALIAS-typed slot (`export var p as Pair`, `typealias Pair = (Int, Int)`) arrives as a
+			// `named` for the reason the arms around it do, and is re-tagged to the tuple's own `structRef`
+			// here — the read-side twin of `parseTypeReference`'s tuple-alias arm. A tuple alias mints NO
+			// identity of its own, so the tag carries the CANONICAL tuple name and a `Pair`-typed slot and a
+			// `(Int, Int)`-typed one are ONE type, which is the whole rule the alias form has.
+			//
+			// ⚠ **MEASURED, A3e** — without it, three of this door's readers answered by the filesystem's walk
+			// order: `var p as Pair` was `E3005 cannot assign 'struct' to variable 'p' of type 'int'`, a tuple
+			// SLOT spelled `(Pair, Int)` canonicalized to `__Tuple2.Pair.int` and read its own element as an
+			// int, and `Array with Pair` refused the `push` of a matching literal — each on a program the other
+			// walk order compiled and ran.
+			if self.isTupleAlias(name) 'tupleAlias'
+				return MaxonType.structRef(into.intern(self.tupleAliasTarget(name)))
+			end 'tupleAlias'
 			// ⭐ A RANGED FLOAT-ALIAS-typed slot (`export var mass as Weight`) arrives as a `named` for the
 			// same reason the two above do — the SWEEP recorded the declaration before any alias was known — and
 			// it is the one `named` whose VALUE is a genuine f64. Left overloaded it reads as an INTEGER
@@ -7457,7 +7521,10 @@ export type ProgramSignatures
 
 		// The three lookups below are keyed by the NAME, so they are interner-independent once it is in hand
 		// — `classifyUnionPayload`'s arrangement, for its reason.
-		let name = foreignNameOf(from, id: typeNameIdOf(fieldType))
+		// ⭐ A TUPLE-ALIAS field (`export var p as Pair`, A3e) resolves to the tuple's own name here, so the
+		// struct arm below answers it — a tuple IS a struct box, and left unresolved it read as a scalar, the
+		// field was dropped by nobody and the program exited 101 on the leak gate. See `denotedAggregateName`.
+		let name = self.denotedAggregateName(foreignNameOf(from, id: typeNameIdOf(fieldType)))
 		if self.structTypes.contains(name) 'namedStruct'
 			return true
 		end 'namedStruct'
@@ -7466,7 +7533,7 @@ export type ProgramSignatures
 			// alias was interned) — a generic instance is a heap box (an `Array`'s record + buffer, a `Box`'s
 			// box), so it is managed and dropped by the struct's cascade. Any other `named` (a ranged int/float
 			// alias) is a scalar and not managed.
-			return self.genericAliases.contains(name)
+			return self.isGenericAlias(name)
 		end 'notEnum'
 
 		let enumLayout = try self.enumTypes.get(name) otherwise panic("ProgramSignatures.typeIsManaged: enumTypes.contains({String.from(name)}) is true but get failed")
@@ -7553,7 +7620,10 @@ export type ProgramSignatures
 		if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
 			return false
 		end 'notManagedRef'
-		let name = try self.typeNames.nameOf(typeNameIdOf(type)) otherwise panic("ProgramSignatures.typeSupportsDeepClone: a managed type's id is not in this index's interner")
+		// Resolved through `denotedAggregateName`, the same door the clone strategy this gate admits reads
+		// (`managedFieldCloneStrategy`) — a name the gate and the strategy disagreed about would admit a clone
+		// nobody can emit.
+		let name = self.denotedAggregateName(try self.typeNames.nameOf(typeNameIdOf(type)) otherwise panic("ProgramSignatures.typeSupportsDeepClone: a managed type's id is not in this index's interner"))
 		if self.isGenericAlias(name) 'genericAlias'
 			return self.instanceSupportsDeepClone(self.genericAliasInstance(name), asElement: asElement, visited: visited)
 		end 'genericAlias'
@@ -7708,7 +7778,7 @@ export type ProgramSignatures
 			// sweep runs (see `internTupleType`). Every sweep-recorded type reaches a reader through here — a
 			// call RESULT via `adoptValueReturn`, a struct FIELD via `declaredSlotType` — so rewriting it once,
 			// here, is what makes `let t = makePair(…)` and a locally-built `(10, 32)` the same type. It is the
-			// same arrangement `declaredSlotType`'s three re-tags live under, one tier down.
+			// same arrangement `declaredSlotType`'s re-tags live under, one tier down.
 			structRef(id) gives MaxonType.structRef(into.intern(self.canonicalNameOfStruct(self.nameOfId(id))))
 			boolean to float gives t
 			exitCode to unresolved gives t

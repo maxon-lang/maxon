@@ -1,0 +1,327 @@
+// Test: sibling-files-tuple-alias-in-every-declared-position
+// --- file: aaa-alias.maxon
+export typealias Int = int(i64.min to i64.max)
+export typealias Pair = (Int, Int)
+export typealias PairArray = Array with Pair
+
+// --- file: zzz-main.maxon
+type Holder
+	export var p as Pair
+
+	export static function create() returns Holder
+		return Self{p: (2, 4)}
+	end 'create'
+
+	export function pair() returns Pair
+		return (6, 8)
+	end 'pair'
+end 'Holder'
+
+union Slot
+	empty
+	some(v Pair)
+end 'Slot'
+
+function make() returns Pair
+	return (10, 0)
+end 'make'
+
+function nested() returns (Pair, Int)
+	return ((12, 0), 0)
+end 'nested'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var xs = PairArray.create()
+	xs.push((14, 0))
+	let e = try xs.get(0) otherwise return 1
+	let n = nested()
+	let s = Slot.some((16, 0))
+	let sv = match s 'm'
+		empty gives 0
+		some(v) gives v.0
+	end 'm'
+	return (h.p.0 + h.p.1 + h.pair().0 + h.pair().1 + make().0 + n.0.0 + e.0 + sv) as ExitCode
+end 'main'
+---
+ExitCode: 72
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 2
+    arm64.movImm x20, 4
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 8]
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Holder.pair {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 6
+    arm64.movImm x20, 8
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @make {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 10
+    arm64.movImm x20, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @nested {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 12
+    arm64.movImm x20, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movImm x19, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 8]
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Holder.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __arr_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 14
+    arm64.movImm x22, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.storeBaseDispReg.word64 [x23 + 0], x21
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_push
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_get
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryok:
+    arm64.bl nested
+    arm64.movRegReg x22, x0
+    arm64.movImm x23, 16
+    arm64.movImm x24, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.storeBaseDispReg.word64 [x25 + 0], x23
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 0], x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.loadRegBaseDisp.word64 x1, [x25 + 0]
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.loadRegBaseDisp.word64 x1, [x25 + 8]
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.storeBaseDispReg.word64 [x23 + 8], x0
+    arm64.movRegReg x0, x25
+    arm64.bl __mm_decref
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x24, 0
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x23 + 8], x1
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.b matchcont
+  matchcont:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.add x25, x0, x1
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.pair
+    arm64.movRegReg x26, x0
+    arm64.loadRegBaseDisp.word64 x0, [x26 + 0]
+    arm64.add x25, x25, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.pair
+    arm64.movRegReg x27, x0
+    arm64.loadRegBaseDisp.word64 x0, [x27 + 8]
+    arm64.add x25, x25, x0
+    arm64.bl make
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x25, x1
+    arm64.loadRegBaseDisp.word64 x2, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.add x1, x1, x2
+    arm64.loadRegBaseDisp.word64 x2, [x21 + 0]
+    arm64.add x1, x1, x2
+    arm64.add x21, x1, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x27
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_Slot
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct___Tuple2.__Tuple2.int.int.int
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  matchdead:
+}

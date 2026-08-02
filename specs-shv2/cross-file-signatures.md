@@ -216,3 +216,169 @@ end 'main'
 ```maxoncstderr
 error E3004: <fragment>:3:9: call to undefined function 'bogus'
 ```
+
+<!-- test: cross-file-generic-alias-is-a-swept-value-type -->
+⭐ **A GENERIC-INSTANCE TYPEALIAS IS A SWEPT VALUE TYPE, NOT ONLY A CALL BASE (A3e).** `parseTypeReference`'s
+generic-alias arm carried a comment claiming the declaration sweep never reached it and that such an alias
+is "used only as a call BASE … never as a swept value type". Both halves were false: the sweep reads
+declared TYPES through that same routine, and this program spells `IntArray` at a struct FIELD, a METHOD
+return and a FREE-FUNCTION return — three positions the sweep records and the whole-program index stores.
+The alias file is walked FIRST here, so the sweep's `isGenericAlias` finds it.
+```maxon
+// --- file: aaa-alias.maxon
+export typealias Int = int(i64.min to i64.max)
+export typealias IntArray = Array with Int
+
+// --- file: zzz-main.maxon
+type Holder
+	export var nums as IntArray
+
+	export static function create() returns Holder
+		var a = IntArray.create()
+		a.push(12)
+		return Self{nums: a}
+	end 'create'
+
+	export function more() returns IntArray
+		var a = IntArray.create()
+		a.push(14)
+		return a
+	end 'more'
+end 'Holder'
+
+function make() returns IntArray
+	var a = IntArray.create()
+	a.push(16)
+	return a
+end 'make'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let x = try h.nums.get(0) otherwise return 1
+	let y = try h.more().get(0) otherwise return 1
+	let z = try make().get(0) otherwise return 1
+	return (x + y + z) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-generic-alias-is-a-swept-value-type-either-order -->
+⭐ **THE SAME PROGRAM WITH THE TWO FILES RENAMED, so the alias file is walked LAST.** Whether the arm fires
+during the sweep is decided by the filesystem walk's order, which `StdlibLoader` deliberately leaves
+unsorted. The arm is now gated on `ProgramSignatures.allFilesFolded`, so it fires in neither order and the
+sweep records `named("IntArray")` for both — repaired identically at every read door. The alias file
+declares nothing but aliases, so the two cases' emitted IR is the SAME text: a golden that drifts apart is
+the order dependence coming back.
+```maxon
+// --- file: aaa-main.maxon
+type Holder
+	export var nums as IntArray
+
+	export static function create() returns Holder
+		var a = IntArray.create()
+		a.push(12)
+		return Self{nums: a}
+	end 'create'
+
+	export function more() returns IntArray
+		var a = IntArray.create()
+		a.push(14)
+		return a
+	end 'more'
+end 'Holder'
+
+function make() returns IntArray
+	var a = IntArray.create()
+	a.push(16)
+	return a
+end 'make'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let x = try h.nums.get(0) otherwise return 1
+	let y = try h.more().get(0) otherwise return 1
+	let z = try make().get(0) otherwise return 1
+	return (x + y + z) as ExitCode
+end 'main'
+
+// --- file: zzz-alias.maxon
+export typealias Int = int(i64.min to i64.max)
+export typealias IntArray = Array with Int
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-function-alias-is-a-swept-value-type -->
+⭐ **THE FUNCTION-ALIAS ARM IS THE SAME SHAPE (A3e).** `functionTypeAliases` is folded per FILE, so a
+function alias declared in a sibling file walked earlier is registered while a later file is still being
+swept — the arm's own comment claimed the registry "returns `undeclared`" throughout the sweep, which is
+true only within one file. The alias file is walked FIRST here; its twin below swaps them.
+```maxon
+// --- file: aaa-alias.maxon
+export typealias Int = int(i64.min to i64.max)
+export typealias UnaryOp = function(Int) returns Int
+
+// --- file: zzz-main.maxon
+function twice(n Int) returns Int
+	return n * 2
+end 'twice'
+
+type Holder
+	export var op as UnaryOp
+
+	export static function create() returns Holder
+		return Self{op: twice}
+	end 'create'
+end 'Holder'
+
+function pick() returns UnaryOp
+	return twice
+end 'pick'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let f = pick()
+	return (h.op(7) + f(14)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-function-alias-is-a-swept-value-type-either-order -->
+⭐ **THE SAME PROGRAM WITH THE TWO FILES RENAMED.** Same gate, same reason, and the same golden-drift
+tripwire: the alias file declares nothing but aliases, so this case's IR must read identically to its twin.
+```maxon
+// --- file: aaa-main.maxon
+function twice(n Int) returns Int
+	return n * 2
+end 'twice'
+
+type Holder
+	export var op as UnaryOp
+
+	export static function create() returns Holder
+		return Self{op: twice}
+	end 'create'
+end 'Holder'
+
+function pick() returns UnaryOp
+	return twice
+end 'pick'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let f = pick()
+	return (h.op(7) + f(14)) as ExitCode
+end 'main'
+
+// --- file: zzz-alias.maxon
+export typealias Int = int(i64.min to i64.max)
+export typealias UnaryOp = function(Int) returns Int
+```
+```exitcode
+42
+```

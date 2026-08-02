@@ -908,3 +908,186 @@ merged a.1=2 fallback m.1=2 binding g.1=55 z=0
 ```exitcode
 68
 ```
+
+### A tuple typealias across a FILE BOUNDARY, in BOTH orders (A3e)
+
+⭐⭐ **A TUPLE ALIAS MINTS NO IDENTITY OF ITS OWN, SO EVERY DECLARED POSITION SPELLED WITH ONE HAS TO BE
+RESOLVED THROUGH THE ALIAS REGISTRY — AND THAT REGISTRY HAS A FILLING ORDER.** The tolerant declaration
+sweep reads a struct FIELD and a RETURN clause, and the sweep's copy is the one the whole-program index
+stores. Asked there, "is `Pair` a tuple alias?" answers *how far the sweep had got*: the alias is
+registered the moment its own file is walked, so a sibling file walked BEFORE it records the position as a
+bare `named("Pair")` and one walked AFTER records the tuple's `structRef`.
+
+⚠ **MEASURED, A3e** — five doors answered differently in the two walk orders, each accepting the program
+when the alias file was walked first and refusing it when it was walked last:
+
+| door | alias file walked FIRST | alias file walked LAST (before A3e) |
+|---|---|---|
+| `var p as Pair` | ran | `E3005 cannot assign 'struct' to variable 'p' of type 'int'` |
+| `returns Pair` | ran | `E3011 Unknown type 'Pair'` |
+| `returns Pair` on a METHOD | ran | `E3011 Unknown type 'Pair'` |
+| `(Pair, Int)` | ran | `E2015 … '__Tuple2.Pair.int._0' … declared 'int' and not a struct` |
+| `Array with Pair` | ran | `E3005 cannot assign 'struct' to variable 'push' of type 'int'` |
+| `some(v Pair)` union payload | ran | `E3011 Unknown type 'Pair'` |
+| `var p as Pair`'s DROP | ran | leaked — the field was dropped by nobody, exit 101 |
+
+⚠ **THE PAIR BELOW RENAMES THE TWO FILES, IT DOES NOT PIN THE WALK.** Nothing in a spec can pin it: the
+loader walks whatever `Directory.list` hands back and deliberately does not sort (`StdlibLoader`'s header,
+user ruling 2026-07-24), and that answer is a property of the staging directory's on-disk state, not of the
+names — MEASURED, the first case here was the REFUSED one while the same two files copied into a fresh
+directory refused the second. So the pair is a two-ticket lottery on a program that must not care, and the
+fix is what makes it not care; writing it once would have been a bet on the ticket that happened to win.
+
+A `named` that the sweep left under an alias spelling is repaired at the READ door — a declared slot's type
+(`ProgramSignatures.declaredSlotType`), a call result (`Parser.resolveNamedAlias`), and the four classifiers
+that read a RAW layout field type, through the one resolution `ProgramSignatures.denotedAggregateName`
+names. That is exactly the arrangement a function alias and a generic-instance alias already had; the tuple
+alias was the one kind no classifier resolved, which is why its `named` spelling was a wrong answer rather
+than merely a less resolved one.
+
+⚠ **`parseTypeReference`'s tuple-alias arm is NOT gated on `allFilesFolded` — the three sibling arms are.**
+`recordTupleAlias` writes DURING the walk rather than at `foldFile`, so for a tuple alias the SWEEP's
+resolved answer is the common case; gating it moves every `Array with <a tuple alias>` onto the bare `named`
+spelling, which seven index doors read RAW off the stored generic-instance ARGUMENT. Measured, it changed
+this file's `value-tuple-escaping-into-array-stays-heap` element size and the answer of
+`array-of-managed-element-tuples-drops-each`.
+
+<!-- test: sibling-files-tuple-alias-in-every-declared-position -->
+
+⭐ Every position a tuple alias can hold that the declaration SWEEP reads: a struct field (whose drop
+cascade must reach it), a method return, a free-function return, a tuple SLOT, an `Array` element and a
+union payload. The alias file declares nothing but aliases, so the two cases emit the same functions and
+their goldens must read alike. Returns 2 + 4 + 6 + 8 + 10 + 12 + 14 + 16 = 72.
+```maxon
+// --- file: aaa-alias.maxon
+export typealias Int = int(i64.min to i64.max)
+export typealias Pair = (Int, Int)
+export typealias PairArray = Array with Pair
+
+// --- file: zzz-main.maxon
+type Holder
+	export var p as Pair
+
+	export static function create() returns Holder
+		return Self{p: (2, 4)}
+	end 'create'
+
+	export function pair() returns Pair
+		return (6, 8)
+	end 'pair'
+end 'Holder'
+
+union Slot
+	empty
+	some(v Pair)
+end 'Slot'
+
+function make() returns Pair
+	return (10, 0)
+end 'make'
+
+function nested() returns (Pair, Int)
+	return ((12, 0), 0)
+end 'nested'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var xs = PairArray.create()
+	xs.push((14, 0))
+	let e = try xs.get(0) otherwise return 1
+	let n = nested()
+	let s = Slot.some((16, 0))
+	let sv = match s 'm'
+		empty gives 0
+		some(v) gives v.0
+	end 'm'
+	return (h.p.0 + h.p.1 + h.pair().0 + h.pair().1 + make().0 + n.0.0 + e.0 + sv) as ExitCode
+end 'main'
+```
+```exitcode
+72
+```
+
+<!-- test: sibling-files-tuple-alias-in-every-declared-position-either-order -->
+
+⭐ **THE IDENTICAL PROGRAM, THE TWO FILES RENAMED.** Before A3e one of this pair was five separate
+refusals of the program the other compiled and ran — which one depended on the staging directory. Both
+halves are kept because half a pair is just the ticket that happened to win.
+```maxon
+// --- file: aaa-main.maxon
+type Holder
+	export var p as Pair
+
+	export static function create() returns Holder
+		return Self{p: (2, 4)}
+	end 'create'
+
+	export function pair() returns Pair
+		return (6, 8)
+	end 'pair'
+end 'Holder'
+
+union Slot
+	empty
+	some(v Pair)
+end 'Slot'
+
+function make() returns Pair
+	return (10, 0)
+end 'make'
+
+function nested() returns (Pair, Int)
+	return ((12, 0), 0)
+end 'nested'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var xs = PairArray.create()
+	xs.push((14, 0))
+	let e = try xs.get(0) otherwise return 1
+	let n = nested()
+	let s = Slot.some((16, 0))
+	let sv = match s 'm'
+		empty gives 0
+		some(v) gives v.0
+	end 'm'
+	return (h.p.0 + h.p.1 + h.pair().0 + h.pair().1 + make().0 + n.0.0 + e.0 + sv) as ExitCode
+end 'main'
+
+// --- file: zzz-alias.maxon
+export typealias Int = int(i64.min to i64.max)
+export typealias Pair = (Int, Int)
+export typealias PairArray = Array with Pair
+```
+```exitcode
+72
+```
+
+<!-- test: error.self-referential-tuple-alias -->
+
+⚠ **THE TERMINATION CASE FOR THE READ-DOOR REPAIR.** Resolving a tuple-alias element follows the alias to
+its target, and an alias NAME — unlike the nested tuple names the canonicalizing walk otherwise strips a
+level off at every step — can name the very tuple being canonicalized. `typealias P = (P, Int)` registers
+`__Tuple2.P.int` whose element 0 is `named("P")` whose target is `__Tuple2.P.int`. It is refused, and the
+point of the case is that it is refused rather than recursing until the stack ends.
+
+⚠ The declared name in the message is a nest deeper than the source wrote, and that predates A3e: each
+real-parse read of a self-naming alias re-registers it one level further out, so the spelling grows with
+the number of reads. It is DETERMINISTIC and the program is illegal either way; the case pins it so that a
+change in the termination rule cannot pass unnoticed.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias P = (P, Int)
+
+function make() returns P
+	return ((1, 2), 3)
+end 'make'
+
+function main() returns ExitCode
+	let t = make()
+	return t.1 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:2: Cannot return '__Tuple2.__Tuple2.int.int.int' from function declared to return '__Tuple2.__Tuple2.__Tuple2.__Tuple2.__Tuple2.__Tuple2.P.Int.int.int.int.int.int'
+```

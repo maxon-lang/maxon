@@ -12130,47 +12130,86 @@ export type Parser
 			// (the index is complete), the read-side twin of the top-level generic-alias arm below — so the field
 			// type is a genericInstance TypeResolution leaves concrete, not a `named` it would reject as E3011. A
 			// RANGED inner alias stays `named("Wrapper.Idx")` (TypeResolution erases it to `integer`, and the
-			// method-return retype re-qualifies it at the call site). During the SWEEP `isGenericAlias` answers no
-			// for both, so both stay `named` — harmless, as the sweep's field type is re-tagged at every read.
+			// method-return retype re-qualifies it at the call site). During the SWEEP both stay `named`, on the
+			// `allFilesFolded` gate the block below argues for — and the sweep's field type is re-tagged at
+			// every read. ⚠ Here the gate is a RESTATEMENT rather than a change: an inner alias is folded with
+			// its enclosing type at `foldFile`, i.e. when the file it is DECLARED IN ends, and this arm only
+			// fires inside that same type's body — so the registry already answered no throughout the sweep of
+			// every WELL-FORMED program. What the gate removes is the one way it could have answered yes: a
+			// SECOND file declaring a type of the same name, which the tolerant sweep folds without complaint
+			// and the real parse rejects later.
 			if self.enclosingInnerAliases.contains(tok.value) 'innerAlias'
 				let qualifiedInner = joinQualifiedName(self.enclosingType, member: tok.value)
-				if self.signatures.isGenericAlias(qualifiedInner) 'genericInnerAlias'
+				if self.signatures.allFilesFolded and self.signatures.isGenericAlias(qualifiedInner) 'genericInnerAlias'
 					return MaxonType.genericInstance(self.signatures.genericAliasInstance(qualifiedInner))
 				end 'genericInnerAlias'
 				return MaxonType.named(self.artifact.typeNames.intern(qualifiedInner))
 			end 'innerAlias'
 
-			// A GENERIC-INSTANCE ALIAS (P1.6-A) — `IntBox` where `typealias IntBox = Box with Integer`.
-			// Resolved to `genericInstance(giid)` here in the REAL parse (the whole-program index is
-			// complete), the read-side twin of the function-alias arm below. During the SWEEP the index is
-			// still building, so `isGenericAlias` answers no and the reference stays `named` — harmless,
-			// because a generic alias is used only as a call BASE (resolved through `parseQualifiedCall`,
-			// which reads the completed index) at this slice, never as a swept value type.
-			if self.signatures.isGenericAlias(tok.value) 'genericAlias'
-				return MaxonType.genericInstance(self.signatures.genericAliasInstance(tok.value))
-			end 'genericAlias'
+			// ⭐⭐ **THE PER-FILE ALIAS REGISTRIES ARE READ IN THE REAL PARSE ONLY, AND `allFilesFolded` IS WHAT
+			// MAKES THAT TRUE RATHER THAN MERELY CLAIMED (A3e).** Both arms below ask a registry the declaration
+			// SWEEP is still filling, and the sweep reaches both: `foldDeclaredSignaturesInto` parses no BODY,
+			// but it reads declared TYPES — a struct field, a return clause, a generic alias's arguments —
+			// through this very routine, holding the `ProgramSignatures` it is filling (`Queries.foldOneFileInto`).
+			//
+			// ⚠ **THE ANSWER WAS THEREFORE A PROPERTY OF THE DISK, NOT OF THE PROGRAM.** Both registries are
+			// written by `foldFile`, which runs when a file's whole token walk ENDS — so an alias declared in
+			// the file being swept always reads as undeclared (the arm's original comment), but one declared in
+			// a file the walk reached EARLIER is already registered. The walk's order is the filesystem's and
+			// the loader deliberately does not sort it (`StdlibLoader`'s header, user ruling 2026-07-24).
+			//
+			// ⇒ Gated, the sweep answers from the TOKENS ALONE and records the same bare `named` whatever the
+			// walk's order — which is the answer the SAME-FILE case already had, so the gate deletes the
+			// cross-file exception rather than introducing a new path. A swept `named` is exactly what the READ
+			// doors exist to repair (`ProgramSignatures.declaredSlotType` for a field / array element / tuple
+			// element, `resolveNamedAlias` for a call result), and repairing it is now the only route rather
+			// than one of two that happened to agree.
+			//
+			// ⚠ **MEASURED, A3e** — the same two-file program staged in both walk orders, compiled with the
+			// same output path and compared BYTE FOR BYTE: a generic alias and a function alias at a struct
+			// field, a method return and a free return were already byte-identical, so what the gate removes is
+			// a structural coincidence rather than a wrong answer. It is a coincidence that had already been
+			// spent once: this arm's comment asserted the sweep never reached it and that a generic alias is
+			// "never a swept value type", and both halves were false.
+			//
+			// ⚠ **THE TUPLE-ALIAS ARM BELOW IS DELIBERATELY OUTSIDE THIS GATE — the asymmetry is in WHEN the
+			// registry is written, and it is measured.** `recordTupleAlias` writes DURING the walk, not at
+			// `foldFile`, so for a tuple alias the sweep's RESOLVED answer is the common case and the bare
+			// `named` is the rare cross-file one. Gating it would move every `Array with <a tuple alias>` onto
+			// that rare spelling, and a generic instance's stored ARGUMENT is read RAW by seven index doors
+			// (element size, mangled name, canonical name, owned-ness, the instantiation-kind gates) — measured,
+			// it changed the emitted element size in `tuples/value-tuple-escaping-into-array-stays-heap` and
+			// the answer of `tuples/array-of-managed-element-tuples-drops-each`. Its cross-file order dependence
+			// is real and is fixed at the READ doors instead; see `ProgramSignatures.declaredSlotType`.
+			//
+			// ⚠ Every OTHER reader of these registries runs in the real parse only — a call base, a cast
+			// target, an instantiation check — so it needs no gate; a gate there would assert something that
+			// cannot be false.
+			if self.signatures.allFilesFolded 'wholeProgramAliasRegistries'
+				// A GENERIC-INSTANCE ALIAS (P1.6-A) — `IntBox` where `typealias IntBox = Box with Integer`.
+				// It resolves to `genericInstance(giid)`, the read-side twin of the function-alias arm below.
+				if self.signatures.isGenericAlias(tok.value) 'genericAlias'
+					return MaxonType.genericInstance(self.signatures.genericAliasInstance(tok.value))
+				end 'genericAlias'
+
+				// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one (P1.5-A1) — so
+				// a param/field/return declared with a function alias carries the `function` tag, which is what
+				// makes a function value assignable to it and an indirect call reach it.
+				if self.signatures.isFunctionAlias(tok.value) 'functionAlias'
+					return MaxonType.function(self.artifact.typeNames.intern(tok.value))
+				end 'functionAlias'
+			end 'wholeProgramAliasRegistries'
 
 			// A TUPLE typealias (P1.10) — `Pair` where `typealias Pair = (Num, Num)`. It resolves STRAIGHT
 			// THROUGH to the tuple's own `structRef`, minting no identity of its own, which is what makes a
-			// `Pair`-typed slot and a `(Num, Num)`-typed one the same type. The read canonicalizes
-			// (`tupleAliasTarget`), so an alias the SWEEP recorded under the source spelling and one the real
-			// parse recorded canonically answer alike.
+			// `Pair`-typed slot and a `(Num, Num)`-typed one the same type. `tupleAliasTarget` canonicalizes,
+			// so a target the SWEEP registered under the source spelling answers under the canonical one.
+			// Ungated, for the reason the block above states.
 			if self.signatures.isTupleAlias(tok.value) 'tupleAlias'
 				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(tok.value)))
 			end 'tupleAlias'
 
-			let id = self.artifact.typeNames.intern(tok.value)
-			// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one (P1.5-A1) — so
-			// a param/field/return declared with a function alias carries the `function` tag, which is what
-			// makes a function value assignable to it and an indirect call reach it. The whole-program
-			// signature index has the answer here in the REAL parse (the sweep is complete); during the
-			// SWEEP itself `functionAliasOf` is still being built and returns `undeclared`, leaving the raw
-			// scanned record a `named` — which the READ sites (call-result / field-load typing) functionize.
-			if self.signatures.isFunctionAlias(tok.value) 'functionAlias'
-				return MaxonType.function(id)
-			end 'functionAlias'
-
-			return MaxonType.named(id)
+			return MaxonType.named(self.artifact.typeNames.intern(tok.value))
 		end 'named'
 		if self.at(TokenKind.int) 'primInt'
 			try self.consume(TokenKind.int)
@@ -12294,10 +12333,11 @@ export type Parser
 	// by the real parse), so this catches only the sweep-sourced types. A `named` that is neither a function
 	// alias (`function`) NOR a generic-instance alias (`genericInstance(gid)`, P1.6-B2 — `returns StrBox`, so
 	// `let b = make()` binds a real generic instance with its type-arg managed drop, not an opaque `named` a
-	// field access rejects), and every non-`named` type, pass through untouched. The SWEEP records a return
-	// type before the index knows its aliases, so both arrive here `named`; a name is a struct, a float
-	// alias, a function alias, a generic alias or a ranged int — NEVER two — so ONE `nameOf` decides which,
-	// idempotent and foldable alongside `resolveNamedStruct`/`resolveFloatAliasType`.
+	// field access rejects) NOR a TUPLE alias (`structRef`, A3e), and every non-`named` type, pass through
+	// untouched. The SWEEP records a return type before the index knows its aliases, so all three arrive here
+	// `named`; a name is a struct, a float alias, a function alias, a generic alias, a tuple alias or a ranged
+	// int — NEVER two — so ONE `nameOf` decides which, idempotent and foldable alongside
+	// `resolveNamedStruct`/`resolveFloatAliasType`.
 	function resolveNamedAlias(t MaxonType) returns MaxonType
 		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
 			return t
@@ -12311,6 +12351,13 @@ export type Parser
 		if self.signatures.isGenericAlias(name) 'genericAlias'
 			return MaxonType.genericInstance(self.signatures.genericAliasInstance(name))
 		end 'genericAlias'
+		// ⭐ A TUPLE-ALIAS return (`returns Pair`) — the `named` the sweep recorded resolved to the tuple's own
+		// CANONICAL `structRef`, so `let t = make()` binds a struct the caller adopts and `t.0` resolves.
+		// ⚠ MEASURED, A3e: without it the very same program was `E3011 Unknown type 'Pair'` whenever the walk
+		// reached the alias's file after the caller's, and ran when it reached it first.
+		if self.signatures.isTupleAlias(name) 'tupleAlias'
+			return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(name)))
+		end 'tupleAlias'
 		return t
 	end 'resolveNamedAlias'
 
