@@ -832,12 +832,25 @@ function writeWasmName(buf ByteArray, name ByteArray)
 	buf.append(name)
 end 'writeWasmName'
 
-// Write a section: id byte, then the ULEB128 byte length of the payload, then the payload.
-function writeSectionRaw(module ByteArray, sectionId MachineWord, contents ByteArray)
-	module.push(sectionId)
-	writeUleb128(module, value: contents.count() as Wasm32Index)
-	module.append(contents)
-end 'writeSectionRaw'
+// ONE id-tagged, length-prefixed blob: the id byte, then the ULEB128 byte length of the payload, then
+// the payload.
+//
+// ⚠ **THIS IS THE FRAMING AT BOTH LEVELS — a wasm SECTION and a "name"-section SUBSECTION — and it is
+// ONE function because it is ONE wire format**, not two that happen to agree. The name section's
+// subsections reuse the section framing by design (WebAssembly Name Section spec), so a second copy
+// would be this project's signature bug at the byte level: change the length to a fixed width here and
+// the other copy keeps ULEB, with no compile error and no validator complaint — just a custom section
+// that no reader can walk, on every module the compiler emits.
+//
+// The id is deliberately NOT typed apart per level. Both ids are small integers with no type to tell
+// them apart, so a separate subsection writer taking the same `MachineWord` would have caught nothing
+// it claimed to; the levels are kept honest by the two call sites naming their own `wasmSection*` /
+// `wasmNameSubsection*` constants, which is where the distinction actually lives.
+function writeIdTaggedBlob(buf ByteArray, id MachineWord, payload ByteArray)
+	buf.push(id)
+	writeUleb128(buf, value: payload.count() as Wasm32Index)
+	buf.append(payload)
+end 'writeIdTaggedBlob'
 
 // Write a constant OFFSET EXPRESSION — `i32.const <offset>` (SLEB immediate) terminated by `end` — the
 // active-segment offset both a data segment and an element segment carry (each lays its bytes at this
@@ -1139,7 +1152,7 @@ export type WasmModuleBuilder
 			contents.append(t)
 		end 'each'
 
-		writeSectionRaw(module, sectionId: wasmSectionType, contents: contents)
+		writeIdTaggedBlob(module, id: wasmSectionType, payload: contents)
 	end 'emitTypeSection'
 
 	function emitImportSection(module ByteArray)
@@ -1160,7 +1173,7 @@ export type WasmModuleBuilder
 			writeUleb128(contents, value: typeIdx)
 		end 'each'
 
-		writeSectionRaw(module, sectionId: wasmSectionImport, contents: contents)
+		writeIdTaggedBlob(module, id: wasmSectionImport, payload: contents)
 	end 'emitImportSection'
 
 	function emitFunctionSection(module ByteArray)
@@ -1175,7 +1188,7 @@ export type WasmModuleBuilder
 			writeUleb128(contents, value: typeIdx)
 		end 'each'
 
-		writeSectionRaw(module, sectionId: wasmSectionFunction, contents: contents)
+		writeIdTaggedBlob(module, id: wasmSectionFunction, payload: contents)
 	end 'emitFunctionSection'
 
 	// The funcref table (id 4) the function-value feature needs: ONE table of `funcref`, sized to hold
@@ -1193,7 +1206,7 @@ export type WasmModuleBuilder
 		contents.push(wasmLimitsFlagMin)
 		writeUleb128(contents, value: self.totalFunctionCount())
 
-		writeSectionRaw(module, sectionId: wasmSectionTable, contents: contents)
+		writeIdTaggedBlob(module, id: wasmSectionTable, payload: contents)
 	end 'emitTableSection'
 
 	// The active element segment (id 9) that fills the funcref table: ONE segment at table offset 0 listing
@@ -1216,7 +1229,7 @@ export type WasmModuleBuilder
 			writeUleb128(contents, value: funcIdx as Wasm32Index)
 		end 'each'
 
-		writeSectionRaw(module, sectionId: wasmSectionElement, contents: contents)
+		writeIdTaggedBlob(module, id: wasmSectionElement, payload: contents)
 	end 'emitElementSection'
 
 	function emitMemorySection(module ByteArray)
@@ -1229,7 +1242,7 @@ export type WasmModuleBuilder
 		contents.push(wasmLimitsFlagMin)
 		writeUleb128(contents, value: self.memoryMinPages)
 
-		writeSectionRaw(module, sectionId: wasmSectionMemory, contents: contents)
+		writeIdTaggedBlob(module, id: wasmSectionMemory, payload: contents)
 	end 'emitMemorySection'
 
 	function emitExportSection(module ByteArray)
@@ -1246,7 +1259,7 @@ export type WasmModuleBuilder
 			writeUleb128(contents, value: entry.index)
 		end 'each'
 
-		writeSectionRaw(module, sectionId: wasmSectionExport, contents: contents)
+		writeIdTaggedBlob(module, id: wasmSectionExport, payload: contents)
 	end 'emitExportSection'
 
 	function emitCodeSection(module ByteArray)
@@ -1262,7 +1275,7 @@ export type WasmModuleBuilder
 			contents.append(body)
 		end 'each'
 
-		writeSectionRaw(module, sectionId: wasmSectionCode, contents: contents)
+		writeIdTaggedBlob(module, id: wasmSectionCode, payload: contents)
 	end 'emitCodeSection'
 
 	// The data section: a count, then each segment (the flag/memory-0 byte, an `i32.const <base>`
@@ -1284,7 +1297,7 @@ export type WasmModuleBuilder
 			contents.append(segment.bytes)
 		end 'each'
 
-		writeSectionRaw(module, sectionId: wasmSectionData, contents: contents)
+		writeIdTaggedBlob(module, id: wasmSectionData, payload: contents)
 	end 'emitDataSection'
 
 	// The "name" custom section — the module's debug name and one name per function, in index order.
@@ -1299,7 +1312,7 @@ export type WasmModuleBuilder
 
 		var moduleNamePayload = ByteArray.create()
 		writeWasmName(moduleNamePayload, name: WasmModuleDebugName)
-		writeNameSubsection(contents, subsectionId: wasmNameSubsectionModule, payload: moduleNamePayload)
+		writeIdTaggedBlob(contents, id: wasmNameSubsectionModule, payload: moduleNamePayload)
 
 		// The namemap: a count of PAIRS, then each `(funcIdx, name)`. The count is the array's own —
 		// see `funcDebugNames` for why it is not an arithmetic sum of the bands.
@@ -1309,18 +1322,8 @@ export type WasmModuleBuilder
 			writeUleb128(namemap, value: iter.index() as Wasm32Index)
 			writeWasmName(namemap, name: name)
 		end 'eachName'
-		writeNameSubsection(contents, subsectionId: wasmNameSubsectionFunction, payload: namemap)
+		writeIdTaggedBlob(contents, id: wasmNameSubsectionFunction, payload: namemap)
 
-		writeSectionRaw(module, sectionId: wasmSectionCustom, contents: contents)
+		writeIdTaggedBlob(module, id: wasmSectionCustom, payload: contents)
 	end 'emitNameSection'
 end 'WasmModuleBuilder'
-
-// One name-section subsection: its id byte, the ULEB byte length of its payload, then the payload.
-// The same shape as `writeSectionRaw` one level down, and written separately for that reason — a
-// subsection id is not a section id, and folding the two would let a section id be passed where a
-// subsection id belongs with nothing to catch it.
-function writeNameSubsection(buf ByteArray, subsectionId MachineWord, payload ByteArray)
-	buf.push(subsectionId)
-	writeUleb128(buf, value: payload.count() as Wasm32Index)
-	buf.append(payload)
-end 'writeNameSubsection'
