@@ -1,0 +1,15 @@
+// Test: error.self-referential-tuple-alias
+typealias Int = int(i64.min to i64.max)
+typealias P = (P, Int)
+
+function make() returns P
+	return ((1, 2), 3)
+end 'make'
+
+function main() returns ExitCode
+	let t = make()
+	return t.1 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:6:2: Cannot return '__Tuple2.__Tuple2.int.int.int' from function declared to return '__Tuple2.__Tuple2.__Tuple2.__Tuple2.__Tuple2.__Tuple2.P.Int.int.int.int.int.int'
