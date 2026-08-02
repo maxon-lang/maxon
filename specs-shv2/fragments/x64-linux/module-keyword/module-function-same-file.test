@@ -1,0 +1,34 @@
+// Test: module-function-same-file
+// --- file: feature/helper.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function helper() returns Integer
+	return 42
+end 'helper'
+
+// --- file: feature/main.maxon
+function main() returns ExitCode
+	return helper()
+end 'main'
+---
+ExitCode: 42
+---
+func @helper {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect helper
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

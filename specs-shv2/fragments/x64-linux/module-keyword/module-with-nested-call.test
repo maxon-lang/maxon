@@ -1,0 +1,53 @@
+// Test: module-with-nested-call
+// --- file: feature/inner.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function inner() returns Integer
+	return 22
+end 'inner'
+
+// --- file: feature/outer.maxon
+typealias Int = int(i64.min to i64.max)
+
+module function outer() returns Int
+	return inner() + 20
+end 'outer'
+
+// --- file: feature/main.maxon
+function main() returns ExitCode
+	return outer()
+end 'main'
+---
+ExitCode: 42
+---
+func @inner {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 22
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect outer
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @outer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect inner
+    x64.leaRegRegImm32 r8, r8, 20
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
