@@ -2159,25 +2159,43 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     // Register deferred expression vars/lets as globals (initialized at runtime in main)
-    foreach (var deferred in _deferredExprVars) {
+    RegisterDeferredExprGlobals(module, _deferredExprVars, isMutable: true);
+    RegisterDeferredExprGlobals(module, _deferredExprLets, isMutable: false);
+  }
+
+  /// <summary>
+  /// Reserve a writable `.data` slot and register the metadata for every top-level binding whose
+  /// initializer runs at startup in `__module_init` rather than folding to a constant attribute.
+  /// The slot always starts null — the initializer's result is stored into it before `main`.
+  /// </summary>
+  private void RegisterDeferredExprGlobals(IrModule<MaxonOp> module, List<DeferredDecl> deferredDecls, bool isMutable) {
+    foreach (var deferred in deferredDecls) {
       var typeName = InferDeferredTypeName(deferred);
       module.Globals.Add(new IrGlobal(deferred.Name, IrType.I64, new IntegerAttr(0, IrType.I64)));
-      var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, true, TypeName: typeName,
-        IsExported: deferred.IsExported, IsModuleVisible: deferred.IsModuleVisible, SourceFilePath: _sourceFilePath);
-      _globalVars[deferred.Name] = gvarInfo;
-      module.GlobalVarInfos[deferred.Name] = gvarInfo;
-      RegisterGlobalVarVisibility(module, deferred);
-    }
-    foreach (var deferred in _deferredExprLets) {
-      var typeName = InferDeferredTypeName(deferred);
-      module.Globals.Add(new IrGlobal(deferred.Name, IrType.I64, new IntegerAttr(0, IrType.I64)));
-      var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, false, TypeName: typeName,
-        IsExported: deferred.IsExported, IsModuleVisible: deferred.IsModuleVisible, SourceFilePath: _sourceFilePath);
+      var gvarInfo = RuntimeInitGlobalMetadata(typeName, isMutable, isLazy: false) with {
+        IsExported = deferred.IsExported,
+        IsModuleVisible = deferred.IsModuleVisible,
+        SourceFilePath = _sourceFilePath
+      };
       _globalVars[deferred.Name] = gvarInfo;
       module.GlobalVarInfos[deferred.Name] = gvarInfo;
       RegisterGlobalVarVisibility(module, deferred);
     }
   }
+
+  /// <summary>
+  /// The metadata for a global whose initializer runs at startup rather than folding to a `.data`
+  /// attribute — a top-level binding in `__module_init`, or a lazy static field. Both slots hold a
+  /// managed record, and the only question is which SHAPE: a boxed union is `Enum`-kinded so that
+  /// reads of it produce a MaxonEnum and `match` can see its cases, while everything else runtime-
+  /// initialized is struct-shaped (struct, String, Array, Map). Decided once for both callers,
+  /// because a static field that answered `Struct` for a union rejected its own assignments with
+  /// "cannot assign a value of type 'enum' ... which holds 'struct'".
+  /// </summary>
+  private GlobalVarMetadata RuntimeInitGlobalMetadata(string typeName, bool isMutable, bool isLazy) =>
+    _typeRegistry.TryGetValue(typeName, out var declType) && declType is IrEnumType { IsHeapAllocated: true }
+      ? new GlobalVarMetadata(MaxonValueKind.Enum, isMutable, EnumTypeName: typeName, IsLazy: isLazy)
+      : new GlobalVarMetadata(MaxonValueKind.Struct, isMutable, TypeName: typeName, IsLazy: isLazy);
 
   // Records the visibility tier (file-scoped, module-visible, or exported) for a
   // pre-scanned top-level var/let into the module-level dictionaries that drive
@@ -2242,13 +2260,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return true;
     }
     // Type.method() calls (e.g., CategoryLevelMap.create()) are complex runtime expressions.
-    // Exclude enum.case references (e.g., Color.green) which are constants.
+    // A SCALAR enum's case reference (e.g. Color.green) is excluded: it is a bare
+    // discriminant with a compile-time value, so it stays a constant. A BOXED union's case is
+    // not — `IsHeapAllocated` types have no representation as a `.data` attribute, and both
+    // `Hold.unowned` and `Hold.owned(5)` allocate the same `[tag, payload...]` record. Folding
+    // one to its ordinal left the slot initialized to an integer while every later assignment
+    // stored a pointer, which is how a union global silently returned the wrong case.
     if (_tokens[exprStart].Type == TokenType.Identifier
         && exprStart + 2 < _tokens.Count
         && _tokens[exprStart + 1].Type == TokenType.Dot
         && _tokens[exprStart + 2].Type == TokenType.Identifier
         && _typeRegistry.TryGetValue(_tokens[exprStart].Value, out var initType)
-        && initType is not IrEnumType) {
+        && (initType is not IrEnumType enumInitType || enumInitType.IsHeapAllocated)) {
       return true;
     }
     return false;
@@ -2633,15 +2656,37 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     var exprResult = ParseExpression();
     var value = ResolveExprValue(exprResult);
-    _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Struct));
 
-    if (value is MaxonStruct ms)
-      _globalVars[name] = new GlobalVarMetadata(MaxonValueKind.Struct, isMutable, TypeName: ms.TypeName);
-    else if (value is MaxonEnum me)
-      _globalVars[name] = new GlobalVarMetadata(MaxonValueKind.Enum, isMutable, EnumTypeName: me.TypeName);
+    // Every runtime-initialized global holds a managed record, and all but one shape of them is
+    // struct-like (struct, String, Array, Map) — a boxed union is the exception, and it must be
+    // Enum-kinded so `match` reads it as cases rather than as an opaque struct pointer.
+    // `RegisterDeferredExprGlobals` already inferred that from the initializer's leading tokens;
+    // the parsed value is the same fact known exactly, so it REFINES the registration rather than
+    // replacing it — the visibility tier and declaring file were recorded there and are not
+    // re-derivable here, and dropping them desynchronized `_globalVars` from
+    // `module.GlobalVarInfos`, which then disagreed about whether the slot held an enum or a struct.
+    if (value is MaxonEnum valueEnum) {
+      _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Enum, valueEnum.TypeName));
+      RefineGlobalVarType(name, isMutable, MaxonValueKind.Enum, typeName: null, enumTypeName: valueEnum.TypeName);
+    } else {
+      _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Struct));
+      if (value is MaxonStruct valueStruct)
+        RefineGlobalVarType(name, isMutable, MaxonValueKind.Struct, typeName: valueStruct.TypeName, enumTypeName: null);
+    }
 
     _tokens = savedTokens;
     _pos = savedPos;
+  }
+
+  /// Narrow a runtime-initialized global's recorded type to what its parsed initializer actually
+  /// produced, keeping every other field of the existing registration and writing the result to
+  /// both views of it, so a reader that consults one never sees a different answer from the other.
+  private void RefineGlobalVarType(string name, bool isMutable, MaxonValueKind kind, string? typeName, string? enumTypeName) {
+    var refined = _globalVars.TryGetValue(name, out var existing)
+      ? existing with { Kind = kind, TypeName = typeName, EnumTypeName = enumTypeName }
+      : new GlobalVarMetadata(kind, isMutable, EnumTypeName: enumTypeName, TypeName: typeName);
+    _globalVars[name] = refined;
+    _currentModule!.GlobalVarInfos[name] = refined;
   }
 
   /// <summary>
@@ -6975,7 +7020,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       module.Globals.Add(new IrGlobal(guardName, IrType.I1, new IntegerAttr(0, IrType.I1)));
 
       var typeName2 = InferDeferredTypeName(new DeferredDecl(qualifiedName, exprStart, exprEnd, fieldToken.Line, fieldToken.Column));
-      var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, isMutable, TypeName: typeName2, IsLazy: true);
+      var gvarInfo = RuntimeInitGlobalMetadata(typeName2, isMutable, isLazy: true);
       _globalVars[qualifiedName] = gvarInfo;
       module.GlobalVarInfos[qualifiedName] = gvarInfo;
       _globalVars[guardName] = new GlobalVarMetadata(MaxonValueKind.Bool, true);
@@ -10681,7 +10726,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (resolved is ResolvedVar.Global(var globalInfo)) {
       RejectEscapingCapturingClosure(newVal, $"store a closure that captures in global '{name}'",
         nameToken.Line, nameToken.Column);
-      _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newVal, globalInfo.Kind));
+      _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newVal, globalInfo.Kind, globalInfo.EnumTypeName));
     } else {
       var varInfo = ((ResolvedVar.Local)resolved).Info;
 
@@ -10730,7 +10775,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       RejectEscapingCapturingClosure(newValue,
         $"store a closure that captures in static '{qualifiedName}'",
         typeToken.Line, typeToken.Column);
-      _currentBlock!.AddOp(new MaxonGlobalStoreOp(qualifiedName, newValue, globalInfo.Kind));
+      _currentBlock!.AddOp(new MaxonGlobalStoreOp(qualifiedName, newValue, globalInfo.Kind, globalInfo.EnumTypeName));
       return;
     }
 

@@ -1373,12 +1373,18 @@ public sealed class MaxonEnumOrdinalOp(MaxonValue enumValue, string enumTypeName
   public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }
 
-public sealed class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueKind kind) : MaxonOp {
+public sealed class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueKind kind, string? enumTypeName = null) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.GlobalStore;
   public override string Mnemonic => $"maxon.global_store @{GlobalName}";
   public string GlobalName { get; } = globalName;
   public MaxonValue Value { get; } = value;
   public MaxonValueKind ValueKind { get; } = kind;
+  /// The union type this slot holds, mirroring <see cref="MaxonGlobalLoadOp.EnumTypeName"/>.
+  /// Lowering needs it to tell a BOXED union (a refcounted heap record the slot owns, so the
+  /// store must release the old occupant and retain the new one) from a scalar enum (a bare
+  /// discriminant written straight into the slot). The store op used to carry no type at all,
+  /// which is why lowering had to guess from the kind and got the boxed case wrong.
+  public string? EnumTypeName { get; } = enumTypeName;
   public override IReadOnlyList<MaxonValue> Results => [];
   public override IReadOnlyList<MaxonValue> Operands => [Value];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>

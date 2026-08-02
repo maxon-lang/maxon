@@ -460,8 +460,17 @@ internal class FunctionCloner {
       }
 
       // Global ops
-      case MaxonGlobalLoadOp gl: { var c = new MaxonGlobalLoadOp(gl.GlobalName, gl.ValueKind); RegisterResult(gl.Result, c.Result); return c; }
-      case MaxonGlobalStoreOp gs: return new MaxonGlobalStoreOp(gs.GlobalName, MapValue(gs.Value), gs.ValueKind);
+      // The type names travel with the clone: they are what tells lowering a boxed union's slot
+      // owns a refcounted record, and a clone that dropped them silently lowered the global as a
+      // bare integer inside the cloned body only.
+      case MaxonGlobalLoadOp gl: {
+        var c = new MaxonGlobalLoadOp(gl.GlobalName, gl.ValueKind, gl.EnumTypeName, gl.StructTypeName) {
+          LazyGuardName = gl.LazyGuardName, LazyInitFuncName = gl.LazyInitFuncName
+        };
+        RegisterResult(gl.Result, c.Result);
+        return c;
+      }
+      case MaxonGlobalStoreOp gs: return new MaxonGlobalStoreOp(gs.GlobalName, MapValue(gs.Value), gs.ValueKind, gs.EnumTypeName);
 
       // Managed memory ops (trivial)
       case MaxonUcdByteLoadOp ucdByte: { var c = new MaxonUcdByteLoadOp(ucdByte.UcddataLabel, MapValue(ucdByte.ByteOffset)); RegisterResult(ucdByte.Result, c.Result); return c; }

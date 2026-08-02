@@ -2335,30 +2335,40 @@ public static partial class MaxonToStandardConversion {
                 StdGlobalLoadI16Op i16 => i16.Result,
                 _ => throw new InvalidOperationException()
               };
-              if (globalLoad.ValueKind == MaxonValueKind.Struct) {
+              // A managed slot yields a POINTER, and every reader of one (field access, a union's
+              // tag/payload read, a call argument) resolves it through a temp variable rather than
+              // as a bare SSA integer. Materializing that temp here is what makes the two kinds of
+              // managed global indistinguishable downstream — without it a boxed union's tag read
+              // fell through to its scalar-enum arm and passed the POINTER through as the tag.
+              if (GlobalSlotHoldsManagedRecord(module, globalLoad.ValueKind, globalLoad.EnumTypeName)) {
+                var recordTypeName = globalLoad.StructTypeName ?? globalLoad.EnumTypeName;
                 var tempName = $"__global_{globalLoad.GlobalName}_{globalLoad.Result.Id}";
-                temps.RegisterTemp(tempName, globalLoad.StructTypeName ?? "unknown", OwnershipFlags.Orphan);
+                temps.RegisterTemp(tempName, recordTypeName ?? "unknown", OwnershipFlags.Orphan);
                 EmitStore(newBlock, valueMap[globalLoad.Result], tempName, varTypes);
                 EmitIncref(newBlock, tempName, varTypes, scopeName: func.Name);
-                var globalTypeName = globalLoad.StructTypeName ?? "unknown";
-                valueMap[globalLoad.Result] = new StdHeapPtr(globalLoad.Result.Id, globalTypeName, tempName);
-                if (globalLoad.StructTypeName != null) {
-                  varNameToStructType[tempName] = globalLoad.StructTypeName;
+                valueMap[globalLoad.Result] = new StdHeapPtr(globalLoad.Result.Id, recordTypeName ?? "unknown", tempName);
+                if (recordTypeName != null) {
+                  varNameToStructType[tempName] = recordTypeName;
                 }
               }
               break;
             }
             case MaxonGlobalStoreOp globalStore: {
-              if (globalStore.ValueKind == MaxonValueKind.Struct) {
+              if (GlobalSlotHoldsManagedRecord(module, globalStore.ValueKind, globalStore.EnumTypeName)) {
                 // Resolve the new heap pointer -- check StdHeapPtr before StdI64
-                // since StdHeapPtr extends StdI64 and needs a load from its temp variable
+                // since StdHeapPtr extends StdI64 and needs a load from its temp variable.
+                // An StdHeapPtr carrying a VarName is a HANDLE, not an SSA value: its Id is the
+                // producing Maxon op's id, which names nothing in the Std function. Using it as
+                // an operand is what emitted `global_store @hold %1` against `mm_alloc`'s size
+                // argument, and — where no Std id happened to collide — reached the register
+                // allocator as `E9001: value %N has no register and no stack home`.
                 StdI64 newHeapPtr;
                 if (valueMap.TryGetValue(globalStore.Value, out var mv) && mv is StdHeapPtr srcNameHp) {
                   newHeapPtr = (StdI64)EmitLoad(newBlock, srcNameHp.VarName!, varTypes);
                 } else if (mv is StdI64 i64Val) {
                   newHeapPtr = i64Val;
                 } else {
-                  throw new InvalidOperationException($"Cannot store struct value to global '{globalStore.GlobalName}': no struct tracking info");
+                  throw new InvalidOperationException($"Cannot store managed value to global '{globalStore.GlobalName}': no heap tracking info");
                 }
 
                 bool isModuleInit = func.Name == "__module_init";
@@ -2783,20 +2793,39 @@ public static partial class MaxonToStandardConversion {
     return result;
   }
 
+  /// <summary>
+  /// True when a global's `.data` slot holds a POINTER to a refcounted record rather than a
+  /// scalar written inline — so the slot OWNS its occupant, and the load must retain, the store
+  /// must release the old occupant before retaining the new one, and process exit must decref
+  /// what is left. Struct-kinded globals always do; an Enum-kinded one does exactly when its
+  /// union is heap-allocated (some case carries a payload), because a payload-free union and a
+  /// plain `enum` are bare discriminants. Three readers reach one slot from three directions and
+  /// they must never disagree — a union global that was INITIALIZED as an ordinal and ASSIGNED as
+  /// a pointer is what this single predicate exists to prevent.
+  /// </summary>
+  private static bool GlobalSlotHoldsManagedRecord(IrModule<MaxonOp> module, MaxonValueKind kind, string? enumTypeName) =>
+    kind switch {
+      MaxonValueKind.Struct => true,
+      MaxonValueKind.Enum => enumTypeName != null
+        && module.TypeDefs.TryGetValue(enumTypeName, out var enumType)
+        && enumType is IrEnumType { IsHeapAllocated: true },
+      _ => false
+    };
+
   private static void GenerateGlobalCleanup(IrModule<MaxonOp> module, IrModule<StandardOp> result) {
-    // Only generate if there are non-lazy struct globals to clean up
-    bool hasEagerStructGlobals = module.GlobalVarInfos.Any(kv =>
-      kv.Value.Kind == MaxonValueKind.Struct && kv.Value.TypeName != null && !kv.Value.IsLazy);
-    bool hasLazyStructGlobals = module.GlobalVarInfos.Any(kv =>
-      kv.Value.Kind == MaxonValueKind.Struct && kv.Value.TypeName != null && kv.Value.IsLazy);
-    if (!hasEagerStructGlobals && !hasLazyStructGlobals) return;
+    // A slot is released at exit exactly when it owns its occupant, and the type it names must be
+    // known — an untyped struct global has no record to release.
+    bool OwnsOccupant(GlobalVarMetadata meta) =>
+      GlobalSlotHoldsManagedRecord(module, meta.Kind, meta.EnumTypeName)
+      && (meta.TypeName ?? meta.EnumTypeName) != null;
+
+    if (!module.GlobalVarInfos.Any(kv => OwnsOccupant(kv.Value))) return;
 
     var cleanupFunc = new IrFunction<StandardOp>("__maxon_global_cleanup", [], [], null, null);
     var block = cleanupFunc.Body.AddBlock("entry");
 
     foreach (var (varName, meta) in module.GlobalVarInfos) {
-      if (meta.Kind != MaxonValueKind.Struct) continue;
-      if (meta.TypeName == null) continue;
+      if (!OwnsOccupant(meta)) continue;
 
       if (meta.IsLazy) {
         // Only decref lazy statics that were actually initialized

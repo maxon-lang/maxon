@@ -2479,8 +2479,16 @@ public static class MonomorphizationPass {
       case MaxonEnumStructRawFieldOp esrf: { var c = new MaxonEnumStructRawFieldOp(mapValue(esrf.EnumValue), esrf.EnumTypeName, esrf.StructTypeName, esrf.FieldName, esrf.ResultKind, esrf.ResultTypeName); valueMap[esrf.Result.Id] = c.Result; return c; }
       case MaxonEnumFunctionRawValueOp efrv: { var c = new MaxonEnumFunctionRawValueOp(mapValue(efrv.EnumValue), efrv.EnumTypeName, efrv.Signature); valueMap[efrv.Result.Id] = c.Result; return c; }
       case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(mapValue(ef.ErrorFlag), ef.EnumTypeName, ef.BackingKind, ef.HasAssociatedValues); valueMap[ef.Result.Id] = c.Result; return c; }
-      case MaxonGlobalLoadOp gl: { var c = new MaxonGlobalLoadOp(gl.GlobalName, gl.ValueKind); valueMap[gl.Result.Id] = c.Result; return c; }
-      case MaxonGlobalStoreOp gs: return new MaxonGlobalStoreOp(gs.GlobalName, mapValue(gs.Value), gs.ValueKind);
+      // See FunctionCloner's twin: dropping the type names here lowered a boxed union's global as
+      // a bare integer inside the specialization only.
+      case MaxonGlobalLoadOp gl: {
+        var c = new MaxonGlobalLoadOp(gl.GlobalName, gl.ValueKind, gl.EnumTypeName, gl.StructTypeName) {
+          LazyGuardName = gl.LazyGuardName, LazyInitFuncName = gl.LazyInitFuncName
+        };
+        valueMap[gl.Result.Id] = c.Result;
+        return c;
+      }
+      case MaxonGlobalStoreOp gs: return new MaxonGlobalStoreOp(gs.GlobalName, mapValue(gs.Value), gs.ValueKind, gs.EnumTypeName);
       case MaxonFunctionParamOp fp: { var c = new MaxonFunctionParamOp(fp.Index, fp.Name, fp.FunctionType); valueMap[fp.Result.Id] = c.Result; return c; }
       case MaxonFunctionRefOp fr: {
         var specName = SpecializeClosureNameForIface(fr.FunctionName, sub, module, closureSpecOut);
