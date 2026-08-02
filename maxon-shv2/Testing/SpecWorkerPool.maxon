@@ -47,9 +47,21 @@
 //       WORKER_SINGLE_RESULT:<spec>:<test>            that test PASSED
 //       WORKER_SINGLE_FAIL:<spec>:<test>:<payload>    that test FAILED; <payload> is its reason,
 //                                                     escaped onto this one line
+//       WORKER_JOB_CPU:<ticks>:<reported>:<unreported>
+//                                                     exactly once per job, immediately BEFORE that
+//                                                     job's WORKER_READY: what compiling this spec's
+//                                                     tests cost (see SpecTestRunner's
+//                                                     cumulative-CPU indicator)
 //
-// INVARIANT, and the drain leans on it: a worker NEVER writes an empty line to stdout. The three
-// lines above are the only ones it can write and all three are non-empty — so an empty line back
+// ⚠ THE CPU RECORD IS ITS OWN LINE KIND, not a field bolted onto a result record, and it is the LAST
+// line of a job. The parent's drain checks a job's result records against its plan NAME FOR NAME and
+// panics on a record it never selected — that check is what catches a flag the parent forgot to
+// forward — so a per-job number carried inside a result line would have had to weaken it. Taken off
+// the end as a distinct kind, the check is untouched: the CPU line is removed first and the records
+// are still counted and named exactly as before.
+//
+// INVARIANT, and the drain leans on it: a worker NEVER writes an empty line to stdout. The four
+// lines above are the only ones it can write and all four are non-empty — so an empty line back
 // from `readStdoutLine()` is unambiguously EOF, i.e. the worker died. Keeping stdout clean takes
 // no effort here: the compiles and the compiled test programs a worker spawns all run under
 // `Subprocess.run` with COLLECTED output, so their streams are captured, never inherited.
@@ -85,6 +97,7 @@
 let WorkerReadyMarker = "WORKER_READY"
 let WorkerPassMarker = "WORKER_SINGLE_RESULT:"
 let WorkerFailMarker = "WORKER_SINGLE_FAIL:"
+let WorkerJobCpuMarker = "WORKER_JOB_CPU:"
 let JobSinglesPrefix = "JOB:singles:"
 let ExitCommand = "EXIT"
 let ProtocolFieldSep = ":"
@@ -444,17 +457,21 @@ end 'runPersistentWorker'
 // Returning quietly instead would leave the parent to notice a missing record and abort with no
 // idea why.
 function runSinglesJob(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target)
-	let results = try runOneSpec(compilerExe, specDir: specDir, specName: specName, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget) otherwise (e) 'specFailed'
+	let run = try runOneSpec(compilerExe, specDir: specDir, specName: specName, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget) otherwise (e) 'specFailed'
 		reportCompileError(e)
 		panic("spec worker: could not run spec '{specName}' — see the error above")
 	end 'specFailed'
 
-	for result in results 'eachResult'
+	for result in run.results 'eachResult'
 		match result.outcome 'verdict'
 			pass then print("{WorkerPassMarker}{specName}{ProtocolFieldSep}{result.testName}\n")
 			fail(reason) then print("{WorkerFailMarker}{specName}{ProtocolFieldSep}{result.testName}{ProtocolFieldSep}{encodeFailPayload(reason)}\n")
 		end 'verdict'
 	end 'eachResult'
+
+	// LAST, after every record — the parent takes it off the end of the drained lines before it
+	// checks the records against its plan. See this file's protocol note.
+	print("{WorkerJobCpuMarker}{run.cpu.ticks}{ProtocolFieldSep}{run.cpu.reported}{ProtocolFieldSep}{run.cpu.unreported}\n")
 end 'runSinglesJob'
 
 // ============================================================================================
@@ -616,6 +633,39 @@ function decodeFailRecord(line String) returns WorkerRecord
 
 	return WorkerRecord.fail(spec.field, testName: test.field, reason: decodeFailPayload(test.rest))
 end 'decodeFailRecord'
+
+// Take the job's CPU record OFF THE END of its drained lines, leaving only the result records.
+//
+// The record is MANDATORY and its position is exact: `runSinglesJob` prints it after the last result
+// and before the WORKER_READY that ends the drain, so it is always the final line of a job that ran at
+// all. A drain that does not end with one is a worker built from a different version of this file —
+// the same protocol break the record checks below panic on, and treated the same way, because the
+// alternative is an indicator that silently loses whole specs.
+//
+// Removing it here rather than teaching `resultsFromLines` to skip it keeps that function's count
+// check exact: it still compares record count against plan count with no allowance for an extra line.
+function takeJobCpuRecord(lines StringArray, specName String) returns SuiteCpuTally
+	let last = try lines.pop() otherwise panic("spec worker pool: '{specName}' returned no lines at all, so it cannot have printed its {WorkerJobCpuMarker} record")
+
+	if not last.startsWith(WorkerJobCpuMarker) 'notTheCpuRecord'
+		panic("spec worker pool: '{specName}' ended with '{last}' where its {WorkerJobCpuMarker} record should be")
+	end 'notTheCpuRecord'
+
+	let ticks = splitAtFieldSep(sliceAfterPrefix(last, prefix: WorkerJobCpuMarker), expected: "reported-count", line: last)
+	let reported = splitAtFieldSep(ticks.rest, expected: "unreported-count", line: last)
+
+	return SuiteCpuTally.create(decodeCpuField(ticks.field, what: "tick total", line: last), reported: decodeCpuField(reported.field, what: "reported count", line: last) as TestTally, unreported: decodeCpuField(reported.rest, what: "unreported count", line: last) as TestTally)
+end 'takeJobCpuRecord'
+
+// One decimal field of the CPU record. `parseCount` is the suite's ONE decimal parser (see
+// ScaleTestRunner, where its `ScaleError` is named for the harness that first needed it); the numbers
+// it reads here were printed by this same file moments ago, so a failure is a protocol break rather
+// than bad input. The caller narrows: the three fields are one tick total and two test counts.
+function decodeCpuField(raw String, what String, line String) returns ParsedCount
+	return try parseCount(raw) otherwise (e) 'unreadableField'
+		panic("spec worker pool: a {WorkerJobCpuMarker} record carries an unreadable {what}: '{line}' ({scaleErrorText(e)})")
+	end 'unreadableField'
+end 'decodeCpuField'
 
 // Turn one worker's drained lines into that spec's results, in the order the parent decided they
 // must appear.
@@ -967,19 +1017,30 @@ end 'abortOnWedgedPool'
 // THE DISPATCHER
 // ============================================================================================
 
-// What one pool run produced: every test's verdict in report order, and how many workers exited
-// NON-ZERO.
+// What one pool run produced: every test's verdict in report order, how many workers exited
+// NON-ZERO, and what the whole run's compiles cost.
 //
 // The worker exit codes are carried out rather than acted on in here, because they are not a TEST
 // result and must never reach the reporter — but they still have to fail the suite. A worker is
 // itself a leak-gated Maxon program: exit 101 means the harness leaked while servicing its tests,
 // and a green suite that swallowed that would be a leak gate that never fires.
+//
+// `cpu` is carried out for the opposite reason: it must never fail anything. It is a trend indicator
+// with no verdict attached (see SpecTestRunner), reported beside the summary and acted on by nobody.
+//
+// `poolSize` travels WITH it and only for it: the tick total is 1.66x larger at twelve workers than at
+// one for identical work, so a reading without the count it was taken at is not comparable to anything.
+// It is the EFFECTIVE size — the pool that actually ran, which a narrow `--filter` can shrink below the
+// requested count — because contention is what the number absorbs, and contention is a property of the
+// workers that existed rather than of the ones that were asked for.
 export type PoolRun
 	export let results as SpecTestResultArray
 	export let failedWorkers as WorkerTally
+	export let cpu as SuiteCpuTally
+	export let poolSize as WorkerCount
 
-	export static function create(results SpecTestResultArray, failedWorkers WorkerTally) returns PoolRun
-		return Self{results: results, failedWorkers: failedWorkers}
+	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, poolSize WorkerCount) returns PoolRun
+		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, poolSize: poolSize}
 	end 'create'
 end 'PoolRun'
 
@@ -1025,7 +1086,11 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 		// Main owns the "no tests selected" diagnostic and reads it off an empty result array.
 		// Spawning a pool only to tell it there is nothing to do would add a way for that message
 		// to go missing, and nothing else.
-		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0)
+		//
+		// `poolSize` is the REQUESTED count here, and it is the same kind of placeholder as
+		// `SpecJob.idle()`: no pool was sized because none was spawned, and Main returns on the empty
+		// result array before anything reads it.
+		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0, cpu: SuiteCpuTally.zero(), poolSize: workerCount)
 	end 'selectsNothing'
 
 	try prepareSharedDirs(specDir, effectiveTarget: effectiveTarget)
@@ -1082,6 +1147,11 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 	var dispatched = 0 as JobTally
 	var completed = 0 as JobTally
 
+	// The run's compile cost, summed as each job's answer is decoded. Summing per JOB rather than
+	// per worker is what makes it independent of the pool size: which worker ran which spec changes
+	// with the scheduling, the set of jobs does not.
+	var cpu = SuiteCpuTally.zero()
+
 	// The watchdog's whole state. `dispatched + completed` counts every progress event this loop can
 	// make, so a poll that finds it unchanged since the previous poll found nothing moving — which is
 	// exactly the condition to time, and it is measured HERE rather than at the three places progress
@@ -1123,7 +1193,7 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 			// that spawned it. It reports WHICH failure killed the worker instead of the generic
 			// guess this site used to print, and binding it is also what RELEASES it: a union's
 			// payload is a heap pointer, and the binding is what decrefs it.
-			let lines = try await drain otherwise (e) 'workerDied'
+			var lines = try await drain otherwise (e) 'workerDied'
 				abortOnDeadWorker(handle, job: job, reason: "its stdout died before {WorkerReadyMarker}: {e.displayReason()}")
 			end 'workerDied'
 
@@ -1136,6 +1206,10 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 			end 'moreWork' else 'queueDrained'
 				try busy.set(readySlot, value: false) otherwise panic("runSpecPool: busy.set({readySlot}) is in bounds by construction")
 			end 'queueDrained'
+
+			// Taken off the END of the drained lines, before anything counts them: what remains is
+			// exactly the result records `resultsFromLines` checks against the plan.
+			cpu = cpu.plus(takeJobCpuRecord(lines, specName: job.specName))
 
 			let plan = try plans.get(job.planIndex) otherwise panic("runSpecPool: plans.get({job.planIndex}) is in bounds by construction")
 			try buckets.set(job.planIndex, value: resultsFromLines(lines, plan: plan)) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
@@ -1168,7 +1242,17 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 	end 'jobLost'
 
 	let failedWorkers = shutdownPool(workers)
-	return PoolRun.create(concatBuckets(buckets), failedWorkers: failedWorkers)
+	let results = concatBuckets(buckets)
+
+	// The indicator covers EVERY test this run reported, or it is not an indicator of this run. Each
+	// test contributes exactly one reading (`SpecTestRunner.runOneTest` returns both together), so a
+	// disagreement here means a job's CPU record was decoded against the wrong job — checked for the
+	// same reason `resultsFromLines` checks its records, and it costs one comparison.
+	if cpu.tests() != results.count() 'cpuCoverageGap'
+		panic("runSpecPool: the compile-CPU tally covers {cpu.tests()} test(s) but the run reported {results.count()} — a job's {WorkerJobCpuMarker} record was counted against the wrong job")
+	end 'cpuCoverageGap'
+
+	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, poolSize: poolSize)
 end 'runSpecPool'
 
 // The buckets, in plan order — the suite's report, assembled at last from answers that arrived in

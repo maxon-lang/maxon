@@ -567,7 +567,7 @@ function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) return
 	argv.push(rung.dir.toString())
 	argv.push(OutputFlagName)
 	argv.push(outputBase.toString())
-	argv.push("--metrics={metricsPath.toString()}")
+	argv.push("{MetricsFlagPrefix}{metricsPath.toString()}")
 
 	let compile = try runProcess(Executable.path(compilerExe), argv: argv) otherwise (e) 'spawnFailed'
 		throw ScaleError.reason("compiler spawn failed: {e.displayReason()}")
@@ -689,17 +689,17 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 
 	for line in text.split("\n") 'eachLine'
 		let trimmed = line.trim()
-		if trimmed.isEmpty() or trimmed.startsWith("#") 'skip'
+		if trimmed.isEmpty() or trimmed.startsWith(MetricsCommentPrefix) 'skip'
 			continue
 		end 'skip'
 
-		let fields = trimmed.split("\t")
+		let fields = trimmed.split(MetricsColumnSep)
 		if fields.count() != MetricsFieldCount 'malformed'
 			throw ScaleError.reason("malformed metrics row (expected {MetricsFieldCount} tab-separated fields, got {fields.count()}): {trimmed}")
 		end 'malformed'
 
-		let kind = try fields.get(0) otherwise panic("parseRungMetrics: fields.get(0) OOB after count check")
-		let name = try fields.get(1) otherwise panic("parseRungMetrics: fields.get(1) OOB after count check")
+		let kind = try fields.get(MetricsKindField) otherwise panic("parseRungMetrics: kind field OOB after count check")
+		let name = try fields.get(MetricsNameField) otherwise panic("parseRungMetrics: name field OOB after count check")
 		let metric = try parseMetricFields(fields)
 
 		if kind == MetricsKindTotal 'isTotal'
@@ -741,20 +741,6 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 
 	return RungResult.create(rung.index, sourceBytes: rung.sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc)
 end 'parseRungMetrics'
-
-let MetricsFieldCount = 7
-
-// Field 2 is the phase's WALL-CLOCK NANOSECONDS, and it is still skipped rather than read.
-//
-// That is not an oversight kept for consistency — it is the same judgement as ever, and field 6
-// is what changed around it. Wall time counts every other process on the machine, so it cannot be
-// trended; CPU time (field 6) counts only this thread, so it can. The row is still required to
-// HAVE all seven fields — the format is MetricsEmit's contract — but the clock is not carried
-// anywhere, because a column nobody may act on is an invitation to act on it.
-let MetricsAllocsField = 3
-let MetricsFreesField = 4
-let MetricsBytesField = 5
-let MetricsCpuTicksField = 6
 
 function parseMetricFields(fields StringArray) returns PhaseMetric throws ScaleError
 	let allocs = try parseCount(try fields.get(MetricsAllocsField) otherwise panic("parseMetricFields: allocs field OOB after count check"))

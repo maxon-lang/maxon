@@ -39,11 +39,45 @@
 // beautiful straight line. If code bytes do not grow with source bytes across the ladder, the
 // corpus is degenerate and the run measured NOTHING — and this row is how the runner can tell.
 
-let MetricsColumnSep = "\t"
+// ============================================================================================
+// THE FORMAT, NAMED ONCE — this file is the WRITER, and every READER reads these same names
+// ============================================================================================
+//
+// There are TWO readers now, in two different suites: `ScaleTestRunner.parseRungMetrics` (the
+// whole table, one rung at a time) and `SpecTestRunner.readCompileCpu` (the `total` row's CPU
+// column, once per spec-suite compile). A separator, a comment marker or a column index spelled
+// at a reader instead of here is a copy of this format that nothing forces to agree with it —
+// and the failure mode is not a compile error, it is a reader that silently parses the wrong
+// column. So the punctuation and the column positions live at the WRITER, where a change to the
+// row shape and a change to the constant are the same edit.
+export let MetricsColumnSep = "\t"
+
+// A row a reader must SKIP. Both header lines carry it, and nothing else in the file does.
+export let MetricsCommentPrefix = "#"
+
+// The two header lines, spelled out. They repeat the punctuation above as LITERAL text, and that is
+// not a second copy of the contract: no reader parses them — both are skipped by their comment
+// prefix, and the column names in the second are a label for a human, not a schema anything matches.
+// (A top-level `let` must also be a constant expression, so it could not be interpolated regardless.)
 let MetricsHeader = "# maxon-shv2 compile metrics\n# kind\tname\tnanos\tallocs\tfrees\tbytes\tcputicks\n"
 
-// The `kind` column's vocabulary. A format contract shared with ScaleTestRunner, which parses
-// these rows back, so they are named here rather than spelled inline at both ends.
+// The column positions, 0-based, in the order `metricsRow` writes them.
+//
+// ⚠ FIELD 2 — the phase's WALL-CLOCK NANOSECONDS — HAS NO CONSTANT, DELIBERATELY. Neither reader
+// may act on it: wall time counts every other process on the box, so it cannot be trended, while
+// CPU ticks count only the compiling thread and can be. A row is still REQUIRED to carry all
+// seven fields (that is what `MetricsFieldCount` checks), because the shape is the contract — but
+// a named index for the clock would be an invitation to read it.
+export let MetricsFieldCount = 7
+export let MetricsKindField = 0
+export let MetricsNameField = 1
+export let MetricsAllocsField = 3
+export let MetricsFreesField = 4
+export let MetricsBytesField = 5
+export let MetricsCpuTicksField = 6
+
+// The `kind` column's vocabulary. A format contract shared with the readers above, so they are
+// named here rather than spelled inline at each end.
 export let MetricsKindTotal = "total"
 export let MetricsKindPhase = "phase"
 export let MetricsKindRegAlloc = "regalloc"
@@ -62,6 +96,13 @@ export let MetricsNoName = "-"
 // build that produced a correct executable must not be failed by a full disk under the metrics
 // path. The runner, for its part, treats a MISSING metrics file as a failed rung rather than as
 // zeroes — a rung that reported nothing is not a rung that compiled instantly.
+//
+// ⚠ AND IT IS WRITTEN ONLY BY A COMPILE THAT SUCCEEDED. This call is the last step of
+// `compileMeasured`, so every throwing exit — a parse error, a semantic error, an E5001 — leaves no
+// file at all, even though that compile burned real CPU. The spec suite's cumulative-CPU indicator
+// reads this file per test and therefore CANNOT see the error-path compiles; it counts them
+// separately and prints the count, rather than reporting a total that quietly omits them (see
+// `SpecTestRunner.readCompileCpu`).
 export function writeMetrics(project Project, metricsPath String, codeBytes CodeByteCount)
 	let path = try FilePath.from(metricsPath) otherwise 'badPath'
 		logError(LogCategory.compiler, message: function() gives "Invalid --metrics path '{metricsPath}'")

@@ -52,6 +52,11 @@ let OutputFlag = "-o"
 // driver's `IrFileExtension` (Compiler.maxon).
 let IrFileExtension = ".ir"
 
+// Where each test's `--metrics` TSV lands, beside its exe and its IR sidecar. Unlike those two this
+// extension is nobody else's contract — the compiler writes wherever `--metrics=` points — so it is
+// declared here, by the only code that names it. See `readCompileCpu`.
+let MetricsFileExtension = ".metrics"
+
 // Committed-fragment layout: `<specDir>/fragments/<target>/<specName>/<testName>.test`.
 //
 // These `.test` files are GATES, not outputs (see `checkTestFragment`): the emitted Target IR is
@@ -291,6 +296,150 @@ export function runProcess(exe Executable, argv StringArray) returns ProcessCapt
 	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
 end 'runProcess'
 
+// ============================================================================================
+// THE CUMULATIVE COMPILE-CPU INDICATOR
+// ============================================================================================
+//
+// WHAT IT IS FOR. The suite already compiles every selected test through a real `build` subprocess,
+// and every one of those compiles already MEASURES its own CPU time — `PhaseProbe` brackets each
+// phase unconditionally, and `--metrics` decides only whether the numbers are WRITTEN. Summing the
+// `total` row across a whole run therefore costs one flag, one small file per test and one read, and
+// buys a single number that answers "did compiling this corpus get dramatically dearer?".
+//
+// ⚠ IT IS AN INDICATOR, NOT A GATE. Nothing passes or fails on it, there is no budget, no golden and
+// no verdict, and none may be added: `scale-test` carried exactly that apparatus and it was deleted,
+// because a verdict over a noisy number teaches people to edit the instrument rather than explain the
+// reading (see .claude/CLAUDE.md).
+//
+// ⚠ WHY CPU RATHER THAN THE SUITE'S WALL TIME, which `build-cost-log.md` already records. The suite's
+// wall time is one number for a whole POOL, so it moves with the core count and with everything else
+// on the box — a measured ~5% band before anything about the compiler has changed — and it says
+// nothing at all about how much work was done, only about how long the slowest chain of it took. A sum
+// of per-compile CPU cannot see preemption, cannot see another process, and does not move with WHICH
+// worker happened to run which spec. Measured on this host, same binary, same 3285 tests, two
+// consecutive default runs: 677,224,061,729 and 675,563,783,610 ticks — a spread of 0.25%, twenty
+// times tighter than the wall-clock band.
+//
+// ⚠ IT IS NOT WORKER-COUNT INVARIANT, AND THAT WAS MEASURED RATHER THAN ASSUMED — the first draft of
+// this comment claimed it was. `threadCpuTicks` is not an instruction count: on Windows it is TSC
+// cycles accrued while the thread was ON A CORE (`QueryThreadCycleTime`), so it removes idle and
+// preemption but still ABSORBS the slowdown contention causes — an SMT sibling, a shared L3, memory
+// bandwidth. The same suite that reads ~676e9 at the default twelve workers reads 407,531,292,437 at
+// `--workers=1`: identical work, 1.66x the ticks, purely from running twelve-up.
+//
+// ⇒ TWO NUMBERS ARE COMPARABLE ONLY AT THE SAME WORKER COUNT, which is why the reported line states
+// the count it was measured at. Read a default run against a default run; a `--workers=1` figure
+// belongs to a different scale entirely and is not an improvement.
+//
+// ⚠ THE UNIT IS PLATFORM-DEFINED (TSC ticks on Windows, nanoseconds on POSIX) and nothing converts
+// between them; see `CpuTicks`. Two runs are comparable on ONE host, never across hosts.
+
+// What ONE test's compile contributed. A union rather than a tick count where zero means "none",
+// because "this compile reported nothing" and "this compile cost nothing" are different facts and a
+// zero folds them together in the direction that reads as an improvement.
+//
+// `unreported` is the ORDINARY case for a `compilerError` test, and that is not a failure of any
+// kind: `writeMetrics` is the last step of a SUCCESSFUL compile (see MetricsEmit), so a case that
+// passes precisely BY failing to compile can never leave a metrics file. It also covers the rare test
+// whose source could not be staged at all, which spawned no compiler. Both are one fact here — no
+// measurement exists — and the tally counts them so the gap is visible rather than absorbed.
+union CompileCpu
+	reported(ticks CpuTicks)
+	unreported
+end 'CompileCpu'
+
+// A count of TESTS. Its own alias rather than a bare int because the two fields it types are read
+// against each other and against the suite's result count.
+export typealias TestTally = int(0 to u32.max)
+
+// The indicator's running total, summed per worker and again across workers.
+//
+// ⚠ THE TWO COUNTS ARE NOT DECORATION. A bare tick total is comparable only against a run of the SAME
+// corpus at the SAME coverage — the suite grows (one spec port took it from 3272 tests to 3285), and
+// how many of its tests are diagnostic cases decides how much of it the indicator can see at all. With
+// the counts beside it a reader can tell a total that moved because the COMPILER did from one that
+// moved because the CORPUS did; without them they are indistinguishable.
+export type SuiteCpuTally
+	export let ticks as CpuTicks
+	export let reported as TestTally
+	export let unreported as TestTally
+
+	export static function create(ticks CpuTicks, reported TestTally, unreported TestTally) returns SuiteCpuTally
+		return Self{ticks: ticks, reported: reported, unreported: unreported}
+	end 'create'
+
+	export static function zero() returns SuiteCpuTally
+		return Self{ticks: 0, reported: 0, unreported: 0}
+	end 'zero'
+
+	export function adding(cpu CompileCpu) returns SuiteCpuTally
+		return match cpu 'contribution'
+			reported(compileTicks) gives Self{ticks: self.ticks + compileTicks, reported: self.reported + 1, unreported: self.unreported}
+			unreported gives Self{ticks: self.ticks, reported: self.reported, unreported: self.unreported + 1}
+		end 'contribution'
+	end 'adding'
+
+	export function plus(other SuiteCpuTally) returns SuiteCpuTally
+		return Self{ticks: self.ticks + other.ticks, reported: self.reported + other.reported, unreported: self.unreported + other.unreported}
+	end 'plus'
+
+	// Every test contributes exactly one `CompileCpu`, so this IS the number of tests the tally
+	// covers — which is what makes the parent's cross-check against its own result count meaningful.
+	export function tests() returns TestTally
+		return reported + unreported
+	end 'tests'
+
+	// The one line a run reports.
+	//
+	// ⚠ IT GOES TO STDERR, AND THAT IS A CONTRACT RATHER THAN A PREFERENCE. `--workers=1` and
+	// `--workers=N` must print BYTE-IDENTICAL STDOUT (see SpecWorkerPool's header) — that identity is
+	// the suite's sharpest test of async correctness — and a CPU reading differs between any two runs
+	// of the same binary. On stdout it would break that gate every time it was run; on stderr it sits
+	// beside the other diagnostics, which is what a cost figure is.
+	//
+	// ⚠ IT STATES THE WORKER COUNT, and that is the measured half of the line rather than decoration:
+	// the tick total is 1.66x larger at twelve workers than at one for identical work (see this
+	// section's header). Without the count, comparing two runs made at different pool sizes reads as a
+	// 40% win that nothing did.
+	//
+	// Every number is spelled out, including a zero `unreported`, because a shape that dropped a term
+	// when it happened to be zero would make two runs of the same suite print two different shapes.
+	export function reportLine(workers WorkerCount) returns String
+		return "compile CPU: {ticks} ticks from {reported} of {tests()} test compiles at {workers} worker(s) ({unreported} wrote no metrics — a compile that FAILS writes none, which every compilerError case does by design)"
+	end 'reportLine'
+end 'SuiteCpuTally'
+
+// What one spec's run produced: its verdicts, and what compiling them cost.
+//
+// The two travel together because they are counted together: the tally's `tests()` must equal the
+// result count, and a shape that could return one without the other is a shape in which they can
+// silently disagree.
+export type SpecRun
+	export let results as SpecTestResultArray
+	export let cpu as SuiteCpuTally
+
+	export static function create(results SpecTestResultArray, cpu SuiteCpuTally) returns SpecRun
+		return Self{results: results, cpu: cpu}
+	end 'create'
+end 'SpecRun'
+
+// One test's verdict and what its compile cost — the same pairing as `SpecRun`, one level down.
+type TestRun
+	export let outcome as TestOutcome
+	export let cpu as CompileCpu
+
+	static function create(outcome TestOutcome, cpu CompileCpu) returns TestRun
+		return Self{outcome: outcome, cpu: cpu}
+	end 'create'
+
+	// A test that never reached a compiler: staging failed, or the output path could not be formed.
+	// Named rather than spelled at each site so "no compile happened" and "the compile reported
+	// nothing" cannot drift into two different tallies.
+	static function notCompiled(reason String) returns TestRun
+		return Self{outcome: TestOutcome.fail(reason), cpu: CompileCpu.unreported}
+	end 'notCompiled'
+end 'TestRun'
+
 // Run the active tests of ONE spec — `<specDir>/<specName>.md` — through `compilerExe`,
 // returning one result per test that `filter` selects, in DECLARATION order (a `draft`
 // spec yields none). Throws only on a spec-file IO failure; a per-test compile or run
@@ -300,8 +449,9 @@ end 'runProcess'
 // spec NAME on stdin and calls exactly this. Nothing above this function walks a directory
 // — the pool does that once, in the parent, because the listing ORDER is also the report
 // order and only one process may own it.
-export function runOneSpec(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target) returns SpecTestResultArray throws CompileError
+export function runOneSpec(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target) returns SpecRun throws CompileError
 	var results = SpecTestResultArray.create()
+	var cpu = SuiteCpuTally.zero()
 
 	let specFile = try parseSpecFile(specDir.join("{specName}{SpecFileExtension}"), effectiveTargetKey: targetToString(effectiveTarget))
 	let tests = selectedTests(specFile, specName: specName, filter: filter, effectiveTarget: effectiveTarget)
@@ -310,7 +460,7 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 		// such a spec — its parent built the same list from the same function — so this is not the
 		// path a pool run takes; returning here keeps the scratch directories below from being made
 		// for a spec that would write nothing into them.
-		return results
+		return SpecRun.create(results, cpu: cpu)
 	end 'selectsNothing'
 
 	let tempDir = specTempDirFor(specDir, specName: specName)
@@ -339,11 +489,12 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 	end 'hasGoldens'
 
 	for test in tests 'eachTest'
-		let outcome = runOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
-		results.push(SpecTestResult.create(specName, testName: test.name, outcome: outcome))
+		let run = runOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+		results.push(SpecTestResult.create(specName, testName: test.name, outcome: run.outcome))
+		cpu = cpu.adding(run.cpu)
 	end 'eachTest'
 
-	return results
+	return SpecRun.create(results, cpu: cpu)
 end 'runOneSpec'
 
 // The tests of `specFile` that this run will actually execute, in DECLARATION order.
@@ -564,28 +715,31 @@ end 'StagingResult'
 // Compile one test via a subprocess build (with `--emit-ir` so the Target-IR sidecar is produced),
 // check its expectation, then check the emitted IR against the committed `.test` golden. Everything
 // written is cleaned up before returning.
-function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestOutcome
+function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
 	let exeBase = tempDir.join(test.name)
 	// The driver appends the platform extension to the `-o` value
 	// (resolveOutputPath), so the produced exe is `<exeBase><ext>` — reconstruct
 	// that exact path to spawn it for the exit-code check.
 	let exePath = try FilePath.from("{exeBase.toString()}{exeExtension}") otherwise 'badExePath'
-		return TestOutcome.fail("could not form output path for {test.name}")
+		return TestRun.notCompiled("could not form output path for {test.name}")
 	end 'badExePath'
 	// `--emit-ir` writes `<output>.ir` (Compiler.writeTargetIr uses the same
 	// changeExtension), so the sidecar sits beside the exe under `.ir`.
 	let irPath = exePath.changeExtension(IrFileExtension)
+	// `--metrics` writes where it is TOLD, so unlike the sidecar this path is chosen here rather than
+	// derived by the compiler — sited beside the exe so one `cleanup` removes everything one test made.
+	let metricsPath = exePath.changeExtension(MetricsFileExtension)
 
 	match stageTest(tempDir, test: test) 'staging'
-		failed(reason) then return TestOutcome.fail(reason)
-		staged(s) then return runStagedTest(compilerExe, test: test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+		failed(reason) then return TestRun.notCompiled(reason)
+		staged(s) then return runStagedTest(compilerExe, test: test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, metricsPath: metricsPath, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 	end 'staging'
 end 'runOneTest'
 
 // Compile a test whose source is already on disk, check its behaviour, then check its golden.
 // Split out of `runOneTest` only because staging can FAIL, and a union's arms are the honest way to
 // say so — the two functions are one story read top to bottom.
-function runStagedTest(compilerExe FilePath, test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestOutcome
+function runStagedTest(compilerExe FilePath, test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, metricsPath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
 	let pinnable = emitsTargetIr(effectiveTarget)
 
 	var compileArgv = StringArray.create()
@@ -593,6 +747,9 @@ function runStagedTest(compilerExe FilePath, test SpecTest, specName String, sta
 	compileArgv.push(staged.buildTarget.toString())
 	compileArgv.push(OutputFlag)
 	compileArgv.push(exeBase.toString())
+	// The cumulative-CPU indicator's only input. It costs the compile one small file write, and
+	// nothing else: `PhaseProbe` is unconditional, so the numbers exist either way (see MetricsEmit).
+	compileArgv.push("{MetricsFlagPrefix}{metricsPath.toString()}")
 	// ALWAYS explicit, even when the effective target IS the host. The runner states what it is
 	// testing rather than trusting the build's default to agree with it — and the two ARE the same
 	// value on the host path (`Main.resolveTargetFlag` defaults to `detectHostTarget()`), so this
@@ -607,10 +764,21 @@ function runStagedTest(compilerExe FilePath, test SpecTest, specName String, sta
 		end 'namesRuntime'
 	end 'emitGolden'
 
+	// ⭐ DELETED BEFORE THE COMPILE, NOT ONLY AFTER IT. A run killed part-way through leaves this
+	// test's metrics file on disk, and the next run's compile writes one only if it SUCCEEDS — so a
+	// failing compile would be credited with the ticks of whichever earlier run last passed here.
+	// The instrument would then report a number about a compile that did not happen, which is this
+	// project's own recurring stale-artifact trap (see `Compiler.discardPreviousOutput`, which
+	// applies the same rule to the exe and the IR sidecar for the same reason).
+	try File.delete(metricsPath) otherwise ignore
+
 	let compile = try runProcess(Executable.path(compilerExe), argv: compileArgv) otherwise (e) 'compileSpawnFailed'
-		cleanup(staged, exePath: exePath, irPath: irPath)
-		return TestOutcome.fail("compiler spawn failed: {e.displayReason()}")
+		cleanup(staged, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
+		return TestRun.notCompiled("compiler spawn failed: {e.displayReason()}")
 	end 'compileSpawnFailed'
+
+	// Read before `cleanup` removes it, and before anything can return.
+	let cpu = readCompileCpu(metricsPath)
 
 	let outcome = checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath, effectiveTarget: effectiveTarget)
 
@@ -625,15 +793,61 @@ function runStagedTest(compilerExe FilePath, test SpecTest, specName String, sta
 	// single `cross` boolean here that would have silently dropped its golden.
 	// The pinnable, passing path runs it before cleanup, while the `--emit-ir` sidecar is still on disk.
 	if not outcome.isPass() or not pinnable 'noFragmentGate'
-		cleanup(staged, exePath: exePath, irPath: irPath)
-		return outcome
+		cleanup(staged, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
+		return TestRun.create(outcome, cpu: cpu)
 	end 'noFragmentGate'
 
 	let fragmentOutcome = checkTestFragment(fragmentDir, test: test, compile: compile, staged: staged, irPath: irPath, updateRequired: updateRequired)
 
-	cleanup(staged, exePath: exePath, irPath: irPath)
-	return fragmentOutcome
+	cleanup(staged, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
+	return TestRun.create(fragmentOutcome, cpu: cpu)
 end 'runStagedTest'
+
+// What this test's compile spent, read back out of the `--metrics` file it was told to write.
+//
+// ABSENT IS A REAL ANSWER, NOT AN ERROR. `writeMetrics` is the last step of a compile that SUCCEEDED,
+// so a `compilerError` case — which passes precisely by failing to compile — can never leave one. The
+// ticks it burned are genuinely unmeasurable from here, and the tally counts the test as `unreported`
+// so the indicator's coverage is visible instead of being quietly rolled into a total.
+//
+// MALFORMED IS NOT A REAL ANSWER. A file that exists but whose rows this cannot read means the writer
+// and the reader disagree about a format both halves of ONE tree are built from — the same class of
+// break the worker-pool protocol panics on, and for the same reason: skipping it silently would buy
+// an indicator that under-reports for a cause nobody can see.
+function readCompileCpu(path FilePath) returns CompileCpu
+	let text = try File.readText(path) otherwise 'noMetrics'
+		return CompileCpu.unreported
+	end 'noMetrics'
+
+	for line in text.split(LineSeparator) 'eachRow'
+		let trimmed = line.trim()
+		if trimmed.isEmpty() or trimmed.startsWith(MetricsCommentPrefix) 'notARow'
+			continue
+		end 'notARow'
+
+		let fields = trimmed.split(MetricsColumnSep)
+		if fields.count() != MetricsFieldCount 'malformed'
+			panic("readCompileCpu: {path.toString()} has a row with {fields.count()} tab-separated fields, not {MetricsFieldCount} — this harness and MetricsEmit disagree about the metrics format: '{trimmed}'")
+		end 'malformed'
+
+		let kind = try fields.get(MetricsKindField) otherwise panic("readCompileCpu: kind field OOB after the count check")
+		if kind != MetricsKindTotal 'notTheTotal'
+			continue
+		end 'notTheTotal'
+
+		let raw = try fields.get(MetricsCpuTicksField) otherwise panic("readCompileCpu: cputicks field OOB after the count check")
+		// `parseCount` is the suite's ONE decimal parser (see ScaleTestRunner); its error union is
+		// named for the harness that first needed it, and a number this compiler itself wrote cannot
+		// fail it.
+		let ticks = try parseCount(raw) otherwise (e) 'unreadableTicks'
+			panic("readCompileCpu: {path.toString()} has an unreadable cputicks column '{raw}': {scaleErrorText(e)}")
+		end 'unreadableTicks'
+
+		return CompileCpu.reported(ticks)
+	end 'eachRow'
+
+	panic("readCompileCpu: {path.toString()} carries no `{MetricsKindTotal}` row — MetricsEmit writes one first on every metrics build")
+end 'readCompileCpu'
 
 // The `--emit-ir-runtime=` value for a case's ```RequiredRuntime names. A `StringBuilder` rather than
 // repeated `String` concatenation for the reason every accumulator in this file gives: a `String`
@@ -1551,13 +1765,16 @@ function referenceFragmentPath(specName String, testName String) returns String
 end 'referenceFragmentPath'
 
 // Best-effort removal of everything this test wrote: its staged source file(s), the produced exe,
-// and the IR sidecar. A delete failure — e.g. the exe/IR were never produced because the compile
-// failed — is ignored. Correctness does not rest on this succeeding: a multi-file test's directory
-// is PURGED before it is written (`stageSourceFiles`), so a leftover can never join a later build.
-function cleanup(staged StagedTest, exePath FilePath, irPath FilePath)
+// the IR sidecar and the metrics TSV. A delete failure — e.g. the exe/IR/metrics were never produced
+// because the compile failed — is ignored. Correctness does not rest on this succeeding: a multi-file
+// test's directory is PURGED before it is written (`stageSourceFiles`), and the metrics file is
+// deleted before the compile that would write it (`runStagedTest`), so a leftover can never join a
+// later build or be read as a later compile's cost.
+function cleanup(staged StagedTest, exePath FilePath, irPath FilePath, metricsPath FilePath)
 	for path in staged.writtenFiles 'eachSource'
 		try File.delete(path) otherwise ignore
 	end 'eachSource'
 	try File.delete(exePath) otherwise ignore
 	try File.delete(irPath) otherwise ignore
+	try File.delete(metricsPath) otherwise ignore
 end 'cleanup'

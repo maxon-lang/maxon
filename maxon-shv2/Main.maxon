@@ -56,6 +56,13 @@ let WorkersFlagPrefix = "--workers="
 export let EmitIrFlag = "--emit-ir"
 export let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 
+// `--metrics=<path>`, exported for the same reason and now with TWO harnesses emitting it: the scale
+// runner spawns one build per rung with it (`ScaleTestRunner.compileRung`), and the spec runner
+// spawns one per test (`SpecTestRunner.runStagedTest`, whose cumulative-CPU indicator reads the
+// `total` row back). It was written out as a literal at the parser below AND at the scale runner
+// until the second harness would have made a third copy.
+export let MetricsFlagPrefix = "--metrics="
+
 // Comma, matching every other list-valued flag and directive this project reads (`--target`s in a
 // `<!-- targets: … -->` marker, the reference's own `TargetsDirectiveRegex`). One separator, so a
 // reader never has to ask which list is spelled which way.
@@ -273,6 +280,13 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	end 'selectedNothing'
 
 	let testsExit = reportResults(run.results)
+
+	// AFTER the summary and BEFORE the exit branches, so a red run reports its cost too: a suite that
+	// went red because something got dramatically slower is exactly when the number is worth reading.
+	// STDERR, because stdout is the report and must stay byte-identical between worker counts — see
+	// `SuiteCpuTally.reportLine`, which is the only place this line is spelled.
+	printError("{run.cpu.reportLine(run.poolSize)}\n")
+
 	if testsExit != 0 'someTestFailed'
 		return testsExit
 	end 'someTestFailed'
@@ -684,7 +698,7 @@ export type MaxonArgs
 				end 'noCompilerValue' else 'hasCompilerValue'
 					compilerPath = named
 				end 'hasCompilerValue'
-			end 'compilerFlag' else if arg.startsWith("--metrics=") 'metricsFlag'
+			end 'compilerFlag' else if arg.startsWith(MetricsFlagPrefix) 'metricsFlag'
 				metricsPath = try CommandLine.optionValue(arg) otherwise ""
 			end 'metricsFlag' else if arg.startsWith("--emit-corpus=") 'emitCorpusFlag'
 				emitCorpus = try CommandLine.optionValue(arg) otherwise ""
