@@ -483,3 +483,318 @@ end 'main'
 ```exitcode
 120
 ```
+
+
+<!-- test: contested-free-function-defaults-follow-the-declaration -->
+**A CONTESTED FUNCTION'S SYNTHESIZED DEFAULT HELPERS ARE RENAMED WITH IT.** A default value is
+compiled as a nullary helper function whose name `Project.paramDefaultHelperName` mints from the
+DECLARING function's name, and that mint's uniqueness rests on a premise this rung removed —
+*"`funcName` is unique whole-program (a second declaration of one name is E3006)"*. Once two
+directories may each declare `pick`, the sweep (which runs before any contest is known) mints
+`__paramDefault#pick#0` for BOTH.
+
+MEASURED before the rename: `error E3006: duplicate definition of function '__paramDefault#pick#0'`
+— a refusal naming a symbol absent from the source, against a program this rung's own rule accepts.
+The helper's name has to follow the DECLARATION's identity, which the fold has just decided.
+
+3/5/35 again, so an aliased pair cannot pass by coincidence: both defaults reaching alpha's gives
+33, both reaching beta's gives 55.
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+export function pick(n Integer = 3) returns Integer
+	return n
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function pick(n Integer = 5) returns Integer
+	return n
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick() * 10 + beta.pick()) as ExitCode
+end 'main'
+```
+```exitcode
+35
+```
+
+
+<!-- test: contested-free-function-nested-directory-qualifier -->
+**A CONTESTED FREE FUNCTION IN A NESTED DIRECTORY, CALLED THROUGH ITS MULTI-SEGMENT QUALIFIER.**
+This is where the `declaresCallee` veto in `resolvesAsNamespaceQualifiedFunction` had to learn about
+the contest. That veto means "a `type lib.inner` already wears this key, so the TYPE reading wins" —
+but N1c registers a contested free function under its own directory-qualified spelling, so
+`declaresCallee("lib.inner.pick")` became true OF THE FREE FUNCTION ITSELF and the veto fired
+against the one name the call could reach.
+
+MEASURED before the fix: `error E2010: Expected ''min' or 'max'' but got 'inner'` — the chain fell
+through to the numeric-bound arm — while the byte-identical UNCONTESTED program compiled. The
+one-dot spelling escaped only because `parseQualifiedCall`'s static arm builds the same string and
+found the same declaration, so the two-dot shape is where it surfaced.
+```maxon
+// --- file: lib/inner/x.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 3
+end 'pick'
+
+// --- file: beta/y.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 5
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (lib.inner.pick() * 10 + beta.pick()) as ExitCode
+end 'main'
+```
+```exitcode
+35
+```
+
+
+<!-- test: contested-free-function-three-directories -->
+The contest logic was written against TWO declarations; this is the third. The first pair is what
+mints the contest and re-files the INCUMBENT's already-folded entries; a third directory finds the
+name already contested and has nothing left to move, so it takes a different arm of
+`noteFreeFunctionDeclaration` entirely. Positional digits (100/10/1) so no pair of aliased calls
+produces the right total.
+```maxon
+// --- file: alpha/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 1
+end 'pick'
+
+// --- file: beta/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 2
+end 'pick'
+
+// --- file: gamma/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick() * 100 + beta.pick() * 10 + gamma.pick()) as ExitCode
+end 'main'
+```
+```exitcode
+124
+```
+
+
+<!-- test: contested-free-function-root-declaration-keeps-the-bare-name -->
+A ROOT declaration contests the name but contributes NO qualified spelling, because it has none —
+the root IS the unqualified namespace. Its entries keep the bare key, so a bare call from anywhere
+finds it while the subdirectory's is reached through `beta.`. This is the arm
+`freeFunctionRegistrationName` and `addContestedSpelling` both return early from, and the only case
+in which a contested name still answers to bare bytes.
+```maxon
+// --- file: r.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 3
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 5
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (pick() * 10 + beta.pick()) as ExitCode
+end 'main'
+```
+```exitcode
+35
+```
+
+
+<!-- test: contested-free-function-void-call-statement -->
+A contested pair called as VOID STATEMENTS through their qualifiers — the statement-position door
+(`namespaceQualifiedCallStmt`), which admits ONE dot where expression position starts at two. It
+reaches `parseNamespaceQualifiedCall` directly rather than through the static-call arm, so it is the
+one door the accidental `Type.method` fallthrough never covered.
+```maxon
+// --- file: alpha/a.maxon
+export function shout()
+	print("A")
+end 'shout'
+
+// --- file: beta/b.maxon
+export function shout()
+	print("B")
+end 'shout'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	alpha.shout()
+	beta.shout()
+	return 0
+end 'main'
+```
+```stdout
+AB
+```
+
+
+<!-- test: error.contested-bare-call-with-exactly-one-visible-candidate -->
+⛔ **THIS CASE RECORDS A DIAGNOSTIC THAT IS WRONG, AND IT IS PINNED SO THAT IT IS VISIBLE RATHER
+THAN MERELY UNTESTED.** `helper` is declared in two directories, so it is contested and neither
+declaration keeps the bare key. From `app/`, alpha's is `module`-scoped and out of reach; beta's is
+exported and perfectly nameable. The compiler answers **`call to undefined function 'helper'`** — a
+false statement about a function that is both defined and visible.
+
+The RULE behind the refusal is defensible and is this rung's thesis: once a name is contested the
+qualifier IS the name, so a file with no local declaration must write `beta.helper()`. What is not
+defensible is the sentence. The two ways out are a language decision and not a bug fix, which is why
+this case is recorded rather than changed:
+
+  • **REFUSE, truthfully** — a diagnostic of E3095's family saying the bare name is contested and
+    naming the one spelling this file may use. Needs a new code; the sentence E3095 is pinned to
+    ("multiple visible definitions found") is false when only one is.
+  • **RESOLVE** — bind the single visible candidate, which is what the self-hosted reference does
+    (`MaxonDialect.maxon:2225-2248` collects `methodNameIndex` candidates and returns the first
+    VISIBLE one; `TypeResolution.maxon:10280-10284` explicitly suppresses the undefined-callee
+    report when any candidate is visible). Its own header concedes the tier is order-dependent —
+    "if multiple files are visible, the first one wins" — which is the property N1b's
+    "a qualified spelling is a route, never a key" was written to avoid.
+
+Note what makes this sharp: a `module`-scoped helper added inside `alpha/` breaks a call in `app/`
+that names a function in `beta/`. Before this rung the same program was refused outright (E3006), so
+nothing regressed — but nothing resolves either.
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+module function helper() returns Integer
+	return 3
+end 'helper'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function helper() returns Integer
+	return 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return helper() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: app/specs/fragments/namespace-qualified-resolution/error.contested-bare-call-with-exactly-one-visible-candidate.test:18:9: call to undefined function 'helper'
+```
+
+
+<!-- test: error.contested-free-function-in-a-directory-named-after-a-type -->
+⛔ **A SECOND RECORDED WRONG ANSWER: A CONTESTED SPELLING AND A `Type.method` KEY ARE THE SAME
+BYTES.** N1c registers a contested free function as `<directory>.<name>` — deliberately "the same
+construction a method gets, in the same flat name space". That is also the collision: a directory
+named `Point/` holding a contested `create` claims the exact key `type Point`'s static factory is
+declared under, and the two meet as a duplicate.
+
+This breaks a guarantee N1b states outright — "a directory may be named after a type and no
+existing call moves" (`ProgramSignatures.resolvesAsNamespaceQualifiedFunction`). The refusal below
+is at least loud and names the right file. It is not always: with the two declarations returning
+DIFFERENT types the duplicate went unreported and `Point.create()` bound to the free function,
+surfacing downstream as `E2015: a field access on 'p', which is declared 'int' and not a struct
+type`.
+
+The cure is a contested registration name that cannot enter the `Type.method` space — a join on a
+separator outside the identifier alphabet, as `__paramDefault#f#0` already uses. That changes the
+emitted symbol of every contested function (the goldens above show `func @alpha.pick`), so it is a
+rung and not a review edit.
+```maxon
+// --- file: Point/p.maxon
+typealias Integer = int(0 to 125)
+
+export function create() returns Integer
+	return 3
+end 'create'
+
+// --- file: other/o.maxon
+typealias Integer = int(0 to 125)
+
+export function create() returns Integer
+	return 5
+end 'create'
+
+// --- file: app/main.maxon
+typealias Integer = int(0 to 125)
+
+export type Point
+	var x as Integer
+
+	export static function create() returns Integer
+		return 9
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	return Point.create() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type.test:5:17: duplicate definition of function 'Point.create'
+```
+
+
+<!-- test: error.three-way-ambiguous-bare-call -->
+E3095's candidate list with THREE competitors, declared in an order the sorted output does not
+preserve (`zulu`, `alpha`, `mid`). The list is rendered lexicographically because shv2's `Map` is
+open-addressed and its iteration is SLOT order — a function of two file paths' hashes — so an
+unsorted list would reorder itself on a rename, on table growth, or on a host whose paths hash
+differently, against a message pinned by this golden. The self-hosted reference renders unsorted;
+that is the one divergence, and it is what makes the message reproducible.
+```maxon
+// --- file: zulu/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 1
+end 'pick'
+
+// --- file: alpha/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 2
+end 'pick'
+
+// --- file: mid/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return pick() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3095: app/specs/fragments/namespace-qualified-resolution/error.three-way-ambiguous-bare-call.test:25:9: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, mid.pick, zulu.pick
+```

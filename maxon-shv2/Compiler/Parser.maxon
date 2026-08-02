@@ -26067,15 +26067,10 @@ export type Parser
 		// would count a chain that is one segment shorter every time round.
 		let qualifierDots = self.dottedChainLengthAt(self.pos)
 
-		// ⭐⭐ **THE WRITTEN QUALIFIER IS THE CALLEE WHEN THE BARE NAME IS CONTESTED (N1c).** Assembled BEFORE
-		// the cursor moves, for the same reason `qualifierDots` is.
-		//
-		// Ordinarily a directory qualifier is a ROUTE and the call resolves onto the bare declared name —
-		// N1b's thesis, and what keeps `utils.helper()` and `helper()` byte-identical. That holds precisely
-		// because a bare name names ONE function. Once two directories declare it, each is registered under
-		// its own qualified spelling (`declaredMethodName`), and the qualifier stops being a route and starts
-		// being the name: `alpha.duplicate()` must reach ALPHA's, and dropping the qualifier here would send
-		// it to whichever declaration happened to keep the bare key.
+		// ⚠ **ASSEMBLED BEFORE THE CURSOR MOVES, for the same reason `qualifierDots` is** — the loop below
+		// walks the chain away, and this is the last position from which the whole of it is readable. WHETHER
+		// the written chain or the bare member ends up the callee is `namespaceQualifiedCallee`'s one rule,
+		// asked by both directory-qualified call doors; see there.
 		let writtenName = self.assembleDottedChainAt(self.pos, dots: qualifierDots)
 
 		// Stops ON the final segment rather than past it: `parseCallNamed` consumes that token itself (it may
@@ -26085,10 +26080,24 @@ export type Parser
 			try self.consume(TokenKind.dot)
 		end 'eachQualifierSegment'
 
-		let bareName = self.current().value
-		let callee = writtenName if self.signatures.isContestedFreeFunction(bareName) else bareName
-		return try self.parseCallNamed(func, callee: callee, anchor: headTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		return try self.parseCallNamed(func, callee: self.namespaceQualifiedCallee(writtenName, bare: self.current().value), anchor: headTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 	end 'parseNamespaceQualifiedCall'
+
+	// ⭐⭐ **ROUTE OR NAME? — THE ONE PLACE THAT QUESTION IS ANSWERED, FOR BOTH DIRECTORY-QUALIFIED CALL
+	// DOORS (N1c review).** A qualifier is ordinarily a ROUTE and the call resolves onto the BARE declared
+	// name (N1b's thesis, and what keeps `utils.helper()` and `helper()` byte-identical). That holds
+	// precisely while a bare name names ONE function. Once two directories declare it, each is registered
+	// under its own qualified spelling (`declaredMethodName`) and the qualifier IS the name.
+	//
+	// ⛔ **IT WAS WRITTEN IN ONE DOOR AND NOT THE OTHER, WHICH IS THIS PROJECT'S SIGNATURE BUG.** The
+	// multi-segment arm (`parseNamespaceQualifiedCall`) carried the rule; the one-dot arm
+	// (`parseQualifiedCall`) went on passing `memberTok.value` — the bare member — and reached the right
+	// function only because `resolvesAsNamespaceQualifiedFunction` was declining it, so it fell through to
+	// the `Type.method` static path which happened to have built the identical string. Two doors, two
+	// answers, agreeing by accident; the accident ended the moment that veto was corrected.
+	function namespaceQualifiedCallee(written ByteArray, bare ByteArray) returns ByteArray
+		return written if self.signatures.isContestedFreeFunction(bare) else bare
+	end 'namespaceQualifiedCallee'
 
 	// `Color.red` — the value of an enum/union case: its TAG, as an i64 `literal` (the raw value for
 	// an int backing, the IEEE-754 bit pattern for a float). Named `Color.green` for a case the enum
@@ -26696,11 +26705,12 @@ export type Parser
 		// this name a second time up there measured a linear term (see `namespaceQualifiedCallDotsAt`).
 		//
 		// The rule itself is `resolvesAsNamespaceQualifiedFunction`'s — the TYPE reading wins wherever there is
-		// one — asked here and by the multi-segment arm and nowhere else. The callee it resolves TO is the bare
-		// member: see `parseNamespaceQualifiedCall` for why that leaves the emitted code untouched and the
-		// visibility decision where it already was.
+		// one — asked here and by the multi-segment arm and nowhere else. Which NAME it resolves to is
+		// `namespaceQualifiedCallee`'s, asked by both doors for the same reason: ordinarily the bare member,
+		// which leaves the emitted code untouched and the visibility decision where it already was; the
+		// written chain when the bare name is contested and no longer names one function.
 		if self.signatures.resolvesAsNamespaceQualifiedFunction(declaredCallee) 'namespaceQualifiedFreeCall'
-			return try self.parseCallNamed(func, callee: memberTok.value, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+			return try self.parseCallNamed(func, callee: self.namespaceQualifiedCallee(declaredCallee, bare: memberTok.value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 		end 'namespaceQualifiedFreeCall'
 
 		let result = try self.parseCallNamed(func, callee: declaredCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.notMinted)

@@ -191,3 +191,53 @@ end 'main'
 ```exitcode
 42
 ```
+
+
+<!-- test: error.three-way-ambiguous-typealias -->
+E3063's candidate list with THREE competitors, declared `zulu`, `alpha`, `mid` and rendered
+lexicographically — `insertCandidateName`'s sort, shared with E3095 for the reason given there.
+```maxon
+// --- file: zulu/t.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: alpha/t.maxon
+export typealias Score = int(0 to 200)
+
+// --- file: mid/t.maxon
+export typealias Score = int(0 to 150)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let x = 50 as Score
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3063: app/specs/fragments/typealias-collision/error.three-way-ambiguous-typealias.test:13:16: Ambiguous typealias 'Score': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.Score, mid.Score, zulu.Score
+```
+
+
+<!-- test: error.ambiguous-typealias-is-anchored-on-the-name-token -->
+**WHERE E3063 POINTS**, pinned on its own because the ported expectation for
+`error.exported-typealias-collision` was changed to enable it, and a moved anchor deserves a case
+that can only be satisfied one way. The binding name is 21 characters, so the NAME token's column
+(36) cannot be confused with the cast operand's (30) or with the statement's. The self-hosted
+reference anchors identically — `reportCompileError(..., line: typeToken.line, column:
+typeToken.column)`, `maxon-selfhosted/Compiler/Parser.maxon:1426` — and it is the token the user has
+to rewrite.
+```maxon
+// --- file: api/types.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/types.maxon
+export typealias Score = int(0 to 200)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let averyveryverylongname = 50 as Score
+	return averyveryverylongname
+end 'main'
+```
+```maxoncstderr
+error E3063: app/specs/fragments/typealias-collision/error.ambiguous-typealias-is-anchored-on-the-name-token.test:10:36: Ambiguous typealias 'Score': multiple visible definitions found. Qualify with a directory name. Candidates: api.Score, legacy.Score
+```

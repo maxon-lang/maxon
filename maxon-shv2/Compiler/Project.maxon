@@ -190,10 +190,21 @@ let RootNamespaceDisplay = "(root)"
 // its candidate list is read off the index; a contested ALIAS is filed under its bare name and the qualified
 // form has to be RENDERED from the declaring file's directory. Handing the function side this renderer would
 // have it re-derive a string it is already holding, and the two could then disagree.
+//
+// ⚠ **THE LAST JOIN GOES THROUGH `joinQualifiedName`, AND THE CONSTANT IT DOES *NOT* USE IS THE POINT
+// (N1c review).** `NamespaceSeparator` is the byte a module DIRECTORY renders its own internal separators
+// as (`namespaceForModuleDirectory`); `QualifiedAliasSeparator`, inside `joinQualifiedName`, is the byte
+// that divides a namespace from the NAME it qualifies — the one `splitQualifiedName` inverts and the one a
+// registry key actually carries. `namespaceQualifiedName` states that split and routes the last join the
+// same way. Spelled here with the directory's constant instead, this renders a candidate the moment those
+// two ever differ that no user could act on: the message would offer `api:Score` while the key that
+// resolves is `api.Score` — a diagnostic whose whole content is a fix, prescribing one that does not work.
+//
+// The `(root)` substitution happens BEFORE the join, so the root's display form survives it.
 export function qualifiedCandidateName(moduleDirectory String, bare ByteArray) returns String
 	let namespace = namespaceForModuleDirectory(moduleDirectory)
 	let shown = RootNamespaceDisplay if namespace.isEmpty() else namespace
-	return "{shown}{NamespaceSeparator}{String.from(bare)}"
+	return String.from(joinQualifiedName(shown.toByteArray(), member: bare))
 end 'qualifiedCandidateName'
 
 // ⭐⭐ **CANDIDATES ARE RENDERED IN LEXICOGRAPHIC ORDER, AND THAT IS A DELIBERATE DIVERGENCE FROM v1**,

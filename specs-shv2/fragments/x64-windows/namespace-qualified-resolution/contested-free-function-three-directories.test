@@ -1,0 +1,74 @@
+// Test: contested-free-function-three-directories
+// --- file: alpha/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 1
+end 'pick'
+
+// --- file: beta/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 2
+end 'pick'
+
+// --- file: gamma/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick() * 100 + beta.pick() * 10 + gamma.pick()) as ExitCode
+end 'main'
+---
+ExitCode: 124
+---
+func @alpha.pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect alpha.pick
+    x64.imulRegRegImm32 rbx, r8, 100
+    x64.callDirect beta.pick
+    x64.imulRegRegImm32 rax, r8, 10
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.callDirect gamma.pick
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @beta.pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @gamma.pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 4
+    x64.popReg rbp
+    x64.ret
+}
