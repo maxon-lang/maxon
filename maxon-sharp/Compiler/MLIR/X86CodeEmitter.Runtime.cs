@@ -2928,7 +2928,9 @@ public partial class X86CodeEmitter {
     // context save has finished. A clear placed BELOW the commit would sit inside that window, so a
     // completer could read whatever preceded it and enqueue a GT still executing these instructions.
     // The store itself is redundant — __gt_context_switch's invariant already leaves a RUNNING GT at
-    // 0 — but its POSITION is what the five submit families must keep identical.
+    // 0 — but its POSITION is the rule stated at EmitIoSubmitPipeOverlapped: ahead of whatever makes
+    // this GT discoverable to a completer, which for rt_ntc is the commit CAS rather than an arm
+    // (rt_ntc has no pre-arm clear; the two are not interchangeable placements).
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
@@ -3246,6 +3248,8 @@ public partial class X86CodeEmitter {
     // Commit first (Go's netpollblockcommit): a failed commit means a completer claimed the wakeup
     // while we were getting here, so we must NOT park — _resume reads the published result.
     EmitNetpollCommitCurrentOrAbort($"{labelPrefix}_resume");
+    // A 0-over-0 store below the commit CAS — see the identical one in EmitIoSubmitOverlappedCore.
+    // The clear that carries this family is the one ahead of the arm, far above.
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitLeaMainThreadInline(X86Register.Rdx);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
@@ -3477,8 +3481,13 @@ public partial class X86CodeEmitter {
     // second M then resumed it onto its pre-__gt_morestack (relocated, munmapped) stack.
     // ioYielded==0 for the entire armed period is what the spin-gate needs, so that it blocks until
     // this GT actually parks and __gt_context_switch publishes 1. The store is now redundant with
-    // that function's invariant (a running GT reads 0); it is its POSITION, ahead of the arm, that
-    // the five submit families must keep identical.
+    // that function's invariant (a running GT reads 0); what survives it is the RULE, which is about
+    // POSITION and not about the store: NOTHING MAY MAKE THIS GT DISCOVERABLE TO A COMPLETER WHILE
+    // ioYielded COULD STILL READ 1. Each submit family has its own moment of becoming discoverable
+    // and puts its clear ahead of that one — the overlapped families ahead of the ARM
+    // (EmitIoSubmitSocketOverlapped, here, EmitIoSubmitOverlappedCore), rt_ntc ahead of its COMMIT
+    // CAS, EmitIoSubmitSync ahead of the ENQUEUE. They are not five copies of one placement, and a
+    // sixth family should be read against the rule rather than against its neighbours.
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
 
@@ -3599,8 +3608,9 @@ public partial class X86CodeEmitter {
     // io_result_val. Just clear our own ioYielded flag and switch — the
     // mainThread's mainthread_loop is the canonical owner of its status
     // field and decides when to transition it.
-    // (ioYielded was already cleared to 0 before the arm above — OPEN #66; this keeps the
-    // "clear before the context switch" ordering explicit and is a harmless no-op.)
+    // (The ioYielded store below is 0-over-0 and sits BELOW the commit CAS, so it is not the
+    // position rule — it is the third of three identical vestiges; see EmitIoSubmitOverlappedCore.
+    // The clear that carries this family is the one ahead of the arm, far above.)
     //
     // Commit first (Go's netpollblockcommit): a failed commit means a completer claimed the wakeup
     // while we were getting here, so we must NOT park — _resume reads the published result.
@@ -5172,10 +5182,18 @@ public partial class X86CodeEmitter {
   ///
   /// ⭐⭐ THIS FUNCTION IS THE SOLE WRITER OF <c>ioYielded</c> FOR A RUNNING OR SUSPENDING GT, AND
   /// THAT SOLENESS IS THE POINT. The flag means exactly "this GT is suspended OFF ITS OWN STACK, so
-  /// another M may be handed it" — the gate <c>__netpoll_claim_done</c>'s post-claim spin,
-  /// <c>__gt_timer_check</c>'s park gate and <c>__gt_process_pending_waiter</c> all stand on. Only a
-  /// context switch knows both halves of that fact, because only it knows WHICH GT is leaving its
-  /// stack.
+  /// another M may be handed it" — the gate <c>__netpoll_claim_done</c>'s post-claim spin and
+  /// <c>__gt_timer_check</c>'s park gate both stand on. Only a context switch knows both halves of
+  /// that fact, because only it knows WHICH GT is leaving its stack.
+  ///
+  /// ⚠ ON x86 <c>__gt_process_pending_waiter</c> DOES NOT YET STAND ON IT, and this comment must not
+  /// be read as saying it does. arm64's <c>__gt_ppw_spin</c> waits for <c>w.ioYielded == 1</c> before
+  /// enqueueing a deferred awaiter; x86's <c>__gt_process_pending_waiter</c> enqueues unconditionally,
+  /// so an awaiter that has published <c>promise.waiter</c> but has not yet reached its next context
+  /// switch can be enqueued while still running, and a third M can then resume it onto the SP saved
+  /// at its previous suspension. That gap predates this invariant and is NOT closed by it — closing
+  /// it means porting arm64's spin, which needs its own termination argument on x86 (see
+  /// EmitGtProcessPendingWaiter).
   ///
   /// ⚠ IT USED TO BE THE RESUMER'S JOB ON x86, AND THE RESUMER CANNOT KNOW. Ten scheduler loops each
   /// stamped <c>ioYielded = 1</c> on the GT THEY DISPATCHED once the switch returned to them, which
@@ -5660,6 +5678,21 @@ public partial class X86CodeEmitter {
   /// If the waiter is a regular GT (stackBase != 0), enqueues it.
   /// If the waiter is a mainThread (stackBase == 0), signals the owning P's wakeEvent.
   /// Clears P->pendingWaiter after processing.
+  ///
+  /// ⚠ KNOWN GAP, x86 ONLY: THIS ENQUEUE IS NOT GATED ON <c>ioYielded</c> AND arm64's IS. arm64
+  /// spins in <c>__gt_ppw_spin</c> until <c>w.ioYielded == 1</c>, because a waiter publishes
+  /// <c>promise.waiter = self</c> and then KEEPS RUNNING its <c>__gt_await</c> scheduling loop; if
+  /// the awaited GT completes on another M in that window, this function enqueues a GT that is still
+  /// executing, and a third M resumes it onto the SP saved at its PREVIOUS suspension — two Ms on one
+  /// stack. Reproducing it needs the child to complete on a different M from the awaiter, so it is
+  /// rare rather than absent.
+  ///
+  /// It is not fixed here because the gate is not the whole port: arm64's spin terminates only
+  /// because its awaiter always reaches a context switch, and an awaiter whose promise completed
+  /// leaves <c>__gt_await</c> and runs USER code at <c>ioYielded == 0</c> for as long as it likes —
+  /// so a naive spin trades a rare double-schedule for a rare unbounded wait. B6b made the flag
+  /// trustworthy on x86 (a running GT now reads 0, which it did not before); building the gate on top
+  /// of it is its own rung.
   /// </summary>
   private void EmitGtProcessPendingWaiter() {
     EmitRuntimeFunctionStart("__gt_process_pending_waiter", 0, 0x20);
@@ -8118,9 +8151,11 @@ public partial class X86CodeEmitter {
     // NOT park — _resume's __netpoll_park_done waits out any publish still in flight and then reads
     // status and io_result_val.
     EmitNetpollCommitCurrentOrAbort($"{labelPrefix}_resume");
-    // Clear ioYielded flag BEFORE context switch so the completer that claimed `Parked` spins
-    // until the switch has saved our RSP/RBP (preventing a race where the IOCP thread enqueues us
-    // before our state is saved).
+    // A 0-over-0 store, kept only so the three overlapped families read alike: it is BELOW the commit
+    // CAS, so it is on the wrong side of the position rule (EmitIoSubmitPipeOverlapped) and can
+    // defend nothing a completer could already have read. What actually holds the completer here is
+    // __gt_context_switch's publish, which its post-claim spin waits for; the clear that matters for
+    // this family is the one ahead of the arm, far above.
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitLeaMainThreadInline(X86Register.Rdx);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
