@@ -1,0 +1,49 @@
+// Test: nested-calls-in-namespace
+
+typealias Integer = int(i64.min to i64.max)
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function sum_three(a Integer, b Integer, c Integer) returns Integer
+	return add(add(a, b: b), b: c)
+end 'sum_three'
+
+function main() returns ExitCode
+	return sum_three(1, b: 2, c: 3)
+end 'main'
+---
+ExitCode: 6
+---
+func @add {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @sum_three {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x2
+    arm64.bl add
+    arm64.movRegReg x1, x19
+    arm64.bl add
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.movImm x2, 3
+    arm64.bl sum_three
+    arm64.epilogue 16
+    arm64.ret
+}

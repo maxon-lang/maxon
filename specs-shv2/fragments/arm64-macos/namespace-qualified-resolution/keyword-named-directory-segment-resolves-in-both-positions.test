@@ -1,0 +1,34 @@
+// Test: keyword-named-directory-segment-resolves-in-both-positions
+// --- file: lib/from/h.maxon
+typealias Integer = int(0 to 125)
+
+export typealias Score = int(0 to 100)
+
+export function helper() returns Integer
+	return 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let s = 5 as lib.from.Score
+	return (lib.from.helper() + (s as int)) as ExitCode
+end 'main'
+---
+ExitCode: 12
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl helper
+    arm64.add x0, x0, 5
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @helper {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+}

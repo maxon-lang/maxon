@@ -1,0 +1,41 @@
+// Test: duplicate-block-identifiers.different-blocks
+function main() returns ExitCode
+	var x = 0
+	if true 'outer'
+		x = 1
+	end 'outer'
+	
+	if true 'inner'
+		x = 2
+	end 'inner'
+	
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 1
+    arm64.cbnz x1, outer
+    arm64.b critsplit
+  outer:
+    arm64.movImm x0, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x1, 1
+    arm64.cbnz x1, inner
+    arm64.b critsplit
+  inner:
+    arm64.movImm x0, 2
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.epilogue 16
+    arm64.ret
+}

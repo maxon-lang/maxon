@@ -1,0 +1,42 @@
+// Test: valid-all-paths
+
+typealias Integer = int(i64.min to i64.max)
+
+function test(x Integer) returns Integer
+	if x > 0 'check'
+		return 1
+	end 'check'
+	return 0
+end 'test'
+
+function main() returns ExitCode
+	return test(5)
+end 'main'
+---
+ExitCode: 1
+---
+func @test {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x0, gt
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+    arm64.bl test
+    arm64.epilogue 16
+    arm64.ret
+}
