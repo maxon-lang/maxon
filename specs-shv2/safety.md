@@ -164,6 +164,9 @@ end 'main'
 ```
 
 <!-- disabled-test: float-divide-by-zero -->
+<!-- ⚠ RE-SHELVED WITH ITS REAL REASON. Filed as blocked on float interpolation; that landed and this
+     still does not compile — it needs the block-form `try 'label' … end` (E2015), a separate slice.
+     Measured by flipping the marker and reading the error. -->
 <!-- BLOCK-FORM `try` — see `divide-by-zero` above for the whole reason; the division half is
      implemented and `float-divide-by-zero-expression-form` below asserts the same 42 in the
      expression form. Enable with block-form `try`. -->

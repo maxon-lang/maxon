@@ -333,7 +333,8 @@ end 'stdBinOpcodeIsFloatOnly'
 // one result out, non-trapping, pure — so per the header's rule it is an opcode, not a
 // variant.
 //
-// ⚠⚠ THESE TWO, AND THE `bitcastF64ToI64` APPENDED AT THE END OF THE ENUM, ARE THE ONLY
+// ⚠⚠ THESE TWO, AND THE `bitcastF64ToI64`/`bitcastI64ToF64` PAIR APPENDED AT THE END OF THE ENUM,
+// ARE THE ONLY
 // OPCODES WHOSE RESULT TYPE DIFFERS FROM THEIR `operandType`, and that is the fact to hold on
 // to. For `neg`/`bitNot`/`logicalNot` the two coincide, so nothing has ever had to distinguish
 // them. Here they cannot: **`operandType` is always the
@@ -380,11 +381,24 @@ end 'stdBinOpcodeIsFloatOnly'
 // It exists for `float.hash` (`BuiltinConformanceRuntime.buildFloatHash`), which masks a float's
 // IEEE-754 pattern to 32 bits — a question about BITS that no arithmetic opcode can ask.
 //
-// ONE DIRECTION ONLY. There is deliberately no `bitcastI64ToF64`: nothing in shv2 produces one
-// (`maxon-selfhosted` added the inverse for `Vector`/generic-float bridging, which shv2 has not
-// reached), and an opcode with zero producers is untested dead code in three backends.
+// ⭐⭐ `bitcastI64ToF64` IS ITS INVERSE, AND THE TWO ARE NOW A PAIR — the reinterpretation READ BACK.
+// It reads a GPR and writes an XMM/SIMD register, the same 64 bits the other direction moved out, and
+// it is one instruction on every target: x64 `movq xmm, r64` (66 REX.W 0F 6E), arm64 `fmov d, x`,
+// wasm `f64.reinterpret_i64`.
 //
-// ⚠ APPENDED PAST THE MATH BAND, per the band-append invariant, and this enum's range arms are the
+// ⚠ **IT IS THE ONE MEMBER OF THIS ENUM PAST `fpToSi` THAT READS A GPR**, which is why
+// `stdUnaryOperandIsFloat` has to give it an arm of its own answering FALSE — every other member
+// from `fpToSi` down reads the float file, so a range extended to reach this one would invert its
+// answer. The DOMAIN follows the SOURCE, and this opcode's source is the integer side.
+//
+// ITS PRODUCER is `stdlib/Builtins.maxon`'s `__float_fromString`, reached through the Maxon-tier
+// door `__Builtins.bitsToFloat` (`Parser.BuiltinsBitsToFloatName`): the tree's ONE correctly-rounded
+// decimal reader answers BITS, and turning those bits back into the `float` a Maxon program asked for
+// is a question no arithmetic opcode can answer either. That closes the loop the outbound direction
+// opened — the print path takes a float apart, the parse path puts one back together, and there is
+// exactly one conversion in each direction.
+//
+// ⚠ APPENDED PAST THE MATH BAND, BOTH OF THEM, per the band-append invariant, and this enum's range arms are the
 // reason that matters: `stdUnaryOperandIsFloat` reads `fpToSi to abs`, `unaryResultClass` and
 // `unaryResultValType` read `floor to abs`, and the wasm isel dispatches `floor to abs` while the
 // arm64 and x64 isels dispatch `floor to round` (the ROUNDING sub-band alone — `sqrt` and `abs` are
@@ -396,6 +410,14 @@ end 'stdBinOpcodeIsFloatOnly'
 // every `… to sqrt` range above now reads `… to abs`: the band GREW, so the arms that describe the
 // band name its new last member. Appending `abs` past `bitcastF64ToI64` instead would have left it
 // outside all four of them — a math intrinsic classified by the arms that answer for a reinterpretation.
+//
+// ⚠ THE TWO BITCASTS ARE NOT A "BAND" ANY RANGE MAY SPAN, though they sit adjacent and are inverses.
+// They DISAGREE about the one question the arms above ask — `stdUnaryOperandIsFloat` is `true` for
+// the outbound one and `false` for the inbound — so a `bitcastF64ToI64 to bitcastI64ToF64` range is
+// wrong at every site that asks about the operand or the result — `stdUnaryOperandIsFloat`,
+// `unaryResultClass`, `unaryResultValType` — so every one of those names them one at a time. A site
+// whose answer genuinely does not depend on the direction (`floatRoundModeFor`'s "there is nothing
+// here to round") may span them, and says so.
 export enum StdUnaryOpcode
 	neg
 	bitNot
@@ -408,6 +430,7 @@ export enum StdUnaryOpcode
 	sqrt
 	abs
 	bitcastF64ToI64
+	bitcastI64ToF64
 end 'StdUnaryOpcode'
 
 // ⭐⭐ **THE ONE ANSWER TO "does this unary opcode READ a float?"** — and the reason it lives beside
@@ -434,6 +457,11 @@ export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
 		// it leaves the domain without converting. Extending the range would make the comment above
 		// false for its last member, which is how a range arm's endpoint stops describing its content.
 		bitcastF64ToI64 gives true
+		// ⚠ THE INBOUND BITCAST IS THE ONLY MEMBER PAST `siToFp` THAT READS AN INTEGER, and it is the
+		// clearest case of this function being about the SOURCE: `bitcastI64ToF64`'s result is an f64,
+		// so anything reading the opcode's NAME for its answer gets `true` and colours the operand into
+		// an XMM register that holds an i64. Its `false` is `siToFp`'s `false`, one band apart.
+		bitcastI64ToF64 gives false
 	end 'k'
 end 'stdUnaryOperandIsFloat'
 

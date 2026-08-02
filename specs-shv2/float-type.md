@@ -348,7 +348,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: float-print-negative-and-repeat -->
+<!-- test: float-print-negative-and-repeat -->
 <!-- P1.2 String — `print` + the `{}` interpolation that calls mrt_f64_to_string. The x64 SSA-destruction hazard this case regresses is covered at THIS rung by specs-shv2/float-compare-branch.md, which reaches the same unordered else edge through an ExitCode instead of a formatted string. -->
 ```maxon
 function main() returns ExitCode

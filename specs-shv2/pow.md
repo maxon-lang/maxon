@@ -83,16 +83,13 @@ end 'main'
 ```
 
 
-<!-- disabled-test: fractional-exponent -->
-<!-- needs FLOAT INTERPOLATION, which is P1.2 wave B-float and is blocked on shv2 having no f64
-     function-argument ABI: the `{result}` hole has to call `mrt_f64_to_string`. Refused at the hole
-     (4:10) by `Parser.maxon:25104`, whose own sentence sequences it — "P1.2 wave B interpolates String,
-     integer and bool expressions; float arrives next". It cannot ride this port because the gap is in
-     the ARGUMENT ABI, not in `pow`: this is the only case in the file whose assertion is a ```stdout
-     block rather than an exit code, and every other case here computes a float through the identical
-     `Math.pow` call and reads it back through `trunc`, so `pow` itself is covered without it. Already
-     shelved on the same grounds by `string-interpolation.md` (`float-interpolation`, `float-literal`)
-     and `float-type.md` (`float-print-negative-and-repeat`). -->
+<!-- test: fractional-exponent -->
+The only case in this file that reads its result as TEXT rather than through `trunc`, so it is the
+only one that pins what `Math.pow` actually computes rather than what it truncates to. It sat
+`disabled-test:` awaiting float interpolation, and its expectation was written against the
+bootstrap's fixed-six-decimal printer (`1.999999`). shv2 prints the SHORTEST decimal that reads back
+as the same double, so the same value now spells out in full — `Math.pow(4.0, 0.5)` is a software
+exp/log pair and lands one ulp under 2, which six decimals were rounding away.
 ```maxon
 function main() returns ExitCode
 	let result = Math.pow(4.0, exponent: 0.5)  // Square root
@@ -104,7 +101,7 @@ end 'main'
 0
 ```
 ```stdout
-1.999999
+1.9999999999999991
 ```
 
 

@@ -332,3 +332,48 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: one-compare-two-branches-across-a-loop -->
+A compare's boolean may be tested by MORE THAN ONE branch, and only the branch the compare's flags
+actually reach may be fused with it.
+
+`small` is tested twice: once immediately after `x < 10` (where the `cmp` is the last flag-writer, so
+the `jcc` may read its flags) and once after a loop that has written flags many times over. The
+fusion record used to be keyed by the compare's VALUE, so the entry proved for the FIRST branch
+answered for the second one too: the later branch was emitted as a bare `jcc` with no `cmp` at all,
+reading whatever the loop's own `i < n` had left — and because both uses were then classified as
+flag reads rather than register reads, no `setcc` was emitted anywhere and the boolean existed in no
+register. It is keyed by the branching BLOCK now, which is the pair the fusion is a fact about; a
+block has exactly one terminator, so the key cannot be lossy.
+
+`small` is true, so the answer is `1 + (0+1+2+3) + 100` = **107**. Reading the loop's exit flags
+instead answers 7.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+function classify(x Num, n Num) returns Num
+	let small = x < 10
+	var acc = 0
+	if small 'first'
+		acc = acc + 1
+	end 'first'
+
+	var i = 0
+	while i < n 'loop'
+		acc = acc + i
+		i = i + 1
+	end 'loop'
+
+	if small 'second'
+		acc = acc + 100
+	end 'second'
+	return acc
+end 'classify'
+
+function main() returns ExitCode
+	return classify(3, n: 4)
+end 'main'
+```
+```exitcode
+107
+```

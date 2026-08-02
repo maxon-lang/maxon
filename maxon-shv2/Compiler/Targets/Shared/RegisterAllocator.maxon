@@ -885,7 +885,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// the operand model — so it covers every one of them without an arm here.
 		// The data-section band carries no COPY hint either: a `lea`, a load and a store are
 		// none of them a move, so no two of their operands want the same register.
-		andRegReg to minMaxSdRegReg then break 'hint'
+		andRegReg to movqXmmGpr then break 'hint'
 		// The arm64 band carries NO copy hint: arm64 is 3-ADDRESS (no ALU op is a move, none has a
 		// two-address reuse to bias). The arm64 moves that DO carry a fixed-register hint — the param
 		// capture, the call-arg pre-move, the return move — are the SHARED `movRegReg` handled above,
@@ -904,9 +904,9 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// Neither stack-argument op is a MOVE: the outgoing store has a use and no def, the incoming load a
 		// def and no use, so no two of their operands could want the same register. No copy hint.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg then break 'hint'
-		// The arm64 bit reinterpretation is not a move — its two operands live in DIFFERENT register
-		// files, so they could not want the same register even in principle. No copy hint.
-		arm64FmovGprFp then break 'hint'
+		// Neither arm64 bit reinterpretation is a move — each one's two operands live in DIFFERENT
+		// register files, so they could not want the same register even in principle. No copy hint.
+		arm64FmovGprFp to arm64FmovFpGpr then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1062,7 +1062,14 @@ function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorH
 	let class = liveness.classOf(v)
 	let classPool = poolOfClass(pool, class: class, file: liveness.registerFile)
 	let blocked = (working and not dyingRegs) or liveness.forbiddenOf(v) or (fullRegisterMask() and not classPool)
-	let reg = chooseRegister(v, classPool: classPool, blocked: blocked, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, stats: stats)
+	// `held` and `forbidden` are handed on SEPARATELY, and only so the exhaustion panic can tell them
+	// apart. `blocked` is their union, and a union cannot: a value confined to the 5 callee-saved
+	// registers has 9 caller-saved bits set by `forbiddenOf` ALONE, so `blocked` covers the whole pool
+	// whenever the held set covers the other 5 — and the panic then blamed plain full-pool pigeonhole
+	// for a CONFINED failure, sending its reader to `analyzeBlockPressure` instead of to the coloring
+	// order. MEASURED on `while-loops.sequential-loops-across-a-call`'s own shape: 5 values live and
+	// 14 registers, reported as a pool overflow.
+	let reg = chooseRegister(v, classPool: classPool, blocked: blocked, held: working and not dyingRegs, forbidden: liveness.forbiddenOf(v), dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, stats: stats)
 	assertColouredInClass(v, reg: reg, class: class, file: liveness.registerFile)
 	alloc.assign(v, regNum: reg)
 	stats.valuesColored = stats.valuesColored + 1
@@ -1119,7 +1126,7 @@ end 'assertColouredInClass'
 // problem; forbidden sets make this LIST colouring, where greedy is exact only if the scarce
 // callee-saved half is protected. Two sequential loops containing calls were enough to hit it
 // (`while-loops.sequential-loops-across-a-call`).
-function chooseRegister(v ValueId, classPool RegMask, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns RegNum
+function chooseRegister(v ValueId, classPool RegMask, blocked RegMask, held RegMask, forbidden RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns RegNum
 	// The volatility preference is the COPY GROUP's, not `v`'s alone — see `copyGroupBlocked`.
 	let groupBlocked = copyGroupBlocked(v, blocked: blocked, hints: hints, alloc: alloc, liveness: liveness)
 	let takeable = preferredVolatilityMask(groupBlocked, classPool: classPool) or dyingRegs
@@ -1181,7 +1188,7 @@ function chooseRegister(v ValueId, classPool RegMask, blocked RegMask, dyingRegs
 		// The confined-pool figure is per CLASS, not the whole callee-saved set: since Wave 2 that set
 		// spans both files (5 GPRs + 10 XMMs), and quoting 15 at a colorer that ran out of GPRs would
 		// name a number no value could ever have had.
-		panic("chooseRegister: no free register for value {v} ({liveness.classOf(v).name} pool {classPool}, blocked mask {blocked}) — the splitter is supposed to relieve EVERY over-pool point before coloring, which is what makes `colorFunction` unable to fail. Reaching this is a SPLITTER BUG, not a colorer limitation, and THE TWO MASKS SAY WHICH KIND. If `blocked` covers the whole pool, the point overflowed the FULL pool: that is plain per-file pigeonhole and `analyzeBlockPressure`'s `classRowGet(effective, ...) > classPoolSizeOf(...)` owns it. If `blocked` leaves some of the pool clear, value {v}'s own `forbidden` set excluded the rest and the point is CONFINED to a subset (a value live across a call is confined to the {regMaskPopcount(classPool and calleeSavedMask())} callee-saved {liveness.classOf(v).name} register(s); an idiv reserves RAX/RDX): `RegPoolCensus.screenViolates` plus `HallCondition`'s exact bipartite confirmation own that half. ⚠ AND A REGISTER HELD AT AN OP THAT IS IN NO LIVE SET IS INVISIBLE TO BOTH — a reuse copy and a DEAD DEF are the two, `addOpTransientPressure` is the ONE place either is counted, and a demand it misses is one no popcount over a live set can ever see.")
+		panic("chooseRegister: no free register for value {v} ({liveness.classOf(v).name} pool {classPool}, blocked mask {blocked}, of which HELD {held and classPool} and FORBIDDEN {forbidden and classPool}) — the splitter is supposed to relieve EVERY over-pool point before coloring, which is what makes `colorFunction` unable to fail. Reaching this is a SPLITTER BUG, not a colorer limitation, and THE TWO MASKS SAY WHICH KIND. READ `HELD` AND `FORBIDDEN`, NOT `blocked` — `blocked` is their UNION and cannot tell them apart. If HELD alone covers the whole pool, the point overflowed the FULL pool: that is plain per-file pigeonhole and `analyzeBlockPressure`'s `classRowGet(effective, ...) > classPoolSizeOf(...)` owns it. If FORBIDDEN is non-empty, value {v}'s own `forbidden` set excluded that part of the pool and HELD the rest and the point is CONFINED to a subset (a value live across a call is confined to the {regMaskPopcount(classPool and calleeSavedMask())} callee-saved {liveness.classOf(v).name} register(s); an idiv reserves RAX/RDX): `RegPoolCensus.screenViolates` plus `HallCondition`'s exact bipartite confirmation own that half. ⚠ AND A REGISTER HELD AT AN OP THAT IS IN NO LIVE SET IS INVISIBLE TO BOTH — a reuse copy and a DEAD DEF are the two, `addOpTransientPressure` is the ONE place either is counted, and a demand it misses is one no popcount over a live set can ever see.")
 	end 'exhausted'
 	return reg
 end 'chooseRegister'
@@ -1597,6 +1604,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// its OWN value's allocation, which is what puts the dest in a GPR and the source in an XMM
 		// with nothing here having to know that.
 		movqGprXmm(dest, src) then return TargetOp.movqGprXmm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		movqXmmGpr(dest, src) then return TargetOp.movqXmmGpr(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		// f64 ABS colors its two XMM operands like any other pair. That it is a REUSE def rather than a
 		// plain one is the OPERAND MODEL's statement, already honoured by the time coloring runs, so
 		// nothing here has to know the two will land in one register.
@@ -1689,8 +1697,10 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// The stack-argument pair colors its ONE register operand each; the slot is a frame index, not a register.
 		arm64StoreOutgoingArg(slot, srcReg) then return TargetOp.arm64StoreOutgoingArg(slot, srcReg: colorVRegWith(srcReg, alloc: alloc))
 		arm64LoadIncomingArg(dest, slot) then return TargetOp.arm64LoadIncomingArg(colorVRegWith(dest, alloc: alloc), slot: slot)
-		// The arm64 BIT REINTERPRETATION — both operands colored from their own values, like `fcvtzs`.
+		// The arm64 BIT REINTERPRETATIONS — both operands colored from their own values, like `fcvtzs`
+		// and `scvtf`, the converting neighbours each shares its pair of register files with.
 		arm64FmovGprFp(dest, src) then return TargetOp.arm64FmovGprFp(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		arm64FmovFpGpr(dest, src) then return TargetOp.arm64FmovFpGpr(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 	end 'rewrite'
 end 'colorTargetOp'
 

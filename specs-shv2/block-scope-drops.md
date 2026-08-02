@@ -276,3 +276,39 @@ end 'main'
 ```
 ```stdout
 ```
+
+<!-- test: local-declared-before-a-loop-drops-once-after-it -->
+A local declared BEFORE a loop drops ONCE, in the block control actually leaves through — not once
+per iteration, and not only on one arm of a branch.
+
+`scratch` outlives the `while` and is never read after it, so the function's implicit-void end owes
+its release. That drop used to be emitted into `self.currentBlock`, which after a nested `if`/`while`
+is that construct's BODY rather than the block the `retVoid` ends: the decref landed inside the loop
+and ran once per iteration — a double free that corrupts the heap — while the loop's exit path got
+none. `emitScopeDrops` now takes the destination block as a parameter, so every caller names the
+block it means and there is no implicit one left to go stale.
+
+The exit code is `sink.count()`, so a `sink` corrupted by the double free cannot answer 3.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function fill(sink ByteArray)
+	var scratch = ByteArray.create()
+	scratch.push('x')
+	var i = 0
+	while i < 3 'each'
+		sink.push('y')
+		i = i + 1
+	end 'each'
+end 'fill'
+
+function main() returns ExitCode
+	var sink = ByteArray.create()
+	fill(sink)
+	return sink.count()
+end 'main'
+```
+```exitcode
+3
+```

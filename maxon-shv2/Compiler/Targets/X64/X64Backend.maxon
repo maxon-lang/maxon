@@ -229,6 +229,17 @@ end 'minMaxSdOpcode'
 // is what makes it the 64-bit GPR transfer rather than `movd`'s 32-bit one.
 let OpcodeMovqRmXmm = 0x7E
 
+// movq xmm, r/m64 (66 REX.W 0F 6E /r) — the INVERSE reinterpretation, `bitcastI64ToF64`'s instruction:
+// the same 64 bits moved back into the float file so a decimal reader's answer can be a `float`.
+//
+// ⚠ ITS FIELD MAPPING IS THE ORDINARY `r, r/m` ONE (reg = the XMM DEST, r/m = the GPR source), which is
+// exactly what `encodeSseRegReg` assembles — so unlike its twin above this direction needs no encoder of
+// its own. The asymmetry is Intel's: `0F 7E` is a STORE-shaped form and `0F 6E` a LOAD-shaped one.
+//
+// ⚠ REX.W is required for the mirror of `0F 7E`'s reason: without it `66 0F 6E` is `movd xmm, r/m32`,
+// which would move 32 bits and leave the resulting double's exponent and sign zeroed.
+let OpcodeMovqXmmRm = 0x6E
+
 // --- The GROUP-14 SSE shift-by-immediate pair: f64 ABSOLUTE VALUE (`specs/abs.md`) ---
 //
 // `psllq xmm, imm8` is `66 0F 73 /6 ib` and `psrlq xmm, imm8` is `66 0F 73 /2 ib` — ONE opcode byte
@@ -1617,6 +1628,11 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// converts, its ModR/M fields are INVERTED, which `encodeMovqGprXmm` owns so that this arm
 		// can read in the direction the data actually flows.
 		movqGprXmm(dest, src) then encodeMovqGprXmm(code, dest: resolveGpr(dest), src: resolveXmm(src))
+		// The INVERSE reinterpretation, and the arm that shows the pair is asymmetric only in its
+		// ENCODING: this direction's ModR/M fields are the ordinary `r, r/m` mapping, so it rides the
+		// shared `encodeSseRegReg` with `wide: true` — the same `true` the two converts need, and for
+		// the same reason (it selects the GPR half's width, not an operand size the 66 already chose).
+		movqXmmGpr(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeMovqXmmRm, dest: resolveXmm(dest), src: resolveGpr(src), wide: true)
 		// ⚠ THE ONE ARM HERE THAT EMITS TWO INSTRUCTIONS, and `src` is deliberately unused: the op is
 		// two-address (a REUSE def — see TargetOperands), so by the time coloring is done `dest` and
 		// `src` ARE the same register and the shifts work on it in place. Naming `src` in the encoding
@@ -1660,9 +1676,10 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// (see the dialect header for why arm64 cannot), so neither arm64 stack-argument op is ever produced
 		// for an x64 program and reaching this encoder is a lowering bug, not a missing encoding.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("emitX64TargetOp: an arm64 stack-argument op reached the x64 encoder — x64 places stack arguments with `storeBaseDispReg`/`loadRegBaseDisp` off rsp/rbp")
-		// x64's own bit reinterpretation is `movqGprXmm`, encoded above; the arm64 `fmov` form never
-		// reaches this encoder (`buildBackend` dispatches on `target.cpu`).
-		arm64FmovGprFp then panic("emitX64TargetOp: the arm64-only `arm64FmovGprFp` reached the x64 encoder — x64's bit reinterpretation is `movqGprXmm`")
+		// x64's own bit reinterpretations are `movqGprXmm`/`movqXmmGpr`, encoded above; neither arm64
+		// `fmov` general↔vector form ever reaches this encoder (`buildBackend` dispatches on
+		// `target.cpu`). ONE arm for the pair — the reason is the ISA, not the direction.
+		arm64FmovGprFp to arm64FmovFpGpr then panic("emitX64TargetOp: an arm64-only general↔vector `fmov` reached the x64 encoder — x64's bit reinterpretations are `movqGprXmm`/`movqXmmGpr`")
 	end 'emit'
 end 'emitTargetOp'
 

@@ -728,6 +728,9 @@ type StdToArm64Lowering
 			// The BIT REINTERPRETATION (`float.hash`) — `FMOV Xd, Dn`, the general↔vector transfer
 			// form, NOT the `FMOV Dd, Dn` the shared `movRegReg` emits. Same 64 bits, other file.
 			bitcastF64ToI64 then self.emit(dstRef, op: TargetOp.arm64FmovGprFp(dest, src: src))
+			// Its INVERSE — `FMOV Dd, Xn`, the same general↔vector form read the other way, and again
+			// NOT the `FMOV Dd, Dn` a plain FP copy would use.
+			bitcastI64ToF64 then self.emit(dstRef, op: TargetOp.arm64FmovFpGpr(dest, src: src))
 		end 'op'
 	end 'lowerUnaryOp'
 

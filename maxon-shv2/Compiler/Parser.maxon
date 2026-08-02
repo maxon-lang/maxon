@@ -134,6 +134,11 @@ export union ParseError implements Error
 	// the limit each names is a DIFFERENT limit — an integer's is the i64 span, spelled out; a
 	// float's is `f64.max`, which no i64 span describes. Same raw-text rule as its integer twin.
 	floatLiteralOverflow(literal String, line LineNumber, column ColumnNumber)
+	// A numeric literal whose TEXT is not a number — `1.5.3`, or any byte the number grammar refuses.
+	// Distinct from the two overflow variants because the fault is different in kind: an overflow is a
+	// real value that will not fit, this is text that names no value at all. Carries the raw token text
+	// for the same reason they do.
+	malformedNumericLiteral(literal String, line LineNumber, column ColumnNumber)
 	// An INTEGRAL-ONLY operator (`mod`, the bit band, or a prefix `not`) applied to a float. Both
 	// the binary and the unary raiser reach it, because it is one rule — see
 	// `TypeRules.operatorIsIntegral`, which is where the operator set is decided, and
@@ -2502,7 +2507,7 @@ end 'shortCircuitOperator'
 // for.
 //
 // A `float` constant's payload is the IEEE-754 bit pattern — whether it came from a literal
-// (`parseFloatBits`) or from a fold (`foldFloatBinOp`/`foldFloatCompare`, which compute with the host's
+// (`__float_bitsFromText`) or from a fold (`foldFloatBinOp`/`foldFloatCompare`, which compute with the host's
 // f64 and re-encode the bits) — and the `MaxonType.float` this hands back is what tells `lowerLiteral`
 // to lay those 8 bytes down as an f64 rather than an i64. That is the whole of `let PI = 3.14`,
 // `var ratio = 2.5`, and now `let X = 1.0 + 2.0` too.
@@ -2832,6 +2837,39 @@ let BuiltinsSleepName = b"__Builtins.sleep"
 // caller frees. See `CommandLineRuntime` for the split they sit on.
 let BuiltinsCommandLineCountName = b"__Builtins.commandLineCount"
 let BuiltinsCommandLineArgName = b"__Builtins.commandLineArg"
+
+// ⭐ **`__Builtins.floatToBits(x)` — AN f64's IEEE-754 ENCODING AS AN i64, THE ONLY WAY TO TAKE A FLOAT
+// APART IN MAXON.** `stdlib/Builtins.maxon`'s `__float_toString` needs the sign, the exponent field and
+// the significand of the value it is printing, and no arithmetic operator can produce them; the same is
+// true of `stdlib/PrimitiveExtensions.maxon`'s `float.hash`, which is where both reference compilers
+// already spell it this way (v1 `LowerMaxonToStd.maxon` → `StdArithUnaryOpcode.bitcastF64ToI64`; the
+// bootstrap `2-Parser.cs`'s builtin table).
+//
+// ⭐ **THE INSTRUCTION WAS ALREADY HERE — only the DOOR was missing.** `StdUnaryOpcode.bitcastF64ToI64`
+// shipped with `float.hash` (`Runtime/BuiltinConformanceRuntime.maxon` builds it as a Std graph) and has
+// an isel on all three targets: x64 `movq r64, xmm`, arm64 `fmov x, d`, wasm `i64.reinterpret_f64`. What
+// did not exist was a way to REACH it from Maxon source, which is why this is a name and an enum arm
+// rather than a backend rung.
+//
+// ⭐ **`__Builtins.bitsToFloat(bits)` — THE SAME REINTERPRETATION READ BACK, AND THE REASON IT EXISTS
+// IS THAT THE TREE HAD TWO DECIMAL READERS.** `stdlib/Builtins.maxon` carried the exact,
+// correctly-rounded `__float_bitsFromText` (which answers BITS) beside a naive
+// `intPart + Σ digit/10^k` accumulation in `__float_fromString` (which answers a float, without
+// exponents, wrapping past 19 integer digits, and not correctly rounded). They could not become one
+// while there was no way to turn bits back into an f64 — so `float.fromString("0.1")` and the literal
+// `0.1` were two different numbers by construction. This is that way; the second reader is gone.
+//
+// The bootstrap already has the door (`PLAN.md`'s slice D1), and v1 spells the Std half the same
+// (`StdArithUnaryOpcode.bitcastI64ToF64`, added there for `Vector`/generic-float bridging).
+let BuiltinsBitsToFloatName = b"__Builtins.bitsToFloat"
+
+let BuiltinsFloatToBitsName = b"__Builtins.floatToBits"
+
+// `floatToBits(x)` takes exactly one FLOAT and `bitsToFloat(b)` exactly one INTEGER. Stated here beside
+// the intrinsics for `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's
+// ordinary arity check to read.
+let FloatToBitsArity = 1 as ParamCount
+let BitsToFloatArity = 1 as ParamCount
 
 // `commandLineCount()` takes nothing; `commandLineArg(index)` takes exactly one INTEGER. Stated here beside
 // the intrinsics for `SleepIntrinsicArity`'s reason — an intrinsic has no signature for SemanticCheck's
@@ -9480,7 +9518,7 @@ export type Parser
 	// token kind is available at scan time; a constant's value is not. (v1 infers it the same way,
 	// from the same three token kinds: `inferShorthandFieldType`, Parser.maxon:3634-3665.)
 	//
-	// The three literal DECODERS are the emitting path's own (`intLiteralValue`, `parseFloatBits`,
+	// The three literal DECODERS are the emitting path's own (`intLiteralValue`, `__float_bitsFromText`,
 	// `BoolTrueValue`) — the same ones `evalConstIntLiteral` and friends call, for their stated
 	// reason: a field default must read a literal exactly as a function body reads it.
 	function readFieldDefaultLiteral() returns ConstValue throws ParseError
@@ -10645,7 +10683,7 @@ export type Parser
 	// float bound (`f32.min`, `f64.max`). The value is the endpoint's IEEE-754 **f64** bit pattern,
 	// carried in the same `ParsedInt` an integer bound uses — a float alias resolves to
 	// `MaxonType.float` = f64, so its bounds are f64 bits (`RangedTypeAlias`). The literal path reuses
-	// the one float decoder `parseFloatLiteral` does (`parseFloatBits`), so `0.0` reads the same bits
+	// the one float decoder `parseFloatLiteral` does (`__float_bitsFromText`), so `0.0` reads the same bits
 	// in a bound as in an expression. A negated literal FLIPS the sign bit (`negatedFloatBits`) rather
 	// than subtracting: `0 - bits` on a bit pattern would be nonsense (see `FloatSignBit`).
 	function parseFloatRangeBound() returns ParsedRangeBound throws ParseError
@@ -10686,32 +10724,48 @@ export type Parser
 	end 'intLiteralValue'
 
 	// The float twin of `intLiteralValue`: THE one place a float literal's text becomes BITS. Six
-	// sites used to spell `try parseFloatBits(tok.value) otherwise throw …` for themselves — a field
+	// sites used to spell `try <the reader>(tok.value) otherwise throw …` for themselves — a field
 	// default, both float range bounds, an enum raw value, a constant initializer and the expression
 	// parser — which is the same fact written down six times, and the integer side had already been
 	// centralized for exactly that reason.
+	//
+	// ⭐ **THE READER ANSWERS WITH A RESULT AND THIS IS WHERE IT BECOMES A `ParserError`.**
+	// `__float_bitsFromText` lives in `stdlib/Builtins.maxon` and deliberately does not throw (a stdlib
+	// error enum is language surface — see `__FloatTextResult`), so its two failure arms are named in the
+	// compiler's own vocabulary exactly once, HERE, and go on to the same `literalDecodeError` the
+	// integer path uses. Mapping them anywhere else would be a second opinion about which diagnostic a
+	// bad literal deserves.
 	function floatLiteralBits(tok Token) returns ParsedInt throws ParseError
-		return try parseFloatBits(tok.value) otherwise (err) 'rejected'
-			throw self.literalDecodeError(err, tok: tok, isFloat: true)
-		end 'rejected'
+		match __float_bitsFromText(String.from(tok.value)) 'decoded'
+			bits(value) then return value
+			overflow then throw self.literalDecodeError(ParserError.overflow, tok: tok, isFloat: true)
+			// Reachable from source — `1.5.3` is the shape. See `literalDecodeError`, which used to
+			// panic here on a premise the lexer disproved.
+			malformed then throw self.literalDecodeError(ParserError.malformed, tok: tok, isFloat: true)
+		end 'decoded'
 	end 'floatLiteralBits'
 
 	// Turn a NumberParsing failure into the POSITIONED parse error that reports it, quoting the
 	// token's RAW TEXT — the radix prefix and `_` separators the source wrote, which the decoded
 	// value can no longer say.
 	//
-	// ⚠ `malformed` is NOT reported: it is unreachable from source. `Lexer.scanNumber` hands a
-	// literal token nothing but digits, `_`, `.`, `e`/`E` and an exponent sign, so a byte the number
-	// grammar refuses means the lexer and `parseFloatBits`/`parseInt` have come to disagree about
-	// what a literal IS — a compiler defect, not a program's. (The variant exists for
-	// `Testing/PeSectionReader`, which parses spec-file text no lexer guards; see `ParserError`.)
+	// ⛔⛔ **`malformed` IS REPORTED, AND IT USED TO PANIC.** The panic asserted this arm was
+	// unreachable from source — "`Lexer.scanNumber` hands a literal token nothing but digits, `_`,
+	// `.`, `e`/`E` and an exponent sign, so a rejection means the lexer and the reader have diverged,
+	// a compiler defect rather than a program's". **The premise was false.** The lexer's trailing-byte
+	// rule appended a SECOND `.` to a token that already carried a fraction, so `1.5.3` arrived here
+	// as `1.5.` and CRASHED the compiler; `1.5.`, `1..5` and `1.5e2.3` did the same. That hole is now
+	// closed in the lexer too (see `scanNumber`'s `not isFloat` clause), and BOTH layers are fixed
+	// deliberately: a parser that cannot answer "this literal is not well-formed" with a position is a
+	// parser whose caller's leniency has nowhere to surface, which is exactly how the lexer's went
+	// unnoticed. A diagnostic here costs nothing and stops the next one being a crash.
 	function literalDecodeError(err ParserError, tok Token, isFloat bool) returns ParseError
+		let literal = String.from(tok.value)
 		match err 'kind'
 			overflow then break 'kind'
-			malformed then panic("literalDecodeError: the number parser rejected '{String.from(tok.value)}' as malformed, but Lexer.scanNumber only ever emits a literal token of digits, '_', '.', 'e'/'E' and an exponent sign — the lexer and the number parser have diverged")
+			malformed then return ParseError.malformedNumericLiteral(literal, line: tok.line, column: tok.column)
 		end 'kind'
 
-		let literal = String.from(tok.value)
 		return ParseError.floatLiteralOverflow(literal, line: tok.line, column: tok.column) if isFloat else ParseError.integerOverflow(literal, line: tok.line, column: tok.column)
 	end 'literalDecodeError'
 
@@ -12149,10 +12203,11 @@ export type Parser
 		// WRITTEN. A VALUE function cannot reach here (E3013 above), so the leak was void-only,
 		// which is why no acceptance case saw it.
 		//
-		// `bodyEnd` IS `self.currentBlock` — `parseStatement` returns the latter and `parseStatements`
-		// threads it — so the drops land in the block this terminator ends. The already-terminated
-		// case returned above, so a `return` that has dropped cannot be dropped a second time here.
-		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: nameTok)
+		// ⚠ **THE DROPS AND THE TERMINATOR GO TO THE SAME BLOCK, AND IT IS `bodyEnd`.** This used to
+		// claim "`bodyEnd` IS `self.currentBlock`" and emit the drops through the latter. It is not: a
+		// body ending in an `if`/`while` leaves `currentBlock` at that construct's BODY, so the decrefs
+		// landed on one path of a branch whose `retVoid` was on another. See `emitScopeDrops`.
+		self.emitScopeDrops(bodyEnd, floor: WholeFunctionScopeFloor, anchor: nameTok)
 		self.artifact.emitTerminator(bodyEnd, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
 	end 'closeFunctionBody'
 
@@ -13843,8 +13898,17 @@ export type Parser
 		// would double-free — the exact hazard `closeBlock`'s old comment named. `isTerminated()` is the
 		// guard that makes this an addition rather than that bug.
 		if not bodyEnd.isTerminated() 'dropBlockOwned'
+			// ⚠ **TWO THINGS HAPPEN HERE AND THEY ARE NOT ONE THING** — which is what this line looked
+			// like when the destination was implicit. `emitScopeDrops` is told WHERE THE DROPS GO by its
+			// parameter; this assignment is the PARSER'S POSITION, and the header's claim that "`bodyEnd`
+			// IS `self.currentBlock`, as `parseStatements` threads it" is not true of every body: a block
+			// whose last statement is an `if` leaves `currentBlock` behind at that `if`'s continuation, and
+			// this re-sync is what put it back. It was invisible while one assignment served both roles —
+			// MEASURED when `emitScopeDrops` began restoring what it borrowed: `block-condition-temporaries`'s
+			// `if-inside-a-try-handler` left its `ifcont` with no terminator at all, because the code that
+			// branches a fallen-through handler to the merge reads `currentBlock`.
 			self.currentBlock = bodyEnd
-			self.emitScopeDrops(mark.ownedCount, anchor: self.current())
+			self.emitScopeDrops(bodyEnd, floor: mark.ownedCount, anchor: self.current())
 		end 'dropBlockOwned'
 
 		// Published for `parseWhileStatement`'s drift guard — the cursor is ON the `end` here,
@@ -14741,6 +14805,31 @@ export type Parser
 		return ValueTypeTag.float if tagIsFloat(self.rangedAliasTagOfName(name)) else tag
 	end 'floatResolvedTagOfName'
 
+	// A `named` tag REDUCED to whatever its ranged alias underlies — `Integer` to `integer`, `Percent`
+	// to `float` — with every other tag passing through. The general form of the two functions above,
+	// and it exists because they are deliberately NOT general: `floatResolvedTag` leaves an INT alias
+	// `named` (its callers still need the name's signedness), which makes it useless to a caller whose
+	// question is "is this an integer?".
+	//
+	// ⚠ IT IS NOT `tagIsIntegral` EITHER, AND THAT IS THE WHOLE REASON IT EXISTS. `tagIsIntegral`
+	// answers `true` for EVERY `named` tag, float aliases included, and its own comment says so and says
+	// why it is sound where it is used. At `emitBitsToFloat` it would not be: it would admit a
+	// `Percent`-typed operand through the front-end gate and hand `bitcastI64ToF64` an f64, which
+	// `assertUnaryOperandDomain` answers with a PANIC. A gate whose failure mode is a compiler crash
+	// on a legal-looking program has to resolve the name, not approximate it.
+	//
+	// The alias lookup itself is not restated — it is `rangedAliasTag`'s, exactly as the two above.
+	// An UNDECLARED name reduces to `named` and therefore matches no primitive question, which is the
+	// truthful answer: the program is being rejected for the missing type anyway (E3011).
+	function rangedAliasResolvedTag(tag ValueTypeTag, nameId TypeNameId) returns ValueTypeTag
+		// The guard `floatResolvedTag`'s carries, and load-bearing for the same reason: a non-`named`
+		// tag's `nameId` is the filler `UnnamedTypeId`, which `internedName` PANICS on.
+		if tag != ValueTypeTag.named 'notNamed'
+			return tag
+		end 'notNamed'
+		return self.rangedAliasTag(nameId)
+	end 'rangedAliasResolvedTag'
+
 	// Resolve a float-alias `named` TYPE to `MaxonType.float` — the produced-VALUE twin of
 	// `floatResolvedTag`. A `returns Float` CALL RESULT is a genuine float value, so its tag must be
 	// `float` (matching the XMM class the value-class column gives a float return from the callee's f64
@@ -14855,7 +14944,7 @@ export type Parser
 				throw ParseError.returnValueFromVoid(String.from(func.name), line: retTok.line, column: retTok.column)
 			end 'valueFromVoid'
 
-			self.emitScopeDrops(WholeFunctionScopeFloor, anchor: retTok)
+			self.emitScopeDrops(block, floor: WholeFunctionScopeFloor, anchor: retTok)
 			self.artifact.emitTerminator(block, op: MaxonOp.retVoid, range: SourceRange.ofToken(retTok))
 			return
 		end 'voidFunction'
@@ -16035,7 +16124,7 @@ export type Parser
 			// flag is re-emitted VERBATIM, so the propagated error type MUST match this function's `throws`
 			// type or the caller decodes one enum's ordinals as another's (E3059, checked here).
 			try self.checkPropagateType(func, throwsClause: self.tryTargetThrows(target), tryTok: tryTok)
-			self.emitScopeDrops(WholeFunctionScopeFloor, anchor: tryTok)
+			self.emitScopeDrops(self.currentBlock, floor: WholeFunctionScopeFloor, anchor: tryTok)
 			self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.propagateError(flag), range: SourceRange.ofToken(tryTok))
 			return TryHandler.terminated
 		end 'propagate'
@@ -16460,7 +16549,20 @@ export type Parser
 	// `anchor` is the token of the statement that made control leave the scope (the `return`, the
 	// block's `end`, the `break`/`continue`): no source token spawns a drop, and that statement is
 	// where a reader looks for what happened to the values in it.
-	function emitScopeDrops(floor BindingMark, anchor Token)
+	//
+	// ⛔⛔ **`into` IS THE BLOCK THE DECREFS LAND IN, AND IT IS A PARAMETER BECAUSE IT USED TO BE
+	// `self.currentBlock` — WHICH IS NOT THE SAME FACT.** Control leaves a scope at a block a caller
+	// KNOWS; `currentBlock` is where the parser last emitted, and after a nested `if`/`while` those are
+	// different blocks. `closeFunctionBody` believed they agreed — it said so in a comment — and put its
+	// `retVoid` in the threaded `bodyEnd` while these decrefs went to a stale `currentBlock`. MEASURED:
+	// a function ending in an `if` with no `else` released its locals ONLY on the taken path, so the
+	// untaken path LEAKED and a loop body decref'd once PER ITERATION — a double free that corrupted
+	// the heap and segfaulted (`specs-shv2/character-ownership.md`'s `local-dropped-once-after-a-loop`).
+	// Naming the block is what makes that impossible to write: there is no implicit destination left to
+	// go stale, and every caller states the block it means.
+	function emitScopeDrops(into IrBlock, floor BindingMark, anchor Token)
+		let saved = self.currentBlock
+		self.currentBlock = into
 		var i = self.ownedBindings.count()
 		while i > floor 'eachOwned'
 			i = i - 1
@@ -16475,6 +16577,7 @@ export type Parser
 				self.emitDecref(binding.boundValue, range: SourceRange.ofToken(anchor))
 			end 'liveOwner'
 		end 'eachOwned'
+		self.currentBlock = saved
 	end 'emitScopeDrops'
 
 	// Emit a single drop — the one shape a dropped owned heap value releases through, shared by every drop
@@ -16942,7 +17045,7 @@ export type Parser
 			self.drainPendingTemps(WholeStatementTempFloor, anchor: anchor)
 		end 'dropExitTemps'
 
-		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: anchor)
+		self.emitScopeDrops(self.currentBlock, floor: WholeFunctionScopeFloor, anchor: anchor)
 		self.ownedBindings = savedOwnedBindings
 	end 'emitHandoffExitDrops'
 
@@ -18188,7 +18291,7 @@ export type Parser
 		// would double-free.
 		if not bodyEnd.isTerminated() 'fallsToStep'
 			self.currentBlock = bodyEnd
-			self.emitScopeDrops(tripMark.ownedCount, anchor: forTok)
+			self.emitScopeDrops(bodyEnd, floor: tripMark.ownedCount, anchor: forTok)
 			self.recordBranchEdge(bodyEnd, targetId: ctx.continueTargetId, argIds: self.edgeArgsFor(phiVars, preLoop: false))
 			self.emitBranch(bodyEnd, targetId: ctx.continueTargetId)
 		end 'fallsToStep'
@@ -18229,7 +18332,7 @@ export type Parser
 		// The loop variable and the iteration source's binding both leave scope here — the drops for the
 		// latter land in the exit block, which every non-terminating path through the loop reaches.
 		self.currentBlock = exit
-		self.emitScopeDrops(forMark.ownedCount, anchor: forTok)
+		self.emitScopeDrops(exit, floor: forMark.ownedCount, anchor: forTok)
 		self.closeBlock(forMark)
 		return exit
 	end 'parseForStatement'
@@ -19535,7 +19638,7 @@ export type Parser
 	// second copy of these two lines is exactly how their drop rules would drift apart.
 	function dropTargetBodyOwned(block IrBlock, floor BindingMark, anchor Token)
 		self.currentBlock = block
-		self.emitScopeDrops(floor, anchor: anchor)
+		self.emitScopeDrops(block, floor: floor, anchor: anchor)
 	end 'dropTargetBodyOwned'
 
 	// Parse `break ['label']` (M4b): leave the innermost enclosing break TARGET — the match statement if
@@ -20322,10 +20425,8 @@ export type Parser
 	// reader looks for what became of its bindings.
 	function dropArmScopedOwned(floor BindingMark, exitBlock IrBlock, anchor Token)
 		if not exitBlock.isTerminated() 'leavesAlive'
-			let saved = self.currentBlock
-			self.currentBlock = exitBlock
-			self.emitScopeDrops(floor, anchor: anchor)
-			self.currentBlock = saved
+			// `emitScopeDrops` saves and restores `currentBlock` itself now, so the arm no longer does.
+			self.emitScopeDrops(exitBlock, floor: floor, anchor: anchor)
 		end 'leavesAlive'
 		while self.ownedBindings.count() > floor 'drain'
 			_ = try self.ownedBindings.pop() otherwise panic("dropArmScopedOwned: ownedBindings.pop failed above the floor {floor}")
@@ -25490,6 +25591,15 @@ export type Parser
 	// integer renders to decimal text via `__int_to_string` into a scratch buffer. bool/float/enum are the
 	// next waves; a Stringable struct is P1.7a.
 	function materializeInterpExpr(exprVal ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
+		// ⚠ **THE RAW TAG IS CORRECT HERE, AND THAT WAS MEASURED RATHER THAN ASSUMED.** `tagIsIntegral`
+		// answers `true` for a `named` tag deliberately (its own header records the trade), so a float
+		// carrying one would be claimed by the INTEGRAL arm below and rendered through `__int_to_string`
+		// — the IEEE bit pattern printed as a decimal integer. No shape reaches that: a ranged FLOAT
+		// alias is resolved to a `float` tag before it can arrive here — a call result by
+		// `resolveFloatAliasType`, a parameter and a field by the same erasure — and interpolating a
+		// `Percent` parameter, a `Percent` field and a `Percent` return all print correctly with the raw
+		// tag (`specs-shv2/string-interpolation.md`'s `float-ranged-alias-positions`, which is the pin).
+		// Resolving again here would be a second answer to a question already answered upstream.
 		let tag = self.tagOf(exprVal)
 		// ⚠ `tagIsByteRecord`, NOT `tagIsText`: this asks whether `buffer@0`/`length@8` can be read off the
 		// value and blitted, which is a question about the RECORD. A Character carries the same record, so
@@ -25510,6 +25620,24 @@ export type Parser
 			return
 		end 'boolPart'
 
+		// ⭐⭐ **A FLOAT — `"{x}"` → a DIRECT `__float_toString(x)` CALL, NOT a `materializeScratchPart`
+		// CONVERTER.** Its two neighbours above render into a fixed-size scratch buffer because their
+		// worst cases are 21 and 5 bytes and their algorithms are a loop of divides. A float's is
+		// neither: the shortest decimal that reads back as the same double is found with EXACT
+		// arbitrary-precision arithmetic (`stdlib/Builtins.maxon`'s float-text band), it allocates as it
+		// goes, and its fixed-notation spelling runs to ~325 characters for the least subnormal. A
+		// hand-built Std-tier graph would be a second implementation of a routine the COMPILER already
+		// needs and has — so the routine lives in `stdlib/` and both callers reach the one copy.
+		//
+		// The call is the same door `materializeStructToStringPart` takes one arm down: an ordinary
+		// `emitCall` whose String result is classified +1 OWNED (`mintOwnedCallResult` →
+		// `trackOwnedTemp`) and freed at statement end, its bytes spliced by
+		// `materializeStringRecordPart` exactly as any other String part's are.
+		if tagIsFloat(tag) 'floatPart'
+			try self.materializeFloatToStringPart(exprVal, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
+			return
+		end 'floatPart'
+
 		// ⭐ **A USER STRUCT — `"{p}"` → a DIRECT `<Type>.toString()` CALL (P1.7a slice 1).** The concrete
 		// type is statically known here, so dispatch is a plain method call, NOT a witness (exactly what the
 		// monomorphizing bootstrap emits). Witnesses are needed only for an UNKNOWN concrete type — a
@@ -25519,8 +25647,39 @@ export type Parser
 			return
 		end 'structPart'
 
-		throw ParseError.unsupported("interpolating a value of type '{typeTagName(tag)}' — P1.2 wave B interpolates String, integer and bool expressions; float arrives next, and a Stringable struct at P1.7a", line: exprTok.line, column: exprTok.column)
+		// ⚠ NAMES WHAT IS UNSUPPORTED, NOT WHAT IS SUPPORTED. A message enumerating the handled types goes
+		// stale every time an arm is added above — which is exactly how its predecessor came to promise
+		// float and struct interpolation as future work while both arms sat directly above it.
+		throw ParseError.unsupported("interpolating a value of type '{typeTagName(tag)}' — no conversion to text exists for it", line: exprTok.line, column: exprTok.column)
 	end 'materializeInterpExpr'
+
+	// ⭐ **INTERPOLATE A FLOAT VIA `stdlib/Builtins.maxon`'s `__float_toString`** — see the arm in
+	// `materializeInterpExpr` for why this is a call rather than a scratch-buffer converter.
+	//
+	// ⚠ **IT IS MINTED `CalleeMint.primitiveStatic`, WHICH IS WHAT LETS A RESERVED CALLEE THROUGH** — and
+	// the classification is a claim, not a trick: `"{x}"` on a float MEANS `float.toString(x)`, the
+	// primitive static whose body `stdlib/Builtins.maxon` declares in the reserved space, exactly as
+	// `int.fromString(s)` means `__int_fromString(s)`. A user cannot write `__float_toString(x)` (E3004
+	// refuses it, unminted); the compiler spells it out of a source `"{x}"` carrying no `__`, which is the
+	// case that mint exists for. A diagnostic about the call therefore quotes `float.toString(…)`
+	// (`SemanticCheck` → `primitiveStaticSourceSpelling`) — the noun for what the interpolation does,
+	// rather than a reserved symbol nobody wrote. The struct arm one function down takes the same view of
+	// its own call for the same reason.
+	function materializeFloatToStringPart(exprVal ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws ParseError
+		var args = ValueIdArray.create()
+		args.push(exprVal)
+		var argLabels = ByteArrayArray.create()
+		argLabels.push(EmptySourceText)
+		var argRanges = SourceRangeArray.create()
+		argRanges.push(range)
+
+		// The callee is spelled by `primitiveStaticCallee`, the ONE speller of a primitive's reserved-space
+		// static, out of the same two components a source `float.toString(x)` would join — so this lowering
+		// cannot come to name a function the mint would spell differently.
+		let callee = primitiveStaticCallee(FloatConformerName, methodName: ToStringMethodName)
+		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
+		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
+	end 'materializeFloatToStringPart'
 
 	// ⭐ **INTERPOLATE A USER STRUCT VIA A DIRECT `<Type>.toString()` CALL (P1.7a slice 1).** A struct is
 	// interpolable iff it HAS a `toString` method (by NAME, not by declaring `Stringable` — the oracle's
@@ -26752,8 +26911,15 @@ export type Parser
 	end 'emitUnionTagStore'
 
 	// Classify a payload field's storage, rejecting the ones this rung's UNION-payload store cannot lower —
-	// a FLOAT (needs the `bitcastI64ToF64` inverse a later rung adds; the outbound `bitcastF64ToI64`
-	// shipped with `float.hash`) and a NESTED boxed-union payload. A SCALAR, a String, and a struct are
+	// a FLOAT and a NESTED boxed-union payload.
+	//
+	// ⚠ THE FLOAT REJECT IS NO LONGER WAITING ON AN OPCODE. Both bitcast directions now exist
+	// (`StdUnaryOpcode.bitcastF64ToI64`/`bitcastI64ToF64`, reachable as `__Builtins.floatToBits`/
+	// `bitsToFloat`), so the INSTRUCTIONS a float payload needs are here. What is still missing is the
+	// LOWERING that uses them: an int-tagged box stores a payload as an i64, so a float field has to be
+	// re-encoded on the way in and decoded on the way out at BOTH the construct and the extract site,
+	// and neither site does that today. Until it does, this refuses cleanly rather than storing an f64
+	// register through an i64 slot. A SCALAR, a String, and a struct are
 	// lowerable; the returned class carries the storage type and, for a managed
 	// payload, whether it is a String. The reject is at the construct/extract USE site (not the
 	// declaration), so the tolerant enum sweep never truncates a layout over it.
@@ -33413,9 +33579,9 @@ export type Parser
 
 	// ⭐ **THE SCALAR-VS-MANAGED PAYLOAD DECISION — the boundary of slice 1.** The concrete storage
 	// type a union payload field of declared type `declared` occupies its 8-byte slot as, OR a clean
-	// rejection of the types slice 1 cannot lower: a FLOAT (needs the `bitcastI64ToF64` inverse a later
-	// rung adds — the outbound `bitcastF64ToI64` shipped with `float.hash`, so only the READ BACK out of
-	// the int-tagged slot is still missing) and every MANAGED reference (String, struct, a boxed union —
+	// rejection of the types slice 1 cannot lower: a FLOAT (BOTH bitcast directions exist now, so what is
+	// missing is no longer an OPCODE but the encode/decode PAIR at the construct and extract sites — see
+	// `requirePayloadLowerable`) and every MANAGED reference (String, struct, a boxed union —
 	// an owned heap pointer whose move-in/drop is slice 2's ownership work). A SCALAR — `int`/`bool`,
 	// a ranged-int alias, or a
 	// payload-FREE enum (whose value IS its i64 tag) — is stored inline and returned here.
@@ -33440,7 +33606,7 @@ export type Parser
 	end 'nestedUnionPayloadMessage'
 
 	function floatPayloadMessage(field PayloadField, layout EnumLayout) returns String
-		return "payload field '{String.from(field.name)}' on `{layout.kindWord()} {String.from(layout.name)}`: a `float` payload needs the `bitcastI64ToF64` inverse a later rung adds (a scalar-only union is int-tagged, and reading a float back out of the slot has no op yet)"
+		return "payload field '{String.from(field.name)}' on `{layout.kindWord()} {String.from(layout.name)}`: a `float` payload is not lowered yet (a scalar-only union is int-tagged, so a float must be re-encoded on the way into the slot and decoded on the way out, and neither the construct nor the extract does that)"
 	end 'floatPayloadMessage'
 
 	// A type-qualified numeric bound used as a VALUE (`let x = u16.max`, `if v == u64.max`).
@@ -35828,6 +35994,14 @@ export type Parser
 
 				return self.emitOwnedManagedMemoryResult(CommandLineArgName, args: singletonArgs(index), range: SourceRange.ofToken(anchor))
 			end 'commandLineArg'
+
+			if callee.equals(BuiltinsFloatToBitsName) 'floatToBits'
+				return try self.emitFloatToBits(args, calleeTok: anchor)
+			end 'floatToBits'
+
+			if callee.equals(BuiltinsBitsToFloatName) 'bitsToFloat'
+				return try self.emitBitsToFloat(args, calleeTok: anchor)
+			end 'bitsToFloat'
 		end 'builtinsIntrinsic'
 
 		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint)
@@ -35966,6 +36140,72 @@ export type Parser
 		let operand = try self.numericBuiltinOperand(args, name: name, calleeTok: calleeTok)
 		return self.emitUnaryOp(self.promoteToFloat(operand, opTok: calleeTok), op: op, resultTag: ValueTypeTag.float, opTok: calleeTok)
 	end 'emitMathIntrinsic'
+
+	// ⭐ `__Builtins.floatToBits(x)` — the f64's IEEE-754 ENCODING as an i64. See
+	// `BuiltinsFloatToBitsName` for why it exists and why there is no inverse.
+	//
+	// ⚠ **NO int → float PROMOTION, unlike EVERY math intrinsic beside it, and that asymmetry is the
+	// point.** `sqrt(16)` means `sqrt(16.0)` because `sqrt` is a function of a NUMBER and 16 is one.
+	// This is a function of an ENCODING: a promoted `floatToBits(16)` would answer the bits of 16.0
+	// while READING as "the bits of the integer 16", which is a different number entirely
+	// (4625196817309499392 against 16). A program that hands it an integer means something this
+	// intrinsic cannot do, so it is told so rather than quietly given the other answer.
+	//
+	// It is also what keeps `assertUnaryOperandDomain` satisfiable: `bitcastF64ToI64` reads the float
+	// register file, and the front end owns that precondition.
+	function emitFloatToBits(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != FloatToBitsArity 'arity'
+			throw ParseError.builtinArity(String.from(BuiltinsFloatToBitsName), expected: FloatToBitsArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let operand = try args.get(0) otherwise panic("emitFloatToBits: args.count() == FloatToBitsArity just checked but get(0) failed")
+		// ⚠ **THROUGH `floatResolvedTag`, NOT THE BARE TAG** — `emitDeadReturn`'s reason, and the one
+		// declaration it matters most for is this intrinsic's only caller: `__float_toString(value
+		// ParsedFloat)` is a PARAMETER of a ranged float alias, which carries a `named` tag at parse time
+		// (aliases erase in `resolveTypes`, later) even though the value occupies XMM exactly as a bare
+		// float does. The bare tag would refuse the one program that needs this.
+		let operandTag = self.floatResolvedTag(self.tagOf(operand), nameId: self.valueNameId(operand))
+		if not tagIsFloat(operandTag) 'notAFloat'
+			throw ParseError.builtinOperandType(String.from(BuiltinsFloatToBitsName), required: typeTagName(ValueTypeTag.float), got: typeTagName(operandTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAFloat'
+
+		return self.emitUnaryOp(operand, op: MaxonUnaryOp.floatToBits, resultTag: ValueTypeTag.integer, opTok: calleeTok)
+	end 'emitFloatToBits'
+
+	// ⭐ `__Builtins.bitsToFloat(bits)` — the f64 an i64's 64 bits ALREADY SPELL, and the exact inverse of
+	// the door above. See `BuiltinsBitsToFloatName` for why it exists: `stdlib/Builtins.maxon` has one
+	// decimal→binary64 reader and it answers BITS, so this is what lets `float.fromString` and a float
+	// LITERAL be the same conversion instead of two that disagree.
+	//
+	// ⚠ **NO int → float PROMOTION EITHER, and here the asymmetry is not merely preserved — it is the
+	// whole operation.** `emitFloatToBits` refuses an integer because promoting it would answer a
+	// different question; this one refuses a FLOAT for the mirror reason. `bitsToFloat(4.0)` cannot mean
+	// "the double 4.0" — the operand is an ENCODING, and a float operand has no encoding to read that is
+	// not already the value it is. A program handing this a float means something the intrinsic cannot
+	// do, so it is told so.
+	//
+	// It is also what keeps `assertUnaryOperandDomain` satisfiable from the other side:
+	// `bitcastI64ToF64` reads the INTEGER register file, and the front end owns that precondition.
+	function emitBitsToFloat(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != BitsToFloatArity 'arity'
+			throw ParseError.builtinArity(String.from(BuiltinsBitsToFloatName), expected: BitsToFloatArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let operand = try args.get(0) otherwise panic("emitBitsToFloat: args.count() == BitsToFloatArity just checked but get(0) failed")
+		// ⚠ **THROUGH `rangedAliasResolvedTag`, NOT THE BARE TAG** — `emitFloatToBits`'s reason mirrored,
+		// and the one declaration it matters most for is again this intrinsic's only caller. The bits
+		// `__float_fromString` hands it come out of `__FloatTextResult.bits(value ParsedInt)`, so the
+		// operand is a ranged INT alias — which keeps a `named` tag at parse time (deliberately; see
+		// `floatResolvedTag`). The bare tag would refuse the one program that needs this, and would say
+		// so in the words "requires a int, but its argument is int", because `typeTagName` renders
+		// `named` as `int`. Resolving first fixes the verdict AND the sentence.
+		let operandTag = self.rangedAliasResolvedTag(self.tagOf(operand), nameId: self.valueNameId(operand))
+		if not tagIsInteger(operandTag) 'notAnInteger'
+			throw ParseError.builtinOperandType(String.from(BuiltinsBitsToFloatName), required: typeTagName(ValueTypeTag.integer), got: typeTagName(operandTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAnInteger'
+
+		return self.emitUnaryOp(operand, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, opTok: calleeTok)
+	end 'emitBitsToFloat'
 
 	// ⭐ `min(a, b)` / `max(a, b)` — the ARITY-2 FLOAT MATH INTRINSICS (`specs/min.md`,
 	// `specs/max.md`), and the exact mirror of `emitMathIntrinsic` one arity up: same arity gate, same

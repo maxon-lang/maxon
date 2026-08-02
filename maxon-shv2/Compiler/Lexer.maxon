@@ -1096,7 +1096,7 @@ type Lexer
 		// Check for scientific notation exponent (e/E) — only after a decimal point
 		if isFloat and cursor.index() < len 'checkExp'
 			let expCh = cursor.current()
-			if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
+			if (expCh == Ascii.lowerE or expCh == Ascii.upperE) and exponentDigitFollows() 'hasExp'
 				isFloat = true
 				if not tryAdvance() 'expEof'
 					emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
@@ -1130,10 +1130,19 @@ type Lexer
 		// The `.` is admitted here only on the same terms it was admitted as a fraction opener above — a
 		// tuple index ends at its digits, and swallowing the following `.` would take the next hop's
 		// separator with it.
+		//
+		// ⛔⛔ **AND NOT WHEN THE NUMBER ALREADY HAS A FRACTION — A SECOND `.` IS NOT PART OF ANY NUMBER.**
+		// Without `not isFloat` this clause appended the second dot of `1.5.3` to the token AND set
+		// `atEof`, so the lexer handed the parser the text `1.5.` and then stopped scanning — dropping
+		// the `3` entirely. `__float_bitsFromText` then answered `malformed`, which
+		// `Parser.literalDecodeError` PANICKED on, on the stated premise that the lexer never emits such
+		// a token. It did, on `1.5.`, `1.5.3`, `1..5` and `1.5e2.3` — four ordinary typos that CRASHED
+		// the compiler. A float token ends at its fraction; the `.` after it belongs to whatever comes
+		// next, and letting it start a member access is what turns those four into positioned errors.
 		let cb = cursor.current()
 		var atEof = false
 		var endOfs = cursor.index()
-		if isDigit(cb) or cb == Ascii.underscore or (cb == Ascii.dot and not followsMemberDot) 'includeDecLast'
+		if isDigit(cb) or cb == Ascii.underscore or (cb == Ascii.dot and not followsMemberDot and not isFloat) 'includeDecLast'
 			endOfs = cursor.index() + 1
 			atEof = true
 		end 'includeDecLast'
@@ -1147,6 +1156,30 @@ type Lexer
 			try finishAtEof()
 		end 'numDone'
 	end 'scanNumber'
+
+	// ⛔⛔ **AN `e` JOINS THE NUMBER ONLY IF AN EXPONENT ACTUALLY FOLLOWS IT.** Decided by LOOKAHEAD,
+	// before anything is consumed, because the alternative is a token that lies: `scanNumber` used to
+	// take the `e` and then run a digit loop that was allowed to match ZERO digits, so `1.5e`, `1.5E`,
+	// `1.5e+` and `1.5e-` all lexed as a float literal whose text carried a dangling exponent — and
+	// `__float_bitsFromText` reads a missing exponent as `sciExp = 0`, so all four SILENTLY COMPILED
+	// AS `1.5`. The bootstrap does not accept them (it crashes on them, which is its own defect), so
+	// this was shv2 alone quietly inventing a value for text that names none.
+	//
+	// Refusing here rather than in the reader is what keeps the diagnostic honest: an `e` that is not
+	// an exponent is an IDENTIFIER, so `1.5e` becomes `1.5` followed by `e` and the parser reports an
+	// unexpected token AT the `e`. It also improves `1.5exp`, which used to eat the `e` and complain
+	// about a stray `xp`.
+	function exponentDigitFollows() returns bool
+		let afterE = try cursor.peek(1) otherwise 0
+		if isDigit(afterE) 'digitImmediately'
+			return true
+		end 'digitImmediately'
+
+		if afterE != Ascii.plus and afterE != Ascii.minus 'noSignEither'
+			return false
+		end 'noSignEither'
+		return isDigit(try cursor.peek(2) otherwise 0)
+	end 'exponentDigitFollows'
 
 	// Cursor points to the first alpha/underscore (not yet consumed by this scanner).
 	function scanIdentifier(startLine LineNumber, startCol ColumnNumber) throws CursorError

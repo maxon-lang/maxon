@@ -256,8 +256,15 @@ export function operandClass(o Operand, classes ValueClassColumn) returns RegCla
 	if not operandIsVirtual(o) 'physical'
 		panic("operandClass: a PHYSICAL operand (payload {operandPayload(o)}) reached the pressure census — its two callers guard on `operandIsVirtual`, so this is a bug. A physical register's file is classified by the encoder (`regClassIn` on the target file), never here.")
 	end 'physical'
-	return try classes.get(operandValueId(o)) otherwise panic("operandClass: value {operandValueId(o)} has no recorded register class — the lowering's class column does not cover it")
+	return valueClass(operandValueId(o), classes: classes)
 end 'operandClass'
+
+// The same lookup for a caller that holds the VALUE and no operand — which is what
+// `opTransientDefOf`'s callers hold, deliberately: the transient's selection rule is stated once and
+// hands back an id, so the class read may not be a second `classes.get` spelled beside each use.
+export function valueClass(v ValueId, classes ValueClassColumn) returns RegClass
+	return try classes.get(v) otherwise panic("valueClass: value {v} has no recorded register class — the lowering's class column does not cover it")
+end 'valueClass'
 
 // Move `v` into or out of ITS OWN file's live tally. ONE implementation for both directions: the
 // direction is the only thing that differs, and two functions would be the same read-modify-write
@@ -1306,7 +1313,7 @@ function opIsCondBranch(op TargetOp) returns bool
 		movRegImm to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to minMaxSdRegReg gives false
+		andRegReg to movqXmmGpr gives false
 		// The arm64 conditional branches — a flag test (`arm64CondBranch`) or a register zero-test
 		// (`arm64Cbz`/`arm64Cbnz`) — are the twins of `jcc`: each carries only the THEN edge, paired
 		// with an `arm64Branch` terminator for the else edge. `arm64Ret`/`arm64Branch` and the ALU band
@@ -1324,8 +1331,8 @@ function opIsCondBranch(op TargetOp) returns bool
 		callMem gives false
 		// Both stack-argument ops are body ops, not branches.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
-		// The arm64 bit reinterpretation is a body op, not a branch.
-		arm64FmovGprFp gives false
+		// Both arm64 bit reinterpretations are body ops, not branches.
+		arm64FmovGprFp to arm64FmovFpGpr gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1343,7 +1350,7 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		jcc to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to minMaxSdRegReg gives false
+		andRegReg to movqXmmGpr gives false
 		arm64Ret gives false
 		arm64Branch gives true
 		arm64CondBranch to arm64Fcsel gives false
@@ -1358,8 +1365,8 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		callMem gives false
 		// Both stack-argument ops are body ops, not branches.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
-		// The arm64 bit reinterpretation is a body op, not a branch.
-		arm64FmovGprFp gives false
+		// Both arm64 bit reinterpretations are body ops, not branches.
+		arm64FmovGprFp to arm64FmovFpGpr gives false
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
@@ -1395,7 +1402,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			movRegImm to idivReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			pushReg to popReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
 			storeSlotReg to loadRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
-			andRegReg to minMaxSdRegReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			andRegReg to movqXmmGpr then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			// The arm64 terminators: `arm64Branch` names the (unconditional / else) target, `arm64Ret`
 			// names none — the exact mirror of `jmp`/`ret`. The conditional branches
 			// (`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`) are BODY ops paired with an `arm64Branch`
@@ -1408,7 +1415,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			leaRegFunc to x64Syscall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			callMem then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a `callMem` (witness call) body op as its terminator")
 			arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a stack-argument body op as its terminator")
-			arm64FmovGprFp then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an `arm64FmovGprFp` (the bit reinterpretation) body op as its terminator")
+			arm64FmovGprFp to arm64FmovFpGpr then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an arm64 general↔vector `fmov` (a bit reinterpretation) body op as its terminator")
 			// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
 			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
@@ -3006,7 +3013,7 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			prologue to movRegImm32 then break 'capture'
 			movReg32Reg32 to popReg then break 'capture'
 			storeSlotReg to loadRegSlot then break 'capture'
-			andRegReg to minMaxSdRegReg then break 'capture'
+			andRegReg to movqXmmGpr then break 'capture'
 			arm64Ret to arm64Fcsel then break 'capture'
 			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none
 			// is an entry param capture — skipped exactly like every other non-`movRegReg` op here.
@@ -3020,8 +3027,8 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			// exists to stop one parameter's capture DESTINATION from clobbering a sibling's incoming REGISTER, and
 			// a parameter that arrives in the caller's frame has no incoming register to clobber.
 			arm64StoreOutgoingArg to arm64LoadIncomingArg then break 'capture'
-			// The arm64 bit reinterpretation is not a `movRegReg`, so it is never an entry param capture.
-			arm64FmovGprFp then break 'capture'
+			// Neither arm64 bit reinterpretation is a `movRegReg`, so neither is ever an entry param capture.
+			arm64FmovGprFp to arm64FmovFpGpr then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3218,33 +3225,140 @@ end 'opClobberMask'
 //
 // It ADDS to a row rather than returning a bool, so the splitter's peak-finder, the index build and
 // this pass call the ONE implementation and cannot disagree about where the transient lands — they
-// must agree or the splitter false-panics (see SplitLiveRanges.analyzePressure). At most one is added:
-// no `TargetOp` defines more than one value (asserted by `refreshTransientAt`, which repairs this same
-// quantity incrementally), so the FIRST virtual def decides the whole answer.
+// must agree or the splitter false-panics (see SplitLiveRanges.analyzePressure). At most one is added,
+// which `opTransientDefOf` below decides and states once.
 export function addOpTransientPressure(buf OperandList, liveRow BitWordArray, classes ValueClassColumn, pressureOut RegCountColumn)
+	let (found, defId, isReuse, reuseInputId) = opTransientDefOf(buf)
+	if not found 'noVirtualDef'
+		return
+	end 'noVirtualDef'
+
+	let defClass = valueClass(defId, classes: classes)
+	if isReuse 'reuseDef'
+		// Against the FULL pool a reuse def whose input DIES here simply inherits the input's register
+		// and costs nothing; one whose input outlives the op needs a register of its own.
+		if bitsetTest(liveRow, base: 0, bit: reuseInputId) 'inputLiveAfter'
+			classRowSet(pressureOut, class: defClass, value: classRowGet(pressureOut, class: defClass) + 1)
+		end 'inputLiveAfter'
+		return
+	end 'reuseDef'
+
+	if bitsetTest(liveRow, base: 0, bit: defId) 'defLiveAfter'
+		return
+	end 'defLiveAfter'
+	if anyVirtualUseDiesAt(buf, liveRow: liveRow, classes: classes, class: defClass) 'thisOpFreesARegister'
+		return
+	end 'thisOpFreesARegister'
+	classRowSet(pressureOut, class: defClass, value: classRowGet(pressureOut, class: defClass) + 1)
+end 'addOpTransientPressure'
+
+// ⭐⭐ **THE OP'S ONE TRANSIENT-HOLDING DEF, SELECTED IN EXACTLY ONE PLACE.** Both transient questions
+// — the FULL-POOL one above and the CONFINED one below — begin by finding the same operand under the
+// same rule, and each used to walk `buf` for it with its own copy of that rule.
+//
+// ⛔ That was one fact written twice, in the file whose most reliable bug signature it is. The premise
+// *"no `TargetOp` defines more than one value, so the FIRST virtual def decides the whole answer"* lived
+// in two loops; `refreshTransientAt` PANICS when a second virtual def appears (it counts them), while
+// the second copy would silently have taken the first and answered for an op it does not describe. A
+// clause added to one walk and not the other is a wrong pressure figure — a colorer panic or an
+// unrelieved point — never a compile error.
+//
+// The tuple is `(found, defId, isReuse, reuseInputId)`: `defId` and `isReuse` are meaningless unless
+// `found`, and `reuseInputId` unless `isReuse`. A discriminated record, not a sentinel.
+export function opTransientDefOf(buf OperandList) returns (bool, ValueId, bool, ValueId)
 	for o in buf 'each'
 		if not (operandIsDef(o) and operandIsVirtual(o)) 'notAVirtualDef'
 			continue
 		end 'notAVirtualDef'
 
-		let defClass = operandClass(o, classes: classes)
-		if operandIsReuseDef(o) 'reuseDef'
-			if bitsetTest(liveRow, base: 0, bit: operandReuseInputValueId(o, buf: buf)) 'inputLiveAfter'
-				classRowSet(pressureOut, class: defClass, value: classRowGet(pressureOut, class: defClass) + 1)
-			end 'inputLiveAfter'
-			return
-		end 'reuseDef'
-
-		if bitsetTest(liveRow, base: 0, bit: operandValueId(o)) 'defLiveAfter'
-			return
-		end 'defLiveAfter'
-		if anyVirtualUseDiesAt(buf, liveRow: liveRow, classes: classes, class: defClass) 'thisOpFreesARegister'
-			return
-		end 'thisOpFreesARegister'
-		classRowSet(pressureOut, class: defClass, value: classRowGet(pressureOut, class: defClass) + 1)
-		return
+		if not operandIsReuseDef(o) 'plainDef'
+			return (true, operandValueId(o), false, 0)
+		end 'plainDef'
+		return (true, operandValueId(o), true, operandReuseInputValueId(o, buf: buf))
 	end 'each'
-end 'addOpTransientPressure'
+	return (false, 0, false, 0)
+end 'opTransientDefOf'
+
+// ⭐⭐ **THE SAME REGISTER, ASKED ABOUT THE CONFINED POOL — AND THE ANSWER IS NOT THE SAME.**
+// `addOpTransientPressure` above answers for the FULL pool, where a reuse def whose input DIES here
+// simply takes the input's register and costs nothing. Against a CONFINED pool that inheritance is
+// not free: the def may only hold registers in its own admissible set, and the register the input
+// was holding need not be in it. A `carry` that is live across the next call may live only in the 5
+// callee-saved registers, while the `widened` it reuses crosses no call and was very likely coloured
+// into a caller-saved one — so the def must find a SIXTH callee-saved register, and there are five.
+//
+// ⛔ The confined census used to see none of this, on the premise recorded at `analyzeBlockPressure`
+// that *"a transient is not a value, so it is not CONFINED by anything"*. A reuse def IS a value. The
+// result was a point that overflowed the callee-saved subset invisibly: the splitter relieved
+// nothing, and the colorer died with `forbidden` covering the caller-saved half and the held set
+// covering the rest (`specs-shv2/register-pressure.md`'s `reuse-def-confined-by-a-later-call`).
+//
+// The inheritance test is a MASK CONTAINMENT and therefore exact without knowing any colour yet:
+// the def can be guaranteed the input's register only when EVERY register the input may hold is one
+// the def may hold too (`forbidden(def) ⊆ forbidden(input)`). Anything less is a maybe, and a
+// pressure analysis that answers "maybe" has to answer "yes, it competes".
+//
+// The pair is `(competes, v)`, `v` meaningful only when `competes` — a discriminated pair, not a
+// sentinel. It selects the op's def through `opTransientDefOf`, the same one the full-pool answer
+// uses, so the two can differ in their RULE and never in which register they are talking about.
+export function opConfinedTransient(buf OperandList, liveRow BitWordArray, liveness LivenessResult) returns (bool, ValueId)
+	let (found, defId, isReuse, reuseInputId) = opTransientDefOf(buf)
+	if not found 'noVirtualDef'
+		return (false, 0)
+	end 'noVirtualDef'
+
+	if not isReuse 'plainDef'
+		// ⛔⛔ **A PLAIN DEF THAT IS LIVE NOWHERE IS THE OTHER HALF OF THIS HOLE, AND IT IS NOT COVERED
+		// BY BEING "its own live range's demand".** A def the census sees at every op of its range needs
+		// nothing here; a def with NO range is seen at no op, while its register is as real as any
+		// other — which is the sentence `chooseRegister`'s exhaustion panic already carried about the
+		// FULL pool ("a reuse copy and a DEAD DEF are the two"). The full-pool half of it was closed
+		// when `addReuseTransientPressure` became `addOpTransientPressure`; this is the confined half,
+		// which was left behind because the premise this arm used to state — *"its confined demand is
+		// its own live range's"* — is vacuously true of a value that has no live range.
+		//
+		// The mask is what makes it a CONFINED competitor rather than merely a full-pool one: a dead
+		// def admissible everywhere competes for the machine and `addOpTransientPressure` bills it, but
+		// one carrying a non-empty `forbidden` set competes for a SUBSET that no popcount over a live
+		// population can see.
+		//
+		// ⚠⚠ **NO SPEC PINS THIS ARM, DELIBERATELY, AND A READER MUST NOT MISTAKE THAT FOR COVERAGE.**
+		// The SHAPE was measured reachable — a temporary detector fired on seven programs, each an
+		// UNUSED PARAMETER whose mask comes from `ParamCrossForbid` (its siblings' incoming argument
+		// registers), reaching this arm with the census running. A FAILING program could not be built:
+		// `E3012 unused variable` forbids an unused parameter in source, so every one of those seven is
+		// a compiler-SYNTHESIZED function (a closure thunk, a witness shim, a first-class-function
+		// trampoline), and those are far too small to over-subscribe a confined pool. A discarded
+		// `idiv` result is elided by the front end, and a 13-in-12 construction on
+		// `idiv-under-loop-pressure`'s one register of slack does not fail either.
+		//
+		// So this arm is a demand that is REAL and was UNACCOUNTED, closed on that ground and measured
+		// behaviour-neutral across the corpus — not a fix with a regression test behind it. If a future
+		// change makes a synthesized function big enough, or lets a user write an unused parameter,
+		// nothing here will turn red first.
+		//
+		// ⚠ NO "a use dies here" RELIEF, unlike the full-pool arm below. The register a dying use
+		// vacates need not be one this def may hold — the same argument the reuse arm makes — and a
+		// pressure analysis that cannot prove the inheritance has to assume the competition.
+		return (not bitsetTest(liveRow, base: 0, bit: defId) and liveness.forbiddenOf(defId) != 0, defId)
+	end 'plainDef'
+
+	if bitsetTest(liveRow, base: 0, bit: reuseInputId) 'inputLiveAfter'
+		return (true, defId)
+	end 'inputLiveAfter'
+	return (not neederMayTakeAnyRegisterOf(liveness, holder: reuseInputId, needer: defId), defId)
+end 'opConfinedTransient'
+
+// Is every register `holder` may hold one that `needer` may hold too? A subset test on the FORBIDDEN
+// masks, which run the other way: `A(v) = pool \ forbidden(v)`, so `A(holder) ⊆ A(needer)` is exactly
+// `forbidden(needer) ⊆ forbidden(holder)`. Both must also be of the same FILE — an int can never
+// inherit an XMM — which the class test states rather than leaving to the masks.
+function neederMayTakeAnyRegisterOf(liveness LivenessResult, holder ValueId, needer ValueId) returns bool
+	if liveness.classOf(holder) != liveness.classOf(needer) 'differentFiles'
+		return false
+	end 'differentFiles'
+	return (liveness.forbiddenOf(needer) and not liveness.forbiddenOf(holder)) == 0
+end 'neederMayTakeAnyRegisterOf'
 
 // Does any of `buf`'s VIRTUAL uses OF `class` die at this op — i.e. is it absent from the live-AFTER
 // row? Those are the registers `BlockDeaths` hands the colorer as `dyingRegs` MINUS the ones
@@ -3563,7 +3677,7 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		// splitter spill a value to a stack SLOT here?", and a `.data` store answers no: it writes a
 		// global at a link-time address, not a `SpillSlot` this function's frame owns. Claiming a slot
 		// for it would hand the allocator a spill record for a value it never spilled.
-		andRegReg to minMaxSdRegReg gives OpSlotRole.touchesNoSlot
+		andRegReg to movqXmmGpr gives OpSlotRole.touchesNoSlot
 		// arm64 spills go through the SHARED `storeSlotReg` (handled above), so the arm64 band never
 		// carries a spill store — `touchesNoSlot` is unreachable this rung AND correct.
 		arm64Ret to arm64Fcsel gives OpSlotRole.touchesNoSlot
@@ -3580,8 +3694,8 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		// let the splitter treat an argument store as a spill and elide a real one. An incoming-argument
 		// load reads the CALLER's frame for the same reason, so it is no reload either.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives OpSlotRole.touchesNoSlot
-		// The arm64 bit reinterpretation touches no stack slot — it is a register-to-register transfer.
-		arm64FmovGprFp gives OpSlotRole.touchesNoSlot
+		// Neither arm64 bit reinterpretation touches a stack slot — each is a register-to-register transfer.
+		arm64FmovGprFp to arm64FmovFpGpr gives OpSlotRole.touchesNoSlot
 	end 'k'
 end 'deriveSlotRole'
 

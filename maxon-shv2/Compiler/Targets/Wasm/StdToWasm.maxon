@@ -937,6 +937,10 @@ function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns 
 		// it as f64 (which `wasmValTypeOf(operandType)` would) puts the result in the wrong local
 		// class and the module fails validation, exactly as it would for the conversions.
 		bitcastF64ToI64 gives WasmValType.i64
+		// The INBOUND bitcast, and the same trap mirrored: `wasmValTypeOf(operandType)` would answer
+		// i64 (the source IS an i64) and record the result in an integer local, which `f64.*`
+		// consumers then fail validation against.
+		bitcastI64ToF64 gives WasmValType.f64
 	end 'k'
 end 'unaryResultValType'
 
@@ -1653,6 +1657,7 @@ type WasmFuncEmitter
 			// the operand push and the domain check are written once and only the opcode differs.
 			floor to abs then self.emitMathIntrinsic(operand, operandType: operandType, opcode: opcode)
 			bitcastF64ToI64 then self.emitBitcastF64ToI64(operand, operandType: operandType)
+			bitcastI64ToF64 then self.emitBitcastI64ToF64(operand, operandType: operandType)
 		end 'op'
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitUnaryOp'
@@ -1701,7 +1706,9 @@ type WasmFuncEmitter
 			sqrt then self.body.f64Sqrt()
 			abs then self.body.f64Abs()
 			neg to fpToSi then panic("emitMathIntrinsic: Std unary opcode {opcode.name} is not a math intrinsic — `emitUnaryOp` routes only floor/ceil/round/sqrt/abs here")
-			bitcastF64ToI64 then panic("emitMathIntrinsic: `bitcastF64ToI64` computes nothing — it reinterprets the operand's bits, and `emitUnaryOp` routes it to `emitBitcastF64ToI64`")
+			// ONE arm for both directions: a reinterpretation computes nothing whichever way the bits
+			// travel, and `emitUnaryOp` routes each to its own emitter.
+			bitcastF64ToI64 to bitcastI64ToF64 then panic("emitMathIntrinsic: `{opcode.name}` computes nothing — it reinterprets the operand's bits, and `emitUnaryOp` routes it to `emitBitcastF64ToI64`/`emitBitcastI64ToF64`")
 		end 'k'
 	end 'emitMathIntrinsic'
 
@@ -1714,6 +1721,23 @@ type WasmFuncEmitter
 		self.pushOperandAt(operand, targetVt: WasmValType.f64)
 		self.body.i64ReinterpretF64()
 	end 'emitBitcastF64ToI64'
+
+	// i64 → f64 REINTERPRETATION (`__Builtins.bitsToFloat`) — `f64.reinterpret_i64` (0xBF), the exact
+	// inverse of the emitter above and the only unary emitter here whose SOURCE is an integer and whose
+	// result is a float without a conversion having happened.
+	//
+	// ⚠ IT REFUSES A NARROWER SOURCE rather than widening one, which is where it parts company with
+	// `emitSiToFp` beside it. A conversion of an i32 to f64 is a well-defined number-preserving
+	// operation, so widening first is right there; a reinterpretation of an i32 is not a smaller
+	// version of anything — the missing 32 bits ARE the resulting double's sign and exponent, and
+	// `pushOperandAt` would invent them as zeros. `isWideInt` already refuses a float source.
+	function emitBitcastI64ToF64(operand ValueId, operandType StdType)
+		if not isWideInt(operandType, what: "bitcast source") 'narrowSource'
+			panic("wasm: `bitcastI64ToF64` on {operandType.name} — a reinterpretation is 64 bits for 64 bits, and a narrower integer source would leave the resulting double's exponent and sign invented rather than read")
+		end 'narrowSource'
+		self.pushOperandAt(operand, targetVt: WasmValType.i64)
+		self.body.f64ReinterpretI64()
+	end 'emitBitcastI64ToF64'
 
 	// Integer negate as `0 - operand` (wasm has no unary negate). The operand is coerced to the op's
 	// width (from `operandType`, which the result also carries): the frontend can leave it a different

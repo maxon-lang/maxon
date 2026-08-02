@@ -248,8 +248,10 @@ line2
 0
 ```
 
-<!-- disabled-test: default-values.float-default-omitted -->
-<!-- FLOAT STRING INTERPOLATION, not defaults: the case's body is `print("{factor}")` and shv2 reports `E2015: interpolating a value of type 'float' - P1.2 wave B interpolates String, integer and bool expressions; float arrives next`. The declaration half - `factor Number = 2.5`, a float default on a ranged float alias - compiles and is exercised by `mixed-defaults`. -->
+<!-- test: default-values.float-default-omitted -->
+A float default on a ranged float alias, interpolated. It sat `disabled-test:` for the whole of P1.2
+wave B because `print("{factor}")` on a float was E2015; float interpolation landing is what
+re-enabled it, and the declaration half was never the blocker.
 ```maxon
 typealias Number = float(f64.min to f64.max)
 

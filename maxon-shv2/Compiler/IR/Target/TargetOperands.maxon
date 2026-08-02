@@ -438,6 +438,12 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// The arm64 BIT REINTERPRETATION — `FMOV Xd, Dn`, one def one use, exactly like `fcvtzs`
 		// beside it and like x64's `movqGprXmm`.
 		arm64FmovGprFp(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		// The two INBOUND reinterpretations — the same one-def-one-use model as their outbound twins,
+		// and again the model says nothing about which file either end is in. Written as two arms and
+		// never a range: they sit in DIFFERENT bands (one at the end of the x64 SSE band, one at the
+		// end of the union), so a range spanning them would swallow the whole arm64 band between.
+		movqXmmGpr(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64FmovFpGpr(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 	end 'operands'
 end 'targetOpOperands'
 

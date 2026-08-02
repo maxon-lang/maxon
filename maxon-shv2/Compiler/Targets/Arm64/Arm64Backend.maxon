@@ -264,6 +264,13 @@ let Arm64OpFmovD = 0x1E604000
 // `maxon-selfhosted`'s Arm64CodeEmitter.maxon:2144-2163.
 let Arm64OpFmovGprFromFp = 0x9E660000
 
+// ⭐ `FMOV Dd, Xn` — the SAME general↔vector transfer read the other way, `bitcastI64ToF64`'s
+// instruction. `opcode` is 111 rather than 110 and every other field is identical, so the two words are
+// 0x00010000 apart: `sf=1, ftype=01, rmode=00, opcode=111`. Written as a second CONSTANT rather than as
+// the first one with a bit set at the call site — a direction is a name, not an arithmetic adjustment,
+// and a poked bit is exactly the kind of thing that reads as correct while pointing the wrong way.
+let Arm64OpFmovFpFromGpr = 0x9E670000
+
 // The MATH INTRINSICS (P1.0d.4-C). `FSQRT Dd, Dn` is its own opcode; the three roundings are ONE
 // instruction, `FRINT<r> Dd, Dn`, whose rounding rides a 3-bit `rmode` field at [17:15] — so the
 // base opcode is written once and `arm64FrintOpcode` ORs in the mode. (Spelling the three as three
@@ -965,7 +972,9 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		loadRegBaseDisp(dest, base, disp, width) then arm64EmitDataLoad(code, dest: dest, base: arm64GprField(base), disp: disp, width: width)
 		storeBaseDispReg(base, disp, src, width) then arm64EmitDataStore(code, base: arm64GprField(base), disp: disp, src: src, width: width)
 		// --- x64-only SSE band ---
-		addsdRegReg to minMaxSdRegReg then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
+		// The endpoint MOVED when `movqXmmGpr` was appended to the end of the x64 SSE band: this range
+		// means "the x64 float ops", and its last member is whichever one that band currently ends on.
+		addsdRegReg to movqXmmGpr then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
 		// `minsd`/`maxsd` are inside the range above; the arm64 spelling of `min`/`max` is `fcmp` +
 		// `fcsel`, not one op.
 		// --- arm64 band ---
@@ -1053,6 +1062,11 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// for its source and `arm64GprField` for its destination in a form that is not a convert:
 		// `fcvtzs` above shares that pair of doors, this one shares nothing else with it.
 		arm64FmovGprFp(dest, src) then emitArm64Rr(code, opcode: Arm64OpFmovGprFromFp, rd: arm64GprField(dest), rn: arm64FpField(src))
+		// The INVERSE, `FMOV Dd, Xn` — the same two doors swapped, which is why it is a separate arm and
+		// not a widened one: `arm64GprField`/`arm64FpField` assert the class of the register they name,
+		// so which door each end goes through IS the direction. `scvtf` above is its converting neighbour
+		// (same files, same order) and shares nothing else with it.
+		arm64FmovFpGpr(dest, src) then emitArm64Rr(code, opcode: Arm64OpFmovFpFromGpr, rd: arm64FpField(dest), rn: arm64GprField(src))
 	end 'emit'
 end 'emitArm64TargetOp'
 

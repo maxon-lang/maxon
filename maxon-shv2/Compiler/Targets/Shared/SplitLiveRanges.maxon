@@ -2028,7 +2028,9 @@ end 'applyOneUseToPressure'
 // `addOpTransientPressure` decides.
 //
 // ⭐ IT DOES NOT DECIDE ANYTHING. It MATERIALIZES this op's live-AFTER row and hands it to
-// `addOpTransientPressure`, which is the ONE place a transient is defined. The only thing that
+// `addOpTransientPressure`, which is the ONE place the FULL-POOL transient is defined — as
+// `opConfinedTransient` is the one place the CONFINED one is, both selecting the same def through
+// `opTransientDefOf`. The only thing that
 // legitimately differs between the full build and a repair is HOW "is `v` live after this point?" is
 // answered — off a swept live row there, off the USE INDEX here, because a repair has no live row —
 // and that is now the only thing this function does.
@@ -3247,6 +3249,21 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 		// implementation, so the two cannot disagree about which FILE it lands in.
 		classRowZero(effective)
 		addOpTransientPressure(buf, liveRow: liveRow, classes: liveness.valueClass, pressureOut: effective)
+		// The CONFINED half of the same question, which the full-pool walk above cannot answer — see
+		// `opConfinedTransient`.
+		//
+		// ⚠ **IT MUST BE ASKED HERE AND CANNOT BE DEFERRED INTO `maybeConfined` BELOW, which is where
+		// its answer is USED.** It reads the live-AFTER row, and the backward step a few lines down
+		// turns that row into live-before; asking it after the step would silently answer a different
+		// question. So the saving is a GUARD, not a move: both consumers of the answer sit inside
+		// `censusNeeded`, so a block without a census pays nothing and one with a census is unchanged.
+		var transientHeld = false
+		var transientValue = 0 as ValueId
+		if censusNeeded 'confinedTransientNeedsACensusToMatter'
+			let (held, heldBy) = opConfinedTransient(buf, liveRow: liveRow, liveness: liveness)
+			transientHeld = held
+			transientValue = heldBy
+		end 'confinedTransientNeedsACensusToMatter'
 
 		if censusNeeded 'stepWithCensus'
 			stepCensusBackwardOverOp(liveRow, buf: buf, census: census, effPoolSizes: effPoolSizes, classes: liveness.valueClass, liveByClass: liveByClass, ids: censusIds, wasLive: censusWasLive)
@@ -3305,10 +3322,30 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 		// pool. Checked only where NO file overflows its own pool — which also bounds each file's live
 		// set at its pool size, so the exact confirmation can never be a hot-path cost.
 		if not anyFullPoolOverflow 'maybeConfined'
+			// ⭐⭐ **THE TRANSIENT JOINS THE CONFINED QUESTION TOO, AS AN ORDINARY PARTICIPANT.** It is a
+			// reuse def holding its own register alongside everything live BEFORE this op, and it is an
+			// SSA value with its own admissible set — so when it is live across a call it competes for
+			// the SAME five callee-saved registers every other call-crossing value competes for.
+			// `addOpTransientPressure` names it; its header carries the false premise this replaces.
+			// It is added to the census and to the row the exact matching runs over, and taken back out
+			// immediately after, so the INCREMENTAL census stays an exact mirror of `liveRow` for the
+			// next op (it is stepped, never rebuilt).
+			let transientCompetes = censusNeeded and transientHeld
+			if transientCompetes 'transientEntersTheCensus'
+				census.add(effectivePoolOf(scratch, valueId: transientValue), class: liveness.classOf(transientValue))
+			end 'transientEntersTheCensus'
+
 			if censusNeeded and census.screenViolates(maxClassPoolSize(pool, file: liveness.registerFile)) 'screenFired'
 				bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveAtOp)
+				if transientHeld 'theTransientIsAtThisPointToo'
+					liveAtOp.push(transientValue)
+				end 'theTransientIsAtThisPointToo'
 				confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, forwardPos: forwardPos, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, hall: scratch.hall)
 			end 'screenFired'
+
+			if transientCompetes 'transientLeavesTheCensus'
+				census.remove(effectivePoolOf(scratch, valueId: transientValue), class: liveness.classOf(transientValue))
+			end 'transientLeavesTheCensus'
 		end 'maybeConfined'
 	end 'eachOpRev'
 
@@ -3334,6 +3371,13 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	// the running best of the blocks before it. See `PeakRank.snapshot`.
 	return best.snapshot()
 end 'analyzeBlockPressure'
+
+// The effective pool size recorded for `valueId` — how many registers it may actually take, after its
+// own `forbidden` set. Named because the census add and the matching remove must quote the same
+// number, and a second `sizes.get` spelled at each would be that number written twice.
+function effectivePoolOf(scratch SplitScratch, valueId ValueId) returns RegCount
+	return try scratch.effPools.sizes.get(valueId) otherwise panic("effectivePoolOf: value {valueId} is outside the function's value space — `effPools.growTo` sizes the column to the CFG's value count before any sweep reads it")
+end 'effectivePoolOf'
 
 // The winning rank, with its live-before row attached — the `PressurePeak` the driver, `chooseVictim`
 // and the E5001 diagnostic all read. Built ONCE per analysis, for the winner alone.
@@ -4125,7 +4169,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// relocation — and there is no `movsd xmm, imm64` to rebuild it with even if the IEEE bits
 		// ARE an integer the compiler holds. `constValueOfDef` would panic. When someone
 		// generalizes remat to "an op with no register inputs", it buys BOTH of these at once.
-		andRegReg to minMaxSdRegReg gives false
+		andRegReg to movqXmmGpr gives false
 		// The arm64 band. `arm64MovImm` IS the arm64 constant materialization (the `movz`/`movk` ladder),
 		// so it is rematerializable exactly as x64's `movRegImm`/`movRegImm32` are — `constDefInfo` reads
 		// its immediate and `freshConstOp` re-emits a fresh `arm64MovImm`. Every other arm64 op reads a
@@ -4147,8 +4191,8 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// A stack-argument store defines nothing; an incoming load's def is a MEMORY read whose address is a
 		// frame fact, not a constant this pass could re-materialize. Neither is rematerializable.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
-		// The arm64 bit reinterpretation READS A REGISTER, so its def cannot be rebuilt from a constant.
-		arm64FmovGprFp gives false
+		// Both arm64 bit reinterpretations READ A REGISTER, so neither def can be rebuilt from a constant.
+		arm64FmovGprFp to arm64FmovFpGpr gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -4900,7 +4944,7 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		movRegImm32(_, value) gives (value, false)
 		arm64MovImm(_, value) gives (value, true)
 		prologue to jcc panic("constDefInfo: def is not a constant materialization")
-		movRegReg to minMaxSdRegReg panic("constDefInfo: def is not a constant materialization")
+		movRegReg to movqXmmGpr panic("constDefInfo: def is not a constant materialization")
 		arm64Ret to arm64Cbnz panic("constDefInfo: def is not a constant materialization")
 		arm64Prologue to arm64Fcsel panic("constDefInfo: def is not a constant materialization")
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not const materializations —
@@ -4912,8 +4956,8 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		callMem panic("constDefInfo: a `callMem` def is not a constant materialization")
 		// `opIsConstMaterialization` answers false for both, so neither reaches here; named rather than swallowed.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg panic("constDefInfo: def is not a constant materialization")
-		// `opIsConstMaterialization` answers false for it, so it never reaches here; named rather than swallowed.
-		arm64FmovGprFp panic("constDefInfo: def is not a constant materialization")
+		// `opIsConstMaterialization` answers false for both, so neither reaches here; named rather than swallowed.
+		arm64FmovGprFp to arm64FmovFpGpr panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -5032,8 +5076,11 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// and passes through, exactly as an immediate or a cond code does.
 		sqrtsdRegReg(dest, src) then return TargetOp.sqrtsdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		roundsdRegReg(dest, src, mode) then return TargetOp.roundsdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), mode: mode)
-		// The BIT REINTERPRETATION — one def, one use, both substitutable, like the converts.
+		// The BIT REINTERPRETATIONS — one def, one use each, both substitutable, like the converts. Two
+		// arms and not a range: they are not adjacent (the inbound one was appended at the end of the x64
+		// SSE band, past `minMaxSdRegReg`) and each rebuilds its OWN variant.
 		movqGprXmm(dest, src) then return TargetOp.movqGprXmm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		movqXmmGpr(dest, src) then return TargetOp.movqXmmGpr(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		// f64 ABS — one def, one use, both substitutable, like the converts. Its two-address REUSE is
 		// the operand model's business, not this rename's.
 		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
@@ -5121,8 +5168,9 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// The stack-argument pair substitutes its ONE register operand each; the slot is a frame index.
 		arm64StoreOutgoingArg(slot, srcReg) then return TargetOp.arm64StoreOutgoingArg(slot, srcReg: substituteVReg(srcReg, from: from, to: to))
 		arm64LoadIncomingArg(dest, slot) then return TargetOp.arm64LoadIncomingArg(substituteVReg(dest, from: from, to: to), slot: slot)
-		// The arm64 BIT REINTERPRETATION — one def, one use, both substitutable, like `fcvtzs`.
+		// The arm64 BIT REINTERPRETATIONS — one def, one use each, both substitutable, like `fcvtzs`/`scvtf`.
 		arm64FmovGprFp(dest, src) then return TargetOp.arm64FmovGprFp(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64FmovFpGpr(dest, src) then return TargetOp.arm64FmovFpGpr(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 	end 'rewrite'
 end 'substituteValueInOp'
 

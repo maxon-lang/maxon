@@ -233,7 +233,7 @@ Value: -10
 
 ### Float Interpolation
 
-<!-- disabled-test: float-interpolation -->
+<!-- test: float-interpolation -->
 <!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
@@ -251,7 +251,7 @@ Pi: 3.14159
 
 ### Float Literal Interpolation
 
-<!-- disabled-test: float-literal -->
+<!-- test: float-literal -->
 <!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
@@ -268,7 +268,7 @@ Value: 2.5
 
 ### Negative Float
 
-<!-- disabled-test: negative-float -->
+<!-- test: negative-float -->
 <!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
@@ -593,7 +593,7 @@ x and y: false
 
 ### Float Arithmetic
 
-<!-- disabled-test: float-arithmetic -->
+<!-- test: float-arithmetic -->
 <!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
@@ -647,7 +647,7 @@ Max int: 2147483647
 
 ### Zero Values
 
-<!-- disabled-test: zero-values -->
+<!-- test: zero-values -->
 <!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
@@ -1361,4 +1361,52 @@ end 'main'
 ```stdout
 val=7
 twice 77
+```
+
+<!-- test: float-ranged-alias-positions -->
+A float that reaches `"{x}"` through a ranged ALIAS — as a parameter, as a field, as a return —
+interpolates as a float.
+
+The question is not idle: `tagIsIntegral` answers `true` for a `named` tag on purpose, so a float
+still carrying one would be claimed by the integer arm of the interpolation lowering and printed as
+its IEEE bit pattern in decimal. Nothing reaches that arm, because a ranged float alias is resolved
+to a `float` tag before the lowering sees it. This pins the three positions where an alias survives
+longest, so the day one of them stops resolving it is a failing case rather than a wrong number.
+```maxon
+typealias Percent = float(0.0 to 100.0)
+
+type Reading
+	export var pct as Percent
+
+	static function create(pct Percent) returns Reading
+		return Self{pct: pct}
+	end 'create'
+end 'Reading'
+
+function pick(r Reading) returns Percent
+	return r.pct
+end 'pick'
+
+function show(p Percent)
+	print("param={p}")
+	print("\n")
+end 'show'
+
+function main() returns ExitCode
+	let r = Reading.create(12.5)
+	show(r.pct)
+	print("field={r.pct}")
+	print("\n")
+	print("ret={pick(r)}")
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+param=12.5
+field=12.5
+ret=12.5
 ```

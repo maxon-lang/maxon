@@ -189,7 +189,12 @@ let F64TypeName = "f64"
 // cannot read it at all, which is the reported reason these two cases sat disabled.
 function parseTypedValueBits(typeName String, text String) returns ParsedInt throws TypedValueError
 	if typeName == F64TypeName 'float'
-		return try parseFloatBits(text.toByteArray()) otherwise throw TypedValueError.badNumber(typeName, text: text)
+		// Both failure arms are the SAME answer here — a `RequiredData f64` line whose text is not a
+		// number is a bad line however it is bad — so they share one arm rather than repeating it.
+		match __float_bitsFromText(text) 'decoded'
+			bits(value) then return value
+			overflow to malformed then throw TypedValueError.badNumber(typeName, text: text)
+		end 'decoded'
 	end 'float'
 	return try int.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)
 end 'parseTypedValueBits'

@@ -372,7 +372,19 @@ end 'indirectResultRegister'
 // `lowerCondBranch`'s lookup the single source of truth: a hit means "the flags this branch
 // reads were set by the compare that defined its condition", and that fact is established at
 // exactly one place (`computeFusedCmps`).
-typealias CmpPredMap = Map with (ValueId, StdCmpPred)
+//
+// ⛔⛔ **KEYED BY THE BRANCHING BLOCK, NOT BY THE COMPARE'S VALUE, AND THAT IS THE WHOLE
+// CORRECTNESS ARGUMENT.** Fusion is a fact about a *(compare, branch)* PAIR — "the flags this
+// `jcc` reads are the ones that `cmp` set" — and a compare's value can feed MORE THAN ONE
+// branch (`let sub = e < -1022` tested once here and again fifty ops later). Keyed by ValueId,
+// the entry recorded for the first branch answered for the second one too: the later `jcc` was
+// emitted BARE, reading whatever flags the intervening calls and compares had left, and
+// `computeValuesReadFromRegisters` — which excludes a fused branch's condition — excluded BOTH
+// uses, so no `setcc` was emitted anywhere and the boolean existed in no register at all.
+// MEASURED as a silent wrong answer: `stdlib/Builtins.maxon`'s `__float_bitsFromDecimal` took
+// its `isSubnormal` branch on a false condition and `0.5` printed as `4503599627370496`.
+// A block has exactly ONE terminator, so keyed by the block the fact is exact.
+typealias CmpPredMap = Map with (BlockRef, StdCmpPred)
 
 // A block whose float-equality branch was split → the id of the `ordered` block minted for it.
 // See `reserveFloatEqualityBlocks`, which is the only writer, and `lowerCondBranch`, the only
@@ -580,11 +592,16 @@ end 'parityTargetOf'
 // Both columns are written HERE, by this one call, which is what keeps them in lockstep — the
 // predicate and the float-ness of the compare carrying it can never disagree, because nothing
 // can write one without the other.
-function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
+function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, blockRef BlockRef, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
 	if defId != condId 'someOtherCompare'
 		return
 	end 'someOtherCompare'
-	fused.upsert(condId, value: pred)
+	// The PREDICATE is recorded against the branching BLOCK (see `CmpPredMap`); the FLOAT-NESS
+	// stays against the compare's VALUE, and the asymmetry is exact rather than convenient. "Which
+	// flags does this jcc read?" is a question about a pair, so only a block can answer it; "is the
+	// compare defining v a float compare?" is a property of v's one defining op and cannot differ
+	// between readers. Every reader of the second column reaches it through a hit in the first.
+	fused.upsert(blockRef, value: pred)
 	if stdTypeIsFloat(operandType) 'float'
 		floatCmps.insert(condId)
 	end 'float'
@@ -977,7 +994,7 @@ type StdToX64Lowering
 			end 'noTerm'
 			let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("computeFusedCmps: terminatorIndex not in stdModule.ops")
 			match term 'term'
-				condBranch(condId, _, _) then self.recordFusableCompare(block, condId: condId, fused: fused, floatCmps: floatCmps)
+				condBranch(condId, _, _) then self.recordFusableCompare(block, blockRef: blockRef, condId: condId, fused: fused, floatCmps: floatCmps)
 				const to mod then break 'term'
 				branch to rdataAddr then break 'term'
 				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
@@ -1006,7 +1023,7 @@ type StdToX64Lowering
 	// Record `condId` as fusable iff the LAST flag-clobbering body op of `block` is a
 	// compare that DEFINES it. Walked backward from the end of the body, because that is
 	// the order the flags are overwritten in.
-	function recordFusableCompare(block IrBlock, condId ValueId, fused CmpPredMap, floatCmps StdValueUseSet)
+	function recordFusableCompare(block IrBlock, blockRef BlockRef, condId ValueId, fused CmpPredMap, floatCmps StdValueUseSet)
 		var i = block.opRefs.count()
 		while i > 0 'scanBackward'
 			i = i - 1
@@ -1023,12 +1040,12 @@ type StdToX64Lowering
 			// identically: `foldConstOperands` moved the right operand into an immediate, which
 			// changed the instruction, not what the compare means.
 			match op 'isTheCompare'
-				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, defId: defId, condId: condId, pred: pred, operandType: operandType)
+				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
 				// `cmpImm` is INTEGER BY CONSTRUCTION and `i64` is not a guess here: it carries no
 				// `operandType` field precisely because no SSE form takes an immediate, so
 				// `foldConstOperands` refuses a float rhs and a float compare can never reach this
 				// variant. The absence of the field IS the statement that the type is integral.
-				cmpImm(defId, _, _, pred) then fuseIfDefines(fused, floatCmps: floatCmps, defId: defId, condId: condId, pred: pred, operandType: StdType.i64)
+				cmpImm(defId, _, _, pred) then fuseIfDefines(fused, floatCmps: floatCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: StdType.i64)
 				const to unaryOp then break 'isTheCompare'
 				binOpImm then break 'isTheCompare'
 				// Extended past `retVoid` to take in the memory band, and past `storeIndirect` to take in
@@ -1104,7 +1121,7 @@ type StdToX64Lowering
 				end 'eachArg'
 			end 'eachEdge'
 
-			self.collectTerminatorValueUses(block, readAsValue: readAsValue)
+			self.collectTerminatorValueUses(block, blockRef: blockRef, readAsValue: readAsValue)
 		end 'eachBlock'
 
 		return readAsValue
@@ -1112,47 +1129,23 @@ type StdToX64Lowering
 
 	// Add the terminator's value uses to `readAsValue` — unless it is a `condBranch` whose
 	// condition this block FUSES, in which case it consumes EFLAGS and not a register.
-	function collectTerminatorValueUses(block IrBlock, readAsValue StdValueUseSet)
+	//
+	// ⭐ **THE MEMBERSHIP TEST IS THE WHOLE QUESTION, because the map is keyed by BLOCK** (see
+	// `CmpPredMap`): an entry exists for exactly those blocks whose terminator is a `condBranch`
+	// that `recordFusableCompare` PROVED reads its compare's flags. This used to be a match over
+	// every `StdOp` variant asking "is this terminator a fused condBranch?", and every arm but one
+	// answered `false` — the arms were re-deriving what a lookup already knows, off a key that
+	// could not tell this block's branch from another block's.
+	function collectTerminatorValueUses(block IrBlock, blockRef BlockRef, readAsValue StdValueUseSet)
 		if not block.hasTerminatorOp() 'noTerm'
 			return
 		end 'noTerm'
-		let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("collectTerminatorValueUses: terminatorIndex not in stdModule.ops")
-		if self.terminatorReadsFusedFlags(term) 'flagsOnly'
+		if self.cmpPreds.contains(blockRef) 'flagsOnly'
 			return
 		end 'flagsOnly'
+		let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("collectTerminatorValueUses: terminatorIndex not in stdModule.ops")
 		collectStdOpUses(term, referenced: readAsValue)
 	end 'collectTerminatorValueUses'
-
-	// True iff `term` is a conditional branch on a compare this function FUSES — so it reads
-	// that compare's flags, not its value. A `bool`, not an optional condition value: this is
-	// asked once per block, and a payload-carrying union would heap-box the answer at each
-	// (see `fuseIfDefines`).
-	function terminatorReadsFusedFlags(term StdOp) returns bool
-		return match term 'term'
-			condBranch(condId, _, _) gives self.cmpPreds.contains(condId)
-			const to mod gives false
-			branch to rdataAddr gives false
-			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
-			// non-false answer here (P1.5-A1).
-			tryCall to osFreePages gives false
-			// The jump table reads no fused compare flags — it sets its own via its bounds `cmp`.
-			switch gives false
-			// A witness call is a value-producing body op, never a terminator that reads fused flags — the
-			// throwing form no more so than the plain one.
-			witnessCall gives false
-			witnessTryCall gives false
-			// P1.5 dogfood slice 1a: an IOCP op is never a terminator — none reads fused compare flags.
-			osPipeCreate to osWriteFile gives false
-			// The wall-clock read is never a terminator, so it reads no fused compare flags.
-			osReadWallClock gives false
-			// R4.1 + R4.2: no file op is ever a terminator, so none reads fused compare flags.
-			osFileOpenRead to osFileAttributes gives false
-			// A panic is never a terminator, so it is never the float-equality condBranch this asks about.
-			osPanicValue gives false
-			// A command-line read is never a terminator either.
-			osCommandLine gives false
-		end 'term'
-	end 'terminatorReadsFusedFlags'
 
 	// Lower a regular (non-terminator) Std op. `ret` reaching here is the rare
 	// mid-block form (LowerMaxonToStd emits it as a body op for a partially-
@@ -1517,6 +1510,11 @@ type StdToX64Lowering
 			// `dest` is GPR-classed and `src` XMM-classed, each from its own value's Std type
 			// (`unaryResultClass`), so the operand model needs nothing special for it.
 			bitcastF64ToI64 then self.targetModule.appendOp(dstBlock, op: TargetOp.movqGprXmm(dest, src: src))
+			// Its INVERSE (`__Builtins.bitsToFloat`, the decimal reader's answer becoming a `float`).
+			// `movq xmm, r64` — the same 64 bits, back across the boundary. `dest` is XMM-classed and
+			// `src` GPR-classed, again each from its own value's Std type, so nothing here changes
+			// either; only `unaryResultClass` had to learn the direction.
+			bitcastI64ToF64 then self.targetModule.appendOp(dstBlock, op: TargetOp.movqXmmGpr(dest, src: src))
 		end 'op'
 	end 'lowerUnaryOp'
 
@@ -2797,21 +2795,21 @@ type StdToX64Lowering
 	// block: `appendOp` refuses to append past a conditional branch.
 	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstBlock IrBlock, blockRef BlockRef)
 		let orderedId = try self.orderedBlockIds.get(blockRef) otherwise 'notFloatEquality'
-			let cond = self.branchConditionCode(condId, dstBlock: dstBlock)
+			let cond = self.branchConditionCode(condId, blockRef: blockRef, dstBlock: dstBlock)
 			self.targetModule.appendCondBranch(dstBlock, op: TargetOp.jcc(cond, targetBlockId: thenBlockId))
 			self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(elseBlockId))
 			return
 		end 'notFloatEquality'
 
-		self.lowerFloatEqualityBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, orderedId: orderedId, dstBlock: dstBlock)
+		self.lowerFloatEqualityBranch(blockRef, thenBlockId: thenBlockId, elseBlockId: elseBlockId, orderedId: orderedId, dstBlock: dstBlock)
 	end 'lowerCondBranch'
 
 	// The FIRST block of a split float equality: it asks "unordered?" and nothing else. The
 	// `ucomisd` is already in this block — `lowerCmp` emitted it as a body op — so all that is
 	// left is the parity jump and the fall-through into `ordered` (which
 	// `reserveFloatEqualityBlocks` has already emitted, complete).
-	function lowerFloatEqualityBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, orderedId BlockId, dstBlock IrBlock)
-		let pred = try self.cmpPreds.get(condId) otherwise panic("lowerFloatEqualityBranch: v{condId} is not a fused compare, but an `ordered` block was reserved for its branch")
+	function lowerFloatEqualityBranch(blockRef BlockRef, thenBlockId BlockId, elseBlockId BlockId, orderedId BlockId, dstBlock IrBlock)
+		let pred = try self.cmpPreds.get(blockRef) otherwise panic("lowerFloatEqualityBranch: block ref {blockRef} fuses no compare, but an `ordered` block was reserved for its branch")
 		let parityTarget = parityTargetOf(pred, thenBlockId: thenBlockId, elseBlockId: elseBlockId)
 		self.targetModule.appendCondBranch(dstBlock, op: TargetOp.jcc(X64CondCode.parity, targetBlockId: parityTarget))
 		self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(orderedId))
@@ -2839,8 +2837,8 @@ type StdToX64Lowering
 
 	// The condition code the branch's `jcc` tests, emitting the truth-test `cmp reg, 0` first
 	// when the condition is a value rather than a fused compare's flags.
-	function branchConditionCode(condId ValueId, dstBlock IrBlock) returns X64CondCode
-		let pred = try self.cmpPreds.get(condId) otherwise 'notFused'
+	function branchConditionCode(condId ValueId, blockRef BlockRef, dstBlock IrBlock) returns X64CondCode
+		let pred = try self.cmpPreds.get(blockRef) otherwise 'notFused'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(TargetVReg.virtual(condId), imm: BoolFalseImm))
 			return X64CondCode.notEqual
 		end 'notFused'
@@ -2944,7 +2942,7 @@ type StdToX64Lowering
 		end 'noTerm'
 		let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("settleFloatEqualityBranch: terminatorIndex not in stdModule.ops")
 		return match term 'term'
-			condBranch(condId, _, _) gives self.settleFloatEqualityCondition(condId)
+			condBranch(condId, _, _) gives self.settleFloatEqualityCondition(blockRef, condId: condId)
 			const to mod gives false
 			branch to rdataAddr gives false
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
@@ -2987,8 +2985,8 @@ type StdToX64Lowering
 	//   • anything else ⇒ no split. An UNFUSED condition is an ordinary bool in a register; an
 	//     INTEGER compare has no unordered answer; an ORDERED float predicate is answered by a
 	//     single `ja`/`jae` on swapped operands and needs no second jump at all.
-	function settleFloatEqualityCondition(condId ValueId) returns bool
-		if not self.isFusedFloatEquality(condId) 'notFloatEquality'
+	function settleFloatEqualityCondition(blockRef BlockRef, condId ValueId) returns bool
+		if not self.isFusedFloatEquality(blockRef, condId: condId) 'notFloatEquality'
 			return false
 		end 'notFloatEquality'
 		if not self.valuesReadFromRegisters.contains(condId) 'flagsOnly'
@@ -3000,14 +2998,14 @@ type StdToX64Lowering
 		// that is correct rather than a half-erasure: dropping the predicate makes this value's
 		// `fusedFloatCmps` bit UNREACHABLE, because every reader of that set gates on a `cmpPreds`
 		// hit first (see the field). A dense bool column has no `remove` to call anyway.
-		_ = self.cmpPreds.remove(condId)
+		_ = self.cmpPreds.remove(blockRef)
 		return false
 	end 'settleFloatEqualityCondition'
 
 	// True iff `condId` is defined by a FUSED compare that is a FLOAT `==` or `!=` — the one
 	// compare shape whose branch cannot be a single jump.
-	function isFusedFloatEquality(condId ValueId) returns bool
-		let pred = try self.cmpPreds.get(condId) otherwise 'notFused'
+	function isFusedFloatEquality(blockRef BlockRef, condId ValueId) returns bool
+		let pred = try self.cmpPreds.get(blockRef) otherwise 'notFused'
 			return false
 		end 'notFused'
 		return self.fusedFloatCmps.contains(condId) and predicateIsEquality(pred)
@@ -3023,8 +3021,10 @@ type StdToX64Lowering
 	// Every step is its own scoped helper, so no two live borrows of `targetModule.blocks` ever
 	// coexist. Reads come first, then the mint, then the writes.
 	function buildOrderedBlock(funcIdx FuncIndex, blockRef BlockRef) returns BlockId
-		let (condId, thenBlockId, elseBlockId) = self.condBranchFieldsOf(blockRef)
-		let pred = try self.cmpPreds.get(condId) otherwise panic("buildOrderedBlock: v{condId} is not a fused compare, but blockNeedsFloatEqualitySplit said its block needs a split")
+		// The condition value is not needed here any more: the predicate is looked up by BLOCK
+		// (see `CmpPredMap`), which is the same key this split was selected under.
+		let (_, thenBlockId, elseBlockId) = self.condBranchFieldsOf(blockRef)
+		let pred = try self.cmpPreds.get(blockRef) otherwise panic("buildOrderedBlock: block ref {blockRef} fuses no compare, but blockNeedsFloatEqualitySplit said it needs a split")
 
 		// The original's phi edges, cloned BEFORE the new block exists — the walk prunes the
 		// original down to its one surviving edge later, and `ordered` needs both.

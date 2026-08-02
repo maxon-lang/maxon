@@ -335,7 +335,7 @@ function isCaptureMove(op TargetOp) returns bool
 	return match op 'm'
 		movRegReg(dst, src) gives vregIsVirtual(dst) and vregIsPhysical(src)
 		prologue to movRegImm32 gives false
-		movReg32Reg32 to minMaxSdRegReg gives false
+		movReg32Reg32 to movqXmmGpr gives false
 		arm64Ret to arm64Fcsel gives false
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none is a
 		// call-result capture move — the same `false` every non-`movRegReg` op gets here.
@@ -346,8 +346,8 @@ function isCaptureMove(op TargetOp) returns bool
 		callMem gives false
 		// Neither stack-argument op is a `movRegReg`, so neither is a call-result capture move.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
-		// The arm64 bit reinterpretation is not a `movRegReg`, so it is not a call-result capture move.
-		arm64FmovGprFp gives false
+		// Neither arm64 bit reinterpretation is a `movRegReg`, so neither is a call-result capture move.
+		arm64FmovGprFp to arm64FmovFpGpr gives false
 	end 'm'
 end 'isCaptureMove'
 
@@ -446,7 +446,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		pushReg to popReg then return false
 		storeSlotReg to loadRegSlot then return false
 		// None of the data-section band is a register-to-register move, so none can be a self-move.
-		andRegReg to minMaxSdRegReg then return false
+		andRegReg to movqXmmGpr then return false
 		// arm64 reg-reg moves are the SHARED `movRegReg` (handled above), so the arm64 band — arm64's
 		// own ALU / control / call ops — is never a register-to-register move, hence never a self-move.
 		arm64Ret to arm64Fcsel then return false
@@ -471,11 +471,12 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		// numbering is one space that a GPR and an FP register cannot collide; the hazard would be real
 		// under v1's TWO-enum design, where `x3` and `d3` are both 3. x64 is the same shape (GPRs 0..15,
 		// XMMs 16..31), which is why its `movqGprXmm` twin needs nothing here and is correctly answered
-		// `false` by the `andRegReg to leaRegRdata` arm above.
+		// `false` by the `andRegReg to movqXmmGpr` arm above — which covers its inbound twin `movqXmmGpr`
+		// too, that arm's endpoint being the x64 band's last member.
 		//
-		// The arm is not optional: `arm64FmovGprFp` is the LAST union member, so no range covers it and
+		// The arm is not optional: `arm64FmovFpGpr` is the LAST union member, so no range covers it and
 		// the match would not be exhaustive without it.
-		arm64FmovGprFp then return false
+		arm64FmovGprFp to arm64FmovFpGpr then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -708,7 +709,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			movRegImm to idivReg then panic("retargetControlOp: non-terminator op as terminator")
 			pushReg to popReg then panic("retargetControlOp: pushReg/popReg reached as a terminator — they are body ops inserted post-regalloc")
 			storeSlotReg to loadRegSlot then panic("retargetControlOp: a spill/reload reached as a terminator — the splitter inserts them as body ops, never as terminators")
-			andRegReg to minMaxSdRegReg then panic("retargetControlOp: non-terminator op as terminator")
+			andRegReg to movqXmmGpr then panic("retargetControlOp: non-terminator op as terminator")
 			// The arm64 band: `arm64Branch` is the unconditional terminator (retargeted like `jmp`);
 			// `arm64Ret` is the ret terminator (like x64 `ret`). Everything else — the conditional
 			// branches, ALU, frame, call ops — is not a terminator here.
@@ -720,7 +721,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			leaRegFunc to x64Syscall then panic("retargetControlOp: non-terminator op as terminator")
 			callMem then panic("retargetControlOp: a `callMem` (witness call) is a body op, not a terminator")
 			arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("retargetControlOp: a stack-argument op is a body op, not a terminator")
-			arm64FmovGprFp then panic("retargetControlOp: an `arm64FmovGprFp` (the bit reinterpretation) is a body op, not a terminator")
+			arm64FmovGprFp to arm64FmovFpGpr then panic("retargetControlOp: an arm64 general↔vector `fmov` (a bit reinterpretation) is a body op, not a terminator")
 			// A jump table is a multiway terminator: redirect EVERY case slot (and the default) that names
 			// `oldTarget` — a range/`or` arm fills several slots with one block, so the split of that single
 			// CFG edge redirects all of them through the one split block.

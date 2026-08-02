@@ -492,6 +492,21 @@ E2067 ParserBuiltinArgNamed
 	doc as a variable reference. That names the wrong thing entirely -- the defect is the label, not
 	doc a missing binding -- which is the clearest argument for shv2 registering its own code here.
 
+E2068 ParserMalformedNumericLiteral
+	csharp ParserMalformedNumericLiteral
+	shv2 parserMalformedNumericLiteral
+	doc A numeric literal's text is not a number -- two decimal points ('1.5.3'), or any byte the
+	doc number grammar does not admit.
+	doc IT REPLACES A PANIC, and the panic's premise is why this code exists. The parser used to
+	doc assert a malformed literal was UNREACHABLE from source, on the ground that Lexer.scanNumber
+	doc only ever hands over digits, '_', '.', 'e'/'E' and an exponent sign -- so a rejection could
+	doc only mean the lexer and the number reader had diverged, a compiler defect rather than a
+	doc program's. That premise was FALSE: the lexer's trailing-byte rule appended a SECOND '.' to a
+	doc token that already carried a fraction, so '1.5.3' reached the reader as '1.5.' and CRASHED
+	doc the compiler. A parser must be able to answer 'that literal is not well-formed' with a
+	doc position, and a layer that cannot say no is a layer whose caller's leniency has nowhere to
+	doc surface.
+
 E3001 SemanticNoMain
 	csharp SemanticNoMain
 	selfhosted semanticNoMain

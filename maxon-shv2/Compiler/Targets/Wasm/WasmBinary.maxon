@@ -272,6 +272,13 @@ let opF64Sqrt = 0x9F
 // `maxon-selfhosted`'s wasm backend (WasmBinary.maxon:296).
 let opI64ReinterpretF64 = 0xBD
 
+// Its INVERSE, i64 → f64 — the bits of `stdlib/Builtins.maxon`'s one correctly-rounded decimal reader
+// becoming the `float` a program asked for (`__Builtins.bitsToFloat`). ⚠ It is 0xBF and NOT 0xBE: the
+// reinterpret quartet runs `i32.reinterpret_f32` (0xBC), `i64.reinterpret_f64` (0xBD),
+// `f32.reinterpret_i32` (0xBE), `f64.reinterpret_i64` (0xBF), so the neighbouring byte is the 32-bit
+// form of this direction and would validate against an f32 result this backend never produces.
+let opF64ReinterpretI64 = 0xBF
+
 // The memory-access band (the top-level-`var` milestone, then the heap-String one), appended the way
 // v1's WasmBinary grew each time a milestone needed new opcodes. A load/store carries a MEMARG — an
 // `align` ULEB then an `offset` ULEB. The WORD forms below (an `int`/pointer is i64, a `float` is f64)
@@ -708,6 +715,11 @@ export type WasmBody
 	export function i64ReinterpretF64()
 		self.buf.push(opI64ReinterpretF64)
 	end 'i64ReinterpretF64'
+
+	// The same reinterpretation inbound (i64 in, f64 out, same bits).
+	export function f64ReinterpretI64()
+		self.buf.push(opF64ReinterpretI64)
+	end 'f64ReinterpretI64'
 
 	// Data-section loads/stores. Each carries a MEMARG (`align` then `offset`, both ULEB); the
 	// dynamic base address is the i32 already on the stack (a load consumes it; a store consumes

@@ -1306,7 +1306,8 @@ end 'literalOutOfRangeMessage'
 
 // A single range bound (or the offending value) as source text — the SIGNED spelling.
 //
-// FLOAT: the bound is an f64 BIT PATTERN, so it renders through `formatFloatBits` — the shortest
+// FLOAT: the bound is an f64 BIT PATTERN, so it renders through `stdlib/Builtins.maxon`'s
+// `__float_textFromBits` — the shortest
 // decimal that reads back as the same double, which is what the bootstrap prints. Printing the
 // pattern itself would name a number nobody wrote.
 //
@@ -1321,7 +1322,7 @@ end 'literalOutOfRangeMessage'
 // offending VALUE — which is a signed i64 the author wrote — never receives it.
 function formatBound(bound ParsedInt, isFloat bool) returns String
 	if isFloat 'float'
-		return formatFloatBits(bound)
+		return __float_textFromBits(bound)
 	end 'float'
 
 	return "{bound}"
@@ -1583,7 +1584,18 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		// want, and not something a `ParsedInt` column that cannot say which entries are bit patterns
 		// may do. (`abs` alone WOULD be a pure bit operation on that pattern, but the column's
 		// ambiguity is what forbids it, not the arithmetic.)
-		trunc to abs gives FoldedInt.notFoldable
+		//
+		// `floatToBits` is refused for `abs`'s reason and no other, and it is the sharpest case of it:
+		// its fold WOULD BE THE IDENTITY — a float operand's `ParsedInt` already IS the bit pattern this
+		// op answers with. Folding it would mean this column asserting of one entry that it holds a
+		// pattern rather than a number, which is exactly the distinction its header says it cannot make.
+		//
+		// `bitsToFloat` is refused for `promoteToFloat`'s STRUCTURAL reason and not `floatToBits`'s: its
+		// result tag is float by construction, so this folder — which runs only when
+		// `tagIsInteger(resultTag)` — is never asked. Its fold would be the identity too, and from the
+		// other side of the same ambiguity: the answer it would hand back is a bit pattern this column
+		// would go on carrying as a number.
+		trunc to bitsToFloat gives FoldedInt.notFoldable
 	end 'o'
 end 'foldIntUnaryOp'
 

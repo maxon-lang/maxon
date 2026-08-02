@@ -634,6 +634,24 @@ export enum MaxonUnaryOp
 	round
 	sqrt
 	abs
+	// ⭐ **NOT ARITHMETIC AND NOT A CONVERSION — a REINTERPRETATION.** `floatToBits` reads an f64 and
+	// answers the i64 its 64 bits already spell, computing nothing: `trunc` asks what NUMBER a float
+	// names, this asks what its ENCODING is. It is a unary op for the same shape reason the five
+	// intrinsics above are (one operand in, one result out, non-trapping), but it is the only member
+	// that LEAVES the float domain without converting, which is exactly how `StdUnaryOpcode`'s
+	// `bitcastF64ToI64` describes itself.
+	//
+	floatToBits
+	// The INVERSE reinterpretation (`__Builtins.bitsToFloat`), and the mirror of every sentence above:
+	// it reads an i64 and answers the f64 those 64 bits already spell. It is the only member of this
+	// enum that ENTERS the float domain without converting — `promoteToFloat` computes the double
+	// nearest an integer, this one computes nothing at all — which is why the two may never share an
+	// arm anywhere downstream even though both end in a float.
+	//
+	// It exists because `stdlib/Builtins.maxon` has exactly ONE decimal→binary64 reader and that reader
+	// answers BITS. Without this arm `float.fromString` could not be the same conversion as a float
+	// literal's, and the tree carried two readers that disagreed (`Parser.BuiltinsBitsToFloatName`).
+	bitsToFloat
 end 'MaxonUnaryOp'
 
 // The comparison operators the Maxon tier represents (M4). A comparison SPLITS OUT

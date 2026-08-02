@@ -108,8 +108,8 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				arm64LoadIncomingArg(dest, slot) then try module.ops.set(opIdx, value: TargetOp.loadRegBaseDisp(dest, base: arm64PhysVReg(Arm64FramePointerRegNum), disp: incomingBase + ((slot * SpillSlotBytes) as Imm32), width: X64AccessWidth.word64)) otherwise panic("resolveArm64IncomingArgs: ops.set OOB at {opIdx}")
 				prologue to callMem then break 'o'
 				arm64StoreOutgoingArg then break 'o'
-				// The bit reinterpretation is already concrete — it names two registers and no frame fact.
-				arm64FmovGprFp then break 'o'
+				// Both bit reinterpretations are already concrete — each names two registers and no frame fact.
+				arm64FmovGprFp to arm64FmovFpGpr then break 'o'
 			end 'o'
 		end 'eachOp'
 	end 'eachBlock'
@@ -206,9 +206,10 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// store's source and an incoming load's destination can both be coloured into a callee-saved register,
 		// so both MUST be counted here or the prologue would not preserve it.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives arm64MaskFromOperands(op, buf: buf)
-		// The bit reinterpretation's GPR dest can be coloured into a callee-saved register, so it MUST be
-		// counted — read through the shared operand model like every other op.
-		arm64FmovGprFp gives arm64MaskFromOperands(op, buf: buf)
+		// Each bit reinterpretation names a GPR — the outbound one's DEST, the inbound one's SOURCE — and
+		// either can be coloured into a callee-saved register, so both MUST be counted. Read through the
+		// shared operand model like every other op.
+		arm64FmovGprFp to arm64FmovFpGpr gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -259,7 +260,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 	end 'noTerm'
 	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("blockEndsWithArm64Return: terminator not in module.ops")
 	return match op 'check'
-		prologue to minMaxSdRegReg gives false
+		prologue to movqXmmGpr gives false
 		arm64Ret gives true
 		// Extended past `arm64Syscall` to the x64-only ops (P1.5-A1 `leaRegFunc`/`callReg`, x64-linux
 		// `x64Syscall`): none is `arm64Ret`, so the block does not end in an arm64 return (and none ever
@@ -271,7 +272,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		callMem gives false
 		// Both stack-argument ops are body ops, never an `arm64Ret`.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
-		// The bit reinterpretation is a body op, never an `arm64Ret`.
-		arm64FmovGprFp gives false
+		// Both bit reinterpretations are body ops, never an `arm64Ret`.
+		arm64FmovGprFp to arm64FmovFpGpr gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

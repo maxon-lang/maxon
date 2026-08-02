@@ -397,6 +397,69 @@ end 'main'
 8
 ```
 
+`float.fromString` and `"{x}"` are the two ends of ONE conversion — `stdlib/Builtins.maxon`'s
+`__float_bitsFromText`, read forwards and backwards. They used to be two: the printer was the exact
+shortest-round-trip search while the reader was a naive `intPart + Σ digit/10^k` accumulation, so
+print-then-parse was not guaranteed to return the value it started from. These two cases pin the
+convergence, and each fails against the reader that was replaced.
+
+<!-- test: parsable.float-fromstring-round-trips-interpolation -->
+Print a float, parse the text back, print it again. The shortest-round-trip printer emits the
+shortest decimal that reads back as the SAME double — a claim only an exact reader can honour, so
+the two lines being identical and `a == b` being true is the whole convergence in one program.
+
+⚠ **THE VALUE WAS CHOSEN BY MEASURING AGAINST THE REPLACED READER, NOT BY LOOKING HARD.** Most
+17-digit decimals round-trip through a naive `Σ digit/10^k` too, so most of them pin nothing:
+`3.14159`, `0.30000000000000004`, `0.12345678901234567`, `0.9999999999999999` and
+`2.2250738585072014` were all tried and all stayed GREEN against the old reader.
+`1.7976931348623157` — `f64.max`'s significand — is one that does not: the naive accumulation
+lands on `1.7976931348623155`, one ULP low. The LITERAL is read by the compiler's own copy of the
+exact reader either way, so `a` is fixed and `b` alone moves, which is what makes this a test of
+the READER rather than of the printer.
+```maxon
+function main() returns ExitCode
+	let a = 1.7976931348623157
+	let text = "{a}"
+	let b = try float.fromString(text) otherwise 0.0
+	print("{text}\n")
+	print("{b}\n")
+	if a == b 'exact'
+		return 0
+	end 'exact'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1.7976931348623157
+1.7976931348623157
+```
+
+<!-- test: parsable.float-fromstring-past-the-i64-integer-part -->
+An integer part wider than an i64. The replaced reader accumulated it in an `int` and WRAPPED —
+`18446744073709551617` is 2^64 + 1, so its naive `intPart` came back as 1 and the answer was `1.0`.
+The exact reader builds the magnitude in limbs and rounds it to the nearest double, 2^64.
+
+⚠ The printed digits are `18446744073709552` followed by zeros, NOT 2^64's exact expansion
+`…551616`. Both name the same double and the printer answers with the SHORTEST decimal that reads
+back as it (17 significant digits here) — so this line also pins that the two ends agree about which
+double is meant rather than about which digits spell it.
+```maxon
+function main() returns ExitCode
+	let f = try float.fromString("18446744073709551617.0") otherwise 0.0
+	print("{f}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709552000.0
+```
+
 <!-- test: parsable.bool-fromstring-true -->
 ```maxon
 function main() returns ExitCode

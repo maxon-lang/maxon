@@ -100,6 +100,10 @@ function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns Re
 		// f64's pattern into a GPR unchanged. `operandType` is the f64 SOURCE, so — exactly as for
 		// `fpToSi` — reading it as the result would put a 64-bit integer in an XMM register.
 		bitcastF64ToI64 gives RegClass.gpr
+		// The INBOUND bitcast is the same claim mirrored, and it is the reason the arm above may not
+		// simply become a range: `operandType` here is the i64 SOURCE, so reading it would put an f64
+		// in a GPR — the exact inverse mistake, from the exact same misreading.
+		bitcastI64ToF64 gives RegClass.xmm
 	end 'k'
 end 'unaryResultClass'
 
@@ -117,7 +121,7 @@ end 'unaryResultClass'
 // (`roundsdRegReg.towardPositive`), the arm64 half only by goldens no Windows or Linux host can
 // regenerate, so the copy with the weaker gate is the one free to drift.
 //
-// `sqrt`, `abs` and `bitcastF64ToI64` are deliberately absent, for two different reasons: neither
+// `sqrt`, `abs` and BOTH bitcasts are deliberately absent, for two different reasons: neither
 // `sqrt` nor `abs` is a `roundsd`/`frint` at all (each has its own lowering on each ISA), and a bitcast
 // computes nothing to round. Asking this function for any of them is a lowering bug, not a missing arm.
 export function floatRoundModeFor(opcode StdUnaryOpcode) returns FloatRoundMode
@@ -130,7 +134,11 @@ export function floatRoundModeFor(opcode StdUnaryOpcode) returns FloatRoundMode
 		// its own lowering, which is not a `roundsd`/`frint` mode) and only the instructions differ, so
 		// the message names both rather than the same sentence being written twice.
 		sqrt to abs then panic("floatRoundModeFor: `{opcode.name}` has no rounding mode — `sqrt` is its own instruction on both ISAs (`sqrtsd` / `fsqrt`) and `abs` clears the sign bit (a `psllq`/`psrlq` pair on x64, `fabs` on arm64); an isel asking either for its rounding has routed it to the wrong op")
-		bitcastF64ToI64 then panic("floatRoundModeFor: `bitcastF64ToI64` REINTERPRETS the operand's bits and computes no number at all, so there is nothing for it to round — an isel asking for its rounding has routed it to the wrong op")
+		// ONE arm for BOTH bitcasts, and this is the one table where spanning them is right: a
+		// reinterpretation computes no number IN EITHER DIRECTION, so the answer does not depend on
+		// which file the bits are moving to. The arms that DO depend on the direction — the operand
+		// domain and both result-class tables — name them separately, as `StdUnaryOpcode`'s header says.
+		bitcastF64ToI64 to bitcastI64ToF64 then panic("floatRoundModeFor: `{opcode.name}` REINTERPRETS the operand's bits and computes no number at all, so there is nothing for it to round — an isel asking for its rounding has routed it to the wrong op")
 	end 'k'
 end 'floatRoundModeFor'
 

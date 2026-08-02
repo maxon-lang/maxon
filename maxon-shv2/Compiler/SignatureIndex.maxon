@@ -1013,9 +1013,10 @@ export union PayloadClass
 	// a match binding MOVES it out; the cascade drops it (String via `__str_decref`, struct via
 	// `__mm_decref`). `storage` is the field's own type, which `maxonTypeToStdType` gives a machine word.
 	managed(storage MaxonType, isString bool)
-	// A `float` payload — needs the `bitcastI64ToF64` INVERSE a later rung adds (a scalar-only union is
-	// int-tagged, so a float payload must go in as bits and come back out as a float; only the outbound
-	// half, `bitcastF64ToI64`, exists — it shipped with `float.hash`).
+	// A `float` payload — a scalar-only union is int-tagged, so a float payload must go in as bits and come
+	// back out as a float. BOTH bitcast directions now exist (`bitcastF64ToI64` shipped with `float.hash`,
+	// `bitcastI64ToF64` with the decimal-reader convergence); what no site does yet is APPLY them at the
+	// construct and the extract, which is why this case is still a rejection and not a lowering.
 	floatPayload
 	// A boxed-union field/payload (a nested payload-bearing union) — a MANAGED owned heap pointer, exactly
 	// like a `managed` struct box: construct MOVES it in (no incref), and the cascade drops it through its

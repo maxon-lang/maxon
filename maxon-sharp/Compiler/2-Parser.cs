@@ -24389,6 +24389,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       throw new CompileError(ErrorCode.ParserLiteralOverflow,
         $"Integer literal '{token.Value}' is outside the range of int ({long.MinValue} to {long.MaxValue})",
         token.Line, token.Column);
+    } catch (FormatException) {
+      throw MalformedNumericLiteral(token);
+    } catch (ArgumentException) {
+      // Convert.ToInt64 raises this rather than FormatException for an empty or non-radix digit
+      // run ('0x' with nothing after it), so the radix path needs its own arm to reach the same
+      // diagnostic the decimal path does.
+      throw MalformedNumericLiteral(token);
     }
   }
 
@@ -24437,7 +24444,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       throw new CompileError(ErrorCode.ParserLiteralOverflow,
         $"Float literal '{token.Value}' is outside the range of float",
         token.Line, token.Column);
+    } catch (FormatException) {
+      // The lexer admits an exponent marker with no digits ('1.5e', '1.5E', '1.5e+'), so
+      // double.Parse can be handed text that is not a number. Without this arm the
+      // FormatException escaped as a raw .NET stack trace under E9001 -- a CRASH where a
+      // positioned diagnostic belongs, in the compiler every other compiler is measured against.
+      throw MalformedNumericLiteral(token);
     }
+  }
+
+  /// The one diagnostic for a numeric literal whose TEXT is not a number. Shared by the float and
+  /// integer readers because it is one fault: both are handed their token's text by the same lexer,
+  /// and a second copy of this message is how the two would drift apart on what "malformed" reads as.
+  private static CompileError MalformedNumericLiteral(Token token) {
+    return new CompileError(ErrorCode.ParserMalformedNumericLiteral,
+      $"Numeric literal '{token.Value}' is not a number",
+      token.Line, token.Column);
   }
 
   /// Tries to consume an optional minus sign followed by an integer or float literal.

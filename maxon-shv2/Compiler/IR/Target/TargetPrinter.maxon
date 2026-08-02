@@ -453,7 +453,7 @@ end 'moduleTargetCpu'
 // holds at least one of these. Exhaustive, so a new op variant is a compile error, not a mis-classify.
 function opIsArm64Band(op TargetOp) returns bool
 	return match op 'p'
-		prologue to minMaxSdRegReg gives false
+		prologue to movqXmmGpr gives false
 		arm64Ret to arm64Fcsel gives true
 		// P1.5-A1: the x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
 		// arm64 band (band-append), but they are x64 ops, so `false` — a module is NOT arm64 for holding them.
@@ -466,10 +466,12 @@ function opIsArm64Band(op TargetOp) returns bool
 		callMem gives false
 		// The stack-argument pair IS arm64-specific (see their dialect header for why x64 needs no op).
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives true
-		// P1.7a's last slice: `arm64FmovGprFp` is the arm64 half of the bit reinterpretation, so a
-		// module holding one IS arm64. Its x64 twin `movqGprXmm` sits inside the `prologue to
-		// leaRegRdata` arm above and is correctly `false` there.
+		// The arm64 halves of the two bit reinterpretations, so a module holding either IS arm64. Their
+		// x64 twins `movqGprXmm`/`movqXmmGpr` both sit inside the leading `prologue to movqXmmGpr` arm
+		// and are correctly `false` there — that range's endpoint is the x64 band's last member and it
+		// MOVED when `movqXmmGpr` was appended to it.
 		arm64FmovGprFp gives true
+		arm64FmovFpGpr gives true
 	end 'p'
 end 'opIsArm64Band'
 
@@ -542,6 +544,10 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		// encoder's inverted ModR/M order — a golden shows the data flow, and the field inversion is
 		// `encodeMovqGprXmm`'s private business.
 		movqGprXmm(dest, src) gives "movqGprXmm {vregName(dest)}, {vregName(src)}"
+		// Its INVERSE. Printed dest-first for the same reason, and here the two orders happen to
+		// coincide — this direction's ModR/M mapping is the ordinary one — which is exactly why the
+		// printer states the data flow rather than mirroring whatever the encoder does.
+		movqXmmGpr(dest, src) gives "movqXmmGpr {vregName(dest)}, {vregName(src)}"
 		// ⚠ THE OPERATION IS PRINTED, NOT THE INSTRUCTIONS. Every other x64 arm here names one
 		// mnemonic because it IS one; `absF64RegReg` assembles to a `psllq`/`psrlq` pair (see
 		// TargetDialect), and printing the pair would put the encoder's expansion in a golden the
@@ -648,6 +654,11 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		// emits: `arm64VregName` renders a GPR `x<n>` and an FP register `d<n>`, so `fmov x0, d1` and
 		// `fmov d0, d1` read as the two different instructions they are.
 		arm64FmovGprFp(dest, src) gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
+		// Its INVERSE, and the reason the arm above is written the way it is: BOTH render the mnemonic
+		// `fmov`, so the two are told apart in a golden ONLY by which side prints `x<n>` and which
+		// `d<n>` — `fmov x0, d1` against `fmov d0, x1`. That is the real assembly and it is unambiguous;
+		// an invented mnemonic would be neither.
+		arm64FmovFpGpr(dest, src) gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
 	end 'op'
 end 'formatTargetOp'
 

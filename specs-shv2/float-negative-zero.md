@@ -44,6 +44,10 @@ field-default, range-bound and interpolation cases below. Observing the sign of 
 needs `print` of a signed infinity, or a `floatToBits` builtin shv2 does not expose to user code.
 
 <!-- disabled-test: negative-zero-literal-keeps-its-sign -->
+<!-- ⚠ RE-SHELVED WITH ITS REAL REASON. It was filed as blocked on float interpolation; that landed,
+     and this case still does not compile — the blocker is E3057, a bare `/` whose divisor is not
+     provably non-zero ("throwing division requires try"). Nothing about printing floats is involved.
+     Measured by flipping the marker and reading the error, not by re-reading the old note. -->
 <!-- NEVER — invalidated by A1's ruling, not deferred by it. See the two ⚠ paragraphs above. -->
 ```maxon
 typealias Wide = float(f64.min to f64.max)

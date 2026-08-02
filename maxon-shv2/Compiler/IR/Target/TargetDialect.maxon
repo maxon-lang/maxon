@@ -936,6 +936,31 @@ export union TargetOp
 	// position no existing or future range silently swallows. Every `andRegReg to leaRegRdata` arm was
 	// re-read and extended when this landed.
 	minMaxSdRegReg(dest TargetVReg, lhs TargetVReg, rhs TargetVReg, kind FloatMinMaxKind) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// ⭐ `movq xmm, r64` (`66 REX.W 0F 6E /r`) — the i64 → f64 BIT REINTERPRETATION, `movqGprXmm`'s
+	// INVERSE and the FOURTH cross-class op in this dialect. Its producer is
+	// `StdUnaryOpcode.bitcastI64ToF64`, which `stdlib/Builtins.maxon`'s `__float_fromString` reaches
+	// through `__Builtins.bitsToFloat`: the tree's one correctly-rounded decimal reader answers BITS,
+	// and this is how they become the `float` the program asked for.
+	//
+	// ⭐ IT NEEDS NO ENCODER OF ITS OWN, WHICH IS EXACTLY WHAT ITS TWIN COULD NOT SAY. `movqGprXmm`
+	// carries the `r/m, r` STORE field mapping (reg = the XMM source), so it had to have
+	// `encodeMovqGprXmm` written for it. This direction is the ordinary `r, r/m` LOAD mapping — reg =
+	// the XMM DESTINATION, r/m = the GPR source — which is precisely what `encodeSseRegReg` assumes,
+	// so it rides the shared encoder like `addsd` and the two converts. The pair is asymmetric in the
+	// ENCODING and symmetric in nothing else; do not "unify" them.
+	//
+	// ⚠ REX.W IS REQUIRED, for `movq r64, xmm`'s reason mirrored: without it `66 0F 6E` is `movd
+	// xmm, r/m32`, which would load 32 bits and leave a float's exponent and sign as zeros.
+	//
+	// ONE PLAIN def, ONE use (`cvtsi2sd`'s shape — same direction, same files): `dest` does not read
+	// its own previous value, so no seed copy. It writes no flags. NOT rematerializable — its source
+	// is a register.
+	//
+	// ⚠ APPENDED AT THE END OF THE x64 SSE BAND, past `minMaxSdRegReg`, exactly where every float op
+	// before it went and for the reason their comments give: the union's tail is the arm64 band and
+	// before that the control/misc band that every `leaRegFunc to x64Syscall` arm claims. Every
+	// `andRegReg to …` range arm was re-read and extended when this landed.
+	movqXmmGpr(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// --- arm64-macOS SCALAR-CORE band (USER RULING 2026-07-17) ---
 	//
 	// APPENDED AT THE END OF THE UNION, one contiguous band, per the band-append invariant every
@@ -1313,6 +1338,16 @@ export union TargetOp
 	// crosses the GPR/SIMD boundary"* — is the arm64 twin of x64's and stays exactly as it is: a cross-file
 	// transfer is not a copy the allocator may insert anywhere, it is an instruction the isel names.
 	arm64FmovGprFp(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `FMOV Dd, Xn` (`0x9E670000 | Rn<<5 | Rd`) — the arm64 half of the i64 → f64 reinterpretation, and
+	// `arm64FmovGprFp`'s inverse. Same shape: one plain def, one use, no flags, not rematerializable.
+	//
+	// ⚠ IT DIFFERS FROM ITS TWIN IN ONE FIELD — `opcode`, 111 rather than 110, which is the whole of the
+	// direction (`sf=1, ftype=01, rmode=00`). The two encodings are 0x00010000 apart and mean opposite
+	// things, which is why each is a named constant beside the other in `Arm64Backend` rather than one
+	// constant with a bit poked into it at the call site.
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `arm64FmovGprFp`, per the band-append invariant.
+	arm64FmovFpGpr(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

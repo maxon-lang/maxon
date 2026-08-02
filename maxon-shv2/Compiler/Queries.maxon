@@ -995,6 +995,9 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// limit is `f64.max`, which no i64 span describes, so the float wording names the TYPE and
 		// stops there rather than spelling out a bound.
 		floatLiteralOverflow(literal, line, column) then reportPositioned(project, code: ErrorCode.parserLiteralOverflow, message: "Float literal '{literal}' is outside the range of float", line: line, column: column, filePath: path)
+		// E2068 — not an overflow. The message says what is wrong with the TEXT, because there is no
+		// value to talk about a range of.
+		malformedNumericLiteral(literal, line, column) then reportPositioned(project, code: ErrorCode.parserMalformedNumericLiteral, message: "Numeric literal '{literal}' is not a number", line: line, column: column, filePath: path)
 		// `E3005 SemanticTypeMismatch` — a type mismatch, and not a missing feature. It reads
 		// "requires integer operands" rather than "does not support floats" because that is the
 		// permanent shape of the rule: `mod` and the bit operators have no float meaning to add

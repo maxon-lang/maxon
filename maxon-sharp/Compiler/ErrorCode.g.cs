@@ -187,6 +187,20 @@ public enum ErrorCode {
   /// field default nobody triggers is never expanded, and the misuse would go undiagnosed.
   /// </summary>
   ParserCallerLocationOutsideDefault = 2060,
+  /// <summary>
+  /// A numeric literal's text is not a number -- two decimal points ('1.5.3'), or any byte the
+  /// number grammar does not admit.
+  /// IT REPLACES A PANIC, and the panic's premise is why this code exists. The parser used to
+  /// assert a malformed literal was UNREACHABLE from source, on the ground that Lexer.scanNumber
+  /// only ever hands over digits, '_', '.', 'e'/'E' and an exponent sign -- so a rejection could
+  /// only mean the lexer and the number reader had diverged, a compiler defect rather than a
+  /// program's. That premise was FALSE: the lexer's trailing-byte rule appended a SECOND '.' to a
+  /// token that already carried a fraction, so '1.5.3' reached the reader as '1.5.' and CRASHED
+  /// the compiler. A parser must be able to answer 'that literal is not well-formed' with a
+  /// position, and a layer that cannot say no is a layer whose caller's leniency has nowhere to
+  /// surface.
+  /// </summary>
+  ParserMalformedNumericLiteral = 2068,
 
   /// <summary>
   /// The program declares no 'main' function.
