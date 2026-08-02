@@ -301,8 +301,8 @@ built with the symmetric "both sides byte-packed" rule: `takesBytes(b Bytes)` ac
 
 So the byte-element boundary door R4.7 opened for `String.addressableBytes()` is an IDENTITY door on BOTH
 sides, over the two element names shv2 actually gives a byte (`SignatureIndex.isByteElementName`:
-`Byte`, `__StringByte`), and NOT "anything that strides one" — the arriving side admits exactly the
-compiler-owned, `__`-reserved `__StringByte`, which no source can declare and which carries no range of its
+`Byte`, `__ManagedByte`), and NOT "anything that strides one" — the arriving side admits exactly the
+compiler-owned, `__`-reserved `__ManagedByte`, which no source can declare and which carries no range of its
 own, and the declared side admits exactly a one-byte-strided `Array` over one of those same two names
 (`ProgramSignatures.byteBufferBoundaryAdmits`). The case below is what holds the arriving side shut.
 
@@ -313,14 +313,23 @@ exit 223, no diagnostic. Both sides now ask the roster; the declared side ALSO k
 is live and independently reachable (`typealias Byte = int(0 to 1000)` puts the NAME on the roster while the
 record strides two, and the door refuses there).
 
-⚠ **NONE OF THE VIEW-SIDE BEHAVIOUR CAN BE A CASE IN THIS FILE, AND THAT IS STRUCTURAL, NOT AN OMISSION.**
-Producing an `Array with __StringByte` at all requires `String.addressableBytes()`, which
+⛔ **AND THE ROSTER DID NOT CLOSE THE 223 — IT MOVED IT ONE RENAME AWAY.** A roster is a question about the
+NAME, so `typealias Byte = int(0 to 200)` passes it; `rangedAliasStorageBytes` gives `0 to 200` a one-byte
+slot, so it passes the stride test too. MEASURED on `origin/main` (N2): the identical **223**, out of an
+element declared `int(0 to 200)`, under the most natural name a byte alias has. The paragraph above had
+recorded that reading as cured. The third question — the element's declared BOUNDS
+(`RangedAliasRegistry.holdsEveryByteInEveryFile`) — is what actually closes it, and
+`a-narrow-byte-does-not-admit-a-compiler-synthesized-buffer` at the end of this file is the case.
+
+⚠ **THE VIEW-SIDE BEHAVIOUR WAS ONCE UNREACHABLE FROM A SPEC, AND IS NOT ANY MORE.** Producing an
+`Array with __ManagedByte` used to require `String.addressableBytes()`, which
 `Parser.requireStdlibOnlyStringMethod` refuses to any file not physically under `stdlib/`, and the spec
-runner stages every fragment outside `stdlib/`. So the three measurements above were made by building
-purpose-written files under `stdlib/`, and the suite could only reach the door once `stdlib/File.maxon` was
-whitelisted — which is the acceptance half of R4.7, and which landed with the RANGE-scoped generic-instance
-identity below. The case below is the part that IS reachable: it pins that two byte-packed aliases are
-still two types.
+runner stages every fragment outside `stdlib/` — so the three measurements above were made by building
+purpose-written files under `stdlib/`. The command-line rung widened the element to EVERY
+compiler-synthesized byte buffer, and three of its producers are written in ORDINARY USER SOURCE
+(`__ManagedDirectory.filename`/`currentPath`, `__Builtins.commandLineArg`), so an arriving
+`Array with __ManagedByte` is now four keystrokes away from any spec fragment. The last two sections of
+this file are the cases that came with that.
 
 <!-- test: byte-packed-alias-is-not-interchangeable-with-byte -->
 ### Two byte-packed aliases are still two types
@@ -712,4 +721,142 @@ Stack trace:
   in feed
   in main
   in mrt_start
+```
+
+### ⚠ THE BOUNDARY IS ONE DOOR, AND EVERY COERCION SITE HAS TO ASK IT
+
+`byteBufferBoundaryAdmits` is the whole of *"the two byte element types stay DISTINCT and convert at the
+BOUNDARY"*, and for one rung only the CALL-ARGUMENT site asked it. The other seven compared the aggregate
+NAMES alone — `return`, reassignment, `otherwise`, a match arm's merge, a struct-literal / union-payload
+store, overload candidate scoring, and a generic call's type-parameter argument — so a program that a call
+accepted was refused the moment the same value crossed any other one of them.
+
+**MEASURED — one probe per door, on this branch's base commit `bf328745a`; the `return` one and the 223
+below also reproduce on `origin/main` with none of N2 applied, so neither is N2's doing**
+(`Array___ManagedByte` is the element every compiler-synthesized byte buffer wears; `Array_Byte` is what
+`__ManagedMemory` declares):
+
+* `return` — `E3005 Cannot return 'Array___ManagedByte' from function declared to return 'Array_Byte'`
+* reassignment — `E3005 cannot assign 'Array___ManagedByte' to variable 'm' of type 'Array_Byte'`
+* `otherwise` — `E3059 otherwise type 'Array___ManagedByte' does not match expected type 'Array_Byte'`
+* a match arm — `E3005 match arms give incompatible types: 'Array___ManagedByte' vs 'Array_Byte'`
+* a struct-literal field store — `E3005 cannot assign 'Array___ManagedByte' to variable 'Holder.mem' of type 'Array_Byte'`
+* a generic type-parameter argument — `E3005 argument type mismatch for 'item': expected 'Bytes', got 'Array___ManagedByte'`
+
+The BOOTSTRAP compiles every one of them. The cure is the door asked ONCE — `aggregatesConflict` now takes
+the (tag, nameId) pair beside each side's aggregate name and folds the byte boundary in, so a site cannot
+ask the identity question without asking the boundary one. Overload scoring is the eighth site and is wired
+for its own stated promise (*"a candidate this function accepts cannot then be rejected downstream"*); no
+case below distinguishes it, because a candidate it wrongly refuses is today refused a second time by every
+sibling candidate and the call still resolves.
+
+<!-- test: a-synthesized-buffer-crosses-every-declared-byte-buffer-door -->
+<!-- targets: x64-windows -->
+### One synthesized buffer, through six declared byte-buffer doors
+x64-windows only for `a-wide-byte-still-reads-a-compiler-synthesized-buffer`'s reason: `currentPath`
+lowers to `GetCurrentDirectoryA`. The cwd differs per machine, so every assertion is on a LENGTH — the
+failure this case guards is a refusal to compile.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+type Holder
+	export var mem as __ManagedMemory
+
+	export static function create() returns Holder
+		return Holder{mem: try __ManagedDirectory.currentPath() otherwise panic("Holder.create: currentPath")}
+	end 'create'
+end 'Holder'
+
+type Box uses T
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias MemBox = Box with Bytes
+
+function cwd() returns __ManagedMemory
+	return try __ManagedDirectory.currentPath() otherwise panic("cwd: currentPath")
+end 'cwd'
+
+function owned() returns __ManagedMemory
+	return try __ManagedMemory.create(4, 1) otherwise panic("owned: create")
+end 'owned'
+
+function alwaysFails() returns __ManagedMemory throws FileReadError
+	throw FileReadError.notFound
+end 'alwaysFails'
+
+function sizeOf(m __ManagedMemory) returns int
+	return m.length()
+end 'sizeOf'
+
+function main() returns ExitCode
+	let viaReturn = cwd()
+
+	var viaReassign = try __ManagedMemory.create(4, 1) otherwise return 1
+	viaReassign = try __ManagedDirectory.currentPath() otherwise return 1
+
+	let rawForOtherwise = try __ManagedDirectory.currentPath() otherwise return 1
+	let viaOtherwise = try alwaysFails() otherwise rawForOtherwise
+
+	let rawForMatch = try __ManagedDirectory.currentPath() otherwise return 1
+	let pick = 1
+	let viaMatchArm = match pick 'arm'
+		0 gives owned()
+		default gives rawForMatch
+	end 'arm'
+
+	let viaFieldStore = Holder.create()
+
+	let rawForBox = try __ManagedDirectory.currentPath() otherwise return 1
+	let viaTypeArgument = MemBox.create(rawForBox)
+	_ = viaTypeArgument
+
+	return 0 if sizeOf(viaReturn) > 0 and sizeOf(viaReassign) > 0 and sizeOf(viaOtherwise) > 0 and sizeOf(viaMatchArm) > 0 and sizeOf(viaFieldStore.mem) > 0 else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+### ⚠ A `Byte` TOO NARROW TO HOLD A BYTE IS NOT A BYTE — the ROSTER and the STRIDE both said yes
+
+The declared side of the door asks three questions and every one of them is load-bearing. The roster
+(`isByteElementName`) says whether the element is CALLED a byte; the stride
+(`isBytePackedArrayInstance`) says whether the RECORD moves one byte at a time. Neither says whether the
+element can HOLD one.
+
+⛔ **MEASURED on `origin/main`: `typealias Byte = int(0 to 200)` passes the roster** — a roster is a
+question about the name, and the base-name strip is what keeps `stdlib/File.maxon` compiling under a
+contested `Byte` — **and `rangedAliasStorageBytes` gives `0 to 200` a ONE-BYTE slot**, so it passes the
+stride test too. The door opened, `takes(cwd)` was accepted with no diagnostic, and `b.get(0)` — an
+accessor typed `int(0 to 200)` — read back **223** out of a path byte. Exit 223, silently.
+The R4.7 review had recorded this exact reading as CURED by the roster; it was cured for
+`typealias Small = int(0 to 200)` and not for `typealias Byte = int(0 to 200)`, which is the more natural
+name of the two. ⇒ the declared element's DECLARED BOUNDS are the third question
+(`RangedAliasRegistry.holdsEveryByteInEveryFile`): a compiler-synthesized buffer is a run of raw bytes, so
+what receives one must admit every value a byte has.
+
+<!-- test: a-narrow-byte-does-not-admit-a-compiler-synthesized-buffer -->
+<!-- targets: x64-windows -->
+### A one-byte slot that cannot hold 255 is refused at the boundary
+```maxon
+typealias Byte = int(0 to 200)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	return takes(cwd)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Array_Byte$0_200', got 'Array___ManagedByte'
 ```

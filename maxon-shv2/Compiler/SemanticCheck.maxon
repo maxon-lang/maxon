@@ -351,7 +351,12 @@ function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature,
 		// promise true — that a candidate it accepts cannot then be rejected downstream.
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("overloadArgTypeFit: value v{argId} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 		if not expected.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
-			if namedAggregatesConflict(expected, got: aggregateNameFor(project, tag: argTag, nameId: argNameId)) 'aggregateMismatch'
+			// ⚠ **`aggregatesConflict`, NOT the bare rule** — the shared door carries the byte-element
+			// boundary (`byteBufferBoundaryAdmits`), and this function's own promise is that a candidate it
+			// accepts cannot then be rejected downstream. Spelled with the bare rule it answered
+			// `incompatible` for a `__ManagedMemory` parameter meeting a compiler-synthesized byte buffer,
+			// which `checkOneArgType` accepts — the two answers `checkOneArgType`'s header forbids.
+			if programSignaturesIn(project, asker: "overloadArgTypeFit").aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), got: aggregateNameFor(project, tag: argTag, nameId: argNameId), gotTag: argTag, gotNameId: argNameId) 'aggregateMismatch'
 				return OverloadFit.incompatible
 			end 'aggregateMismatch'
 		end 'aggregateComparable'
@@ -2512,7 +2517,14 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// `typeNameIdOf` of a `typeParameter` is its POSITION in the base type's `uses` list, and the
 		// instance's argument list was arity-checked at instantiation (E2056), so it indexes in range.
 		let position = typeNameIdOf(paramType)
-		let expected = signatures.instanceArgAggregateName(gid, position: position)
+		// ⭐ **SUBSTITUTED AND RESOLVED ONCE, READ THREE TIMES.** A `MaxonType` is a heap box, and this type is
+		// wanted for its nominal identity, for the (tag, nameId) pair the shared rule compares with, and — on
+		// the scalar path below — for the declared tag. It used to be substituted separately for each, and the
+		// alias resolution (`canonicalTypeArg`) lived inside the identity read alone, where the pair could not
+		// see it: `Box with Bytes`'s argument then read `Array_Byte` as its identity while its tag stayed
+		// `named`, and the byte boundary was asked about a name id that is not an instance id.
+		let substituted = signatures.canonicalTypeArg(signatures.substitutedInstanceArg(gid, position: position))
+		let expected = signatures.typeArgAggregateName(substituted)
 		let argId = try argIds.get(i) otherwise panic("checkTypeParameterArgsAt: argIds.get OOB at {i}")
 		let argTag = try func.valueTags.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
@@ -2521,15 +2533,18 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// is cheaper than threading it into two. It is a dense array read on a path that already does four,
 		// and `checkArgTypes` fetches the same name unconditionally for every argument of every call.
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkTypeParameterArgsAt: paramNames.get OOB at {i}")
-		// ⚠ **`aggregatesConflict`, NOT the bare rule — the SAME door the parser's five coercion sites use.**
+		// ⚠ **`aggregatesConflict`, NOT the bare rule — the SAME door every other coercion site uses.**
 		// The wrapper adds the P1.6-C decay: a PER-INSTANCE alias (`WA.Idx`) meeting a target that is not one
 		// carries no identity claim and decays. Spelled with the bare rule this arm read a decaying argument's
 		// name as an aggregate meeting a SCALAR — `expected` is deliberately empty for a ranged-alias type
 		// argument — and REJECTED a legal program: `takesPlain(t)` and `IntBox.create(t)` were the same value
 		// into the same `Integer`, accepted at the parser and refused here. One comparison rule, one answer.
-		if signatures.aggregatesConflict(expected, got: got) 'wrongTypeArgument'
+		// It also carries the byte-element boundary, and that is not theoretical here either: MEASURED on
+		// `origin/main`, `MemBox.create(<a cwd buffer>)` at a `Box with Bytes` was refused
+		// `expected 'Bytes', got 'Array___ManagedByte'` while the bootstrap compiled it.
+		if signatures.aggregatesConflict(expected, expectedTag: maxonTypeTag(substituted), expectedNameId: typeNameIdOf(substituted), got: got, gotTag: argTag, gotNameId: argNameId) 'wrongTypeArgument'
 			// The EXPECTED side names the concrete TYPE ARGUMENT, not the identity that was compared: the
-			// two agree for an aggregate (`instanceArgAggregateName`'s nominal arm IS this call), and where
+			// two agree for an aggregate (`typeArgAggregateName`'s nominal arm IS this call), and where
 			// they differ — a scalar / `String` / ranged-alias argument, whose identity is deliberately
 			// empty — this is the only one that can say `String` rather than `type parameter`. It is asked
 			// on the FAILURE path alone, so the rendering costs a rejected program and nothing else.
@@ -2538,7 +2553,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		end 'wrongTypeArgument'
 
 		// ⭐⭐ **THE SAME SUBSTITUTION, HANDED TO THE SCALAR RULE — AND THAT HALF WAS A COMPILER PANIC.** The
-		// nominal check above is blind to everything that carries no name: `instanceArgAggregateName` answers
+		// nominal check above is blind to everything that carries no name: `typeArgAggregateName` answers
 		// `EmptySourceText` for a scalar, a `String` and a ranged alias, deliberately, so `Box with Integer`
 		// keeps accepting a plain `42`. But a FLOAT carries no name either, so `IntBox.create(1.5)` and
 		// `StrBox.create(1.5)` passed both walks — `checkOneArgType` asked `checkDeclaredType(float,
@@ -2547,7 +2562,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// emitter PANICKED on a program whose only defect was an ordinary lossy conversion.
 		//
 		// ⚠⚠ **THE TWO HALVES PARTITION THE TYPE ARGUMENTS, AND THIS GATE IS THAT PARTITION — NOT A
-		// SHORT-CIRCUIT.** `instanceArgAggregateName` answers a NAME for exactly the arguments that carry a
+		// SHORT-CIRCUIT.** `typeArgAggregateName` answers a NAME for exactly the arguments that carry a
 		// nominal identity and `EmptySourceText` for exactly the ones that do not, and its own header states
 		// that the second group "meets its argument by TAG (`checkDeclaredType`)". This is that sentence
 		// enforced. The tag CANNOT stand in for the first group, because `substitutedInstanceArg` returns the
@@ -2575,7 +2590,6 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			continue
 		end 'nominalArgumentAlreadyMatched'
 
-		let substituted = signatures.substitutedInstanceArg(gid, position: position)
 		if checkArgAgainstDeclaredTag(project, argTag: argTag, declaredTag: maxonTypeTag(substituted), paramName: paramName, position: i, callRange: callRange, filePath: filePath) != DeclaredTypeMatch.ok 'refusedBySubstitutedType'
 			return
 		end 'refusedBySubstitutedType'
@@ -2627,6 +2641,14 @@ end 'checkPerInstanceArgs'
 // and `aggregateArgDisplay` wording `checkArgTypes` uses on its own `aggregateNameFor` result — a
 // per-instance alias IS a nominal aggregate here, so the two aggregate-argument checks stay one rule (a
 // future narrower-range compatibility rule lands in one place, not two).
+//
+// ⚠ **IT IS THE ONE AGGREGATE COMPARISON THAT IS *NOT* ROUTED THROUGH `ProgramSignatures.aggregatesConflict`,
+// AND THE REASON IS THAT ITS EXPECTED SIDE IS NOT A TYPE.** `expected` here is a name this function BUILDS
+// (`joinQualifiedName(receiverAlias, member)`) rather than one read off a declaration or a value, so there
+// is no (tag, nameId) pair to hand the shared door — and nothing is lost by that, because both halves of
+// what the shared door adds are unreachable on this comparison: a per-instance alias is a `named` wrapper
+// over an int, never an `Array` instance, so the byte-element boundary cannot open, and the decay is
+// already decided one line above by `got.isEmpty()`.
 function checkPerInstanceArgsWith(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray, info InnerAliasParamInfo, callRange SourceRange, filePath FilePath)
 	// A method prepends `__self` at real position 0; the sweep records inner-alias members over the SOURCE
 	// parameters (no `__self`), so a method's real position i maps to source i - 1. A static factory has no
@@ -2943,11 +2965,14 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		// builtin's `__ManagedMemory` parameter admits either because `Parser.valueIsByteArray` asks the
 		// STRIDE. An ordinary declared parameter is compared NOMINALLY, so `stdlib/File.maxon`'s
 		// `FileWriter.open(path __ManagedMemory)` refused the very `String.addressableBytes()` view its own
-		// callers hand it — one fact, two answers. `byteBufferBoundaryAdmits` is that fact, asked once.
+		// callers hand it — one fact, two answers.
 		//
-		// Asked only AFTER the names have already disagreed, so the agreeing path — every argument of every
-		// call in the program — pays nothing for it.
-		if namedAggregatesConflict(expectedAggregate, got: gotAggregate) and not programSignaturesIn(project, asker: "checkOneArgType").byteBufferBoundaryAdmits(paramTag, declaredNameId: typeNameIdOf(paramType), gotTag: argTag, gotNameId: argNameId) 'aggregateArgMismatch'
+		// ⚠ It is asked THROUGH `aggregatesConflict` and not open-coded beside the name rule. This site was
+		// the only one that asked it for a rung, and each of the seven that did not refused a legal program
+		// (see `ProgramSignatures.byteBufferBoundaryAdmits`). The P1.6-C decay clause the shared door also
+		// carries cannot fire here: it needs an EMPTY `expectedAggregate`, and an empty one only reaches this
+		// line through `argAggregateCannotDecay`, which has already answered the same question wider.
+		if programSignaturesIn(project, asker: "checkOneArgType").aggregatesConflict(expectedAggregate, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), got: gotAggregate, gotTag: argTag, gotNameId: argNameId) 'aggregateArgMismatch'
 			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: String.from(expectedAggregate) if not expectedAggregate.isEmpty() else typeTagName(paramTag), got: aggregateArgDisplay(gotAggregate, tag: argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'

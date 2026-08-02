@@ -1246,6 +1246,39 @@ export type RangedAliasRegistry
 		end 'wider'
 	end 'widenStorageBytesFor'
 
+	// ⭐⭐ **CAN A VALUE OF `name` HOLD EVERY BYTE — 0 THROUGH 255 — WHICHEVER FILE'S DECLARATION YOU READ?**
+	// The THIRD file-less door, and it is one for the SAME reason `storageBytesInEveryFile` is: the answer is
+	// not any one file's. Where that door folds to the WIDEST width so no file's range is truncated, this one
+	// demands the property of EVERY declaration, so no file's range is over-promised. `underlyingInAnyFile`'s
+	// refusal to hand out bounds is untouched — a reader with no file may not learn what SOME file's `low`
+	// and `high` are, and this reader never does; it learns only whether they all clear one fixed bar.
+	//
+	// ⚠ **THE BAR IS THE VALUE SET AND NOT THE WIDTH, AND THE TWO ARE A MEASURED WRONG ANSWER APART.**
+	// `rangedAliasStorageBytes` gives EVERY non-negative range that fits `u8.max` a ONE-BYTE slot, so
+	// `int(0 to 200)` strides one byte and cannot hold `223`. Its only reader is the byte-element boundary
+	// (`ProgramSignatures.byteBufferBoundaryAdmits`), where a compiler-synthesized buffer — a run of RAW
+	// bytes — is admitted into a declared `Array with Byte`: what receives one must admit every value a byte
+	// has, and a slot that merely fits in one byte is not that.
+	//
+	// ⚠ It is asked only after two aggregate names have already DISAGREED, which is a rejected program's
+	// path, so the walk over one name's declarations costs every compiling program nothing.
+	//
+	// `throws` is `Map.get`'s own channel: a name NO file declares is not a ranged alias at all, and what
+	// the compiler's own two byte elements are worth is the caller's to state, not this index's to invent.
+	export function holdsEveryByteInEveryFile(name ByteArray) returns bool throws MapError
+		if let byFile = try self.multiplyDeclared.get(name) 'declaredByMoreThanOneFile'
+			for (_, alias) in byFile 'eachDeclaringFile'
+				if not rangeHoldsEveryByte(alias.low, high: alias.high) 'thisFilesDeclarationCannot'
+					return false
+				end 'thisFilesDeclarationCannot'
+			end 'eachDeclaringFile'
+			return true
+		end 'declaredByMoreThanOneFile'
+
+		let sole = try self.byName.get(name)
+		return rangeHoldsEveryByte(sole.low, high: sole.high)
+	end 'holdsEveryByteInEveryFile'
+
 	// ⭐⭐ **DECIDE WHICH NAMES ARE RANGE-CONTESTED, AND MINT THE QUALIFIED DECLARATION EACH DISTINCT RANGE
 	// GETS (N2)** — the answer the door above cannot give, made once, after every declaration is in.
 	//
@@ -1426,6 +1459,26 @@ function holdsRange(claimants RangedTypeAliasArray, low ParsedInt, high ParsedIn
 	end 'each'
 	return false
 end 'holdsRange'
+
+// ⭐ **DOES `low to high` CONTAIN EVERY BYTE VALUE, 0 THROUGH `u8.max`?**
+// `holdsEveryByteInEveryFile`'s per-declaration test, spelled apart from it because it is a statement about
+// a RANGE and not about the registry.
+//
+// ⚠⚠ **A NEGATIVE BOUND IS AMBIGUOUS AND IS ANSWERED NO — BOTH ENDS.** Bounds ride as the RAW 64-bit
+// pattern (`RangedTypeAlias`'s header), so `-1` and `u64.max` are the SAME BITS: a negative `low` is either
+// a genuine negative lower bound (which does contain 0) or a bound above `i64.max` (which does not), and
+// nothing here can tell them apart. `rangedAliasStorageBytes` conflates them too and resolves it by taking
+// the WIDEST slot, which is its safe direction; this door's safe direction is the opposite one — refuse —
+// because its answer ADMITS a buffer of raw bytes into a declared element. So the lower bound must be
+// EXACTLY zero, which is also the only lower bound a byte can honestly have, and a raw-negative `high`
+// fails `>= u8.max` on the same bits for the same reason.
+//
+// ⚠ Nothing is lost by that: an element with a negative lower bound is not byte-packed either
+// (`rangedAliasStorageBytes` gives it the machine word), so the boundary's stride test refuses it a second
+// time. The two clauses agree here rather than one leaning on the other.
+function rangeHoldsEveryByte(low ParsedInt, high ParsedInt) returns bool
+	return low == 0 and high >= u8.max
+end 'rangeHoldsEveryByte'
 
 // --- The TYPE-NAME namespace: one name, one declaration ---
 

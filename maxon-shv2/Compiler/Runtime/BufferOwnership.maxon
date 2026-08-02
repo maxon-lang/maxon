@@ -37,11 +37,26 @@
 //
 // ⇒ **ADD A FOURTH `NotOwnedBufferCapacity` HERE AND THAT ARM SILENTLY CLASSIFIES IT AS INLINE**, handing
 // out a byte view that counts the record instead of wherever the bytes really are: a dangling pointer or
-// a leak, with nothing to catch it — no compile error, and the suite structurally cannot reach the door
-// (`addressableBytes` is stdlib-only and the spec runner stages its sources outside `stdlib/`). This note
-// is the obligation, written at the declaration because that is where the fourth value will be added.
-// The runtime does NOT guard it with an abort arm, for this file's own stated reason: it refuses to emit
-// a branch no input reaches (see `emitBufferCannotHold`).
+// a leak. There is still no COMPILE error for it. This note is the obligation, written at the declaration
+// because that is where the fourth value will be added. The runtime does NOT guard it with an abort arm,
+// for this file's own stated reason: it refuses to emit a branch no input reaches (see
+// `emitBufferCannotHold`).
+//
+// ⚠ **WHAT IS NO LONGER TRUE: "with nothing to catch it".** This note used to argue that the suite
+// STRUCTURALLY could not reach the door, because `addressableBytes` is stdlib-only and the spec runner
+// stages its fragments outside `stdlib/`. That was an argument about who may CALL it, and the callers that
+// matter are inside `stdlib/`: `URL.maxon`, `helpers/url/urlHelpers.maxon` and `FilePath.maxon` were
+// already whitelisted, and `File.maxon` added seven more call sites (`File.exists`, `readText`,
+// `writeText`, `delete`, `rename`, `stat`, `FileReader.open`). Every whitelisted module is parsed and
+// compiled into EVERY program.
+//
+// ⭐ **MEASURED (N2), at RUN time and on both arms that exist to be told apart** — one program, an
+// interpolated path (INLINE: `capacity@16 = InlineBufferCapacity`, bytes in the record's own payload) and a
+// literal one (RDATA: the immortal blob) — `File.writeText` then `File.exists` then `File.readText` then
+// `File.delete` on each: `built=true literal=true back=hello from 4`, exit 0, no leak. So a fourth
+// provenance misclassified as inline would land as a wrong answer, a fault or a 101 on `file-io.md`,
+// `file-info.md`, `filepath.md` and `url.md` — loudly, at the gate. That is the catcher this note said did
+// not exist; it does not remove the obligation above, it says what ignoring it now costs.
 //
 // ⚠ **THE VALUES ARE NOT PRIVATE, THOUGH: `__arr_capacity` HANDS `capacity@16` STRAIGHT TO USER CODE**,
 // so a Maxon program can read one, and `arrays.md:slice-capacity-is-a-view-until-written` pins

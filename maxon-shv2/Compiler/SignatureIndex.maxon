@@ -1809,6 +1809,18 @@ end 'undeclaredNamedElementStorageBytes'
 // String's byte 223 into an element declared `int(0 to 200)` (MEASURED, R4.7 review, exit 223 with no
 // diagnostic).
 //
+// ⛔⛔ **AND THE ROSTER IS NOT A RANGE EITHER — THIS HEADER ONCE CLAIMED IT CURED THAT READING, AND IT DID
+// NOT.** The sentence above was written as if the roster had closed the 223, and for `Small` it had: `Small`
+// is not a byte NAME, so the door refuses. Rename the very same declaration `Byte` and the roster answers
+// YES — a roster is a question about the name, which is the whole point of the base-name strip below — the
+// stride still answers YES, and **the identical 223 came straight back** (MEASURED on `origin/main`, N2:
+// `takes(<a cwd buffer>)` against `typealias Byte = int(0 to 200)`, exit 223, no diagnostic). The user's
+// most natural spelling was the one nothing checked. What closes it is a third question that is neither a
+// name nor a width — the element's declared BOUNDS
+// (`RangedAliasRegistry.holdsEveryByteInEveryFile`, asked from `byteBufferBoundaryAdmits`). A cure claimed
+// in a header is exactly how the next reader inherits the bug, so: this function is a NAME test, it is
+// only ever one third of that door, and it must not be read as more.
+//
 // ⚠⚠ **IT ASKS ABOUT THE *BASE* NAME, AND WITHOUT THAT THE ROSTER SHUTS THE STDLIB'S OWN DOOR (N2).** Once
 // a contested `Byte` is qualified per claimant, the stdlib's element is spelled `Byte$0_255` — literally
 // equal to neither roster entry — so `stdlib/File.maxon:140`'s `FileWriter.open(path.path.addressableBytes())`
@@ -6011,15 +6023,31 @@ export type ProgramSignatures
 		return self.innerAliasOf(joinQualifiedName(base, member: member))
 	end 'perInstanceAliasFromParts'
 
-	// ⭐ **THE PER-INSTANCE-AWARE AGGREGATE CONFLICT RULE (P1.6-C)** — the ONE authority every symmetric
-	// coercion site (return, reassignment, `otherwise`, match arm, union-payload / struct-literal store)
-	// shares, so they cannot come to disagree about when a per-instance value decays.
+	// ⭐⭐ **THE AGGREGATE CONFLICT RULE — the ONE authority every coercion site shares**: the parser's five
+	// symmetric ones (return, reassignment, `otherwise`, match arm, union-payload / struct-literal store) and
+	// SemanticCheck's three (a call argument, an overload candidate's score, a generic call's type-parameter
+	// argument), so they cannot come to disagree about when a value may cross.
+	//
+	// It answers TWO questions in the order a coercion asks them, and each has its own measured wrong answer
+	// below: does a value with no nominal identity DECAY into the place (P1.6-C), and — when the two
+	// identities genuinely differ — is this the one pair of DIFFERENT names that denotes ONE record
+	// (`byteBufferBoundaryAdmits`, R4.7)?
+	//
+	// ⭐ **`expected` IS THE SIDE WHOSE DECLARATION DECIDES**, which is not always a `declare`d type: the
+	// binding's declared type, the function's declared return, the parameter, the instance's type argument —
+	// and, at the two symmetric merges, the value the phi ADOPTS (the try's result, the first arm). The byte
+	// boundary is one-way for that reason and no other; see `byteBufferBoundaryAdmits`.
+	//
+	// ⚠ **THE (tag, nameId) PAIRS RIDE BESIDE THE NAMES RATHER THAN REPLACING THEM.** Three producers spell
+	// the name (`Parser.aggregateNameOf`, `SemanticCheck.aggregateNameFor`, `typeArgAggregateName`), one
+	// per interner, so this index cannot re-derive it — but the pair it needs is interner-independent, since
+	// a `genericInstance` carries a whole-program `GenericInstanceId` in all three.
 	//
 	// A per-instance `Idx` is a NOMINAL wrapper over a SCALAR int, so it DECAYS to plain int wherever a
 	// value with NO nominal identity of its own is expected — exactly as a per-instance argument into a
 	// plain-numeric parameter decays. `expected.isEmpty()` IS that condition: an empty aggregate name is this
 	// file's one spelling of "carries no nominal identity" (`aggregateNameOf`, `aggregateNameFor` and
-	// `instanceArgAggregateName` all answer it for a scalar, a `String` and a ranged alias). There is nothing
+	// `typeArgAggregateName` all answer it for a scalar, a `String` and a ranged alias). There is nothing
 	// for an `Idx` to decay INTO when the target is a struct, a boxed union/enum or a generic instance, so
 	// against a NAMED target the conflict stands and `namedAggregatesConflict` reports it.
 	//
@@ -6034,13 +6062,20 @@ export type ProgramSignatures
 	// passed into a `Box with Leaf`'s `T` formal, was stored in the box's `T` field, and was freed by
 	// `__destruct_Box_Leaf` as a `Leaf`: a wild free on the integer's value (MEASURED: exit 0xC0000005).
 	// Deciding it from `expected` alone needs no premise held anywhere else.
-	export function aggregatesConflict(expected ByteArray, got ByteArray) returns bool
+	export function aggregatesConflict(expected ByteArray, expectedTag ValueTypeTag, expectedNameId TypeNameId, got ByteArray, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
 		// `not self.isPerInstanceAlias(expected)` is not spelled: an EMPTY name can never be one
 		// (`splitQualifiedName` answers `notQualified`), and a redundant clause is a fact stated twice.
 		if expected.isEmpty() and not got.isEmpty() and self.isPerInstanceAlias(got) 'perInstanceDecays'
 			return false
 		end 'perInstanceDecays'
-		return namedAggregatesConflict(expected, got: got)
+
+		if not namedAggregatesConflict(expected, got: got) 'theTwoIdentitiesAgree'
+			return false
+		end 'theTwoIdentitiesAgree'
+
+		// Asked only once the names have already disagreed, so every value that crosses every coercion site
+		// in a compiling program pays nothing for it.
+		return not self.byteBufferBoundaryAdmits(expectedTag, declaredNameId: expectedNameId, gotTag: gotTag, gotNameId: gotNameId)
 	end 'aggregatesConflict'
 
 	// The underlying primitive of a qualified alias (base-template OR per-instance) — TypeResolution's
@@ -6998,29 +7033,41 @@ export type ProgramSignatures
 	// `String.addressableBytes()` yields `Array with __ManagedByte` and `FileWriter.open(path __ManagedMemory)`
 	// declares `Array with Byte`, and both are the same 1-byte record.
 	//
-	// **BOTH SIDES ARE IDENTITY TESTS OVER THE ROSTER `isByteElementName` HOLDS, AND THE DECLARED SIDE ALSO
-	// KEEPS THE STRIDE TEST. NEITHER CLAUSE IS REDUNDANT AND BOTH ARE MEASURED:**
+	// **THE ARRIVING SIDE IS AN IDENTITY TEST OVER THE ROSTER `isByteElementName` HOLDS. THE DECLARED SIDE IS
+	// THREE TESTS — NAME, BOUNDS, STRIDE — AND EACH ONE IS THE ONLY REFUSAL ON ITS OWN MEASURED PROGRAM:**
 	//
 	//   • **The declared side's NAME test.** A program that declares `typealias Small = int(0 to 200)` gets a
 	//     byte-PACKED `Array with Small` for free (`rangedAliasStorageBytes`), and a declared side that asked
 	//     only the stride admitted a String's byte view into it — `b.get(0)`, an accessor typed
 	//     `int(0 to 200)`, then read back **223** with no diagnostic (MEASURED, R4.7 review). A one-byte slot
 	//     is not a byte. What may be declared here is one of shv2's TWO byte element names and nothing else.
+	//   • **The declared side's BOUNDS test** (`RangedAliasRegistry.holdsEveryByteInEveryFile`). A program
+	//     that declares `typealias Byte = int(0 to 200)` puts the SAME range on the ROSTER, and the roster is
+	//     a question about the NAME — deliberately, because the base-name strip is what keeps
+	//     `stdlib/File.maxon` compiling under a contested `Byte` (`isByteElementName`). So the name test says
+	//     yes, the stride test says yes, and R4.7's own reading came back: **exit 223, no diagnostic**, out of
+	//     an element declared `int(0 to 200)` (MEASURED on `origin/main`, N2 — `takes(<a cwd buffer>)` with
+	//     `typealias Byte = int(0 to 200)`; rename the alias to `Small` and it was correctly refused, so the
+	//     defect needed only the most natural name there is). A buffer the COMPILER minted is a run of RAW
+	//     bytes; what receives one must admit every value a byte has, and this is where that is asked.
 	//   • **The declared side's STRIDE test.** A program that declares `typealias Byte = int(0 to 1000)` makes
 	//     every `Array with Byte` — including the one `__ManagedMemory` names — genuinely stride TWO, so the
-	//     NAME is on the roster and the record is not a byte buffer. Adopting a stride-1 view into it would
-	//     hand every accessor a record it reads at the wrong width: a silent wrong answer, not a refusal. The
-	//     stride test refuses exactly there, and it is LIVE — measured raising
-	//     `expected 'Array_Byte', got 'Array___ManagedByte'` on that program.
+	//     NAME is on the roster, the BOUNDS hold every byte, and the record is still not a byte buffer.
+	//     Adopting a stride-1 view into it would hand every accessor a record it reads at the wrong width: a
+	//     silent wrong answer, not a refusal. The stride test refuses exactly there, and it is LIVE —
+	//     measured raising `expected 'Array_Byte', got 'Array___ManagedByte'` on that program.
 	//
-	// ⚠ **WHAT IS DELIBERATELY *NOT* CLOSED HERE, because this door is not its only entrance.** A program
-	// declaring `typealias Byte = int(0 to 100)` still admits a String's high byte through this door — and it
-	// admits one through `b"\xdf"` just as readily, with no door in the picture (MEASURED: a `b"\xdf"` passed
-	// to a parameter declared `Array with Byte` reads back **223** from an element typed `int(0 to 100)`, on a
-	// compiler built WITHOUT this door at all). The `b"…"` gate refuses a byte-string literal whose element is
-	// too WIDE (`requireByteStringBlobStridesLikeItsType`, E2015) and has no twin for one too NARROW to hold
-	// the blob's own bytes; that missing twin is the entrance, and curing one of its two doorways here would
-	// be the one-fact-two-answers shape this rung exists to end. It is filed, with the reproduction, as its
+	// ⇒ the three are INDEPENDENT: `int(0 to 200)` clears name and stride but not bounds; `int(0 to 1000)`
+	// clears name and bounds but not stride; `Small = int(0 to 255)` clears bounds and stride but not name.
+	//
+	// ⚠ **WHAT IS STILL *NOT* CLOSED, because this door was never its only entrance.** A program declaring
+	// `typealias Byte = int(0 to 100)` no longer admits a raw byte THROUGH THIS DOOR — that is exactly what
+	// the BOUNDS test above ends — but it admits one through `b"\xdf"` just as readily, with no door in the
+	// picture (MEASURED: a `b"\xdf"` passed to a parameter declared `Array with Byte` reads back **223** from
+	// an element typed `int(0 to 100)`, on a compiler built WITHOUT this door at all). The `b"…"` gate
+	// refuses a byte-string literal whose element is too WIDE (`requireByteStringBlobStridesLikeItsType`,
+	// E2015) and has no twin for one too NARROW to hold the blob's own bytes; that missing twin is the
+	// entrance, it is a `b"…"` question and not a boundary one, and it is filed with its reproduction as its
 	// own rung.
 	//
 	// ⚠⚠ **THE ARRIVING SIDE IS AN IDENTITY TEST AND NOT A STRIDE TEST, AND THE DIFFERENCE IS A
@@ -7035,36 +7082,61 @@ export type ProgramSignatures
 	// its own for a declared `Byte` to contradict — a compiler-minted byte buffer is bytes
 	// (`SynthesizedByteElementName`).
 	//
-	// ⛔⛔ **THE SYMMETRIC TWINS ARE NOT GIVEN THIS DOOR, THE ASYMMETRY IS STILL ONE-WAY SAFE — AND THE
-	// ARGUMENT THAT NOBODY COULD NOTICE IS NOW FALSE. IT REFUSES A LEGAL PROGRAM.** `aggregatesConflict`
-	// (return, reassignment, `otherwise`, match arm, payload store) and `SemanticCheck.overloadArgTypeFit`
-	// still compare names alone, so they remain strictly NARROWER than this door and can never admit what it
-	// refuses. What has changed is who can reach the pair. R4.7's safety argument was that `__ManagedByte` is
-	// minted only by `String.addressableBytes()`, which is stdlib-only, so the pair could arise only inside a
-	// stdlib module — "a program nobody can write". The command-line rung widened the element to EVERY
+	// ⭐⭐ **IT IS ASKED AT EVERY COERCION SITE, THROUGH `aggregatesConflict`, AND THE ONE RUNG IT WAS NOT
+	// REFUSED A LEGAL PROGRAM AT SEVEN OF THEM.** R4.7 wired only the call-argument site
+	// (`SemanticCheck.checkOneArgType`) and argued the rest were unreachable: `__ManagedByte` was minted only
+	// by `String.addressableBytes()`, which is stdlib-only, so the pair could arise only inside a stdlib
+	// module — "a program nobody can write". The command-line rung widened the element to EVERY
 	// compiler-synthesized byte buffer, and three of its producers are parsed out of ORDINARY USER SOURCE
-	// (`__ManagedDirectory.filename`/`currentPath`, `__Builtins.commandLineArg`), so the premise no longer
-	// holds and the refusal is reachable in four lines:
+	// (`__ManagedDirectory.filename`/`currentPath`, `__Builtins.commandLineArg`), which killed that premise
+	// without moving the doors. SIX of the seven were then MEASURED, one probe each, refusing a program the
+	// BOOTSTRAP compiles — `return`, reassignment, `otherwise`, a match arm's merge, a struct-literal /
+	// union-payload store, and a generic call's type-parameter argument. The seventh is overload SCORING,
+	// whose wrong `incompatible` no corpus program can observe today, because a candidate it refuses is
+	// refused a second time by every sibling candidate and the call resolves anyway — it is wired for its
+	// own stated promise (*"a candidate this function accepts cannot then be rejected downstream"*) and not
+	// because a case caught it. The shortest of the six is four lines:
 	//
 	//     function cwd() returns __ManagedMemory
 	//         return try __ManagedDirectory.currentPath() otherwise panic("cwd")
 	//     end 'cwd'
 	//
-	// ⚠ MEASURED (N2 reconciliation) — shv2 answers `E3005 Cannot return 'Array___ManagedByte' from function
-	// declared to return 'Array_Byte'` while the BOOTSTRAP compiles the same program and prints the path's
-	// length. Measured identically on `origin/main` with none of N2 applied, so it is the command-line rung's
-	// and not this one's, and it is REPORTED rather than repaired here: the cure is one aggregate-coercion
-	// door asked with (tag, nameId) at all six sites, which is a rung — three separate producers spell the
-	// aggregate NAME these sites compare, and folding the byte boundary into a six-argument predicate at each
-	// of them would be the very one-fact-two-answers shape this door exists to end.
+	// ⇒ the door is folded into `aggregatesConflict`, which every one of those sites already asked and which
+	// now takes each side's (tag, nameId) beside its aggregate NAME. That shape is forced: THREE producers
+	// spell the name those sites compare (`Parser.aggregateNameOf`, `SemanticCheck.aggregateNameFor`,
+	// `typeArgAggregateName`, one per interner), so the name cannot be re-derived here — but the pair
+	// CAN be passed, because a `genericInstance`'s id is whole-program in all three. Spelling
+	// `namedAggregatesConflict(…) and not byteBufferBoundaryAdmits(…)` at each site instead would be the
+	// one-fact-two-answers shape this door exists to end, and is exactly how seven of them came to disagree.
+	// `specs-shv2/bytearray-element-size.md`'s `a-synthesized-buffer-crosses-every-declared-byte-buffer-door`
+	// pins all six reachable ones in one program.
 	export function byteBufferBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
 		let declaredElement = self.arrayNamedElementName(declaredTag, nameId: declaredNameId)
-		if not isByteElementName(declaredElement) or not self.isBytePackedArrayInstance(declaredTag, nameId: declaredNameId) 'declaredIsNotAByteBuffer'
+		if not isByteElementName(declaredElement) 'declaredElementIsNotNamedForAByte'
 			return false
-		end 'declaredIsNotAByteBuffer'
+		end 'declaredElementIsNotNamedForAByte'
+
+		if not self.rosterElementHoldsEveryByte(declaredElement) 'declaredElementCannotHoldEveryByte'
+			return false
+		end 'declaredElementCannotHoldEveryByte'
+
+		if not self.isBytePackedArrayInstance(declaredTag, nameId: declaredNameId) 'declaredRecordDoesNotStrideOneByte'
+			return false
+		end 'declaredRecordDoesNotStrideOneByte'
 
 		return self.arrayNamedElementName(gotTag, nameId: gotNameId).equals(SynthesizedByteElementName)
 	end 'byteBufferBoundaryAdmits'
+
+	// The BOUNDS half of the declared side, over a name the roster has already accepted. The registry MISS
+	// arm is the same split `undeclaredNamedElementStorageBytes` makes and for the same reason: the two
+	// roster names are exactly the ones NO file declares in the general case — `__ManagedByte` is
+	// compiler-owned and unspellable, and `Byte` is undeclared in a program whose only `Array with Byte` is
+	// the one a `b"…"` literal minted for itself — so what they hold is the COMPILER's to state, and a
+	// compiler-minted byte is a whole byte. Every other roster name reaching here IS declared, and its own
+	// declarations answer.
+	function rosterElementHoldsEveryByte(element ByteArray) returns bool
+		return try self.typeAliases.holdsEveryByteInEveryFile(element) otherwise true
+	end 'rosterElementHoldsEveryByte'
 
 	// ⭐ **THE ONE PLACE A RANGED ALIAS'S DECLARED BOUNDS BECOME A STORAGE WIDTH.** A trivial element is
 	// stored INLINE, so its slot is as wide as its values need and no wider: a `named` element is a ranged-
@@ -7830,8 +7902,8 @@ export type ProgramSignatures
 		end 'eachInstance'
 	end 'deriveInstanceNames'
 
-	// ⭐ **THE NOMINAL IDENTITY OF INSTANCE `gid`'s TYPE ARGUMENT AT `position` (P1.7)** — what a parameter
-	// declared with the bare type parameter `T` actually demands at a call made through this instance. It is
+	// ⭐ **THE NOMINAL IDENTITY OF AN INSTANCE'S SUBSTITUTED TYPE ARGUMENT (P1.7)** — what a parameter
+	// declared with the bare type parameter `T` actually demands at a call made through that instance. It is
 	// the third source of the aggregate name `namedAggregatesConflict` compares, beside the parser's
 	// `aggregateNameOf` and SemanticCheck's `aggregateNameFor`, and it exists for the reason those two are
 	// twins rather than one function: the name is resolved against a DIFFERENT interner — an instance's
@@ -7846,8 +7918,14 @@ export type ProgramSignatures
 	// `namedAggregatesConflict` treats exactly-one-empty as "an aggregate meeting a SCALAR", so an
 	// unhandled kind did not abstain — it asserted `scalar` and REJECTED a legal program. A tag appended to
 	// `ValueTypeTag` must now fail to compile here rather than inherit a wrong answer.
-	export function instanceArgAggregateName(gid GenericInstanceId, position TypeParamId) returns ByteArray
-		let arg = self.substitutedInstanceArg(gid, position: position)
+	// ⚠ **IT TAKES THE ALREADY-SUBSTITUTED, ALREADY-CANONICAL ARGUMENT, NOT `(gid, position)`.** Its one
+	// caller (`SemanticCheck.checkTypeParameterArgsAt`) needs the same type THREE ways — this identity, the
+	// (tag, nameId) pair the shared `aggregatesConflict` compares with, and the declared tag the scalar half
+	// judges against — and `substitutedInstanceArg` returns a heap-boxed `MaxonType`. Asked here by
+	// (gid, position) it was substituted once for this answer and again for the `structRef` arm, and a third
+	// time at the caller. One substitution, resolved once through `canonicalTypeArg` and read three times, is
+	// both fewer boxes and one resolution instead of two.
+	export function typeArgAggregateName(arg MaxonType) returns ByteArray
 		match maxonTypeTag(arg) 'k'
 			// No nominal identity: a scalar, a `String`, an opaque `T` and a function value all coerce by
 			// TAG (`checkDeclaredType`), so `Box with Integer` keeps accepting a plain `42`.
@@ -7857,22 +7935,23 @@ export type ProgramSignatures
 			named then return self.namedTypeArgIdentity(arg)
 			exitCode then return EmptySourceText
 			unresolved then return EmptySourceText
-			void then panic("instanceArgAggregateName: instance {gid}'s type argument at {position} is `void` — a type argument is a TYPE, and the parser accepts no void one")
+			void then panic("typeArgAggregateName: a type argument is `void` — a type argument is a TYPE, and the parser accepts no void one")
 			// A struct argument is named by itself and a nested instance by its compiled name — the same two
 			// spellings `mangleTypeArg` produces, which is why it is asked rather than re-derived.
-			structRef then return self.instanceArgTypeName(gid, position: position)
+			structRef then return self.mangleTypeArg(arg).toByteArray()
 			string then return EmptySourceText
 			function then return EmptySourceText
 			typeParameter then return EmptySourceText
-			// CANONICAL, not `instanceArgTypeName`: a nested instance's identity must match what the two
+			// CANONICAL, not `mangleTypeArg`: a nested instance's identity must match what the two
 			// value-side extractors produce for the same type, whichever way it was spelled.
-			genericInstance then return self.canonicalInstanceName(typeNameIdOf(self.substitutedInstanceArg(gid, position: position)))
+			genericInstance then return self.canonicalInstanceName(typeNameIdOf(arg))
 			// A Character argument carries no name — the builtin's identity is its tag, `string`'s answer.
 			character then return EmptySourceText
 		end 'k'
-	end 'instanceArgAggregateName'
+	end 'typeArgAggregateName'
 
-	// ⭐⭐ **READ-TIME RESOLUTION OF A TYPE ARGUMENT SPELLED AS A GENERIC-INSTANCE ALIAS (P1.7).**
+	// ⭐⭐ **READ-TIME RESOLUTION OF A TYPE ARGUMENT SPELLED AS A GENERIC-INSTANCE ALIAS (P1.7)** — the type
+	// argument as the thing it DENOTES, which for `Box with Bytes` is `Bytes`'s instance and not the name.
 	//
 	// `typealias N1 = Box with N0` records its argument as a plain `named(N0)` LEAF: only a syntactic
 	// `Base with (…)` header becomes `genericInstance` at intern time, and the sweep records a file's
@@ -7883,25 +7962,45 @@ export type ProgramSignatures
 	// names; that duplicate is pre-existing and is its own rung. What matters for the comparison is the
 	// TYPE ARGUMENT's identity, and both spellings yield `N0`'s instance — the same `Box_S0`.)
 	//
+	// ⭐ **IT HANDS BACK A TYPE AND NOT A NAME, AND THAT IS WHAT KEEPS THE RESOLUTION SINGLE.** Its reader
+	// wants the argument BOTH ways — the identity name (`typeArgAggregateName`) and the (tag, nameId) pair
+	// the shared `aggregatesConflict` compares with — and a name-returning door could serve only the first.
+	// Resolved to a name, `Box with Bytes`'s argument read `Array_Byte` for the identity while its raw tag
+	// stayed `named`, so the byte-element boundary was asked about a name id that is not an instance id and
+	// answered no: MEASURED, `MemBox.create(<a cwd buffer>)` refused `expected 'Bytes'`.
+	//
 	// ⚠ It cannot hang on a cyclic alias: `mangleGenericInstance` recurses only through `genericInstance`
 	// args (`mangleTypeArg` returns a `named` arg's bare NAME without resolving it), and those nest
 	// syntactically, so the recursion is bounded by source nesting depth. A cycle is refused earlier
 	// anyway, by `firstCyclicAliasDecl` (E3091), which runs before the pipeline.
-	function namedTypeArgIdentity(arg MaxonType) returns ByteArray
-		let name = self.nameOfId(typeNameIdOf(arg))
-		if let aliased = try self.genericAliases.get(name) 'namesAnInstance'
-			return self.canonicalInstanceName(aliased)
+	export function canonicalTypeArg(arg MaxonType) returns MaxonType
+		// Only a `named` LEAF can spell an alias; every other tag already denotes what it is.
+		if maxonTypeTag(arg) != ValueTypeTag.named 'cannotSpellAnAlias'
+			return arg
+		end 'cannotSpellAnAlias'
+
+		if let aliased = try self.genericAliases.get(self.nameOfId(typeNameIdOf(arg))) 'namesAnInstance'
+			return MaxonType.genericInstance(aliased)
 		end 'namesAnInstance'
 
-		// `named` is OVERLOADED — a declared union/enum VALUE (a boxed aggregate) and a ranged numeric alias
-		// share it — so only a registered aggregate carries identity, exactly as both twins decide it.
+		return arg
+	end 'canonicalTypeArg'
+
+	// The identity of a `named` type argument that `canonicalTypeArg` has already resolved, so the generic
+	// alias arm is not restated here.
+	//
+	// `named` is OVERLOADED — a declared union/enum VALUE (a boxed aggregate) and a ranged numeric alias
+	// share it — so only a registered aggregate carries identity, exactly as both twins decide it.
+	function namedTypeArgIdentity(arg MaxonType) returns ByteArray
+		let name = self.nameOfId(typeNameIdOf(arg))
 		if self.containsStruct(name) or self.containsEnum(name) 'registeredAggregate'
 			return name
 		end 'registeredAggregate'
 
 		// A RANGED numeric alias (`Integer`), which is a nominal wrapper over a scalar and decays. This is
 		// the enumerated last kind a `named` can be, not a fallthrough: the three are alias / aggregate /
-		// ranged, and the tag match above has already excluded everything that is not `named`.
+		// ranged, the tag match above has already excluded everything that is not `named`, and
+		// `canonicalTypeArg` has already taken the alias.
 		return EmptySourceText
 	end 'namedTypeArgIdentity'
 
@@ -8086,7 +8185,7 @@ export type ProgramSignatures
 	// two steps itself must either be handed the interner or adopt the type into its own first — and adopting
 	// it is precisely the mistake, because the id then means whatever name happens to sit at that number in
 	// the OTHER table. Keeping both steps inside makes the pairing structural instead of conventional, which
-	// is the same move `instanceArgAggregateName` above already makes.
+	// is the same move `typeArgAggregateName` above already makes.
 	export function instanceArgIsManaged(id GenericInstanceId, position TypeParamId) returns bool
 		return self.typeIsManaged(self.substitutedInstanceArg(id, position: position), from: self.typeNames)
 	end 'instanceArgIsManaged'
