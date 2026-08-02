@@ -1,0 +1,22 @@
+// Test: int-to-float
+
+typealias Float = float(f64.min to f64.max)
+
+function main() returns ExitCode
+	let x = 42
+	let f = x as Float
+	return trunc(f)
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 42
+    x64.cvtsi2sdRegReg xmm0, rax
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.popReg rbp
+    x64.ret
+}

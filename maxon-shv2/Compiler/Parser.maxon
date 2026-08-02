@@ -1157,6 +1157,11 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
 
+// The same COW anchor for the declared-alias map (`ValueDeclaredAliasMap`), with the same invariant: a
+// function that declares no float-alias value and writes no `as` cast INCREFS this one rather than
+// allocating, and `recordValueDeclaredAlias` copies on its first write keyed on this instance's identity.
+let sharedEmptyDeclaredAliasMap = ValueDeclaredAliasMap.create()
+
 // The module-level shared EMPTY tuple-layout table (P1.10), held as the INITIAL value of `Parser.tupleLayouts`
 // AND as the COW anchor `internTupleLayout` keys on — `sharedEmptyInstanceAliasMap`'s pattern, for its reason
 // and with its invariant. A file that writes no tuple INCREFS this one rather than allocating a map of its
@@ -4504,6 +4509,45 @@ typealias InnerAliasNameSet = Set with ByteArray
 // `Idx` results and arguments DECAY to plain (no per-instance identity) — which matches the oracle.
 typealias ValueInstanceAliasMap = Map with (ValueId, TypeNameId)
 
+// ⭐⭐ **A PER-FUNCTION MAP FROM AN SSA VALUE TO THE RANGED TYPEALIAS ITS DECLARED TYPE NAMES — for the two
+// values whose OWN type columns cannot carry it.** E3010 ("unneeded cast") is a question about DECLARED
+// types on both sides, and shv2's `(tag, nameId)` columns answer it for a parameter, a field and an
+// int-alias call result — but not for these two:
+//
+//   • **A ranged FLOAT alias.** Its value's tag is LIFTED to `float` (`resolveFloatAliasType`), because a
+//     `named` float would be filed in a GPR — and `MaxonType.float` has no id slot, so the name is dropped
+//     with it. `identity(42.0) returns Float` then `f as Float` has to know `f` is a `Float`.
+//   • **The RESULT of a representationally-no-op `as` cast**, which `applyCast` flows on as the SOURCE
+//     ValueId, unchanged and unminted. `let b = 42 as Byte` therefore leaves `b` naming the literal's
+//     `integer`-tagged value, and `b as Byte` would look like a cast from a bare int.
+//
+// ⚠ **THE CAST WRITER IS GATED ON THE OPERAND NOT BEING A BARE LOCAL, AND THAT GATE IS WHAT KEEPS THE MAP
+// FROM LYING.** A no-op cast returns the source ValueId, so `let a = 42` + `let b = a as Byte` leaves `a`
+// and `b` naming ONE value — and writing `Byte` on it would make a later, genuinely-needed `a as Byte`
+// report E3010 against a plain int. Recording only when the operand was a TEMPORARY (a literal, a call
+// result, an expression — `rhsWasBareLocalReference` is the same question the move-poison asks, and it is
+// asked of the same token range) means the value has no other name to corrupt. The cost is a FALSE
+// NEGATIVE — `let x = t as Byte` for a bare local `t` records nothing, so a later `x as Byte` goes
+// unreported — and a missing diagnostic is the safe direction where a false rejection is not.
+//
+// ⚠ **THE RULE, NOT A ROSTER: a float-alias value is recorded when it is a CALL RESULT, and is not
+// recorded anywhere else.** Every other producer of one erases the alias by the same lift and goes
+// unrecorded — a PARAMETER (`seedParamTypes`, whose loop iterates declared types with no ValueId in hand:
+// a parameter's id is its position, RESERVED rather than minted), a FIELD READ
+// (`ProgramSignatures.declaredSlotType` returns a bare `MaxonType.float`), a CLOSURE CAPTURE
+// (`emitCaptureRead`). Those are instances, not a list to keep current: the deciding fact is that only
+// `mintOwnedCallResult` still holds the un-lifted declared type at a point where a ValueId exists.
+//
+// It is the SAME false negative the bare-local gate above trades for, not a different rule — `f as Float`
+// inside `function g(f Float)` reports nothing — and it closes at each producer that comes to hold both
+// halves. An enumeration written once rots; this paragraph named exactly one of the three when it was
+// written, and the other two were already there.
+//
+// A Map rather than a dense column because the population is a program's float-alias values plus its
+// casts, which is zero for most functions. Reset per function and SWAPPED across a closure body (its value
+// ids are a fresh SSA space), exactly like the sibling value columns.
+typealias ValueDeclaredAliasMap = Map with (ValueId, TypeNameId)
+
 // ⭐ **ONE PARSER MARK OVER THIS FUNCTION'S SSA VALUES — a set of the values that carry it.** The two marks
 // that wear this shape are `Parser.immutableGlobalReads` (loaded out of an IMMUTABLE top-level global's slot,
 // P1.7 slice 2b) and `Parser.bufferSurfaceValues` (denotes a `__ManagedMemory` BUFFER rather than the `Array`
@@ -5487,6 +5531,10 @@ export type Parser
 	// fresh SSA space), exactly like the sibling value columns. A Map rather than a dense column because only
 	// the few generic-instance values a program constructs ever get an entry.
 	var valueInstanceAlias as ValueInstanceAliasMap
+	// ⭐⭐ **THE RANGED TYPEALIAS EACH VALUE'S DECLARED TYPE NAMES, where the value's own type columns cannot
+	// say so (E3010)** — see `ValueDeclaredAliasMap` for the two cases and for why the cast writer is gated.
+	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
+	var valueDeclaredAlias as ValueDeclaredAliasMap
 	// ⭐⭐ **WHICH VALUES WERE READ OUT OF AN IMMUTABLE TOP-LEVEL GLOBAL (P1.7 slice 2b)** — the fact that
 	// stops a `let`-declared array's record from being written through a mutable ALIAS.
 	//
@@ -6008,6 +6056,7 @@ export type Parser
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
+			valueDeclaredAlias: sharedEmptyDeclaredAliasMap,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
 			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
@@ -11284,6 +11333,9 @@ export type Parser
 		// in THIS function's SSA space (P1.6-C). Points at the SHARED empty until the function constructs an
 		// instance (`recordValueInstanceAlias` copy-on-writes), so a generics-free function allocates nothing.
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
+		// Per-function for the identical reason: a value's declared ranged alias names an id in THIS
+		// function's SSA space (see `ValueDeclaredAliasMap`), and shares the same copy-on-write anchor.
+		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
@@ -11818,6 +11870,7 @@ export type Parser
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
+		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.inMatchArmBody = false
@@ -13699,6 +13752,42 @@ export type Parser
 		self.valueInstanceAlias.upsert(value, value: self.artifact.typeNames.intern(aliasName))
 	end 'recordValueInstanceAlias'
 
+	// ⭐ **RECORD THE RANGED TYPEALIAS A VALUE'S DECLARED TYPE NAMES** (see `ValueDeclaredAliasMap` for what
+	// this map is for and why it exists beside the two type columns). An `undeclared` alias records nothing:
+	// a cast to `ExitCode`, to a bare primitive or to a struct names no ranged alias, and a value with no
+	// entry simply falls back to its own `named` tag (`castSourceAlias`).
+	//
+	// ⚠ **THE CALLER OWNS THE ALIASING QUESTION.** This writes the value it is given, so a caller holding a
+	// value that another BINDING also names must not call it — see `ValueDeclaredAliasMap`'s gate and
+	// `applyCast`, the one door where that can happen.
+	function recordValueDeclaredAlias(value ValueId, alias DeclaredAlias)
+		match alias 'a'
+			undeclared then break 'a'
+			declared(declaredAlias) then self.recordValueDeclaredAliasName(value, aliasName: declaredAlias.name)
+		end 'a'
+	end 'recordValueDeclaredAlias'
+
+	// The write itself, off the alias's NAME — split out because `mintOwnedCallResult` reaches it holding a
+	// `MaxonType` rather than a resolved `DeclaredAlias`, and both must land the same entry.
+	function recordValueDeclaredAliasName(value ValueId, aliasName ByteArray)
+		// COPY-ON-WRITE off the shared empty map, exactly as `recordValueInstanceAlias` does and for its
+		// reason: a function with no float-alias value and no `as` cast never allocates one.
+		if self.valueDeclaredAlias is sharedEmptyDeclaredAliasMap 'stillShared'
+			self.valueDeclaredAlias = ValueDeclaredAliasMap.create()
+		end 'stillShared'
+		self.valueDeclaredAlias.upsert(value, value: self.artifact.typeNames.intern(aliasName))
+	end 'recordValueDeclaredAliasName'
+
+	// ⭐ **THE RANGED TYPEALIAS A CAST'S SOURCE EXPRESSION DENOTES** — the half of E3010 that is about the
+	// value rather than about the written target. The recorded entry WINS over the value's own `named` tag,
+	// because it is the LATER and more specific statement about the same value: `identity(42) as Byte` hands
+	// back the call result untouched, and that result's type column still says `Integer` while the
+	// expression now denotes a `Byte`.
+	function castSourceAlias(value ValueId) returns DeclaredAlias
+		let aliasId = try self.valueDeclaredAlias.get(value) otherwise return self.declaredAliasOfValue(value)
+		return self.declaredAliasOfNameId(aliasId)
+	end 'castSourceAlias'
+
 	// The instance alias NAME `value` came from (`WrapperA`), or `EmptySourceText` when it has none — a
 	// `self` receiver, a value merged across branches, or any non-instance value (P1.6-C).
 	function instanceAliasNameOfValue(value ValueId) returns ByteArray
@@ -13847,7 +13936,15 @@ export type Parser
 	// `builtinConformerOfType` claims is one conformer with `Integer`/`Byte`/`int` — was E2015 while
 	// `TypeResolution.resolveNamedType` had erased the very same name to `integer` since slice 2a.
 	function rangedAliasTag(nameId TypeNameId) returns ValueTypeTag
-		let name = self.internedName(nameId)
+		return self.rangedAliasTagOfName(self.internedName(nameId))
+	end 'rangedAliasTag'
+
+	// The rule above, asked of the NAME rather than of an interner id — for the one caller that holds no
+	// id: the top-level constant evaluator, which "emits no ops and touches no artifact" and so has no
+	// interner of its own (`requireConstCastTargetKind` passes `UnnamedTypeId` as a filler). Both spellings
+	// of an `as` cast must decide a float-alias target the same way, so the decision is written once here
+	// and the id-keyed form above only resolves the id.
+	function rangedAliasTagOfName(name ByteArray) returns ValueTypeTag
 		if isSynthesizedIntAliasName(name) 'compilerDeclaredIntAlias'
 			return ValueTypeTag.integer
 		end 'compilerDeclaredIntAlias'
@@ -13856,7 +13953,7 @@ export type Parser
 			declared(alias) gives maxonTypeTag(alias.underlying)
 			undeclared gives ValueTypeTag.named
 		end 'a'
-	end 'rangedAliasTag'
+	end 'rangedAliasTagOfName'
 
 	// Does `nameId` name a ranged FLOAT alias? A `float(low to high)` alias
 	// (`Parser.readTypeAliasDeclaration`) is the ONE `named` type whose VALUE is a genuine float; an
@@ -13873,11 +13970,25 @@ export type Parser
 	// integer and report a false narrowing (E3009). `resolveFloatAliasType` is its twin for a produced
 	// VALUE's type; both delegate the alias lookup to `namedIsFloatAlias`.
 	function floatResolvedTag(tag ValueTypeTag, nameId TypeNameId) returns ValueTypeTag
+		// ⚠ The guard is repeated below rather than delegated to, and it is load-bearing HERE: callers hand
+		// this the filler `UnnamedTypeId` beside a concrete tag all the time, and `internedName` PANICS on an
+		// id its interner never minted. Only a `named` tag has a name to resolve.
 		if tag != ValueTypeTag.named 'notNamed'
 			return tag
 		end 'notNamed'
-		return ValueTypeTag.float if self.namedIsFloatAlias(nameId) else tag
+		return self.floatResolvedTagOfName(tag, name: self.internedName(nameId))
 	end 'floatResolvedTag'
+
+	// The resolution above, asked of the NAME — the form the constant evaluator's cast target needs (see
+	// `rangedAliasTagOfName`). ONE statement of "a `named` tag over a ranged FLOAT alias is a `float`", so
+	// the body cast and the top-level-`let` cast cannot come to disagree about which types a cast may cross
+	// (`castHasNoLegalConversion`'s float-resolved precondition) or about what a rejection names.
+	function floatResolvedTagOfName(tag ValueTypeTag, name ByteArray) returns ValueTypeTag
+		if tag != ValueTypeTag.named 'notNamed'
+			return tag
+		end 'notNamed'
+		return ValueTypeTag.float if tagIsFloat(self.rangedAliasTagOfName(name)) else tag
+	end 'floatResolvedTagOfName'
 
 	// Resolve a float-alias `named` TYPE to `MaxonType.float` — the produced-VALUE twin of
 	// `floatResolvedTag`. A `returns Float` CALL RESULT is a genuine float value, so its tag must be
@@ -22321,7 +22432,21 @@ export type Parser
 	// (that band — the indirect call `f(x)` — stays TIGHTER than `-`, so `-f()` is `-(f())`); it wraps the
 	// whole unary result here. `applyCast` retags / range-checks / float-converts (P1.9).
 	function parseCast(func IrFunction) returns ValueId throws ParseError
+		let operandStart = self.pos
 		var current = try self.parseUnary(func)
+
+		// ⚠ Asked only once an `as` is actually there, and this is a HOT path — `parseCast` wraps every
+		// expression leaf in the program, while a cast is rare. `rhsWasBareLocalReference` walks tokens and
+		// probes the scope; paying that per leaf would be a cost the feature does not earn.
+		if not self.at(TokenKind.as) 'noCast'
+			return current
+		end 'noCast'
+
+		// ⭐ **WAS THE OPERAND A BARE REFERENCE TO A LOCAL?** Asked HERE, while the cursor still sits just
+		// past the operand, because `applyCast` may not stamp a declared alias onto a value that another
+		// BINDING also names (see `ValueDeclaredAliasMap`). A later hop of the loop casts a CAST RESULT,
+		// which is this parse's own temporary and is bound to no name, so the answer is false from then on.
+		var currentIsBareLocal = self.rhsWasBareLocalReference(operandStart)
 		while self.at(TokenKind.as) 'cast'
 			let asTok = try self.consume(TokenKind.as)
 			// Captured BEFORE the target is parsed: E2003 anchors on the TARGET NAME, and by the time
@@ -22329,7 +22454,8 @@ export type Parser
 			// this is the first of the two, which is the one the reference blames.)
 			let targetTok = self.current()
 			let targetType = try self.parseTypeReference()
-			current = try self.applyCast(current, targetType: targetType, asTok: asTok, targetTok: targetTok)
+			current = try self.applyCast(current, targetType: targetType, asTok: asTok, targetTok: targetTok, sourceIsBareLocal: currentIsBareLocal)
+			currentIsBareLocal = false
 		end 'cast'
 		return current
 	end 'parseCast'
@@ -22551,7 +22677,11 @@ export type Parser
 	//     (2) is kept, and it is what the two predicates are for: a cast whose target answers every
 	//     question the tag column decides exactly as the source's own type does is still the no-op it
 	//     was, byte for byte.
-	function applyCast(value ValueId, targetType MaxonType, asTok Token, targetTok Token) returns ValueId throws ParseError
+	//
+	// `sourceIsBareLocal` is whether the OPERAND was written as a bare reference to a local — the one fact
+	// `applyCast` cannot recover for itself (it holds a ValueId, and a ValueId does not say how many names
+	// point at it). It gates the declared-alias record the result carries; see `finishCast`.
+	function applyCast(value ValueId, targetType MaxonType, asTok Token, targetTok Token, sourceIsBareLocal bool) returns ValueId throws ParseError
 		// ⭐ REJECT A FUNDAMENTALLY-INCOMPATIBLE KIND CAST FIRST (E3009), before any conversion is chosen. A
 		// managed aggregate (String/struct/function) has no conversion to or from a scalar, nor to a
 		// DIFFERENT aggregate; letting such a cast reach the float/no-op branches below would emit a
@@ -22583,20 +22713,36 @@ export type Parser
 		let targetAlias = self.declaredAliasOfType(targetType)
 		self.recordHiddenCastTarget(targetAlias, targetTok: targetTok)
 
-		let sourceIsFloat = tagIsFloat(self.tagOf(value))
+		// ⭐ **E3010, ABOVE THE THREE CONVERSION ARMS** — because it is a question about the two DECLARED
+		// types and not about the conversion any arm chooses: the int→float widening `i as JsonFloat` is as
+		// unneeded as the identity `b as Byte`. RECORDED rather than thrown, so the parse walks on and every
+		// unneeded cast in the file is reported by ONE compile — which is exactly what
+		// `error.unneeded.multiple-in-one-function` (three of them) and `.multiple-across-functions` (two,
+		// in two functions) pin, and what type-casting.md's prose calls a recoverable diagnostic.
+		self.reportUnneededCast(self.castSourceAlias(value), target: targetAlias, asTok: asTok)
+
+		// `sourceTag` rather than a second `tagOf(value)`: nothing between its binding and here re-tags
+		// `value` — every statement above reads or records — so a re-read is the same answer twice.
+		let sourceIsFloat = tagIsFloat(sourceTag)
 		let targetIsFloat = self.typeIsFloatDomain(targetType)
 
 		if sourceIsFloat and not targetIsFloat 'floatToInt'
+			// ⚠ **A CONCRETE INTEGER TARGET NO LONGER REACHES HERE — it is E3009 above** (`float → int` is
+			// lossy; the language's answer is `trunc`/`round`/`floor`/`ceil`). What still does is a target no
+			// tag can judge: an opaque type parameter `T`, whose cast `castHasNoLegalConversion` deliberately
+			// stands aside from. The truncation is kept for it rather than deleted, because it is the only
+			// reading `f as T` has ever had and nothing in the corpus asks for a different one.
+			//
 			// The trunc RESULT is the narrowed integer, so it — not the float source — is what a ranged INT
 			// target checks (`500.7 as Byte` guards `500`). The result has its own Std op, but the guard still
 			// anchors at the cast's BLOCK (below) for the same reason an int->int cast does.
 			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: asTok)
 			self.recordRangeCheckSite(narrowed, targetAlias: targetAlias, line: asTok.line, column: asTok.column)
-			return narrowed
+			return self.finishCast(narrowed, source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'floatToInt'
 
 		if not sourceIsFloat and targetIsFloat 'intToFloat'
-			return self.promoteToFloat(value, opTok: asTok)
+			return self.finishCast(self.promoteToFloat(value, opTok: asTok), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'intToFloat'
 
 		// ⚠ **THE RANGE-CHECK SITE IS THE SOURCE, NOT THE MINTED RESULT, AND THAT IS A CORRECTNESS
@@ -22620,11 +22766,64 @@ export type Parser
 		// different registries and none implies the others. Everything else is the representational no-op
 		// below, with no new value and no new op.
 		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias) 'retaggingCast'
-			return self.emitRetaggedCastValue(value, targetType: targetType, asTok: asTok)
+			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, asTok: asTok), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'retaggingCast'
 
-		return value
+		return self.finishCast(value, source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 	end 'applyCast'
+
+	// ⭐ **THE CAST'S RESULT DENOTES THE TARGET ALIAS — recorded on the result, and read by NOTHING but
+	// E3010.** It emits no op and moves no bit: `ValueDeclaredAliasMap` exists precisely so that knowing
+	// `let b = 42 as Byte` makes `b` a `Byte` costs no instruction, where minting a value to carry it would
+	// have cost one at every ranged cast in the corpus.
+	//
+	// ⚠ **THREE OF THE FOUR ARMS MINT A FRESH VALUE**, which nothing else names, so the record is
+	// unambiguous there. The fourth flows the SOURCE value on unchanged, and there the record is WITHHELD
+	// when the operand was a bare local: `let a = 42` then `let b = a as Byte` leaves ONE value under two
+	// names, and stamping it would make a later `a as Byte` — a narrowing the program genuinely needs —
+	// report E3010 against a plain `int`. See `ValueDeclaredAliasMap` for the false negative that trades for.
+	function finishCast(result ValueId, source ValueId, targetAlias DeclaredAlias, sourceIsBareLocal bool) returns ValueId
+		if result == source and sourceIsBareLocal 'sharedWithABinding'
+			return result
+		end 'sharedWithABinding'
+
+		self.recordValueDeclaredAlias(result, alias: targetAlias)
+		return result
+	end 'finishCast'
+
+	// ⭐⭐ **E3010 — "unneeded cast: 'A' already fits in 'B'".** It fires only when BOTH ends are DECLARED
+	// ranged typealiases, and that gate is the whole discriminator rather than a convenience: `let x = 42`
+	// then `x as Float` is LEGAL — the source is a bare `int`, which names no alias and so states nothing
+	// the cast could be repeating — while `let i = identity(42)`, whose callee DECLARES `returns Integer`,
+	// then `i as JsonFloat` is E3010. The two programs differ in nothing else, and both reference compilers
+	// gate it the same way (v1's `namedAliasNameOrEmpty`, the bootstrap's resolved alias name).
+	function reportUnneededCast(source DeclaredAlias, target DeclaredAlias, asTok Token)
+		match source 's'
+			undeclared then break 's'
+			declared(sourceAlias) then self.reportUnneededCastFrom(sourceAlias, target: target, asTok: asTok)
+		end 's'
+	end 'reportUnneededCast'
+
+	// The second unwrap. A `match` arm carries one expression and there are two unions to open, so the pair
+	// reads as the two sentences it is rather than as a nested match.
+	function reportUnneededCastFrom(source RangedTypeAlias, target DeclaredAlias, asTok Token)
+		match target 't'
+			undeclared then break 't'
+			declared(targetAlias) then self.reportUnneededCastBetween(source, target: targetAlias, asTok: asTok)
+		end 't'
+	end 'reportUnneededCastFrom'
+
+	// The verdict and the words. `rangeCoversRange` is the rule; a cast that CAN lose a value is the one
+	// that earns its keep and is left alone. The message names the ALIASES the program wrote — not the
+	// erased primitives `typeTagName` prints for E3009 — because "already fits in" is a statement about the
+	// two ranges, and both spell `int` once erased.
+	function reportUnneededCastBetween(source RangedTypeAlias, target RangedTypeAlias, asTok Token)
+		if not rangeCoversRange(target.low, targetHigh: target.high, targetIsFloat: aliasIsFloat(target), sourceLow: source.low, sourceHigh: source.high, sourceIsFloat: aliasIsFloat(source)) 'narrowing'
+			return
+		end 'narrowing'
+
+		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: "unneeded cast: '{String.from(source.name)}' already fits in '{String.from(target.name)}'", tok: asTok)
+	end 'reportUnneededCastBetween'
 
 	// ⭐ **THE CAST TARGET'S KIND AS THE AUTHORITY DENOTES IT — not as `maxonTypeTag` reads the
 	// SPELLING.** `parseTypeReference` answers a handful of type spellings syntactically (`Self`, the
@@ -22660,12 +22859,19 @@ export type Parser
 	// cast sites ask it (`castTargetTag` for a body cast, `requireConstCastTargetKind` for a top-level
 	// `let`'s), and a name that denotes nothing must reach the same code with the same wording at the
 	// same anchor whichever site met it.
+	//
+	// ⭐ **AND IT FLOAT-RESOLVES WHAT IT ANSWERS.** A ranged FLOAT alias denotes a `float`, and the `named`
+	// tag cannot say so — `tagIsIntegral` reads every `named` as an int (its own header says why it cannot
+	// do otherwise). That is `castHasNoLegalConversion`'s stated precondition, and it decides two things at
+	// once: `f as Float` stays the identity conversion instead of being refused as the lossy `float → int`,
+	// and `true as Float` says "Cannot cast from bool to **float**" instead of naming the alias's erased
+	// `int`. Resolved HERE, at the one door both cast spellings ask, so neither can skip it.
 	function denotedCastTargetTag(name ByteArray, id TypeNameId, asTok Token) returns ValueTypeTag throws ParseError
 		let denoted = try denotedNamedType(self.signatures, name: name, id: id) otherwise 'undeclared'
 			throw ParseError.unknownTypeName(String.from(name), line: asTok.line, column: asTok.column)
 		end 'undeclared'
 
-		return maxonTypeTag(denoted)
+		return self.floatResolvedTagOfName(maxonTypeTag(denoted), name: name)
 	end 'denotedCastTargetTag'
 
 	// May a `sourceTag` value BECOME a `targetTag` one (E3009) — the other half of the cast-target
@@ -32894,6 +33100,7 @@ export type Parser
 		let savedValueIsCapturingClosure = self.valueIsCapturingClosure
 		let savedValueClosureEnv = self.valueClosureEnv
 		let savedValueInstanceAlias = self.valueInstanceAlias
+		let savedValueDeclaredAlias = self.valueDeclaredAlias
 		let savedImmutableGlobalReads = self.immutableGlobalReads
 		let savedBufferSurfaceValues = self.bufferSurfaceValues
 		let savedBufferSurfaceSlots = self.bufferSurfaceSlots
@@ -32965,6 +33172,7 @@ export type Parser
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
+		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
@@ -33104,6 +33312,7 @@ export type Parser
 		self.valueIsCapturingClosure = savedValueIsCapturingClosure
 		self.valueClosureEnv = savedValueClosureEnv
 		self.valueInstanceAlias = savedValueInstanceAlias
+		self.valueDeclaredAlias = savedValueDeclaredAlias
 		self.immutableGlobalReads = savedImmutableGlobalReads
 		self.bufferSurfaceValues = savedBufferSurfaceValues
 		self.bufferSurfaceSlots = savedBufferSurfaceSlots
@@ -33746,6 +33955,14 @@ export type Parser
 	// integer LITERAL, the range is checked HERE — a top-level `let` is not a function, so it records no
 	// site for `InsertRangeChecks` to guard, and the compile-time E3005 that a body cast gets from that
 	// pass must be raised by the evaluator instead.
+	//
+	// ⚠ **E3010 IS NOT ASKED HERE, AND THAT IS STRUCTURAL RATHER THAN AN OMISSION.** The unneeded-cast rule
+	// needs the SOURCE's declared alias NAME on both sides (`Parser.reportUnneededCast`), and this evaluator
+	// carries a constant as a `(payload, tag)` pair with no name in it — it emits no ops, touches no
+	// artifact and has no interner of its own, which is the same reason `requireConstCastTargetKind` is
+	// handed the filler `UnnamedTypeId`. Closing it means carrying an alias name through the const arena,
+	// beside the payload and the tag, at every fold. The other two verdicts a body cast gets ARE asked, and
+	// through the body path's own deciders, so the two spellings agree on everything a tag can settle.
 	function applyConstCast(value ConstValue) returns ConstValue throws ConstEvalError
 		let asTok = self.current()
 		try self.consumeConstToken(TokenKind.as)
@@ -35572,6 +35789,17 @@ export type Parser
 		// result of a `returns Float` callee binds a `float` (XMM) value that `trunc` truncates and `return`
 		// moves cleanly, rather than a `named` value the tag says is an int while the backend files it in XMM.
 		let result = self.mintValueOfType(self.resolveNamedAlias(self.resolveFloatAliasType(self.resolveNamedStruct(inner))))
+
+		// ⭐ **THE FLOAT LIFT DROPS THE ALIAS NAME, so the alias is recorded beside the value.**
+		// `MaxonType.float` has no id slot, so a `returns Float` result lands with tag `float` and no name —
+		// and `let f = identity(42.0)` then `f as Float` would read as a cast from a bare `float`, missing
+		// E3010. An INT alias keeps its `named` tag and its name, so it needs no entry (see
+		// `ValueDeclaredAliasMap`). The test is two tag reads: only the float lift turns a `named` return
+		// type into a `float` value.
+		if maxonTypeTag(inner) == ValueTypeTag.named and tagIsFloat(self.tagOf(result)) 'floatAliasReturn'
+			self.recordValueDeclaredAliasName(result, aliasName: self.internedName(typeNameIdOf(inner)))
+		end 'floatAliasReturn'
+
 		if self.valueIsManagedHeap(result) 'adoptsHeapBox'
 			self.trackOwnedTemp(result)
 		end 'adoptsHeapBox'

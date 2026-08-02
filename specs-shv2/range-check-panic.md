@@ -352,7 +352,7 @@ end 'scale'
 
 function main() returns ExitCode
   let big = widen(0.5)
-  return scale(big) as ExitCode
+  return trunc(scale(big))
 end 'main'
 ```
 ```exitcode

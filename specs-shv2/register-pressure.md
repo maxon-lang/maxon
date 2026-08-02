@@ -888,13 +888,13 @@ end 'main'
 A dead def may inherit the register of a use that DIES at the same op — but only one of its OWN FILE.
 `dyingRegsAt` names every dying operand's register whatever file it is in, yet `allocateDef` ORs
 `fullRegisterMask() and not classPool` into `blocked`, so a dying XMM frees nothing a GPR def can take.
-Here `x as int` is a `cvttsd2si` whose GPR def is read by nothing and whose only dying operand is the
+Here `trunc(x)` is a `cvttsd2si` whose GPR def is read by nothing and whose only dying operand is the
 FLOAT `x`: fourteen live parameters plus that dead GPR def still want fifteen GPRs, and scoring the
 dying float as "this op frees a register" put the colorer back into `chooseRegister`'s panic — the
 dead-def correction's own wrong answer, one register file over. Result is `sum(1..14) = 105`.
 ```maxon
 function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, x float) returns int
-	let unused = x as int
+	let unused = trunc(x)
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
 end 'f'
 
@@ -921,7 +921,7 @@ function g(f0 float, f1 float, f2 float, f3 float, f4 float, f5 float, f6 float,
 end 'g'
 
 function main() returns ExitCode
-	return g(1.0, f1: 1.0, f2: 1.0, f3: 1.0, f4: 1.0, f5: 1.0, f6: 1.0, f7: 1.0, f8: 1.0, f9: 1.0, f10: 1.0, f11: 1.0, f12: 1.0, f13: 1.0, f14: 1.0, f15: 1.0, y: 3) as int as ExitCode
+	return trunc(g(1.0, f1: 1.0, f2: 1.0, f3: 1.0, f4: 1.0, f5: 1.0, f6: 1.0, f7: 1.0, f8: 1.0, f9: 1.0, f10: 1.0, f11: 1.0, f12: 1.0, f13: 1.0, f14: 1.0, f15: 1.0, y: 3))
 end 'main'
 ```
 ```exitcode
@@ -937,7 +937,7 @@ program is well past the pool and the splitter relieves it cold, which is worth 
 trailing arguments are zero so the sum fits an exit code. Result is `sum(1..20) = 210`.
 ```maxon
 function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int, a15 int, a16 int, a17 int, a18 int, a19 int, a20 int, a21 int, a22 int, a23 int, a24 int, a25 int, x float) returns int
-	let unused = x as int
+	let unused = trunc(x)
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25
 end 'f'
 

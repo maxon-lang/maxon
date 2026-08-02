@@ -207,17 +207,37 @@ end 'typeClassAdmits'
 // String drop run on a struct box, a DOUBLE FREE that faults the runtime MM) or surfaced only downstream
 // at the next type-checked position.
 //
-// It is the ONE cast-legality rule stated over `TypeClass`, and it is bounded to what a TAG can decide:
+// ⭐⭐ **AND IT IS ALSO THE RULE FOR THE TWO SCALAR CLASSES, WHICH IT ONCE WAVED THROUGH.** Its own header
+// used to claim *"different concrete classes convert ONLY when both are scalars (int↔float, bool↔int)"*,
+// and that premise is FALSE against `specs/type-casting.md`: **a `bool` converts to nothing and nothing
+// converts to a `bool`** — the very sentence `TypeClass`'s `boolean` arm states — so `true as Integer`,
+// `true as Float`, `0 as bool` and `0.0 as bool` are all E3009. MEASURED before the fix: `b as Integer`
+// for a `let b = true` PRINTED `true`, because the cast was a complete no-op that left a bool payload
+// wearing an integer type; `7 as bool` printed `7`. A silent wrong answer, in the one place a cast is
+// supposed to be the type check.
+//
+// ⭐⭐ **AND ONE PAIR INSIDE THE `numeric` CLASS IS LOSSY: `float → int`.** A class cannot see it — the two
+// are deliberately one class, or `5 + 2.0` would not compile — so it is asked of the TAGS, through
+// `isLossyFloatToInt`: the SAME call `checkDeclaredType` makes for the implicit doors, so the explicit `as`
+// and every implicit conversion cannot come to disagree about it (that header records the two times they
+// did). `5.9 as Integer` SILENTLY TRUNCATED to 5 before this call existed. The other direction —
+// `int → float` — is a WIDENING and stays legal: it is what `int-to-float` and `byte-to-float` pin.
+//
+// It is the ONE cast-legality rule, and it is bounded to what a TAG can decide:
 //   • BOTH ends must be CONCRETE (an aggregate or a scalar). A cast touching an opaque `T`
 //     (`typeParameter`) or an unresolved type (`unknown`/`noValue`) is left to the existing rules — NOT
 //     rejected here.
-//   • The SAME class is a real or identity conversion left alone: a scalar↔scalar `as` (int↔int no-op,
-//     int↔float promote/trunc, handled in `applyCast`), and the `structRef` COARSENESS a tag cannot yet
-//     split — two different structs share `structRef`, so `Point as Rect` is not caught here (that needs
-//     the `valueNameIds` publication `TypeClass.structRef` already names as its fix).
-//   • Different concrete classes convert ONLY when both are scalars (int↔float, bool↔int); if EITHER end
-//     is an aggregate there is no conversion. Symmetric in the two ends — a cast is symmetric in what it
-//     may cross — which is why the aggregate test is applied to each end.
+//   • DIFFERENT concrete classes never convert. Symmetric in the two ends — a cast is symmetric in what it
+//     may cross — and that now covers `boolean` against `numeric` as well as anything against an aggregate.
+//   • The SAME class is an identity or a real conversion, EXCEPT the lossy `float → int` above. The
+//     `structRef` COARSENESS a tag cannot yet split rides the same arm — two different structs share
+//     `structRef`, so `Point as Rect` is not caught here (that needs the `valueNameIds` publication
+//     `TypeClass.structRef` already names as its fix).
+//
+// ⚠⚠ **PRECONDITION: BOTH TAGS MUST BE FLOAT-RESOLVED** — stated in full on `isLossyFloatToInt`, which is
+// what needs it. `Parser.denotedCastTargetTag` supplies it for the TARGET of an `as`, and that same lift is
+// what makes `true as Float` say "Cannot cast from bool to float" rather than naming the alias's erased
+// `int` — so this door depends on it for its WORDING as well as for its verdict.
 export function castHasNoLegalConversion(source ValueTypeTag, target ValueTypeTag) returns bool
 	let sourceClass = typeClassOf(source)
 	let targetClass = typeClassOf(target)
@@ -226,10 +246,12 @@ export function castHasNoLegalConversion(source ValueTypeTag, target ValueTypeTa
 	if not sourceConcrete or not targetConcrete 'opaque'
 		return false
 	end 'opaque'
-	if sourceClass == targetClass 'sameClass'
-		return false
-	end 'sameClass'
-	return typeClassIsAggregate(sourceClass) or typeClassIsAggregate(targetClass)
+
+	if sourceClass != targetClass 'differentKinds'
+		return true
+	end 'differentKinds'
+
+	return isLossyFloatToInt(source, declared: target)
 end 'castHasNoLegalConversion'
 
 // A managed AGGREGATE type class — a String (`text`), a struct or generic instance (`structRef`), or a
@@ -356,7 +378,7 @@ export function checkDeclaredType(value ValueTypeTag, declared ValueTypeTag) ret
 		return DeclaredTypeMatch.mismatch
 	end 'disagree'
 
-	if tagIsFloat(value) and tagIsIntegral(declared) 'narrowing'
+	if isLossyFloatToInt(value, declared: declared) 'narrowing'
 		return DeclaredTypeMatch.narrowsFloatToInt
 	end 'narrowing'
 
@@ -400,6 +422,31 @@ end 'checkDeclaredType'
 export function widensIntToFloat(value ValueTypeTag, declared ValueTypeTag) returns bool
 	return tagIsIntegral(value) and tagIsFloat(declared)
 end 'widensIntToFloat'
+
+// ⭐⭐ **THE LOSSY DIRECTION, WRITTEN ONCE — the mirror of `widensIntToFloat` above, and the rule BOTH
+// cast doors and every implicit door decide by.** A float dropped into an integer loses its fraction, and
+// Maxon refuses the conversion in every spelling rather than performing it silently: `checkDeclaredType`
+// turns it into `DeclaredTypeMatch.narrowsFloatToInt` for the IMPLICIT doors (a call argument, a `return`,
+// an assignment, a field store — reported through `implicitNarrowingMessage`), and
+// `castHasNoLegalConversion` turns it into E3009 for the EXPLICIT `as`. The language's answer in both is
+// `trunc`/`round`/`floor`/`ceil`.
+//
+// ⚠ **IT IS ONE FUNCTION BECAUSE THE TWO DOORS DISAGREEING ABOUT ONE CONVERSION IS A DEFECT THIS FILE HAS
+// ALREADY SHIPPED — TWICE, IN OPPOSITE DIRECTIONS.** `specs/implicit-type-conversion.md` once carried a
+// `float → int: Truncate toward zero` row while `specs/type-casting.md` rejected the explicit `5.0 as int`
+// (deleted at P1.0d.4); then the explicit door was the silent one — `5.9 as Integer` truncated to 5 while
+// `takeInt(5.9)` was refused. Both were one rule with two copies. A cross-reference in prose is not a
+// mechanism; a shared call is.
+//
+// ⚠⚠ **PRECONDITION: BOTH TAGS MUST BE FLOAT-RESOLVED** — a ranged FLOAT alias must arrive as `float`, not
+// as `named`. `tagIsIntegral` answers `true` for EVERY `named` alias (its own header says why it cannot do
+// otherwise), so an unlifted float alias reads as an integer on either side: as the TARGET it would make
+// `f as Float` — the identity conversion — the lossy one, and as the VALUE it would hide a genuine
+// narrowing. The VALUE side is the parser invariant every float-alias producer obeys
+// (`Parser.resolveFloatAliasType`); the TARGET side of an `as` is `Parser.denotedCastTargetTag`'s job.
+export function isLossyFloatToInt(value ValueTypeTag, declared ValueTypeTag) returns bool
+	return tagIsFloat(value) and tagIsIntegral(declared)
+end 'isLossyFloatToInt'
 
 // **THE WORDS**, written once. Two files report this — `Queries.reportParseError` for the three
 // sites the parser owns (`return`, assignment, global store) and `SemanticCheck.checkArgTypes` for
@@ -1184,6 +1231,49 @@ export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt, i
 	end 'unsignedUpper'
 	return value >= low and value <= high
 end 'literalInRange'
+
+// ⭐⭐ **DOES THE TARGET ALIAS ADMIT EVERY VALUE THE SOURCE ALIAS DOES? — the whole content of E3010.**
+// A cast that cannot lose a value contributes nothing (`Parser.reportUnneededCastBetween`): the language
+// already widens into the target implicitly, so writing the `as` says something that was true anyway.
+// Both ends are DECLARED ranged aliases by the time this is asked — a source with no alias name is not an
+// unneeded cast but an ordinary one, which is what keeps `let x = 42` + `x as Float` legal.
+//
+// CROSS-DOMAIN: only `int → float` covers, and it covers ALWAYS — an f64 spans every i64 the corpus can
+// write, and the declared float alias is the full `float(f64.min to f64.max)` in every use. The reverse
+// (`float → int`) never reaches here: `castHasNoLegalConversion` refuses it as E3009 first.
+//
+// FLOAT: through `floatOrderKey`, NOT the raw patterns — the reference's own version compares the stored
+// i64s directly, which is the sign-and-magnitude trap `floatOrderKey`'s header describes and which
+// silently inverts the verdict for a negative bound (`float(-100.0 to -1.0)`). shv2 has the order key; the
+// divergence is deliberate.
+//
+// INTEGER, and the UNSIGNED-MAX-UPPER shape is why this is not two `<=`s: `int(0 to u64.max)` rides with
+// `high == -1`, so a plain signed compare would call it a SUBSET of `int(i64.min to i64.max)` and report
+// the genuinely-narrowing `Word as Integer` as unneeded. The shape is recognized by the one predicate that
+// recognizes it everywhere else; two ranges that disagree about carrying it are reported NOT covered
+// (their union is unrepresentable in 64 bits, and over-reporting coverage is a FALSE REJECTION of a valid
+// program). When BOTH carry it the uppers are equal by construction and both lows are non-negative
+// (`rangeIsUnsigned` holds inside the shape), so the lows decide under an ordinary signed compare.
+export function rangeCoversRange(targetLow ParsedInt, targetHigh ParsedInt, targetIsFloat bool, sourceLow ParsedInt, sourceHigh ParsedInt, sourceIsFloat bool) returns bool
+	if targetIsFloat != sourceIsFloat 'crossDomain'
+		return targetIsFloat
+	end 'crossDomain'
+
+	if targetIsFloat 'float'
+		return floatOrderKey(targetLow) <= floatOrderKey(sourceLow) and floatOrderKey(targetHigh) >= floatOrderKey(sourceHigh)
+	end 'float'
+
+	let targetIsUnsignedMaxUpper = rangeIsUnsignedMaxUpper(targetLow, high: targetHigh)
+	if targetIsUnsignedMaxUpper != rangeIsUnsignedMaxUpper(sourceLow, high: sourceHigh) 'mixedRepresentation'
+		return false
+	end 'mixedRepresentation'
+
+	if targetIsUnsignedMaxUpper 'bothUnbounded'
+		return targetLow <= sourceLow
+	end 'bothUnbounded'
+
+	return targetLow <= sourceLow and targetHigh >= sourceHigh
+end 'rangeCoversRange'
 
 // The E3005 a literal out-of-range NARROWING reports — `Value N is outside the range of 'Alias'
 // (int(lo to hi))` — worded ONCE, for BOTH the body-cast/return pass (`InsertRangeChecks`) and

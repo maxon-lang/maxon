@@ -195,7 +195,7 @@ end 'useFloat'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	return useInt(41) as ExitCode
+	return trunc(useInt(41))
 end 'main'
 ```
 ```maxoncstderr

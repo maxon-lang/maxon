@@ -330,7 +330,7 @@ end 'Scale'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	return Scale.make().w as ExitCode
+	return trunc(Scale.make().w)
 end 'main'
 ```
 ```exitcode
