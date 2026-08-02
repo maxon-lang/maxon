@@ -16110,6 +16110,28 @@ export type Parser
 		return retained
 	end 'retainBorrowedAggregate'
 
+	// ⭐ **BECOME A SECOND OWNER OF `source`'s BOX, AS AN UNBOUND STATEMENT-SCOPED TEMPORARY** — the door for
+	// an expression that hands back a record SOMEBODY ELSE already owes a drop on, and whose own result may be
+	// bound to nothing.
+	//
+	// It is `retainBorrowedAggregate` PLUS `trackOwnedTemp`, and the second half is the part that is easy to
+	// leave off: the door above sets the owned-heap bit ALONE, because it is written for a value whose drop a
+	// BINDING will owe (`promoteBorrowedToOwned`). A value that may never reach a binding —
+	// `ByteArray.init(mm).count()`, `f(bytes.managed)` — needs the STATEMENT-scoped obligation as well, or the
+	// retain is never released (measured as exit 101 with `trackOwnedTemp` removed, review of BATCH2 slice 6).
+	//
+	// ⭐ **THE TWO CALLERS ARE EXACT INVERSES OF EACH OTHER AND THAT IS WHY THIS IS ONE FUNCTION**:
+	// `parseArrayInitStatic` adopts a buffer AS the array around it, `bufferSurfaceOf` hands the array's buffer
+	// BACK. They differ in exactly ONE line — whether the fresh id is marked `markBufferSurface` — and until
+	// this door existed they agreed on the ownership pair only by each spelling it out. A third ownership fact
+	// added to one of the two copies would have been a leak or a double free in the other, with nothing to say
+	// so: the surfaces are inverses, but the refcount question they answer is the same question.
+	function coOwnAggregateAsTemp(source ValueId, range SourceRange) returns ValueId
+		let owned = self.retainBorrowedAggregate(source, range: range)
+		self.trackOwnedTemp(owned)
+		return owned
+	end 'coOwnAggregateAsTemp'
+
 	// ⭐ **MAKE A BORROWED MANAGED VALUE OWNED — the ONE `String`-copy-vs-aggregate-retain decision every site
 	// that needs an owned value out of a borrowed one must make.** A borrowed value cannot be enrolled as
 	// owned as-is: its owner is elsewhere, so a scope-exit drop would free the caller's box a second time. So
@@ -28087,19 +28109,17 @@ export type Parser
 	//     `__arr_decref` lowers — both go through `MmRuntime.emitRefcountCheckToLastOwner` — so
 	//     `let a = ByteArray.init(mm)` traces rc 0 → 1 → (`a` drops) 0 → (`mm` drops) freed.
 	//
-	// `trackOwnedTemp` on top of the door's own `markValueOwnsHeap`: the door is written for a value whose
-	// drop a BINDING owes (`promoteBorrowedToOwned`), and a static CALL's result may be bound to nothing —
-	// `ByteArray.init(mm).count()` — so it needs the statement-scoped obligation `create()` above takes, and
-	// takes it through the same one door rather than reaching into `pendingTempDrops` beside it.
+	// The retain and the statement-scoped drop obligation come as ONE call (`coOwnAggregateAsTemp`), shared
+	// with `bufferSurfaceOf` — the inverse direction, which owes the identical pair for the identical reason:
+	// a static CALL's result may be bound to nothing (`ByteArray.init(mm).count()`), so the bare owned-heap
+	// bit `retainBorrowedAggregate` sets is not enough. See that door for why the two halves travel together.
 	function parseArrayInitStatic(func IrFunction, giid GenericInstanceId, methodTok Token, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let managed = try self.parseExpression(func, block: self.currentBlock)
 		try self.requireSameArrayInstance(managed, giid: giid, anchor: methodTok)
 		try self.consume(TokenKind.rightParen)
 
-		let adopted = self.retainBorrowedAggregate(managed, range: range)
-		self.trackOwnedTemp(adopted)
-		return adopted
+		return self.coOwnAggregateAsTemp(managed, range: range)
 	end 'parseArrayInitStatic'
 
 	// ⭐ **THE `init(managed)` ARGUMENT RULE IS SAME-INSTANCE — AND THE OBVIOUS DOOR IS THE WRONG ONE.**
@@ -29064,10 +29084,10 @@ export type Parser
 	//     `error.managed-field-chain-does-not-mark-the-array` pins for the CHAINED spelling.
 	//   • **SOMEBODY ELSE DOES** — `arr` is a BINDING's value (`var a = […]`, dropped at ITS scope exit) or a
 	//     BORROW (a `ByteArray` PARAMETER, owned in the caller's frame — `stdlib/File.maxon:147`). Whatever
-	//     this value is bound to or handed to drops independently, so it must become a SECOND owner:
-	//     `retainBorrowedAggregate` mints the fresh id with `__mm_retain` — the same refcount word
-	//     `__arr_decref` lowers — and `trackOwnedTemp` adds the statement-scoped obligation an UNBOUND result
-	//     needs, exactly as `parseArrayInitStatic` does for the other direction.
+	//     this value is bound to or handed to drops independently, so it must become a SECOND owner through
+	//     `coOwnAggregateAsTemp` — the `__mm_retain` that mints the fresh id on the same refcount word
+	//     `__arr_decref` lowers, plus the statement-scoped drop an UNBOUND result needs. It is the one door
+	//     `parseArrayInitStatic` takes for the other direction, so the two inverses cannot drift on ownership.
 	//
 	// ⚠⚠ **HANDING BACK THE RECEIVER'S OWN `ValueId` IN THE SECOND CASE IS A DOUBLE FREE, NOT A COSMETIC
 	// IDENTITY.** `let m = a.managed` is three tokens, so `rhsWasBareLocalReference` reads it as a CONSUME and
@@ -29079,8 +29099,7 @@ export type Parser
 			return arr
 		end 'statementAlreadyOwnsIt'
 
-		let buffer = self.retainBorrowedAggregate(arr, range: range)
-		self.trackOwnedTemp(buffer)
+		let buffer = self.coOwnAggregateAsTemp(arr, range: range)
 		self.markBufferSurface(buffer)
 		return buffer
 	end 'bufferSurfaceOf'
@@ -32128,16 +32147,23 @@ export type Parser
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
 	// identical copy-on-write reason, through the same one home for it (`privateValueMarkSet`).
 	//
-	// Its SIX call sites, DERIVED by grepping them rather than remembered: the five producers of a buffer
-	// VALUE — `__ManagedMemory.create` (`parseManagedMemoryStaticCall`), a `slice` taken THROUGH the buffer
-	// surface (`parseArraySlice`), `__ManagedDirectory.filename`/`currentPath` (`emitOwnedManagedMemoryResult`,
-	// R4.3), `String.addressableBytes()` (`dispatchStringMethod`, BATCH2 slice 1) and `arr.managed` in VALUE
-	// position (`bufferSurfaceOf`, BATCH2 slice 6) — plus `markDeclaredSurface` below, which A2j reaches from
-	// the three sites that bind a value whose DECLARED type spelled the alias.
-	// ⚠⚠ **THIS COUNT HAS NOW BEEN WRONG THREE TIMES** — it said TWO while there were three, THREE while
-	// there were four, and the two independent corrections (A2j's and BATCH2's) each restated it without
-	// the other's caller, so a clean textual rebase would have landed a fourth wrong count. **Count them,
-	// do not copy this sentence.**
+	// Its EIGHT call sites in SEVEN functions, DERIVED by grepping `markBufferSurface(` rather than
+	// remembered — the six producers of a buffer VALUE:
+	//   • `__ManagedMemory.create` (`parseManagedMemoryStaticCall`);
+	//   • a `slice` taken THROUGH the buffer surface (`parseArraySlice`);
+	//   • `__ManagedDirectory.filename`/`currentPath` (`emitOwnedManagedMemoryResult`, R4.3);
+	//   • `String.addressableBytes()` (`dispatchStringMethod`, BATCH2 slice 1);
+	//   • an ELEMENT read out of an array whose elements are buffers (`markElementReadSurface`, A2m) —
+	//     the one producer that reads a DIFFERENT column (`bufferSurfaceElements`) to decide;
+	//   • `arr.managed` in VALUE position (`bufferSurfaceOf`, BATCH2 slice 6), which is TWO call sites in
+	//     one function because its two ownership arms mark two different values;
+	// — plus `markDeclaredSurface` below, which A2j reaches from the three sites that bind a value whose
+	// DECLARED type spelled the alias.
+	// ⚠⚠ **THIS COUNT HAS NOW BEEN WRONG FOUR TIMES** — TWO while there were three, THREE while there were
+	// four, FIVE while there were six (`markElementReadSurface` had never been counted), and SIX while there
+	// were eight. Every correction so far restated the sentence from the previous one instead of from the
+	// grep, which is why the same omission survived three of them. **Count them, do not copy this sentence** —
+	// and count CALL SITES, not producers: `bufferSurfaceOf` is one producer with two of them.
 	// ⚠ The CHAINED `.managed` (`arr.managed.setLength(2)`) is still the producer that mints NO value to mark
 	// — D11b measured it as one — and it passes the surface along the dispatch instead (`viaManagedField`).
 	// Only the VALUE form has a value to mark, and it mints one for exactly that reason.

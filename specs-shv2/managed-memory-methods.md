@@ -2509,6 +2509,57 @@ end 'main'
 error E2015: <fragment>:8:2: Unsupported: identifier statement
 ```
 
+<!-- test: managed-field-as-a-value-releases-in-every-forking-region -->
+
+⭐ **THE VALUE FORM TAKES A STATEMENT-SCOPED DROP, SO IT IS SUBJECT TO THE REGION DISCIPLINE**
+(`coOwnAggregateAsTemp` → `trackOwnedTemp` → `drainPendingTemps`), and that discipline has no automatic
+check behind it — every construct that FORKS must release its own temporaries in a block their definitions
+dominate, and the list of such constructs is maintained by hand. So this walks the regions a `.managed`
+value can now be built in, which the four cases above do not reach: an `if` CONDITION, a `while` CONDITION
+(re-entered per iteration), a `for` SOURCE, and a receiver that is a `var` REASSIGNED under all of them. A
+release on too few paths is a leak (exit 101); one on a path that never built the value is a dominance
+failure several passes later. Each receiver is read back as an `Array` (`count`) afterwards, which is what
+says the buffer mark never reached it.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function bufLength(m __ManagedMemory) returns int
+	return m.length()
+end 'bufLength'
+
+function main() returns ExitCode
+	var a = ByteArray.create()
+	a.push(1 as Byte)
+	a.push(2 as Byte)
+	var total = 0
+
+	if bufLength(a.managed) > 1 'big'
+		total = total + 1
+	end 'big'
+
+	while bufLength(a.managed) > total 'spin'
+		total = total + 1
+	end 'spin'
+
+	for b in a.managed 'each'
+		total = total + b
+	end 'each'
+
+	a = "xyz".toByteArray()
+	total = total + bufLength(a.managed) + a.count()
+
+	print("{total}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11
+```
+
 <!-- test: buffer-surface-survives-a-var-reassignment -->
 
 A `var` reassigned from another buffer keeps the buffer surface. The mark rides the VALUE, and a reassignment
