@@ -140,6 +140,26 @@
 //     names standing after `sleep` left, omitting `spawnReadLine` and all seven `subp*` — so a maintainer
 //     checking a module against the list rather than the chain would have been told a claimed name was
 //     free, and got back exactly the silent shadow this rule exists to prevent.
+//   • ⚠⚠ **A LISTED MODULE'S OWN BODY MUST NOT BE TYPE-PARAMETERIZED BY A USER DECLARATION — and this clause
+//     is here because the four above did NOT cover it, twice.** Every bullet so far is about a NAME the
+//     module DECLARES colliding with one the user declares. This one is about a TYPE the module's body
+//     merely USES, resolving differently per program: `__ManagedMemory` is registered as an alias of
+//     `Array with Byte`, and `Byte` is a name a user may declare — so a module whose body passes a
+//     `__ManagedMemory` around stops compiling in any program that writes `typealias Byte = int(0 to 1000)`,
+//     WITHOUT NAMING ANYTHING THE MODULE DOES. The module is parsed by every program, so the blast radius is
+//     every program, and the diagnostic points at a stdlib line the author never opened.
+//     ⚠ MEASURED TWICE, three rungs apart, with the same two `specs-shv2/bytearray-element-size.md` cases
+//     and the same sentence — `E3005 argument type mismatch for 'managed': expected '__ManagedMemory', got
+//     'Array_Byte'` — first inside `stdlib/URL.maxon` (BATCH2 slice 1), then inside `stdlib/CommandLine.maxon`
+//     at `String.init(managed)` (the command-line rung).
+//     ⇒ THE RULE: a value a listed module receives from the COMPILER (an intrinsic's result, a synthesized
+//     view) must carry a compiler-owned type, not one spelled out of user-declarable names.
+//     `SignatureIndex.SynthesizedByteElementName` is that answer for bytes and carries the whole argument.
+//     ⚠ **THE SHADOWING MECHANISM DOES NOT REACH THIS AND MUST NOT BE REACHED FOR.** A1s wave 2 rewrites the
+//     identifier TOKENS of a listed module, which cures a name the module WRITES; `stdlib/CommandLine.maxon`
+//     never writes `Byte` at all. The fix belongs where the type is MINTED, not where it is spelled.
+//     ⇒ CHECKING IT is a build, not a reading: compile a program that declares its own `Byte` as a wide
+//     range and calls NOTHING in the module. If the module appears in the output, this clause has been hit.
 
 // ⭐ **THE LOADER.** Enumerate `stdlib/` and register each module, in the order the walk found them
 // (see the header on why it does not sort). Called by `loadProject`
@@ -364,9 +384,9 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     `Math` or `Real`. (A prose list of the other entries' type names is the same thing written down
 	//     twice, and the two copies in this file had already drifted apart.)
 	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: `Math` is not a builtin. It appears NOWHERE in
-	//     shv2's own sources — the four math intrinsics are BARE names (`floor`/`ceil`/`round`/`sqrt`), never
-	//     `Math.`-qualified — which is also why `Math.exp` reaches `emitCall` as an ordinary qualified callee
-	//     instead of being intercepted by `parseCallNamed`'s `__Builtins.`-prefixed intrinsic table.
+	//     shv2's own sources — the five math intrinsics are BARE names (`floor`/`ceil`/`round`/`sqrt`/`abs`),
+	//     never `Math.`-qualified — which is also why `Math.exp` reaches `emitCall` as an ordinary qualified
+	//     callee instead of being intercepted by `parseCallNamed`'s `__Builtins.`-prefixed intrinsic table.
 	//   • `Real` is a RANGED typealias, file-local per alias FORM, so it reserves nothing from a user program.
 	//     Its form `float(f64.min to f64.max)` is already declared under a second name by a listed module
 	//     (`Builtins.maxon`'s `ParsedFloat`) — the same same-form-different-name shape `Clock`'s four
@@ -398,6 +418,57 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// takes the early return and cannot see it. ⇒ this entry is sound as a LISTING — nothing about the
 	// whitelist is what is wrong — and the module's answers are only as good as that rung leaves them.
 	try listWhitelistedModule(stdlibDir, relative: "Math.maxon", into: listed)
+	// ⭐⭐ **`stdlib/CommandLine.maxon` — `CommandLine.args()`, `optionValue`, `getOptionValue`.** The first
+	// listed module whose leaves are OS intrinsics rather than pure Maxon: `args()` is a loop over
+	// `__Builtins.commandLineCount()` / `__Builtins.commandLineArg(i)`, which lower to the `__cl_*` runtime
+	// (`Runtime/CommandLineRuntime.maxon` — one `GetCommandLineA` import and the CRT split).
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS (E3006): it declares NONE. All three of its functions are `static`s of `CommandLine`,
+	//     so the whole free-function clause — and with it the SILENT bare-builtin shadow that cost
+	//     `Sleep.maxon` a builtin retirement — is vacuous here. Checked against `Parser.parseCallNamed`'s
+	//     bare-name `if` chain AT THE CHAIN, as that rule's last bullet insists: nothing this module declares
+	//     can be claimed by it, because it declares nothing the chain can see.
+	//   • TYPE NAMES: `CommandLine` is a nominal declaration, so a user program spelling it wins and this one
+	//     moves into the reserved space (A1s wave 2). Against the other listed modules there is no overlap,
+	//     checked AT THE SOURCE by reading the declarations of the modules the calls above name — no listed
+	//     module declares `CommandLine`.
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: `CommandLine` is not a builtin. It appears NOWHERE
+	//     in shv2's own sources as a type — the two intrinsics it bottoms out in are `__Builtins.`-qualified,
+	//     which is a DIFFERENT namespace (`BuiltinsQualifierPrefix`), and the runtime entries are `__cl_`.
+	//     ⚠ Checked the harder way too, against `TypeResolution.isCompilerOwnedTypeName`, since this rung ADDS
+	//     a name to that list (`StringError`): `CommandLine` is not on it and cannot be, because nothing in
+	//     the compiler synthesizes a declaration of it.
+	//   • `StringArray` is a `typealias … = Array with String` — a GENERIC-INSTANCE alias, file-local per alias
+	//     FORM like `Clock`'s ranged ones, so it reserves nothing from a user program.
+	//   • The E3112 MEMBER-name rule is a whole-program CHECK that fires only when a user program actually
+	//     contests a spelling, so there is nothing to clear ahead of time. The surface it exposes is the three
+	//     method names (`args`, `optionValue`, `getOptionValue`) — `CommandLine` is a statics-only type with no
+	//     fields at all.
+	//   • It has NO imports and calls into no other stdlib module.
+	//
+	// ⚠⚠ **THREE BLOCKERS HAD TO GO FIRST, AND ONLY ONE OF THEM WAS THE INTRINSICS** — the whitelist is
+	// ALL-OR-NOTHING PER FILE, which is a property worth stating because it is not obvious and it was
+	// MEASURED: with this line present and the intrinsics absent, `function main() returns int / return 7`
+	// was refused with `E3004 … stdlib\CommandLine.maxon:9:15`, i.e. a program that never mentions
+	// `CommandLine` died on a function it never calls. `StdlibFacts.unreachable` prunes LOWERING, not PARSING.
+	// So `optionValue`'s two obstacles were this entry's obstacles as much as `args()`'s were:
+	//   1. `String.indexAfter` did not exist — now built (`__strix_after`, a reuse of `__strix_advance`);
+	//   2. `throw StringError.notFound` did not parse, because `StringError` is declared in
+	//      `stdlib/String.maxon`, which this loader can never list (`String` is compiler-owned). It is now
+	//      SYNTHESIZED, exactly as `ArrayError` already was for the identical provenance
+	//      (`Project.builtinStringErrorEnum`).
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes:
+	// `maxon-shv2 build stdlib/CommandLine.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING
+	// ELSE — the module parses and analyzes clean under shv2 and fails only for not being a program.
+	//
+	// ⚠ **IT IS THE FIRST LISTED MODULE THAT IS x64-WINDOWS-ONLY, and the gate for that is NOT here.**
+	// `SemanticCheck.stdlibSubstrateEntries` propagates `calleeNeedsWin32Substrate` through the stdlib call
+	// graph, so a wasm/arm64 program calling `CommandLine.args()` is refused (E3104) at ITS OWN call site,
+	// while a program that never calls it is unaffected on every target — the reachability asymmetry that
+	// function's header records. Listing the module is what makes those calls exist; it is not what gates them.
+	try listWhitelistedModule(stdlibDir, relative: "CommandLine.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

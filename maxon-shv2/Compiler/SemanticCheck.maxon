@@ -2264,7 +2264,11 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// fake it — so the program must be refused HERE, at the call's own span, before it reaches one.
 	// R4.3's directory entries join them on the same terms and by the same PREFIX test, so the whole
 	// eight-method surface is gated by construction rather than by a list somebody has to remember to extend.
-	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee)
+	// The command-line entries join on the same terms and by the same PREFIX test. ⚠ Their reason is one the
+	// four above do not have: argv is not merely UNIMPLEMENTED elsewhere, it has a DIFFERENT SHAPE elsewhere
+	// (one unsplit string on Windows, a pre-split vector under SysV), so serving another target is a rung
+	// rather than a lowering. `CommandLineRuntime`'s header carries it in full.
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote

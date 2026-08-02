@@ -458,7 +458,9 @@ end 'isLossyFloatToInt'
 // `round`/`floor`/`ceil` are named because they are the LANGUAGE's answer (type-casting.md lists
 // all four) — and as of P1.0d.4-C all four are shv2's too (specs/{floor,ceil,round,sqrt}.md), so
 // every function this message names is one the reader can call. `trunc` is named first because it
-// is the one that answers the question the rejection actually asked.
+// is the one that answers the question the rejection actually asked. (`abs` is a fifth intrinsic of
+// the same family but is deliberately NOT named here: it is not a narrowing, so it answers nothing
+// this rejection asked.)
 export function implicitNarrowingMessage(sourceType String, targetType String) returns String
 	return "cannot implicitly convert '{sourceType}' to '{targetType}': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)"
 end 'implicitNarrowingMessage'
@@ -1548,13 +1550,15 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		// encoding at compile time — a real thing to want, and a `ParsedInt` column that cannot
 		// say which of its entries are bit patterns is not the place to put it.
 		//
-		// The four MATH INTRINSICS are unreachable for `promoteToFloat`'s structural reason, twice
+		// The five MATH INTRINSICS are unreachable for `promoteToFloat`'s structural reason, twice
 		// over: their result tag is float by construction, and `Parser.emitMathIntrinsic` has already
 		// promoted an integer argument, so neither the result nor the operand is an integer by the
-		// time this folder could run. Folding them would mean evaluating `sqrt`/`floor`/`ceil`/`round`
-		// on IEEE bit patterns at compile time — a real thing to want, and not something a `ParsedInt`
-		// column that cannot say which entries are bit patterns may do.
-		trunc to sqrt gives FoldedInt.notFoldable
+		// time this folder could run. Folding them would mean evaluating
+		// `sqrt`/`floor`/`ceil`/`round`/`abs` on IEEE bit patterns at compile time — a real thing to
+		// want, and not something a `ParsedInt` column that cannot say which entries are bit patterns
+		// may do. (`abs` alone WOULD be a pure bit operation on that pattern, but the column's
+		// ambiguity is what forbids it, not the arithmetic.)
+		trunc to abs gives FoldedInt.notFoldable
 	end 'o'
 end 'foldIntUnaryOp'
 

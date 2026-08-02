@@ -1597,6 +1597,10 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// its OWN value's allocation, which is what puts the dest in a GPR and the source in an XMM
 		// with nothing here having to know that.
 		movqGprXmm(dest, src) then return TargetOp.movqGprXmm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		// f64 ABS colors its two XMM operands like any other pair. That it is a REUSE def rather than a
+		// plain one is the OPERAND MODEL's statement, already honoured by the time coloring runs, so
+		// nothing here has to know the two will land in one register.
+		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		// The `.rdata` address `lea` (P1.2 wave A) — colors its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(colorVRegWith(dest, alloc: alloc), label: label)
 		// --- arm64 SCALAR-CORE band ---
@@ -1651,6 +1655,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64Scvtf(dest, src) then return TargetOp.arm64Scvtf(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64Fcvtzs(dest, src) then return TargetOp.arm64Fcvtzs(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64Fsqrt(dest, src) then return TargetOp.arm64Fsqrt(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		arm64Fabs(dest, src) then return TargetOp.arm64Fabs(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64Frint(dest, src, mode) then return TargetOp.arm64Frint(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), mode: mode)
 		arm64FpLoadRdata(dest, label) then return TargetOp.arm64FpLoadRdata(colorVRegWith(dest, alloc: alloc), label: label)
 		// Neither OS-call form names a register operand (their args are pre-moved into x0..), so both

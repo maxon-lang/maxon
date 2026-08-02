@@ -487,7 +487,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:12: Unsupported: `__StringIndex` member 'offset' — shv2 provides charIndex/bytePos; the reference's `equals`/`compare` are reached through `==`/`<` instead, and `String.charAt`/`indexAfter`/`indexBefore` (the other consumers of an index) need a BACKWARD UAX#29 segmenter
+error E2015: <fragment>:5:12: Unsupported: `__StringIndex` member 'offset' — shv2 provides charIndex/bytePos; the reference's `equals`/`compare` are reached through `==`/`<` instead, and of the other consumers of an index `String.charAt` needs `makeCharFromBytes` and `String.indexBefore` a BACKWARD UAX#29 segmenter (`String.indexAfter` is built)
 ```
 
 ### A throwing search written without `try` names the search

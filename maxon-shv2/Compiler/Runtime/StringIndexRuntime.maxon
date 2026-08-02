@@ -60,6 +60,12 @@ export let StrIndexAdvanceName = b"__strix_advance"
 export let StrIndexFirstName = b"__strix_first"
 export let StrIndexLastName = b"__strix_last"
 export let StrIndexSliceName = b"__strix_slice"
+// `String.indexAfter` — the one THROWING producer that is not a search. See `buildStringIndexAfter`.
+export let StrIndexAfterName = b"__strix_after"
+
+// The prefix EVERY entry point above shares — what `isStringIndexRuntimeCallee` tests, so the install-time
+// drift guard covers a name added later without being told about it.
+let StringIndexRuntimePrefix = b"__strix_"
 
 // The error flag both searches throw on a miss — an error case's `ordinal + ErrorFlagOrdinalBias`
 // (`StringError.notFound` is ordinal 0 in `stdlib/String.maxon:6-9`). DERIVED from the one bias, exactly as
@@ -69,11 +75,39 @@ export let StrIndexSliceName = b"__strix_slice"
 let StrIndexNotFoundOrdinal = 0 as ParsedInt
 let StrIndexNotFoundFlag = StrIndexNotFoundOrdinal + ErrorFlagOrdinalBias
 
-// The `throws` type name stamped on the two searching functions. It matches `StringError` in
-// `stdlib/String.maxon`, the enum a user `try s.findFirst(n) otherwise …` binds; for a runtime function it
-// is documentation only — `funcSignatureResultValTypes` reads `throwsClauseIsThrowing` (throwing vs none),
-// never the name's bytes.
-let StringErrorTypeName = "StringError"
+// `StringError.invalidIndex`'s flag — the SECOND case of the same enum, thrown by `__strix_after` for an
+// index already at the end of the string. Same derivation as the pair above, from the same declaration
+// order (`stdlib/String.maxon:6-9`, which `Project.builtinStringErrorEnum` synthesizes case for case).
+let StrIndexInvalidIndexOrdinal = 1 as ParsedInt
+let StrIndexInvalidIndexFlag = StrIndexInvalidIndexOrdinal + ErrorFlagOrdinalBias
+
+// The name these ordinals are transcribed under, for `BuiltinErrorOrdinalCheck`'s diagnostic.
+let StringErrorOrdinalInstaller = b"the StringIndex runtime (StringError)"
+
+// ⭐⭐ **THE ORDINAL DRIFT GUARD FOR `StringError` — THE SIXTH FAMILY, AND IT BECAME ONE THE MOMENT THE ENUM
+// STOPPED BEING A LABEL.** While `StringError` was only the BYTES of a `throws` clause (`funcSignatureResultValTypes`
+// reads throwing-vs-none and never the name), the two ordinals above answered to nothing and could not drift
+// from anything. `Project.builtinStringErrorEnum` changed that: the enum is now a seeded DECLARATION whose case
+// ORDER is what a handler's `match e` resolves its arms from, while the ordinals stay literals here — the two
+// halves of a wire format with nothing tying them, which is precisely what
+// `Project.BuiltinErrorOrdinalCheck` exists for and what its `__DivisionByZeroError` paragraph spells out
+// ("a case inserted BEFORE it would silently retarget every `otherwise (e)` arm in the program").
+//
+// `overSynthesized`, like `ArrayError`'s: `stdlib/String.maxon` is unlistable by construction, so only this
+// compiler's own source can move the declaration and a disagreement is a compiler bug that PANICS.
+export function verifyStringErrorOrdinals(project Project)
+	var stringErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinStringErrorEnum(), installer: StringErrorOrdinalInstaller)
+	stringErrors.claim(StringErrorNotFoundCaseName, ordinal: StrIndexNotFoundOrdinal)
+	stringErrors.claim(StringErrorInvalidIndexCaseName, ordinal: StrIndexInvalidIndexOrdinal)
+end 'verifyStringErrorOrdinals'
+
+// The `throws` clause stamped on every throwing function in this file. Its name is
+// `SignatureIndex.StringErrorTypeName` — the ONE spelling, now that the enum is a compiler-seeded
+// declaration a program can name (`Project.builtinStringErrorEnum`) rather than an opaque label. This file
+// held a second `String`-typed copy of those bytes until then.
+function stringThrows() returns ThrowsClause
+	return ThrowsClause.throwing(String.from(StringErrorTypeName))
+end 'stringThrows'
 
 // The THROWING `StringIndex` runtime callees. `__strix_first`/`__strix_last` return via the dual-register
 // `errorReturn` ABI and can throw `StringError.notFound`, so a call to one MUST become a `tryCall`. The
@@ -89,8 +123,14 @@ let StringErrorTypeName = "StringError"
 // ⚠⚠ **THAT ARGUMENT DOES NOT REACH THE THIRD FACT (D12 review).** `stringIndexSourceMethodName` below is a
 // separate list of these same two names, and no builder ties it to this predicate — so
 // `installStringIndexRuntime` grew the one install-time check this family does need. See the loop there.
+//
+// ⚠ **`__strix_after` MAKES THREE, AND IT BREAKS THE "ONE BUILDER STAMPS BOTH" ARGUMENT ABOVE** — it has a
+// builder of its own, so the pairing it relies on is gone and only the install-time loop below still holds
+// this predicate to the `throws` clauses actually stamped. That loop already asked the source-method map
+// for every name here; it now asks the `throws` stamp too, in both directions, exactly as
+// `installManagedFileRuntime` and `installManagedDirectoryRuntime` do for their separately-built families.
 export function isThrowingStringIndexRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(StrIndexFirstName) or callee.equals(StrIndexLastName)
+	return callee.equals(StrIndexFirstName) or callee.equals(StrIndexLastName) or callee.equals(StrIndexAfterName)
 end 'isThrowingStringIndexRuntimeCallee'
 
 // ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `managedDirectorySourceMethodName`, read through
@@ -110,6 +150,9 @@ export function stringIndexSourceMethodName(callee ByteArray) returns ByteArray
 	if callee.equals(StrIndexLastName) 'findLast'
 		return StringFindLastMethod
 	end 'findLast'
+	if callee.equals(StrIndexAfterName) 'indexAfter'
+		return StringIndexAfterMethod
+	end 'indexAfter'
 	panic("stringIndexSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `StringIndex` callee — this map is asked ONLY behind `isThrowingStringIndexRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `String*Method` constant. `installStringIndexRuntime`'s drift guard asks this for every throwing `__strix_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'stringIndexSourceMethodName'
 
@@ -138,19 +181,48 @@ export function installStringIndexRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrIndexSlice 'slice'
 		buildStringIndexSlice(module)
 	end 'slice'
+	if usage.usesStrIndexAfter 'after'
+		buildStringIndexAfter(module)
+	end 'after'
 
-	// ⭐ **THE THIRD LIST (D12 review): a throwing callee must also have a SOURCE-METHOD arm.** This family
-	// needs NO builder-vs-predicate loop — one builder stamps both searches from the same two constants, as
-	// `isThrowingStringIndexRuntimeCallee`'s header records — but `stringIndexSourceMethodName` is a THIRD
-	// spelling of those two names that no builder ties to anything. Asked, not described: the CALL is the
-	// check, so a missing arm is that map's own panic here at install rather than in front of a user who
-	// forgot a `try` on `findFirst`. Reasoning lives once, on `GtRuntime.runtimeCalleeSourceMethod`.
+	// ⭐ **THE THIRD LIST (D12 review): a throwing callee must also have a SOURCE-METHOD arm** —
+	// `stringIndexSourceMethodName` is a spelling of the throwing names that no builder ties to anything, so a
+	// missing arm must be that map's own panic HERE at install rather than in front of a user who forgot a
+	// `try` on `findFirst`.
+	//
+	// ⚠ **AND SINCE `__strix_after` THE `throws`-STAMP CHECK IS NEEDED TOO, WHERE IT WAS NOT BEFORE.** While
+	// the only throwing members were the two searches, ONE builder stamped both from the same two constants
+	// and the predicate could not disagree with it — the argument `isThrowingStringIndexRuntimeCallee`'s
+	// header used to close on. `__strix_after` has a builder of its own, so this family reverted to the shape
+	// `installManagedFileRuntime` and `installManagedDirectoryRuntime` have always guarded: a predicate and a
+	// stamp free to drift. Checked in BOTH directions for their stated reason — a stamp without a name is a
+	// `try` that silently stops being required, and a name without a stamp is an E3055 on a call that cannot
+	// fail. Reasoning lives once, on `GtRuntime.runtimeCalleeSourceMethod`.
 	for func in module.functions 'eachFunc'
-		if isThrowingStringIndexRuntimeCallee(func.name) 'hasSourceMethod'
+		if not isStringIndexRuntimeCallee(func.name) 'notOurs'
+			continue
+		end 'notOurs'
+		let named = isThrowingStringIndexRuntimeCallee(func.name)
+		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
+		if stamped and not named 'stampedNotNamed'
+			panic("installStringIndexRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingStringIndexRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted")
+		end 'stampedNotNamed'
+		if named and not stamped 'namedNotStamped'
+			panic("installStringIndexRuntime: isThrowingStringIndexRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted")
+		end 'namedNotStamped'
+
+		if named 'hasSourceMethod'
 			requireQuotableSourceSpelling(stringIndexSourceMethodName(func.name), callee: func.name)
 		end 'hasSourceMethod'
 	end 'eachFunc'
 end 'installStringIndexRuntime'
+
+// Every callee this file installs — what the drift guard above iterates. A PREFIX test rather than an
+// eight-way `or`, exactly as `isManagedDirectoryRuntimeCallee` is: every entry point here is `__strix_`-named
+// by construction, so a ninth is covered without being remembered here as well as declared above.
+function isStringIndexRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: StringIndexRuntimePrefix)
+end 'isStringIndexRuntimeCallee'
 
 // ⭐ **`__strix_make(charIdx, bytePos) -> StringIndex` — THE ONE DOOR A `StringIndex` IS BORN THROUGH.**
 // One `__mm_alloc` of `StringIndexBoxBytes` with a zero destructor, then the two fields. Every producer
@@ -252,6 +324,64 @@ function buildStringIndexAdvance(module StdModule)
 	module.functions.push(func)
 end 'buildStringIndexAdvance'
 
+// ⭐⭐ **`__strix_after(strRec, charIdx, bytePos) -> StringIndex` — `String.indexAfter`, THE FORWARD STEP.**
+// `stdlib/String.maxon:387-392` verbatim: an index already at (or past) the end of the string throws
+// `StringError.invalidIndex`; otherwise the answer is the next grapheme index paired with the byte position
+// one cluster on.
+//
+// ⭐ **IT REUSES `__strix_advance` RATHER THAN WALKING ITSELF, AND THAT IS THE WHOLE BODY.** The reference
+// calls `findGraphemeEnd(self, startPos:)` — "where does the cluster starting here end?" — which is exactly
+// `graphemeOffsetToBytePos(start, 1)`, the function `__strix_advance` already is. Writing the step out again
+// would be a third copy of "the next cluster starts here" beside the two `emitGraphemeWalk` already
+// single-sources, and the file's own header says why that must not happen: a change to what a cluster
+// boundary means has to reach every reader at once. The `1` is named, because a bare literal at a call to a
+// COUNT parameter says nothing about which of the two conversions is being asked for.
+//
+// ⚠ **THE GUARD IS `>=`, NOT `==`, AND IT IS THE REFERENCE'S.** A `bytePos` PAST the length cannot arise
+// from an index taken off this string, but it can arise from one taken off a LONGER string — the shape
+// `string-index.an-index-from-a-longer-string-aborts` already pins for `slice` — and `>=` answers it with
+// this method's own catchable error rather than letting `__strix_advance` clamp and hand back an index that
+// silently names a position in a different string.
+//
+// ⚠ Both the ADVANCE and the MINT happen on the success path only. On the throw edge the primary register is
+// unread (the desugar's phi takes the `otherwise` value), so the plain 0 is honest — `buildStringIndexSearch`
+// states the convention, and there is no box allocated to leak.
+function buildStringIndexAfter(module StdModule)
+	var func = IrFunction.createFromStd(StrIndexAfterName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: stringThrows())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var atEnd = module.addBlock(func, label: b"sxaend")
+	var step = module.addBlock(func, label: b"sxastep")
+
+	emitParams(module, block: entry, count: 3)
+	let record = 0 as ValueId
+	let charIdx = 1 as ValueId
+	let bytePos = 2 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let exhausted = emitCmp(module, block: entry, a: bytePos, b: len, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(exhausted, thenBlockId: atEnd.id, elseBlockId: step.id))
+
+	let noBox = emitConst(module, block: atEnd, value: 0, ids: ids)
+	let invalidFlag = emitConst(module, block: atEnd, value: StrIndexInvalidIndexFlag, ids: ids)
+	module.setTerminator(atEnd, op: StdOp.errorReturn(noBox, errorFlagId: invalidFlag))
+
+	let oneCluster = emitConst(module, block: step, value: OneGraphemeStep, ids: ids)
+	let nextBytePos = ids.mint()
+	module.appendOp(step, op: StdOp.call(nextBytePos, callee: StrIndexAdvanceName, args: threeArgs(record, second: bytePos, third: oneCluster)))
+	let one = emitConst(module, block: step, value: OneGraphemeStep, ids: ids)
+	let nextCharIdx = emitBin(module, block: step, a: charIdx, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let okFlag = emitConst(module, block: step, value: NoErrorFlag, ids: ids)
+	module.setTerminator(step, op: StdOp.errorReturn(emitStringIndexMakeCall(module, block: step, charIdx: nextCharIdx, bytePos: nextBytePos, ids: ids), errorFlagId: okFlag))
+
+	module.functions.push(func)
+end 'buildStringIndexAfter'
+
+// ONE cluster — both the `count` `__strix_advance` is asked for and the amount the grapheme index moves.
+// The two are the same fact ("advance by a single cluster") and a bare `1` at either site would say neither.
+let OneGraphemeStep = 1 as ParsedInt
+
 // ⭐⭐ **ONE CLUSTER WALK, TWO ANSWERS — the two byte↔grapheme conversions are the SAME loop read from
 // opposite ends.** Both step `__gr_end` from a byte position carrying a step counter, both stop when the
 // string runs out, and they differ ONLY in which of the two loop-carried values is tested against the
@@ -321,7 +451,7 @@ end 'graphemeWalkProjection'
 // `__str_rfind` answers the byte length (so `findLast("")` is the end index). Both are the stdlib's
 // (`findIn:983-985`, `findLastIn:1006-1008`), and both are non-throwing there too.
 function buildStringIndexSearch(module StdModule, name ByteArray, fromEnd bool)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(StringErrorTypeName))
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: stringThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")

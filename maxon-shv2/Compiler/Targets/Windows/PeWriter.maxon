@@ -231,6 +231,24 @@ export enum IatSlot
 	CreateDirectoryA
 	GetCurrentDirectoryA
 	GetFileAttributesA
+	// ⭐ **THE COMMAND-LINE IMPORT.** APPENDED AFTER `GetFileAttributesA` so every existing slot INDEX (and
+	// hence every existing `iatCall` relocation) is unchanged; a reorder would silently repoint every prior
+	// import. It is kernel32, so `Kernel32DirEntries` stays 1 — that constant counts import DIRECTORY entries
+	// (DLLs), not imports, and that is exactly what makes this a ONE-LINE addition rather than a new directory.
+	//
+	// ⚠⚠ **THE `A` VARIANT, AND HERE IT IS NOT MERELY CONSISTENT — IT IS WHAT KEEPS THE LANE SHUT.** The
+	// bootstrap uses `GetCommandLineW` and then needs shell32's `CommandLineToArgvW` plus `WideCharToMultiByte`
+	// to get back to bytes (three imports and a second DLL, `X86CodeEmitter.Runtime.cs:2032-2176`). shv2 takes
+	// the `A` entry point for one import and no new directory entry, and the deciding reason is not the count:
+	// every other path shv2 hands Windows goes through an `A` entry point (`CreateFileA`, `FindFirstFileA`,
+	// `GetCurrentDirectoryA`, `GetFileAttributesA`), so a UTF-8 argv would be the one producer disagreeing with
+	// every consumer — and `openRead(args.get(1))` is the first thing anyone writes.
+	//
+	// ⚠ It inherits `CreateFileA`'s stated LIMITATION unchanged, and inherits it CONSISTENTLY: a non-ASCII
+	// argument is read in the system ANSI codepage, exactly as a non-ASCII path is. The eventual fix is the
+	// same one — the W entry points plus a real widening — for the whole lane at once, which is the property
+	// a lone UTF-8 producer here would have destroyed.
+	GetCommandLineA
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer

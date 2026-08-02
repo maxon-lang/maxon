@@ -2087,18 +2087,34 @@ end 'main'
 error E3113: <fragment>:12:10: 'throws Payload' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
 ```
 
-<!-- test: error.throws-a-stdlib-error-shv2-does-not-declare -->
-⚠ **A MEASURED NARROWING, PINNED BECAUSE IT IS THE ONE PLACE THE RULE READS DIFFERENTLY FROM THE ORACLE
-(A1s-throwsbox).** `StringError` is declared in `stdlib/String.maxon` — a module the C# bootstrap's type
-registry holds and `StdlibLoader.whitelistedStdlibModules` does NOT list, because shv2 EMITS its String
-runtime rather than compiling that file. So in shv2 the name resolves to nothing, and this clause was
-accepted only as an unchecked opaque label: `throw StringError.notFound` does not parse here, and neither
-does a `match` over the caught binding. It is `throws Bogus` wearing a real name, and accepting one while
-refusing the other would need a hardcoded second copy of the stdlib's declarations inside the compiler —
-exactly what listing a module exists to avoid. ⭐ **The working spelling is the author's own error enum, and
-it is strictly better**, because it can be matched: `throws-a-stdlib-error-has-a-user-declared-spelling`
-below is the same program with one, and it answers 2. ⚠ **This case flips the day `stdlib/String.maxon` is
-listed** — that is the signal, not a maintenance cost.
+<!-- test: throws-a-stdlib-error-shv2-synthesizes -->
+⭐ **THE NARROWING THIS CASE ONCE PINNED IS GONE, AND THE FLIP IS THE SIGNAL ITS OWN NOTE PROMISED.** Until
+`StringError` was synthesized, this program was refused `E3113: 'throws StringError' names no declared enum
+or union` — because `StringError` is declared in `stdlib/String.maxon`, which
+`StdlibLoader.whitelistedStdlibModules` does not list and never can: shv2 EMITS its String runtime rather
+than compiling that file. The name resolved to nothing, so the clause was accepted only as an unchecked
+opaque label — `throws Bogus` wearing a real name — and the old note recorded this as **the one place the
+rule read differently from the ORACLE**.
+
+⭐ **It now agrees with the oracle, and that is why the case flipped rather than being deleted.** MEASURED on
+this exact program: the C# bootstrap compiles it and exits **2**, and shv2 now compiles it and exits **2** —
+the byte position of the space in `"ab cd"`. A divergence became an agreement, so what is worth pinning is
+the agreement.
+
+⚠ **The old note predicted the flip and named the wrong cause**, which is worth keeping rather than quietly
+correcting: it said *"this case flips the day `stdlib/String.maxon` is listed"*. That module is still not
+listed and still cannot be. It flipped because the compiler **synthesizes** the declaration instead —
+`Project.builtinStringErrorEnum`, seeded with `implements Error`, exactly as it has synthesized
+`ArrayError` from the equally-unlistable `stdlib/Array.maxon:6` since R4.4. The old note also argued that
+doing so *"would need a hardcoded second copy of the stdlib's declarations inside the compiler — exactly
+what listing a module exists to avoid"*; that argument was already false when written, because
+`ArrayError` is that copy and R4.4 accepted it deliberately.
+
+⚠ **The bill, and it is the same one `ArrayError` carries:** the name is now RESERVED program-wide, so a
+user program declaring its own `enum StringError` meets `E2015 … a declaration of the type name
+'StringError', which the compiler owns`. `throws-a-stdlib-error-has-a-user-declared-spelling` below is
+still the control and still answers 2 — an author's own error enum remains the spelling that can be
+`match`ed.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -2111,8 +2127,8 @@ function main() returns ExitCode
 	return (try firstSpace("ab cd") otherwise 99) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3113: <fragment>:4:10: 'throws StringError' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
+```exitcode
+2
 ```
 
 <!-- test: throws-a-stdlib-error-has-a-user-declared-spelling -->

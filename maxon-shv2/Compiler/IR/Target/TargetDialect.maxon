@@ -843,6 +843,44 @@ export union TargetOp
 	// the XMM *source* and r/m the GPR *destination*, which is the `r/m, r` STORE mapping rather than
 	// the `r, r/m` mapping `encodeSseRegReg` assumes. That is `encodeMovqGprXmm`'s whole content.
 	movqGprXmm(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// ⭐⭐ **f64 ABSOLUTE VALUE — THE ONE OP IN THIS DIALECT THAT IS NOT A SINGLE MACHINE INSTRUCTION**
+	// (`specs/abs.md`), and the reason is x64's, not shv2's: SSE2 has no scalar float `abs`. It clears the
+	// IEEE-754 SIGN BIT of `src`, which IS absolute value for every f64 pattern — ±0, ±inf and NaN
+	// included — and it does it in the register:
+	//
+	//     psllq dest, 1   (66 0F 73 /6 ib)   ; shift the sign bit out of the top
+	//     psrlq dest, 1   (66 0F 73 /2 ib)   ; shift the rest back, zero-filling bit 63
+	//
+	// ⚠⚠ **BOTH REFERENCE COMPILERS DO IT DIFFERENTLY, AND shv2 CANNOT.** Each emits the textbook
+	// `andpd dest, [rip + mask]` against a 128-bit `0x7FFF…`/`0x7FFF…` constant (the bootstrap's
+	// `GetOrCreateAbsMask`/`EmitAbsF64`, v1's `lowerFloatAbs` + `andMaskRipRel`). Two mechanisms shv2 does
+	// not have stand in the way of copying that, and neither is small:
+	//   • **`andpd`'s MEMORY operand is 128-bit and FAULTS unless 16-byte ALIGNED**, and shv2's `.rdata`
+	//     has no alignment at all — `GlobalDataTable.rdataImage` says so in its own words ("No alignment
+	//     and no padding"), and payloads are laid out end to end in registration order. Giving one
+	//     constant an alignment guarantee means the shared data table AND every native writer taking on
+	//     an invariant none of them states today.
+	//   • **`andpd`'s REGISTER form needs a second XMM holding the mask**, and the x64 isel cannot mint a
+	//     vreg: every `TargetVReg.virtual(id)` names a Std `ValueId`, and the class column is derived from
+	//     the **Std** module (`buildValueClassColumns`), so a backend-minted vreg would be filled `gpr`
+	//     and `andpd` would encode a GPR number as an XMM. Silently.
+	// ⇒ The shift pair needs neither: no constant, no relocation, no alignment, no second value. It is
+	// two ALU instructions against one load-plus-AND, so it is not a cost the divergence pays either.
+	//
+	// **IT IS ONE OP AND NOT TWO BECAUSE THE TARGET TIER IS SSA.** Two ops would both define `dest`, and
+	// a second definition of one vreg is exactly what liveness and coloring may not see. So the dialect
+	// names the OPERATION and the encoder owns the byte sequence — the same division `roundsdRegReg`
+	// already makes by carrying a neutral `FloatRoundMode` instead of an imm8.
+	//
+	// TWO-ADDRESS, so unlike `sqrtsd`/`roundsd` beside it this is a REUSE def, not a plain one: the shifts
+	// work in place, so `dest` must ARRIVE holding `src`. The allocator supplies that copy only when `src`
+	// outlives — `notReg`'s shape exactly. It writes no flags and is not rematerializable.
+	//
+	// APPENDED AT THE END OF THE SSE BAND (before `leaRegRdata`), exactly where `sqrtsd`/`roundsd` and
+	// `movqGprXmm` went and for the reason their comments give: the union's tail is the control/misc band
+	// that every `leaRegFunc to x64Syscall` arm claims, while landing here puts it inside the
+	// `andRegReg to leaRegRdata` arms that already answer for every float op. All of those were re-read.
+	absF64RegReg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// `lea dest, [rip + disp32]` to an `.rdata` constant — the address of a String literal's 48-byte
 	// record (P1.2 wave A). The `.rdata` twin of `leaRegGlobal` (which targets `.data`), and it shares
 	// that op's every property: ONE plain def, NO uses, reads no allocatable register at all (RIP is
@@ -987,6 +1025,11 @@ export union TargetOp
 	// `roundsd` carries its imm8. THREE separate ops would be three spellings of one encoding, and
 	// would make the isel state a rounding decision the x64 isel states once.
 	arm64Frint(dest TargetVReg, src TargetVReg, mode FloatRoundMode) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `FABS Dd, Dn` (0x1E60C000) — f64 absolute value, and the arm64 half of the asymmetry
+	// `absF64RegReg` records: arm64 HAS the instruction, so this is an ordinary 2-address PLAIN def
+	// (`dest` independent of `src`, no seed copy) exactly like `arm64Fsqrt` above it, and none of the x64
+	// sign-bit reasoning reaches here. Appended at the end of the arm64 MATH-INTRINSIC sub-band.
+	arm64Fabs(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// `ldr d, [pc-rel rdata]` — load an f64 constant from `.rdata` via the ADRP+LDR pair. One plain
 	// def reading no allocatable register; the float twin of `leaRdata`. isMemory (a load).
 	arm64FpLoadRdata(dest TargetVReg, label ByteArray) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}

@@ -830,6 +830,8 @@ type StdToX64Lowering
 			osFileSize to osFileAttributes gives 0
 			// A rendered panic calls `mrt_panic` with one REGISTER argument, exactly as `osPanic` does.
 			osPanicValue gives 0
+			// `GetCommandLineA` takes NO arguments at all, so nothing lands on the stack.
+			osCommandLine gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -995,6 +997,8 @@ type StdToX64Lowering
 				osFileOpenRead to osFileAttributes then break 'term'
 				// A panic is a body op, never a terminator, under either spelling.
 				osPanicValue then break 'term'
+				// A command-line read is a value-producing body op, never a terminator.
+				osCommandLine then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1064,6 +1068,8 @@ type StdToX64Lowering
 				osFileOpenRead to osFileAttributes then break 'isTheCompare'
 				// A call, not the compare — the scan stops, exactly as it does at `osPanic`.
 				osPanicValue then break 'isTheCompare'
+				// An import call, not the compare — the scan stops.
+				osCommandLine then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1143,6 +1149,8 @@ type StdToX64Lowering
 			osFileOpenRead to osFileAttributes gives false
 			// A panic is never a terminator, so it is never the float-equality condBranch this asks about.
 			osPanicValue gives false
+			// A command-line read is never a terminator either.
+			osCommandLine gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -1232,6 +1240,7 @@ type StdToX64Lowering
 			osDirCurrentPath(resultId, bufLenId, bufPtrId) then self.lowerOsDirCurrentPath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
 			osFileAttributes(resultId, pathPtrId) then self.lowerOsFileAttributes(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osPanicValue(messagePtrId) then self.lowerPanicValue(messagePtrId, dstBlock: dstBlock)
+			osCommandLine(resultId) then self.lowerOsCommandLine(resultId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1280,6 +1289,7 @@ type StdToX64Lowering
 			osReadWallClock then panic("lowerStdToX64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
 			osFileOpenRead to osFileAttributes then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 			osPanicValue then panic("lowerStdToX64: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
+			osCommandLine then panic("lowerStdToX64: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1489,6 +1499,11 @@ type StdToX64Lowering
 			// isels, so this arm states the INSTRUCTION and never re-decides the mode.
 			floor to round then self.targetModule.appendOp(dstBlock, op: TargetOp.roundsdRegReg(dest, src: src, mode: floatRoundModeFor(opcode)))
 			sqrt then self.targetModule.appendOp(dstBlock, op: TargetOp.sqrtsdRegReg(dest, src: src))
+			// `abs` is the ONE math intrinsic x64 has no instruction for — SSE2 offers no scalar float
+			// absolute value — so it lowers to a sign-bit CLEAR the encoder spells as a `psllq`/`psrlq`
+			// pair. `TargetOp.absF64RegReg` carries the whole argument, including why shv2 does not use
+			// the `andpd`-against-an-`.rdata`-mask both reference compilers emit.
+			abs then self.targetModule.appendOp(dstBlock, op: TargetOp.absF64RegReg(dest, src: src))
 			// The BIT REINTERPRETATION (`float.hash`). `movq r64, xmm` moves the SAME 64 bits across
 			// the file boundary — it is not a convert, so there is no rounding and no value change.
 			// `dest` is GPR-classed and `src` XMM-classed, each from its own value's Std type
@@ -2301,10 +2316,16 @@ type StdToX64Lowering
 	// bug that got one past that gate, never the user-facing rejection. Nine copies of the same
 	// `match x64OsCallKind` wrapper is the duplication this replaces; the op's name is the only thing that
 	// differed between them, so it is the only thing passed in.
+	// ⚠ **THE SENTENCE NAMES THE OP AND NOT A RUNG, BECAUSE THE CALLERS ARE NO LONGER ONE FAMILY.** It read
+	// "file IO is x64-windows-gated at R4.1/R4.2" while every caller was a file or directory primitive;
+	// `osCommandLine` joined and is neither, so that clause became a diagnostic naming a rung the reader's
+	// op has nothing to do with — D12's wrong-noun defect, at the helper that outlived its first family. The
+	// gate itself is one fact for all of them (`SemanticCheck.calleeNeedsWin32Substrate`), so that is what
+	// the message points at.
 	function requireWin64FileIo(opName String)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then return
-			syscall then panic("lowerStdToX64: `{opName}` lowers to a Win32 import and is x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program at its source span (E3104)")
+			syscall then panic("lowerStdToX64: `{opName}` lowers to a Win32 import and is therefore x64-windows only. `SemanticCheck.calleeNeedsWin32Substrate` refuses such a program at its own source span (E3104), so reaching here is a compiler bug that got one past that gate rather than the user-facing rejection")
 		end 'route'
 	end 'requireWin64FileIo'
 
@@ -2406,6 +2427,19 @@ type StdToX64Lowering
 		self.lowerOsWin64Call1(IatSlot.GetFileAttributesA, arg0: pathPtrId, dstBlock: dstBlock)
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileAttributes'
+
+	// ⭐ **`GetCommandLineA()`** — the ONLY import in this file with no arguments to marshal, so there is no
+	// `lowerOsWin64Call0` to reach for and none is invented: the `iatCall` IS the whole call, and a helper
+	// whose body is one `appendOp` would be the thin wrapper the house rules forbid. `GetLastError` (the
+	// other zero-argument import) is emitted the same way one function up.
+	//
+	// The returned pointer is into the PEB and is owned by the OS — never freed, and the same address on
+	// every call. `CommandLineRuntime` copies out of it and frees only its own scratch.
+	function lowerOsCommandLine(resultId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osCommandLine")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetCommandLineA)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsCommandLine'
 
 	function lowerOsIocpCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
@@ -2921,6 +2955,8 @@ type StdToX64Lowering
 			osFileOpenRead to osFileAttributes gives false
 			// A panic is never a terminator, so it is never the float-equality condBranch this asks about.
 			osPanicValue gives false
+			// A command-line read is never a terminator either.
+			osCommandLine gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3062,6 +3098,7 @@ type StdToX64Lowering
 			osReadWallClock panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osReadWallClock`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osFileOpenRead to osFileAttributes panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPanicValue panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osPanicValue`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osCommandLine panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCommandLine`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

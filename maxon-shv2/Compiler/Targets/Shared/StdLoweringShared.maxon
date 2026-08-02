@@ -94,7 +94,7 @@ function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns Re
 		// to reach here without swallowing both conversions on the way. Stating `xmm` outright is also
 		// the stronger claim — these are f64 → f64 by definition (`stdUnaryOperandIsFloat`), so the
 		// class does not depend on `operandType` at all.
-		floor to sqrt gives RegClass.xmm
+		floor to abs gives RegClass.xmm
 		// ⚠ The BITCAST is the THIRD shape this table has to answer for, and the only one whose
 		// operand and result differ in FILE without differing in BITS: `bitcastF64ToI64` moves an
 		// f64's pattern into a GPR unchanged. `operandType` is the f64 SOURCE, so — exactly as for
@@ -117,16 +117,19 @@ end 'unaryResultClass'
 // (`roundsdRegReg.towardPositive`), the arm64 half only by goldens no Windows or Linux host can
 // regenerate, so the copy with the weaker gate is the one free to drift.
 //
-// `sqrt` and `bitcastF64ToI64` are deliberately absent, for two different reasons: `sqrt` is not a
-// `roundsd`/`frint` at all but its own instruction on both ISAs, and a bitcast computes nothing to
-// round. Asking this function for either is a lowering bug, not a missing arm.
+// `sqrt`, `abs` and `bitcastF64ToI64` are deliberately absent, for two different reasons: neither
+// `sqrt` nor `abs` is a `roundsd`/`frint` at all (each has its own lowering on each ISA), and a bitcast
+// computes nothing to round. Asking this function for any of them is a lowering bug, not a missing arm.
 export function floatRoundModeFor(opcode StdUnaryOpcode) returns FloatRoundMode
 	match opcode 'k'
 		floor then return FloatRoundMode.towardNegative
 		ceil then return FloatRoundMode.towardPositive
 		round then return FloatRoundMode.nearestTiesToEven
 		neg to fpToSi then panic("floatRoundModeFor: Std unary opcode {opcode.name} performs no rounding — only floor/ceil/round lower to a rounding instruction (`roundsd` on x64, `frint` on arm64), and the isels route only those three here")
-		sqrt then panic("floatRoundModeFor: `sqrt` is its own instruction on both ISAs (`sqrtsd` / `fsqrt`), not a rounding mode — an isel asking for its rounding has routed it to the wrong op")
+		// ONE arm for the two math intrinsics that are not roundings: the reason is identical (each has
+		// its own lowering, which is not a `roundsd`/`frint` mode) and only the instructions differ, so
+		// the message names both rather than the same sentence being written twice.
+		sqrt to abs then panic("floatRoundModeFor: `{opcode.name}` has no rounding mode — `sqrt` is its own instruction on both ISAs (`sqrtsd` / `fsqrt`) and `abs` clears the sign bit (a `psllq`/`psrlq` pair on x64, `fabs` on arm64); an isel asking either for its rounding has routed it to the wrong op")
 		bitcastF64ToI64 then panic("floatRoundModeFor: `bitcastF64ToI64` REINTERPRETS the operand's bits and computes no number at all, so there is nothing for it to round — an isel asking for its rounding has routed it to the wrong op")
 	end 'k'
 end 'floatRoundModeFor'
@@ -511,6 +514,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		osFileAttributes(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		// A3n: a rendered panic defines no value, exactly as `osPanic` defines none.
 		osPanicValue then break 'result'
+		osCommandLine(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 

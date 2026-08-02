@@ -92,7 +92,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/byteLength/startsWith/endsWith/contains/toLower/toUpper/replace/split/count/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/slice/trim/trimStart/trimEnd/addressableBytes/byteAtOrPanic/hash/equals; `addressableBytes` and `byteAtOrPanic` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet
+error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/byteLength/startsWith/endsWith/contains/toLower/toUpper/replace/split/count/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAtOrPanic/hash/equals; `addressableBytes` and `byteAtOrPanic` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `indexBefore` needs a BACKWARD UAX#29 segmenter (`findGraphemeStart`), `charAt` needs `makeCharFromBytes`, and `graphemes` has no consumer yet
 ```
 
 And the roster a user program is handed NAMES both stdlib-only methods. This is the case the derivation
@@ -106,5 +106,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides append/byteLength/startsWith/endsWith/contains/toLower/toUpper/replace/split/count/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/slice/trim/trimStart/trimEnd/addressableBytes/byteAtOrPanic/hash/equals; `addressableBytes` and `byteAtOrPanic` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet
+error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides append/byteLength/startsWith/endsWith/contains/toLower/toUpper/replace/split/count/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAtOrPanic/hash/equals; `addressableBytes` and `byteAtOrPanic` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `indexBefore` needs a BACKWARD UAX#29 segmenter (`findGraphemeStart`), `charAt` needs `makeCharFromBytes`, and `graphemes` has no consumer yet
 ```

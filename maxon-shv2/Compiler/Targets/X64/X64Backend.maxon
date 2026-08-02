@@ -211,6 +211,28 @@ let OpcodeSqrtsd = 0x51
 // is what makes it the 64-bit GPR transfer rather than `movd`'s 32-bit one.
 let OpcodeMovqRmXmm = 0x7E
 
+// --- The GROUP-14 SSE shift-by-immediate pair: f64 ABSOLUTE VALUE (`specs/abs.md`) ---
+//
+// `psllq xmm, imm8` is `66 0F 73 /6 ib` and `psrlq xmm, imm8` is `66 0F 73 /2 ib` — ONE opcode byte
+// whose meaning is chosen by the ModR/M reg field, exactly like the group-1/2/3/5 GPR forms above, and
+// the only SSE instructions in this file that carry an opcode extension instead of a second register.
+// Each shifts BOTH 64-bit lanes; shv2 reads only the low one.
+//
+// ⭐ SHIFTING LEFT BY ONE AND BACK IS AN f64 `abs`: the sign bit falls off the top and zero fills in
+// behind it, so bit 63 ends clear and bits 0-62 (exponent and mantissa) are exactly as they were. That
+// is absolute value for EVERY pattern — `-0.0` becomes `+0.0`, `-inf` becomes `+inf`, and a NaN keeps
+// its payload — because it is a bit operation and never an arithmetic one. Why shv2 clears the sign bit
+// this way rather than with the `andpd` + `.rdata` mask BOTH reference compilers emit is recorded in
+// full on `TargetOp.absF64RegReg`.
+//
+// ⚠ SSE2, unlike the SSE4.1 `roundsd` below — this pair does not move shv2's x64 baseline.
+let OpcodeGrp14ShiftQImm8 = 0x73
+let Grp14ExtPsrlq = 2
+let Grp14ExtPsllq = 6
+
+// The shift COUNT both halves of the sign-bit clear use: one bit, which is the sign bit's whole width.
+let SignBitShiftCount = 1 as ShiftCount
+
 // --- `roundsd`: the ONE three-byte opcode in this file (SSE4.1) ---
 //
 // `roundsd xmm, xmm/m64, imm8` is `66 0F 3A 0B /r ib`. TWO things make it unlike every other SSE
@@ -666,6 +688,37 @@ function encodeRoundsdRegReg(code ByteArray, dest X64Register, src X64Register, 
 	emitModRmRegReg(code, regField: dest, rmField: src)
 	code.push(roundsdImm8(mode))
 end 'encodeRoundsdRegReg'
+
+// `abs(x)` for an f64 already in `reg`: shift the sign bit out and shift the rest back
+// (`OpcodeGrp14ShiftQImm8`'s comment carries the argument). IN PLACE, on one register — the op is
+// two-address, so the allocator has already put the source there.
+//
+// It is the ONE encoder in this file that emits TWO instructions, and that is the shape the dialect
+// deliberately chose: two Target ops would define one vreg twice, which the SSA the allocator runs on
+// forbids. See `TargetOp.absF64RegReg`.
+function encodeAbsF64Reg(code ByteArray, reg X64Register)
+	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsllq, reg: reg, count: SignBitShiftCount)
+	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsrlq, reg: reg, count: SignBitShiftCount)
+end 'encodeAbsF64Reg'
+
+// One group-14 SSE shift-by-immediate (`66 0F 73 /ext ib`) — the opcode-extension form of an SSE
+// instruction, which is why it can ride neither `encodeSseRegReg` (whose reg field is a REGISTER) nor
+// `encodeModRmExtDirect` (which forces REX.W and emits no mandatory prefix, no escape and no immediate).
+//
+// It still spells nothing twice: the mandatory prefix, the REX byte and the ModR/M byte come from the
+// same primitives every other instruction here uses, so the prefix ORDER and the REX.B rule for
+// xmm8-15 are stated once for the whole backend. `regField` is the base `rax` for
+// `encodeModRmExtDirect`'s reason — the `/ext` reg field is an opcode extension 0..7 and never needs
+// REX.R — while REX.B still extends the r/m register. ⚠ NO REX.W: the mandatory 66 has already chosen
+// the form, and REX.W would only lengthen the encoding and stop the bytes matching an assembler's.
+function encodeSseShiftQRegImm8(code ByteArray, ext MachineWord, reg X64Register, count ShiftCount)
+	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: reg)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeGrp14ShiftQImm8)
+	emitModRmExt(code, ext: ext, rmField: reg)
+	code.push(count)
+end 'encodeSseShiftQRegImm8'
 
 // `roundsd`'s imm8 for a rounding mode — the ONE place the target-neutral `FloatRoundMode` becomes
 // x86 bits, which is what lets the isel state the rounding once for both native targets.
@@ -1546,6 +1599,12 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// converts, its ModR/M fields are INVERTED, which `encodeMovqGprXmm` owns so that this arm
 		// can read in the direction the data actually flows.
 		movqGprXmm(dest, src) then encodeMovqGprXmm(code, dest: resolveGpr(dest), src: resolveXmm(src))
+		// ⚠ THE ONE ARM HERE THAT EMITS TWO INSTRUCTIONS, and `src` is deliberately unused: the op is
+		// two-address (a REUSE def — see TargetOperands), so by the time coloring is done `dest` and
+		// `src` ARE the same register and the shifts work on it in place. Naming `src` in the encoding
+		// would be a second, redundant claim about a fact the allocator has already established, and
+		// the two could only ever disagree.
+		absF64RegReg(dest, _) then encodeAbsF64Reg(code, reg: resolveXmm(dest))
 		// The `.rdata` address `lea` (P1.2 wave A) — `leaRegGlobal`'s twin, GPR dest, its label filed
 		// as an `.rdata` relocation. See `encodeLeaRegRdata`.
 		leaRegRdata(dest, label) then encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)

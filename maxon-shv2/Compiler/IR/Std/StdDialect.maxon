@@ -260,17 +260,23 @@ end 'StdBinOpcode'
 // current mode — banker's rounding by default — so `trunc(3.99)` would answer **4**.
 // The spec says 3. The two mnemonics differ by one letter and by a wrong answer.
 //
-// ⭐ P1.0d.4-C appends the FOUR MATH INTRINSICS — `floor`/`ceil`/`round`/`sqrt`. They are the
+// ⭐ P1.0d.4-C appends the MATH INTRINSICS — `floor`/`ceil`/`round`/`sqrt`, and (with `specs/abs.md`)
+// `abs`, FIVE in all. They are the
 // mirror image of the conversion pair above and the reason to read the two bands together:
 // a conversion's operand and result are in DIFFERENT files, these two are in the SAME one, and
-// neither is `operandType`'s naive reading. **All four read an f64 and produce an f64**, so
+// neither is `operandType`'s naive reading. **All five read an f64 and produce an f64**, so
 // `operandType` happens to name the result as well — but only because the domains coincide, and a
 // table that says so must say it deliberately (see `unaryResultClass` / `unaryResultValType`,
 // where they need their own arms precisely because they sit PAST `fpToSi` in this enum).
 //
-// Each is ONE instruction on every target — x64 `sqrtsd` / `roundsd imm8`, arm64 `fsqrt` /
-// `frint{n,p,m}`, wasm `f64.{sqrt,nearest,ceil,floor}` — so there is no opcode here that a backend
-// has to synthesize.
+// Four of the five are ONE instruction on every target — x64 `sqrtsd` / `roundsd imm8`, arm64 `fsqrt` /
+// `frint{n,p,m}`, wasm `f64.{sqrt,nearest,ceil,floor}`.
+//
+// ⚠ `abs` IS THE EXCEPTION, ON x64 ONLY, and it is the one opcode in this enum a backend does have to
+// SYNTHESIZE. arm64 has `fabs` and wasm has `f64.abs`; SSE2 has no scalar float absolute value, so the
+// x64 isel clears the sign bit with a `psllq`/`psrlq` pair (`TargetOp.absF64RegReg`, where the full
+// reasoning and the divergence from both reference compilers is recorded). That is a TARGET fact and
+// changes nothing here: the opcode is still f64 → f64, still non-trapping, still one operand.
 //
 // ⭐ `round` IS TIES-TO-EVEN (banker's rounding), which is what all three of those instruction
 // families do natively and what `specs/round.md` pins (`round(2.5)` is 2). It is NOT C's `round()`.
@@ -288,12 +294,18 @@ end 'StdBinOpcode'
 // (`maxon-selfhosted` added the inverse for `Vector`/generic-float bridging, which shv2 has not
 // reached), and an opcode with zero producers is untested dead code in three backends.
 //
-// ⚠ APPENDED PAST `sqrt`, per the band-append invariant, and this enum's range arms are the reason
-// that matters: `stdUnaryOperandIsFloat` reads `fpToSi to sqrt`, `unaryResultClass` and
-// `unaryResultValType` read `floor to sqrt`, and the wasm isel dispatches `floor to sqrt` while the
-// arm64 isel dispatches `floor to round`. They do NOT all span the same members, so a member inserted
-// anywhere before `sqrt` would be swallowed by some and not by others — misclassified at a subset of
+// ⚠ APPENDED PAST THE MATH BAND, per the band-append invariant, and this enum's range arms are the
+// reason that matters: `stdUnaryOperandIsFloat` reads `fpToSi to abs`, `unaryResultClass` and
+// `unaryResultValType` read `floor to abs`, and the wasm isel dispatches `floor to abs` while the
+// arm64 and x64 isels dispatch `floor to round` (the ROUNDING sub-band alone — `sqrt` and `abs` are
+// each their own lowering). They do NOT all span the same members, so a member inserted anywhere
+// before the band's end would be swallowed by some and not by others — misclassified at a subset of
 // sites, which is worse than at all of them. Every one of those arms was re-read when this landed.
+//
+// ⚠ `abs` JOINED THE MATH BAND AT ITS END, past `sqrt` and before `bitcastF64ToI64`, and that is why
+// every `… to sqrt` range above now reads `… to abs`: the band GREW, so the arms that describe the
+// band name its new last member. Appending `abs` past `bitcastF64ToI64` instead would have left it
+// outside all four of them — a math intrinsic classified by the arms that answer for a reinterpretation.
 export enum StdUnaryOpcode
 	neg
 	bitNot
@@ -304,6 +316,7 @@ export enum StdUnaryOpcode
 	ceil
 	round
 	sqrt
+	abs
 	bitcastF64ToI64
 end 'StdUnaryOpcode'
 
@@ -323,8 +336,8 @@ export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
 		// `neg`/`bitNot`/`logicalNot` are integer/bool instructions, and `siToFp` reads the integer
 		// half of the conversion pair.
 		neg to siToFp gives false
-		// `fpToSi` reads the float half, and the four math intrinsics are f64 → f64.
-		fpToSi to sqrt gives true
+		// `fpToSi` reads the float half, and the five math intrinsics are f64 → f64.
+		fpToSi to abs gives true
 		// The BITCAST reads an f64 and writes a GPR. It gets its own arm rather than extending the
 		// range above, because that range's answer is "true" for two different reasons — `fpToSi`
 		// converts out of the float domain and the intrinsics stay inside it — and this is a third:
@@ -1224,6 +1237,32 @@ export union StdOp
 	// It shares `osPanic`'s metadata exactly: `isCall: true` so a caller reserves the shadow space the call
 	// needs, defines no value, and never returns.
 	osPanicValue(messagePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- The COMMAND LINE ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, per the band-append invariant `osPanicValue` states above.
+	// `category: system` places it logically beside the file-IO band, independent of this tail position.
+	//
+	// `osCommandLine(result)` = `GetCommandLineA()` — a pointer to the process's ONE NUL-terminated command
+	// line, owned by the OS. It is not a copy and must not be freed.
+	//
+	// ⭐⭐ **THE OP HANDS BACK THE UNSPLIT STRING, AND THE SPLIT IS BUILDER-BUILT Std ABOVE IT** — the same
+	// division `osDirCurrentPath` draws for its retry loop, and for a sharper reason. Windows has no
+	// pre-split argv: `CommandLineToArgvW` is the only splitter in the OS and it lives in shell32, takes
+	// UTF-16 and returns UTF-16. So the split is CODE either way, and putting it at the Std tier means the
+	// CRT quoting rules are written once, in one readable graph, rather than per backend.
+	//
+	// ⚠⚠ **THE `A` ENTRY POINT, AND THE ENCODING IS THE WHOLE ARGUMENT.** The bootstrap goes wide
+	// (`GetCommandLineW` + shell32's `CommandLineToArgvW` + `WideCharToMultiByte` to UTF-8,
+	// `X86CodeEmitter.Runtime.cs:2032-2176`) and shv2 deliberately does not, because **shv2's Windows lane is
+	// ANSI end to end** — `CreateFileA`, `FindFirstFileA`, `GetCurrentDirectoryA`, `GetFileAttributesA`,
+	// `CreateDirectoryA`, every one of them. A UTF-8 argv would be the single producer disagreeing with all
+	// of them, and the first thing a program does with an argument is hand it to one: `openRead(args.get(1))`
+	// would then take a path whose non-ASCII bytes the OS reads in a different encoding from the one they
+	// were written in. Matching the lane costs one kernel32 import and buys the round trip.
+	//
+	// ⚠ It takes NO operands. `GetCommandLineA` reads the PEB, so there is nothing to pass and nothing that
+	// can differ between two calls in one process.
+	osCommandLine(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1342,6 +1381,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// The assembled message's address is the one value operand a rendered panic reads; it defines
 		// nothing (the label-carrying `osPanic` reads nothing at all).
 		osPanicValue(messagePtr) then referenced.insert(messagePtr)
+		// No operands: `GetCommandLineA` reads the PEB.
+		osCommandLine then break 'u'
 		// The jump table reads ONLY the biased index `subjectId`; `denseTargetBlockIds`/`defaultBlockId` are
 		// block ids (the CFG, carried on the op), NOT value operands, and are deliberately not bound here (a
 		// tail-slot Array binding in this big match is the decref-corruption trap `switch` documents).
@@ -1515,6 +1556,7 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// The exact mirror of `collectStdOpUses`'s arm: the region base is the one read, so it is the one rewrite.
 		osFreePages(addr) gives StdOp.osFreePages(remappedValue(addr, subst: subst))
 		osPanicValue(messagePtr) gives StdOp.osPanicValue(remappedValue(messagePtr, subst: subst))
+		osCommandLine(resultId) gives StdOp.osCommandLine(resultId)
 		// The exact mirror of `collectStdOpUses`'s `switch` arm: only the biased index `subjectId` is a value
 		// operand, so it is the one rewrite; the block-id table and default carry through verbatim. Binding
 		// the middle-slot Array is safe — a trailing non-Array field (`defaultBlockId`) follows it, exactly

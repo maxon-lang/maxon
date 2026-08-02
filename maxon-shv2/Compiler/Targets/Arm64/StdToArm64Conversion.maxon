@@ -391,6 +391,8 @@ type StdToArm64Lowering
 			osFileOpenRead to osFileAttributes gives 0
 			// A rendered panic calls `mrt_panic` with one REGISTER argument, exactly as `osPanic` does.
 			osPanicValue gives 0
+			// x64-windows only, like the file-IO band above and for the same ruling.
+			osCommandLine gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -510,6 +512,12 @@ type StdToArm64Lowering
 			osReadWallClock then panic("lowerStdToArm64: `osReadWallClock` is x64-windows only — the wall clock is x64-windows-gated at this rung")
 			osFileOpenRead to osFileAttributes then panic("lowerStdToArm64: the file-IO ops are x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
 			osPanicValue(messagePtrId) then self.lowerPanicValue(messagePtrId, dstRef: dstRef)
+			// The command line is x64-windows only: `GetCommandLineA` is a Win32 import, and macOS hands argv to
+			// `mrt_start` in x0/x1 instead — a DIFFERENT SHAPE (a pre-split vector, not one string to split), so a
+			// lowering here would have to answer a question this op does not ask. SemanticCheck refuses such a
+			// program at its source span (E3104, `calleeNeedsWin32Substrate`'s `__cl_` prefix), so this is the
+			// backstop for a compiler bug rather than the user-facing rejection.
+			osCommandLine then panic("lowerStdToArm64: `osCommandLine` is x64-windows only — argv capture is x64-windows-gated, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -553,6 +561,7 @@ type StdToArm64Lowering
 			osReadWallClock then panic("lowerStdToArm64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op; also x64-windows only)")
 			osFileOpenRead to osFileAttributes then panic("lowerStdToArm64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op; also x64-windows only)")
 			osPanicValue then panic("lowerStdToArm64: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
+			osCommandLine then panic("lowerStdToArm64: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-consuming body op; also x64-windows only)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -681,6 +690,10 @@ type StdToArm64Lowering
 			// encoded twice (`arm64FrintOpcode`, `roundsdImm8`), never decided twice.
 			floor to round then self.emit(dstRef, op: TargetOp.arm64Frint(dest, src: src, mode: floatRoundModeFor(opcode)))
 			sqrt then self.emit(dstRef, op: TargetOp.arm64Fsqrt(dest, src: src))
+			// `fabs` is its own instruction here, which is exactly where arm64 and x64 part company on
+			// this opcode: x64 has to synthesize the sign-bit clear (`TargetOp.absF64RegReg`), arm64 asks
+			// the hardware for it.
+			abs then self.emit(dstRef, op: TargetOp.arm64Fabs(dest, src: src))
 			// The BIT REINTERPRETATION (`float.hash`) — `FMOV Xd, Dn`, the general↔vector transfer
 			// form, NOT the `FMOV Dd, Dn` the shared `movRegReg` emits. Same 64 bits, other file.
 			bitcastF64ToI64 then self.emit(dstRef, op: TargetOp.arm64FmovGprFp(dest, src: src))

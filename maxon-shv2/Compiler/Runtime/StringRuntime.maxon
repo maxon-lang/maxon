@@ -567,6 +567,8 @@ export type RuntimeUsage
 	export var usesStrIndexFirst as bool
 	export var usesStrIndexLast as bool
 	export var usesStrIndexSlice as bool
+	// `String.indexAfter` — its own bit, so a program that only searches carries no `__strix_after`.
+	export var usesStrIndexAfter as bool
 	// ⭐ **THE UNICODE `General_Category` TABLE (P1.8 Slice D, R2).** Its own bit, and DECOUPLED from every
 	// String bit: `__ucd_cat` is a LEAF that reads two `.rdata` blobs and does integer arithmetic — no heap,
 	// no copy loop, no segmenter — so a program that classifies a codepoint carries nothing else, and a
@@ -593,9 +595,14 @@ export type RuntimeUsage
 	// ALSO on `usesArray`: `__md_filename`/`__md_current_path` build their `__ManagedMemory` answer through
 	// `__arr_create`/`__arr_reserve`, calls that live in a Std body this Maxon-module scan cannot see.
 	export var usesManagedDirectory as bool
+	// The program reads its COMMAND LINE. Like the directory family it declares a transitive dependency on
+	// `usesHeap` (the scratch buffer is a raw alloc) AND on `usesArray`: `__cl_arg` builds its
+	// `__ManagedMemory` answer through `__arr_create`/`__arr_reserve` inside a Std body this Maxon-module
+	// scan cannot see.
+	export var usesCommandLine as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -751,6 +758,13 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesArray = true
 	end 'managedDirectory'
+	// A `__cl_*` call. Same two transitive bits as the directory family and for the same reasons: the scratch
+	// buffer is a raw alloc, and `__cl_arg` answers with an `Array` record it builds one tier down.
+	if isCommandLineRuntimeCallee(callee) 'commandLine'
+		usage.usesCommandLine = true
+		usage.usesHeap = true
+		usage.usesArray = true
+	end 'commandLine'
 	if callee.equals(PrintStringName) 'print'
 		usage.usesPrint = true
 	end 'print'
@@ -987,6 +1001,9 @@ function recordStringIndexUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrIndexSliceName) 'slice'
 		usage.usesStrIndexSlice = true
 	end 'slice'
+	if callee.equals(StrIndexAfterName) 'after'
+		usage.usesStrIndexAfter = true
+	end 'after'
 	closeStringIndexNeeds(usage)
 end 'recordStringIndexUsage'
 
@@ -1016,7 +1033,15 @@ function closeStringIndexNeeds(usage RuntimeUsage)
 		usage.usesStrIndexByteToGrapheme = true
 		usage.usesStrIndexMake = true
 	end 'searchesBackward'
-	// Both conversions ARE the cluster walk (`emitGraphemeWalk`), so each pulls in the segmenter.
+	// `indexAfter` steps ONE cluster through `__strix_advance` and mints its answer through the one door —
+	// two calls its own body makes that no Maxon-module scan can see (`buildStringIndexAfter`).
+	if usage.usesStrIndexAfter 'stepsOneCluster'
+		usage.usesStrIndexAdvance = true
+		usage.usesStrIndexMake = true
+	end 'stepsOneCluster'
+	// Both conversions ARE the cluster walk (`emitGraphemeWalk`), so each pulls in the segmenter. Asked AFTER
+	// the arm above, whose `usesStrIndexAdvance` this must then close over — the ordering discipline this
+	// whole closure exists to make order-independent, applied within it.
 	if usage.usesStrIndexByteToGrapheme or usage.usesStrIndexAdvance 'walksClusters'
 		usage.usesGraphemeEnd = true
 	end 'walksClusters'

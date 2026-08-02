@@ -4,12 +4,13 @@
 // block (```exitcode or ```maxoncstderr), plus the `status:` frontmatter. Every
 // v1 feature the specs-shv2 corpus does not use — fragment caching, RequiredIR /
 // RequiredLowering, mm-trace,
-// `Args`/`TimeoutMs` directives, doc-example extraction — is dropped; each
+// `TimeoutMs` directive, doc-example extraction — is dropped; each
 // returns when a spec first needs it. **Per-target `Stdout:<target>` was the first
 // one to have come back** — BATCH2 slice 3, for `specs/filepath.md`, whose 26
 // separator-printing cases pin one answer per platform (see `TargetStdoutFencePrefix`) —
-// and **`RequiredRdata` is the second**, at BATCH8, where the read-only section became the
-// second thing no golden could see (see `RequiredRdataFence`).
+// **`RequiredRdata` is the second**, at BATCH8, where the read-only section became the
+// second thing no golden could see (see `RequiredRdataFence`), and **`Args` is the third**,
+// for the 51 `/specs` cases whose programs read their own argv (see `ArgsMarker`).
 //
 // MULTI-FILE TESTS — `// --- file: <name>` (added for the cross-file signature rung).
 //
@@ -105,6 +106,32 @@ let DisabledTestMarker = "<!-- disabled-test:"
 // signature bug — one fact written down twice — in a place where both would "work".
 let TargetsMarker = "<!-- targets:"
 let TargetSeparator = ","
+
+// The per-case RUNTIME ARGUMENTS — `<!-- Args: -5.5 -->` — sitting on the same kind of comment line
+// `TargetsMarker` does, between a test's marker and its first fence. Its payload is the argv the
+// compiled program is SPAWNED with (`SpecTest.programArgs` → `SpecTestRunner.buildRunCommand`), which
+// the program then reads back through `CommandLine.args()`.
+//
+// `/specs` carries 51 of them across 12 files (`abs`, `ceil`/`floor`, `min`/`max`, `command-line-args`,
+// `regalloc`, `advent`, `builtins-type`), so a harness that spawns an empty argv cannot port any of
+// them: the program reads `args.get(1)`, gets nothing, and the case fails on a value it was never
+// given. Two already-ported specs record exactly that in their shelve notes.
+//
+// It is not a superstring of any other marker ("<!-- Args:" first differs from "<!-- test:",
+// "<!-- disabled-test:" and "<!-- targets:" at the character after "<!-- "), so the marker checks stay
+// independent and none can swallow another — the property `TargetsMarker` and `DisabledTestMarker` are
+// both documented against.
+//
+// ⚠ CAPITAL `A`, matched EXACTLY, because the spec format is SHARED: the C# reference's
+// `ArgsDirectiveRegex` is `<!--\s*Args:\s*(.+?)\s*-->` and these are the same `.md` files it reads. A
+// case-insensitive shv2 spelling would accept — and act on — a directive the reference silently ignores,
+// which is the one-file-two-meanings failure this file's other shared constants exist to prevent.
+let ArgsMarker = "<!-- Args:"
+
+// What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
+// the split intact. See `parseProgramArgs` for why the quote is not decoration.
+let ArgSeparator = " "
+let ArgQuote = "\""
 
 let TestMarkerNameSep = ": "
 let TestMarkerEnd = " -->"
@@ -360,6 +387,11 @@ export typealias SpecSourceFileArray = Array with SpecSourceFile
 // is not a sentinel. Named for its PURPOSE (the target keys), not its type.
 export typealias TargetKeyArray = Array with String
 
+// The arguments an `<!-- Args: … -->` marker hands the compiled program, in order. EMPTY means the
+// program is spawned with argv[0] alone — the ordinary case, and the literal count of arguments a
+// marker-less test names — so it is not a sentinel. Named for its PURPOSE, as `TargetKeyArray` is.
+export typealias ProgramArgArray = Array with String
+
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
 export type SpecTest
 	export let name as String
@@ -383,11 +415,16 @@ export type SpecTest
 	// against: it changes what the COMPILE is asked to print, which is a property of how this test is
 	// built (like `targets`), not of what its execution must do.
 	export let runtimeNames as RuntimeFunctionNameArray
+	// The arguments this case's program is SPAWNED with (an `<!-- Args: … -->` marker), or EMPTY for
+	// the ordinary test that reads no argv. Like `targets` and `runtimeNames` it rides on the TEST
+	// rather than on the expectation: it changes how the run is PERFORMED, not what the run must
+	// produce.
+	export let programArgs as ProgramArgArray
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray) returns SpecTest
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: splitSourceFiles(source), targets: targets, runtimeNames: runtimeNames}
+	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray) returns SpecTest
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: splitSourceFiles(source), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -597,6 +634,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	var sectionPins = SpecSectionPinArray.create()
 	var targets = TargetKeyArray.create()
 	var runtimeNames = RuntimeFunctionNameArray.create()
+	var programArgs = ProgramArgArray.create()
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -623,6 +661,16 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = i + 1
 			continue
 		end 'targetsMarker'
+
+		// The runtime arguments — the other comment line that may sit between this test's marker and its
+		// first fence, read here for `TargetsMarker`'s reasons exactly: it is neither a fence nor a next-test
+		// marker, so without an arm it falls through to `i = i + 1` and is silently ignored, and a disabled
+		// case must consume it identically to a live one.
+		if line.contains(ArgsMarker) 'argsMarker'
+			programArgs = parseProgramArgs(line)
+			i = i + 1
+			continue
+		end 'argsMarker'
 
 		// CompilerError MUST be checked before Source: "```maxoncstderr" also
 		// startsWith "```maxon", so the source arm would otherwise consume it. The
@@ -724,7 +772,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			panic("SpecParser: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
 		end 'pinsOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError), targets: targets, runtimeNames: runtimeNames))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs))
 		return i
 	end 'rejected'
 
@@ -734,7 +782,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		panic("SpecParser: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs))
 
 	return i
 end 'scanTestFromMarker'
@@ -923,6 +971,81 @@ function parseTargetKeys(line String) returns TargetKeyArray
 	end 'eachTarget'
 	return result
 end 'parseTargetKeys'
+
+// The arguments an `<!-- Args: … -->` marker names, in order — its value split into the argv the
+// program is spawned with. `<!-- Args: -5.5 -->` is ONE argument, `-5.5`: a value beginning with `-`
+// is an argument like any other, never a flag, because nothing between here and the child's `main`
+// interprets it (`runProcess` hands `Subprocess` an argv LIST, so no shell and no option parser ever
+// sees these bytes).
+//
+// SPACE separates; a DOUBLE-QUOTED run is one argument and may be EMPTY. The quote is not decoration:
+// `specs/command-line-args.md`'s `empty-string-arg` writes `<!-- Args: "" -->` and asserts the program
+// receives ONE argument that is the empty string — a claim a plain space split cannot express at all
+// (it yields the two-character token `""`). The C# reference gets this rule for free by handing its
+// payload to the OS as a VERBATIM command line, which the platform then splits by exactly these rules;
+// shv2's `Subprocess` takes an argv list, so the same rule is applied here instead of by the OS. One
+// `.md`, one meaning, whichever compiler reads it.
+//
+// An UNTERMINATED quote runs to the end of the payload rather than being refused — again the platform's
+// own rule, so the two compilers agree even on a directive neither spec author meant to write.
+// Backslash escapes and single quotes are NOT honoured: nothing in `/specs` writes them, and the
+// platform rule they would have to mirror is per-OS.
+function parseProgramArgs(line String) returns ProgramArgArray
+	var args = ProgramArgArray.create()
+	let payload = markerValue(line)
+
+	// The argument being accumulated, and whether one has been STARTED — which `current.isEmpty()`
+	// cannot answer: `""` starts an argument and contributes no characters to it, and inferring the
+	// flag from the buffer would drop exactly the empty argument the quote exists to write.
+	var current = StringBuilder.create()
+	var haveArg = false
+	var inQuotes = false
+
+	// The text since the last quote or separator. Accumulating by SLICE rather than character keeps
+	// multi-byte characters whole without this walk having to know anything about them.
+	var segmentStart = payload.startIndex()
+	var pos = payload.startIndex()
+
+	let length = payload.count()
+	var at = 0 as GraphemeCount
+	while at < length 'eachCharacter'
+		let ch = payload.slice(pos, length: 1)
+		let isQuote = ch == ArgQuote
+		let isSeparator = not inQuotes and ch == ArgSeparator
+
+		// Advanced ONCE, before the branches: both the next segment's start and the next character's
+		// position are this same index, and computing it twice would be one fact — and one panic
+		// message — written down twice.
+		let next = try payload.indexAfter(pos) otherwise panic("SpecParser.parseProgramArgs: indexAfter failed at character {at} of {length} on the payload of '{line}', which the while guard says is still in range")
+
+		if isQuote or isSeparator 'segmentEnds'
+			current.append(payload.slice(segmentStart, endIndex: pos))
+			segmentStart = next
+
+			if isQuote 'toggleQuoting'
+				inQuotes = not inQuotes
+				haveArg = true
+			end 'toggleQuoting' else 'argumentEnds'
+				if haveArg 'flush'
+					args.push(current.build())
+					haveArg = false
+				end 'flush'
+			end 'argumentEnds'
+		end 'segmentEnds' else 'ordinaryCharacter'
+			haveArg = true
+		end 'ordinaryCharacter'
+
+		pos = next
+		at = at + 1
+	end 'eachCharacter'
+
+	current.append(payload.slice(segmentStart, endIndex: payload.endIndex()))
+	if haveArg 'flushLast'
+		args.push(current.build())
+	end 'flushLast'
+
+	return args
+end 'parseProgramArgs'
 
 // Lines joined by "\n", with no leading and no trailing newline.
 //

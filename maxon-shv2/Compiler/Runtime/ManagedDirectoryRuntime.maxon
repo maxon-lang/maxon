@@ -106,8 +106,11 @@ let DirectoryIterationComplete = 0 as ParsedInt
 // returns `.` or `..`").
 let DotByte = 0x2E as ParsedInt
 
-// The NUL that ends `cFileName`. Also what tells `.` from `.x` and `..` from `..x`.
-let NulByte = 0 as ParsedInt
+// The NUL that ends a cstring — what ends `cFileName`, what tells `.` from `.x` and `..` from `..x`, what
+// `emitCStringLength` walks to, and what `CommandLineRuntime` terminates each scanned argument with.
+// EXPORTED once that fourth reader arrived rather than re-spelled `0` beside it: a `0` at a byte compare
+// says nothing about whether it means "end of string" or "the number zero".
+export let NulByte = 0 as ParsedInt
 
 // `ERROR_NO_MORE_FILES` — the ONE `GetLastError` reading that makes a FALSE from `FindNextFileA` an ordinary
 // end of iteration rather than a failure. Everything else is a real error and throws `nextFailed`.
@@ -255,8 +258,46 @@ function emitFileNameAddr(module StdModule, block IrBlock, findBlock ValueId, id
 	return emitBin(module, block: block, a: findBlock, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitFileNameAddr'
 
+// ⭐ **strlen — WALK A NUL-TERMINATED cstring AND LEAVE ITS LENGTH IN THE CONTINUATION BLOCK.**
+//
+// ⚠ **EXTRACTED FROM `emitCStringToManaged` WHEN THE COMMAND-LINE RUNTIME BECAME ITS SECOND ASKER.**
+// `__cl_count`/`__cl_arg` size their scratch buffer by the command line's length and do not want the copy,
+// so the measure and the build are now two builders rather than one — which is also what makes the length
+// available to a caller that is not about to allocate an `Array` record.
+//
+// `length`'s `ValueId` is MINTED BY THE CALLER and used as the walk's loop-carried cursor. At the moment the
+// header exits, that cursor IS the length, and it reaches the continuation block with NO block-arg of its
+// own: the header dominates the continuation (its `condBranch` is the only way in), so the value is simply
+// in scope — the same dominance argument `ManagedFileRuntime.emitPathToCString` makes for its own `len`.
+export function emitCStringLength(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, length ValueId, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"mdslh")
+	var body = module.addBlock(func, label: b"mdslb")
+	let done = module.addBlock(func, label: b"mdsld")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+	header.blockArgs.push(IrBlockArg.create(length, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+
+	let ch = emitLoadByte(module, block: header, base: cstr, index: length, ids: ids)
+	let nul = emitConst(module, block: header, value: NulByte, ids: ids)
+	let atEnd = emitCmp(module, block: header, a: ch, b: nul, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let one = emitConst(module, block: body, value: 1, ids: ids)
+	let next = emitBin(module, block: body, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+
+	return done
+end 'emitCStringLength'
+
 // One byte of a NUL-terminated cstring, zero-extended.
-function emitLoadByte(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
+//
+// ⚠ EXPORTED because `CommandLineRuntime`'s splitter reads the command line a byte at a time and this is
+// exactly that read. A second copy would be a second answer to "how wide is a cstring byte, and is it
+// zero-extended?" — the pair this project keeps finding drifted.
+export function emitLoadByte(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
 	let addr = emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids)
 	let loaded = ids.mint()
 	module.appendOp(block, op: StdOp.loadIndirect(loaded, addrId: addr, offset: 0 as ByteOffset, valueType: StdType.u8))
@@ -284,32 +325,12 @@ end 'emitLoadByte'
 // blocks, so the caller carries on from the one this leaves it in. The record's `ValueId` is MINTED BY THE
 // CALLER and handed in, rather than returned beside the block — a pair would have to be a `type`, and that
 // is a heap box (plus a destructor cascade over its `IrBlock` field) per call, for two values.
-function emitCStringToManaged(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, record ValueId, ids ValueMinter) returns IrBlock
-	// strlen: walk to the NUL. The count rides a block-arg, which is how every loop in this runtime carries
-	// its cursor — there are no stack slots at this tier.
-	var header = module.addBlock(func, label: b"mdslh")
-	var body = module.addBlock(func, label: b"mdslb")
-	var build = module.addBlock(func, label: b"mdsld")
-
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(header.id))
+export function emitCStringToManaged(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, record ValueId, ids ValueMinter) returns IrBlock
+	// The LENGTH's id is minted here and handed down, exactly as `record`'s is and for the same reason: a
+	// builder that returns both a block and a value would have to return a pair, and a pair is a heap box.
 	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	var build = emitCStringLength(module, func: func, cur: cur, cstr: cstr, length: i, ids: ids)
 
-	let ch = emitLoadByte(module, block: header, base: cstr, index: i, ids: ids)
-	let nul = emitConst(module, block: header, value: NulByte, ids: ids)
-	let atEnd = emitCmp(module, block: header, a: ch, b: nul, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: build.id, elseBlockId: body.id))
-
-	let one = emitConst(module, block: body, value: 1, ids: ids)
-	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
-
-	// `i` at the moment the header exits IS the length, and it needs no second block-arg to reach `build`:
-	// the header dominates `build` (its condBranch is the only way in), so the value is simply in scope —
-	// the same dominance argument `ManagedFileRuntime.emitPathToCString` makes for its own `len`.
 	let elementSize = emitConst(module, block: build, value: ByteStringElementSize, ids: ids)
 	let trivial = emitConst(module, block: build, value: TrivialElementDestroy, ids: ids)
 	module.appendOp(build, op: StdOp.call(record, callee: ArrCreateName, args: twoArgs(elementSize, second: trivial)))

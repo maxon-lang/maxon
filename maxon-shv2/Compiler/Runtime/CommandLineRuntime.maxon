@@ -1,0 +1,645 @@
+// Runtime/CommandLineRuntime.maxon — argv, split out of the one string Windows gives a process.
+//
+// ⭐ **WHAT IT SERVES.** `stdlib/CommandLine.maxon`'s `args()` bottoms out in two `__Builtins` intrinsics —
+// `commandLineCount()` and `commandLineArg(i)` — and nothing else in the language reaches these entry
+// points. The bootstrap declares the same two (`2-Parser.cs:10952-10957`) with the same arity, the same
+// types and the same ownership, so the SURFACE here is the reference's; only the implementation differs.
+//
+// ⭐ **HOST-ONLY BY THE R4 RULING (2026-07-30), AND FOR A REASON OF ITS OWN ON TOP.** `x64-windows` is real;
+// every other target refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct` via
+// `SemanticCheck.calleeNeedsWin32Substrate`, which matches on the `__cl_` PREFIX — so an entry point added
+// later is gated by construction rather than by memory.
+//
+// ⚠⚠ **THE EXTRA REASON MATTERS, because it is not "nobody wrote the lowering yet": THE SHAPE OF argv IS
+// NOT THE SAME ON THE OTHER PLATFORMS.** Windows hands a process ONE UNSPLIT STRING and the splitting is
+// code (this file). SysV hands `_start` a PRE-SPLIT VECTOR — argc at `[rsp]`, argv at `rsp+8` on x64-linux
+// (`Targets/BackendDispatch.maxon:413`), argc/argv in x0/x1 on arm64-macos (`Arm64Runtime.maxon:120-121`) —
+// where there is nothing to split and the work is instead to capture two registers at entry and keep them.
+// Those are two different mechanisms behind one surface, and shv2's Std tier is TARGET-NEUTRAL: there is no
+// place in it for a body that is a splitter on one target and an indexed load on another. Serving them
+// honestly means a per-target capture plus a target-neutral surface over it — a rung, not a lowering — so
+// this rung builds the Windows half and REFUSES the rest LOUDLY, which is the one thing that must not be
+// traded for a target that compiles and answers an empty argv.
+// ⚠ wasm is refused for a second, independent reason: WASI does have `args_sizes_get`/`args_get`, but the
+// wasm lane is SCALAR (no heap, no `String`, no `print`) and `args()` answers an `Array with String`. A
+// lowering there would be vocabulary with no reachable consumer.
+//
+// ---
+//
+// ⭐⭐ **THE SPLIT IS THE CRT's, NOT A SIMPLER ONE, AND THAT IS DELIBERATE.** `GetCommandLineA` yields the
+// raw line; every argument boundary, every quote and every backslash run then has to be read the way the
+// rest of the platform reads them, because the SHELL and the SPAWNING PROCESS both encoded the arguments
+// under those rules. A whitespace-only split would be a silent wrong answer for `--note="a b"` — the exact
+// defect class this project hunts — and it would DISAGREE WITH THE BOOTSTRAP, which gets the real rules for
+// free from shell32's `CommandLineToArgvW`. The rules, from that function's contract:
+//
+//   • space and tab separate arguments, unless inside quotes;
+//   • `2n` backslashes then `"` ⇒ `n` backslashes, and the `"` toggles quoting;
+//   • `2n+1` backslashes then `"` ⇒ `n` backslashes and a LITERAL `"`;
+//   • backslashes not followed by `"` ⇒ themselves, all of them;
+//   • `""` inside quotes ⇒ a literal `"`, still quoted.
+//
+// ⚠ **argv[0] IS PARSED BY THE SAME RULES, WHERE `CommandLineToArgvW` GIVES IT ITS OWN.** The real rule for
+// argv[0] is "quoted ⇒ up to the next `\"`; otherwise up to the first whitespace", with NO backslash
+// processing. The two agree on every program path that can actually occur: an unquoted `C:\dir\prog.exe`
+// has backslashes none of which precede a `"`, so the general rule emits them all unchanged, and a quoted
+// `"C:\dir\prog.exe"` opens and closes on its two quotes with the same result. They part company only for a
+// path ending in a backslash INSIDE quotes (`"C:\dir\"`), which no executable path is. Written down rather
+// than discovered: a second scanner for one special case would be a second set of rules to keep in step,
+// for an input that does not arise.
+//
+// ⚠ **ENCODING: ANSI, NOT UTF-8, AND ON PURPOSE** — see `IatSlot.GetCommandLineA` for the whole argument.
+// The short form: shv2's Windows lane is `A`-entry-point end to end, so argv must be too, or the first
+// `openRead(args.get(1))` misreads its own path.
+
+// The `__cl_` prefix that identifies EVERY command-line runtime entry point — the one test
+// `scanRuntimeUsage` reads to set `usesCommandLine`, and the one `SemanticCheck` reads for E3104.
+let CommandLineRuntimePrefix = b"__cl_"
+
+// ⭐ **THE THREE ENTRY POINTS.** Two answer an intrinsic; `__cl_scan_one` is the shared scanner both walk
+// with, and it is a real runtime function rather than an inlined builder because BOTH walkers need the
+// identical loop and a builder would put two copies of the CRT rules in the emitted image.
+export let CommandLineCountName = b"__cl_count"
+export let CommandLineArgName = b"__cl_arg"
+let CommandLineScanOneName = b"__cl_scan_one"
+
+// `__cl_scan_one`'s "there is no argument here" answer, and a NEGATIVE position rather than a flag for
+// `StrFindNotFound`'s reason: a byte position is non-negative by construction, so -1 is outside the answer
+// domain rather than inside it, and both callers test `>= 0`.
+let NoMoreArguments = -1 as ParsedInt
+
+// The two bytes that separate arguments outside quotes, and the quote and escape that do the rest. Named
+// because a bare `0x20` at a branch says nothing about which of the two roles a byte is being tested for.
+let SpaceByte = 0x20 as ParsedInt
+let TabByte = 0x09 as ParsedInt
+let QuoteByte = 0x22 as ParsedInt
+let BackslashByte = 0x5C as ParsedInt
+
+// The scanner's quoting state, as the 0/1 it rides the loop as. `not q` is spelled `1 - q` at the one site
+// that toggles it, which is why both values are named rather than just the true one.
+let OutsideQuotes = 0 as ParsedInt
+let InsideQuotes = 1 as ParsedInt
+
+// The scratch buffer holds one argument plus its NUL. An unescaped argument is never LONGER than the
+// command line it came from — every rule above consumes at least as many bytes as it emits — so the whole
+// line's length plus this one byte is a sufficient bound, and the only one that needs no second scan. The
+// bound is TIGHT: the terminator is written at the write cursor, which reaches `length` in the worst case.
+//
+// ⚠ It is a COUNT OF BYTES, not a byte VALUE, and the name says so because `NulByte` (the value 0) is in
+// scope in this same file. Spelling this one `NulTerminatorByte` invited exactly one edit — using `NulByte`
+// here — and that edit sizes the scratch at `length` and overflows it by one on the terminating store.
+let NulTerminatorSlackBytes = 1 as ParsedInt
+
+// ⭐ **`__cl_scan_one(cmd, pos, dest) -> nextPos`** — skip separators, then copy ONE unescaped argument into
+// `dest` NUL-terminated and answer the position just past it, or `NoMoreArguments` when the line is spent.
+//
+// ⭐ **IT WRITES A cstring BECAUSE THAT IS WHAT ITS CALLER ALREADY KNOWS HOW TO CONSUME.** `__cl_arg` turns
+// the scratch into an owned `__ManagedMemory` through `emitCStringToManaged`, the copy `__md_filename` and
+// `__md_current_path` already go through; answering with a length instead would have meant a second return
+// value, and a second return value at this tier is a heap-boxed pair (`emitCStringToManaged`'s own note).
+//
+// ⚠ **THE BACKSLASH RUN IS COUNTED, NOT PROCESSED PAIRWISE, AND THE PAIRWISE FORM IS WRONG.** It is
+// tempting to consume `\\` as one emitted backslash and be done; MEASURED against the rules above, that
+// answers `a\b` for the input `a\\b`, because outside a quote-terminated run every backslash stands for
+// ITSELF. The count is what tells the two contexts apart, so the scanner counts first and decides after.
+//
+// The three exits of the run — plain, even-before-quote, odd-before-quote — differ only in how many
+// backslashes to emit, where to resume, and whether a literal `"` follows. So they compute those THREE
+// NUMBERS and share ONE emit loop, rather than each carrying a copy of it.
+function buildCommandLineScanOne(module StdModule)
+	var func = IrFunction.createFromStd(CommandLineScanOneName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var skipHead = module.addBlock(func, label: b"clskip")
+	var skipTabTest = module.addBlock(func, label: b"clskiptab")
+	var skipStep = module.addBlock(func, label: b"clskipstep")
+	var argStart = module.addBlock(func, label: b"clstart")
+	var noMore = module.addBlock(func, label: b"clnone")
+	var scan = module.addBlock(func, label: b"clscan")
+	var notNul = module.addBlock(func, label: b"clnotnul")
+	var notBackslash = module.addBlock(func, label: b"clnotbs")
+	var maybeSeparator = module.addBlock(func, label: b"clmaysep")
+	var sepSpaceTest = module.addBlock(func, label: b"clsepsp")
+	var sepTabTest = module.addBlock(func, label: b"clseptab")
+	var copyByte = module.addBlock(func, label: b"clcopy")
+	var atQuote = module.addBlock(func, label: b"clquote")
+	var quoteInside = module.addBlock(func, label: b"clqin")
+	var literalQuote = module.addBlock(func, label: b"clqlit")
+	var toggleQuotes = module.addBlock(func, label: b"clqtog")
+	var countRun = module.addBlock(func, label: b"clbscnt")
+	var countStep = module.addBlock(func, label: b"clbsstep")
+	var runEnded = module.addBlock(func, label: b"clbsend")
+	var runPlain = module.addBlock(func, label: b"clbspln")
+	var runBeforeQuote = module.addBlock(func, label: b"clbsq")
+	var emitRun = module.addBlock(func, label: b"clbsemit")
+	var emitRunStep = module.addBlock(func, label: b"clbswr")
+	var runTail = module.addBlock(func, label: b"clbstail")
+	var runTailQuote = module.addBlock(func, label: b"clbstq")
+	var terminate = module.addBlock(func, label: b"clterm")
+
+	emitParams(module, block: entry, count: 3)
+	let cmd = 0 as ValueId
+	let pos = 1 as ValueId
+	let dest = 2 as ValueId
+
+	// --- skip the separators before the argument ---
+	let skipAt = ids.mint()
+	skipHead.blockArgs.push(IrBlockArg.create(skipAt, argType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(skipHead.id))
+	entry.branchEdges.push(BranchEdge.create(skipHead.id, argIds: argsOf(pos)))
+
+	// ⚠ `skipTabTest`, `skipStep` and `argStart` carry NO block args and take no edge arguments: `skipHead`
+	// dominates all three (it is the only way into the first, which is the only way into the other two), so
+	// `skipAt` is simply in scope — the dominance argument `emitCStringLength` states for its own length.
+	emitSeparatorTest(module, block: skipHead, cmd: cmd, at: skipAt, byte: SpaceByte, hit: skipStep, miss: skipTabTest, ids: ids)
+	emitSeparatorTest(module, block: skipTabTest, cmd: cmd, at: skipAt, byte: TabByte, hit: skipStep, miss: argStart, ids: ids)
+
+	let oneStep = emitConst(module, block: skipStep, value: 1, ids: ids)
+	let skipNext = emitBin(module, block: skipStep, a: skipAt, b: oneStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(skipStep, op: StdOp.branch(skipHead.id))
+	skipStep.branchEdges.push(BranchEdge.create(skipHead.id, argIds: argsOf(skipNext)))
+
+	// --- is there an argument at all? ---
+	let startByte = emitLoadByte(module, block: argStart, base: cmd, index: skipAt, ids: ids)
+	let startNul = emitConst(module, block: argStart, value: NulByte, ids: ids)
+	let lineSpent = emitCmp(module, block: argStart, a: startByte, b: startNul, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(argStart, op: StdOp.condBranch(lineSpent, thenBlockId: noMore.id, elseBlockId: scan.id))
+	let zeroWrite = emitConst(module, block: argStart, value: 0, ids: ids)
+	let outside = emitConst(module, block: argStart, value: OutsideQuotes, ids: ids)
+	argStart.branchEdges.push(BranchEdge.create(scan.id, argIds: threeArgs(skipAt, second: zeroWrite, third: outside)))
+
+	let none = emitConst(module, block: noMore, value: NoMoreArguments, ids: ids)
+	module.setTerminator(noMore, op: StdOp.ret(none))
+
+	// --- the scan loop: (read cursor, write cursor, quoting state) ---
+	let at = ids.mint()
+	let wrote = ids.mint()
+	let quoted = ids.mint()
+	pushI64BlockArgs(scan, values: threeArgs(at, second: wrote, third: quoted))
+
+	let cur = emitLoadByte(module, block: scan, base: cmd, index: at, ids: ids)
+	let nul = emitConst(module, block: scan, value: NulByte, ids: ids)
+	let lineEnded = emitCmp(module, block: scan, a: cur, b: nul, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scan, op: StdOp.condBranch(lineEnded, thenBlockId: terminate.id, elseBlockId: notNul.id))
+	scan.branchEdges.push(BranchEdge.create(terminate.id, argIds: twoArgs(at, second: wrote)))
+	scan.branchEdges.push(BranchEdge.create(notNul.id, argIds: threeArgs(at, second: wrote, third: quoted)))
+
+	let notNulAt = ids.mint()
+	let notNulWrote = ids.mint()
+	let notNulQuoted = ids.mint()
+	pushI64BlockArgs(notNul, values: threeArgs(notNulAt, second: notNulWrote, third: notNulQuoted))
+	let notNulByte = emitLoadByte(module, block: notNul, base: cmd, index: notNulAt, ids: ids)
+	let bsConst = emitConst(module, block: notNul, value: BackslashByte, ids: ids)
+	let isBackslash = emitCmp(module, block: notNul, a: notNulByte, b: bsConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notNul, op: StdOp.condBranch(isBackslash, thenBlockId: countRun.id, elseBlockId: notBackslash.id))
+	let zeroRun = emitConst(module, block: notNul, value: 0, ids: ids)
+	notNul.branchEdges.push(BranchEdge.create(countRun.id, argIds: quadArgsOf(notNulAt, second: notNulWrote, third: notNulQuoted, fourth: zeroRun)))
+	notNul.branchEdges.push(BranchEdge.create(notBackslash.id, argIds: threeArgs(notNulAt, second: notNulWrote, third: notNulQuoted)))
+
+	let plainAt = ids.mint()
+	let plainWrote = ids.mint()
+	let plainQuoted = ids.mint()
+	pushI64BlockArgs(notBackslash, values: threeArgs(plainAt, second: plainWrote, third: plainQuoted))
+	let plainByte = emitLoadByte(module, block: notBackslash, base: cmd, index: plainAt, ids: ids)
+	let quoteConst = emitConst(module, block: notBackslash, value: QuoteByte, ids: ids)
+	let isQuote = emitCmp(module, block: notBackslash, a: plainByte, b: quoteConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notBackslash, op: StdOp.condBranch(isQuote, thenBlockId: atQuote.id, elseBlockId: maybeSeparator.id))
+	notBackslash.branchEdges.push(BranchEdge.create(atQuote.id, argIds: threeArgs(plainAt, second: plainWrote, third: plainQuoted)))
+	notBackslash.branchEdges.push(BranchEdge.create(maybeSeparator.id, argIds: threeArgs(plainAt, second: plainWrote, third: plainQuoted)))
+
+	// An ordinary byte: a separator only when we are OUTSIDE quotes.
+	let sepAt = ids.mint()
+	let sepWrote = ids.mint()
+	let sepQuoted = ids.mint()
+	pushI64BlockArgs(maybeSeparator, values: threeArgs(sepAt, second: sepWrote, third: sepQuoted))
+	let outsideConst = emitConst(module, block: maybeSeparator, value: OutsideQuotes, ids: ids)
+	let isOutside = emitCmp(module, block: maybeSeparator, a: sepQuoted, b: outsideConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(maybeSeparator, op: StdOp.condBranch(isOutside, thenBlockId: sepSpaceTest.id, elseBlockId: copyByte.id))
+	maybeSeparator.branchEdges.push(BranchEdge.create(sepSpaceTest.id, argIds: threeArgs(sepAt, second: sepWrote, third: sepQuoted)))
+	maybeSeparator.branchEdges.push(BranchEdge.create(copyByte.id, argIds: threeArgs(sepAt, second: sepWrote, third: sepQuoted)))
+
+	emitScanSeparatorExit(module, block: sepSpaceTest, cmd: cmd, byte: SpaceByte, ends: terminate, continues: sepTabTest, ids: ids)
+	emitScanSeparatorExit(module, block: sepTabTest, cmd: cmd, byte: TabByte, ends: terminate, continues: copyByte, ids: ids)
+
+	// Copy one byte through unchanged and step both cursors.
+	let copyAt = ids.mint()
+	let copyWrote = ids.mint()
+	let copyQuoted = ids.mint()
+	pushI64BlockArgs(copyByte, values: threeArgs(copyAt, second: copyWrote, third: copyQuoted))
+	let copied = emitLoadByte(module, block: copyByte, base: cmd, index: copyAt, ids: ids)
+	emitStoreByte(module, block: copyByte, base: dest, index: copyWrote, value: copied, ids: ids)
+	emitResumeScan(module, block: copyByte, scan: scan, at: copyAt, atDelta: 1, wrote: copyWrote, wroteDelta: 1, quoted: copyQuoted, ids: ids)
+
+	// A `"` with no backslashes in front of it: inside quotes a doubled `""` is a literal quote; otherwise
+	// the quote toggles the state and is not itself copied.
+	let qAt = ids.mint()
+	let qWrote = ids.mint()
+	let qQuoted = ids.mint()
+	pushI64BlockArgs(atQuote, values: threeArgs(qAt, second: qWrote, third: qQuoted))
+	let insideConst = emitConst(module, block: atQuote, value: InsideQuotes, ids: ids)
+	let isInside = emitCmp(module, block: atQuote, a: qQuoted, b: insideConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(atQuote, op: StdOp.condBranch(isInside, thenBlockId: quoteInside.id, elseBlockId: toggleQuotes.id))
+	atQuote.branchEdges.push(BranchEdge.create(quoteInside.id, argIds: threeArgs(qAt, second: qWrote, third: qQuoted)))
+	atQuote.branchEdges.push(BranchEdge.create(toggleQuotes.id, argIds: threeArgs(qAt, second: qWrote, third: qQuoted)))
+
+	let qiAt = ids.mint()
+	let qiWrote = ids.mint()
+	let qiQuoted = ids.mint()
+	pushI64BlockArgs(quoteInside, values: threeArgs(qiAt, second: qiWrote, third: qiQuoted))
+	let oneAhead = emitConst(module, block: quoteInside, value: 1, ids: ids)
+	let aheadIndex = emitBin(module, block: quoteInside, a: qiAt, b: oneAhead, opcode: StdBinOpcode.add, ids: ids)
+	let aheadByte = emitLoadByte(module, block: quoteInside, base: cmd, index: aheadIndex, ids: ids)
+	let aheadQuote = emitConst(module, block: quoteInside, value: QuoteByte, ids: ids)
+	let isDoubled = emitCmp(module, block: quoteInside, a: aheadByte, b: aheadQuote, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(quoteInside, op: StdOp.condBranch(isDoubled, thenBlockId: literalQuote.id, elseBlockId: toggleQuotes.id))
+	quoteInside.branchEdges.push(BranchEdge.create(literalQuote.id, argIds: threeArgs(qiAt, second: qiWrote, third: qiQuoted)))
+	quoteInside.branchEdges.push(BranchEdge.create(toggleQuotes.id, argIds: threeArgs(qiAt, second: qiWrote, third: qiQuoted)))
+
+	let lqAt = ids.mint()
+	let lqWrote = ids.mint()
+	let lqQuoted = ids.mint()
+	pushI64BlockArgs(literalQuote, values: threeArgs(lqAt, second: lqWrote, third: lqQuoted))
+	let litByte = emitConst(module, block: literalQuote, value: QuoteByte, ids: ids)
+	emitStoreByte(module, block: literalQuote, base: dest, index: lqWrote, value: litByte, ids: ids)
+	// BOTH quotes are consumed — that is what makes `""` one literal rather than two toggles.
+	emitResumeScan(module, block: literalQuote, scan: scan, at: lqAt, atDelta: 2, wrote: lqWrote, wroteDelta: 1, quoted: lqQuoted, ids: ids)
+
+	let tgAt = ids.mint()
+	let tgWrote = ids.mint()
+	let tgQuoted = ids.mint()
+	pushI64BlockArgs(toggleQuotes, values: threeArgs(tgAt, second: tgWrote, third: tgQuoted))
+	let insideVal = emitConst(module, block: toggleQuotes, value: InsideQuotes, ids: ids)
+	let flipped = emitBin(module, block: toggleQuotes, a: insideVal, b: tgQuoted, opcode: StdBinOpcode.sub, ids: ids)
+	let tgOne = emitConst(module, block: toggleQuotes, value: 1, ids: ids)
+	let tgNext = emitBin(module, block: toggleQuotes, a: tgAt, b: tgOne, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(toggleQuotes, op: StdOp.branch(scan.id))
+	toggleQuotes.branchEdges.push(BranchEdge.create(scan.id, argIds: threeArgs(tgNext, second: tgWrote, third: flipped)))
+
+	// --- the backslash run: count it, then decide ---
+	let runAt = ids.mint()
+	let runWrote = ids.mint()
+	let runQuoted = ids.mint()
+	let runCount = ids.mint()
+	pushI64BlockArgs(countRun, values: quadArgsOf(runAt, second: runWrote, third: runQuoted, fourth: runCount))
+	let runByte = emitLoadByte(module, block: countRun, base: cmd, index: runAt, ids: ids)
+	let runBsConst = emitConst(module, block: countRun, value: BackslashByte, ids: ids)
+	let stillBackslash = emitCmp(module, block: countRun, a: runByte, b: runBsConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(countRun, op: StdOp.condBranch(stillBackslash, thenBlockId: countStep.id, elseBlockId: runEnded.id))
+	countRun.branchEdges.push(BranchEdge.create(countStep.id, argIds: quadArgsOf(runAt, second: runWrote, third: runQuoted, fourth: runCount)))
+	countRun.branchEdges.push(BranchEdge.create(runEnded.id, argIds: quadArgsOf(runAt, second: runWrote, third: runQuoted, fourth: runCount)))
+
+	let stepAt = ids.mint()
+	let stepWrote = ids.mint()
+	let stepQuoted = ids.mint()
+	let stepCount = ids.mint()
+	pushI64BlockArgs(countStep, values: quadArgsOf(stepAt, second: stepWrote, third: stepQuoted, fourth: stepCount))
+	let stepOne = emitConst(module, block: countStep, value: 1, ids: ids)
+	let stepNextAt = emitBin(module, block: countStep, a: stepAt, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
+	let stepNextCount = emitBin(module, block: countStep, a: stepCount, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(countStep, op: StdOp.branch(countRun.id))
+	countStep.branchEdges.push(BranchEdge.create(countRun.id, argIds: quadArgsOf(stepNextAt, second: stepWrote, third: stepQuoted, fourth: stepNextCount)))
+
+	let endAt = ids.mint()
+	let endWrote = ids.mint()
+	let endQuoted = ids.mint()
+	let endCount = ids.mint()
+	pushI64BlockArgs(runEnded, values: quadArgsOf(endAt, second: endWrote, third: endQuoted, fourth: endCount))
+	let endByte = emitLoadByte(module, block: runEnded, base: cmd, index: endAt, ids: ids)
+	let endQuoteConst = emitConst(module, block: runEnded, value: QuoteByte, ids: ids)
+	let runHitQuote = emitCmp(module, block: runEnded, a: endByte, b: endQuoteConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(runEnded, op: StdOp.condBranch(runHitQuote, thenBlockId: runBeforeQuote.id, elseBlockId: runPlain.id))
+	runEnded.branchEdges.push(BranchEdge.create(runBeforeQuote.id, argIds: quadArgsOf(endAt, second: endWrote, third: endQuoted, fourth: endCount)))
+	runEnded.branchEdges.push(BranchEdge.create(runPlain.id, argIds: quadArgsOf(endAt, second: endWrote, third: endQuoted, fourth: endCount)))
+
+	// Not before a quote: every backslash stands for itself, and the byte that ended the run is scanned
+	// again from the top (it may be a separator, a NUL or an ordinary byte — none of this block's business).
+	let pAt = ids.mint()
+	let pWrote = ids.mint()
+	let pQuoted = ids.mint()
+	let pCount = ids.mint()
+	pushI64BlockArgs(runPlain, values: quadArgsOf(pAt, second: pWrote, third: pQuoted, fourth: pCount))
+	let noLiteral = emitConst(module, block: runPlain, value: 0, ids: ids)
+	module.setTerminator(runPlain, op: StdOp.branch(emitRun.id))
+	runPlain.branchEdges.push(BranchEdge.create(emitRun.id, argIds: quintArgsOf(pWrote, second: pQuoted, third: pCount, fourth: pAt, fifth: noLiteral)))
+
+	// Before a quote: HALF the backslashes survive, and the run's PARITY decides what the quote itself
+	// becomes — even leaves it to toggle in the main scan, odd turns it into a literal this run swallows.
+	let bqAt = ids.mint()
+	let bqWrote = ids.mint()
+	let bqQuoted = ids.mint()
+	let bqCount = ids.mint()
+	pushI64BlockArgs(runBeforeQuote, values: quadArgsOf(bqAt, second: bqWrote, third: bqQuoted, fourth: bqCount))
+	let oneBit = emitConst(module, block: runBeforeQuote, value: 1, ids: ids)
+	let half = emitBin(module, block: runBeforeQuote, a: bqCount, b: oneBit, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let parity = emitBin(module, block: runBeforeQuote, a: bqCount, b: oneBit, opcode: StdBinOpcode.bitAnd, ids: ids)
+	// An ODD run consumes the quote (`resume` steps past it) AND emits one; an EVEN run does neither, so the
+	// parity IS both numbers and there is no second test.
+	let resumeAt = emitBin(module, block: runBeforeQuote, a: bqAt, b: parity, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(runBeforeQuote, op: StdOp.branch(emitRun.id))
+	runBeforeQuote.branchEdges.push(BranchEdge.create(emitRun.id, argIds: quintArgsOf(bqWrote, second: bqQuoted, third: half, fourth: resumeAt, fifth: parity)))
+
+	// The ONE emit loop the three exits share: write `remaining` backslashes, then the tail.
+	let eWrote = ids.mint()
+	let eQuoted = ids.mint()
+	let eRemaining = ids.mint()
+	let eResume = ids.mint()
+	let eLiteral = ids.mint()
+	pushI64BlockArgs(emitRun, values: quintArgsOf(eWrote, second: eQuoted, third: eRemaining, fourth: eResume, fifth: eLiteral))
+	let eZero = emitConst(module, block: emitRun, value: 0, ids: ids)
+	let runDone = emitCmp(module, block: emitRun, a: eRemaining, b: eZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(emitRun, op: StdOp.condBranch(runDone, thenBlockId: runTail.id, elseBlockId: emitRunStep.id))
+	emitRun.branchEdges.push(BranchEdge.create(runTail.id, argIds: quadArgsOf(eWrote, second: eQuoted, third: eResume, fourth: eLiteral)))
+	emitRun.branchEdges.push(BranchEdge.create(emitRunStep.id, argIds: quintArgsOf(eWrote, second: eQuoted, third: eRemaining, fourth: eResume, fifth: eLiteral)))
+
+	let sWrote = ids.mint()
+	let sQuoted = ids.mint()
+	let sRemaining = ids.mint()
+	let sResume = ids.mint()
+	let sLiteral = ids.mint()
+	pushI64BlockArgs(emitRunStep, values: quintArgsOf(sWrote, second: sQuoted, third: sRemaining, fourth: sResume, fifth: sLiteral))
+	let sByte = emitConst(module, block: emitRunStep, value: BackslashByte, ids: ids)
+	emitStoreByte(module, block: emitRunStep, base: dest, index: sWrote, value: sByte, ids: ids)
+	let sOne = emitConst(module, block: emitRunStep, value: 1, ids: ids)
+	let sNextWrote = emitBin(module, block: emitRunStep, a: sWrote, b: sOne, opcode: StdBinOpcode.add, ids: ids)
+	let sLeft = emitBin(module, block: emitRunStep, a: sRemaining, b: sOne, opcode: StdBinOpcode.sub, ids: ids)
+	module.setTerminator(emitRunStep, op: StdOp.branch(emitRun.id))
+	emitRunStep.branchEdges.push(BranchEdge.create(emitRun.id, argIds: quintArgsOf(sNextWrote, second: sQuoted, third: sLeft, fourth: sResume, fifth: sLiteral)))
+
+	let tWrote = ids.mint()
+	let tQuoted = ids.mint()
+	let tResume = ids.mint()
+	let tLiteral = ids.mint()
+	pushI64BlockArgs(runTail, values: quadArgsOf(tWrote, second: tQuoted, third: tResume, fourth: tLiteral))
+	let tZero = emitConst(module, block: runTail, value: 0, ids: ids)
+	let wantsQuote = emitCmp(module, block: runTail, a: tLiteral, b: tZero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(runTail, op: StdOp.condBranch(wantsQuote, thenBlockId: runTailQuote.id, elseBlockId: scan.id))
+	runTail.branchEdges.push(BranchEdge.create(runTailQuote.id, argIds: threeArgs(tWrote, second: tQuoted, third: tResume)))
+	runTail.branchEdges.push(BranchEdge.create(scan.id, argIds: threeArgs(tResume, second: tWrote, third: tQuoted)))
+
+	let tqWrote = ids.mint()
+	let tqQuoted = ids.mint()
+	let tqResume = ids.mint()
+	pushI64BlockArgs(runTailQuote, values: threeArgs(tqWrote, second: tqQuoted, third: tqResume))
+	let tqByte = emitConst(module, block: runTailQuote, value: QuoteByte, ids: ids)
+	emitStoreByte(module, block: runTailQuote, base: dest, index: tqWrote, value: tqByte, ids: ids)
+	let tqOne = emitConst(module, block: runTailQuote, value: 1, ids: ids)
+	let tqNextWrote = emitBin(module, block: runTailQuote, a: tqWrote, b: tqOne, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(runTailQuote, op: StdOp.branch(scan.id))
+	runTailQuote.branchEdges.push(BranchEdge.create(scan.id, argIds: threeArgs(tqResume, second: tqNextWrote, third: tqQuoted)))
+
+	// --- the argument ends: NUL-terminate it and answer where the scan stopped ---
+	let endPos = ids.mint()
+	let endWrite = ids.mint()
+	terminate.blockArgs.push(IrBlockArg.create(endPos, argType: StdType.i64))
+	terminate.blockArgs.push(IrBlockArg.create(endWrite, argType: StdType.i64))
+	let terminator = emitConst(module, block: terminate, value: NulByte, ids: ids)
+	emitStoreByte(module, block: terminate, base: dest, index: endWrite, value: terminator, ids: ids)
+	module.setTerminator(terminate, op: StdOp.ret(endPos))
+
+	module.functions.push(func)
+end 'buildCommandLineScanOne'
+
+// ⭐⭐ **A BLOCK'S CARRIED VALUES, DECLARED FROM THE SAME CONSTRUCTOR ITS EDGES SUPPLY THEM WITH.** Every
+// loop here is a phi over i64s, and the hazard is not forgetting to push one — it is pushing them in a
+// DIFFERENT ORDER from the `BranchEdge` that feeds them, which is a silent transposition of two live values
+// (a write cursor read as a quoting flag) with no diagnostic anywhere.
+//
+// ⇒ So a block's parameter list and its predecessors' argument lists are built by the SAME
+// `threeArgs`/`quadArgsOf`/`quintArgsOf` call, and this turns one such list into block args. One shape, two
+// uses, no second ordering to keep in step. It replaces four hand-written per-arity pushers, two of which
+// had already grown misleading parameter names by being reused at a different arity.
+function pushI64BlockArgs(block IrBlock, values ValueIdArray)
+	for value in values 'each'
+		block.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
+	end 'each'
+end 'pushI64BlockArgs'
+
+// A four- and a five-value `BranchEdge` argument list. `MmRuntime` stops at three, and these two exist for
+// the same reason those do: a literal `ValueIdArray.create()` plus four `push`es at each of the nine sites
+// below is four chances to transpose two of them.
+function quadArgsOf(first ValueId, second ValueId, third ValueId, fourth ValueId) returns ValueIdArray
+	var args = threeArgs(first, second: second, third: third)
+	args.push(fourth)
+	return args
+end 'quadArgsOf'
+
+function quintArgsOf(first ValueId, second ValueId, third ValueId, fourth ValueId, fifth ValueId) returns ValueIdArray
+	var args = quadArgsOf(first, second: second, third: third, fourth: fourth)
+	args.push(fifth)
+	return args
+end 'quintArgsOf'
+
+// One byte of the separator test, and the reason it is a function: the leading skip asks it twice (space,
+// then tab) and would otherwise carry two copies of "load the byte, compare, branch". `miss` is where a
+// non-match goes — the next test for the first call, the argument start for the second.
+function emitSeparatorTest(module StdModule, block IrBlock, cmd ValueId, at ValueId, byte ParsedInt, hit IrBlock, miss IrBlock, ids ValueMinter)
+	let loaded = emitLoadByte(module, block: block, base: cmd, index: at, ids: ids)
+	let sep = emitConst(module, block: block, value: byte, ids: ids)
+	let matches = emitCmp(module, block: block, a: loaded, b: sep, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(matches, thenBlockId: hit.id, elseBlockId: miss.id))
+end 'emitSeparatorTest'
+
+// The IN-SCAN separator test — `emitSeparatorTest`'s twin for the loop that is already copying an argument,
+// where a hit ENDS the argument (two carried values) and a miss carries all three onward. Two functions
+// rather than one parameterized over the edge shapes, because the two edges genuinely differ in ARITY and
+// folding them would mean passing both argument lists in anyway.
+function emitScanSeparatorExit(module StdModule, block IrBlock, cmd ValueId, byte ParsedInt, ends IrBlock, continues IrBlock, ids ValueMinter)
+	let at = ids.mint()
+	let wrote = ids.mint()
+	let quoted = ids.mint()
+	pushI64BlockArgs(block, values: threeArgs(at, second: wrote, third: quoted))
+	let loaded = emitLoadByte(module, block: block, base: cmd, index: at, ids: ids)
+	let sep = emitConst(module, block: block, value: byte, ids: ids)
+	let matches = emitCmp(module, block: block, a: loaded, b: sep, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(matches, thenBlockId: ends.id, elseBlockId: continues.id))
+	block.branchEdges.push(BranchEdge.create(ends.id, argIds: twoArgs(at, second: wrote)))
+	block.branchEdges.push(BranchEdge.create(continues.id, argIds: threeArgs(at, second: wrote, third: quoted)))
+end 'emitScanSeparatorExit'
+
+// Step both cursors by the caller's deltas and go round again — the tail three of the copy blocks share,
+// which differ only in how far the READ cursor moves (one byte for a copied byte, two for a `""` pair).
+function emitResumeScan(module StdModule, block IrBlock, scan IrBlock, at ValueId, atDelta ParsedInt, wrote ValueId, wroteDelta ParsedInt, quoted ValueId, ids ValueMinter)
+	let readStep = emitConst(module, block: block, value: atDelta, ids: ids)
+	let nextAt = emitBin(module, block: block, a: at, b: readStep, opcode: StdBinOpcode.add, ids: ids)
+	let writeStep = emitConst(module, block: block, value: wroteDelta, ids: ids)
+	let nextWrote = emitBin(module, block: block, a: wrote, b: writeStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(block, op: StdOp.branch(scan.id))
+	block.branchEdges.push(BranchEdge.create(scan.id, argIds: threeArgs(nextAt, second: nextWrote, third: quoted)))
+end 'emitResumeScan'
+
+// One byte into a raw buffer. `emitLoadByte`'s dual, and the only writer of a `u8` in this file.
+function emitStoreByte(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
+	let addr = emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0 as ByteOffset, valueId: value, valueType: StdType.u8))
+end 'emitStoreByte'
+
+// ⭐ **`__cl_count() -> argc`** — walk the whole line and count what `__cl_scan_one` finds.
+//
+// It answers the RAW count, argv[0] included, exactly as the bootstrap's `maxon_command_line_count` does
+// ("returns total argc (including argv[0])", `X86CodeEmitter.Runtime.cs:2032`) — `stdlib/CommandLine.maxon`
+// loops `0 upto count` and takes them all, so index 0 is the program and the user's first argument is 1.
+//
+// ⚠ It allocates the same scratch `__cl_arg` does and throws the bytes away. That is deliberate: the
+// alternative is a `dest == 0` "measure only" mode threaded through the scanner, which puts a branch on the
+// hot byte-copy path of the OTHER caller to save one allocation on a call that happens once per program.
+function buildCommandLineCount(module StdModule)
+	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loop = module.addBlock(func, label: b"clcloop")
+	var step = module.addBlock(func, label: b"clcstep")
+	var finish = module.addBlock(func, label: b"clcdone")
+
+	let cmd = ids.mint()
+	module.appendOp(entry, op: StdOp.osCommandLine(cmd))
+	let length = ids.mint()
+	var build = emitCStringLength(module, func: func, cur: entry, cstr: cmd, length: length, ids: ids)
+	let scratch = emitCommandLineScratch(module, block: build, length: length, ids: ids)
+
+	let pos = ids.mint()
+	let seen = ids.mint()
+	loop.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
+	loop.blockArgs.push(IrBlockArg.create(seen, argType: StdType.i64))
+	let zero = emitConst(module, block: build, value: 0, ids: ids)
+	module.setTerminator(build, op: StdOp.branch(loop.id))
+	build.branchEdges.push(BranchEdge.create(loop.id, argIds: twoArgs(zero, second: zero)))
+
+	let next = emitScanOneCall(module, block: loop, cmd: cmd, pos: pos, dest: scratch, ids: ids)
+	let found = emitFoundAnArgument(module, block: loop, next: next, ids: ids)
+	module.setTerminator(loop, op: StdOp.condBranch(found, thenBlockId: step.id, elseBlockId: finish.id))
+	loop.branchEdges.push(BranchEdge.create(step.id, argIds: twoArgs(next, second: seen)))
+	loop.branchEdges.push(BranchEdge.create(finish.id, argIds: argsOf(seen)))
+
+	let stepPos = ids.mint()
+	let stepSeen = ids.mint()
+	step.blockArgs.push(IrBlockArg.create(stepPos, argType: StdType.i64))
+	step.blockArgs.push(IrBlockArg.create(stepSeen, argType: StdType.i64))
+	let one = emitConst(module, block: step, value: 1, ids: ids)
+	let counted = emitBin(module, block: step, a: stepSeen, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(step, op: StdOp.branch(loop.id))
+	step.branchEdges.push(BranchEdge.create(loop.id, argIds: twoArgs(stepPos, second: counted)))
+
+	let total = ids.mint()
+	finish.blockArgs.push(IrBlockArg.create(total, argType: StdType.i64))
+	emitRawFree(module, block: finish, ptr: scratch, ids: ids)
+	module.setTerminator(finish, op: StdOp.ret(total))
+
+	module.functions.push(func)
+end 'buildCommandLineCount'
+
+// ⭐ **`__cl_arg(index) -> arrRec`** — the argument at `index` as a FRESH owned `__ManagedMemory`.
+//
+// ⭐ **AN OUT-OF-RANGE INDEX ANSWERS THE EMPTY STRING, WHICH IS THE BOOTSTRAP'S ANSWER AND NOT A GUESS.**
+// `maxon_command_line_arg` bounds-checks and returns a 1-byte NUL buffer (`X86CodeEmitter.Runtime.cs:2090-2106`).
+// It is reachable from ordinary source — `stdlib/CommandLine.maxon`'s `args()` never asks out of range, but
+// nothing stops a caller — and a wild read here would be an out-of-buffer load, so the guard is real. It is
+// spelled by NUL-terminating the scratch at offset 0 and then joining the ordinary copy-out, rather than by
+// a second `__arr_create` path: one producer of the answer, whatever the reason for it.
+//
+// ⚠ NON-throwing. There is no failure available to it — an index outside the range is answered, not
+// refused — which matches the intrinsic the bootstrap declares (`RuntimeCallToManaged`, no throws clause).
+function buildCommandLineArg(module StdModule)
+	var func = IrFunction.createFromStd(CommandLineArgName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loop = module.addBlock(func, label: b"claloop")
+	var advance = module.addBlock(func, label: b"clanext")
+	var outOfRange = module.addBlock(func, label: b"claoob")
+	var copyOut = module.addBlock(func, label: b"clacopy")
+
+	emitParams(module, block: entry, count: 1)
+	let index = 0 as ValueId
+
+	let cmd = ids.mint()
+	module.appendOp(entry, op: StdOp.osCommandLine(cmd))
+	let length = ids.mint()
+	var build = emitCStringLength(module, func: func, cur: entry, cstr: cmd, length: length, ids: ids)
+	let scratch = emitCommandLineScratch(module, block: build, length: length, ids: ids)
+
+	let pos = ids.mint()
+	let seen = ids.mint()
+	loop.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
+	loop.blockArgs.push(IrBlockArg.create(seen, argType: StdType.i64))
+	let zero = emitConst(module, block: build, value: 0, ids: ids)
+	module.setTerminator(build, op: StdOp.branch(loop.id))
+	build.branchEdges.push(BranchEdge.create(loop.id, argIds: twoArgs(zero, second: zero)))
+
+	// The scan writes the argument into the scratch BEFORE we know whether it is the one asked for; the
+	// wanted one is simply the last write, and every earlier one is overwritten in place. That is what makes
+	// one scratch buffer enough for the whole walk.
+	let next = emitScanOneCall(module, block: loop, cmd: cmd, pos: pos, dest: scratch, ids: ids)
+	let found = emitFoundAnArgument(module, block: loop, next: next, ids: ids)
+	module.setTerminator(loop, op: StdOp.condBranch(found, thenBlockId: advance.id, elseBlockId: outOfRange.id))
+	loop.branchEdges.push(BranchEdge.create(advance.id, argIds: twoArgs(next, second: seen)))
+
+	let advPos = ids.mint()
+	let advSeen = ids.mint()
+	advance.blockArgs.push(IrBlockArg.create(advPos, argType: StdType.i64))
+	advance.blockArgs.push(IrBlockArg.create(advSeen, argType: StdType.i64))
+	let isWanted = emitCmp(module, block: advance, a: advSeen, b: index, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(advance, op: StdOp.condBranch(isWanted, thenBlockId: copyOut.id, elseBlockId: loop.id))
+	let advOne = emitConst(module, block: advance, value: 1, ids: ids)
+	let advNextSeen = emitBin(module, block: advance, a: advSeen, b: advOne, opcode: StdBinOpcode.add, ids: ids)
+	advance.branchEdges.push(BranchEdge.create(loop.id, argIds: twoArgs(advPos, second: advNextSeen)))
+
+	// Ran off the end: make the scratch the empty string and take the ordinary copy-out.
+	let emptyAt = emitConst(module, block: outOfRange, value: 0, ids: ids)
+	let emptyByte = emitConst(module, block: outOfRange, value: NulByte, ids: ids)
+	emitStoreByte(module, block: outOfRange, base: scratch, index: emptyAt, value: emptyByte, ids: ids)
+	module.setTerminator(outOfRange, op: StdOp.branch(copyOut.id))
+
+	let record = ids.mint()
+	var built = emitCStringToManaged(module, func: func, cur: copyOut, cstr: scratch, record: record, ids: ids)
+	emitRawFree(module, block: built, ptr: scratch, ids: ids)
+	module.setTerminator(built, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildCommandLineArg'
+
+// The scratch buffer both walkers allocate: the whole command line plus a NUL. See `NulTerminatorSlackBytes` for
+// why that is a sufficient bound and needs no second scan.
+function emitCommandLineScratch(module StdModule, block IrBlock, length ValueId, ids ValueMinter) returns ValueId
+	let slack = emitConst(module, block: block, value: NulTerminatorSlackBytes, ids: ids)
+	let size = emitBin(module, block: block, a: length, b: slack, opcode: StdBinOpcode.add, ids: ids)
+	return emitRawAlloc(module, block: block, byteCount: size, ids: ids)
+end 'emitCommandLineScratch'
+
+// One `__cl_scan_one` call. Both walkers make the identical one, and a transposed argument here would be a
+// scanner reading the DESTINATION and writing the command line.
+function emitScanOneCall(module StdModule, block IrBlock, cmd ValueId, pos ValueId, dest ValueId, ids ValueMinter) returns ValueId
+	let next = ids.mint()
+	module.appendOp(block, op: StdOp.call(next, callee: CommandLineScanOneName, args: threeArgs(cmd, second: pos, third: dest)))
+	return next
+end 'emitScanOneCall'
+
+// Did the scan find an argument? Both walkers ask, and both must read `NoMoreArguments` the same way.
+function emitFoundAnArgument(module StdModule, block IrBlock, next ValueId, ids ValueMinter) returns ValueId
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	return emitCmp(module, block: block, a: next, b: zero, pred: StdCmpPred.ge, ids: ids)
+end 'emitFoundAnArgument'
+
+export function installCommandLineRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesCommandLine 'noCommandLine'
+		return
+	end 'noCommandLine'
+
+	buildCommandLineScanOne(module)
+	buildCommandLineCount(module)
+	buildCommandLineArg(module)
+end 'installCommandLineRuntime'
+
+// Every callee this file installs — what `scanRuntimeUsage` reads to set `usesCommandLine`, and what
+// `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows target. A PREFIX test rather than a
+// three-way `or`: every entry point here is `__cl_`-named by construction, so a fourth is covered without
+// being remembered here as well as declared above.
+//
+// ⚠ It names `__cl_scan_one` too, which no source can call. That is correct rather than sloppy: the scanner
+// is only ever reached FROM the two intrinsics, so a program containing it contains them, and the E3104 the
+// prefix triggers is raised at the SOURCE callee's span in every case — the gate reads names the parser
+// emitted, and the parser never emits this one.
+export function isCommandLineRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: CommandLineRuntimePrefix)
+end 'isCommandLineRuntimeCallee'

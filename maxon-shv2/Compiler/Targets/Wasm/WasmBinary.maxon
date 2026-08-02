@@ -241,13 +241,19 @@ let opF64Div = 0xA3
 let opI64TruncF64S = 0xB0
 let opF64ConvertI64S = 0xB9
 
-// The MATH INTRINSICS (P1.0d.4-C), f64 → f64 — the whole rung, on wasm, is these four opcodes: wasm
-// has each as a NATIVE instruction, so there is nothing to synthesize and no `.rdata` constant (the
-// native backends need an SSE4.1 `roundsd` and an AArch64 `frint`; wasm needs one byte each).
+// The MATH INTRINSICS (P1.0d.4-C, `abs` with `specs/abs.md`), f64 → f64 — the whole rung, on wasm, is
+// these five opcodes: wasm has each as a NATIVE instruction, so there is nothing to synthesize and no
+// `.rdata` constant (the native backends need an SSE4.1 `roundsd` and an AArch64 `frint`; wasm needs
+// one byte each).
 //
 // ⚠ `f64.nearest` is round-to-nearest **TIES TO EVEN** — the same rounding x64 `roundsd imm8=0` and
 // arm64 `frintn` do, and what `specs/round.md`'s `round.halfway` case pins (`round(2.5)` is 2). It
 // is NOT C's `round()`. Values taken from `maxon-selfhosted`'s wasm backend (MirToWasm.maxon:2362).
+//
+// ⚠ `f64.abs` is the one of the five with NO x64 counterpart: SSE2 has no scalar float absolute value,
+// so the x64 backend clears the sign bit itself (`TargetOp.absF64RegReg`). Here it is one byte, as
+// arm64's `fabs` is one word — x64 is the outlier, not wasm.
+let opF64Abs = 0x99
 let opF64Ceil = 0x9B
 let opF64Floor = 0x9C
 let opF64Nearest = 0x9E
@@ -662,7 +668,8 @@ export type WasmBody
 	end 'i64TruncF64S'
 
 	// The MATH INTRINSICS (one f64 in, one f64 out). `f64Nearest` is TIES TO EVEN — see the opcode
-	// band; it is what `round()` means in this language and it is not C's `round()`.
+	// band; it is what `round()` means in this language and it is not C's `round()`. `f64Abs` clears
+	// the IEEE sign bit, which is why it is exact for ±0, ±inf and NaN alike.
 	export function f64Floor()
 		self.buf.push(opF64Floor)
 	end 'f64Floor'
@@ -678,6 +685,10 @@ export type WasmBody
 	export function f64Sqrt()
 		self.buf.push(opF64Sqrt)
 	end 'f64Sqrt'
+
+	export function f64Abs()
+		self.buf.push(opF64Abs)
+	end 'f64Abs'
 
 	// The BIT REINTERPRETATION (f64 in, i64 out, same bits) — see the opcode's comment for why it is
 	// beside the conversions and not one of them.

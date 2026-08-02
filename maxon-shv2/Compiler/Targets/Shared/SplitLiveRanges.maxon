@@ -5034,6 +5034,9 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		roundsdRegReg(dest, src, mode) then return TargetOp.roundsdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), mode: mode)
 		// The BIT REINTERPRETATION — one def, one use, both substitutable, like the converts.
 		movqGprXmm(dest, src) then return TargetOp.movqGprXmm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		// f64 ABS — one def, one use, both substitutable, like the converts. Its two-address REUSE is
+		// the operand model's business, not this rename's.
+		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		// The `.rdata` address `lea` (P1.2 wave A) — substitutes its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(substituteVReg(dest, from: from, to: to), label: label)
 		// --- arm64 SCALAR-CORE band ---
@@ -5089,6 +5092,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64Scvtf(dest, src) then return TargetOp.arm64Scvtf(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64Fcvtzs(dest, src) then return TargetOp.arm64Fcvtzs(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64Fsqrt(dest, src) then return TargetOp.arm64Fsqrt(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64Fabs(dest, src) then return TargetOp.arm64Fabs(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64Frint(dest, src, mode) then return TargetOp.arm64Frint(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), mode: mode)
 		arm64FpLoadRdata(dest, label) then return TargetOp.arm64FpLoadRdata(substituteVReg(dest, from: from, to: to), label: label)
 		// No register operand to substitute — both OS-call forms take their args pre-moved into x0..

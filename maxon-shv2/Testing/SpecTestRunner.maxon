@@ -1189,7 +1189,7 @@ end 'buildErrorFragment'
 
 function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	return match test.expectation 'e'
-		run(expected, stderr, stdout, sectionPins) gives checkRun(expected, stderr: stderr, stdout: stdout, sectionPins: sectionPins, compile: compile, exePath: exePath, effectiveTarget: effectiveTarget)
+		run(expected, stderr, stdout, sectionPins) gives checkRun(expected, stderr: stderr, stdout: stdout, sectionPins: sectionPins, compile: compile, exePath: exePath, effectiveTarget: effectiveTarget, programArgs: test.programArgs)
 		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged)
 	end 'e'
 end 'checkExpectation'
@@ -1307,22 +1307,39 @@ function windowsLinuxRunner(target Target, host Target) returns ExternalRunner
 	return ExternalRunner.wsl
 end 'windowsLinuxRunner'
 
-// How to execute the binary the build just produced.
+// How to execute the binary the build just produced, with the arguments the case asked for.
 //
-// The HOST's own binary is spawned directly with an empty argv (spec tests take no runtime
-// arguments — shv2's SpecParser has no `Args` directive); everything else goes behind the runner
-// `externalRunnerFor` names. Restored from v1 `SpecTestRunner.maxon:623` (`buildRunCommand`), which
-// had only the first two arms.
-function buildRunCommand(modulePath FilePath, effectiveTarget Target) returns RunCommand
+// ⭐ THE PROGRAM'S OWN ARGUMENTS GO LAST, AND THAT IS ONE RULE FOR EVERY RUNNER. Each builder below
+// ends its argv with THE THING TO BE EXECUTED — the module path for wasmtime, the resolved exe for
+// `orb run` and for `wsl -e` — and each runner forwards whatever follows that to the program it
+// launched (wasmtime's `-S`-ordering note is the same rule stated for its own flags). So appending
+// once, here, is not a convenience over three copies of a push loop: it is the single place the rule
+// is written, and a fourth runner inherits it by construction.
+//
+// The HOST's own binary needs no runner in front of it, so there is nothing to append after and its
+// argv simply IS the program's arguments; everything else goes behind the runner `externalRunnerFor`
+// names. Restored from v1 `SpecTestRunner.maxon:623` (`buildRunCommand`), which had only the first
+// two arms.
+//
+// ⚠ The spawned process sees these starting at argv[1] — argv[0] is the program's own path, which
+// `Subprocess` supplies from the executable and which no caller may occupy. That is what a real
+// process sees, and what every `/specs` case reading `args.get(1)` was written against.
+function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArgs ProgramArgArray) returns RunCommand
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
-		return RunCommand.create(Executable.path(modulePath), argv: StringArray.create())
+		return RunCommand.create(Executable.path(modulePath), argv: programArgs)
 	end 'hostSpawn'
 
-	return match externalRunnerFor(effectiveTarget) 'runner'
+	let launch = match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime gives buildWasmRunCommand(modulePath)
 		orbstack gives buildLinuxVmRunCommand(modulePath)
 		wsl gives buildWslRunCommand(modulePath)
 	end 'runner'
+
+	var argv = StringArray.create()
+	argv.append(launch.argv)
+	argv.append(programArgs)
+
+	return RunCommand.create(launch.exe, argv: argv)
 end 'buildRunCommand'
 
 // `wasmtime run -S cli-exit-with-code=y <module.wasm>` — the exact command the wasm component
@@ -1489,7 +1506,7 @@ end 'requireWslAvailable'
 // A RUN test (whatever result blocks the case carried — an ```exitcode, a ```stdout, a ```stderr, a
 // ```RequiredData, a ```RequiredRdata, in any combination): the compile MUST succeed, then the produced
 // exe is spawned and EVERY half the spec pinned is checked against that one execution.
-function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile ProcessCapture, exePath FilePath, effectiveTarget Target) returns TestOutcome
+function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile ProcessCapture, exePath FilePath, effectiveTarget Target, programArgs ProgramArgArray) returns TestOutcome
 	if compile.exitCode != 0 'compileFailed'
 		return TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}")
 	end 'compileFailed'
@@ -1513,7 +1530,7 @@ function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, s
 	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned
 	// by the host, so it is run through the vendored wasmtime instead — everything checked against
 	// that one execution afterwards is IDENTICAL either way.
-	let runCommand = buildRunCommand(exePath, effectiveTarget: effectiveTarget)
+	let runCommand = buildRunCommand(exePath, effectiveTarget: effectiveTarget, programArgs: programArgs)
 	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv) otherwise (e) 'runSpawnFailed'
 		return TestOutcome.fail("program spawn failed: {e.displayReason()}")
 	end 'runSpawnFailed'

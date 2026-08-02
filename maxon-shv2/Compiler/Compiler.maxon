@@ -330,7 +330,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// pipeline's error gate, exactly as an E3017 is.
 	checkTypeSymbolNamespace(project, signatures: signatures)
 
-	// ⭐⭐ **THE FIVE BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT IN FIVE OTHER PLACES (A1s).**
+	// ⭐⭐ **THE SIX BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT IN SIX OTHER PLACES (A1s).**
 	// Each family's runtime transcribes its enum's ordinals as literals, and each holds them to the
 	// declaration on every compile (`Project.BuiltinErrorOrdinalCheck` — drift silently reroutes every
 	// handler arm). They used to run from four `install*Runtime` heads plus one free function; three of them
@@ -351,6 +351,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		verifyManagedDirectoryOrdinals(project)
 		verifyArrayRuntimeOrdinals(project)
 		verifyDivisionByZeroOrdinals(project)
+		// ⚠ `StringError` is the SIXTH, and it joined the day the command-line rung made it a seeded
+		// DECLARATION (`Project.builtinStringErrorEnum`) rather than the bytes of a `throws` clause. Before
+		// that its two ordinals in `StringIndexRuntime` answered to nothing; now they are one half of a wire
+		// format whose other half is that enum's case order. See `verifyStringErrorOrdinals`.
+		verifyStringErrorOrdinals(project)
 	end 'wellFormedSoFar'
 
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
@@ -544,6 +549,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// functions are appended to one module and the backend resolves calls by name — and the `usesArray` bit
 	// that makes the array runtime present was settled by `scanRuntimeUsage` before any install ran.
 	installManagedDirectoryRuntime(pipeline.stdModule, usage: usage)
+
+	// The command-line runtime (`__cl_count`/`__cl_arg`/`__cl_scan_one`) — installed the same already-lowered
+	// way, on its own `usesCommandLine` bit. It sits beside the two families above because it shares their
+	// helpers (the raw alloc/free, the cstring walk and the cstring-to-`__ManagedMemory` copy), and it needs
+	// no ordering against the Array install below even though `__cl_arg` CALLS `__arr_create`, for the reason
+	// stated there: one module, name-resolved calls, and the `usesArray` bit was settled before any install ran.
+	installCommandLineRuntime(pipeline.stdModule, usage: usage)
 
 	// The Array runtime (`__arr_create`/`__arr_push`/`__arr_get`/…) — installed the same way and for the
 	// same reason: already-lowered Std, appended after the pipeline so it is never re-optimized. Keyed on

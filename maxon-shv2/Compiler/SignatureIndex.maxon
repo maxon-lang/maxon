@@ -1794,9 +1794,11 @@ function undeclaredNamedElementStorageBytes(name ByteArray) returns ByteOffset
 end 'undeclaredNamedElementStorageBytes'
 
 // ⭐⭐ **THE TWO NAMES shv2 GIVES A BYTE — the ROSTER, in one place (R4.7 review).** `Byte` is the
-// user-visible element a `b"…"` literal, a `ByteArray` and `__ManagedMemory` all share; `__StringByte` is the
-// compiler-owned element a String's byte VIEW wears (`StringByteViewElementName`). Everything else a program
-// can name is some OTHER type that happens to be narrow.
+// user-visible element a `b"…"` literal, a `ByteArray` and `__ManagedMemory` all share; `__ManagedByte` is
+// the compiler-owned element EVERY COMPILER-SYNTHESIZED byte buffer wears (`SynthesizedByteElementName` —
+// widened from the String-view-only `__ManagedByte` by the command-line rung; see its header below for the
+// two sightings that forced the class name). Everything else a program can name is some OTHER type that
+// happens to be narrow.
 //
 // ⚠ **IT IS A ROSTER AND NOT A WIDTH, AND CONFLATING THE TWO WAS A MEASURED WRONG ANSWER.**
 // `rangedAliasStorageBytes` hands EVERY non-negative range that fits `u8.max` a one-byte slot, so "strides one
@@ -1807,28 +1809,41 @@ end 'undeclaredNamedElementStorageBytes'
 // String's byte 223 into an element declared `int(0 to 200)` (MEASURED, R4.7 review, exit 223 with no
 // diagnostic).
 function isByteElementName(name ByteArray) returns bool
-	return name.equals(ByteElementTypeName) or name.equals(StringByteViewElementName)
+	return name.equals(ByteElementTypeName) or name.equals(SynthesizedByteElementName)
 end 'isByteElementName'
 
-// ⭐⭐ **THE ELEMENT OF A STRING'S BYTE VIEW (`String.addressableBytes()`, BATCH2 slice 1) — AND WHY IT IS
-// NOT `Byte`.** `__str_bytes_view` publishes a record over a String's OWN buffer, and a String's bytes are
-// bytes: its `element_size@24` is `StringElementSize`, 1, always. `Array with Byte` cannot carry that,
-// because `Byte` is a name a USER PROGRAM may declare — `typealias Byte = int(0 to 1000)` makes
-// `internArrayByteInstance()` stride TWO — and the view would then be a static type and a runtime record
+// ⭐⭐ **THE ELEMENT OF EVERY COMPILER-SYNTHESIZED BYTE BUFFER — AND WHY IT IS NOT `Byte`.**
+// A buffer the COMPILER mints is byte-packed by construction: `__str_bytes_view` publishes a record over a
+// String's own buffer, whose `element_size@24` is 1 always, and the `__ManagedMemory` an OS runtime entry
+// hands back (`emitOwnedManagedMemoryResult`) is a `mm_alloc`'d run of bytes. `Array with Byte` cannot carry
+// either, because `Byte` is a name a USER PROGRAM may declare — `typealias Byte = int(0 to 1000)` makes
+// `internArrayByteInstance()` stride TWO — and the buffer would then be a static type and a runtime record
 // disagreeing about one instance's stride, which is the two-producer shape `arrayElementSize` exists to end.
 //
-// ⚠ **MEASURED, and it is why this name exists at all**: with the view typed `Array with Byte`,
-// `specs-shv2/bytearray-element-size.md`'s two wide-`Byte` cases went red with
-// `E3005 argument type mismatch for 'managed': expected '__ManagedMemory', got 'Array_Byte'` raised INSIDE
-// `stdlib/URL.maxon` — a whitelisted module is parsed by every program, so a user's `Byte` alias broke the
-// stdlib. A `b"…"` literal meets the identical wall and is REFUSED for it (E2015, same spec); the stdlib's
-// own byte reader cannot be refused, so it takes an element the user cannot reach instead.
+// ⚠⚠ **MEASURED TWICE, THREE RUNGS APART, WITH THE SAME TWO CASES AND THE SAME SENTENCE.** Both times a
+// WHITELISTED STDLIB MODULE — which every program parses — stopped compiling because of a `Byte` alias in a
+// program that never called it:
+//   • BATCH2 slice 1, with the string view typed `Array with Byte`: `E3005 argument type mismatch for
+//     'managed': expected '__ManagedMemory', got 'Array_Byte'` raised inside `stdlib/URL.maxon`.
+//   • The command-line rung, with `emitOwnedManagedMemoryResult` still minting `internArrayByteInstance()`:
+//     the IDENTICAL sentence, raised inside `stdlib/CommandLine.maxon:13` at `String.init(managed)`.
+// `specs-shv2/bytearray-element-size.md`'s two wide-`Byte` cases are what caught it on both occasions.
+// ⇒ The first fix cured the ONE producer that had bitten, and the rule it wrote down was general while the
+// name it wrote it under (`__ManagedByte`) was not — so the next synthesized byte buffer walked into the same
+// wall. The element is now named for the CLASS, and every compiler-minted byte buffer wears it.
+//
+// ⚠ A `b"…"` literal meets the identical wall and is REFUSED for it (E2015, same spec), and that is not an
+// inconsistency: a literal's element is the `Byte` the PROGRAM declares and the program can see the refusal.
+// So is `__ManagedMemory.create(n, elementSize: 1)`, which is user-written and keeps `Byte`
+// (`managedMemoryInstanceForElementSize`, pinned by `array-init.md`). The split is SYNTHESIZED vs WRITTEN,
+// not string vs buffer: code the user did not write cannot be refused, so it takes an element the user
+// cannot reach instead.
 //
 // It is `__`-RESERVED, so no program can declare it and `undeclaredNamedElementStorageBytes` is the only
 // answer for its width — the same reason `StringIndexTypeName` wears one. This is `parseDecodedView`'s rule
-// applied to bytes: a compiler-synthesized view's stride is the compiler's to state, never a function of
+// applied to bytes: a compiler-synthesized buffer's stride is the compiler's to state, never a function of
 // which aliases the program happens to declare.
-let StringByteViewElementName = b"__StringByte"
+let SynthesizedByteElementName = b"__ManagedByte"
 
 // ⭐⭐ **THE COMPILER-OWNED `StringIndex` TYPE (P1.8 slice B2), AND WHY IT WEARS A RESERVED NAME.**
 //
@@ -2287,6 +2302,29 @@ export let ManagedMemoryErrorTypeName = b"__ManagedMemoryError"
 // synthesizes what `stdlib/Array.maxon` declares, so it owes that file's exported names.
 export let ArrayErrorTypeName = b"ArrayError"
 
+// ⭐⭐ **`StringError` — WHAT EVERY THROWING `String` OPERATION THROWS, AND IT WEARS THE BARE NAME FOR
+// `ArrayError`'S EXACT REASON.** `stdlib/String.maxon:6-9` declares it with exactly two cases, and its
+// provenance is `ArrayError`'s to the letter: a module the stdlib loader CANNOT list — `String` is
+// compiler-owned, so `stdlib/String.maxon` is unlistable by construction and not merely unlisted (see
+// `TypeResolution.isCompilerOwnedTypeName`'s `String`/`Character` paragraph) — so there is no declaration to
+// be read and the compiler synthesizes what that file declares (`Project.builtinStringErrorEnum`).
+//
+// ⚠ It cannot be `__StringError` for the reason `ArrayError` cannot be `__ArrayError`: SOURCE ALREADY SPELLS
+// THE BARE NAME in a `throws` clause — `stdlib/CommandLine.maxon:29,39` write `throws StringError` and
+// `throw StringError.notFound` — and a reserved spelling would meet every one of them as
+// `E3059: try propagates '__StringError' but enclosing function throws 'StringError'`.
+//
+// ⚠⚠ **THE SPELLING WAS ALREADY WRITTEN DOWN HERE-BUT-ELSEWHERE, AS A `String`.** `StringIndexRuntime` held
+// `let StringErrorTypeName = "StringError"` for the `throws` clause it stamps on the two searches; that was
+// the same fact in a second home and a second TYPE, so it now reads this one.
+export let StringErrorTypeName = b"StringError"
+
+// The two cases, in `stdlib/String.maxon:6-9`'s declaration order — which IS their ordinal order, and
+// therefore the error flag a throwing `__strix_` runtime returns (`StringIndexRuntime`'s two `…Flag` chains).
+// Not reorderable, for `ManagedMemory*CaseName`'s reason one paragraph down.
+export let StringErrorNotFoundCaseName = b"notFound"
+export let StringErrorInvalidIndexCaseName = b"invalidIndex"
+
 // ⭐ **`ArrayError`'s TWO CASES ARE `__ManagedMemoryError`'s FIRST TWO, IN THE SAME ORDER, AND THAT IS THE
 // REFERENCE'S OWN ARRANGEMENT** (`stdlib/Array.maxon:6-9` against `stdlib/Builtins.maxon:151-153`). So ONE pair
 // of name constants serves both enums: writing them twice would let the two orders drift apart while each file
@@ -2312,6 +2350,12 @@ export let StringInitManagedParamName = b"managed"
 // file, one spelling of one fact in two places.
 export let StringFindFirstMethod = b"findFirst"
 export let StringFindLastMethod = b"findLast"
+
+// `s.indexAfter(idx)` — `stdlib/String.maxon:387-392`, the FORWARD step to the next grapheme boundary. It
+// lives here for the same reason its two neighbours do and no other: it is the third `String` method whose
+// runtime callee can reach an E3057, so `stringIndexSourceMethodName` has to answer with the very constant
+// `dispatchStringMethod` matches the source token against.
+export let StringIndexAfterMethod = b"indexAfter"
 
 // ⭐ **THE ERROR EVERY `__ManagedFile` OPERATION THROWS (R4.1)**, and the type a handler's `match e`
 // discriminates. It is DECLARED at `stdlib/Builtins.maxon:175` and read from there (A1s); the reason its
@@ -6785,8 +6829,8 @@ export type ProgramSignatures
 	//
 	// ⚠ **IT IS A STRIDE FACT AND NOT A NAME FACT, BECAUSE shv2 HAS TWO NAMES FOR A BYTE AND THE USER RULING
 	// KEEPS THEM DISTINCT.** `Byte` is the user-visible element a `b"…"` literal, a `ByteArray` and
-	// `__ManagedMemory` share; `__StringByte` is the compiler-owned element a String's byte VIEW wears (see
-	// `StringByteViewElementName` for the measurement that minted it). They are two instances on purpose — a
+	// `__ManagedMemory` share; `__ManagedByte` is the compiler-owned element a String's byte VIEW wears (see
+	// `SynthesizedByteElementName` for the measurement that minted it). They are two instances on purpose — a
 	// user may declare `Byte`, and a view's stride may not follow — and they meet at a BOUNDARY, which is what
 	// this predicate lets a door recognize.
 	//
@@ -6798,7 +6842,7 @@ export type ProgramSignatures
 	// ⭐ **WHAT AN `Array` INSTANCE CALLS ITS ELEMENT, when the element is a `named` LEAF** — `EmptySourceText`
 	// for every other (tag, id) pair, which is the answer BOTH SIDES of the door below want: a pair that is not
 	// an Array instance at all, and an Array over a String / struct / nested instance, each name no element
-	// this file could mistake for a byte, and neither `isByteElementName` nor the `__StringByte` comparison
+	// this file could mistake for a byte, and neither `isByteElementName` nor the `__ManagedByte` comparison
 	// answers true for an empty name. One walk, asked once per side, so the two sides cannot come to disagree
 	// about where an element's name is read from.
 	//
@@ -6822,7 +6866,7 @@ export type ProgramSignatures
 	// ⭐⭐ **THE BYTE-ELEMENT BOUNDARY DOOR (R4.7)** — the one place a value of one byte element type is
 	// admitted where the other is declared, and the whole of what the user ruling *"the two byte element types
 	// stay DISTINCT and convert at the BOUNDARY"* means in code. `stdlib/File.maxon:140-146` is what asks:
-	// `String.addressableBytes()` yields `Array with __StringByte` and `FileWriter.open(path __ManagedMemory)`
+	// `String.addressableBytes()` yields `Array with __ManagedByte` and `FileWriter.open(path __ManagedMemory)`
 	// declares `Array with Byte`, and both are the same 1-byte record.
 	//
 	// **BOTH SIDES ARE IDENTITY TESTS OVER THE ROSTER `isByteElementName` HOLDS, AND THE DECLARED SIDE ALSO
@@ -6838,7 +6882,7 @@ export type ProgramSignatures
 	//     NAME is on the roster and the record is not a byte buffer. Adopting a stride-1 view into it would
 	//     hand every accessor a record it reads at the wrong width: a silent wrong answer, not a refusal. The
 	//     stride test refuses exactly there, and it is LIVE — measured raising
-	//     `expected 'Array_Byte', got 'Array___StringByte'` on that program.
+	//     `expected 'Array_Byte', got 'Array___ManagedByte'` on that program.
 	//
 	// ⚠ **WHAT IS DELIBERATELY *NOT* CLOSED HERE, because this door is not its only entrance.** A program
 	// declaring `typealias Byte = int(0 to 100)` still admits a String's high byte through this door — and it
@@ -6858,20 +6902,20 @@ export type ProgramSignatures
 	// nominal distinction `namedAggregatesConflict` refuses today. The stride is what the RECORD says; the
 	// element's declared RANGE is what it does not, and a 1-byte element is not a byte just because it fits in
 	// one. `specs-shv2/bytearray-element-size.md`'s `byte-packed-alias-is-not-interchangeable-with-byte` pins it.
-	// ⇒ what may cross is exactly ONE thing: `__StringByte`, which is `__`-RESERVED, is minted only by
+	// ⇒ what may cross is exactly ONE thing: `__ManagedByte`, which is `__`-RESERVED, is minted only by
 	// `String.addressableBytes()`, and carries no range of its own for a declared `Byte` to contradict — the
-	// bytes of a String are bytes (`StringByteViewElementName`).
+	// bytes of a String are bytes (`SynthesizedByteElementName`).
 	//
 	// ⛔ **THE SYMMETRIC TWINS ARE DELIBERATELY NOT GIVEN THIS DOOR, AND THE ASYMMETRY IS ONE-WAY SAFE.**
 	// `aggregatesConflict` (return, reassignment, `otherwise`, match arm, payload store) and
-	// `SemanticCheck.overloadArgTypeFit` both still compare names alone. No source can DECLARE `__StringByte`,
+	// `SemanticCheck.overloadArgTypeFit` both still compare names alone. No source can DECLARE `__ManagedByte`,
 	// and `addressableBytes()` is stdlib-only, so the pair can only arise where a stdlib module RETURNS a
 	// String's view through a declared `__ManagedMemory` or OVERLOADS on one — neither of which any stdlib
 	// module does. Both twins are strictly NARROWER than this door, so neither can accept what this refuses:
 	// the worst either can do is refuse a program nobody can write, never admit one it should not. MEASURED
 	// (R4.7 review) by writing the two programs nobody has written yet, under `stdlib/`: the return twin
-	// answers `Cannot return 'Array___StringByte' from function declared to return 'Array_Byte'` and the
-	// reassignment twin `cannot assign 'Array___StringByte' to variable 'b' of type 'Array_Byte'` — both
+	// answers `Cannot return 'Array___ManagedByte' from function declared to return 'Array_Byte'` and the
+	// reassignment twin `cannot assign 'Array___ManagedByte' to variable 'b' of type 'Array_Byte'` — both
 	// refusals, neither an admission.
 	export function byteBufferBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
 		let declaredElement = self.arrayNamedElementName(declaredTag, nameId: declaredNameId)
@@ -6879,7 +6923,7 @@ export type ProgramSignatures
 			return false
 		end 'declaredIsNotAByteBuffer'
 
-		return self.arrayNamedElementName(gotTag, nameId: gotNameId).equals(StringByteViewElementName)
+		return self.arrayNamedElementName(gotTag, nameId: gotNameId).equals(SynthesizedByteElementName)
 	end 'byteBufferBoundaryAdmits'
 
 	// ⭐ **THE ONE PLACE A RANGED ALIAS'S DECLARED BOUNDS BECOME A STORAGE WIDTH.** A trivial element is
@@ -6979,16 +7023,17 @@ export type ProgramSignatures
 		return self.arrayByteInstance
 	end 'internArrayByteInstance'
 
-	// ⭐ **THE `__ManagedMemory` INSTANCE A STRING'S BYTE VIEW WEARS (BATCH2 slice 1).**
-	// `internArrayByteInstance`'s twin, differing only in its element — see `StringByteViewElementName` for
-	// why a compiler-owned element rather than `Byte`, and for the measurement that chose it. Not memoized
-	// like its twin: this one is asked once per `addressableBytes()` in stdlib source (four sites in the
-	// whole corpus), never on a hot parser path.
-	export function internStringByteViewInstance() returns GenericInstanceId
+	// ⭐ **THE `__ManagedMemory` INSTANCE EVERY COMPILER-SYNTHESIZED BYTE BUFFER WEARS.**
+	// `internArrayByteInstance`'s twin, differing only in its element — see `SynthesizedByteElementName` for
+	// why a compiler-owned element rather than `Byte`, and for the two measurements that chose it. Its
+	// producers are `String.addressableBytes()` (BATCH2 slice 1) and `emitOwnedManagedMemoryResult`'s three
+	// OS runtime entries (`__md_filename`, `__md_current_path`, `__cl_arg`). Not memoized like its twin:
+	// it is asked once per such call site, never on a hot parser path.
+	export function internSynthesizedByteInstance() returns GenericInstanceId
 		var args = MaxonTypeArray.create()
-		args.push(MaxonType.named(self.typeNames.intern(StringByteViewElementName)))
+		args.push(MaxonType.named(self.typeNames.intern(SynthesizedByteElementName)))
 		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
-	end 'internStringByteViewInstance'
+	end 'internSynthesizedByteInstance'
 
 	// ⭐⭐ **WHICH `Array` INSTANCE A `__ManagedMemory.create(count, elementSize)` YIELDS (R4.4)** — the one
 	// place the raw `elementSize` the source writes becomes a STATIC element type, and the reason it has to:

@@ -2667,11 +2667,13 @@ let SubpReadArity = 1 as ParamCount
 let SubpWriteArity = 2 as ParamCount
 let SubpHandleArity = 1 as ParamCount
 
-// **THE ARITY-1 FLOAT MATH INTRINSICS** (P1.0d.4-C) — `specs/{floor,ceil,round,sqrt}.md`. Builtins for the
-// same reason `trunc` is: each lowers to ONE instruction on every target, so a stdlib function would be a
-// call/ret wrapped around a single `sqrtsd`/`roundsd`/`fsqrt`/`frint`/`f64.sqrt`. Both reference compilers
-// make them builtins too (the bootstrap's `BuiltinOps1` table, 2-Parser.cs:829; v1's `isMathIntrinsicName`,
-// TypeResolution.maxon:11613).
+// **THE ARITY-1 FLOAT MATH INTRINSICS** (P1.0d.4-C, `abs` added with `specs/abs.md`) —
+// `specs/{floor,ceil,round,sqrt,abs}.md`. Builtins for the same reason `trunc` is: each lowers to ONE
+// instruction on every target — `abs` to a two-instruction sign-bit clear on x64 only, see
+// `TargetOp.absF64RegReg` — so a stdlib function would be a call/ret wrapped around a single
+// `sqrtsd`/`roundsd`/`fsqrt`/`frint`/`f64.sqrt`. Both reference compilers make them builtins too, and both
+// carry the identical FIVE (the bootstrap's `BuiltinOps1` table, 2-Parser.cs:873; v1's
+// `isMathIntrinsicName`, TypeResolution.maxon:11613).
 //
 // ⚠ Like `trunc`, each name is RESERVED wherever a call is parsed: a user `function sqrt` is shadowed by
 // this and never linked, undiagnosed. v1 has the identical property for the identical set.
@@ -2679,6 +2681,7 @@ let FloorBuiltinName = b"floor"
 let CeilBuiltinName = b"ceil"
 let RoundBuiltinName = b"round"
 let SqrtBuiltinName = b"sqrt"
+let AbsBuiltinName = b"abs"
 
 // ⭐ **THE `__Builtins` INTRINSIC TABLE (P1.0b step 2) — THE ONE PLACE THE RECOGNIZED SET IS STATED.**
 //
@@ -2703,6 +2706,18 @@ let BuiltinsCurrentTimeNanosName = b"__Builtins.currentTimeNanos"
 let BuiltinsCurrentTimeMsName = b"__Builtins.currentTimeMs"
 let BuiltinsCurrentUnixTimeSecondsName = b"__Builtins.currentUnixTimeSeconds"
 let BuiltinsSleepName = b"__Builtins.sleep"
+// ⭐ **THE TWO COMMAND-LINE INTRINSICS**, `stdlib/CommandLine.maxon`'s only floor. The bootstrap declares
+// exactly these two names with exactly these shapes (`2-Parser.cs:10952-10957`): a count that takes nothing
+// and answers an `int`, and an accessor that takes one index and answers an OWNED `__ManagedMemory` the
+// caller frees. See `CommandLineRuntime` for the split they sit on.
+let BuiltinsCommandLineCountName = b"__Builtins.commandLineCount"
+let BuiltinsCommandLineArgName = b"__Builtins.commandLineArg"
+
+// `commandLineCount()` takes nothing; `commandLineArg(index)` takes exactly one INTEGER. Stated here beside
+// the intrinsics for `SleepIntrinsicArity`'s reason — an intrinsic has no signature for SemanticCheck's
+// ordinary arity check to read, because no file declares it.
+let CommandLineCountArity = 0 as ParamCount
+let CommandLineArgArity = 1 as ParamCount
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
 // must never disagree: the intrinsic table in `parseCallNamed` (which dispatches on it) and the
@@ -3343,9 +3358,21 @@ end 'arraySurfaceMemberNames'
 //
 // ⚠⚠ **AND THE RUNG THAT BUILDS ONE OF THE ABSENT NAMES ADDS ITS LINE HERE AND STRIKES IT FROM THE
 // REFUSAL'S TAIL CLAUSE IN THE SAME EDIT** — `bufferSurfaceMemberNames`' obligation, verbatim, for the same
-// reason: only the ROSTER half of that sentence is derived. `charAt`/`indexAfter`/`indexBefore` wait on a
-// BACKWARD UAX#29 segmenter and `graphemes` has no consumer yet; add one here and forget it there, and one
-// sentence will both provide a member and call it unbuilt.
+// reason: only the ROSTER half of that sentence is derived. `indexBefore` waits on a BACKWARD UAX#29
+// segmenter, `charAt` on `makeCharFromBytes`, and `graphemes` has no consumer yet; add one here and forget it
+// there, and one sentence will both provide a member and call it unbuilt.
+//
+// ⚠⚠ **AND THAT IS THE THIRD TIME THIS SENTENCE WAS WRONG — the first two are recorded above, and this one
+// was WRONG ABOUT WHY RATHER THAN ABOUT WHAT.** It named `charAt`/`indexAfter`/`indexBefore` as one group
+// waiting on a BACKWARD segmenter. Read the reference: `indexAfter` (`stdlib/String.maxon:387-392`) and
+// `charAt` (`:380-384`) both call `findGraphemeEnd`, which is FORWARD and which shv2 has had since P1.8
+// slice B (`GraphemeRuntime.__gr_end`, and `__strix_advance` is already `graphemeOffsetToBytePos` over it).
+// Only `indexBefore` (`:398-403`) calls `findGraphemeStart`. So `indexAfter` was never blocked on anything —
+// it shipped as a fifteen-line reuse of `__strix_advance` the moment somebody checked — and `charAt` is
+// blocked on `makeCharFromBytes` (`:301-303`, a `__ManagedMemory` member the BUFFER surface's own clause
+// already names unbuilt), not on a segmenter at all. **A reason nobody checks is a reason that decides what
+// does not get built**, which is worse than the two earlier roster omissions: those denied a member that
+// existed, this one denied a member that was fifteen lines away.
 function stringSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(AppendMethod)
@@ -3369,6 +3396,7 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	names.push(StringEndIndexMethod)
 	names.push(StringFindFirstMethod)
 	names.push(StringFindLastMethod)
+	names.push(StringIndexAfterMethod)
 	names.push(SliceMethod)
 	names.push(StringTrimMethod)
 	names.push(StringTrimStartMethod)
@@ -3581,7 +3609,7 @@ function surfaceRosterRefusal(surface MemberSurface, member ByteArray, roster By
 	end 'arraySurface'
 
 	if surface == MemberSurface.string 'stringSurface'
-		return rosterRefusalSentence(StringConformerName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2", absentClause: "`{String.from(StringAddressableBytesMethod)}` and `{String.from(StringByteAtOrPanicMethod)}` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes` has no consumer yet")
+		return rosterRefusalSentence(StringConformerName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2", absentClause: "`{String.from(StringAddressableBytesMethod)}` and `{String.from(StringByteAtOrPanicMethod)}` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `indexBefore` needs a BACKWARD UAX#29 segmenter (`findGraphemeStart`), `charAt` needs `makeCharFromBytes`, and `graphemes` has no consumer yet")
 	end 'stringSurface'
 
 	if surface == MemberSurface.character 'characterSurface'
@@ -3589,7 +3617,7 @@ function surfaceRosterRefusal(surface MemberSurface, member ByteArray, roster By
 	end 'characterSurface'
 
 	if surface == MemberSurface.stringIndex 'stringIndexSurface'
-		return rosterRefusalSentence(StringIndexTypeName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2", absentClause: "the reference's `equals`/`compare` are reached through `==`/`<` instead, and `String.charAt`/`indexAfter`/`indexBefore` (the other consumers of an index) need a BACKWARD UAX#29 segmenter")
+		return rosterRefusalSentence(StringIndexTypeName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2", absentClause: "the reference's `equals`/`compare` are reached through `==`/`<` instead, and of the other consumers of an index `String.charAt` needs `makeCharFromBytes` and `String.indexBefore` a BACKWARD UAX#29 segmenter (`String.indexAfter` is built)")
 	end 'stringIndexSurface'
 
 	// ⚠ The provider is THE REFERENCE and not a rung, because this roster is not a subset it grows towards:
@@ -27679,6 +27707,12 @@ export type Parser
 		// The two searches are THROWING (`StringError.notFound`), so the runtime call must be the LAST op
 		// this arm emits — an enclosing `try` rewrites exactly that op (`rewriteLastCallToTryCall`).
 		// `emitOwnedRuntimeResult` emits nothing after the call, which is what makes it usable here.
+		// `s.indexAfter(idx)` — the third THROWING `String` method, and the third whose runtime call must be
+		// the arm's LAST op for the same reason the two searches' must be. Its two field reads come off the
+		// argument BEFORE the call, so nothing follows it.
+		if methodTok.value.equals(StringIndexAfterMethod) 'indexAfter'
+			return try self.parseStringIndexAfter(func, receiver: recv.value, range: range)
+		end 'indexAfter'
 		if methodTok.value.equals(StringFindFirstMethod) 'findFirst'
 			return try self.parseStringSearch(func, receiver: recv.value, callee: StrIndexFirstName, methodName: StringFindFirstMethod, range: range)
 		end 'findFirst'
@@ -27713,7 +27747,7 @@ export type Parser
 			// `ByteMemory` (`__ManagedMemory with Byte`) means here — and it is what makes the corpus's
 			// `urlBytes.slice(0, colonPos)` resolve: the buffer surface is where `slice`'s `endIndex:` label
 			// is OPTIONAL, and the corpus writes both indices positionally.
-			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internStringByteViewInstance(), range: range)
+			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)
 			self.markBufferSurface(view)
 			return view
 		end 'addressableBytes'
@@ -27814,6 +27848,28 @@ export type Parser
 		return self.emitOwnedRuntimeResult(callee, args: pairArgs(receiver, second: needle), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
 	end 'parseStringSearch'
 
+	// ⭐ **`s.indexAfter(idx)` — THE FORWARD STEP TO THE NEXT GRAPHEME BOUNDARY** (`stdlib/String.maxon:387-392`).
+	//
+	// ⚠ **THE BOX IS UNPACKED HERE, NOT PASSED WHOLE, AND THAT IS THIS TIER'S RULE RATHER THAN A CHOICE.**
+	// `__strix_after` is a Std function over i64s; handing it the box would make it read the two fields
+	// itself, i.e. a SECOND site that knows where `charIdx` and `bytePos` live. `emitStringIndexField` is the
+	// one derivation of that (five readers already), so the runtime is handed the two values and the layout
+	// stays known in one place.
+	//
+	// The result is an OWNED `StringIndex` on the SUCCESS path only; on the throw edge the callee's primary
+	// register is unread and the `otherwise` value takes its place, so nothing is dropped twice —
+	// `parseStringSearch`'s convention, and the reason both use `emitOwnedRuntimeResult`.
+	function parseStringIndexAfter(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let idxTok = self.current()
+		let idx = try self.requireStringIndexValue(func, methodName: StringIndexAfterMethod, anchor: idxTok)
+		try self.consume(TokenKind.rightParen)
+
+		let charIdx = self.emitStringIndexField(idx, index: StringIndexCharIdxFieldIndex, range: range)
+		let bytePos = self.emitStringIndexField(idx, index: StringIndexBytePosFieldIndex, range: range)
+		return self.emitOwnedRuntimeResult(StrIndexAfterName, args: tripleArgs(receiver, second: charIdx, third: bytePos), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
+	end 'parseStringIndexAfter'
+
 	// ⭐⭐ **`s.slice(start, endIndex: e)` AND `s.slice(start, length: n)` — TWO OVERLOADS TOLD APART BY THE
 	// ARGUMENT LABEL, NEVER BY A PARAMETER TYPE.** That is the oracle's own arrangement — its mangled name
 	// for the first is `String.slice$endIndex` — and it is what makes the pair resolvable here at all:
@@ -27830,7 +27886,7 @@ export type Parser
 	function parseStringSlice(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let startTok = self.current()
-		let startBytePos = self.emitStringIndexField(try self.requireStringIndexValue(func, anchor: startTok), index: StringIndexBytePosFieldIndex, range: range)
+		let startBytePos = self.emitStringIndexField(try self.requireStringIndexValue(func, methodName: SliceMethod, anchor: startTok), index: StringIndexBytePosFieldIndex, range: range)
 		let labelTok = try self.consumeArgLabel()
 		let endBytePos = try self.parseStringSliceEnd(func, receiver: receiver, startBytePos: startBytePos, labelTok: labelTok, range: range)
 		try self.consume(TokenKind.rightParen)
@@ -27844,7 +27900,7 @@ export type Parser
 	function parseStringSliceEnd(func IrFunction, receiver ValueId, startBytePos ValueId, labelTok Token, range SourceRange) returns ValueId throws ParseError
 		if labelTok.value.equals(EndIndexArgLabel) 'byEndIndex'
 			let endTok = self.current()
-			return self.emitStringIndexField(try self.requireStringIndexValue(func, anchor: endTok), index: StringIndexBytePosFieldIndex, range: range)
+			return self.emitStringIndexField(try self.requireStringIndexValue(func, methodName: SliceMethod, anchor: endTok), index: StringIndexBytePosFieldIndex, range: range)
 		end 'byEndIndex'
 		if labelTok.value.equals(SliceLengthArgLabel) 'byLength'
 			let countTok = self.current()
@@ -27861,10 +27917,16 @@ export type Parser
 	// Parse one argument expression and require it to be a `StringIndex`, blaming the argument's own first
 	// token. `requireStringArgValue`'s twin, and it needs its own body because a `StringIndex` is not
 	// identified by a TAG — every struct shares `structRef` — but by the compiler-owned name behind it.
-	function requireStringIndexValue(func IrFunction, anchor Token) returns ValueId throws ParseError
+	//
+	// ⚠ **`methodName` IS A PARAMETER BECAUSE THERE IS NOW MORE THAN ONE ASKER.** It spelled `SliceMethod`
+	// inline while `slice` was the only consumer of an index; `indexAfter` is the second, and an inline
+	// literal would have told its author about `'slice'` — a diagnostic naming a construct their program does
+	// not contain. That is D12's wrong-noun defect exactly, and it recurs at every helper that outlives its
+	// first caller, so the noun travels with the call.
+	function requireStringIndexValue(func IrFunction, methodName ByteArray, anchor Token) returns ValueId throws ParseError
 		let value = try self.parseExpression(func, block: self.currentBlock)
 		if not self.valueIsStringIndex(value) 'notAnIndex'
-			throw ParseError.builtinOperandType(String.from(SliceMethod), required: String.from(StringIndexTypeName), got: self.giveTypeName(self.tagOf(value), aggregateName: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))), line: anchor.line, column: anchor.column)
+			throw ParseError.builtinOperandType(String.from(methodName), required: String.from(StringIndexTypeName), got: self.giveTypeName(self.tagOf(value), aggregateName: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))), line: anchor.line, column: anchor.column)
 		end 'notAnIndex'
 		return value
 	end 'requireStringIndexValue'
@@ -28209,16 +28271,25 @@ export type Parser
 		throw ParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly the three both references declare: `next()`, `filename()` and `close()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedDirectoryMethod'
 
-	// ⭐ **AN OWNED `__ManagedMemory` OUT OF A RUNTIME CALL — the shape `filename()` and `currentPath()` share
-	// (R4.3).** Three facts have to travel together and each of them is a silent wrong answer on its own:
-	// the value is an OWNED heap record (so its scope exit must drop it), it is the `Array with Byte`
-	// instance (so `String.init` accepts it and reads it at stride 1), and it is a BUFFER SURFACE (so
-	// `.length()`/`.byteAt()` reach the `__ManagedMemory` members rather than the `Array` ones —
-	// `valueIsBufferSurface`, the provenance mark that tells the two surfaces of one record apart).
+	// ⭐ **AN OWNED `__ManagedMemory` OUT OF A RUNTIME CALL — the shape `filename()`, `currentPath()` (R4.3)
+	// and `__Builtins.commandLineArg(i)` share.** Three facts have to travel together and each of them is a
+	// silent wrong answer on its own: the value is an OWNED heap record (so its scope exit must drop it), it
+	// is a byte-PACKED `Array` instance (so `String.init` accepts it and reads it at stride 1), and it is a
+	// BUFFER SURFACE (so `.length()`/`.byteAt()` reach the `__ManagedMemory` members rather than the `Array`
+	// ones — `valueIsBufferSurface`, the provenance mark that tells the two surfaces of one record apart).
 	// `__ManagedMemory.create` states the same three at its own site; this is the second producer, so they
 	// are stated once.
+	//
+	// ⚠⚠ **THE INSTANCE IS THE COMPILER'S OWN (`internSynthesizedByteInstance`), NOT `Array with Byte`, AND
+	// THAT IS A MEASURED FIX RATHER THAN A PREFERENCE.** These buffers are `mm_alloc`'d runs of bytes that no
+	// source line describes, so their stride cannot be a function of whether the PROGRAM happens to declare
+	// `typealias Byte = int(0 to 1000)`. With `internArrayByteInstance()` here, a user's wide `Byte` made
+	// `String.init(managed)` inside `stdlib/CommandLine.maxon` fail with `E3005 … expected
+	// '__ManagedMemory', got 'Array_Byte'` — in a program that never mentions `CommandLine`, because a
+	// whitelisted module is parsed by every program. `SynthesizedByteElementName` carries the full argument
+	// and the two occasions this exact defect has been measured on.
 	function emitOwnedManagedMemoryResult(callee ByteArray, args ValueIdArray, range SourceRange) returns ValueId
-		let result = self.emitOwnedRuntimeResult(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internArrayByteInstance(), range: range)
+		let result = self.emitOwnedRuntimeResult(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)
 		self.markBufferSurface(result)
 		return result
 	end 'emitOwnedManagedMemoryResult'
@@ -35367,6 +35438,10 @@ export type Parser
 			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.sqrt, name: callee, calleeTok: anchor)
 		end 'sqrtBuiltin'
 
+		if callee.equals(AbsBuiltinName) 'absBuiltin'
+			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.abs, name: callee, calleeTok: anchor)
+		end 'absBuiltin'
+
 		// The `__Builtins.*` intrinsic table (see `BuiltinsQualifierPrefix`). Gated behind ONE prefix compare
 		// so a call to anything else pays two bytes and no allocation; an unrecognized member falls through to
 		// `emitCall`'s reserved-callee rejection, which is this table's "unknown intrinsic" arm.
@@ -35391,6 +35466,31 @@ export type Parser
 			if callee.equals(BuiltinsSleepName) 'sleep'
 				return try self.emitSleep(args, calleeTok: anchor, resultUsed: resultUsed)
 			end 'sleep'
+
+			if callee.equals(BuiltinsCommandLineCountName) 'commandLineCount'
+				if args.count() != CommandLineCountArity 'countArity'
+					throw ParseError.builtinArity(String.from(callee), expected: CommandLineCountArity, got: args.count(), line: anchor.line, column: anchor.column)
+				end 'countArity'
+
+				return self.emitRuntimeCall(CommandLineCountName, args: ValueIdArray.create(), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+			end 'commandLineCount'
+
+			// ⭐ The result is an OWNED `__ManagedMemory` — the `Array with Byte` instance `String.init` reads,
+			// marked as a BUFFER SURFACE so its members resolve there. `emitOwnedManagedMemoryResult` is what
+			// carries all three of those facts at once; `__ManagedDirectory.currentPath`/`filename` are its
+			// other two producers, and stating them a fourth time here is exactly what it exists to prevent.
+			if callee.equals(BuiltinsCommandLineArgName) 'commandLineArg'
+				if args.count() != CommandLineArgArity 'argArity'
+					throw ParseError.builtinArity(String.from(callee), expected: CommandLineArgArity, got: args.count(), line: anchor.line, column: anchor.column)
+				end 'argArity'
+
+				let index = try args.get(0) otherwise panic("commandLineArg: args.count() == CommandLineArgArity just checked but get(0) failed")
+				if not tagIsInteger(self.tagOf(index)) 'notAnIndex'
+					throw ParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: typeTagName(self.tagOf(index)), line: anchor.line, column: anchor.column)
+				end 'notAnIndex'
+
+				return self.emitOwnedManagedMemoryResult(CommandLineArgName, args: singletonArgs(index), range: SourceRange.ofToken(anchor))
+			end 'commandLineArg'
 		end 'builtinsIntrinsic'
 
 		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint)
@@ -35489,8 +35589,8 @@ export type Parser
 		return operand
 	end 'numericBuiltinOperand'
 
-	// `floor(x)` / `ceil(x)` / `round(x)` / `sqrt(x)` — the arity-1 FLOAT math intrinsics, written
-	// ONCE for all four because everything but the opcode is identical (specs/{floor,ceil,round,sqrt}.md).
+	// `floor(x)` / `ceil(x)` / `round(x)` / `sqrt(x)` / `abs(x)` — the arity-1 FLOAT math intrinsics, written
+	// ONCE for all five because everything but the opcode is identical (specs/{floor,ceil,round,sqrt,abs}.md).
 	//
 	// ⭐ THE ONE PLACE IT DIVERGES FROM `emitTrunc`, AND IT IS THE WHOLE DIFFERENCE BETWEEN THE TWO:
 	// `trunc` LEAVES the float domain, so an integer argument is the IDENTITY and is answered with the
@@ -35500,8 +35600,10 @@ export type Parser
 	// f64-operand precondition true (`assertUnaryOperandDomain`). v1 promotes at the same point for
 	// the same reason (`lowerMathIntrinsic`, LowerMaxonToStd.maxon:7784).
 	//
-	// The result is a FLOAT, per every one of the four spec files' signature (`floor(x float) float`),
-	// which is why each of their tests ends on `trunc(...)` to reach an ExitCode.
+	// The result is a FLOAT, per every one of the five spec files' signature (`floor(x float) float`),
+	// which is why each of their tests ends on `trunc(...)` to reach an ExitCode. `specs/abs.md` says so
+	// in its own words — "Currently only works with float type … For integer values, convert to float
+	// first" — so `abs` needs no integer form, exactly like its four siblings.
 	//
 	// `name` is the callee's own bytes rather than a name derived from `op`: the caller already holds
 	// them, and a diagnostic must quote what the user wrote.

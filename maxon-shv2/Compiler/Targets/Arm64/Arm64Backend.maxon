@@ -272,7 +272,12 @@ let Arm64OpFmovGprFromFp = 0x9E660000
 //
 // The resulting words are the ones the references pin: `frintn` 0x1E644000, `frintp` 0x1E64C000,
 // `frintm` 0x1E654000 (maxon-sharp ARM64CodeEmitter.cs), and `fsqrt` 0x1E61C000.
+//
+// `FABS Dd, Dn` 0x1E60C000 joins them with `specs/abs.md` — another plain FP-to-FP 2-register form, and
+// the same word the bootstrap emits (ARM64CodeEmitter.cs:453). ⚠ It is the intrinsic x64 has NO
+// instruction for; that asymmetry lives in `TargetOp.absF64RegReg` and reaches nothing here.
 let Arm64OpFsqrtD = 0x1E61C000
+let Arm64OpFabsD = 0x1E60C000
 let Arm64OpFrintDBase = 0x1E644000
 let Arm64FrintRmodeShift = 15
 let Arm64FrintRmodeNearest = 0  // frintn — to nearest, TIES TO EVEN
@@ -997,9 +1002,10 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		arm64Fcmp(lhs, rhs) then emitArm64Insn(code, insn: Arm64OpFcmpD or (arm64FpField(rhs) shl Arm64RmShift) or (arm64FpField(lhs) shl Arm64RnShift))
 		arm64Scvtf(dest, src) then emitArm64Rr(code, opcode: Arm64OpScvtfD, rd: arm64FpField(dest), rn: arm64GprField(src))
 		arm64Fcvtzs(dest, src) then emitArm64Rr(code, opcode: Arm64OpFcvtzsD, rd: arm64GprField(dest), rn: arm64FpField(src))
-		// The MATH INTRINSICS — both are FP-to-FP 2-register forms, so both ride `emitArm64Rr`
+		// The MATH INTRINSICS — all three are FP-to-FP 2-register forms, so all three ride `emitArm64Rr`
 		// unchanged; only `frint`'s rounding rides an opcode field.
 		arm64Fsqrt(dest, src) then emitArm64Rr(code, opcode: Arm64OpFsqrtD, rd: arm64FpField(dest), rn: arm64FpField(src))
+		arm64Fabs(dest, src) then emitArm64Rr(code, opcode: Arm64OpFabsD, rd: arm64FpField(dest), rn: arm64FpField(src))
 		arm64Frint(dest, src, mode) then emitArm64Rr(code, opcode: arm64FrintOpcode(mode), rd: arm64FpField(dest), rn: arm64FpField(src))
 		arm64FpLoadRdata(dest, label) then arm64EmitFpLoadRdata(code, rdataRelocs: rdataRelocs, dest: arm64FpField(dest), label: label)
 		// The GOT-indirect libSystem import call (`osAllocPages`→mmap, `osWriteStdout`→write). The same

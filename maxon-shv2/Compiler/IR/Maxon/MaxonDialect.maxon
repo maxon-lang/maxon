@@ -571,11 +571,12 @@ end 'MaxonBinOp'
 //                        It is what makes `5 + 2.0` mean 7.0, and `TypeRules.arithResultTag`
 //                        answering `float` is the promise this op keeps.
 //
-// P1.0d.4-C appends the FOUR ARITY-1 FLOAT MATH INTRINSICS — `floor`, `ceil`, `round`, `sqrt`
-// (specs/{floor,ceil,round,sqrt}.md). They are unary ops for the dialect's own reason: one operand
-// in, one result out, non-trapping, so the SHAPE decides. Both reference compilers agree — v1 maps
-// its whole math-intrinsic set onto `StdArithUnaryOpcode` (LowerMaxonToStd.maxon:13872), the
-// bootstrap onto arity-1 Maxon ops with a `MaxonFloat Result` (MaxonDialect.cs:812-848).
+// P1.0d.4-C appends the ARITY-1 FLOAT MATH INTRINSICS — `floor`, `ceil`, `round`, `sqrt`, and (with
+// specs/abs.md) `abs`, FIVE in all (specs/{floor,ceil,round,sqrt,abs}.md). They are unary ops for the
+// dialect's own reason: one operand in, one result out, non-trapping, so the SHAPE decides. Both
+// reference compilers agree, and both carry the same five — v1 maps its whole math-intrinsic set onto
+// `StdArithUnaryOpcode` (LowerMaxonToStd.maxon:13872), the bootstrap onto arity-1 Maxon ops with a
+// `MaxonFloat Result` (MaxonDialect.cs:806-848).
 //
 // ⭐ THEY ARE f64 → f64, WHICH IS WHAT MAKES `trunc` THE WRONG TEMPLATE FOR THEM. `trunc` leaves
 // the float domain; these stay inside it, so they get NO int identity short-circuit (`sqrt(16)` is
@@ -587,6 +588,12 @@ end 'MaxonBinOp'
 // wasm `f64.nearest` are all round-to-nearest/ties-to-even, both references agree, and
 // `specs/round.md`'s `round.halfway` case pins it: `round(2.5)` is **2**. The bare hardware
 // instruction is already correct on all three targets — there is no correction layer.
+//
+// ⭐ `abs` IS A BIT OPERATION, NOT ARITHMETIC, which is why it needs no NaN or overflow reasoning of its
+// own: it clears the IEEE-754 SIGN BIT and touches nothing else, so `abs(-0.0)` is `+0.0` (what
+// `specs/abs.md`'s `abs.zero` case pins through `== 0.0`), `abs(nan)` stays a NaN and `abs(-inf)` is
+// `+inf`. arm64 `fabs` and wasm `f64.abs` are that operation; x64 has no single instruction for it, so
+// the sign bit is cleared in the register — see `TargetOp.absF64RegReg`.
 export enum MaxonUnaryOp
 	neg
 	bitNot
@@ -597,6 +604,7 @@ export enum MaxonUnaryOp
 	ceil
 	round
 	sqrt
+	abs
 end 'MaxonUnaryOp'
 
 // The comparison operators the Maxon tier represents (M4). A comparison SPLITS OUT

@@ -320,6 +320,12 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// model still says only "one def, one use". Which FILE each lands in is the class column's
 		// answer, read off each value's own Std type.
 		movqGprXmm(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		// ⚠ THE ONE FLOAT OP HERE THAT IS **NOT** A PLAIN DEF. `absF64RegReg`'s `psllq`/`psrlq` pair
+		// shifts IN PLACE, so `dest` must arrive holding `src` and reads its own previous value — the
+		// two-address shape `notReg` and the four SSE ALU ops declare, not `sqrtsd`'s. Claiming a plain
+		// def here would let the allocator put `dest` in a register `src` does not occupy and emit no
+		// copy, and the op would shift whatever happened to be there.
+		absF64RegReg(dest, src) then pushReuseUnaryOperands(buf, dest: dest, src: src)
 		// The `.rdata` address `lea` (P1.2 wave A) — one plain def, no uses, exactly like
 		// `leaRegGlobal`: a RIP-relative `lea` reads no allocatable register.
 		leaRegRdata(dest, _) then pushDef(buf, vreg: dest)
@@ -382,6 +388,9 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// counterpart and as `scvtf`/`fcvtzs` beside them.
 		arm64Fsqrt(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64Frint(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		// `fabs` is a real 2-operand instruction, so — unlike its x64 counterpart `absF64RegReg`, which
+		// is an in-place shift pair — it is a PLAIN def beside `fsqrt`.
+		arm64Fabs(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64FpLoadRdata(dest, _) then pushDef(buf, vreg: dest)
 		// Neither OS-call form names an explicit register operand — arguments are pre-moved into x0..
 		// and the caller-saved clobbers ride `TargetOpMeta.implicitDefs`, exactly as `iatCall` and

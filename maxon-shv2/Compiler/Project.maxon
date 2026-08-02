@@ -2323,6 +2323,24 @@ export function builtinArrayErrorEnum() returns EnumLayout
 	return layout
 end 'builtinArrayErrorEnum'
 
+// ⭐ **THE COMPILER-OWNED `StringError`** — what the two throwing `String` searches throw
+// (`StringIndexRuntime`'s `__strix_first`/`__strix_last`) and what `String.indexAfter` throws on an index at
+// the end of the string. Registered under the BARE name `SignatureIndex.StringErrorTypeName`; that constant
+// carries the argument for the bare spelling and for its two case names.
+//
+// Its provenance is `ArrayError`'s exactly — `stdlib/String.maxon:6-9` declares it and the loader cannot list
+// that module — so it takes the same UNCONDITIONAL seed for the same stated reason.
+//
+// ⚠ `implements Error`, and NOT the shared empty: `stdlib/String.maxon:6` writes
+// `export enum StringError implements Error`, and `builtinErrorConformance`'s header records what an empty
+// list measured as one enum over.
+export function builtinStringErrorEnum() returns EnumLayout
+	var layout = EnumLayout.createCompilerOwned(StringErrorTypeName, conformsTo: builtinErrorConformance())
+	addBuiltinEnumCase(layout, caseName: StringErrorNotFoundCaseName)
+	addBuiltinEnumCase(layout, caseName: StringErrorInvalidIndexCaseName)
+	return layout
+end 'builtinStringErrorEnum'
+
 // ⭐ **THE COMPILER-OWNED `__DivisionByZeroError` (A1)** — what a possibly-zero `/` or `mod` throws, and the
 // type `specs-shv2/safety.md`'s `divide-by-zero-expression-form` and `mod-by-zero` discriminate.
 //
@@ -2534,6 +2552,8 @@ export function createEnumRegistry() returns EnumLayoutMap
 	// `declaredBuiltinErrorEnum` for what happens when the module is not loaded.
 	// R4.4: what every throwing `Array` accessor throws. See `builtinArrayErrorEnum`.
 	registry.upsert(ArrayErrorTypeName, value: builtinArrayErrorEnum())
+	// What the throwing `String` searches and `indexAfter` throw. See `builtinStringErrorEnum`.
+	registry.upsert(StringErrorTypeName, value: builtinStringErrorEnum())
 	// A1: what a possibly-zero `/` or `mod` throws. See `builtinDivisionByZeroErrorEnum`.
 	registry.upsert(DivisionByZeroErrorTypeName, value: builtinDivisionByZeroErrorEnum())
 	return registry

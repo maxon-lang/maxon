@@ -542,6 +542,12 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		// encoder's inverted ModR/M order — a golden shows the data flow, and the field inversion is
 		// `encodeMovqGprXmm`'s private business.
 		movqGprXmm(dest, src) gives "movqGprXmm {vregName(dest)}, {vregName(src)}"
+		// ⚠ THE OPERATION IS PRINTED, NOT THE INSTRUCTIONS. Every other x64 arm here names one
+		// mnemonic because it IS one; `absF64RegReg` assembles to a `psllq`/`psrlq` pair (see
+		// TargetDialect), and printing the pair would put the encoder's expansion in a golden the
+		// isel is what actually decided. What a fragment must pin is that `abs` reached the x64
+		// backend as one two-address op over these two vregs.
+		absF64RegReg(dest, src) gives "absF64RegReg {vregName(dest)}, {vregName(src)}"
 		// The LABEL is printed for the same reason `leaRegGlobal`'s is: a fragment showing which
 		// `.rdata` record a `lea` names makes a wrong record a reviewable diff.
 		leaRegRdata(dest, label) gives "leaRegRdata {vregName(dest)}, [rip + {String.from(label)}]"
@@ -601,6 +607,7 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		arm64Scvtf(dest, src) gives "scvtf {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Fcvtzs(dest, src) gives "fcvtzs {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Fsqrt(dest, src) gives "fsqrt {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64Fabs(dest, src) gives "fabs {arm64VregName(dest)}, {arm64VregName(src)}"
 		// The arm64 arms print REAL MNEMONICS (`fcvtzs`, `scvtf`, …), and `FRINT<r>`'s rounding is part
 		// of its mnemonic rather than a printed operand — so the mode resolves to the letter the
 		// assembler would show.
