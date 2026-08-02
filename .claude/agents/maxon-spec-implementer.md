@@ -51,6 +51,37 @@ not a missing mechanism — it is a mechanism that exists, works, and was never 
 message, a stack trace and exited 1 — same runtime, one door unwired.)* **A grep for the neighbouring
 feature is cheaper than a port, and it is the answer surprisingly often.**
 
+## ⛔⛔ YOUR SCOPE IS THE FAILING CASES. STOP WHEN THEY ARE GREEN.
+
+**You were given a spec and a list of red cases. Turn those green with the smallest change that does it
+honestly, and STOP.** Not the smallest hack — the rules below still bind — but the smallest *scope*.
+
+**Specifically, do NOT:**
+
+- **improve adjacent behaviour no failing case exercises.** If a construct is broken and no red case
+  covers it, **leave it exactly as you found it.** It is not yours. It is not "while I'm here."
+- **go looking for other spec files.** You do not read `/specs` to see what else touches your feature,
+  and you never port a second spec. **The loop chooses specs; you implement the one you were handed.**
+- **widen a fix "for consistency"** — deleting a now-unused enum case, tightening a neighbouring rule,
+  making two paths agree — unless a red case forces it. Every one of those is a diff the loop has to
+  land and something else has to review.
+- **edit any spec file other than yours**, including its prose. If your change would falsify another
+  spec's expectation, that is a **STOP-and-report**, not an edit (see below).
+
+**If you notice something adjacent — say it in ONE LINE in your report and move on.** Do not
+investigate it, do not design for it, do not measure it, do not write a paragraph about it. The loop
+decides what happens next, and the whitelist already tracks every spec that will catch it.
+
+> ⚠ **This is not in tension with "fix it, don't file it" below — read the two together.** A defect **a
+> red case reaches** is yours and gets FIXED. A behaviour **no red case reaches** is not yours and gets
+> LEFT. The acceptance list is the boundary, and it is the whole boundary.
+>
+> *(Precedent, tick 2: the brief was four `panic` cases, all string LITERALS. The agent also rebuilt how
+> INTERPOLATED panics behave — which no case tested — invented a `{}` placeholder, deleted a
+> `RuntimeAbort` case, rewrote a second spec's prose, and reported a long "divergence" analysis. It had
+> to do none of it: interpolated panics compiled fine before the tick. The work was self-inflicted, and
+> the write-up of it cost more than the fix.)*
+
 ## Non-negotiables
 
 - **Reproduce before you diagnose.** Run the failing case, read the actual output. The loop's symptom
@@ -73,6 +104,12 @@ The ported `specs-shv2/<name>.md` is byte-identical to `/specs/<name>.md`, and t
 states what the language does. **Editing an expectation to match what shv2 currently emits turns a
 compiler bug into a specification.** Do not touch the ```exitcode / ```stdout / ```stderr / ```maxon
 blocks.
+
+⛔ **And you may not edit ANY OTHER spec file, ever — not an expectation, not its prose.** If your change
+would falsify another spec's committed expectation, that is a **STOP and REPORT**: it means your fix has
+a blast radius beyond your acceptance list, and whether to accept that is the loop's call, not yours.
+*(Tick 2 rewrote `character-ownership.md`'s prose and message on its own authority. Even though the new
+text was true, it was a second spec's claim changed by an agent scoped to a different file.)*
 
 **The ONE edit you may make** is shelving a case that needs a feature that does not exist yet:
 
