@@ -840,6 +840,13 @@ export union MaxonOp
 	// of the `panic` keyword. Carrying a `ValueId` instead would mean emitting a `stringLiteral` op whose
 	// only consumer diverges — a heap-free rdata record, but still an op, a value and a drop obligation on a
 	// path that never returns — and would still leave lowering unable to say WHERE the panic was written.
+	//
+	// ⚠ **THE VALUE FORM EXISTS ANYWAY, AS A SECOND OP, AND THAT IS NOT A CONTRADICTION.** `panicAbortValue`
+	// (at the tail of this union) carries a `ValueId` because an INTERPOLATED message has no parse-time
+	// text to bake at all — the argument above is a reason not to spell a BAKEABLE message as a value, not
+	// a claim that every message is bakeable. The parser picks between them; both end on `mrt_panic` with a
+	// NUL-terminated line, and neither leaves lowering guessing at the location, because the interpolation
+	// carries the very same prefix as its first fragment.
 	panicAbort(message ByteArray) = MaxonOpMeta{category: OpCategory.panicking}
 	// --- P1.5-A1: non-capturing function values ---
 	//
@@ -1005,6 +1012,25 @@ export union MaxonOp
 	// ⚠ Its `args` is bound only in a SMALL match (`lowerWitnessTryDispatch`), never in `lowerOp`'s big one —
 	// `witnessDispatch`'s trap, unchanged.
 	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
+	// --- A3n: a panic whose message is RENDERED AT RUN TIME ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `witnessTryDispatch`, per the band-append invariant: a
+	// mid-union insert is silently swallowed by any range arm (`throwError to panicAbort` among them, which
+	// is exactly the arm this variant must be classified beside). `OpCategory.panicking` places it logically
+	// with `panicAbort`, independent of this tail position.
+	//
+	// ⭐ **THE TWIN OF `panicAbort`, DIFFERING IN ONE THING: THE MESSAGE IS A VALUE.** `panic("value is {x}")`
+	// cannot bake its line — `{x}` is not known until the program runs — so the parser ASSEMBLES the whole
+	// line as an interpolation, location prefix and trailing newline included, and hands this op the
+	// ADDRESS of its bytes. A fused interpolation buffer is NUL-terminated by construction
+	// (`Parser.emitStringInterp`: the byte at `buffer[totalLen]` comes from the slab's zeroing), so what
+	// reaches the runtime is a C string of exactly the shape `panicAbort`'s interned blob is — one
+	// `mrt_panic`, one contract, two ways of producing the bytes.
+	//
+	// ⚠ **`messagePtr` IS A RAW `buffer@0`, NOT THE String RECORD**, so nothing below the parser needs to
+	// know a String's layout. It is a USE; the op defines nothing and never returns. Like `panicAbort` it is
+	// a BODY op followed by a dead return terminator.
+	panicAbortValue(messagePtr ValueId) = MaxonOpMeta{category: OpCategory.panicking}
 end 'MaxonOp'
 
 // ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
@@ -1109,6 +1135,8 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		throwError gives MaxonCalleeKind.noCallee
 		propagateError gives MaxonCalleeKind.noCallee
 		panicAbort gives MaxonCalleeKind.noCallee
+		// A panic binds no callee under either spelling — the runtime it ends on is not a user name.
+		panicAbortValue gives MaxonCalleeKind.noCallee
 		indirectCall gives MaxonCalleeKind.noCallee
 		await gives MaxonCalleeKind.noCallee
 		tryAwait gives MaxonCalleeKind.noCallee

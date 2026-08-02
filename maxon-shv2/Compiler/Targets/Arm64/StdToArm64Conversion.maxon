@@ -117,7 +117,7 @@ let Arm64DoubleBytes = 8 as ByteCount
 // vreg carries — in ONE place. The `.rawValue` is bound to a local FIRST, deliberately, exactly as
 // `x64PhysReg` does: the bootstrap's union-case argument type-checker cannot lower an
 // `EnumMember.rawValue` written directly as a case argument (E9001).
-function arm64PhysReg(reg Arm64Register) returns TargetVReg
+export function arm64PhysReg(reg Arm64Register) returns TargetVReg
 	let n = reg.rawValue
 	return TargetVReg.physical(n)
 end 'arm64PhysReg'
@@ -389,6 +389,8 @@ type StdToArm64Lowering
 			osPipeCreate to osReadWallClock gives 0
 			// R4.1 + R4.2: x64-windows only — refused at the CALL SITE by E3104, so none reaches this backend.
 			osFileOpenRead to osFileAttributes gives 0
+			// A rendered panic calls `mrt_panic` with one REGISTER argument, exactly as `osPanic` does.
+			osPanicValue gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -478,7 +480,7 @@ type StdToArm64Lowering
 			// marker and are pinned by arm64 goldens like every other target's.
 			funcAddr(resultId, funcName) then self.emit(dstRef, op: TargetOp.arm64LeaFuncAddr(TargetVReg.virtual(resultId), funcName: funcName))
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
-			osPanic then self.lowerPanic(dstRef)
+			osPanic(label) then self.lowerPanic(label, dstRef: dstRef)
 			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
 			// only at this rung — its QueryPerformanceCounter clock and Windows `Sleep` have no arm64 primitive
 			// yet, and a `sleep` program is spec-gated to x64-windows, so neither op ever reaches arm64 lowering.
@@ -507,6 +509,7 @@ type StdToArm64Lowering
 			// this is the backstop for a compiler bug rather than the user-facing rejection.
 			osReadWallClock then panic("lowerStdToArm64: `osReadWallClock` is x64-windows only — the wall clock is x64-windows-gated at this rung")
 			osFileOpenRead to osFileAttributes then panic("lowerStdToArm64: the file-IO ops are x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
+			osPanicValue(messagePtrId) then self.lowerPanicValue(messagePtrId, dstRef: dstRef)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -549,6 +552,7 @@ type StdToArm64Lowering
 			osPipeCreate to osWriteFile then panic("lowerStdToArm64: a P1.5 IOCP op appeared as a block terminator (lowering bug — all are body ops; also x64-windows only)")
 			osReadWallClock then panic("lowerStdToArm64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op; also x64-windows only)")
 			osFileOpenRead to osFileAttributes then panic("lowerStdToArm64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op; also x64-windows only)")
+			osPanicValue then panic("lowerStdToArm64: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1059,22 +1063,29 @@ type StdToArm64Lowering
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: Arm64LinuxSyscallExitGroup)
 	end 'lowerOsExit'
 
-	// Lower `osPanic` (a P1.9 range-check violation) on arm64 to a BARE EXIT. arm64 has
-	// no panic runtime / backtrace of its own — `mrt_panic` and its walker are hand-assembled x64 chunks
-	// in `X64Runtime`, appended to BOTH x64 lanes since rung A1j — so a violated guard aborts WITHOUT the
-	// message + backtrace the x64 path prints.
+	// Lower `osPanic <label>` — a violated P1.9 range guard, or a user `panic("…")` — to `mrt_panic`,
+	// which prints the baked `panic at …` line plus a symbolized backtrace and exits `PanicExitCode`. The
+	// message address goes in x0 (AAPCS64's first argument) and the `bl` follows; `functionMakesCall`
+	// sees the branch-with-link and frames the caller accordingly.
 	//
-	// ⚠ DO NOT RE-DERIVE THIS GAP FROM WHAT THE SPEC SUITE HAPPENS TO PIN. The sentence that stood here
-	// justified it by "the two runtime-panic spec cases are restricted to `x64-windows`" — which was the
-	// A1j bug's own reasoning wearing arm64's name: those cases carried that marker BECAUSE a lane
-	// printed nothing, so citing the marker as the reason is circular, and the count was stale the moment
-	// x64-linux gained the runtime (there are 16, on both x64 lanes). The real reason arm64 exits bare is
-	// that nobody has written an arm64 `mrt_panic`. Same primitive as `lowerOsExit`, over the one
-	// `PanicExitCode` every backend's panic path reads (`Targets/Shared/PanicExitCode`).
-	function lowerPanic(dstRef BlockRef)
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: PanicExitCode))
-		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: Arm64LinuxSyscallExitGroup)
+	// ⭐ NO OS SPLIT HERE, exactly as x64's `lowerPanic` has none: x0 is not an OS fact, and the ONE
+	// genuine per-OS difference — how the process finally exits — lives INSIDE the chunk, where
+	// `Arm64PanicRuntime` derives it from the same `arm64OsCallKind` door this file consults for every
+	// other primitive. This used to be a BARE EXIT, printing nothing on either arm64 lane, because
+	// nobody had written an arm64 `mrt_panic`; `Arm64PanicRuntime` is that runtime.
+	function lowerPanic(label ByteArray, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64LeaRdata(arm64PhysReg(Arm64Register.x0), label: label))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(PanicName))
 	end 'lowerPanic'
+
+	// The RENDERED twin (A3n). The message is a runtime POINTER — an interpolation assembled the whole
+	// `panic at …\n` line, NUL terminator included — so it MOVES into x0 where the baked form materializes
+	// a label address there. Everything after is identical: one `mrt_panic`, one cstr contract, two ways
+	// of producing the bytes.
+	function lowerPanicValue(messagePtrId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(messagePtrId)))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(PanicName))
+	end 'lowerPanicValue'
 
 	// Lower `osAllocPages(size)` to the POSIX page source `mmap(NULL, size, PROT_READ|PROT_WRITE,
 	// MAP_ANON|MAP_PRIVATE, -1, 0)` — the arm64 twin of x64's `lowerOsAllocPages` (VirtualAlloc), and FAR

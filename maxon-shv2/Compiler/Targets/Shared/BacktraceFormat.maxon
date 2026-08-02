@@ -1,0 +1,170 @@
+// BacktraceFormat — everything a PANIC BACKTRACE is, that is not an instruction set: the `__symtable`
+// wire format, the frame-record layout the walk follows, the words a trace prints, and the names its
+// runtime functions answer to.
+//
+// ⭐ **IT EXISTS BECAUSE THERE ARE NOW TWO WALKERS.** Every constant here was declared inside
+// `Targets/X64/` while x64 was the only backend that could symbolize a frame. The arm64 panic runtime
+// (`Targets/Arm64/Arm64PanicRuntime`) reads the SAME table, prints the SAME words and answers to the
+// SAME `mrt_` names — so leaving them in the x64 files would have meant either an arm64 file reaching
+// into `Targets/X64/` for a format, or (far worse, and this project's signature bug) a second copy of
+// the layout that agrees today and is free to drift tomorrow. A backtrace format that two backends
+// spell separately is a backtrace that lies on one of them.
+//
+// What stayed behind is what is genuinely one ISA's: x64's fault-path apparatus (the VEH thunk, the
+// `EXCEPTION_POINTERS`/`ucontext` offsets, the hex writer, the ±64 MiB stack window a CORRUPTED frame
+// pointer is validated against). arm64 has no fault handler yet, so it has no use for any of it.
+
+// --- `__symtable`: the backtrace's function-name table ---
+//
+// The panic runtime symbolizes a frame by looking its `.text` offset up in this table.
+// It is emitted as the LAST chunk of `.text` — not into `.symtab` — and that placement
+// buys three things at once:
+//   - It is reachable by an ordinary PC-relative address materialization filed as a chunk
+//     reference (x64: a `lea r64, [rip + disp32]` as a `CallFixup`, because a RIP-relative
+//     disp32 and a `call rel32` share the end-of-field convention; arm64: the ADRP+ADD
+//     `leaFuncAddr` pair), because both concats already resolve those by name. No new
+//     relocation kind, no symdata pipeline, no rdata pipeline.
+//   - `textSize = __symtable - mrt_start` becomes STRUCTURALLY the size of the code (the
+//     walker's upper bound on a symbolizable return address) rather than an accident of
+//     which section the writer happened to lay down next.
+//   - `.text` is READ|EXECUTE, so a read-only table living in it needs no new section.
+//
+// Format (byte-identical to the C# bootstrap's — X86CodeEmitter.EmitSymbolTable):
+//   count(4) | entries[count] of { codeOffset(4), nameOffset(4) } | NUL-terminated names
+// `nameOffset` is relative to the START of the table; the header is `4 + 8*count` bytes.
+export let SymbolTableName = b"__symtable"
+
+// The format's ONE definition. It has THREE parties — `buildSymbolTableBytes` below writes it,
+// and the two panic runtimes READ it out of the emitted program (`X64Runtime.buildPrintFrameChunk`
+// and `Arm64PanicRuntime.buildArm64PrintFrameChunk`, whose reader-side offsets are derived from
+// these and from nothing else). That is exactly the shape this project keeps getting burned by:
+// copies of one layout, agreeing today, with nothing that MAKES them agree. Widen the count here
+// against a walker that still adds 4 and every frame symbolizes to the wrong function — no compile
+// error, no failing assert, just a backtrace that lies.
+export let SymbolTableColumnBytes = 4  // every column is a u32: the count, and each entry field
+export let SymbolTableEntryColumns = 2  // an entry is { codeOffset, nameOffset }
+export let SymbolTableCountBytes = SymbolTableColumnBytes
+export let SymbolTableEntryBytes = SymbolTableColumnBytes * SymbolTableEntryColumns
+
+// `__symtable`'s alignment within `.text`. x64 tolerates unaligned DWORD loads and AArch64's
+// `ldr w` does too for this table's naturally-aligned columns, so this is not a correctness
+// requirement of either reader — it matches the C# emitter's contract
+// (`DefineSymdata("__symtable", table, 4)`) so the tables stay byte-comparable.
+export let SymbolTableAlignment = 4
+
+// --- The READER's view of the same table ---
+//
+// Every offset here is DERIVED from the writer above and from nothing else. The two sides are a
+// contract, and the emitter is the party that defines it; a reader that restated `4` and `8` in
+// its own words would be the same layout written down twice, free to disagree the moment either
+// side moved — and the disagreement is not a compile error but a walker striding through the
+// table at the wrong pitch, naming the wrong function for every frame.
+export let SymtabOffEntries = SymbolTableCountBytes as Imm32  // the entry array starts just past the count
+export let SymtabEntryOffCodeOffset = 0 as Imm32  // an entry's first column
+export let SymtabEntryOffNameOffset = SymbolTableColumnBytes as Imm32  // … and its second
+
+// log2 of the entry stride: both walkers index the entry array by a left shift, not by a multiply.
+// A SHIFT COUNT, not a size — the two are only interchangeable by accident, so this is the
+// one value that cannot be spelled as a byte count, and `assertSymtabStride` is what keeps
+// it honest against `SymbolTableEntryBytes` rather than trusting the two to stay in step.
+export let SymtabEntryShift = 3
+
+// The stride the walkers actually index by, recomputed from the shift above. Guards the one
+// number in the reader's view that duplicates the writer and cannot be derived from it.
+export function assertSymtabStride()
+	let stride = 1 shl SymtabEntryShift
+	if stride != SymbolTableEntryBytes 'strideDrift'
+		panic("assertSymtabStride: a walker strides {stride} bytes per symbol-table entry (shift {SymtabEntryShift}) but `buildSymbolTableBytes` writes {SymbolTableEntryBytes} — the emitter and the walker disagree about the format, and every backtrace would name the wrong function")
+	end 'strideDrift'
+end 'assertSymtabStride'
+
+// --- Frame walking ---
+//
+// Cap on printed frames: a backtrace is a diagnostic, not a transcript, and the cap is
+// also what stops a chain that survives every validity check from looping forever.
+export let MaxBacktraceFrames = 32
+
+// A frame record's two words: the CALLER's saved frame pointer at +0 and the return address at
+// +8. x64 builds it with `push rbp; mov rbp, rsp` and AArch64 with `stp x29, x30, [sp, #-N]!;
+// mov x29, sp` — different instructions, IDENTICAL layout — which is why one pair of offsets
+// serves both walkers and why every function on both backends is framed (a chain with a hole is
+// not a chain).
+export let FrameOffSavedFramePointer = 0
+export let FrameOffReturnAddr = 8
+
+// A return address points at the instruction AFTER the call, so when that call is a
+// function's LAST instruction the raw address lands at the start of the NEXT function.
+// Biasing by one byte resolves the frame to the calling function. Frame 0 of a FAULT
+// backtrace takes no bias — a faulting RIP already IS the faulting instruction.
+export let ReturnAddrSymbolBias = 1
+
+// --- The words a trace prints ---
+//
+// ONE spelling per line, for EVERY producer: x64's hardware-fault path (`mrt_fault_backtrace`),
+// x64's software panic and arm64's software panic. A reader is entitled to one trace format from
+// one runtime, and nothing but these constants would make three emitters agree.
+export let BacktraceHeader = b"Stack trace:\n"
+export let FrameLinePrefix = b"  in "
+export let UnknownFrameName = b"<unknown>"
+export let FrameLineTerminator = b"\n"
+
+// --- Runtime function names ---
+//
+// `mrt_` mirrors v1's runtime prefix. These are the names each backend's intra-`.text` call fixup
+// resolves against, and they are ALSO what a backtrace prints, so they are the diagnostic's
+// user-visible vocabulary. Declared here rather than per backend because `mrt_panic` in particular
+// is named from THREE sides — the chunk that defines it, the isel that calls it, and the trace that
+// may print it — on each of two backends.
+export let WriteStderrName = b"mrt_write_cstr_stderr"
+export let PrintFrameName = b"mrt_panic_print_frame"
+export let WalkFramesName = b"mrt_panic_walk_frames"
+
+// The callable SOFTWARE panic entry (a P1.9 range check, and a user `panic("…")`). Named here so
+// each backend's `lowerPanic` targets the SAME chunk its own runtime defines — one string, one fixup.
+export let PanicName = b"mrt_panic"
+
+// STDERR_FILENO. A POSIX fact, not a per-OS one: x64-linux's `write` syscall, arm64-linux's `svc`
+// and arm64-macOS's libSystem `_write` all name the same descriptor. (Windows has no fd for it —
+// its writer asks `GetStdHandle(STD_ERROR_HANDLE)` instead, which is why that constant stays with
+// the x64 Windows chunk that is its only reader.)
+export let StderrFd = 0x2
+
+// Serialize the symbol table. `symbols` MUST already be in ascending `codeOffset` order:
+// the runtime's lookup keeps the LAST entry satisfying `text_offset >= codeOffset`, which
+// is the greatest such entry ONLY if the table ascends. Concat lays chunks out in order,
+// so the order is a fact of the layout — asserted here rather than re-established by a
+// sort, because a sort would silently paper over a layout that had stopped ascending.
+export function buildSymbolTableBytes(symbols DebugSymbolArray) returns ByteArray
+	let headerSize = SymbolTableCountBytes + SymbolTableEntryBytes * symbols.count()
+	var names = ByteArray.create()
+	var table = ByteArray.create()
+	table.reserve(headerSize)
+	writeDword(table, value: symbols.count())
+
+	var prevOffset = 0 as CodeOffset
+	for (iter, sym) in symbols.withIterator() 'entries'
+		if iter.index() > 0 and sym.codeOffset <= prevOffset 'notAscending'
+			panic("buildSymbolTableBytes: '{String.from(sym.name)}' is at .text offset {sym.codeOffset}, which does not exceed its predecessor's {prevOffset} — the symbol table must ascend, because the runtime's lookup takes the LAST matching entry and would otherwise symbolize a frame to the wrong function")
+		end 'notAscending'
+		prevOffset = sym.codeOffset
+
+		let entryStart = table.count()
+		writeDword(table, value: sym.codeOffset)
+		writeDword(table, value: headerSize + names.count())
+
+		// These two writes are POSITIONAL — they are the only place an entry's column order
+		// is stated — so this ties them back to the declared width the walker sizes its
+		// stride from. Add a third column without widening `SymbolTableEntryColumns` and the
+		// header arithmetic above silently under-counts, putting every `nameOffset` in the
+		// table out by a multiple of the symbol count.
+		if table.count() - entryStart != SymbolTableEntryBytes 'entryWidth'
+			panic("buildSymbolTableBytes: wrote {table.count() - entryStart} bytes for '{String.from(sym.name)}' but SymbolTableEntryBytes declares {SymbolTableEntryBytes} — the emitted columns and the width the walker strides by have drifted")
+		end 'entryWidth'
+
+		names.append(sym.name)
+		names.push(0)
+	end 'entries'
+
+	table.append(names)
+	return table
+end 'buildSymbolTableBytes'

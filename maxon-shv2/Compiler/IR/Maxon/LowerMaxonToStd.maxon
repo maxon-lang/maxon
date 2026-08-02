@@ -893,6 +893,8 @@ type MaxonToStdLowering
 			// The THROWING twin (P1.7a slice 2b-v) — the same dispatch plus the second `errorFlag` result, so it
 			// goes through its own small re-match for the same tail-slot-`Array` reason.
 			witnessTryDispatch then self.lowerWitnessTryDispatch(hlOp, dstBlock: dstBlock)
+			// A panic whose message was ASSEMBLED at run time (A3n) — the pointer passes through verbatim.
+			panicAbortValue(messagePtr) then self.stdModule.appendOp(dstBlock, op: StdOp.osPanicValue(messagePtr))
 		end 'lower'
 	end 'lowerOp'
 
@@ -926,6 +928,7 @@ type MaxonToStdLowering
 			sizeofType then panic("lowerMaxonToStd: a `sizeofType` op appeared as a block terminator (parser bug — sizeof is a value-producing body op, never a terminator)")
 			byteStringLiteral then panic("lowerMaxonToStd: a `byteStringLiteral` op appeared as a block terminator (parser bug — a byte-string literal is a value-producing body op, never a terminator)")
 			witnessDispatch to witnessTryDispatch then panic("lowerMaxonToStd: a `witnessDispatch` op appeared as a block terminator (parser bug — a witness dispatch is a value-producing body op, never a terminator)")
+			panicAbortValue then panic("lowerMaxonToStd: a `panicAbortValue` op appeared as a block terminator (parser bug — like `panicAbort` it is a body op followed by a dead return terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -2454,6 +2457,10 @@ type MaxonToStdLowering
 	// BYTES `.rdata` path a String literal's payload takes. Deduping by bytes is what makes two panics with
 	// distinct messages take distinct labels (and two with identical text at identical positions correctly
 	// share one), so `osPanic` can never print a neighbour's message.
+	// ⚠ **THE BAKED HALF OF A PAIR.** A message with an INTERPOLATION cannot be interned — `{x}` is not
+	// known until the program runs — so the parser assembles that line at run time and emits
+	// `panicAbortValue`, which lowers to `osPanicValue` (a POINTER) a few lines above. Both end on
+	// `mrt_panic` with a NUL-terminated line; only where the bytes live differs.
 	function lowerPanicAbort(message ByteArray, dstBlock IrBlock)
 		let blobLabel = registerStringBlob(self.globalData, bytes: message)
 		self.stdModule.appendOp(dstBlock, op: StdOp.osPanic(blobLabel.toByteArray()))

@@ -1680,81 +1680,9 @@ end 'emitFunctionChunk'
 // so augmentWithRuntime builds a function under the same name the concat looks up.
 export let EntryPointName = b"mrt_start"
 
-// --- `__symtable`: the backtrace's function-name table ---
-//
-// The panic runtime symbolizes a frame by looking its `.text` offset up in this table.
-// It is emitted as the LAST chunk of `.text` — not into `.symtab` — and that placement
-// buys three things at once:
-//   - It is reachable by an ordinary `lea r64, [rip + disp32]` filed as a `CallFixup`,
-//     because a RIP-relative disp32 and a `call rel32` share the end-of-field convention
-//     and concat already resolves those by name. No new relocation kind, no symdata
-//     pipeline, no rdata pipeline — none of which exist at this milestone.
-//   - `textSize = __symtable - mrt_start` becomes STRUCTURALLY the size of the code (the
-//     walker's upper bound on a symbolizable return address) rather than an accident of
-//     which section the writer happened to lay down next.
-//   - `.text` is READ|EXECUTE, so a read-only table living in it needs no new section.
-//
-// Format (byte-identical to the C# bootstrap's — X86CodeEmitter.EmitSymbolTable):
-//   count(4) | entries[count] of { codeOffset(4), nameOffset(4) } | NUL-terminated names
-// `nameOffset` is relative to the START of the table; the header is `4 + 8*count` bytes.
-export let SymbolTableName = b"__symtable"
-
-// The format's ONE definition. It has TWO parties — `buildSymbolTableBytes` below writes it,
-// and the panic runtime's walker READS it out of the emitted program (X64Runtime's
-// `buildPrintFrameChunk`, whose reader-side offsets are derived from these and from nothing
-// else). That is exactly the shape this project keeps getting burned by: two copies of one
-// layout, agreeing today, with nothing that MAKES them agree. Widen the count here against a
-// walker that still adds 4 and every frame symbolizes to the wrong function — no compile
-// error, no failing assert, just a backtrace that lies.
-export let SymbolTableColumnBytes = 4  // every column is a u32: the count, and each entry field
-export let SymbolTableEntryColumns = 2  // an entry is { codeOffset, nameOffset }
-export let SymbolTableCountBytes = SymbolTableColumnBytes
-export let SymbolTableEntryBytes = SymbolTableColumnBytes * SymbolTableEntryColumns
-
-// `__symtable`'s alignment within `.text`. x64 tolerates unaligned DWORD loads, so this
-// is not a correctness requirement of the reader — it matches the C# emitter's contract
-// (`DefineSymdata("__symtable", table, 4)`) so the two tables stay byte-comparable.
-let SymbolTableAlignment = 4
-
-// Serialize the symbol table. `symbols` MUST already be in ascending `codeOffset` order:
-// the runtime's lookup keeps the LAST entry satisfying `text_offset >= codeOffset`, which
-// is the greatest such entry ONLY if the table ascends. Concat lays chunks out in order,
-// so the order is a fact of the layout — asserted here rather than re-established by a
-// sort, because a sort would silently paper over a layout that had stopped ascending.
-function buildSymbolTableBytes(symbols DebugSymbolArray) returns ByteArray
-	let headerSize = SymbolTableCountBytes + SymbolTableEntryBytes * symbols.count()
-	var names = ByteArray.create()
-	var table = ByteArray.create()
-	table.reserve(headerSize)
-	writeDword(table, value: symbols.count())
-
-	var prevOffset = 0 as CodeOffset
-	for (iter, sym) in symbols.withIterator() 'entries'
-		if iter.index() > 0 and sym.codeOffset <= prevOffset 'notAscending'
-			panic("buildSymbolTableBytes: '{String.from(sym.name)}' is at .text offset {sym.codeOffset}, which does not exceed its predecessor's {prevOffset} — the symbol table must ascend, because the runtime's lookup takes the LAST matching entry and would otherwise symbolize a frame to the wrong function")
-		end 'notAscending'
-		prevOffset = sym.codeOffset
-
-		let entryStart = table.count()
-		writeDword(table, value: sym.codeOffset)
-		writeDword(table, value: headerSize + names.count())
-
-		// These two writes are POSITIONAL — they are the only place an entry's column order
-		// is stated — so this ties them back to the declared width the walker sizes its
-		// stride from. Add a third column without widening `SymbolTableEntryColumns` and the
-		// header arithmetic above silently under-counts, putting every `nameOffset` in the
-		// table out by a multiple of the symbol count.
-		if table.count() - entryStart != SymbolTableEntryBytes 'entryWidth'
-			panic("buildSymbolTableBytes: wrote {table.count() - entryStart} bytes for '{String.from(sym.name)}' but SymbolTableEntryBytes declares {SymbolTableEntryBytes} — the emitted columns and the width the walker strides by have drifted")
-		end 'entryWidth'
-
-		names.append(sym.name)
-		names.push(0)
-	end 'entries'
-
-	table.append(names)
-	return table
-end 'buildSymbolTableBytes'
+// `__symtable` — the backtrace's function-name table — is a FORMAT, not an x64 fact: its layout, its
+// name and its serializer live in `Targets/Shared/BacktraceFormat` because the arm64 panic runtime
+// reads the identical table. Concat below appends it to close `.text`.
 
 // Concatenate every function chunk into the final `.text`, rebase each chunk's
 // CHUNK-LOCAL fixups to absolute `.text` offsets, resolve intra-module direct

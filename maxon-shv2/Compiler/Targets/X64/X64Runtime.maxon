@@ -111,11 +111,6 @@ end 'IntegerFaultKind'
 // would silently stop the harness stripping one of the two lines.
 let FaultRipTag = b" at rip=0x"
 
-// The header that opens a symbolized backtrace. ONE spelling for BOTH producers — the hardware-fault
-// path (`mrt_fault_backtrace`) and the software panic (`mrt_panic`) — because a reader is entitled to
-// one trace format from one runtime, and nothing but this constant would make the two agree.
-let BacktraceHeader = b"Stack trace:\n"
-
 // The whole fixed prefix of `kind`'s panic line, up to the ASLR-dependent hex. ONE answer to "which
 // fault prints what", asked by the Windows thunk (which picks between the two AT RUNTIME, by loading
 // the chosen string's address) and by the Linux handler (which cannot classify at all, and says so at
@@ -147,54 +142,12 @@ let ContextOffRsp = 0x098
 let ContextOffRbp = 0x0A0
 let ContextOffRip = 0x0F8
 
-// --- Frame walking ---
-// Cap on printed frames: a backtrace is a diagnostic, not a transcript, and the cap is
-// also what stops a chain that survives every validity check below from looping forever.
-let MaxBacktraceFrames = 32
+// --- Frame walking (the x64-FAULT half; the shared half is `Targets/Shared/BacktraceFormat`) ---
 
 // The window above the faulting RSP a frame pointer must lie in to be believed:
 // 64 MiB, larger than any thread stack Windows hands out. A fault that corrupted RBP then
 // yields a SHORT trace instead of a wild read that faults again inside the diagnostic.
 let StackWindowBytes = 0x4000000
-
-// A saved-RBP frame's two words: the caller's saved RBP at [rbp+0], the return address at
-// [rbp+8]. This is the whole reason `1abbe292d` put a frame pointer on every function.
-let FrameOffSavedRbp = 0
-let FrameOffReturnAddr = 8
-
-// A return address points at the instruction AFTER the call, so when that call is a
-// function's LAST instruction the raw address lands at the start of the NEXT function.
-// Biasing by one byte resolves the frame to the calling function. Frame 0 of a FAULT
-// backtrace takes no bias — a faulting RIP already IS the faulting instruction.
-let ReturnAddrSymbolBias = 1
-
-// --- Symbol table reader ---
-// The READER of the format X64Backend's `buildSymbolTableBytes` writes: count(4), then
-// entries of { codeOffset(4), nameOffset(4) }, then the NUL-terminated names.
-//
-// Every offset here is DERIVED from that writer's constants and from nothing else. The two
-// sides are a contract, and the emitter is the party that defines it; a reader that restated
-// `4` and `8` in its own words would be the same layout written down twice, free to disagree
-// the moment either side moved — and the disagreement is not a compile error but a walker
-// striding through the table at the wrong pitch, naming the wrong function for every frame.
-let SymtabOffEntries = SymbolTableCountBytes as Imm32  // the entry array starts just past the count
-let SymtabEntryOffCodeOffset = 0 as Imm32  // an entry's first column
-let SymtabEntryOffNameOffset = SymbolTableColumnBytes as Imm32  // … and its second
-
-// log2 of the entry stride: the entry array is indexed by `shl index, 3`, not by a multiply.
-// A SHIFT COUNT, not a size — the two are only interchangeable by accident, so this is the
-// one value that cannot be spelled as a byte count, and `assertSymtabStride` is what keeps
-// it honest against `SymbolTableEntryBytes` rather than trusting the two to stay in step.
-let SymtabEntryShift = 3
-
-// The stride the walker actually indexes by, recomputed from the shift above. Guards the one
-// number in this file that duplicates the writer and cannot be derived from it.
-function assertSymtabStride()
-	let stride = 1 shl SymtabEntryShift
-	if stride != SymbolTableEntryBytes 'strideDrift'
-		panic("assertSymtabStride: the walker strides {stride} bytes per symbol-table entry (shl index, {SymtabEntryShift}) but X64Backend writes {SymbolTableEntryBytes} — the emitter and the walker disagree about the format, and every backtrace would name the wrong function")
-	end 'strideDrift'
-end 'assertSymtabStride'
 
 // --- Hex formatting ---
 // The panic line carries `rip=0x…` paired with `diag_base=0x…` (the runtime address of a
@@ -221,10 +174,7 @@ let HexBufferBytes = 17  // 16 digits + the NUL
 // user-visible vocabulary.
 // `mrt_start` calls this one — the panic runtime's single entry point from module code.
 export let RuntimeInitName = b"mrt_runtime_init"
-let WriteStderrName = b"mrt_write_cstr_stderr"
 let WriteHexName = b"mrt_write_hex64"
-let PrintFrameName = b"mrt_panic_print_frame"
-let WalkFramesName = b"mrt_panic_walk_frames"
 let FaultBacktraceName = b"mrt_fault_backtrace"
 let FaultThunkName = b"mrt_fault_thunk"
 
@@ -237,10 +187,6 @@ let LinuxFaultHandlerName = b"mrt_fault_handler"
 // kernel demands a restorer address to build the return frame — mandatory even though this handler never
 // returns through it. Just `mov eax, 15; syscall` (rt_sigreturn).
 let LinuxSigreturnName = b"mrt_rt_sigreturn"
-
-// The callable SOFTWARE panic entry (P1.9 range checks). EXPORTED so `StdToX64Conversion.lowerPanic`
-// names the SAME chunk the `osPanic` guard's `callDirect` targets — one string, one fixup.
-export let PanicName = b"mrt_panic"
 
 // ==========================================================================
 // The chunk assembler
@@ -657,7 +603,7 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), srcReg: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rdx)
 
-	emitPrintString(asm, bytes: b"  in ")
+	emitPrintString(asm, bytes: FrameLinePrefix)
 
 	// count = *(u32*)symtable — a 32-bit load, which zero-extends. v1 loads 8 bytes and
 	// masks; the narrow load is the same value in one instruction.
@@ -710,10 +656,10 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: newline)
 
 	asm.placeLabel(unknown)
-	emitPrintString(asm, bytes: b"<unknown>")
+	emitPrintString(asm, bytes: UnknownFrameName)
 
 	asm.placeLabel(newline)
-	emitPrintString(asm, bytes: b"\n")
+	emitPrintString(asm, bytes: FrameLineTerminator)
 
 	return asm.finishFunction(PrintFrameName)
 end 'buildPrintFrameChunk'
@@ -811,7 +757,7 @@ function buildWalkFramesChunk() returns FunctionCodeChunk
 
 	// next = [frame]
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: FrameOffSavedRbp, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: FrameOffSavedFramePointer, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotNextFrame), srcReg: X64Register.rax)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), wide: true)

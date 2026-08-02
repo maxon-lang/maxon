@@ -1083,6 +1083,8 @@ type RangeCheckEmitter
 				osReadWallClock then break 'c'
 				// R4.1 + R4.2: a raw OS handle, a Win32 BOOL and a byte count are not ranged-typealias values.
 				osFileOpenRead to osFileAttributes then break 'c'
+				// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+				osPanicValue then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -1197,6 +1199,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		osReadWallClock gives false
 		// R4.1 + R4.2: every file op is a body op, never a `ret`.
 		osFileOpenRead to osFileAttributes gives false
+		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+		osPanicValue gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -1327,6 +1331,8 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osDirCreate(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osDirCurrentPath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileAttributes(resultId, _) gives DefinedValueLookup.defines(resultId)
+		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+		osPanicValue gives DefinedValueLookup.none
 	end 'r'
 end 'stdOpDefinedValue'
 

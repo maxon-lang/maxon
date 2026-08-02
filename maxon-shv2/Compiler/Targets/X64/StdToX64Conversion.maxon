@@ -828,6 +828,8 @@ type StdToX64Lowering
 			osReadFile gives win64OutgoingArgBytes(ReadFileStackArgWords)
 			osFileOpenWrite gives win64OutgoingArgBytes(CreateFileStackArgWords)
 			osFileSize to osFileAttributes gives 0
+			// A rendered panic calls `mrt_panic` with one REGISTER argument, exactly as `osPanic` does.
+			osPanicValue gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -991,6 +993,8 @@ type StdToX64Lowering
 				osReadWallClock then break 'term'
 				// R4.1 + R4.2: every file op is a value-producing or void body op, never a terminator.
 				osFileOpenRead to osFileAttributes then break 'term'
+				// A panic is a body op, never a terminator, under either spelling.
+				osPanicValue then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1058,6 +1062,8 @@ type StdToX64Lowering
 				// wall-clock read one can be the last flag-writer before a branch — and, like a `call`, it is
 				// not the compare, so the scan stops.
 				osFileOpenRead to osFileAttributes then break 'isTheCompare'
+				// A call, not the compare — the scan stops, exactly as it does at `osPanic`.
+				osPanicValue then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1135,6 +1141,8 @@ type StdToX64Lowering
 			osReadWallClock gives false
 			// R4.1 + R4.2: no file op is ever a terminator, so none reads fused compare flags.
 			osFileOpenRead to osFileAttributes gives false
+			// A panic is never a terminator, so it is never the float-equality condBranch this asks about.
+			osPanicValue gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -1223,6 +1231,7 @@ type StdToX64Lowering
 			osDirCreate(resultId, pathPtrId) then self.lowerOsDirCreate(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osDirCurrentPath(resultId, bufLenId, bufPtrId) then self.lowerOsDirCurrentPath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
 			osFileAttributes(resultId, pathPtrId) then self.lowerOsFileAttributes(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			osPanicValue(messagePtrId) then self.lowerPanicValue(messagePtrId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1270,6 +1279,7 @@ type StdToX64Lowering
 			osPipeCreate to osWriteFile then panic("lowerStdToX64: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
 			osReadWallClock then panic("lowerStdToX64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
 			osFileOpenRead to osFileAttributes then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
+			osPanicValue then panic("lowerStdToX64: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1855,6 +1865,16 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(x64PhysReg(X64Register.rcx), label: label))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(PanicName))
 	end 'lowerPanic'
+
+	// The RENDERED twin (A3n). The message is a runtime POINTER — an interpolation assembled the whole
+	// `panic at …\n` line, NUL terminator included — so it MOVES into RCX where the baked form
+	// materializes a label address there. Everything after is identical, which is the point: one
+	// `mrt_panic`, one cstr contract, two ways of producing the bytes. RCX is written and immediately
+	// consumed, so no intervening op can clobber it.
+	function lowerPanicValue(messagePtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(messagePtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(PanicName))
+	end 'lowerPanicValue'
 
 	// Lower `osAllocPages` to the x64-windows page source: `VirtualAlloc(NULL, size,
 	// MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` through the IAT.
@@ -2899,6 +2919,8 @@ type StdToX64Lowering
 			osReadWallClock gives false
 			// R4.1 + R4.2: no file op is ever a terminator, let alone a float-equality condBranch.
 			osFileOpenRead to osFileAttributes gives false
+			// A panic is never a terminator, so it is never the float-equality condBranch this asks about.
+			osPanicValue gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3039,6 +3061,7 @@ type StdToX64Lowering
 			osPipeCreate to osWriteFile panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a P1.5 IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osReadWallClock panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osReadWallClock`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osFileOpenRead to osFileAttributes panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osPanicValue panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osPanicValue`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

@@ -1,0 +1,75 @@
+// Test: panic.two-distinct-messages
+typealias Integer = int(i64.min to i64.max)
+
+function runA(n Integer) returns Integer
+	if n < 0 'a'
+		panic("message A")
+	end 'a'
+	return n
+end 'runA'
+
+function runB(n Integer) returns Integer
+	if n < 0 'b'
+		panic("message B")
+	end 'b'
+	return n
+end 'runB'
+
+function main() returns ExitCode
+	let a = runA(1)  // does not panic
+	let b = runB(-1) // should print "message B"
+	return a + b
+end 'main'
+---
+ExitCode: 1
+---
+func @runA {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, a
+    arm64.b ifcont
+  a:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @runB {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, b
+    arm64.b ifcont
+  b:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.bl runA
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, -1
+    arm64.bl runB
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

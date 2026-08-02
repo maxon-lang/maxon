@@ -53,7 +53,7 @@ let Arm64Ip0 = 16
 let Arm64Ip1 = 17
 
 // A 3-register data-processing instruction `op Rd, Rn, Rm` — the shape ADD/SUB/MUL/AND/ORR/… share.
-function emitArm64Rrr(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, rm MachineWord)
+export function emitArm64Rrr(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, rm MachineWord)
 	emitArm64Insn(code, insn: opcode or (rm shl Arm64RmShift) or (rn shl Arm64RnShift) or rd)
 end 'emitArm64Rrr'
 
@@ -75,8 +75,8 @@ function arm64FrintOpcode(mode FloatRoundMode) returns MachineWord
 end 'arm64FrintOpcode'
 
 // --- Data-processing (register) base opcodes, 64-bit ---
-let Arm64OpAdd = 0x8B000000
-let Arm64OpSub = 0xCB000000
+export let Arm64OpAdd = 0x8B000000
+export let Arm64OpSub = 0xCB000000
 let Arm64OpMul = 0x9B007C00
 let Arm64OpSdiv = 0x9AC00C00
 let Arm64OpUdiv = 0x9AC00800
@@ -195,12 +195,17 @@ let Arm64OpAdrp = 0x90000000
 
 // --- Loads / stores ---
 // Scaled unsigned-offset forms (imm12 * transfer size). Xn = base, Rt = data reg.
-let Arm64OpStrX = 0xF9000000
-let Arm64OpLdrX = 0xF9400000
+export let Arm64OpStrX = 0xF9000000
+export let Arm64OpLdrX = 0xF9400000
+
+// LDR Wt, [Xn, #imm12*4] — a 32-bit load, which ZERO-EXTENDS into the full X register. The
+// `__symtable` columns are u32, so the panic runtime reads them with this and never with a
+// 64-bit load (which would drag in the neighbouring column) or a sign-extending one.
+export let Arm64OpLdrW = 0xB9400000
 let Arm64OpStrD = 0xFD000000
 let Arm64OpLdrD = 0xFD400000
 let Arm64OpStrB = 0x39000000
-let Arm64OpLdrB = 0x39400000
+export let Arm64OpLdrB = 0x39400000
 let Arm64LoadStoreImm12Shift = 10
 let Arm64LoadStoreImm12Mask = 0xFFF
 
@@ -318,7 +323,7 @@ end 'arm64VRegIsGpr'
 // The GPR field value (0..30) of a colored operand, panicking if it is a SIMD register — the arm64
 // twin of `X64Backend.resolveGpr`. The `Arm64Register` mapping is the brief's `fromRawValue` path;
 // its `rawValue` IS the GPR field for x0..x30, so the round-trip validates the class in one place.
-function arm64GprField(vreg TargetVReg) returns MachineWord
+export function arm64GprField(vreg TargetVReg) returns MachineWord
 	let reg = arm64ResolveRegNum(vreg)
 	if not arm64RegNumIsGpr(reg) 'notGpr'
 		panic("arm64 emitter: register number {reg} is a SIMD register where a GPR is required — this encoding would name the wrong register file")
@@ -356,7 +361,7 @@ end 'arm64EmitMovk'
 // halfword as a MOVZ (so a single-halfword constant is one instruction) and every subsequent
 // non-zero halfword as a MOVK. Correct for any value; the redundant leading MOVZ #0 the naive ladder
 // emits for e.g. 0x10000 is avoided by starting the MOVZ at the first live halfword.
-function arm64EmitMovImm(code ByteArray, rd MachineWord, value MachineWord)
+export function arm64EmitMovImm(code ByteArray, rd MachineWord, value MachineWord)
 	if value == 0 'zero'
 		emitArm64Insn(code, insn: Arm64OpMovReg or (Arm64XzrField shl Arm64RmShift) or rd)
 		return
@@ -558,7 +563,7 @@ end 'arm64EmitAddSubImmWide'
 // side is a SUB of its magnitude (and vice versa), and a magnitude past the 12-bit field routes
 // through the hi/lo split. `rd`/`rn` are independent (arm64's ADD-immediate is 3-address), so this is
 // never a two-address reuse.
-function arm64EmitAddImmSigned(code ByteArray, rd MachineWord, rn MachineWord, imm Imm32)
+export function arm64EmitAddImmSigned(code ByteArray, rd MachineWord, rn MachineWord, imm Imm32)
 	if imm >= 0 'nonNeg'
 		arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: rd, rn: rn, imm: imm)
 		return
@@ -583,7 +588,7 @@ function arm64EmitBitfield(code ByteArray, opcode MachineWord, rd MachineWord, r
 end 'arm64EmitBitfield'
 
 // LSL Xd, Xn, #sh = UBFM Xd, Xn, #(-sh mod 64), #(63-sh).
-function arm64EmitLslImm(code ByteArray, rd MachineWord, rn MachineWord, sh ShiftCount)
+export function arm64EmitLslImm(code ByteArray, rd MachineWord, rn MachineWord, sh ShiftCount)
 	let shift = shiftCountBits(sh)
 	arm64EmitBitfield(code, opcode: Arm64OpUbfm, rd: rd, rn: rn, immr: (64 - shift) and Arm64WordBitMax, imms: Arm64WordBitMax - shift)
 end 'arm64EmitLslImm'
@@ -615,7 +620,7 @@ end 'shiftCountBits'
 // ==========================================================================
 
 // CMP Xn, Xm = SUBS XZR, Xn, Xm.
-function arm64EmitCmpReg(code ByteArray, rn MachineWord, rm MachineWord)
+export function arm64EmitCmpReg(code ByteArray, rn MachineWord, rm MachineWord)
 	emitArm64Insn(code, insn: Arm64OpCmpReg or (rm shl Arm64RmShift) or (rn shl Arm64RnShift))
 end 'arm64EmitCmpReg'
 
@@ -623,7 +628,7 @@ end 'arm64EmitCmpReg'
 // literal) is materialised into the IP scratch and compared as a register — AArch64 has no wider
 // CMP-immediate, so this is the only correct form (a masked 12-bit truncation would compare the
 // wrong constant).
-function arm64EmitCmpImm(code ByteArray, rn MachineWord, imm Imm32)
+export function arm64EmitCmpImm(code ByteArray, rn MachineWord, imm Imm32)
 	if imm >= 0 and imm <= Arm64ImmMask 'fits'
 		emitArm64Insn(code, insn: Arm64OpCmpImm or ((imm as MachineWord) shl Arm64ImmShift) or (rn shl Arm64RnShift))
 		return
@@ -652,7 +657,7 @@ end 'arm64EmitCset'
 // ==========================================================================
 
 // A GPR reg-reg move: ORR Xd, XZR, Xn.
-function arm64EmitMovGpr(code ByteArray, rd MachineWord, rn MachineWord)
+export function arm64EmitMovGpr(code ByteArray, rd MachineWord, rn MachineWord)
 	emitArm64Insn(code, insn: Arm64OpMovReg or (rn shl Arm64RmShift) or rd)
 end 'arm64EmitMovGpr'
 
@@ -734,7 +739,7 @@ end 'arm64EmitFrameSlot'
 
 // A scaled unsigned-offset load/store `op Rt, [Xn, #imm12*scale]`. The offset must be scale-aligned
 // and fit the 12-bit field — a spill/callee-save or data-field offset always is; a violation is a bug.
-function arm64EmitScaledMem(code ByteArray, opcode MachineWord, rt MachineWord, baseReg MachineWord, byteOffset MachineWord, scale MachineWord)
+export function arm64EmitScaledMem(code ByteArray, opcode MachineWord, rt MachineWord, baseReg MachineWord, byteOffset MachineWord, scale MachineWord)
 	emitArm64Insn(code, insn: opcode or (arm64ScaledImm12(byteOffset, scale: scale) shl Arm64LoadStoreImm12Shift) or (baseReg shl Arm64RnShift) or rt)
 end 'arm64EmitScaledMem'
 
@@ -815,7 +820,7 @@ end 'arm64NonNegDisp'
 // it targets. `wide` selects the field width — an unconditional `b` carries a 26-bit imm (±128 MiB),
 // a `b.cond`/`cbz`/`cbnz` a 19-bit imm (±1 MiB). A function's blocks are contiguous within its one
 // chunk, so these resolve HERE (like x64's `resolveChunkRel32Fixups`), independent of concat.
-type Arm64BlockBranchFixup
+export type Arm64BlockBranchFixup
 	export var codeOffset as CodeOffset
 	export var targetBlock as BlockId
 	export var wide as bool
@@ -825,34 +830,34 @@ type Arm64BlockBranchFixup
 	end 'create'
 end 'Arm64BlockBranchFixup'
 
-typealias Arm64BlockBranchFixupArray = Array with Arm64BlockBranchFixup
+export typealias Arm64BlockBranchFixupArray = Array with Arm64BlockBranchFixup
 
 // `b` to a block — placeholder imm26, fixup recorded.
-function arm64EmitBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, targetBlock BlockId)
+export function arm64EmitBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, targetBlock BlockId)
 	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: true))
 	emitArm64Insn(code, insn: Arm64OpB)
 end 'arm64EmitBranch'
 
 // `b.cond` to a block — placeholder imm19, condition in the low nibble.
-function arm64EmitCondBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, cond Arm64CondCode, targetBlock BlockId)
+export function arm64EmitCondBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, cond Arm64CondCode, targetBlock BlockId)
 	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: false))
 	emitArm64Insn(code, insn: Arm64OpBcond or (cond.rawValue as MachineWord))
 end 'arm64EmitCondBranch'
 
 // `cbz`/`cbnz Xt` to a block — a fused zero-test with no preceding compare, placeholder imm19.
-function arm64EmitCbz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
+export function arm64EmitCbz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
 	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: false))
 	emitArm64Insn(code, insn: Arm64OpCbz or reg)
 end 'arm64EmitCbz'
 
-function arm64EmitCbnz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
+export function arm64EmitCbnz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
 	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: false))
 	emitArm64Insn(code, insn: Arm64OpCbnz or reg)
 end 'arm64EmitCbnz'
 
 // Patch every pending block branch to its target's chunk-local offset. A branch's displacement is
 // PC-relative from the branch itself (not the end of a field, as on x64) and scaled by 4.
-function arm64ResolveBlockBranches(code ByteArray, blockOffsets BlockOffsetTable, fixups Arm64BlockBranchFixupArray)
+export function arm64ResolveBlockBranches(code ByteArray, blockOffsets BlockOffsetTable, fixups Arm64BlockBranchFixupArray)
 	for fixup in fixups 'resolve'
 		let targetOffset = try blockOffsets.get(fixup.targetBlock) otherwise panic("arm64ResolveBlockBranches: branch to block {fixup.targetBlock} with no recorded offset")
 		if fixup.wide 'uncond'
@@ -1108,6 +1113,12 @@ export function arm64EmitSyscall(code ByteArray, number MachineWord)
 	emitArm64Insn(code, insn: Arm64OpSvc)
 end 'arm64EmitSyscall'
 
+// RET — return through x30. Exported for the hand-assembled runtime chunks; a MODULE function's
+// return is the `arm64Ret` TargetOp, encoded from the same word.
+export function arm64EmitRet(code ByteArray)
+	emitArm64Insn(code, insn: Arm64OpRet)
+end 'arm64EmitRet'
+
 // BRK #0 — the entry stub's trap after the exit primitive, in case it ever returns (it does not).
 export function arm64EmitBrk(code ByteArray)
 	emitArm64Insn(code, insn: Arm64OpBrk)
@@ -1117,7 +1128,7 @@ end 'arm64EmitBrk'
 // the M1 traps mandate for ALL func/global/rdata addresses (NEVER a bare ADR, whose ±1 MiB reach
 // silently truncates). The ADRP files the page reloc, the ADD the within-page reloc; the writer
 // patches both fields once section VAs are known (`patchArm64Adrp`/`patchArm64PageOff`).
-function arm64EmitAdrpAddPair(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, label ByteArray, adrpKind RdataRelocKind, pageOffKind RdataRelocKind)
+export function arm64EmitAdrpAddPair(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, label ByteArray, adrpKind RdataRelocKind, pageOffKind RdataRelocKind)
 	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: adrpKind))
 	emitArm64Insn(code, insn: Arm64OpAdrp or dest)
 	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: pageOffKind))
@@ -1141,7 +1152,7 @@ end 'arm64EmitFpLoadRdata'
 // `arm64EmitAdrpAddPair`, which materialises `.rdata`/`.data` addresses — same instruction pair, a
 // function symbol rather than a data label, so a dedicated code→`.text` reloc channel (P1.5-A1 / OPEN
 // #67) rather than the section-targeting `rdataRelocs`.
-function arm64EmitLeaFuncAddr(code ByteArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, dest MachineWord, funcName ByteArray)
+export function arm64EmitLeaFuncAddr(code ByteArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, dest MachineWord, funcName ByteArray)
 	funcAdrpRelocs.push(Arm64FuncAdrpReloc.create(code.count(), funcName: funcName))
 	emitArm64Insn(code, insn: Arm64OpAdrp or dest)
 	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: dest, rn: dest, imm12: 0, shiftHi: false)
@@ -1167,7 +1178,7 @@ export let Arm64FrameRecordBytes = 16
 // allocates and stores in one instruction and so can only put the record AT the new SP. `add x29, sp,
 // #recordOffset` then keeps x29 pointing at the record, which is what leaves `[x29 + 16 + slot*8]` spill
 // addressing identical in both shapes.
-function arm64EmitPrologue(code ByteArray, frameSize StackSize, recordOffset StackSize)
+export function arm64EmitPrologue(code ByteArray, frameSize StackSize, recordOffset StackSize)
 	if frameSize <= Arm64FramePairIndexMax and recordOffset == 0 'compact'
 		arm64EmitStpPreIndex(code, frameSize: frameSize)
 		arm64EmitAddFpFromSp(code, offset: recordOffset)
@@ -1183,7 +1194,7 @@ end 'arm64EmitPrologue'
 // `epilogue` releases the frame and leaves the `ret` to the terminator. A nonzero `recordOffset` takes the
 // explicit form for the mirror of the prologue's reason: the post-indexed LDP reloads from the OLD SP,
 // which is the outgoing-argument region rather than the record.
-function arm64EmitEpilogue(code ByteArray, frameSize StackSize, recordOffset StackSize)
+export function arm64EmitEpilogue(code ByteArray, frameSize StackSize, recordOffset StackSize)
 	if frameSize <= Arm64FramePairIndexMax and recordOffset == 0 'compact'
 		arm64EmitLdpPostIndex(code, frameSize: frameSize)
 	end 'compact' else 'explicitFree'
@@ -1344,9 +1355,9 @@ end 'appendArm64RuntimeChunks'
 //
 // `mrt_start` MUST lead `.text` so `LC_MAIN.entryoff` (= `mainCallFixupOffset`) is its offset, 0;
 // `appendArm64RuntimeChunks` appends it first, and the guard below asserts that layout at the one
-// place that decides it. There is NO `__symtable`: x64 closes `.text` with it for the panic runtime's
-// backtrace, but the scalar core has no fault backtrace, so the table (and its `buildSymbolTableBytes`)
-// have nothing to symbolize and are omitted — they grow back with the arm64 panic runtime.
+// place that decides it. `__symtable` CLOSES `.text` after everything else, exactly as x64's concat
+// closes its own — the arm64 panic runtime's backtrace symbolizes every frame against it, and reads
+// `__symtable - mrt_start` as the size of the code.
 export function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
@@ -1358,9 +1369,8 @@ export function concatArm64FunctionChunks(targetModule TargetModule, stdModule S
 	var jumpTableRelocs = JumpTableRelocArray.create()
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
-	// owns the rule and the refusal for both native backends. There is no `__symtable` claim to follow it
-	// here: the scalar core has no arm64 fault backtrace, so the table is not emitted (see this function's
-	// header).
+	// owns the rule and the refusal for both native backends. `__symtable` goes through the same door
+	// after the loop.
 	var labelsLaid = 0 as ChunkLabelCount
 	for chunk in chunks 'eachChunk'
 		let funcStart = code.count()
@@ -1395,6 +1405,18 @@ export function concatArm64FunctionChunks(targetModule TargetModule, stdModule S
 			jumpTableRelocs.push(rebaseJumpTableReloc(jt, funcStart: funcStart))
 		end 'rebaseJumpTables'
 	end 'eachChunk'
+
+	// `__symtable` CLOSES `.text`, after the last chunk — the placement the panic runtime's
+	// `textSize = __symtable - mrt_start` depends on. Appending it here, from the loop's own output, is
+	// what makes that structural: every symbol's offset is known because the loop just assigned it, and
+	// nothing can be laid out after it because nothing follows. It is registered in `labelOffsets` (so
+	// the walker's `leaFuncAddr __symtable` resolves like any other chunk reference) but deliberately
+	// NOT in `debugSymbols` — it is DATA, not a function, and an entry for it would let a walk symbolize
+	// a stray return address INTO the table. It is exempt from being a function, not from being unique:
+	// a second claim would move the bound `textSize` reads, silently mis-sizing every backtrace.
+	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
+	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	code.append(buildSymbolTableBytes(debugSymbols))
 
 	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 	arm64ResolveFuncAdrpRelocs(funcAdrpRelocs, labelOffsets: labelOffsets)
@@ -1567,6 +1589,11 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func))
 	end 'eachFunc'
+	// The panic runtime lays out ABOVE user code (x64's placement, and for x64's reason: only the entry
+	// stub has to lead `.text`). Its four chunks and the `__symtable` concat appends after them are what
+	// make a violated range guard — or a user `panic("…")` — print its message and a symbolized
+	// backtrace on arm64 instead of exiting bare.
+	appendArm64PanicRuntimeChunks(chunks, globalData: globalData, os: target.os)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)

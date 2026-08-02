@@ -791,9 +791,10 @@ export union StdOp
 	// A `system`-band op — the same
 	// shape and rationale as `osExit`/`osWriteStdout`: it says WHAT is wanted (panic with this message)
 	// and each backend says HOW (x64 loads the address into the ABI's first-arg register and calls the
-	// `mrt_panic` runtime chunk, on BOTH its lanes since rung A1j; arm64 and wasm have no panic runtime,
-	// so they DISCARD the label and exit 1 bare — they do not reject it, and a program that reaches a
-	// range violation on those targets dies with an exit code and no message). It is spelled as a
+	// `mrt_panic` runtime chunk, on BOTH its lanes since rung A1j, and arm64 does the same on BOTH of its
+	// own since A3n gave it `Arm64PanicRuntime`; wasm has no panic runtime, so it DISCARDS the label and
+	// exits 1 bare — it does not reject it, and a program that reaches a range violation there dies with an
+	// exit code and no message). It is spelled as a
 	// dedicated op rather than an `StdOp.call` because `mrt_panic` is a hand-assembled runtime chunk with
 	// NO Std function, so the callee-argument-class lookup a normal `call` performs has nothing to resolve
 	// against — exactly why `osExit`/`osAllocPages` are their own ops too. `isCall: true` so
@@ -1206,6 +1207,23 @@ export union StdOp
 	// search handle to answer "is this a directory?". The bootstrap uses `GetFileAttributesA` here for
 	// exactly that reason (its `SyncOpDirExists`), and v1 reaches the same bit through `stat`.
 	osFileAttributes(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- A3n: a panic whose message is RENDERED AT RUN TIME ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osFileAttributes`, per the band-append invariant: every
+	// stale full-tail range arm now FAILS TO COMPILE until it is consciously extended, which is the
+	// mechanism that finds every site obliged to classify or lower it. `category: system` places it
+	// logically beside `osPanic`, independent of this tail position.
+	//
+	// ⭐ **`osPanicValue : osPanic :: a pointer : a label.** Both abort through `mrt_panic` with a
+	// NUL-terminated `panic at <file>:<line>: …\n` line; they differ only in where the bytes are. `osPanic`
+	// names an immortal `.rdata` blob interned at compile time; this one carries the RUNTIME ADDRESS of a
+	// line an interpolation just assembled (`MaxonOp.panicAbortValue`). The message is therefore its ONE
+	// value operand — the only difference the backends see, each moving it into the ABI's first argument
+	// register instead of materializing a label address there.
+	//
+	// It shares `osPanic`'s metadata exactly: `isCall: true` so a caller reserves the shadow space the call
+	// needs, defines no value, and never returns.
+	osPanicValue(messagePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1321,6 +1339,9 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osWaitHandle(_, handle, timeoutMs) then insertUsePair(referenced, a: handle, b: timeoutMs)
 		// The region base is the one value operand `osFreePages` reads; it defines nothing (like `osExit`/`osCloseHandle`).
 		osFreePages(addr) then referenced.insert(addr)
+		// The assembled message's address is the one value operand a rendered panic reads; it defines
+		// nothing (the label-carrying `osPanic` reads nothing at all).
+		osPanicValue(messagePtr) then referenced.insert(messagePtr)
 		// The jump table reads ONLY the biased index `subjectId`; `denseTargetBlockIds`/`defaultBlockId` are
 		// block ids (the CFG, carried on the op), NOT value operands, and are deliberately not bound here (a
 		// tail-slot Array binding in this big match is the decref-corruption trap `switch` documents).
@@ -1493,6 +1514,7 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osWaitHandle(resultId, handle, timeoutMs) gives StdOp.osWaitHandle(resultId, handleId: remappedValue(handle, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
 		// The exact mirror of `collectStdOpUses`'s arm: the region base is the one read, so it is the one rewrite.
 		osFreePages(addr) gives StdOp.osFreePages(remappedValue(addr, subst: subst))
+		osPanicValue(messagePtr) gives StdOp.osPanicValue(remappedValue(messagePtr, subst: subst))
 		// The exact mirror of `collectStdOpUses`'s `switch` arm: only the biased index `subjectId` is a value
 		// operand, so it is the one rewrite; the block-id table and default carry through verbatim. Binding
 		// the middle-slot Array is safe — a trailing non-Array field (`defaultBlockId`) follows it, exactly

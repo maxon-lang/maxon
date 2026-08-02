@@ -966,6 +966,9 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 		// Its receiver + user args are all in `args`.
 		witnessDispatch(_, args, _, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
 		witnessTryDispatch(_, _, args, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
+		// A panic's message pointer is bytes handed to a diverging runtime — nothing outlives the frame,
+		// because there is no frame afterwards.
+		panicAbortValue then break 'op'
 	end 'op'
 	return false
 end 'opEscapesValue'
@@ -1015,6 +1018,8 @@ function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func Ir
 		switch then break 'term'
 		// A witness dispatch is a body op, never a terminator — it escapes nothing here (P1.7a slice 2a).
 		witnessDispatch to witnessTryDispatch then break 'term'
+		// A panic is a body op followed by a dead return, never a terminator.
+		panicAbortValue then break 'term'
 	end 'term'
 	return false
 end 'terminatorEscapesValue'
@@ -1236,6 +1241,8 @@ function collectMutationEdgesAt(project Project, op MaxonOp, func IrFunction, ca
 		byteStringLiteral then break 'op'
 		switch then break 'op'
 		witnessDispatch to witnessTryDispatch then break 'op'
+		// A panic calls no user function, so it carries no mutation edge.
+		panicAbortValue then break 'op'
 	end 'op'
 end 'collectMutationEdgesAt'
 
@@ -1400,6 +1407,7 @@ function functionHasAwait(func IrFunction, module MaxonModule) returns bool
 				byteStringLiteral then break 'op'
 				switch then break 'op'
 				witnessDispatch to witnessTryDispatch then break 'op'
+				panicAbortValue then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -1438,6 +1446,7 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				byteStringLiteral then break 'op'
 				switch then break 'op'
 				witnessDispatch to witnessTryDispatch then break 'op'
+				panicAbortValue then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -1561,6 +1570,8 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		// The jump table reads an integer index, never a promise handle — unrelated to any await.
 		switch then break 'op'
 		witnessDispatch to witnessTryDispatch then break 'op'
+		// A rendered panic reads a byte pointer, never a promise handle.
+		panicAbortValue then break 'op'
 	end 'op'
 	return OpAwaitRole.unrelated
 end 'classifyOpForPromise'
@@ -1594,6 +1605,8 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		switch(_, denseTargetBlockIds, defaultBlockId) then pushMaxonSwitchSuccessors(into, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
 		// A witness dispatch is a body op, never a terminator — it has no in-function successor (P1.7a slice 2a).
 		witnessDispatch to witnessTryDispatch then break 'term'
+		// A panic is a body op followed by a dead return, never a terminator.
+		panicAbortValue then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -1705,6 +1718,8 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					// A `witnessTryDispatch` IS the `try` — it is produced by nothing else — so the rule above is
 					// satisfied by its existence, exactly as a `tryCall` satisfies `validatePlainCall`'s.
 					witnessTryDispatch then break 'op'
+					// A panic has no callee name to validate.
+					panicAbortValue then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
@@ -2651,6 +2666,8 @@ function closureEscapeReason(op MaxonOp) returns String
 		// Refused rather than delegated to a decider that cannot run — before this arm it reached lowering and
 		// PANICKED (`maxonTypeToStdType`) on the environment it could not thread.
 		witnessDispatch to witnessTryDispatch then return "cannot pass a closure that captures to an interface method dispatched through a witness: the concrete method is chosen at run time, so the compiler cannot tell whether it stores the closure, and its environment cannot be threaded to it. {CapturingClosureEscapeSuffix}"
+		// A panic persists nothing (`opEscapesValue` says so), so it falls through to the panic below.
+		panicAbortValue then break 'op'
 	end 'op'
 
 	// Reached only if `opEscapesValue` reported an escape at an op this mapping believes cannot persist a

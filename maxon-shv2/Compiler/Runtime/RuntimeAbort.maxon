@@ -71,7 +71,7 @@ export enum RuntimeAbort
 	// out-of-buffer read. The reference dies on the same input: `String.sliceBytes` forwards to a throwing
 	// `managed.slice` under an `otherwise panic(…)`, so this abort matches the oracle's CLASS of answer
 	// (the process ends) though not its message — shv2's `mrt_panic` prints on the two x64 lanes (rung
-	// A1j added x64-linux) and arm64/wasm exit bare.
+	// A1j added x64-linux) and on both arm64 lanes (A3n); wasm alone exits bare.
 	stringSliceInvalidRange = 77
 	// `__mf_stat_field` / `__mf_stat_free`: a NULL stat buffer. Both references treat it as a stdlib-only
 	// INVARIANT violation rather than a catchable error (`__ManagedFile.statField`/`statFree` are registered
@@ -104,19 +104,35 @@ end 'RuntimeAbort'
 
 // ⭐ **THE PANIC LINE ITSELF — `panic at <file>:<line>: <text>\n` — WRITTEN ONCE.**
 //
-// Two producers bake a message for `mrt_panic`, and they must not each spell the format: the P1.9
-// range-check guard (`InsertRangeChecks.rangeCheckMessage`) and a user `panic("…")`
-// (`Parser.parsePanicStatement`). They differ ONLY in the TEXT after the colon — "Range check failed:
-// …" against whatever the program wrote — so the location prefix, the separator and the trailing
-// newline are this function's, and neither caller restates them. `mrt_panic` prints the result
-// verbatim, then `Stack trace:` and its frames, then exits `PanicExitCode`.
-//
-// ⚠ **THE NEWLINE IS PART OF THE MESSAGE, NOT OF THE RUNTIME.** `mrt_panic` writes the cstr it is
-// handed and starts the backtrace header immediately after; a caller that omitted it would run the
-// message into `Stack trace:` on one line.
+// THREE producers assemble a message for `mrt_panic`, and they must not each spell the format: the P1.9
+// range-check guard (`InsertRangeChecks.rangeCheckMessage`), a user `panic("…")`
+// (`Parser.parsePanicStatement`), and an INTERPOLATED `panic("…{x}…")`, which cannot call this function
+// at all because its text is not known until the program runs — it takes the two halves below instead
+// (`Parser.renderedPanicMessagePointer`). They differ ONLY in the TEXT after the colon — "Range check
+// failed: …" against whatever the program wrote — so the location prefix, the separator and the trailing
+// newline are this file's, and no caller restates them. `mrt_panic` prints the result verbatim, then
+// `Stack trace:` and its frames, then exits `PanicExitCode`.
 export function panicMessageLine(filePath FilePath, line LineNumber, text String) returns ByteArray
-	return "panic at {baseName(filePath.toString())}:{line}: {text}\n".toByteArray()
+	var baked = panicMessageLinePrefix(filePath, line: line)
+	baked.append(text.toByteArray())
+	baked.append(PanicMessageLineTerminator)
+	return baked
 end 'panicMessageLine'
+
+// ⭐ **THE LINE'S TWO CONSTANT HALVES, NAMED, because a THIRD producer needs them SEPARATELY.** An
+// interpolated `panic("value is {x}")` cannot bake its line — `{x}` is unknown until the program runs —
+// so the parser assembles it as an ordinary interpolation with these two as extra literal fragments
+// (`Parser.renderedPanicMessagePointer`). Splitting the format here rather than letting that path spell
+// `"panic at …: "` a second time is the whole reason this function exists: the location prefix, the
+// separator and the terminator stay written down ONCE, whichever of the three producers assembles them.
+export function panicMessageLinePrefix(filePath FilePath, line LineNumber) returns ByteArray
+	return "panic at {baseName(filePath.toString())}:{line}: ".toByteArray()
+end 'panicMessageLinePrefix'
+
+// ⚠ **THE NEWLINE IS PART OF THE MESSAGE, NOT OF THE RUNTIME** — `mrt_panic` writes the cstr it is handed
+// and starts the backtrace header immediately after, so a producer that omitted it would run the message
+// into `Stack trace:` on one line.
+export let PanicMessageLineTerminator = b"\n"
 
 // The base file name (last path segment) of a source path, for the runtime panic message — the shv2
 // equivalent of the bootstrap's `Path.GetFileName`. Strips both separators so a Windows temp path and a

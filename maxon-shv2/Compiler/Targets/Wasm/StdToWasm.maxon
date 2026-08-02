@@ -566,6 +566,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osReadWallClock then break 'k'
 		// R4.1 + R4.2: the file ops are x64-windows only (E3104 at the call site) and pull in no wasm import.
 		osFileOpenRead to osFileAttributes then break 'k'
+		// A rendered panic pulls in no import that `osPanic` does not.
+		osPanicValue then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -899,6 +901,8 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		osReadWallClock then break 'def'
 		// R4.1 + R4.2: the file ops are x64-windows only, so no wasm valtype is ever recorded for their defs.
 		osFileOpenRead to osFileAttributes then break 'def'
+		// A rendered panic defines no value, exactly as `osPanic` defines none.
+		osPanicValue then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1150,6 +1154,7 @@ type WasmFuncEmitter
 			osPipeCreate to osWriteFile then panic("emitStraightLineTerminator: a P1.5 IOCP op is a body op, never a terminator")
 			osReadWallClock then panic("emitStraightLineTerminator: an `osReadWallClock` is a body op, never a terminator")
 			osFileOpenRead to osFileAttributes then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
+			osPanicValue then panic("emitStraightLineTerminator: an `osPanicValue` is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1224,6 +1229,7 @@ type WasmFuncEmitter
 			osPipeCreate to osWriteFile then panic("emitDispatcherTerminator: a P1.5 IOCP op is a body op, never a terminator")
 			osReadWallClock then panic("emitDispatcherTerminator: an `osReadWallClock` is a body op, never a terminator")
 			osFileOpenRead to osFileAttributes then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
+			osPanicValue then panic("emitDispatcherTerminator: an `osPanicValue` is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1295,6 +1301,9 @@ type WasmFuncEmitter
 			// the backstop for a compiler bug that got one past that gate, not the user-facing rejection.
 			osReadWallClock then panic("emitBodyOp: `osReadWallClock` is x64-windows only — the wall clock is x64-windows-gated at this rung")
 			osFileOpenRead to osFileAttributes then panic("emitBodyOp: the file-IO ops are x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			// The rendered message is DISCARDED for the same reason the baked label is: nobody has written a
+			// wasm `mrt_panic`, so both spellings exit bare (see `emitPanic`).
+			osPanicValue then self.emitPanic()
 		end 'body'
 	end 'emitBodyOp'
 
@@ -2399,6 +2408,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osPipeCreate to osWriteFile then panic("decideDispatcher: a P1.5 IOCP op is a body op, never a terminator")
 		osReadWallClock then panic("decideDispatcher: an `osReadWallClock` is a body op, never a terminator")
 		osFileOpenRead to osFileAttributes then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
+		osPanicValue then panic("decideDispatcher: an `osPanicValue` is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

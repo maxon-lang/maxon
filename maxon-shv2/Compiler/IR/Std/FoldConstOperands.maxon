@@ -127,6 +127,8 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// R4.1 + R4.2: an OS file HANDLE, a Win32 BOOL and a search handle are kernel values, never
 		// compile-time constants; the two void ops define nothing to call constant.
 		osFileOpenRead to osFileAttributes gives StdConstInfo.notConst
+		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+		osPanicValue gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -216,6 +218,8 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		// R4.1 + R4.2: every file op's operands are BUFFER or out-param addresses, a HANDLE or a byte
 		// COUNT the caller computed — never a const-foldable immediate.
 		osFileOpenRead to osFileAttributes gives FoldResult.unchanged
+		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+		osPanicValue gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 
