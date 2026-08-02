@@ -3000,6 +3000,13 @@ export function splitQualifiedName(name ByteArray) returns QualifiedNameParts
 	return QualifiedNameParts.parts(prefix.toByteArray(), member: member.toByteArray())
 end 'splitQualifiedName'
 
+// A set of declared type NAMES, for a walk that has to recognize a name it has already reached
+// (`ProgramSignatures.structIsConstructibleWithin`). The `Set with ByteArray` the compiler's other
+// name-set walks are spelled with — `ClonerSet` (the deep-clone walk over this very field graph),
+// `LiveGlobalLabelSet`, `InterfaceNameSet` — rather than a list plus a linear scan, which is what makes
+// "linear in the graph" a fact about this walk rather than a hope.
+typealias StructNameSet = Set with ByteArray
+
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
@@ -5350,6 +5357,105 @@ export type ProgramSignatures
 		return self.structTypes.contains(name)
 	end 'containsStruct'
 
+	// ⭐⭐ **CAN A VALUE OF `type name` EXIST AT ALL?** — the question a base that is a STRUCT-TYPED SELF-FIELD
+	// ALIAS is admitted or refused on (`Parser.structBaseOfReceiver`).
+	//
+	// Maxon has no `null`, no optional and no partial initialization, so building a struct means supplying a
+	// value for EVERY field, and a field of struct type means first building THAT struct. A CYCLE in the
+	// struct-typed-field graph is therefore an infinite regress, and nothing on one — or reaching one — can
+	// ever exist. `type Node` with `var next as Node` is the one-node case; `A.b as B` with `B.a as A` is the
+	// same fact spread over two declarations, and it is not "self-referential" in any way a name comparison
+	// could tell apart. That is why this walks the GRAPH rather than asking whether a field's type equals its
+	// enclosing type: the two questions agree on the one-node case and part company on every longer one.
+	//
+	// ⚠ **AN UNDECLARED NAME ANSWERS `false`, AND THE TEST IS WRITTEN HERE, AT THE ENTRY.** It cannot be
+	// proven constructible, and this is a gate whose safe direction is refusal. It is the ENTRY's business
+	// because it is the only place a name can arrive unvetted: the walk itself only ever recurses into a name
+	// it has just proved declared, so the same test inside the recursion would be dead code that reads as a
+	// live policy — and deleting the walk's own `structTypes.contains` as "redundant with this one" would
+	// silently make every scalar, String and enum field answer `false`.
+	//
+	// ⚠ **WHAT IT DELIBERATELY DOES NOT CHASE: a type ARGUMENT that closes the cycle** — `var b as Box with
+	// Outer` inside `type Outer`, in EITHER of the two spellings such a field arrives in. A directly-tagged
+	// `genericInstance` is not an aggregate NAME at all, so the walk's tag guard skips it; a generic ALIAS
+	// (`typealias OuterBox = Box with Outer`, `var b as OuterBox`) arrives as a bare `named` — the sweep
+	// recorded the field before the alias was interned (`fieldTypeIsArray` and `declaredSlotType` both state
+	// it) — so it passes the tag guard and is skipped one line later by `structTypes.contains`, which a
+	// generic alias's name is not in. Same verdict, different door.
+	//
+	// The direction is CHOSEN, not overlooked: the other arm of that trade treats every generic-instance
+	// field as undecided, which false-REFUSES a base inside any type that merely holds an `IntArray` beside a
+	// struct field — a program that runs. Over-admitting here only lets a base compile inside a type nothing
+	// can construct, so the code lowered for it is correct and unreachable. It costs a false accept of dead
+	// code, never a wrong answer.
+	export function structTypeIsConstructible(name ByteArray) returns bool
+		if not self.structTypes.contains(name) 'notDeclared'
+			return false
+		end 'notDeclared'
+
+		return self.structIsConstructibleWithin(name, visiting: StructNameSet.create(), settled: StructNameSet.create())
+	end 'structTypeIsConstructible'
+
+	// The walk `structTypeIsConstructible` is. `visiting` holds the types whose own proof is still OPEN, so a
+	// name reached while it is in there IS the cycle; `settled` holds the types already proven constructible.
+	// Precondition: `name` is a declared struct — every entry into this walk is gated on `structTypes`, at the
+	// exported door above and at the field recursion below.
+	//
+	// ⚠ **`visiting` IS NEVER UNMARKED, AND `settled` IS WHAT MAKES THAT CORRECT rather than merely cheap.** A
+	// name is never removed, because the only way a type's proof ends without settling it is the `false` that
+	// abandons the whole query — so an unsettled name in `visiting` is always an open chain. `settled` is
+	// therefore consulted FIRST: a diamond in the field graph (two fields of one type) re-enters a name that is
+	// still in `visiting` from the branch that finished it, and reading that as a cycle would refuse a struct
+	// that builds fine. Together they also make the walk linear in the graph rather than once per path into
+	// each node.
+	//
+	// ⚠ **THE TWO SETS ARE A REAL DIFFERENCE FROM `typeSupportsDeepClone`'s ONE**, which walks this same field
+	// graph with a single `ClonerSet` and answers `true` on a re-entry: a recursive type IS clonable, because
+	// the synthesized cloner recurses at RUN time through the same field. Here a re-entry is the infinite
+	// regress itself and must answer `false`, so "in flight" and "proven" cannot share one set.
+	//
+	// A field's type is classified over `self.typeNames` — the interner a layout's field types were minted
+	// against (`structFieldIsManaged`'s discipline) — and through `denotedSlotAggregateName`, so a TUPLE-alias
+	// field answers under the tuple's own name exactly as it does for every other classifier that reads a raw
+	// layout field type. A slot naming no declared struct forces no construction and is skipped: a scalar, a
+	// String, a function, an opaque type parameter and a generic instance all have values that need no further
+	// struct to exist.
+	function structIsConstructibleWithin(name ByteArray, visiting StructNameSet, settled StructNameSet) returns bool
+		if settled.contains(name) 'alreadyProven'
+			return true
+		end 'alreadyProven'
+
+		if visiting.contains(name) 'closesTheCycle'
+			return false
+		end 'closesTheCycle'
+
+		let layout = try self.structTypes.get(name) otherwise panic("ProgramSignatures.structIsConstructibleWithin: no `type {String.from(name)}` is declared — `structTypeIsConstructible` gates the entry and the field recursion gates itself on `structTypes.contains`")
+
+		visiting.insert(name)
+
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let declared = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.structIsConstructibleWithin: fieldTypes.get OOB at {i} for `type {String.from(name)}`, which declares {layout.fieldCount()}")
+
+			// A field declared with the ENCLOSING type's own name arrives as a `structRef`
+			// (`Parser.enclosingSelfType`); every other struct-typed field arrives as a bare `named`, because
+			// the declaration SWEEP that recorded it ran before anything could say what the name denoted.
+			// Both spellings are one question, so both are asked here.
+			if not tagMayNameAggregate(maxonTypeTag(declared)) 'namesNoAggregate'
+				continue
+			end 'namesNoAggregate'
+
+			// LOAD-BEARING TWICE: it skips the slots that name no struct at all (a ranged alias, an enum, a
+			// generic alias), and it is what proves the recursion's precondition.
+			let fieldStruct = self.denotedSlotAggregateName(declared)
+			if self.structTypes.contains(fieldStruct) and not self.structIsConstructibleWithin(fieldStruct, visiting: visiting, settled: settled) 'fieldCannotBeBuilt'
+				return false
+			end 'fieldCannotBeBuilt'
+		end 'eachField'
+
+		settled.insert(name)
+		return true
+	end 'structIsConstructibleWithin'
+
 	// ⭐ **REGISTER THE COMPILER-OWNED `StringIndex` TYPE (P1.8 slice B2).** Called by the declaration
 	// SWEEP when a file's tokens name one of the four methods that PRODUCE a `StringIndex`
 	// (`Parser.atStringIndexProducer`) — the same shape `internArrayByteInstance` and
@@ -5760,6 +5866,43 @@ export type ProgramSignatures
 	export function denotedAggregateName(name ByteArray) returns ByteArray
 		return self.tupleAliasTarget(name) if self.isTupleAlias(name) else name
 	end 'denotedAggregateName'
+
+	// **CAN A RAW SLOT TYPE'S TAG NAME A DECLARED AGGREGATE?** — a `structRef` (what a resolved reference
+	// carries, and what `Parser.enclosingSelfType` mints for a type's own name) or a bare `named` (what the
+	// declaration SWEEP records, having run before anything could say what the name denoted). Every other tag
+	// names no struct, union or tuple, so the resolution below has nothing to look up.
+	//
+	// ⭐ **WRITTEN ONCE BECAUSE FOUR DOORS ASK IT AND HAD COME TO SPELL IT FOUR WAYS** — `tagIsStructRef(tag)
+	// or tag == ValueTypeTag.named`, each of its two De Morgan negations, and `tag == ValueTypeTag.named or
+	// tag == ValueTypeTag.structRef`. `Parser.tagCarriesStructLayout` is the same shape for the same reason and
+	// its header states the cost of the alternative: a third tag taught to one spelling and not the others is
+	// a wrong answer at whichever door was not updated, with no compile error at either.
+	//
+	// ⚠ `typeIsManaged` deliberately does NOT ask it. Its `structRef` arm has already returned `true` (fused
+	// with `tagIsByteRecord`/`genericInstance`) by the time it tests `named`, so its remaining test is
+	// "is this the ONE tag still undecided?" — a different question that happens to mention the same tags.
+	function tagMayNameAggregate(tag ValueTypeTag) returns bool
+		return tagIsStructRef(tag) or tag == ValueTypeTag.named
+	end 'tagMayNameAggregate'
+
+	// **THE DECLARED NAME A RAW SLOT TYPE DENOTES, over THIS index's own interner** — a tuple typealias
+	// answered as the tuple's own canonical name, every other name as itself. Precondition:
+	// `tagMayNameAggregate(maxonTypeTag(t))`, which is what makes the id a name's.
+	//
+	// ⭐ The `denotedAggregateName(nameOfId(…))` pair was open-coded at four doors — the type-argument size,
+	// the type-argument ownership classifier, the deep-clone gate and the constructibility walk — one of them
+	// spelling `nameOfId`'s body out again with a second panic string for the identical invariant. The comment
+	// at `typeArgIsOwned` says these must not diverge and records what it cost when they did (a silent wrong
+	// `sizeof`, then a false E2015 on a program the other walk order ran); a shared call is that rule enforced
+	// rather than restated.
+	//
+	// ⚠ **`typeIsManaged` IS NOT ONE OF THEM, AND MUST NOT BECOME ONE.** It takes the interner as a PARAMETER
+	// (`from`) because a type that crossed into a file-local artifact table has to be read against THAT table;
+	// its header records both directions in which resolving it against `self.typeNames` instead was measured
+	// to give a silent wrong answer.
+	function denotedSlotAggregateName(t MaxonType) returns ByteArray
+		return self.denotedAggregateName(self.nameOfId(typeNameIdOf(t)))
+	end 'denotedSlotAggregateName'
 
 	// The tuple type `name` aliases, CANONICAL. Precondition: `isTupleAlias(name)`.
 	export function tupleAliasTarget(name ByteArray) returns ByteArray
@@ -6267,7 +6410,7 @@ export type ProgramSignatures
 	// `sizeof(T)` for `Sizer with Byte` answer 1 while `sizeof(Byte)` in the same program answered 8.
 	function typeLogicalByteSize(t MaxonType) returns ByteOffset
 		let tag = maxonTypeTag(t)
-		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedOrStruct'
+		if tagMayNameAggregate(tag) 'namedOrStruct'
 			// ⭐⭐ **RESOLVED THROUGH `denotedAggregateName` (A3e review) — a TYPE ARGUMENT is a RAW stored
 			// type, so this door reads a spelling no re-tag has passed over.** An instance's argument is
 			// interned once, by whichever pass first met `Sizer with Pair`, and the declaration SWEEP meets it
@@ -6282,7 +6425,7 @@ export type ProgramSignatures
 			// baked into `.rdata` as `elementLogicalSize@56` — a silent wrong ANSWER, not a diagnostic. The
 			// unresolved name simply missed `structOf` and fell to `primitiveTypeByteSize(named)`, the
 			// machine-word fallback that exists for an enum/union.
-			match self.structOf(self.denotedAggregateName(self.nameOfId(typeNameIdOf(t)))) 'lookup'
+			match self.structOf(self.denotedSlotAggregateName(t)) 'lookup'
 				declared(layout) then return layout.sizeBytes()
 				undeclared then return primitiveTypeByteSize(tag)
 			end 'lookup'
@@ -6299,7 +6442,10 @@ export type ProgramSignatures
 	// identical across cold and warm builds (a gid's numeric value is a build-order artifact).
 	export function mangleTypeArg(t MaxonType) returns String
 		let tag = maxonTypeTag(t)
-		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedOrStruct'
+		// ⚠ The NAME is read raw and NOT through `denotedSlotAggregateName`: this label must be the argument's
+		// SOURCE spelling (`instanceArgTypeName`'s header says the same of the E3017 message it feeds), and
+		// canonicalizing a tuple alias here would rename an emitted symbol. Only the TAG question is shared.
+		if tagMayNameAggregate(tag) 'namedOrStruct'
 			return String.from(self.nameOfId(typeNameIdOf(t)))
 		end 'namedOrStruct'
 		if tag == ValueTypeTag.genericInstance 'nested'
@@ -6870,7 +7016,7 @@ export type ProgramSignatures
 		if tag == ValueTypeTag.genericInstance 'instance'
 			return self.genericInstanceHasManagedField(typeNameIdOf(t))
 		end 'instance'
-		if tag != ValueTypeTag.named and not tagIsStructRef(tag) 'notNamedStruct'
+		if not tagMayNameAggregate(tag) 'notNamedStruct'
 			return false
 		end 'notNamedStruct'
 		// ⭐⭐ **RESOLVED THROUGH `denotedAggregateName`, AND IT MUST BE THE SAME RESOLUTION `typeIsManaged`
@@ -6889,7 +7035,7 @@ export type ProgramSignatures
 		// the exact program the other walk order compiled and ran to exit 0. Before A3e the same asymmetry ran
 		// the other way (both false, so the reassign stored over the old value with no drop: a silent leak).
 		// The consume boundary and the drop boundary have to read one name.
-		let name = self.denotedAggregateName(self.nameOfId(typeNameIdOf(t)))
+		let name = self.denotedSlotAggregateName(t)
 		if self.structTypes.contains(name) 'struct'
 			return self.structHasManagedField(name)
 		end 'struct'
@@ -7654,13 +7800,13 @@ export type ProgramSignatures
 		if tag == ValueTypeTag.genericInstance 'instance'
 			return self.instanceSupportsDeepClone(typeNameIdOf(type), asElement: asElement, visited: visited)
 		end 'instance'
-		if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
+		if not tagMayNameAggregate(tag) 'notManagedRef'
 			return false
 		end 'notManagedRef'
-		// Resolved through `denotedAggregateName`, the same door the clone strategy this gate admits reads
+		// Resolved through `denotedSlotAggregateName`, the same door the clone strategy this gate admits reads
 		// (`managedFieldCloneStrategy`) — a name the gate and the strategy disagreed about would admit a clone
 		// nobody can emit.
-		let name = self.denotedAggregateName(try self.typeNames.nameOf(typeNameIdOf(type)) otherwise panic("ProgramSignatures.typeSupportsDeepClone: a managed type's id is not in this index's interner"))
+		let name = self.denotedSlotAggregateName(type)
 		if self.isGenericAlias(name) 'genericAlias'
 			return self.instanceSupportsDeepClone(self.genericAliasInstance(name), asElement: asElement, visited: visited)
 		end 'genericAlias'

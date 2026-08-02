@@ -69,6 +69,38 @@ in the commit message. Starting from a pre-trimmed file makes the retractions in
 whole failure mode this step exists to prevent. `git diff` against `/specs` is the review of your
 retractions; keep it readable.
 
+### ⭐ THE FILE YOU JUST COPIED IS KNOWN TO PASS. **A REAL COMPILER PASSED IT, UNEDITED.**
+
+**Every spec on the whitelist was RUN and PASSED by `maxon-selfhosted` (v1) — against `/specs` itself,
+byte-for-byte, with no shv2-style retractions.** v1's runner walks up from cwd to find the `specs/`
+directory (`SpecTestRunner.maxon`, `findSpecsRoot`) and reads those exact files; the whitelist *is* the
+set it passed, and everything off it is explicitly marked `DEFERRED SPECS`. That is what earned the
+easiest-first ordering this loop walks.
+
+⇒ **So never wonder whether a case is right, and never edit one because you suspect the spec is wrong.**
+Its program, its `exitcode`, its `stdout` and its `maxoncstderr` blocks are all a configuration a real
+Maxon compiler has actually satisfied. **The only open question is whether shv2 LEGITIMATELY DIFFERS** —
+and that is a much narrower question than "does this spec work".
+
+**A retraction is legitimate only when you can point at the thing that ratifies it**, in one of these
+three forms. Nothing else counts:
+
+| legitimate | the evidence you must be able to point at |
+|---|---|
+| shv2 has its own **registered** code for this rule | a `shv2` line in `docs/error-codes.txt` — the ONE registry shared by all three compilers. E.g. **E2053** `callArgMissingLabel` is claimed for **shv2 alone**, where the bootstrap reports the same rule through its general E3005. |
+| shv2 **structurally cannot** emit the expected code | the registry claims it for other compilers only. E.g. **E4006** `IrInvalidFieldAccess` is an IR-stage code claimed by `csharp`/`selfhosted`; shv2 refuses the same program one stage earlier under E3004. |
+| an **already-ported** `specs-shv2` file pins the other spelling | name the file. ⚠ And note this cuts the other way too: if making your spec pass would force a change to that ported file, **you are in HALT AND ASK**, not in a retraction. |
+
+⛔ **What is NEVER a reason: "shv2 prints something else, so I wrote down what shv2 prints."** That is
+editing the claim to match the implementation, which is §3b's whole prohibition — a compiler bug
+becoming a specification. If you cannot fill in the right-hand column, the spec is right and shv2 is
+wrong: **fix shv2.**
+
+⚠ **You cannot re-run v1 to re-check any of this** — it no longer builds (`.claude/CLAUDE.md` records
+why, and that is accepted). The passes are historical and were real when the whitelist was earned; v1
+remains a SOURCE to read, not a runnable oracle. **The runnable oracle is the C# bootstrap** — use it for
+*what the right answer is*, exactly as §3 says.
+
 The runner discovers specs by listing `specs-shv2/*.md` (`specFilePaths`) — **copying the file is the
 whole registration.** There is no list to add it to.
 
@@ -114,8 +146,8 @@ already done is the most valuable thing in the brief**; making the agent re-deri
 this delegation is supposed to prevent.
 
 Its brief (`.claude/agents/maxon-spec-implementer.md`) fixes the reference ORDER: **`maxon-selfhosted`
-(v1) first** — the closest code, in the same language against the same `stdlib/`, and *it passes this
-spec, because the whitelist is v1's* — then **`maxon-sharp` (the bootstrap)** as the RUNNABLE oracle
+(v1) first** — the closest code, in the same language against the same `stdlib/`, and the compiler that
+**passed this exact spec unedited** (§1) — then **`maxon-sharp` (the bootstrap)** as the RUNNABLE oracle
 when the question is *what is the right answer* rather than *how is it built*. **Neither binds it.**
 shv2 is a deliberate rewrite; where it departs, the departure is the thesis, and an implementation that
 does not fit gets designed rather than copied.

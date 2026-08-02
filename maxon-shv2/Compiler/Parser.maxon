@@ -1486,10 +1486,14 @@ type MethodReceiver
 	// anything that is not a parameter's record.
 	export let owner as MutatedParamMask
 	// The FIELD NAME when this receiver was materialized out of a SELF-FIELD ALIAS, empty otherwise — the
-	// one fact the struct fallthrough still refuses on (`structBaseOfReceiver`, and
+	// fact the struct fallthrough names in its refusal (`structBaseOfReceiver`, and
 	// `specs-shv2/self-field-struct-typed.md` for why). Every builtin arm serves such a receiver happily
 	// (`items.push(v)`, `name.append("!")`), so it cannot be a gate in front of the switch; it is the tag
 	// the fallthrough reads, exactly where `requireStructBase` reads `isSelfField`.
+	//
+	// ⚠ It is the BLAME NAME and half of the test, never the whole verdict: the fallthrough refuses only when
+	// no value of the receiver's type could exist (`ProgramSignatures.structTypeIsConstructible`). A
+	// constructible one — `type Outer`'s `var inner as Inner` — is dispatched on.
 	export let selfFieldName as ByteArray
 
 	export static function create(value ValueId, tag ValueTypeTag, nameId TypeNameId, anchor Token, immutableName ByteArray, subjectName ByteArray, owner MutatedParamMask, selfFieldName ByteArray) returns MethodReceiver
@@ -1503,6 +1507,25 @@ end 'MethodReceiver'
 // three cases against the identical text, so a second spelling would go red at whichever door it was not
 // updated at, and the two doors would then be free to disagree about a refusal whose sabotage note records
 // that the wrong answer is SILENT.
+//
+// ⚠ **THE TWO DOORS SHARE THE SENTENCE AND NO LONGER SHARE THE PREDICATE, and the two halves of the sentence
+// are why that is tolerable.** It says both "this type has no constructible value" AND "the box has to be
+// loaded out of the receiver first". `structBaseOfReceiver` refuses on the FIRST half and states it only where
+// it is true (`ProgramSignatures.structTypeIsConstructible`). `requireStructBase` refuses on the SECOND — it
+// still refuses EVERY struct-typed self-field alias, constructible or not, because its box is the alias's
+// `boundValue`, which is 0, which is the RECEIVER, and it has nothing materialized to address. So `inner.a`
+// in a perfectly constructible `Outer` is told something whose first half is not true of it. That is a
+// diagnostic wording the read/write door owes a better version of once it materializes the box; it is not a
+// licence to give the two doors different TEXT, because a second spelling would go red at whichever door it
+// was not updated at and let them drift on the refusal itself, whose sabotage note records that the wrong
+// answer is SILENT.
+//
+// ⚠ Its closing clause — *"no struct-typed field can be constructed yet"* — reads as a claim about the whole
+// language and is true only of what the METHOD door still refuses: a type on a cycle in the struct-field
+// graph, which genuinely has no constructible value. It is left BYTE-IDENTICAL because
+// `self-field-struct-typed.md` pins THREE of its four cases against this exact text (the fourth,
+// `error.scalar-field-base-is-not-a-struct`, pins the different not-a-struct refusal, which is what makes the
+// ORDER inside `requireStructBase` load-bearing), and that spec is not this change's to rewrite.
 //
 // It returns the STRING and each caller throws `ParseError.unsupported(…)` INLINE — never
 // `throw self.helperReturningAParseError(…)`, which leaks two allocations under the C#-emitted refcount
@@ -26159,16 +26182,40 @@ export type Parser
 			throw ParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{typeTagName(recv.tag)}' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here", line: memberTok.line, column: memberTok.column)
 		end 'notAStruct'
 
-		// ⚠ **AN AGGREGATE-TYPED SELF-FIELD ALIAS IS REFUSED HERE, and this is the SAME refusal
-		// `requireStructBase` makes for the READ and the WRITE path** — `specs-shv2/self-field-struct-typed.md`
-		// pins all three, and its own sabotage note says the method case does not merely go red without it, it
-		// goes GREEN WITH THE WRONG CODE. It sits at the FALLTHROUGH and not in front of the switch because
-		// every builtin arm above serves such an alias correctly and by design (`items.push(v)`,
-		// `name.append("!")` — `methodReceiverBinding`'s header measures both); what has no ruling yet is a
-		// struct-typed field's OWNERSHIP, which is only what this arm would address.
-		if not recv.selfFieldName.isEmpty() 'structTypedSelfField'
-			throw ParseError.unsupported(structTypedSelfFieldBaseMessage(recv.selfFieldName), line: recv.anchor.line, column: recv.anchor.column)
-		end 'structTypedSelfField'
+		// ⚠ **AN AGGREGATE-TYPED SELF-FIELD ALIAS IS REFUSED HERE ONLY WHEN NO VALUE OF ITS TYPE COULD EXIST**
+		// — `specs-shv2/self-field-struct-typed.md` pins the refusal and its own sabotage note says the method
+		// case does not merely go red without it, it goes GREEN WITH THE WRONG CODE. It sits at the FALLTHROUGH
+		// and not in front of the switch because every builtin arm above serves such an alias correctly and by
+		// design (`items.push(v)`, `name.append("!")` — `methodReceiverBinding`'s header measures both).
+		//
+		// ⭐⭐ **THE PREDICATE IS CONSTRUCTIBILITY, AND THAT IS WHAT THE ORIGINAL REFUSAL WAS ARGUING FOR ALL
+		// ALONG.** Its case was never "a struct-typed field is unlowerable" — the box IS loaded correctly, by
+		// `methodReceiverBinding`, before this receiver is built — but the `mintPhi` trap: `type Node`'s
+		// `var next as Node` needs a `Node` to put there and there is no `null` and no base case, so NO PROGRAM
+		// COULD OBSERVE the load being right. That argument holds for a type on a cycle in the struct-field
+		// graph and for nothing else. `type Outer`'s `var inner as Inner` is built by
+		// `Outer.create(Inner.create(42))`, `inner.get()` is the program `specs-shv2/method-calls.md` writes,
+		// and the explicit `self.inner.get()` spelling of the very same call already compiled and answered 42
+		// through this same fallthrough — the two spellings of one access must not disagree.
+		// `ProgramSignatures.structTypeIsConstructible` is the one home of that question, cycles and all.
+		//
+		// ⚠ **`requireStructBase` DOES NOT ASK THE NARROWED QUESTION, and the asymmetry is load-bearing**, not
+		// an omission: its box is `binding.boundValue`, which is 0 for a self-field alias — and 0 is the
+		// RECEIVER. Admitting there without materializing the field first is exactly the measured silent
+		// `return self.a` its own header records. This door is safe precisely because it holds a VALUE its
+		// producer already loaded.
+		//
+		// ⚠ The name resolution is NESTED INSIDE the alias arm, not hoisted above it. `structLayoutOfType`
+		// below resolves the same name for itself, but this door is on the path of EVERY method dispatch in
+		// the program while a self-field alias base is rare — so lifting the resolution out to share it would
+		// pay it on every call to save one dense-column index on almost none. It stays where only the alias
+		// path reaches it, exactly as the enum arm above gates on its TAG before touching the interner.
+		if not recv.selfFieldName.isEmpty() 'selfFieldAlias'
+			let baseName = self.baseStructNameOfType(recv.tag, nameId: recv.nameId, baseTok: recv.anchor)
+			if not self.signatures.structTypeIsConstructible(baseName) 'inconstructible'
+				throw ParseError.unsupported(structTypedSelfFieldBaseMessage(recv.selfFieldName), line: recv.anchor.line, column: recv.anchor.column)
+			end 'inconstructible'
+		end 'selfFieldAlias'
 
 		return StructBase.create(try self.structLayoutOfType(recv.tag, nameId: recv.nameId, baseTok: recv.anchor), box: recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName)
 	end 'structBaseOfReceiver'
@@ -31577,12 +31624,17 @@ export type Parser
 		//
 		// Reading it correctly means materializing the field first — `loadIndirect` the box out of
 		// the receiver, then address THAT — which is one line, and is deliberately NOT taken here.
-		// A struct-typed field cannot be CONSTRUCTED at this rung: `Self{next: …}` needs a `Node`
-		// to put there, there is no `null` and no base case, so no program could observe the load
-		// being right. That is the `mintPhi` trap exactly — a mechanism handed a consumer and no
-		// reason to be right — and it is the same trap this rung's own scaffold waited out. It
-		// arrives with the rung that gives a field a struct type, which is the rung that already
-		// owes this one its receiver-ownership analysis (see `parseMethodCall`).
+		//
+		// ⚠ **THIS DOOR REFUSES EVERY SUCH ALIAS, INCLUDING ONES WHOSE TYPE IS PERFECTLY
+		// CONSTRUCTIBLE, AND THE METHOD-CALL DOOR NO LONGER DOES.** The asymmetry is exactly the box:
+		// the value this function hands back is `binding.boundValue`, which a self-field alias leaves
+		// 0 — and 0 is the RECEIVER, the measured silent `return self.a` this function's own header
+		// records. `structBaseOfReceiver` is safe to narrow because `methodReceiverBinding` has
+		// already materialized the field into a real value by the time it looks; nothing has
+		// materialized one HERE. Narrowing this door means loading the box first and then answering
+		// the WRITE path's mutability off the FIELD rather than off the alias binding (which is
+		// `mutable: false` by construction, and reports E2013 against an `export var` field) — the
+		// receiver-ownership work `parseMethodCall` already owes, not a predicate change.
 		if binding.isSelfField 'structTypedField'
 			throw ParseError.unsupported(structTypedSelfFieldBaseMessage(baseTok.value), line: baseTok.line, column: baseTok.column)
 		end 'structTypedField'
