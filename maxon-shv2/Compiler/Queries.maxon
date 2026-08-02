@@ -285,46 +285,46 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	let tokens = try queryActiveTokens(project, path: path)
 
 	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
-	// ⭐ **THE FILE'S NAMESPACE IS DERIVED HERE, ONCE, AND FILED (N1a)** — before the file's declarations are
-	// folded, so every later reader (this sweep's own `module`-tier questions, the real parse, the constant
-	// evaluator) reads an index rather than re-deriving a string from a path. This is the one place that holds
-	// both the file and the anchor it is measured from.
-	let namespace = namespaceForFile(project, path: path, isStdlibSource: isStdlibSource)
-	signatures.recordFileNamespace(path, namespace: namespace)
+	// ⭐ **THE FILE'S MODULE DIRECTORY IS DERIVED HERE, ONCE, AND FILED (N1a)** — before the file's
+	// declarations are folded, so every later reader (this sweep's own `module`-tier questions, the real
+	// parse, the constant evaluator) reads an index rather than re-deriving a string from a path. This is the
+	// one place that holds both the file and the anchor it is measured from.
+	let moduleDirectory = moduleDirectoryForFile(project, path: path, isStdlibSource: isStdlibSource)
+	signatures.recordFileModuleDirectory(path, moduleDirectory: moduleDirectory)
 
 	// A `Parser` IS the sweeper — same cursor, same `parseOptionalReturnType` — so the sweep and
 	// the real parse cannot drift on what `returns X` means (see `foldDeclaredSignaturesInto`). It
 	// is handed the index it is BUILDING, which is safe because a sweep types no call and so never
 	// reads it; nothing else in the Parser needs a signature.
-	var scanner = Parser.create(tokens, filePath: path, namespace: namespace, signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
+	var scanner = Parser.create(tokens, filePath: path, namespace: namespaceForModuleDirectory(moduleDirectory), signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
 	scanner.foldDeclaredSignaturesInto(signatures)
 	recordPhase(project, phase: CompilePhase.signatures, probe: probe)
 end 'foldOneFileInto'
 
-// ⭐⭐ **THE ANCHOR A FILE'S NAMESPACE IS MEASURED FROM — THREE OF THEM, AND PICKING THE WRONG ONE IS
-// SILENT** (N1a). v1 threads three roots by hand from three different callers
+// ⭐⭐ **THE ANCHOR A FILE'S MODULE DIRECTORY IS MEASURED FROM — THREE OF THEM, AND PICKING THE WRONG ONE
+// IS SILENT** (N1a). v1 threads three roots by hand from three different callers
 // (`maxon-selfhosted/Compiler/Queries.maxon:75-102`: install dir for stdlib, project root for user code,
 // fragment dir for a spec fragment); shv2 DERIVES all three here, from facts it already has:
 //
 //   • a `stdlib/` file is anchored at `stdlib/`'s PARENT, so `stdlib/String.maxon` is `stdlib` and
-//     `stdlib/helpers/url/urlHelpers.maxon` is `stdlib.helpers.url` — the spelling `specs/namespaces.md`
-//     gives (`stdlib/fmt/integer.maxon` ⇒ `stdlib.fmt`). Anchoring stdlib at the USER's root would put every
-//     stdlib file outside it and collapse the whole cone onto `deriveNamespace`'s parent-name fallback.
+//     `stdlib/helpers/url/urlHelpers.maxon` is `stdlib/helpers/url` — rendered `stdlib.helpers.url`, the
+//     spelling `specs/namespaces.md` gives. Anchoring stdlib at the USER's root would put every stdlib file
+//     outside it and collapse the whole cone onto `deriveModuleDirectory`'s parent-name fallback.
 //   • a DIRECTORY build is anchored at the directory — this is v1's project root, and it is what makes a spec
-//     fixture's `feature/sub/deep.maxon` derive `feature.sub`.
+//     fixture's `feature/sub/deep.maxon` derive `feature/sub`.
 //   • a SINGLE-FILE build is anchored at the file's own directory, which is v1's "fragment dir" case reached
 //     by derivation rather than by a third caller: the one file compiled is at the root of its own program,
-//     so its namespace is the global one.
+//     so it is in the root module.
 //
 // ⚠ **BOTH SIDES ARE RESOLVED AGAINST THE CWD**, because `rootPath` is the raw CLI spelling and
 // `relativeTo` compares SPELLINGS. `Queries.isStdlibSourceFile` records what that costs when it is skipped:
 // the same file read as the user's or as stdlib depending only on how the command line named it. Resolving
 // only the anchor would be worse than resolving neither — every file would miss its own root and fall to
-// `deriveNamespace`'s parent-name arm, which produces a plausible namespace and the wrong one.
-function namespaceForFile(project Project, path FilePath, isStdlibSource bool) returns String
+// `deriveModuleDirectory`'s parent-name arm, which produces a plausible directory and the wrong one.
+function moduleDirectoryForFile(project Project, path FilePath, isStdlibSource bool) returns String
 	let cwd = Directory.currentPath()
-	return deriveNamespace(path.resolve(cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, isStdlibSource: isStdlibSource))
-end 'namespaceForFile'
+	return deriveModuleDirectory(path.resolve(cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, isStdlibSource: isStdlibSource))
+end 'moduleDirectoryForFile'
 
 function namespaceAnchorFor(project Project, cwd FilePath, isStdlibSource bool) returns FilePath
 	if isStdlibSource 'thestdlibsOwnCone'

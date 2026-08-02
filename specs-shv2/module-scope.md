@@ -27,6 +27,15 @@ as the next declaration's modifier.
 `feature2/` is not inside `feature/`. A prefix test that forgot the separator would say it was, and
 that is a wrong ANSWER about what another directory may name — not a missing diagnostic.
 
+### A DOT IS AN ORDINARY CHARACTER IN A DIRECTORY NAME
+
+`feature.extra/` and `my.dir/` are directories like any other, and the language's `.`-joined
+NAMESPACE spelling is a rendering of a directory, never a stand-in for one. An implementation that
+decides the subtree question on the rendered string reintroduces the prefix bug through the joiner
+itself: `feature.extra` starts with `feature.`, and `my.dir/` renders exactly like `my/dir/`. Both
+are wrong ANSWERS — one admits a sibling into the module, the other merges two unrelated
+directories — and neither is visible in any test whose directory names happen to have no dots.
+
 ### The root directory is every file's module
 
 A `module` declaration in a root-level file is visible program-wide, because "the declaring
@@ -114,6 +123,67 @@ end 'main'
 ```
 ```maxoncstderr
 error E3088: feature2/<fragment>:11:9: function 'helper' is module-scoped and not visible from this directory
+```
+
+<!-- test: error.a-sibling-directory-whose-name-contains-a-dot-is-outside-the-module -->
+`feature.extra/` is a SIBLING of `feature/`, not a subdirectory of it. Its `.`-joined namespace is
+`feature.extra`, which begins with `feature.` — so a subtree test asked on namespaces rather than on
+directories admits it, and the separator guard that catches `feature2/` walks straight past.
+```maxon
+// --- file: feature/helper.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function helper() returns Integer
+	return 42
+end 'helper'
+
+// --- file: feature.extra/main.maxon
+function main() returns ExitCode
+	return helper()
+end 'main'
+```
+```maxoncstderr
+error E3088: feature.extra/<fragment>:11:9: function 'helper' is module-scoped and not visible from this directory
+```
+
+<!-- test: error.a-dotted-directory-is-not-the-nested-directory-it-renders-like -->
+`my.dir/` and `my/dir/` are different directories that render to the same `.`-joined namespace. The
+reader is in neither the declaring directory nor beneath it.
+```maxon
+// --- file: my.dir/helper.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function helper() returns Integer
+	return 42
+end 'helper'
+
+// --- file: my/dir/main.maxon
+function main() returns ExitCode
+	return helper()
+end 'main'
+```
+```maxoncstderr
+error E3088: my/dir/<fragment>:11:9: function 'helper' is module-scoped and not visible from this directory
+```
+
+<!-- test: a-directory-name-containing-a-dot-is-its-own-module -->
+The converse of the two refusals above: a dot in a directory name costs the directory nothing. Its
+own subdirectory is inside its module exactly as any other subdirectory is.
+```maxon
+// --- file: feature.extra/helper.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function helper() returns Integer
+	return 42
+end 'helper'
+
+// --- file: feature.extra/sub/main.maxon
+function main() returns ExitCode
+	return helper()
+end 'main'
+```
+```exitcode
+42
 ```
 
 <!-- test: a-root-level-module-declaration-is-visible-from-a-subdirectory -->

@@ -44,55 +44,87 @@ export enum Visibility
 	global
 end 'Visibility'
 
-// What joins a namespace's segments. A directory name cannot contain one on any host the compiler
-// targets, so a `.`-joined namespace decomposes back into directories — which is what makes
-// `namespaceContains` a SEGMENT test rather than a character-prefix test.
-let NamespaceSeparator = "."
-// Both spellings are replaced, not just the host's: `FilePath` normalizes to the platform separator on
-// construction, but a path handed in already-normalized on the OTHER platform (a spec fixture's
-// `// --- file: feature/sub/deep.maxon`) must derive the same namespace on either host.
+// ⭐⭐ **WHAT JOINS A MODULE DIRECTORY'S SEGMENTS — AND IT IS `/`, NOT `.`, BECAUSE THE JOIN HAS TO BE
+// INVERTIBLE.** `moduleDirectoryContains` is a SEGMENT test, and a segment test on a joined string is
+// only sound if no segment can contain the joiner.
+//
+// ⚠ **THIS WAS `.` AND IT WAS A WRONG ANSWER (found in N1a review).** The claim written here was *"a
+// directory name cannot contain one on any host the compiler targets"*, and it is false on all three —
+// this very repository holds `.maxon/` and `.claude/`. Two failures, both MEASURED, both silent:
+//
+//   • `feature/` and `feature.extra/` are SIBLINGS. Joined with `.` the second reads as `feature.extra`,
+//     which starts with `feature.` — so a `module` declaration in `feature/` was visible from
+//     `feature.extra/`, the exact widening the separator guard exists to prevent.
+//   • `my.dir/` and `my/dir/` both joined to `my.dir`, so two structurally different directories
+//     became ONE module and each could see the other's `module` declarations.
+//
+// `/` cannot appear in a path SEGMENT on any host the compiler targets: it is the separator itself on
+// Linux, macOS and WASI, and on Windows it is both an accepted separator and one of the characters a
+// file or directory name may not contain. So the join is injective and the segment test is sound. The
+// `.`-joined spelling the language shows a user is DERIVED from this one
+// (`namespaceForModuleDirectory`) and is never what a visibility question is asked on.
+let ModuleDirectorySeparator = "/"
+// The one spelling that has to be rewritten: `FilePath` normalizes to the PLATFORM separator on
+// construction, so a Windows host hands back `feature\sub` where a POSIX host hands back `feature/sub`,
+// and a spec fixture's `// --- file: feature/sub/deep.maxon` must derive the same module directory on
+// either. `/` needs no rewrite because it IS the joined form.
 let WindowsPathSeparatorText = "\\"
-let PosixPathSeparatorText = "/"
 
-// ⭐ **A FILE'S NAMESPACE IS ITS DIRECTORY, RELATIVE TO ITS COMPILE ANCHOR, `.`-JOINED** —
-// `specs/namespaces.md`: `math.maxon` at root ⇒ `""`, `utils/helpers.maxon` ⇒ `utils`,
-// `stdlib/fmt/integer.maxon` ⇒ `stdlib.fmt`.
+// What joins a NAMESPACE's segments — the spelling `specs/namespaces.md` gives (`stdlib.fmt`) and the one
+// a qualified reference will be written with. It is a RENDERING of a module directory and nothing reads a
+// visibility answer off it; see `ModuleDirectorySeparator` for why the two cannot be the same character.
+let NamespaceSeparator = "."
+
+// ⭐ **A FILE'S MODULE DIRECTORY IS ITS DIRECTORY, RELATIVE TO ITS COMPILE ANCHOR, `/`-JOINED** —
+// `math.maxon` at root ⇒ `""`, `utils/helpers.maxon` ⇒ `utils`, `stdlib/fmt/integer.maxon` ⇒ `stdlib/fmt`.
+// It is the string every `Visibility.module` question is decided on.
 //
 // Ported from v1's `deriveNamespace` (`maxon-selfhosted/Compiler/Queries.maxon:88-102`), including its
 // `notUnderRoot` fallback: a file outside its declared anchor falls back to its immediate parent's NAME,
-// so a misconfigured anchor can never produce a `..` segment in a namespace. shv2 reaches that arm for
-// every stdlib file of a user build — `namespaceRootFor` gives stdlib its own anchor, so the arm covers
+// so a misconfigured anchor can never produce a `..` segment. shv2 reaches that arm for
+// every stdlib file of a user build — `namespaceAnchorFor` gives stdlib its own anchor, so the arm covers
 // only a genuinely misconfigured caller.
 //
 // ⚠ **THE ANCHOR IS THE ARGUMENT, AND GETTING IT WRONG IS SILENT** — every file would get a plausible
-// namespace and the wrong one. `Queries.namespaceRootFor` is its single producer, and states the three
-// anchors it derives.
-export function deriveNamespace(filePath FilePath, rootPath FilePath) returns String
+// module directory and the wrong one. `Queries.namespaceAnchorFor` is its single producer, and states the
+// three anchors it derives.
+export function deriveModuleDirectory(filePath FilePath, rootPath FilePath) returns String
 	let relative = try filePath.relativeTo(rootPath) otherwise 'notUnderRoot'
 		let parent = try filePath.parent() otherwise return ""
 		return parent.filename()
 	end 'notUnderRoot'
 
-	// No separator left in the relative path ⇒ the file sits AT the anchor, which is the global namespace.
+	// No separator left in the relative path ⇒ the file sits AT the anchor, which is the root module.
 	let directory = try relative.parent() otherwise return ""
-	return directory.toString().replace(WindowsPathSeparatorText, with: NamespaceSeparator).replace(PosixPathSeparatorText, with: NamespaceSeparator)
-end 'deriveNamespace'
+	return directory.toString().replace(WindowsPathSeparatorText, with: ModuleDirectorySeparator)
+end 'deriveModuleDirectory'
+
+// The `.`-joined NAMESPACE a module directory is shown as — `stdlib/fmt` ⇒ `stdlib.fmt`. Derived from the
+// directory rather than stored beside it, so the two cannot come to disagree: the directory is the fact
+// (it is invertible), and this is one rendering of it.
+export function namespaceForModuleDirectory(moduleDirectory String) returns String
+	if moduleDirectory.isEmpty() 'rootModule'
+		return ""
+	end 'rootModule'
+
+	return moduleDirectory.replace(ModuleDirectorySeparator, with: NamespaceSeparator)
+end 'namespaceForModuleDirectory'
 
 // ⭐ **IS `inner` THE SAME MODULE AS `outer`, OR ONE BENEATH IT?** — the whole of what `Visibility.module`
-// means, asked on namespaces rather than on paths.
+// means, asked on module directories rather than on `FilePath`s.
 //
 // ⚠ **THE SEPARATOR IN THE PREFIX IS THE POINT, and v1 flags the same line as the fragile one**
 // (`readerFileIsInModuleSubtree`, `maxon-selfhosted/Compiler/Project.maxon:213-227`): without it
 // `feature` would contain `featureX`, a sibling directory that merely shares a character prefix. shv2
-// spells the test on NAMESPACES instead of on parent PATHS for two reasons — it is the same string
-// qualified references will resolve against, so "which module is this file in?" has one answer in the
-// compiler rather than two; and it is derived ONCE PER FILE, where v1's version calls `FilePath.parent()`
-// on both sides of every ask (a slice, a String and a FilePath per call, per side).
+// asks it of a `/`-joined RELATIVE directory rather than of v1's stringified parent `FilePath` for one
+// reason — it is derived ONCE PER FILE and indexed, where v1's version calls `FilePath.parent()` on both
+// sides of every ask (a slice, a String and a FilePath per call, per side). The guard itself is v1's,
+// character for character, and `ModuleDirectorySeparator` is what keeps it sound.
 //
-// The empty namespace is the ROOT directory, and every file in the program is under the root — so a
+// The empty module directory is the ROOT, and every file in the program is under the root — so a
 // `module` declaration in a root-level file is visible program-wide, which is what "same directory and
 // every subdirectory" says when the directory is the root.
-export function namespaceContains(outer String, inner String) returns bool
+export function moduleDirectoryContains(outer String, inner String) returns bool
 	if outer.isEmpty() 'rootIsEveryFilesModule'
 		return true
 	end 'rootIsEveryFilesModule'
@@ -101,8 +133,8 @@ export function namespaceContains(outer String, inner String) returns bool
 		return true
 	end 'sameDirectory'
 
-	return inner.startsWith("{outer}{NamespaceSeparator}")
-end 'namespaceContains'
+	return inner.startsWith("{outer}{ModuleDirectorySeparator}")
+end 'moduleDirectoryContains'
 
 // A `Visibility` as a small dense number, for the one reader that must MIX a tier into a content hash
 // (`ProgramSignatures.recordAlias`) rather than branch on it. Spelled here, beside the enum, so a fourth
@@ -1604,8 +1636,9 @@ export type StructLayout
 	// `typeParamNames`' reason — the E3017 instantiation check reads it straight off `structOf`.
 	export var whereConstraints as WhereConstraintArray
 	// ⭐ **THE DECLARATION'S OWN VISIBILITY (N1a)** — `type Point` vs `module type Point` vs
-	// `export type Point`. Read by `Parser.requireVisibleTypeName`, the door a source-written type NAME goes
-	// through, and by the field gate's `module` tier, which needs the declaring file below.
+	// `export type Point`. Read by `Parser.typeNameVisibleHere`, the door a source-written type NAME in a
+	// dotted primary goes through, and by `Parser.requireFieldAccessible`, which meets it at the first field
+	// access on a value of the type.
 	//
 	// ⚠ It is `global` for every COMPILER-SYNTHESIZED layout (`StringIndex`, `CharacterSet`, a tuple,
 	// `__ManagedFile`, `__ManagedDirectory`): those are not written in any file, so no file may be refused

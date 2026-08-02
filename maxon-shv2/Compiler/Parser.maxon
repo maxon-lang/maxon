@@ -8547,6 +8547,16 @@ export type Parser
 		return self.kindAt(index) == TokenKind.identifier and self.tokenAt(index).value.equals(ModuleModifierName)
 	end 'moduleModifierAt'
 
+	// ⭐ **WHICH WORDS ARE VISIBILITY MODIFIERS — ASKED ONCE, BY THE LOOK-AHEAD DOORS.** `atStructFieldKeyword`
+	// and `atTypeAliasDeclaration` both need "is a modifier here, whatever it is?" before they can look past
+	// it at the keyword they are actually testing for, and each spelled the disjunction itself until this
+	// review. Two copies of the modifier SET is the same defect `consumeOptionalExport` was created to end —
+	// a third modifier taught to `consumeOptionalVisibility` and to one door would make the other silently
+	// read `module`'s successor as an ordinary expression.
+	function atVisibilityModifier() returns bool
+		return self.at(TokenKind.export) or self.atModuleModifier()
+	end 'atVisibilityModifier'
+
 	// ⭐ **AN ALIAS DECLARED IN `stdlib/` IS `global` WHATEVER IT WROTE (P1.9)** — the spec's "reachable
 	// as a cast target from any file, regardless of its source-level visibility modifier". Seven of the
 	// aliases user code has to be able to name are declared without `export`
@@ -8969,7 +8979,7 @@ export type Parser
 	// scope, a type body, a function body), and a keyword taught to one spelling and not another
 	// would put two readers of one grammar a token apart.
 	function atStructFieldKeyword() returns bool
-		if self.at(TokenKind.export) or self.atModuleModifier() 'modified'
+		if self.atVisibilityModifier() 'modified'
 			return self.kindAt(self.pos + 1) == TokenKind.let or self.kindAt(self.pos + 1) == TokenKind.var
 		end 'modified'
 		return self.atTopLevelBindingKeyword()
@@ -9675,7 +9685,7 @@ export type Parser
 	// WITHOUT having consumed the `export` first: the type-body scan (P1.6-C nested aliases) and the
 	// declaration sweep, whose loop treats `export` as an ordinary token.
 	function atTypeAliasDeclaration() returns bool
-		if self.at(TokenKind.export) or self.atModuleModifier() 'modified'
+		if self.atVisibilityModifier() 'modified'
 			return self.kindAt(self.pos + 1) == TokenKind.typealias
 		end 'modified'
 		return self.at(TokenKind.typealias)
@@ -25555,10 +25565,15 @@ export type Parser
 
 		// ⭐ **A BASE NAMING A TYPE THIS FILE MAY NOT SEE BINDS NOTHING HERE (N1a)** — not a value, not a type
 		// — so it is the same mistake as a misspelled name and takes the same diagnostic, which is the
-		// reference's answer for it (`export-keyword/error.non-exported-enum-cross-file`). The CALL shape
-		// never reaches this line: it went to `parseQualifiedCall`, whose `requireVisibleTypeName` reports
-		// E4006 instead, because there the name is certainly a TYPE reference and "unknown type" is the
-		// sharper sentence. Asked LAST so a visible type still takes whichever arm above claims it.
+		// reference's answer for it (`export-keyword/error.non-exported-enum-cross-file`).
+		//
+		// ⚠ **THE CALL SHAPE NEVER REACHES THIS LINE — IT WENT TO `parseQualifiedCall`, WHICH GATES NOTHING**,
+		// and that is the rule rather than an omission: `Hidden.create(…)` is refused (or not) by the
+		// STATIC's own tier at `SemanticCheck.calleeVisibleFrom`, so an `export`ed static on a hidden type
+		// stays callable and the reader meets the type's own visibility at the first FIELD access
+		// (`requireFieldAccessible` ⇒ E4006). Both references decide it exactly there and exactly that way —
+		// v1 at `TypeResolution.maxon:10200-10220`, which returns without a diagnostic for a visible method
+		// and defers to the field gate. Asked LAST so a visible type still takes whichever arm above claims it.
 		if not self.typeNameVisibleHere(baseTok.value) 'hiddenTypeBase'
 			throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
 		end 'hiddenTypeBase'
@@ -25994,6 +26009,35 @@ export type Parser
 		return result
 	end 'emitEnumTagLiteral'
 
+	// ⭐ **IS THE NOMINAL TYPE `name` — IF THE PROGRAM DECLARES ONE AT ALL — NAMEABLE FROM THIS FILE (N1a)?**
+	//
+	// A name NO declaration binds answers `true`: "there is no such type" is a different mistake with a
+	// different diagnostic (E3004 at the mangled callee, E2004 at a bare base), and answering `false` here
+	// would collapse both into this one's wording. That is `ProgramSignatures.aliasVisibleFrom`'s rule, one
+	// registry over, and it is why this predicate is spelled as a question about a DECLARATION rather than as
+	// a membership test.
+	//
+	// ⚠ Both probes are gated on the NON-ALLOCATING `contains` twin, for `parseDottedPrimary`'s measured
+	// reason: `structOf`/`enumOf` box a `DeclaredStruct`/`DeclaredEnum` even to say `undeclared`, and this
+	// runs on paths where nearly every name is neither.
+	function typeNameVisibleHere(name ByteArray) returns bool
+		if self.signatures.containsStruct(name) 'declaredStruct'
+			match self.signatures.structOf(name) 'layout'
+				declared(layout) then return self.signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
+				undeclared then panic("typeNameVisibleHere: containsStruct answered yes for '{String.from(name)}' but structOf answered undeclared — the two read one registry under one key")
+			end 'layout'
+		end 'declaredStruct'
+
+		if not self.signatures.containsEnum(name) 'notANominalDeclaration'
+			return true
+		end 'notANominalDeclaration'
+
+		match self.signatures.enumOf(name) 'layout'
+			declared(layout) then return self.signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
+			undeclared then panic("typeNameVisibleHere: containsEnum answered yes for '{String.from(name)}' but enumOf answered undeclared — the two read one registry under one key")
+		end 'layout'
+	end 'typeNameVisibleHere'
+
 	// `Point.create(3, y: 4)` — a call to a type's static method.
 	//
 	// It is an ORDINARY call with a mangled name, and that is the whole implementation: the callee
@@ -26016,34 +26060,6 @@ export type Parser
 	// so it is recorded rather than invented here. (The COUNTS that E3036 carries are inflated by
 	// the receiver, which is not this routine's doing and is not restated here — see the receiver
 	// prepend in `parseCallNamed`, the one place that causes it, for both callers.)
-	// ⭐ **IS THE NOMINAL TYPE `name` — IF THE PROGRAM DECLARES ONE AT ALL — NAMEABLE FROM THIS FILE (N1a)?**
-	//
-	// A name NO declaration binds answers `true`: "there is no such type" is a different mistake with a
-	// different diagnostic (E3004 at the mangled callee, E2004 at a bare base), and answering `false` here
-	// would collapse both into this one's wording. That is `RangedAliasRegistry.visibleFrom`'s rule, one
-	// registry over, and it is why this predicate is spelled as a question about a DECLARATION rather than as
-	// a membership test.
-	// ⚠ Both probes are gated on the NON-ALLOCATING `contains` twin, for `parseDottedPrimary`'s measured
-	// reason: `structOf`/`enumOf` box a `DeclaredStruct`/`DeclaredEnum` even to say `undeclared`, and this
-	// runs on paths where nearly every name is neither.
-	function typeNameVisibleHere(name ByteArray) returns bool
-		if self.signatures.containsStruct(name) 'declaredStruct'
-			match self.signatures.structOf(name) 'layout'
-				declared(layout) then return self.signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
-				undeclared then panic("typeNameVisibleHere: containsStruct answered yes for '{String.from(name)}' but structOf answered undeclared — the two read one registry under one key")
-			end 'layout'
-		end 'declaredStruct'
-
-		if not self.signatures.containsEnum(name) 'notANominalDeclaration'
-			return true
-		end 'notANominalDeclaration'
-
-		match self.signatures.enumOf(name) 'layout'
-			declared(layout) then return self.signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
-			undeclared then panic("typeNameVisibleHere: containsEnum answered yes for '{String.from(name)}' but enumOf answered undeclared — the two read one registry under one key")
-		end 'layout'
-	end 'typeNameVisibleHere'
-
 	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		// `Self.create(…)` reaches here as `Point.create(…)` — `consumeTypeBaseToken` resolved the keyword, so
 		// the callee mangling, the alias interceptions and the E3062 use hook below all see one spelling (D9).

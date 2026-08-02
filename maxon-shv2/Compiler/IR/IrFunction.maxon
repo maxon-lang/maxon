@@ -122,15 +122,18 @@ export type IrFunction
 	// the way to the COFF symbol table, which writes it as bytes anyway.
 	export var name as ByteArray
 	// The DIRECTORY this function was declared in, `.`-joined (`stdlib`, `stdlib.helpers.url`, `""` at the
-	// root) — see `deriveNamespace`. Stamped by the parser from `Parser.namespace`, which carried `""` at
-	// every call site until N1a derived one per file.
+	// root) — `namespaceForModuleDirectory` applied to `deriveModuleDirectory`'s answer. Stamped by the
+	// parser from `Parser.namespace`, which carried `""` at every call site until N1a derived one per file.
 	//
 	// ⚠ **STILL WRITE-ONLY, AND ITS HEADER USED TO SAY OTHERWISE**: it claimed `LowerMaxonToStd` consumed
 	// it to resolve bare callees, and that file contains the word `namespace` ZERO times. The claim was
 	// v1's, carried across with the field. The authoritative copy of this fact is
-	// `ProgramSignatures.fileNamespaces`, which `isVisibleFrom` reads and which is keyed by the path a
-	// caller already holds; this field is the per-function mirror QUALIFIED REFERENCES (`dir.fn()`) are
+	// `ProgramSignatures.fileModuleDirectories`, which `isVisibleFrom` reads and which is keyed by the path
+	// a caller already holds; this field is the per-function mirror QUALIFIED REFERENCES (`dir.fn()`) are
 	// expected to want. If that rung does not want it, DELETE it rather than leaving one fact in two homes.
+	//
+	// ⚠ **IT IS THE RENDERED SPELLING, AND NOTHING MAY ASK A VISIBILITY QUESTION OF IT** — `my.dir/` and
+	// `my/dir/` render alike. See `ModuleDirectorySeparator`.
 	export var namespace as String
 	// ⭐ **THE VISIBILITY TIER THE DECLARATION WROTE — READ, since N1a, by the call door**
 	// (`SemanticCheck.calleeVisibleFrom` ⇒ E3008 / E3088). It was written at three sites and consulted at

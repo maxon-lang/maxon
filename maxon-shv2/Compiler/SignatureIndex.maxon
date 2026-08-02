@@ -3012,8 +3012,9 @@ end 'splitQualifiedName'
 // `LiveGlobalLabelSet`, `InterfaceNameSet` — rather than a list plus a linear scan, which is what makes
 // "linear in the graph" a fact about this walk rather than a hope.
 typealias StructNameSet = Set with ByteArray
-// Source-file path (stringified) ⇒ that file's namespace. See `ProgramSignatures.fileNamespaces`.
-typealias FileNamespaceMap = Map with (String, String)
+// Source-file path (stringified) ⇒ that file's MODULE DIRECTORY. See
+// `ProgramSignatures.fileModuleDirectories`.
+typealias FileModuleDirectoryMap = Map with (String, String)
 
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
@@ -3314,35 +3315,46 @@ export type ProgramSignatures
 	// every program that shadows nothing, which is the whole existing corpus — and that emptiness is what
 	// makes this mechanism byte-neutral rather than merely cheap (see `Parser.shadowRenamedTokens`).
 	var stdlibShadowRenames as StdlibShadowRenameMap
-	// ⭐ **EVERY SOURCE FILE'S NAMESPACE (N1a)** — path ⇒ its directory, `.`-joined (see
-	// `deriveNamespace`). Written once per file by `Queries.foldOneFileInto`, which is the one place that
-	// holds both the file and the anchor it is measured from; read by `isVisibleFrom`'s `module` arm and by
-	// every `Parser.create`, which stamps it onto the functions the file declares.
+	// ⭐ **EVERY SOURCE FILE'S MODULE DIRECTORY (N1a)** — path ⇒ its directory relative to the compile
+	// anchor, `/`-joined (see `deriveModuleDirectory`). Written once per file by `Queries.foldOneFileInto`,
+	// which is the one place that holds both the file and the anchor it is measured from; read by
+	// `isVisibleFrom`'s `module` arm, and by every `Parser.create` through `namespaceOf`.
+	//
+	// ⚠ **THE DIRECTORY IS STORED AND THE NAMESPACE IS DERIVED, NOT THE OTHER WAY ROUND**, because only
+	// one of the two is invertible — see `ModuleDirectorySeparator`, which records the two wrong answers
+	// a `.`-joined store produced.
 	//
 	// Keyed by the path's STRING for `RangedAliasRegistry.multiplyDeclared`'s measured reason: `FilePath.hash`
 	// case-folds and allocates on Windows, and the whole value of an index is that a probe costs one hash of a
 	// string that already exists.
-	var fileNamespaces as FileNamespaceMap
+	var fileModuleDirectories as FileModuleDirectoryMap
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileNamespaces: FileNamespaceMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create()}
 	end 'create'
 
-	// --- NAMESPACES and the ONE visibility decision (N1a) ---
+	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
 
-	// File this file's namespace. Called once per file by `Queries.foldOneFileInto`, before the file's
+	// File this file's module directory. Called once per file by `Queries.foldOneFileInto`, before the file's
 	// declarations are folded, so `isVisibleFrom` can answer about any declaration the moment the sweep ends.
 	// LAST-WINS is unreachable rather than tolerated: the sweep visits each path exactly once.
-	export function recordFileNamespace(path FilePath, namespace String)
-		self.fileNamespaces.upsert(path.toString(), value: namespace)
-	end 'recordFileNamespace'
+	export function recordFileModuleDirectory(path FilePath, moduleDirectory String)
+		self.fileModuleDirectories.upsert(path.toString(), value: moduleDirectory)
+	end 'recordFileModuleDirectory'
 
-	// The namespace of a file the sweep folded. A MISS IS A COMPILER BUG, not a file at the root: the root's
-	// namespace is the empty string and is recorded like any other, so an absent entry means a path reached a
-	// visibility question without ever having been swept — and answering `""` would silently place that file
-	// in the global module, where every `module` declaration in the program is visible to it.
+	// The module directory of a file the sweep folded. A MISS IS A COMPILER BUG, not a file at the root: the
+	// root's directory is the empty string and is recorded like any other, so an absent entry means a path
+	// reached a visibility question without ever having been swept — and answering `""` would silently place
+	// that file in the root module, where every `module` declaration in the program is visible to it.
+	export function moduleDirectoryOf(path FilePath) returns String
+		return try self.fileModuleDirectories.get(path.toString()) otherwise panic("ProgramSignatures.moduleDirectoryOf: '{path.toString()}' has no module directory — every source path is stamped by `Queries.foldOneFileInto` before any declaration of it is folded")
+	end 'moduleDirectoryOf'
+
+	// The `.`-joined NAMESPACE a file is shown as — what `Parser.create` stamps onto `IrFunction.namespace`.
+	// Rendered from the stored directory rather than stored beside it: two fields would be two chances to
+	// disagree, and only the directory can be inverted back into segments.
 	export function namespaceOf(path FilePath) returns String
-		return try self.fileNamespaces.get(path.toString()) otherwise panic("ProgramSignatures.namespaceOf: '{path.toString()}' has no namespace — every source path is stamped by `Queries.foldOneFileInto` before any declaration of it is folded")
+		return namespaceForModuleDirectory(self.moduleDirectoryOf(path))
 	end 'namespaceOf'
 
 	// ⭐⭐ **MAY `readerFilePath` NAME A DECLARATION MADE IN `declFilePath` AT TIER `visibility`?** — the ONE
@@ -3350,9 +3362,10 @@ export type ProgramSignatures
 	// type, a ranged typealias, a top-level binding, a field.
 	//
 	// Ported from v1's `isVisibleFrom` (`maxon-selfhosted/Compiler/Project.maxon:161-167`), tier for tier. The
-	// `module` arm is the one that diverges: v1 compares stringified PARENT PATHS with a separator-guarded
-	// prefix test, shv2 compares NAMESPACES — see `namespaceContains` for why, and for the shared reason the
-	// guard exists at all.
+	// `module` arm is the one that diverges, and only in WHERE the string comes from: v1 stringifies both
+	// `FilePath.parent()`s at every ask, shv2 reads a per-file INDEX. Both then run the same
+	// separator-guarded prefix test — see `moduleDirectoryContains`, and `ModuleDirectorySeparator` for what
+	// the guard costs when the joiner is a character a directory name may contain.
 	//
 	// ⚠ **A DECLARATION'S OWN FILE ALWAYS MAY**, in every tier — visibility governs who ELSE may see a
 	// declaration, never whether it is in scope where it was written. That is not a fourth arm: `file` says it
@@ -3361,7 +3374,7 @@ export type ProgramSignatures
 		match visibility 'tier'
 			global then return true
 			file then return declFilePath.toString().equals(readerFilePath.toString())
-			module then return namespaceContains(self.namespaceOf(declFilePath), inner: self.namespaceOf(readerFilePath))
+			module then return moduleDirectoryContains(self.moduleDirectoryOf(declFilePath), inner: self.moduleDirectoryOf(readerFilePath))
 		end 'tier'
 	end 'isVisibleFrom'
 
@@ -4935,10 +4948,19 @@ export type ProgramSignatures
 		//
 		// A hidden declaration answers `notFound` rather than a refusal of its own: the reader gets
 		// `Undefined constant 'LIMIT'`, which is the reference's answer for it
-		// (`module-keyword/error.module-let-different-directory`) and the true one — from outside the
-		// subtree, no declaration binds the name.
+		// (`module-keyword/error.module-let-different-directory`).
+		//
+		// ⚠ **THAT ANSWER IS ONLY TRUE WHILE THE NAME HAS ONE NON-FILE-PRIVATE DECLARATION, AND THE BARE KEY
+		// CANNOT HOLD TWO.** `recordDecl` is first-wins, so two files declaring `LIMIT` at any tier wider than
+		// `file` put ONE of them in this index and drop the other — MEASURED, and wrong in two ways: two
+		// `export let LIMIT` in different directories silently resolve BOTH readers to the first (a wrong
+		// VALUE, and unchanged from before N1a), and two `module let LIMIT` make the loser's OWN FILE fail to
+		// see its own declaration. The cure is a namespace-scoped key plus a precedence rule, which is
+		// exactly N1b/N1c's content — the same collision refuses a program outright for FUNCTIONS and TYPES
+		// today (E3006), so top-level bindings are the one kind where it is silent.
 		if let exported = try self.declIndex.get(name) 'exported'
-			if not self.isVisibleFrom(self.declAt(exported).visibility, declFilePath: self.declAt(exported).declFilePath, readerFilePath: readerFilePath) 'outOfScope'
+			let decl = self.declAt(exported)
+			if not self.isVisibleFrom(decl.visibility, declFilePath: decl.declFilePath, readerFilePath: readerFilePath) 'outOfScope'
 				return TopLevelDeclLookup.notFound
 			end 'outOfScope'
 
