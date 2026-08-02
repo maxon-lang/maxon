@@ -2078,6 +2078,32 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   is the env slot's WIDTH; this is `closureReturns` threading through a NESTED env, which is P1.5-A2's
   mechanism and wants its own survey of how a lifted closure's file-local return type reaches an inner
   closure's call site.
+- **⬜ THE UNUSED-BINDING CHECK (E3012) DOES NOT EXIST IN shv2 AT ALL** — not for parameters, not for
+  locals. **Filed 2026-08-02 by `/spec-port`, which took the §7 DEFERRED exit on
+  `specs/unused-parameters.md` (4 of its 6 cases blocked, past the half-the-file floor).** Measured, not
+  inferred: `docs/error-codes.txt` E3012 carries `csharp` and `selfhosted` claims and **no `shv2` line**,
+  and shv2's sources contain no emitter under any spelling (grep for both the member name and the message
+  text — the check is structural, since `ErrorCode.<name>` does not compile unless the registry generated
+  it). ⭐ **The backlog for it already exists and is bigger than the one spec**: `unused-variables.md`
+  (whitelist 170) and `var-should-be-let.md` (175) are unported and sit on the same mechanism, and **four
+  cases across three ALREADY-PORTED specs are shelved waiting on it** —
+  `discarded-results/underscore-not-prefix-suppression`,
+  `interface-conformance/non-interface-method-on-conforming-type-still-errors`,
+  `interface-conformance/interface-method-local-var-still-errors`, and
+  `ternary-expression/…unused-loopvar-before-ternary`. ⚠ **Why it is a rung and not a port tick, and it is
+  not the use-count that makes it one — it is the four rules layered on top, three of which are already
+  written down as contracts:** (1) an **interface-method exemption** — the implementer is forced to declare
+  every parameter the contract names, and `interface-conformance`'s two shelved cases exist precisely to
+  pin that the exemption does NOT extend to non-interface methods on the same conforming type, nor to
+  locals inside an interface method; (2) the **`_` discard rule** — `_` binds nothing and is exempt, while
+  `_x` is an ordinary variable that is not (`discarded-results`); (3) **two precedence orderings the
+  registry states outright** — E2028 `matchTypeMismatch` is thrown at parse time *"so it wins over the
+  body-finish unused-variable check (E3012)"*, and E3012 in turn beats **E3077** `SemanticVarShouldBeLet`
+  (*"an unused `var` reports as unused, not as should-be-let"*), which shv2 does not claim either, so the
+  two want sequencing together; (4) a **whole-program false-positive surface** — this is a check that goes
+  from silent to loud across every function in `stdlib/` and all ~3,390 corpus cases at once, which is the
+  blast radius no rapid-iteration tick can carry and the reason the spec was deferred rather than
+  part-landed.
 - **⬜ `readStdoutLine` HAS NO DEADLINE ANYWHERE IN THE STDLIB, so `awaitReady` can hang the pool BEFORE
   the dispatch loop exists.** **Filed by H1's review (2026-07-30).** A worker that never prints
   `WORKER_READY` hangs `spawnPool` (`SpecWorkerPool.maxon:775`) forever — the **same class** as the
