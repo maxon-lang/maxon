@@ -252,12 +252,19 @@ end 'byteComparabilityOfPaths'
 // ===========================================================================================
 
 // One table of the log, as parsed. `last` is the row this run is differenced against.
+//
+// IT CARRIES THE TWO THINGS EVERY REFUSAL ABOUT IT HAS TO NAME — the document it was read out of and
+// the marker that closes it — rather than having each of them handed back in beside it at every call.
+// `lastRowOf` used to take the marker as a second argument that could only ever be the one the table
+// was read with; a table that knows which table it is cannot be described as a different one.
 type LogTable
+	export let source as String
+	export let marker as String
 	export let header as StringArray
 	export let last as LogTableRow
 
-	static function create(header StringArray, last LogTableRow) returns LogTable
-		return Self{header: header, last: last}
+	static function create(source String, marker String, header StringArray, last LogTableRow) returns LogTable
+		return Self{source: source, marker: marker, header: header, last: last}
 	end 'create'
 end 'LogTable'
 
@@ -284,26 +291,47 @@ export function loadScaleTrend() returns LoggedMemory throws ScaleError
 	// minting a fresh file would bury the real history rather than continue it.
 	let text = try File.readText(path) otherwise throw ScaleError.reason("could not read {OptimizationLogRelativePath} — it is the trend this run is measured against, not a file the instrument creates. Run scale-test from the repo root.")
 
-	let allocations = try readTable(text, marker: AllocationsTableMarker)
-	let bytes = try readTable(text, marker: BytesTableMarker)
+	return try parseScaleTrend(text, source: OptimizationLogRelativePath)
+end 'loadScaleTrend'
+
+// THE PARSER, SEPARATED FROM THE FILE READ — and that separation is the whole seam.
+//
+// ⭐ **EVERY REFUSAL BELOW WAS RUN BY NOTHING.** There is no route to a damaged trend log from a spec
+// case, so around thirty throws describing exactly how this document can be hand-edited into a lie had
+// never once been observed to fire — a claim, not a door. `ScaleHistorySelfTest` now proves each of them
+// by handing THIS function deliberately-damaged documents, in process, on every suite run.
+//
+// ⚠ **AND IT IS THIS FUNCTION, NOT A SECOND ONE WRITTEN TO BE TESTABLE.** A parser built for the test
+// beside the parser the tool uses is this project's signature bug — one fact written down twice, with
+// the copy under test and the original unwatched. The log has exactly one parser; what the caller
+// supplies is the text and its NAME.
+//
+// `source` is that name, and it is a parameter rather than the constant every message used to
+// interpolate: a refusal raised over a fixture must not tell its reader that `docs/optimization-log.md`
+// is broken when that file is fine.
+export function parseScaleTrend(text String, source String) returns LoggedMemory throws ScaleError
+	// SPLIT ONCE. The three markers are three anchors in ONE document, and each table used to re-split
+	// the whole file to find its own.
+	let lines = text.split("\n")
+
+	let allocations = try readTable(lines, marker: AllocationsTableMarker, source: source)
+	let bytes = try readTable(lines, marker: BytesTableMarker, source: source)
 
 	// THE CPU TABLE IS READ TOO, AND ITS NUMBERS ARE NOT USED. `recordScaleRun` WRITES a row into it, so
 	// leaving it unread made it the one table whose shape nothing checked — a CPU table that had gone
 	// ragged, or kept a leading column the other two had dropped, would take row after row of the wrong
 	// width forever and no run would ever say so. A missing check never fails.
-	let cpu = try readTable(text, marker: CpuTableMarker)
+	let cpu = try readTable(lines, marker: CpuTableMarker, source: source)
 
 	return try readMemoryRow(allocations, bytesTable: bytes, cpuTable: cpu)
-end 'loadScaleTrend'
+end 'parseScaleTrend'
 
 // The table that ends at `marker`: the contiguous run of `|`-leading lines immediately above it.
 //
 // Bottom-up from the marker, because that is the ONE anchor the document guarantees. Searching
 // top-down from a heading would tie the parser to prose the author is free to rewrite; the marker is
 // there precisely so they can.
-function readTable(text String, marker String) returns LogTable throws ScaleError
-	let lines = text.split("\n")
-
+function readTable(lines StringArray, marker String, source String) returns LogTable throws ScaleError
 	var markerLine = lines.count()
 	for i in 0 upto lines.count() 'findMarker'
 		let line = try lines.get(i) otherwise panic("readTable: i < count but lines.get({i}) failed")
@@ -314,7 +342,7 @@ function readTable(text String, marker String) returns LogTable throws ScaleErro
 	end 'findMarker'
 
 	if markerLine >= lines.count() 'noMarker'
-		throw ScaleError.reason("{OptimizationLogRelativePath} is missing the table marker `{marker}`. A row is inserted immediately before it; without it there is no table to extend.")
+		throw ScaleError.reason("{source} is missing the table marker `{marker}`. A row is inserted immediately before it; without it there is no table to extend.")
 	end 'noMarker'
 
 	// Walk up over the table's rows to its header. The block is header, separator, then zero or more
@@ -330,15 +358,15 @@ function readTable(text String, marker String) returns LogTable throws ScaleErro
 
 	let rowCount = markerLine - top
 	if rowCount < TableHeaderLines 'noHeader'
-		throw ScaleError.reason("the table above `{marker}` in {OptimizationLogRelativePath} has no header row and separator — it must be `| {DateColumnHeading} | {MintedAtColumnHeading} | {NoteColumnHeading} | ... |` followed by `| --- | ... |`")
+		throw ScaleError.reason("the table above `{marker}` in {source} has no header row and separator — it must be `| {DateColumnHeading} | {MintedAtColumnHeading} | {NoteColumnHeading} | ... |` followed by `| --- | ... |`")
 	end 'noHeader'
 
 	let header = splitRow(try lines.get(top) otherwise panic("readTable: header line is inside the block"))
-	try assertLeadingHeadings(header, marker: marker)
-	try assertSeparatorRow(splitRow(try lines.get(top + 1) otherwise panic("readTable: the separator line is inside the block")), header: header, marker: marker)
+	try assertLeadingHeadings(header, marker: marker, source: source)
+	try assertSeparatorRow(splitRow(try lines.get(top + 1) otherwise panic("readTable: the separator line is inside the block")), header: header, marker: marker, source: source)
 
 	if rowCount == TableHeaderLines 'headerOnly'
-		return LogTable.create(header, last: LogTableRow.none)
+		return LogTable.create(source, marker: marker, header: header, last: LogTableRow.none)
 	end 'headerOnly'
 
 	let lastCells = splitRow(try lines.get(markerLine - 1) otherwise panic("readTable: the last row is inside the block"))
@@ -346,7 +374,7 @@ function readTable(text String, marker String) returns LogTable throws ScaleErro
 		throw ScaleError.reason("the last row of the table above `{marker}` has {lastCells.count()} cell(s) but its header has {header.count()} — the table is ragged, and a column read out of it would be the wrong column")
 	end 'ragged'
 
-	return LogTable.create(header, last: LogTableRow.cells(lastCells))
+	return LogTable.create(source, marker: marker, header: header, last: LogTableRow.cells(lastCells))
 end 'readTable'
 
 // A markdown table always opens with a heading row and a `| --- |` separator; data rows come after.
@@ -362,16 +390,16 @@ let TableHeaderLines = 2
 // ordinary means — a rebase onto a branch whose log half was not migrated, a merge that took one side of
 // the document. The header row says plainly which columns the document has; this is the one place it is
 // believed.
-function assertLeadingHeadings(header StringArray, marker String) throws ScaleError
-	try assertHeading(header, index: DateColumnIndex, expected: DateColumnHeading, marker: marker)
-	try assertHeading(header, index: MintedAtColumnIndex, expected: MintedAtColumnHeading, marker: marker)
-	try assertHeading(header, index: NoteColumnIndex, expected: NoteColumnHeading, marker: marker)
+function assertLeadingHeadings(header StringArray, marker String, source String) throws ScaleError
+	try assertHeading(header, index: DateColumnIndex, expected: DateColumnHeading, marker: marker, source: source)
+	try assertHeading(header, index: MintedAtColumnIndex, expected: MintedAtColumnHeading, marker: marker, source: source)
+	try assertHeading(header, index: NoteColumnIndex, expected: NoteColumnHeading, marker: marker, source: source)
 end 'assertLeadingHeadings'
 
-function assertHeading(header StringArray, index ColumnIndex, expected String, marker String) throws ScaleError
-	let heading = try cellAt(header, index: index)
+function assertHeading(header StringArray, index ColumnIndex, expected String, marker String, source String) throws ScaleError
+	let heading = try cellAt(header, index: index, source: source)
 	if heading != expected 'wrongColumn'
-		throw ScaleError.reason("column {index} of the table above `{marker}` in {OptimizationLogRelativePath} is headed '{heading}' and this compiler reads it as `{expected}` — the leading columns are `{DateColumnHeading}`, `{MintedAtColumnHeading}`, `{NoteColumnHeading}`, then one per rung. A row read against the wrong columns would take a note for a minting path and a rung's count for a note.")
+		throw ScaleError.reason("column {index} of the table above `{marker}` in {source} is headed '{heading}' and this compiler reads it as `{expected}` — the leading columns are `{DateColumnHeading}`, `{MintedAtColumnHeading}`, `{NoteColumnHeading}`, then one per rung. A row read against the wrong columns would take a note for a minting path and a rung's count for a note.")
 	end 'wrongColumn'
 end 'assertHeading'
 
@@ -384,14 +412,14 @@ end 'assertHeading'
 // datapoint" over a document full of history, `assertRecordable` stops pinning the ladder's width
 // because it believes there is nothing to be ragged against, and a `--note` appends a row to a table
 // nobody read correctly. Every one of those is silent, which is why this is a throw and not a repair.
-function assertSeparatorRow(cells StringArray, header StringArray, marker String) throws ScaleError
+function assertSeparatorRow(cells StringArray, header StringArray, marker String, source String) throws ScaleError
 	if cells.count() != header.count() 'wrongWidth'
-		throw ScaleError.reason("the separator under the header of the table above `{marker}` in {OptimizationLogRelativePath} has {cells.count()} cell(s) and the header has {header.count()}")
+		throw ScaleError.reason("the separator under the header of the table above `{marker}` in {source} has {cells.count()} cell(s) and the header has {header.count()}")
 	end 'wrongWidth'
 
 	for cell in cells 'eachCell'
 		if not isSeparatorCell(cell) 'notASeparator'
-			throw ScaleError.reason("the second line of the table above `{marker}` in {OptimizationLogRelativePath} is not a `| --- | ---: |` separator — its cell '{cell}' is not one. A markdown header is followed by exactly one separator, and without it the first DATA row is read as the header and every row below it is silently lost.")
+			throw ScaleError.reason("the second line of the table above `{marker}` in {source} is not a `| --- | ---: |` separator — its cell '{cell}' is not one. A markdown header is followed by exactly one separator, and without it the first DATA row is read as the header and every row below it is silently lost.")
 		end 'notASeparator'
 	end 'eachCell'
 end 'assertSeparatorRow'
@@ -431,16 +459,16 @@ end 'splitRow'
 function readMemoryRow(allocations LogTable, bytesTable LogTable, cpuTable LogTable) returns LoggedMemory throws ScaleError
 	match allocations.last 'a'
 		none then return LoggedMemory.absent
-		cells(allocCells) then return try memoryRowFrom(allocCells, byteCells: try lastRowOf(bytesTable, marker: BytesTableMarker), cpuCells: try lastRowOf(cpuTable, marker: CpuTableMarker))
+		cells(allocCells) then return try memoryRowFrom(allocCells, bytesTable: bytesTable, cpuTable: cpuTable)
 	end 'a'
 end 'readMemoryRow'
 
 // The `minted at` cell of a row. A row is written with a real path or with `MintedAtUnrecorded`, so an
 // EMPTY cell is a damaged row rather than a third state — and reading it as "unrecorded" would silently
 // turn a hand-edit that deleted a path into a row that merely declines to say.
-function mintedAtFrom(cell String) returns MintedAt throws ScaleError
+function mintedAtFrom(cell String, source String) returns MintedAt throws ScaleError
 	if cell.isEmpty() 'damaged'
-		throw ScaleError.reason("a row in {OptimizationLogRelativePath} has an EMPTY `{MintedAtColumnHeading}` cell — a row records the compiler path it was measured at, or `{MintedAtUnrecorded}` if it predates the column, and an empty cell is neither")
+		throw ScaleError.reason("a row in {source} has an EMPTY `{MintedAtColumnHeading}` cell — a row records the compiler path it was measured at, or `{MintedAtUnrecorded}` if it predates the column, and an empty cell is neither")
 	end 'damaged'
 
 	if cell == MintedAtUnrecorded 'predatesTheColumn'
@@ -453,9 +481,9 @@ end 'mintedAtFrom'
 // The last data row of a table the allocations table has a counterpart in. One function for all of them:
 // the message names the table by the marker every other message here identifies a table by, so a third
 // table needs no third copy of it.
-function lastRowOf(table LogTable, marker String) returns StringArray throws ScaleError
+function lastRowOf(table LogTable) returns StringArray throws ScaleError
 	match table.last 'b'
-		none then throw ScaleError.reason("the allocations table has rows but the table above `{marker}` in {OptimizationLogRelativePath} has none — all three are written together by one run, so one of them has been hand-edited")
+		none then throw ScaleError.reason("the allocations table has rows but the table above `{table.marker}` in {table.source} has none — all three are written together by one run, so one of them has been hand-edited")
 		cells(values) then return values
 	end 'b'
 end 'lastRowOf'
@@ -463,54 +491,191 @@ end 'lastRowOf'
 // The last row of each table must agree on EVERY leading cell, provenance included. The minting path
 // decides whether the byte column may be differenced, so the row that carries the bytes and the row that
 // states where they came from being one and the same run is exactly the property being relied on.
-function memoryRowFrom(allocCells StringArray, byteCells StringArray, cpuCells StringArray) returns LoggedMemory throws ScaleError
-	let date = try cellAt(allocCells, index: DateColumnIndex)
-	let mintedAt = try cellAt(allocCells, index: MintedAtColumnIndex)
-	let note = try cellAt(allocCells, index: NoteColumnIndex)
+function memoryRowFrom(allocCells StringArray, bytesTable LogTable, cpuTable LogTable) returns LoggedMemory throws ScaleError
+	// All three tables were read out of one document, so any of them names it.
+	let source = bytesTable.source
 
-	try assertSameRun(byteCells, date: date, mintedAt: mintedAt, note: note, marker: BytesTableMarker)
-	try assertSameRun(cpuCells, date: date, mintedAt: mintedAt, note: note, marker: CpuTableMarker)
+	let byteCells = try lastRowOf(bytesTable)
+	let cpuCells = try lastRowOf(cpuTable)
 
-	let allocs = try rungCounts(allocCells)
-	let bytes = try rungCounts(byteCells)
+	let date = try cellAt(allocCells, index: DateColumnIndex, source: source)
+	let mintedAt = try cellAt(allocCells, index: MintedAtColumnIndex, source: source)
+	let note = try cellAt(allocCells, index: NoteColumnIndex, source: source)
+
+	try assertSameRun(byteCells, date: date, mintedAt: mintedAt, note: note, marker: bytesTable.marker, source: source)
+	try assertSameRun(cpuCells, date: date, mintedAt: mintedAt, note: note, marker: cpuTable.marker, source: source)
+
+	let allocs = try rungCounts(allocCells, source: source)
+	let bytes = try rungCounts(byteCells, source: source)
 
 	// The CPU row's counts are PARSED and then only counted. That is the check: the row this run's write
 	// will land beneath is numeric and the same width as the other two, which is the whole of what the
 	// writer assumes about it.
-	let cpu = try rungCounts(cpuCells)
+	let cpu = try rungCounts(cpuCells, source: source)
 	if allocs.count() != bytes.count() or allocs.count() != cpu.count() 'differentLadders'
 		throw ScaleError.reason("the last rows of the three tables have {allocs.count()}, {bytes.count()} and {cpu.count()} rung(s) — they measure one ladder, so one of them has been hand-edited")
 	end 'differentLadders'
 
-	return LoggedMemory.present(date, mintedAt: try mintedAtFrom(mintedAt), note: note, allocs: allocs, bytes: bytes)
+	return LoggedMemory.present(date, mintedAt: try mintedAtFrom(mintedAt, source: source), note: note, allocs: allocs, bytes: bytes)
 end 'memoryRowFrom'
 
 // One table's last row against the allocations table's, on the three leading cells.
-function assertSameRun(cells StringArray, date String, mintedAt String, note String, marker String) throws ScaleError
-	let otherDate = try cellAt(cells, index: DateColumnIndex)
-	let otherMintedAt = try cellAt(cells, index: MintedAtColumnIndex)
-	let otherNote = try cellAt(cells, index: NoteColumnIndex)
+//
+// ⭐ **IT NAMES THE CELL THAT DIFFERS, AND SHOWS BOTH OF THAT CELL'S VALUES.** This message used to
+// interpolate the date and the minting path of both rows — and never the NOTE, which is the third cell
+// it COMPARES and by far the likeliest of the three to have been hand-edited. So the one failure it was
+// most often raised by printed two byte-identical descriptors and told the reader they described
+// different runs. (Reproduced: appending ` (hand-edited tail)` to the bytes table's note produced two
+// parentheticals the reader could not tell apart, and no sight of the text that had actually moved.)
+//
+// EVERY differing cell is reported, not the first. One bad rebase moves all three at once, and a message
+// naming one of them sends the reader back for another full sweep per remaining cell — the same argument
+// `LadderIndex` reports its three directions together for.
+//
+// ⚠ **THE NOTES ARE 2,205–3,753 CHARACTERS in the live log, so two of them cannot be printed whole — and
+// a bare head would not do either.** The failure that occurred differed in its LAST sentence, where the
+// first eighty characters of the two are identical, so a head would print two indistinguishable excerpts
+// and reproduce the original defect one layer down. The excerpt is therefore a window around the FIRST
+// character that differs, and `cellDifferenceReport` states that rule where the reader is looking at its
+// output rather than in a comment they are not reading.
+function assertSameRun(cells StringArray, date String, mintedAt String, note String, marker String, source String) throws ScaleError
+	var differing = StringArray.create()
+	recordCellDifference(differing, heading: DateColumnHeading, logged: date, other: try cellAt(cells, index: DateColumnIndex, source: source))
+	recordCellDifference(differing, heading: MintedAtColumnHeading, logged: mintedAt, other: try cellAt(cells, index: MintedAtColumnIndex, source: source))
+	recordCellDifference(differing, heading: NoteColumnHeading, logged: note, other: try cellAt(cells, index: NoteColumnIndex, source: source))
 
-	if otherDate != date or otherMintedAt != mintedAt or otherNote != note 'differentRuns'
-		throw ScaleError.reason("the last allocations row ({date}, minted at {mintedAt}) and the last row of the table above `{marker}` ({otherDate}, minted at {otherMintedAt}) describe different runs — all three tables are written together by one run, so one of them has been hand-edited")
-	end 'differentRuns'
+	if differing.isEmpty() 'sameRun'
+		return
+	end 'sameRun'
+
+	throw ScaleError.reason("the last row of the table above `{marker}` in {source} does not describe the same run as the last allocations row: {differing.count()} of its {LeadingColumns} leading cell(s) differ. All three tables are written together by one run, so one of them has been hand-edited.{cellDifferenceReport(differing)}")
 end 'assertSameRun'
+
+// Record `heading` as a difference IF the two rows disagree about it.
+//
+// An accumulator that is APPENDED TO rather than a String that is empty when the cells agree: the
+// caller counts the differences to say how many there are, and an empty-string sentinel would make it
+// re-derive "no clause" from "a clause that says nothing".
+function recordCellDifference(differing StringArray, heading String, logged String, other String)
+	if logged == other 'agrees'
+		return
+	end 'agrees'
+
+	let at = firstDivergenceAt(logged, other: other)
+	differing.push("`{heading}` differs — the allocations row's is {groupDigits(logged.count() as Delta)} character(s), this one's is {groupDigits(other.count() as Delta)}, and they part at character {groupDigits(at as Delta)}:\n      allocations: {divergenceExcerpt(logged, at: at)}\n      this table:  {divergenceExcerpt(other, at: at)}")
+end 'recordCellDifference'
+
+// The differing cells, one indented paragraph each, with THE TRUNCATION RULE STATED WHERE ITS OUTPUT IS.
+// A reader who sees `…` mid-sentence has to know whether they are looking at the whole cell, and the
+// answer belongs beside the excerpt rather than in the source of the tool that printed it.
+function cellDifferenceReport(differing StringArray) returns String
+	var report = StringBuilder.create()
+	for difference in differing 'each'
+		report.append("\n    {difference}")
+	end 'each'
+
+	report.append("\n    (a cell longer than {ExcerptWindowChars} characters is shown as a window of {ExcerptWindowChars} characters around the character they part at; `{OmissionMark}` marks what is cut)")
+	return report.build()
+end 'cellDifferenceReport'
+
+// The character position at which two cells first diverge — or, when one is a prefix of the other, the
+// length of the shorter, which is exactly where they part.
+//
+// CHARACTERS, NOT BYTES. The notes carry `⭐` and `⚠`, and an excerpt cut at a byte offset would slice a
+// codepoint in half and print a replacement character where the difference is.
+function firstDivergenceAt(logged String, other String) returns GraphemeCount
+	var shortest = logged.count()
+	if other.count() < shortest 'otherIsShorter'
+		shortest = other.count()
+	end 'otherIsShorter'
+
+	var loggedIndex = logged.startIndex()
+	var otherIndex = other.startIndex()
+	var at = 0 as GraphemeCount
+	while at < shortest 'walk'
+		if not logged.charAt(loggedIndex).equals(other.charAt(otherIndex)) 'diverged'
+			return at
+		end 'diverged'
+
+		loggedIndex = try logged.indexAfter(loggedIndex) otherwise panic("firstDivergenceAt: at {at} of {shortest} characters, indexAfter failed on the logged cell")
+		otherIndex = try other.indexAfter(otherIndex) otherwise panic("firstDivergenceAt: at {at} of {shortest} characters, indexAfter failed on the other cell")
+		at = at + 1
+	end 'walk'
+
+	return at
+end 'firstDivergenceAt'
+
+// A bounded window of `value` around `at` — the ONE place the truncation rule is implemented, and the
+// rule `cellDifferenceReport` states.
+function divergenceExcerpt(value String, at GraphemeCount) returns String
+	let length = value.count()
+	if length <= ExcerptWindowChars 'fitsWhole'
+		return value
+	end 'fitsWhole'
+
+	// Centred on the divergence, then slid back inside the cell: a window hanging off either end would
+	// spend its width on nothing, exactly where the interesting text is.
+	var start = 0 as GraphemeCount
+	if at > ExcerptContextChars 'roomBefore'
+		start = at - ExcerptContextChars
+	end 'roomBefore'
+
+	if start + ExcerptWindowChars > length 'pastTheEnd'
+		start = length - ExcerptWindowChars
+	end 'pastTheEnd'
+
+	let stop = start + ExcerptWindowChars
+	let window = value.slice(indexAt(value, at: start), endIndex: indexAt(value, at: stop))
+	return "{omissionMark(start > 0)}{window}{omissionMark(stop < length)}"
+end 'divergenceExcerpt'
+
+// How much of a differing cell the message shows. The window is CENTRED on the divergence, so it is
+// twice the context — one fact, not two that could disagree — and forty either side is a terminal line.
+let ExcerptContextChars = 40 as GraphemeCount
+let ExcerptWindowChars = ExcerptContextChars * 2
+
+// What stands in for the text an excerpt cut. `omissionMark` is what puts it in: empty text for "nothing
+// was cut on this side" is this suite's idiom for a message fragment with nothing to say (see
+// `LadderIndex.nameListClause`).
+let OmissionMark = "…"
+
+function omissionMark(cut bool) returns String
+	if not cut 'nothingCut'
+		return ""
+	end 'nothingCut'
+
+	return OmissionMark
+end 'omissionMark'
+
+// The `StringIndex` at character offset `at`. A `StringIndex` carries a BYTE position beside its
+// character one, so it cannot be built from an offset — it is walked to. Linear, on a path that runs
+// only when a message is being written about a broken document.
+function indexAt(value String, at GraphemeCount) returns StringIndex
+	var index = value.startIndex()
+	var walked = 0 as GraphemeCount
+	while walked < at 'walk'
+		index = try value.indexAfter(index) otherwise panic("indexAt: walked {walked} of {at} characters into a {value.count()}-character cell and indexAfter failed")
+		walked = walked + 1
+	end 'walk'
+
+	return index
+end 'indexAt'
 
 // The rung columns of a memory row. `AllocCountArray` for both tables: an allocation count and a
 // byte volume are the same unsigned counter, and a second array type differing only in its name
 // would buy nothing but a cast at every use.
-function rungCounts(cells StringArray) returns AllocCountArray throws ScaleError
+function rungCounts(cells StringArray, source String) returns AllocCountArray throws ScaleError
 	var counts = AllocCountArray.create()
 	for i in LeadingColumns upto cells.count() 'eachRung'
-		counts.push(try parseGroupedCount(try cellAt(cells, index: i)))
+		counts.push(try parseGroupedCount(try cellAt(cells, index: i, source: source)))
 	end 'eachRung'
 	return counts
 end 'rungCounts'
 
 // One cell of an already-parsed row, as a THROW rather than a panic: every caller is reading a file a
 // human may have edited, so a cell that is not there is bad input, not a bug in this file.
-function cellAt(cells StringArray, index ColumnIndex) returns String throws ScaleError
-	return try cells.get(index) otherwise throw ScaleError.reason("a row in {OptimizationLogRelativePath} has {cells.count()} cell(s); column {index} was expected")
+function cellAt(cells StringArray, index ColumnIndex, source String) returns String throws ScaleError
+	return try cells.get(index) otherwise throw ScaleError.reason("a row in {source} has {cells.count()} cell(s); column {index} was expected")
 end 'cellAt'
 
 // `19,261,978` -> 19261978. The tables carry digit groups because a column of seven-figure numbers is
@@ -643,9 +808,9 @@ export function recordScaleRun(results RungResultArray, note String, mintedAt St
 	let existing = try File.readText(path) otherwise throw ScaleError.reason("could not re-read {OptimizationLogRelativePath}")
 
 	let today = todayUtc()
-	var updated = try insertRowBefore(existing, marker: AllocationsTableMarker, row: renderMemoryRow(results, note: note, mintedAt: mintedAt, date: today, measure: ScaleMeasure.allocations))
-	updated = try insertRowBefore(updated, marker: BytesTableMarker, row: renderMemoryRow(results, note: note, mintedAt: mintedAt, date: today, measure: ScaleMeasure.bytes))
-	updated = try insertRowBefore(updated, marker: CpuTableMarker, row: renderMemoryRow(results, note: note, mintedAt: mintedAt, date: today, measure: ScaleMeasure.cpuTicks))
+	var updated = try insertRowBefore(existing, marker: AllocationsTableMarker, row: renderMemoryRow(results, note: note, mintedAt: mintedAt, date: today, measure: ScaleMeasure.allocations), source: OptimizationLogRelativePath)
+	updated = try insertRowBefore(updated, marker: BytesTableMarker, row: renderMemoryRow(results, note: note, mintedAt: mintedAt, date: today, measure: ScaleMeasure.bytes), source: OptimizationLogRelativePath)
+	updated = try insertRowBefore(updated, marker: CpuTableMarker, row: renderMemoryRow(results, note: note, mintedAt: mintedAt, date: today, measure: ScaleMeasure.cpuTicks), source: OptimizationLogRelativePath)
 
 	try File.writeText(path, content: updated) otherwise throw ScaleError.reason("could not write {OptimizationLogRelativePath}")
 
@@ -671,10 +836,16 @@ end 'recordScaleRun'
 //
 // It throws BEFORE anything is written — the three inserts all run against a string, and the file is
 // written once, at the end — so a log that fails here is left exactly as it was.
-function insertRowBefore(text String, marker String, row String) returns String throws ScaleError
+//
+// EXPORTED, alongside `parseScaleTrend`, and for the same reason: it is a document-to-document function
+// whose refusal nothing ran. The other route to it is `recordScaleRun`, which WRITES `docs/optimization-
+// log.md` — so a self-test driving that entry point would either edit the project's trend record or
+// prove the refusal against a copy, and the second is a parser of the same document in a second place.
+// This one takes the text and gives text back, so the refusal is provable without either.
+export function insertRowBefore(text String, marker String, row String, source String) returns String throws ScaleError
 	let parts = text.split(marker)
 	if parts.count() != MarkerSplitParts 'notExactlyOnce'
-		throw ScaleError.reason("`{marker}` appears {parts.count() - 1} time(s) in {OptimizationLogRelativePath} and must appear exactly once — a row is inserted immediately above it, and `readTable` reads the table immediately above it")
+		throw ScaleError.reason("`{marker}` appears {parts.count() - 1} time(s) in {source} and must appear exactly once — a row is inserted immediately above it, and `readTable` reads the table immediately above it")
 	end 'notExactlyOnce'
 
 	let before = try parts.get(0) otherwise panic("insertRowBefore: split gave {MarkerSplitParts} parts but get(0) failed")

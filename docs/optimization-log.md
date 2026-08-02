@@ -40,6 +40,13 @@ and six months from now a number with no reason attached is worth almost nothing
 demanded at the one moment it is still known: from you, now. See
 [`maxon-shv2/Testing/ScaleHistory.maxon`](../maxon-shv2/Testing/ScaleHistory.maxon).
 
+⚠ **IF YOU EDIT A ROW BY HAND, EDIT IT IN ALL THREE TABLES.** One run writes the last row of
+**Allocations**, **Bytes** and **CPU** together, so those three rows must agree cell for cell on
+`date`, `minted at` and `change` — and the next run **refuses to read this file** rather than
+difference itself against two different pasts. Touching the note of one row and not the other two is
+the way that happens, and it has. The refusal names the cell that differs and prints a window of both
+values around the character they part at, so what it tells you to fix is the edit you actually made.
+
 ## `minted at` — why a row records where it was measured, and what it costs you
 
 **A row's BYTE columns are only comparable with another row minted in the same place.** The `minted at`

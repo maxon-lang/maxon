@@ -1,0 +1,424 @@
+// Testing/ScaleHistorySelfTest.maxon — the gate over `ScaleHistory`'S OWN REFUSALS.
+//
+// ⭐⭐ **A REFUSAL NOTHING RUNS IS A CLAIM, NOT A DOOR** — the rule `HarnessSelfTest` states, applied to
+// the OTHER file in this suite that reads a hand-edited document. `ScaleHistory` carries around thirty
+// throws describing precisely how `docs/optimization-log.md` can be edited into a lie: a missing marker,
+// a deleted separator, a renamed column, a ragged row, three tables that no longer describe one run.
+// Not one of them was run by anything — no spec case, no self-test, nothing in the tree. They were
+// written, reviewed, and then never observed to fire, which is exactly how one of them came to print
+// two byte-identical descriptors and tell the reader they described different runs (see
+// `ScaleHistory.assertSameRun`).
+//
+// ⚠ **AN ORDINARY SPEC CASE STRUCTURALLY CANNOT PIN THESE.** A spec case compiles a Maxon program; the
+// trend log is read by `scale-test`, which no spec case runs, and there is no route from a `.md` in
+// `specs-shv2/` to a damaged trend log. The refusals are therefore unreachable from the suite's normal
+// vocabulary however many cases are written.
+//
+// ⇒ **THE SHAPE IS DELIBERATELY NOT `HarnessSelfTest`'S.** That file SPAWNS a sub-process per fixture,
+// because the refusals it gates are `panic`s raised in the suite's parent while it parses its own
+// corpus — a panic cannot be caught, so the only way to observe one is to watch a process die. These
+// refusals are `throws ScaleError`, which is CATCHABLE, so each fixture here is a document handed to
+// the parser in process and an error caught. A spawning harness would be a far heavier mechanism than
+// the problem needs, and twenty sub-processes on every suite run is a real cost paid for nothing.
+//
+// ⚠ **AND WHAT IS COMPARED IS A SUBSTRING OF THE MESSAGE**, chosen to name the refusal and to contain no
+// file, no line and no stack frame — `HarnessSelfTest`'s rule and its reason: an expectation carrying a
+// whole diagnostic goes red on every edit that moves a line above it, which is a false-red generator
+// wired to an unrelated property.
+//
+// ⚠ **THE FIXTURES ARE NOT `docs/optimization-log.md`, AND NOTHING HERE WRITES A FILE.** The log is the
+// project's trend record; a self-test that damaged it to prove a refusal would be worse than the silence
+// it replaces. Every fixture is a literal document built in this file, and both seams
+// (`parseScaleTrend`, `insertRowBefore`) take TEXT and give back a value — the file read and the file
+// write stay in `loadScaleTrend` and `recordScaleRun`, where nothing under test reaches them.
+//
+// ⭐ **WHY THE FIXTURES SPELL THE FORMAT OUT INSTEAD OF BUILDING IT FROM `ScaleHistory`'S CONSTANTS.** A
+// fixture assembled by the same constants the parser reads cannot detect a change in those constants —
+// it would follow the parser wherever it went, which is a test that agrees with the code by
+// construction. Spelling the format here means a marker rename makes these documents genuinely stale,
+// and THE POSITIVE CONTROL is what turns that from twenty confusing reds into one clear one: the VALID
+// document is parsed FIRST, and its row is read back cell by cell. Until that passes, a fixture that
+// "fired" proves nothing about the refusal it names, so the control panics on its own terms and says so.
+
+// The name a fixture goes under. It reaches the reader inside `ScaleHistory`'s own messages, which name
+// the document they are about — so it must be obviously NOT a path, and obviously not the trend log.
+let FixtureSource = "a ScaleHistorySelfTest fixture"
+
+// The three leading cells every valid fixture row carries, and the two rung columns behind them.
+let FixtureDate = "2026-01-01"
+let FixtureMintedAt = "/fixture/maxon-shv2 (corpus /fixture/.scale-tmp)"
+
+// ⭐ **A NOTE OF THE LENGTH THE LIVE COLUMN REALLY CARRIES** (the log's run from 2,205 to 3,753
+// characters), so the `change` fixture exercises the TRUNCATION path rather than the whole-value one.
+// The failure this file exists over was a long note differing in its LAST sentence, where the first
+// eighty characters of the two are identical — a fixture with a short note would prove the field is
+// named and never prove the reader can SEE the difference.
+let FixtureNote = "BATCH9 fixture - a note of the length this column really carries, so that the excerpt rule is exercised by the fixture rather than merely written down. The live log's notes run from 2,205 to 3,753 characters and differ, when they differ, in their last sentence."
+
+// What the hand-editor appended in the reproduction this rung was opened by. It is BOTH the damage the
+// `change` fixture applies and the text its message must show, which is the whole point: a message that
+// named the field and then showed eighty characters the two rows agree on would have reproduced the
+// original defect one layer down.
+let HandEditedTail = "(hand-edited tail)"
+
+let AllocationsCounts = "1,000 | 2,000"
+let BytesCounts = "30,000 | 60,000"
+let CpuCounts = "500 | 900"
+
+// How wide the fixture ladder is. Read back out of the parsed row by the positive control, and the width
+// a `--note` has to match.
+let FixtureRungCount = 2 as RungCount
+
+// A ladder width the fixture document does NOT have, for the refusal that exists to stop a row of the
+// wrong width being appended.
+let WrongLadderRungCount = 3 as RungCount
+
+// The document's own markers and headings, SPELLED OUT — see this file's header for why they are not
+// read off `ScaleHistory`'s constants, and what catches them when they drift.
+let AllocationsMarkerLine = "<!-- scale-history:allocations -->"
+let BytesMarkerLine = "<!-- scale-history:bytes -->"
+let CpuMarkerLine = "<!-- scale-history:cpu -->"
+
+let AllocationsTitle = "Allocations"
+let BytesTitle = "Bytes"
+let CpuTitle = "CPU"
+
+let ValidHeaderRow = "| date | minted at | change | rung 0 | rung 1 |"
+let ValidSeparatorRow = "| --- | --- | --- | ---: | ---: |"
+
+// What a table closes with when the fixture is "someone deleted the marker". Deliberately a comment
+// rather than nothing: an EMPTY closing line would be matched by the parser's own line scan (every blank
+// line trims to the empty string), so the fixture would trip a refusal about the wrong line.
+let DeletedMarkerStandIn = "<!-- this table's marker, deleted by hand -->"
+
+// ⭐ **PROVE EVERY TREND-LOG REFUSAL STILL FIRES.** Called ONCE, by the spec suite's parent process,
+// beside `requireHarnessRefusalsFire` and for its reason: this is a property of the TREE rather than of
+// any one test, so there is no test to fail and nothing downstream that could act on it. It PANICS,
+// naming every fixture whose refusal did not fire — all of them together, because one edit routinely
+// breaks several and a report naming the first sends the reader back for another sweep per remaining
+// fixture.
+export function requireScaleHistoryRefusalsFire()
+	let trend = validFixtureTrend()
+	let fixtures = scaleHistoryFixtures(trend)
+
+	// The fixture set is literal in this file, so it cannot go empty by accident the way a listed
+	// directory can — but a gate that could report "all clear" over nothing at all is the silence this
+	// file removes, and the guard costs one comparison.
+	if fixtures.isEmpty() 'noFixtures'
+		panic("ScaleHistorySelfTest: not one trend-log refusal was proven to fire — `scaleHistoryFixtures` returned nothing. A refusal nothing runs is a claim, not a door.")
+	end 'noFixtures'
+
+	var broken = StringArray.create()
+	for fixture in fixtures 'eachFixture'
+		match fixture.outcome 'outcome'
+			accepted(what) then broken.push("'{fixture.what}' was ACCEPTED — {what}. The fixture is a deliberately damaged document, so either that refusal was removed, or this fixture no longer trips it.")
+			refused(message) then recordWrongRefusal(broken, fixture: fixture, message: message)
+		end 'outcome'
+	end 'eachFixture'
+
+	if broken.isEmpty() 'everyRefusalFired'
+		return
+	end 'everyRefusalFired'
+
+	// ⚠ `panic` takes a STRING LITERAL — a `let`-bound String is rejected outright — so the list is built
+	// as text and INTERPOLATED. The same constraint `HarnessSelfTest` and `LadderIndex` both document.
+	let report = indentedList(broken, indent: BrokenFixtureIndent)
+	panic("ScaleHistorySelfTest: {broken.count()} of {fixtures.count()} trend-log refusals did not fire on the document written to trip them. A refusal nothing runs is a claim, not a door.{report}")
+end 'requireScaleHistoryRefusalsFire'
+
+// A refusal fired — but was it THIS one? The message must carry the refusal's own words, because a
+// throw alone proves only that something went wrong: a fixture damaged in a way that trips an EARLIER
+// refusal would satisfy a bare "it threw" and prove nothing about the door it names.
+function recordWrongRefusal(broken StringArray, fixture TrendFixture, message String)
+	var missing = StringArray.create()
+	for text in fixture.expected 'eachExpectation'
+		if not message.contains(text) 'absent'
+			missing.push(text)
+		end 'absent'
+	end 'eachExpectation'
+
+	if missing.isEmpty() 'firedAsWritten'
+		return
+	end 'firedAsWritten'
+
+	let absentExpectations = indentedList(missing, indent: MissingExpectationIndent)
+	broken.push("'{fixture.what}' was refused, but for the WRONG REASON — its message is missing:{absentExpectations}\n    and it said: {message}")
+end 'recordWrongRefusal'
+
+// How deep each list sits under the sentence that introduces it: one fixture per line under the panic's
+// headline, one missing expectation per line under the fixture that is missing it.
+let BrokenFixtureIndent = "\n  "
+let MissingExpectationIndent = "\n      "
+
+// One list, one line each, at `indent`. ⚠ `HarnessSelfTest.brokenRefusalReport` and
+// `LadderIndex.nameListClause` build the same shape; both are file-private in files this rung is not
+// permitted to edit, so this is a third copy of four lines rather than a shared helper. Noted for the
+// coordinator rather than fixed here.
+function indentedList(items StringArray, indent String) returns String
+	var out = StringBuilder.create()
+	for item in items 'eachItem'
+		out.append("{indent}{item}")
+	end 'eachItem'
+	return out.build()
+end 'indentedList'
+
+// ============================================================================================
+// The fixtures
+// ============================================================================================
+
+// What one fixture is: the refusal it is about, the words its message must carry, and what the seam
+// actually did when it was handed the damaged document. The outcome is computed when the list is BUILT,
+// so every fixture runs even when an earlier one has already failed and the report names all of them.
+type TrendFixture
+	export let what as String
+	export let expected as StringArray
+	export let outcome as TrendRefusalOutcome
+
+	static function create(what String, expected StringArray, outcome TrendRefusalOutcome) returns TrendFixture
+		return Self{what: what, expected: expected, outcome: outcome}
+	end 'create'
+end 'TrendFixture'
+
+typealias TrendFixtureArray = Array with TrendFixture
+
+// What a seam did with a fixture. A union rather than an empty-String message, so "it refused" carries
+// no vestigial text and "it accepted" can say what it produced instead — which is the sentence a reader
+// of a broken gate needs first.
+union TrendRefusalOutcome
+	refused(message String)
+	accepted(what String)
+end 'TrendRefusalOutcome'
+
+// EVERY refusal in `ScaleHistory` that a caller can reach, one fixture each, each differing from the
+// VALID document by exactly one damaged cell, row, separator or marker.
+//
+// NOT COVERED, and each for a reason that is a fact about the refusal rather than a gap here:
+//   - `loadScaleTrend`'s missing-file and unparseable-path throws, and `recordScaleRun`'s read and write
+//     failures. All four are IO, reachable only by removing or locking the real log.
+//   - `parseGroupedCount`'s non-numeric cell, whose message belongs to `ScaleTestRunner.parseCount` and
+//     is shared with the metrics TSV and `--rungs`. Pinning it from here would wire this gate to a
+//     sentence another file owns.
+function scaleHistoryFixtures(trend LoggedMemory) returns TrendFixtureArray
+	var fixtures = TrendFixtureArray.create()
+
+	// ---- readTable: the document's shape -------------------------------------------------------
+	fixtures.push(TrendFixture.create("the DELETED TABLE MARKER", expected: expecting("is missing the table marker"), outcome: parseOutcome(fixtureDocument(validAllocationsTable(), bytes: validBytesTable(), cpu: tableBlock(CpuTitle, lines: validTableLines(CpuCounts), marker: DeletedMarkerStandIn)))))
+
+	fixtures.push(TrendFixture.create("the DELETED SEPARATOR, leaving a table of one line", expected: expecting("has no header row and separator"), outcome: parseOutcome(documentWithBytesTable(tableBlock(BytesTitle, lines: "{ValidHeaderRow}\n", marker: BytesMarkerLine)))))
+
+	fixtures.push(TrendFixture.create("the RENAMED COLUMN", expected: expecting("is headed 'notes'"), outcome: parseOutcome(documentWithBytesTable(tableBlock(BytesTitle, lines: tableLines("| date | minted at | notes | rung 0 | rung 1 |", separator: ValidSeparatorRow, rows: validRowLine(BytesCounts)), marker: BytesMarkerLine)))))
+
+	// `cellAt`, reached through `assertHeading`: a table narrower than the three leading columns has no
+	// cell to read the third heading out of, which is the one route to that throw from a whole document.
+	fixtures.push(TrendFixture.create("the TABLE WITH THE `change` COLUMN DROPPED ENTIRELY", expected: expecting("cell(s); column 2 was expected"), outcome: parseOutcome(documentWithBytesTable(tableBlock(BytesTitle, lines: tableLines("| date | minted at |", separator: "| --- | --- |", rows: "| {FixtureDate} | {FixtureMintedAt} |\n"), marker: BytesMarkerLine)))))
+
+	fixtures.push(TrendFixture.create("the SEPARATOR OF THE WRONG WIDTH", expected: expecting("the separator under the header of the table above"), outcome: parseOutcome(documentWithBytesTable(tableBlock(BytesTitle, lines: tableLines(ValidHeaderRow, separator: "| --- | --- | --- | ---: |", rows: validRowLine(BytesCounts)), marker: BytesMarkerLine)))))
+
+	fixtures.push(TrendFixture.create("the SECOND LINE THAT IS NOT A SEPARATOR", expected: expecting("is not a `| --- | ---: |` separator"), outcome: parseOutcome(documentWithBytesTable(tableBlock(BytesTitle, lines: tableLines(ValidHeaderRow, separator: "| --- | --- | --- | ---: | n/a |", rows: validRowLine(BytesCounts)), marker: BytesMarkerLine)))))
+
+	fixtures.push(TrendFixture.create("the RAGGED LAST ROW", expected: expecting("the table is ragged"), outcome: parseOutcome(documentWithBytesRow("| {FixtureDate} | {FixtureMintedAt} | {FixtureNote} | 30,000 |\n"))))
+
+	fixtures.push(TrendFixture.create("the TABLE WITH NO DATA ROWS beside two that have one", expected: expecting("has rows but the table above"), outcome: parseOutcome(documentWithBytesTable(tableBlock(BytesTitle, lines: tableLines(ValidHeaderRow, separator: ValidSeparatorRow, rows: ""), marker: BytesMarkerLine)))))
+
+	// ---- assertSameRun: the three leading cells, SEPARATELY -------------------------------------
+	fixtures.push(TrendFixture.create("the `date` CELL that no longer matches", expected: expecting("`date` differs"), outcome: parseOutcome(documentWithBytesRow(rowLine("2026-01-02", mintedAt: FixtureMintedAt, note: FixtureNote, counts: BytesCounts)))))
+
+	fixtures.push(TrendFixture.create("the `minted at` CELL that no longer matches", expected: expecting("`minted at` differs"), outcome: parseOutcome(documentWithBytesRow(rowLine(FixtureDate, mintedAt: "/elsewhere/maxon-shv2 (corpus /elsewhere/.scale-tmp)", note: FixtureNote, counts: BytesCounts)))))
+
+	// ⭐ THE ROW THIS RUNG WAS OPENED BY. Two expectations, and the second is the one that matters: the
+	// message must not merely NAME the note, it must show the text that moved — which for a 260-character
+	// note differing in its last sentence means the excerpt has to reach the end.
+	var noteExpectations = expecting("`change` differs")
+	noteExpectations.push(HandEditedTail)
+	fixtures.push(TrendFixture.create("the `change` CELL that no longer matches — a long note, edited at its END", expected: noteExpectations, outcome: parseOutcome(documentWithBytesRow(rowLine(FixtureDate, mintedAt: FixtureMintedAt, note: "{FixtureNote} {HandEditedTail}", counts: BytesCounts)))))
+
+	// ---- the row itself -------------------------------------------------------------------------
+	fixtures.push(TrendFixture.create("the TABLE MEASURING A DIFFERENT LADDER", expected: expecting("rung(s) — they measure one ladder"), outcome: parseOutcome(documentWithBytesTable(tableBlock(BytesTitle, lines: tableLines("| date | minted at | change | rung 0 | rung 1 | rung 2 |", separator: "| --- | --- | --- | ---: | ---: | ---: |", rows: rowLine(FixtureDate, mintedAt: FixtureMintedAt, note: FixtureNote, counts: "30,000 | 60,000 | 120,000")), marker: BytesMarkerLine)))))
+
+	// The empty cell goes into ALL THREE rows, so the row reaches `mintedAtFrom` rather than being
+	// stopped one refusal earlier by `assertSameRun`.
+	fixtures.push(TrendFixture.create("the EMPTIED `minted at` CELL", expected: expecting("has an EMPTY `minted at` cell"), outcome: parseOutcome(documentWithMintedAt(""))))
+
+	// ---- assertCellSafe, through the door that screens a --note ---------------------------------
+	fixtures.push(TrendFixture.create("the --note carrying a `|`", expected: expecting("may not contain `|` or a newline"), outcome: recordableOutcome(trend, note: "a note with a | in it", rungs: FixtureRungCount)))
+
+	fixtures.push(TrendFixture.create("the --note carrying a NEWLINE", expected: expecting("may not contain `|` or a newline"), outcome: recordableOutcome(trend, note: "a note with a\nnewline in it", rungs: FixtureRungCount)))
+
+	fixtures.push(TrendFixture.create("the --note carrying a FORGED TABLE MARKER", expected: expecting("a forged marker would decide where the NEXT row landed"), outcome: recordableOutcome(trend, note: "a note carrying {AllocationsMarkerLine} inside it", rungs: FixtureRungCount)))
+
+	fixtures.push(TrendFixture.create("the RUN THAT CLIMBED A DIFFERENT LADDER than the log records", expected: expecting("would make the tables RAGGED"), outcome: recordableOutcome(trend, note: "a perfectly ordinary note", rungs: WrongLadderRungCount)))
+
+	// ---- insertRowBefore: the write's own anchor -------------------------------------------------
+	fixtures.push(TrendFixture.create("the MARKER APPEARING TWICE", expected: expecting("must appear exactly once"), outcome: insertOutcome("{validDocument()}\n{BytesMarkerLine}\n")))
+
+	fixtures.push(TrendFixture.create("the MARKER APPEARING NOWHERE at write time", expected: expecting("must appear exactly once"), outcome: insertOutcome(documentWithBytesTable(tableBlock(BytesTitle, lines: validTableLines(BytesCounts), marker: DeletedMarkerStandIn)))))
+
+	// ---- LoggedMemory ----------------------------------------------------------------------------
+	fixtures.push(TrendFixture.create("the LADDER WIDTH ASKED OF A LOG WITH NO ROWS", expected: expecting("the log has no rows, so it pins no ladder length"), outcome: loggedRungCountOutcome(LoggedMemory.absent)))
+
+	return fixtures
+end 'scaleHistoryFixtures'
+
+// One expectation. The `change` fixture needs two, and pushes its second onto what this returns — an
+// arity overload would be two spellings of one idea for the sake of a single call site.
+function expecting(text String) returns StringArray
+	var expected = StringArray.create()
+	expected.push(text)
+	return expected
+end 'expecting'
+
+// ============================================================================================
+// The seams, and what they did
+// ============================================================================================
+
+function parseOutcome(text String) returns TrendRefusalOutcome
+	let parsed = try parseScaleTrend(text, source: FixtureSource) otherwise (error) 'refused'
+		return TrendRefusalOutcome.refused(scaleErrorText(error))
+	end 'refused'
+
+	return TrendRefusalOutcome.accepted("it parsed as {trendShape(parsed)}")
+end 'parseOutcome'
+
+// What a document parsed AS, for the report a broken gate prints. The rung count is the half that says
+// whether the reader took the columns it was meant to.
+function trendShape(parsed LoggedMemory) returns String
+	return match parsed 'm'
+		absent gives "a log with no rows at all"
+		present(date, _, _, allocs, _) gives "the {date} row over {allocs.count()} rung(s)"
+	end 'm'
+end 'trendShape'
+
+function recordableOutcome(trend LoggedMemory, note String, rungs RungCount) returns TrendRefusalOutcome
+	try assertRecordable(trend, note: note, mintedAt: FixtureMintedAt, rungs: rungs) otherwise (error) 'refused'
+		return TrendRefusalOutcome.refused(scaleErrorText(error))
+	end 'refused'
+
+	return TrendRefusalOutcome.accepted("the note was accepted for recording")
+end 'recordableOutcome'
+
+function insertOutcome(text String) returns TrendRefusalOutcome
+	let updated = try insertRowBefore(text, marker: BytesMarkerLine, row: validRowLine(BytesCounts), source: FixtureSource) otherwise (error) 'refused'
+		return TrendRefusalOutcome.refused(scaleErrorText(error))
+	end 'refused'
+
+	return TrendRefusalOutcome.accepted("the row was inserted, giving a {updated.count()}-character document")
+end 'insertOutcome'
+
+function loggedRungCountOutcome(trend LoggedMemory) returns TrendRefusalOutcome
+	let rungs = try trend.loggedRungCount() otherwise (error) 'refused'
+		return TrendRefusalOutcome.refused(scaleErrorText(error))
+	end 'refused'
+
+	return TrendRefusalOutcome.accepted("it answered {rungs} rung(s)")
+end 'loggedRungCountOutcome'
+
+// ============================================================================================
+// THE POSITIVE CONTROL — and the trend the `--note` fixtures are asked against
+// ============================================================================================
+
+// The VALID fixture document, parsed and read back cell by cell.
+//
+// ⭐ It runs BEFORE any fixture, and it panics rather than joining the report, because every fixture is
+// this document with ONE thing damaged: if the undamaged one does not parse, a fixture that "fired"
+// fired for a reason nobody has established and the whole gate is measuring the fixtures rather than the
+// refusals. This is also what makes spelling the format out in this file safe — a marker or heading
+// rename lands here, once, saying exactly that, instead of as twenty fixtures failing for reasons that
+// look like missing refusals.
+//
+// READ BACK CELL BY CELL, not merely "it parsed": the parser takes the three leading cells BY INDEX, so
+// a document read one column out of true would still parse, and would still hand back a row — with a
+// minting path where the note belongs. That is the failure `assertLeadingHeadings` exists to stop, and
+// asking the round trip is how this file proves the stop works rather than assuming it.
+function validFixtureTrend() returns LoggedMemory
+	let parsed = try parseScaleTrend(validDocument(), source: FixtureSource) otherwise (error) 'refused'
+		panic("ScaleHistorySelfTest: the VALID fixture document was REFUSED — '{scaleErrorText(error)}'. Every fixture in this file is that document with one cell damaged, so until it parses, a fixture that fired proves nothing about the refusal it names. The trend log's format has moved and these fixtures have not.")
+	end 'refused'
+
+	match parsed 'row'
+		absent then panic("ScaleHistorySelfTest: the VALID fixture document parsed but yielded NO ROW, so every fixture below is being asked of a log the parser believes is empty. Its allocations table has one data row immediately above its marker.")
+		present(date, _, note, allocs, _) then requireFixtureRowReadBack(date, note: note, rungs: allocs.count() as RungCount)
+	end 'row'
+
+	return parsed
+end 'validFixtureTrend'
+
+function requireFixtureRowReadBack(date String, note String, rungs RungCount)
+	if date != FixtureDate 'wrongDate'
+		panic("ScaleHistorySelfTest: the VALID fixture document's `date` cell read back as '{date}'. The row is read by COLUMN INDEX, so a document being read one column out of true still parses — this is where that shows.")
+	end 'wrongDate'
+
+	if note != FixtureNote 'wrongNote'
+		panic("ScaleHistorySelfTest: the VALID fixture document's `change` cell read back as '{note}'. The row is read by COLUMN INDEX, so a document being read one column out of true still parses — this is where that shows.")
+	end 'wrongNote'
+
+	if rungs != FixtureRungCount 'wrongWidth'
+		panic("ScaleHistorySelfTest: the VALID fixture document's row read back as {rungs} rung(s) and it carries {FixtureRungCount}. The rung columns are whatever follows the leading ones, so a miscounted leading column shows up as a ladder of the wrong width.")
+	end 'wrongWidth'
+end 'requireFixtureRowReadBack'
+
+// ============================================================================================
+// Building a document
+// ============================================================================================
+
+// The whole document: three tables, with prose around and between them. The prose is not decoration —
+// the parser finds a table by walking UP from its marker over contiguous `|` lines, so what stops that
+// walk is a line that does not begin with a pipe, and a fixture with the tables jammed together would
+// be one long table as far as the reader is concerned.
+function fixtureDocument(allocations String, bytes String, cpu String) returns String
+	return "# a scale-history fixture\n\nprose the reader must walk past.\n\n{allocations}\nprose between two tables.\n\n{bytes}\nmore prose between two tables.\n\n{cpu}\nprose after the last table.\n"
+end 'fixtureDocument'
+
+function validDocument() returns String
+	return fixtureDocument(validAllocationsTable(), bytes: validBytesTable(), cpu: validCpuTable())
+end 'validDocument'
+
+// The document with only the BYTES table replaced. Every fixture that damages a table damages this one,
+// so the other two are always the valid ones and any refusal is attributable to the one perturbation.
+function documentWithBytesTable(bytes String) returns String
+	return fixtureDocument(validAllocationsTable(), bytes: bytes, cpu: validCpuTable())
+end 'documentWithBytesTable'
+
+function documentWithBytesRow(row String) returns String
+	return documentWithBytesTable(tableBlock(BytesTitle, lines: tableLines(ValidHeaderRow, separator: ValidSeparatorRow, rows: row), marker: BytesMarkerLine))
+end 'documentWithBytesRow'
+
+// The document with `mintedAt` in ALL THREE rows' `minted at` cell — the three tables still agree, which
+// is what carries the row past `assertSameRun` and down to the cell's own check.
+function documentWithMintedAt(mintedAt String) returns String
+	return fixtureDocument(tableBlock(AllocationsTitle, lines: tableLines(ValidHeaderRow, separator: ValidSeparatorRow, rows: rowLine(FixtureDate, mintedAt: mintedAt, note: FixtureNote, counts: AllocationsCounts)), marker: AllocationsMarkerLine), bytes: tableBlock(BytesTitle, lines: tableLines(ValidHeaderRow, separator: ValidSeparatorRow, rows: rowLine(FixtureDate, mintedAt: mintedAt, note: FixtureNote, counts: BytesCounts)), marker: BytesMarkerLine), cpu: tableBlock(CpuTitle, lines: tableLines(ValidHeaderRow, separator: ValidSeparatorRow, rows: rowLine(FixtureDate, mintedAt: mintedAt, note: FixtureNote, counts: CpuCounts)), marker: CpuMarkerLine))
+end 'documentWithMintedAt'
+
+function validAllocationsTable() returns String
+	return tableBlock(AllocationsTitle, lines: validTableLines(AllocationsCounts), marker: AllocationsMarkerLine)
+end 'validAllocationsTable'
+
+function validBytesTable() returns String
+	return tableBlock(BytesTitle, lines: validTableLines(BytesCounts), marker: BytesMarkerLine)
+end 'validBytesTable'
+
+function validCpuTable() returns String
+	return tableBlock(CpuTitle, lines: validTableLines(CpuCounts), marker: CpuMarkerLine)
+end 'validCpuTable'
+
+// A markdown section closed by a marker. `lines` is the table verbatim, INCLUDING its trailing newline,
+// because a fixture that damages the header, the separator or the row set has to be able to say that
+// one of them is not there at all.
+function tableBlock(title String, lines String, marker String) returns String
+	return "## {title}\n\n{lines}{marker}\n"
+end 'tableBlock'
+
+function tableLines(header String, separator String, rows String) returns String
+	return "{header}\n{separator}\n{rows}"
+end 'tableLines'
+
+function validTableLines(counts String) returns String
+	return tableLines(ValidHeaderRow, separator: ValidSeparatorRow, rows: validRowLine(counts))
+end 'validTableLines'
+
+function validRowLine(counts String) returns String
+	return rowLine(FixtureDate, mintedAt: FixtureMintedAt, note: FixtureNote, counts: counts)
+end 'validRowLine'
+
+function rowLine(date String, mintedAt String, note String, counts String) returns String
+	return "| {date} | {mintedAt} | {note} | {counts} |\n"
+end 'rowLine'
