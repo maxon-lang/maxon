@@ -404,6 +404,33 @@ Nothing here is optional, and none of it needs permission:
 push.** A review after the commit is a bug report; a review before it is a gate. That is the whole
 reason it sits here and not one step later.
 
+### ⇒ RUN `scripts/spec-port-finish.sh`. It is this battery and §9's row, in one pass.
+
+Everything from here down is mechanical and order-sensitive, so it is a script rather than a checklist
+you re-derive each tick. **You still do §6's review yourself, first** — the script starts after it.
+
+```bash
+scripts/spec-port-finish.sh --spec <name> --outcome PORTED --cases 30/30 \
+    --note-file temp/note.md --message-file temp/commit-msg.txt \
+    [--build-cost-note-file temp/bc-note.md]      # required iff compiler source changed
+```
+
+You write the PROSE (the log note, the commit message, the cost-log note); it measures every NUMBER and
+refuses to invent one. What it does, in order: **rebase → rebuild (bootstrap too, if stale) → full
+suite → gates → write the log rows → commit → push.**
+
+- **The rebase comes FIRST**, so the suite runs on the tree that will actually be pushed. A rebase after
+  testing means pushing something nobody tested.
+- **A REJECTED PUSH IS NOT A RETRY.** Another agent landed while you were running, so the script
+  rebases and **re-runs the whole suite** before pushing again — it will not push a tree the suite never
+  saw. *(Two pushes were rejected on 2026-08-02 alone.)*
+- **Nothing is written or committed until every gate is green**, so a failed run leaves the tree as it
+  found it. **A non-zero exit means the tick is NOT done** — read the message.
+- `--dry-run` runs every gate and writes nothing. `--no-push` stops after the commit.
+
+It refuses to run if it has uncommitted changes itself, because it stashes the working tree and bash
+reads a script incrementally — stashing its own bytes mid-run does not fail cleanly, it fails weirdly.
+
 **If compiler source changed, add a row to `maxon-shv2/build-cost-log.md`** — build seconds, exe bytes,
 suite seconds + test count. Its three numbers all fall out of the build and the full-suite run this
 battery just did, so it costs nothing but the row. It is a trend, not a gate: **size is exact, the two
@@ -427,8 +454,10 @@ each; the before/after suite numbers.
 
 ## 9. Close the tick
 
-Append one row to `docs/spec-port-log.md` (create it on the first tick, mirroring
-`docs/optimization-log.md`'s read-downwards shape):
+**`scripts/spec-port-finish.sh` appends this row for you** (§8) — you supply the prose via `--note-file`
+and it fills in the measured suite figure. Write it by hand only if you landed without the script.
+
+The row's shape (`docs/spec-port-log.md` mirrors `docs/optimization-log.md`'s read-downwards form):
 
 ```markdown
 | spec | date | outcome | cases | note |
