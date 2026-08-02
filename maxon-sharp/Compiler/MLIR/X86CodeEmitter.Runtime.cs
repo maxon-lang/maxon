@@ -4383,6 +4383,7 @@ public partial class X86CodeEmitter {
     // The async-I/O park protocol's own globals — see RuntimeEmitter.Netpoll.cs, which owns the
     // protocol for every target.
     schedRt.EmitNetpollGlobals();
+    schedRt.EmitGtAwaitHandoffGlobals();
 
     if (Compiler.AsyncTrace) {
       DefineGlobal("__gt_trace_counter", 8, 0);
@@ -4443,6 +4444,11 @@ public partial class X86CodeEmitter {
     schedRt.EmitGtDequeue();
     schedRt.EmitGtStealWork();
     schedRt.EmitNetpollFunctions();
+    // The AWAIT completion hand-off. Written against IEmitterBackend like the park protocol beside
+    // it, and for the same reason — it is one question, not a per-backend one — but only this
+    // backend emits and calls it so far: arm64 still hand-rolls the gate in __gt_ppw_spin, and
+    // converging it needs a host that can run the result.
+    schedRt.EmitGtAwaitHandoffFunctions();
     EmitSchedWorkerLoop();
     EmitGtCleanup();
     EmitGtMorestack();
@@ -4886,6 +4892,10 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(gt, GtOffNext, X86Register.Rax);
     // gt.threw = 0
     EmitMovIndirectMemReg(gt, GtOffThrew, X86Register.Rax);
+    // gt.awaitHandoff = Nil. A GT off the per-P free list carries its previous life's word, and
+    // this one is never reset by the awaiter — it belongs to the PROMISE and its states are
+    // terminal, so the recycle point is the only place it can be cleared.
+    EmitMovIndirectMemReg(gt, GtOffAwaitHandoff, X86Register.Rax);
 
     // gt.ioYielded = 1: a spawned GT that has not run yet IS suspended off-stack, so it is safe to
     // hand to any M — which is exactly what the enqueue below does. __gt_context_switch clears it
@@ -5147,26 +5157,34 @@ public partial class X86CodeEmitter {
     // Reload R10 = current gt (list walk may have modified RCX/RDX)
     EmitLoadCurrentGtInline(X86Register.R10);
 
-    // Set status = completed
+    // Set status = completed. This is the LAST result field published, and it is what an awaiter
+    // self-detects on — so it must precede the hand-off CAS below, which is the acquire an awaiter
+    // that loses its own CAS reads it through. See RuntimeEmitter.Scheduler.cs's hand-off comment.
     EmitMovRegImm(X86Register.Rax, GtStatusCompleted);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
 
-    // Defer waiter wakeup: store waiter in P->pendingWaiter. The actual wakeup
-    // happens AFTER __gt_yield_completed context-switches off this GT's stack.
-    // This prevents a race where the waiter frees the GT's stack while we're
-    // still running on it (the waiter's __gt_await does VirtualFree + mm_raw_free).
-    EmitMovRegIndirectMem(X86Register.R11, X86Register.R10, GtOffWaiter);
+    // Decide whose job the awaiter's resumption is. A non-zero answer is a green thread that
+    // CANNOT be running: either it committed to a park and has since vacated its stack, or it is
+    // the main OS thread, which nothing ever enqueues.
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = self (the promise)
+    EmitCallRuntimeLabel("__gt_await_handoff_claim");
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-0x38] = the GT to hand over, or 0
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_tramp_no_waiter");
     // Set waiter.status = ready (safe: the waiter won't be scheduled until
     // we explicitly enqueue/signal it in the pending waiter processing).
-    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
-    EmitJcc("z", "__gt_tramp_no_waiter");
+    EmitMovRegReg(X86Register.R11, X86Register.Rax);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R11, GtOffStatus, X86Register.Rax);
     DefineLabel("__gt_tramp_no_waiter");
-    // Store waiter (or NULL) in P->pendingWaiter via inline TLS
+    // Defer the wakeup: store it in P->pendingWaiter. The actual wakeup happens AFTER
+    // __gt_yield_completed context-switches off this GT's stack. This prevents a race where the
+    // waiter frees the GT's stack while we're still running on it (the waiter's __gt_await does
+    // VirtualFree + mm_raw_free).
     EmitGlobalLoadReg(X86Register.Rax, "__sched_tls_teb_offset");
     EmitByte(0x65); // GS prefix
     EmitMovRegIndirectMemRaw(X86Register.Rax, X86Register.Rax, 0); // RAX = P*
+    EmitMovRegMem(X86Register.R11, -0x38, 8);
     EmitMovIndirectMemReg(X86Register.Rax, POffPendingWaiter, X86Register.R11);
 
     // Yield to next thread (never returns for completed threads)
@@ -5186,14 +5204,12 @@ public partial class X86CodeEmitter {
   /// <c>__gt_timer_check</c>'s park gate both stand on. Only a context switch knows both halves of
   /// that fact, because only it knows WHICH GT is leaving its stack.
   ///
-  /// ⚠ ON x86 <c>__gt_process_pending_waiter</c> DOES NOT YET STAND ON IT, and this comment must not
-  /// be read as saying it does. arm64's <c>__gt_ppw_spin</c> waits for <c>w.ioYielded == 1</c> before
-  /// enqueueing a deferred awaiter; x86's <c>__gt_process_pending_waiter</c> enqueues unconditionally,
-  /// so an awaiter that has published <c>promise.waiter</c> but has not yet reached its next context
-  /// switch can be enqueued while still running, and a third M can then resume it onto the SP saved
-  /// at its previous suspension. That gap predates this invariant and is NOT closed by it — closing
-  /// it means porting arm64's spin, which needs its own termination argument on x86 (see
-  /// EmitGtProcessPendingWaiter).
+  /// ⚠ THE AWAIT HAND-OFF STANDS ON IT TOO, BUT ONE STEP BACK FROM WHERE arm64 PUTS THE TEST.
+  /// <c>__gt_process_pending_waiter</c> here does no gating of its own; the wait for this flag lives
+  /// in <c>__gt_await_handoff_claim</c>, and it runs only for an awaiter that has already published
+  /// <c>AwaitHandoffParked</c>. That ordering is what makes the wait terminate on this backend,
+  /// where a bare <c>ioYielded</c> spin could not: this flag says a context HAS been saved, never
+  /// that one is GOING to be.
   ///
   /// ⚠ IT USED TO BE THE RESUMER'S JOB ON x86, AND THE RESUMER CANNOT KNOW. Ten scheduler loops each
   /// stamped <c>ioYielded = 1</c> on the GT THEY DISPATCHED once the switch returned to them, which
@@ -5356,6 +5372,7 @@ public partial class X86CodeEmitter {
     // promise.waiter = current
     EmitMovRegMem(X86Register.R10, -0x08, 8); // R10 = promise
     EmitMovIndirectMemReg(X86Register.R10, GtOffWaiter, X86Register.R11);
+    EmitAwaitWaiterPublishFence();
 
     // Scheduling loop: find something to run and context-switch to it.
     // Whether we're a worker's GT or the main thread on P[0], we always
@@ -5370,7 +5387,11 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.R10, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
     EmitCmpRegImm(X86Register.Rax, GtStatusCompleted);
-    EmitJcc("z", "__gt_await_done");
+    EmitJcc("z", "__gt_await_resumed");
+
+    // Every path out of this point but the main thread's own poll is a context switch, so the
+    // commit belongs HERE rather than beside each of them — see EmitAwaitCommitParkOrAbort.
+    EmitAwaitCommitParkOrAbort("__gt_await_sched");
 
     EmitCallRuntimeLabel("__gt_dequeue");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
@@ -5378,12 +5399,17 @@ public partial class X86CodeEmitter {
 
     // Nothing to run. Check if we're on a worker (not mainThread):
     // if so, switch to P->mainThread to let the worker loop park.
-    EmitLeaMainThreadInline(X86Register.Rdx);
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
-    EmitJcc("nz", "__gt_await_switch_main");
+    EmitJumpIfMainThread("__gt_await_main_park");
+
+    // Worker GT: RCX = current and RDX = &P->mainThread are already __gt_context_switch's
+    // (from, to).
+    EmitMovRegImm(X86Register.Rax, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rdx, GtOffStatus, X86Register.Rax);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    EmitJmp("__gt_await_sched");
 
     // We ARE the mainThread: park briefly using P->wakeEvent, then retry
+    DefineLabel("__gt_await_main_park");
     EmitGlobalLoadReg(X86Register.Rax, "__sched_tls_teb_offset");
     EmitByte(0x65); // GS prefix
     EmitMovRegIndirectMemRaw(X86Register.Rax, X86Register.Rax, 0); // RAX = P*
@@ -5391,14 +5417,6 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rdx, 50); // 50ms timeout
     EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
     EmitJmp("__gt_await_sched");
-
-    DefineLabel("__gt_await_switch_main");
-    EmitMovRegImm(X86Register.Rax, GtStatusRunning);
-    EmitMovIndirectMemReg(X86Register.Rdx, GtOffStatus, X86Register.Rax);
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitCallRuntimeLabel("__gt_context_switch");
-    // Resume here when re-woken — fall through to done
-    EmitJmp("__gt_await_done");
 
     DefineLabel("__gt_await_has_next");
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // save next
@@ -5414,12 +5432,12 @@ public partial class X86CodeEmitter {
     EmitLoadCurrentGtInline(X86Register.Rcx); // from = current
     EmitMovRegMem(X86Register.Rdx, -0x10, 8);          // to = next
     EmitCallRuntimeLabel("__gt_context_switch");
-    // Resume here when woken (via waiter mechanism).
-    // Check if promise is done — if not, keep scheduling
-    EmitMovRegMem(X86Register.R10, -0x08, 8);
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
-    EmitCmpRegImm(X86Register.Rax, GtStatusCompleted);
-    EmitJcc("nz", "__gt_await_sched");
+    // Resumed. Whatever woke us, the loop's own recheck is what decides — it is the only place the
+    // park word is released, so this may not shortcut to the extract path.
+    EmitJmp("__gt_await_sched");
+
+    DefineLabel("__gt_await_resumed");
+    EmitAwaitRestoreRunning();
 
     DefineLabel("__gt_await_done");
 
@@ -5527,6 +5545,7 @@ public partial class X86CodeEmitter {
     // promise.waiter = current
     EmitMovRegMem(X86Register.R10, -0x08, 8); // R10 = promise
     EmitMovIndirectMemReg(X86Register.R10, GtOffWaiter, X86Register.R11);
+    EmitAwaitWaiterPublishFence();
 
     // Scheduling loop: find something to run and context-switch to it.
     DefineLabel("__gt_try_await_sched");
@@ -5542,19 +5561,25 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.R10, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
     EmitCmpRegImm(X86Register.Rax, GtStatusCompleted);
-    EmitJcc("z", "__gt_try_await_done");
+    EmitJcc("z", "__gt_try_await_resumed");
+
+    EmitAwaitCommitParkOrAbort("__gt_try_await_sched");
 
     EmitCallRuntimeLabel("__gt_dequeue");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
     EmitJcc("nz", "__gt_try_await_has_next");
 
     // Nothing to run. If we're on a worker, switch to P->mainThread.
-    EmitLeaMainThreadInline(X86Register.Rdx);
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
-    EmitJcc("nz", "__gt_try_await_switch_main");
+    EmitJumpIfMainThread("__gt_try_await_main_park");
+
+    // Worker GT: RCX = current, RDX = &P->mainThread — __gt_context_switch's (from, to).
+    EmitMovRegImm(X86Register.Rax, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rdx, GtOffStatus, X86Register.Rax);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    EmitJmp("__gt_try_await_sched");
 
     // We ARE the mainThread: park briefly, then retry
+    DefineLabel("__gt_try_await_main_park");
     EmitGlobalLoadReg(X86Register.Rax, "__sched_tls_teb_offset");
     EmitByte(0x65);
     EmitMovRegIndirectMemRaw(X86Register.Rax, X86Register.Rax, 0);
@@ -5562,13 +5587,6 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rdx, 50); // 50ms timeout
     EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
     EmitJmp("__gt_try_await_sched");
-
-    DefineLabel("__gt_try_await_switch_main");
-    EmitMovRegImm(X86Register.Rax, GtStatusRunning);
-    EmitMovIndirectMemReg(X86Register.Rdx, GtOffStatus, X86Register.Rax);
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitCallRuntimeLabel("__gt_context_switch");
-    EmitJmp("__gt_try_await_done");
 
     DefineLabel("__gt_try_await_has_next");
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // save next
@@ -5579,11 +5597,11 @@ public partial class X86CodeEmitter {
     EmitLoadCurrentGtInline(X86Register.Rcx);
     EmitMovRegMem(X86Register.Rdx, -0x10, 8);
     EmitCallRuntimeLabel("__gt_context_switch");
-    // Check if promise is done
-    EmitMovRegMem(X86Register.R10, -0x08, 8);
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
-    EmitCmpRegImm(X86Register.Rax, GtStatusCompleted);
-    EmitJcc("nz", "__gt_try_await_sched");
+    // Resumed — the loop's own recheck decides, as in __gt_await.
+    EmitJmp("__gt_try_await_sched");
+
+    DefineLabel("__gt_try_await_resumed");
+    EmitAwaitRestoreRunning();
 
     DefineLabel("__gt_try_await_done");
 
@@ -5679,20 +5697,20 @@ public partial class X86CodeEmitter {
   /// If the waiter is a mainThread (stackBase == 0), signals the owning P's wakeEvent.
   /// Clears P->pendingWaiter after processing.
   ///
-  /// ⚠ KNOWN GAP, x86 ONLY: THIS ENQUEUE IS NOT GATED ON <c>ioYielded</c> AND arm64's IS. arm64
-  /// spins in <c>__gt_ppw_spin</c> until <c>w.ioYielded == 1</c>, because a waiter publishes
-  /// <c>promise.waiter = self</c> and then KEEPS RUNNING its <c>__gt_await</c> scheduling loop; if
-  /// the awaited GT completes on another M in that window, this function enqueues a GT that is still
-  /// executing, and a third M resumes it onto the SP saved at its PREVIOUS suspension — two Ms on one
-  /// stack. Reproducing it needs the child to complete on a different M from the awaiter, so it is
-  /// rare rather than absent.
+  /// ⚠ THIS FUNCTION DOES NOT DECIDE, AND MUST NOT BE MADE TO. Whether the awaiter needed an
+  /// enqueue at all was settled before it was ever put in this slot, by
+  /// <c>__gt_await_handoff_claim</c> — so what arrives here is a green thread that provably cannot
+  /// be running, and the enqueue is unconditional because by then it is unconditionally right.
   ///
-  /// It is not fixed here because the gate is not the whole port: arm64's spin terminates only
-  /// because its awaiter always reaches a context switch, and an awaiter whose promise completed
-  /// leaves <c>__gt_await</c> and runs USER code at <c>ioYielded == 0</c> for as long as it likes —
-  /// so a naive spin trades a rare double-schedule for a rare unbounded wait. B6b made the flag
-  /// trustworthy on x86 (a running GT now reads 0, which it did not before); building the gate on top
-  /// of it is its own rung.
+  /// ⚠ IT USED TO DECIDE NOTHING AND ENQUEUE ANYWAY, WHICH IS NOT THE SAME THING. An awaiter
+  /// publishes <c>promise.waiter = self</c> and then KEEPS RUNNING its <c>__gt_await</c> loop; a
+  /// child completing on another M in that window put a RUNNING green thread in the run queue, and
+  /// a third M resumed it onto the SP saved at its PREVIOUS suspension — two Ms on one stack.
+  /// arm64 covers the same window by spinning here for <c>w.ioYielded == 1</c>, which this backend
+  /// deliberately does NOT copy: that spin terminates only because arm64's await loop rechecks
+  /// AFTER its context switch, while this one rechecks before it and can therefore leave for user
+  /// code at <c>ioYielded == 0</c> and never switch again. See RuntimeEmitter.Scheduler.cs's
+  /// hand-off comment for the word that supplies that missing premise instead of assuming it.
   /// </summary>
   private void EmitGtProcessPendingWaiter() {
     EmitRuntimeFunctionStart("__gt_process_pending_waiter", 0, 0x20);
@@ -7946,6 +7964,63 @@ public partial class X86CodeEmitter {
   private void EmitIoSubmitWrite() {
     EmitRuntimeFunctionStart("__io_submit_write", 3, 0x50);
     EmitIoSubmitOverlappedCore("WriteFile", "__io_submit_write");
+  }
+
+  /// <summary>
+  /// The StoreLoad fence between <c>promise.waiter = current</c> and the awaiter's FIRST read of
+  /// <c>promise.status</c>. Both awaits publish then poll, and the completion trampoline publishes
+  /// <c>status</c> then reads <c>waiter</c> — the textbook two-flag shape, whose two loads may not
+  /// BOTH miss the other's store. x86-TSO reorders exactly this pair and nothing else, so exactly
+  /// one instruction is needed, and the trampoline's own half is its hand-off CAS.
+  ///
+  /// ⚠ WITHOUT IT THE MAIN OS THREAD'S AWAIT LOSES ITS WAKEUP, and only its own: a worker GT is
+  /// covered by the hand-off word (a completer that wins reads no field, and one that loses reads
+  /// <c>waiter</c> behind the CAS the awaiter published it before), whereas a main-thread awaiter
+  /// is decided on the win arm, which reads <c>waiter</c> directly. What it costs is one 50 ms park
+  /// timeout, not a hang — the poll is bounded — which is precisely why it would have gone
+  /// unnoticed.
+  /// </summary>
+  private void EmitAwaitWaiterPublishFence() => EmitMfence();
+
+  /// <summary>
+  /// The awaiter's half of the await completion hand-off: publish "I am parking" and find out
+  /// whether that is still true. Jumps to <paramref name="abortLabel"/> — always the top of the
+  /// caller's scheduling loop — when the child completed first, in which case the caller must NOT
+  /// park and its next <c>promise.status</c> recheck is guaranteed to see <c>completed</c>.
+  ///
+  /// ⚠ IT SITS AHEAD OF THE DEQUEUE, NOT BESIDE EACH SWITCH, and that placement is the argument:
+  /// past the recheck above it, every path a non-main-thread awaiter can take ends in
+  /// <c>__gt_context_switch</c> — it either runs a dequeued GT or yields to its scheduler — so ONE
+  /// commit covers both and there is no path that publishes <c>Parked</c> and then decides to keep
+  /// running. Placing it after the dequeue would need an abort path that re-enqueues the GT it is
+  /// holding: more code, on the one interleaving nothing routinely exercises.
+  ///
+  /// It does put <c>__gt_dequeue</c> inside the window a completer waits through, which is a
+  /// LOCK and not the "straight-line, no call" stretch <c>__netpoll_commit</c> promises. The bound
+  /// that matters survives: that lock is held for a queue splice by Ms that are running, never
+  /// across a park, so the wait is still a scheduling quantum and never another green thread's
+  /// progress.
+  ///
+  /// Clobbers the call-clobbered set, so the caller must re-establish RCX/RDX afterwards.
+  /// </summary>
+  private void EmitAwaitCommitParkOrAbort(string abortLabel) {
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = promise (arg slot of both awaits)
+    EmitCallRuntimeLabel("__gt_await_commit_park");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", abortLabel);
+  }
+
+  /// <summary>
+  /// Undo the <c>status = waiting</c> both awaits set before publishing themselves as the waiter.
+  /// The completion trampoline used to do this for every waiter it found; it now only does so for
+  /// one it is handing over, because a waiter it declines is RUNNING and writing a scheduler field
+  /// of a thread you have just decided not to own is how the double-schedule got in. So the
+  /// awaiter closes its own state, on the one path that reaches user code.
+  /// </summary>
+  private void EmitAwaitRestoreRunning() {
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitMovRegImm(X86Register.Rax, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax);
   }
 
   /// <summary>

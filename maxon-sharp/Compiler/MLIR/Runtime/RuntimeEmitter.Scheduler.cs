@@ -1072,4 +1072,209 @@ public partial class RuntimeEmitter {
     _b.LockRelease(_b.TimerLockLabel);
     _b.FunctionEnd();
   }
+
+  // ===========================================================================================
+  // THE AWAIT COMPLETION HAND-OFF
+  // ===========================================================================================
+
+  private const string AwaitHandoffCorruptMsg = "__gt_await_msg_handoff_corrupt";
+
+  private const string AwaitHandoffNoWaiterMsg = "__gt_await_msg_handoff_no_waiter";
+
+  /// <summary>
+  /// The hand-off's panic strings. Emitted from a backend's globals block, beside
+  /// <see cref="EmitNetpollGlobals"/> and from the same <c>RuntimeEmitter</c> instance.
+  /// </summary>
+  public void EmitGtAwaitHandoffGlobals() {
+    _b.DefineSymdata(AwaitHandoffCorruptMsg, System.Text.Encoding.UTF8.GetBytes(
+      "runtime: corrupted await handoff\n\0"));
+    _b.DefineSymdata(AwaitHandoffNoWaiterMsg, System.Text.Encoding.UTF8.GetBytes(
+      "runtime: await handoff parked with no waiter\n\0"));
+  }
+
+  /// <summary>
+  /// THE AWAIT COMPLETION HAND-OFF — who enqueues an awaiter when the green thread it awaits
+  /// finishes, the awaiter itself or the completing child. Two functions, one word
+  /// (<see cref="GtLayout.GtOffAwaitHandoff"/>, on the PROMISE), one atomic operation per side.
+  ///
+  /// ⭐ IT IS THE SAME QUESTION <c>RuntimeEmitter.Netpoll.cs</c> ANSWERS FOR I/O, AND THE ANSWER
+  /// HAS THE SAME SHAPE ON PURPOSE. An awaiter publishes <c>promise.waiter = self</c> and then
+  /// keeps running its own scheduling loop, so a completer reading that field faces exactly the
+  /// question <c>netpoll</c>'s guard (c) could not answer: is this waiter about to park, or is it
+  /// about to notice the completion itself? Those two are the SAME INSTANT, and no snapshot of
+  /// <c>ioYielded</c> separates them. The word does: the awaiter CASes
+  /// <c>Nil -&gt; Parked</c> as the last branch before its context switch, the completer CASes
+  /// <c>Nil -&gt; Completed</c> after publishing <c>status</c>, and exactly one of them wins.
+  ///
+  /// ⚠ WHAT IT REPLACES ON x86 WAS NOT A WEAKER GUARD, IT WAS NO GUARD.
+  /// <c>__gt_process_pending_waiter</c> enqueued the deferred awaiter unconditionally, so a child
+  /// completing on another M while its awaiter was still executing put a RUNNING green thread in
+  /// the run queue, and a third M resumed it onto the SP saved at its previous suspension — one
+  /// green thread on two Ms. Reproduced deterministically by widening the awaiter's window with
+  /// <c>MAXON_GT_PARK_DELAY_MS</c> (see <see cref="EmitGtAwaitCommitPark"/>): a nil-deref inside
+  /// the re-entered thread, every run.
+  ///
+  /// ⚠ AND WHY THIS IS NOT arm64's <c>__gt_ppw_spin</c> PORTED. That gate waits for
+  /// <c>w.ioYielded == 1</c> and rests its termination on "the await idle path guarantees the
+  /// awaiter always reaches a context switch" — which is TRUE of arm64's await loop, whose status
+  /// recheck sits AFTER the switch, and FALSE of this one, whose recheck sits before it. An
+  /// awaiter here can see its promise completed and leave <c>__gt_await</c> for user code without
+  /// ever switching again, at <c>ioYielded == 0</c> for as long as it likes, so a transplanted
+  /// spin trades a rare double-schedule for a rare unbounded wait. The word supplies the missing
+  /// premise instead of assuming it: <c>Parked</c> is published only where the run to
+  /// <c>__gt_context_switch</c> IS straight-line, so the wait that follows it is the bounded one
+  /// (<see cref="EmitStackVacatedGate"/>).
+  /// </summary>
+  public void EmitGtAwaitHandoffFunctions() {
+    EmitGtAwaitCommitPark();
+    EmitGtAwaitHandoffClaim();
+  }
+
+  /// <summary>
+  /// <c>__gt_await_commit_park(promise)</c> -&gt; non-zero when the caller may park, 0 when it must
+  /// NOT. The awaiter's half, and the LAST instruction that can still change its mind — the
+  /// counterpart of <c>__netpoll_commit</c>, and it carries the same two rules.
+  ///
+  /// ⚠ IT MUST BE THE LAST BRANCH BEFORE <c>__gt_context_switch</c> — nothing between this call and
+  /// the switch may turn the caller around, because a completer that loses its CAS against the
+  /// <c>Parked</c> this publishes waits for the caller's <c>ioYielded</c>. Calls in between are
+  /// tolerable (<c>__gt_dequeue</c> is one) as long as none of them can decide not to park and none
+  /// can wait on another green thread's progress; a BRANCH back would be a hang.
+  ///
+  /// ⚠ A ZERO RETURN MEANS "THE CHILD COMPLETED", so every abort path must reach a recheck of
+  /// <c>promise.status</c> rather than reading a result straight out. The completer publishes
+  /// <c>status</c> (and <c>result</c> / <c>threw</c> before it) ahead of the CAS this loses to, and
+  /// a failing <c>AtomicCAS</c> is an acquire on that same word, so the recheck is guaranteed to
+  /// see <c>completed</c> — which is what makes "loop back to the top" a terminating abort rather
+  /// than a spin.
+  ///
+  /// ⚠ THE MAIN OS THREAD NEVER COMMITS, on the <c>stackBase == 0</c> predicate
+  /// <c>__netpoll_commit</c> and <c>__gt_process_pending_waiter</c> already use. It has no
+  /// schedulable stack and nothing ever enqueues it, so publishing <c>Parked</c> for it would hand
+  /// a completer a wait for an <c>ioYielded</c> that a running thread never sets. It still gets its
+  /// wakeup: see <see cref="EmitGtAwaitHandoffClaim"/>'s main-thread arm.
+  /// </summary>
+  private void EmitGtAwaitCommitPark() {
+    _b.FunctionStart("__gt_await_commit_park", 1, 0x40);
+
+    var proceedLabel = UniqueLabel("await_commit_proceed");
+    var abortLabel = UniqueLabel("await_commit_abort");
+    var abortOkLabel = UniqueLabel("await_commit_abort_ok");
+
+    // No P, or no schedulable stack: nothing can enqueue this caller, so it must not publish
+    // `Parked`. Both answers are "go on"; see the note above for why they are different STATES.
+    EmitLoadCurrentGtOrZero(VReg.Scratch1);
+    _b.JumpIfZero(VReg.Scratch1, proceedLabel);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, GtOffStackBase);
+    _b.JumpIfZero(VReg.Scratch2, proceedLabel);
+
+    // ⭐ FAULT INJECTION, THE PARKER'S HALF, and this is the SECOND parker it serves — the knob is
+    // defined as the gap between a parker's last self-detect and its commit CAS, and an awaiter has
+    // exactly that gap. Widen it and the completer lands squarely inside the window that used to be
+    // unguarded here; see EmitGtAwaitHandoffFunctions for the reproduction.
+    _b.Call(NetpollParkDelayFn);
+
+    _b.LoadLocal(VReg.Scratch1, 0);                    // promise
+    _b.MovRegImm(VReg.Scratch2, AwaitHandoffNil);      // expected
+    _b.MovRegImm(VReg.Arg1, AwaitHandoffParked);       // desired
+    _b.AtomicCAS(VReg.Scratch1, GtOffAwaitHandoff, VReg.Scratch2, VReg.Arg1);
+    _b.JumpIfZero(VReg.Scratch3, abortLabel);
+
+    _b.DefineLabel(proceedLabel);
+    _b.MovRegImm(VReg.Scratch0, 1);
+    _b.ReturnValue(VReg.Scratch0);
+
+    _b.DefineLabel(abortLabel);
+    // Re-read rather than trust the CAS's observed value in a register: the two backends agree only
+    // that `expected` survives, not where a failure leaves what it saw. The word cannot move again —
+    // `Completed` is terminal and this GT is its only other writer — so the re-read is exact.
+    _b.LoadLocal(VReg.Scratch1, 0);
+    _b.LoadAcquire(VReg.Scratch2, VReg.Scratch1, GtOffAwaitHandoff);
+    _b.CmpRegImm(VReg.Scratch2, AwaitHandoffCompleted);
+    _b.JumpIf(Condition.Equal, abortOkLabel);
+
+    // `Parked` here means a second awaiter committed on one promise, which `await` being linear
+    // (E3100) says cannot happen. Say so and stop, rather than spin on a recheck that will never
+    // come true.
+    EmitRuntimeThrow(AwaitHandoffCorruptMsg);
+
+    _b.DefineLabel(abortOkLabel);
+    _b.ZeroReg(VReg.Scratch0);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  /// <summary>
+  /// <c>__gt_await_handoff_claim(promise)</c> -&gt; the GT to hand to <c>P-&gt;pendingWaiter</c>, or
+  /// 0. The completer's half, called by the completion trampoline AFTER it has published
+  /// <c>result</c>, <c>threw</c> and <c>status = completed</c> and BEFORE it stores anything into
+  /// the pending-waiter slot.
+  ///
+  /// ⚠ THE PUBLISH COMES FIRST HERE AND LAST IN <c>netpoll</c>, AND THE RULE BEHIND BOTH IS ONE
+  /// RULE: a waiter must never be released toward a result that is not there yet.
+  /// <c>netpoll</c>'s waiter learns of its completion THROUGH the word, so the word must be
+  /// released last; ours learns through <c>status</c>, which it was already reading, so
+  /// <c>status</c> must be published before the word can send it there. Reversing either is the
+  /// same defect.
+  ///
+  /// ⚠ THE WIN ARM STILL READS <c>promise.waiter</c>, AND THAT IS NOT A SECOND CHANNEL. Winning
+  /// says only that no awaiter has COMMITTED; there may still be one registered and running, and if
+  /// it is the main OS thread it is parked on a wake handle that nothing else will signal. Reading
+  /// the field there is safe because the awaiter fences between publishing it and its first
+  /// <c>status</c> recheck: if this load misses the store, that recheck cannot miss the
+  /// <c>status</c> published above — the standard two-sided argument, and the reason that fence is
+  /// not decoration.
+  /// </summary>
+  private void EmitGtAwaitHandoffClaim() {
+    _b.FunctionStart("__gt_await_handoff_claim", 1, 0x40);
+
+    var parkedLabel = UniqueLabel("await_handoff_parked");
+    var noneLabel = UniqueLabel("await_handoff_none");
+    var handOverLabel = UniqueLabel("await_handoff_hand_over");
+    var waiterOkLabel = UniqueLabel("await_handoff_waiter_ok");
+
+    _b.LoadLocal(VReg.Scratch1, 0);                       // promise
+    _b.MovRegImm(VReg.Scratch2, AwaitHandoffNil);         // expected
+    _b.MovRegImm(VReg.Arg1, AwaitHandoffCompleted);       // desired
+    _b.AtomicCAS(VReg.Scratch1, GtOffAwaitHandoff, VReg.Scratch2, VReg.Arg1);
+    _b.JumpIfZero(VReg.Scratch3, parkedLabel);
+
+    // Won: nobody has committed to a park on this promise. An awaiter that exists is still running
+    // and resumes itself off the `status` we published; it must NOT be enqueued.
+    _b.LoadLocal(VReg.Scratch1, 0);
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, GtOffWaiter);
+    _b.JumpIfZero(VReg.Scratch0, noneLabel);
+    // ...unless it is the main OS thread, which self-detects by POLLING and is therefore waiting on
+    // its P's wake handle right now. It is never enqueued — __gt_process_pending_waiter turns this
+    // same slot into a SetEvent for it — so handing it over costs nothing and saves a full park
+    // timeout per await.
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, GtOffStackBase);
+    _b.JumpIfNonZero(VReg.Scratch2, noneLabel);
+    _b.Jump(handOverLabel);
+
+    _b.DefineLabel(noneLabel);
+    _b.ZeroReg(VReg.Scratch0);
+    _b.ReturnValue(VReg.Scratch0);
+
+    _b.DefineLabel(parkedLabel);
+    // Lost: the word reads `Parked`. The awaiter committed, and the CAS it won is a release for the
+    // `promise.waiter` it stored before it, so this load cannot miss.
+    _b.LoadLocal(VReg.Scratch1, 0);
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, GtOffWaiter);
+    _b.JumpIfNonZero(VReg.Scratch0, waiterOkLabel);
+    EmitRuntimeThrow(AwaitHandoffNoWaiterMsg);
+
+    _b.DefineLabel(waiterOkLabel);
+    // Home the awaiter over the promise — which is not needed again — because the gate below reads
+    // its subject from a local slot. Then wait for the context save. Bounded; see
+    // EmitStackVacatedGate.
+    _b.StoreLocal(0, VReg.Scratch0);
+    EmitStackVacatedGate(0);
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.ReturnValue(VReg.Scratch0);
+
+    // The main OS thread: hand it over WITHOUT the gate, which would never open — it is running,
+    // not parked off its stack, and nothing will ever enqueue it.
+    _b.DefineLabel(handOverLabel);
+    _b.ReturnValue(VReg.Scratch0);
+  }
 }

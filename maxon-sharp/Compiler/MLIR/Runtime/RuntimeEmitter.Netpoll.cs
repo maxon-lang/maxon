@@ -338,16 +338,6 @@ public partial class RuntimeEmitter {
   // handshake's hand-rolled Dekker fence could be retired with it rather than kept beside it.
 
   /// <summary>
-  /// Panic with <paramref name="msgSymdata"/>. The equivalent of Go's <c>throw</c>: an invariant
-  /// this protocol asserts rather than tolerates, so it says which one and stops, instead of
-  /// carrying on into a lost wakeup that would be diagnosed weeks later from a wedge.
-  /// </summary>
-  private void EmitNetpollThrow(string msgSymdata) {
-    _b.LeaSymdata(VReg.Arg0, msgSymdata);
-    _b.Call("mrt_panic"); // never returns
-  }
-
-  /// <summary>
   /// <c>__netpoll_arm(gt)</c> — Go's <c>netpollblock</c> PREPARE loop, and it must be called BEFORE
   /// the registration the completer can see is published (before <c>kevent(EV_ADD)</c>, before the
   /// overlapped <c>ReadFile</c>, before <c>epoll_ctl</c>). From this instruction on, a completer may
@@ -388,7 +378,7 @@ public partial class RuntimeEmitter {
     // missing park_done at some submit site, or (for Claiming) a completer that took the wakeup and
     // never released it. Either would otherwise present itself much later as a wakeup delivered to
     // the wrong park.
-    EmitNetpollThrow(NetpollDoubleWaitMsg);
+    EmitRuntimeThrow(NetpollDoubleWaitMsg);
 
     _b.DefineLabel(okLabel);
     _b.FunctionEnd();
@@ -589,7 +579,7 @@ public partial class RuntimeEmitter {
     _b.CmpRegImm(VReg.Scratch2, NetpollWait);
     _b.JumpIf(Condition.Equal, okLabel);
 
-    EmitNetpollThrow(NetpollCorruptMsg);
+    EmitRuntimeThrow(NetpollCorruptMsg);
 
     _b.DefineLabel(okLabel);
     _b.FunctionEnd();
@@ -734,8 +724,6 @@ public partial class RuntimeEmitter {
     _b.FunctionStart("__netpoll_claim_done", 2, 0x40);
 
     var validLabel = UniqueLabel("netpoll_claim_done_valid");
-    var spinLabel = UniqueLabel("netpoll_claim_done_spin");
-    var enqueueLabel = UniqueLabel("netpoll_claim_done_enqueue");
     var noneLabel = UniqueLabel("netpoll_claim_done_none");
 
     // Validate BEFORE releasing: a claimedFrom that is neither state __netpoll_claim can return is a
@@ -747,7 +735,7 @@ public partial class RuntimeEmitter {
     _b.CmpRegImm(VReg.Scratch2, NetpollWait);
     _b.JumpIf(Condition.Equal, validLabel);
 
-    EmitNetpollThrow(NetpollClaimStateMsg);
+    EmitRuntimeThrow(NetpollClaimStateMsg);
 
     _b.DefineLabel(validLabel);
 
@@ -773,24 +761,14 @@ public partial class RuntimeEmitter {
     _b.CmpRegImm(VReg.Scratch2, NetpollWait);
     _b.JumpIf(Condition.Equal, noneLabel);
 
-    // The enqueue is ours. Wait for the context save to finish before handing this GT to another M:
-    // ioYielded goes to 1 inside __gt_context_switch, after the callee-saved block and gt.sp are
-    // stored, and enqueueing before that lets a second M resume the GT onto a stale SP.
+    // The enqueue is ours.
     //
-    // ⭐ WHY THIS SPIN TERMINATES AND THE OLD DESIGN'S COULD NOT. We claimed `Parked`, so the waiter
+    // ⭐ WHY THIS WAIT TERMINATES AND THE OLD DESIGN'S COULD NOT. We claimed `Parked`, so the waiter
     // has already committed, and everything from its commit CAS to `ioYielded = 1` is straight-line
     // code — no call, no lock, no branch back. It cannot decide to keep running, which is precisely
     // what it COULD do before this word existed, and precisely why the completer had to guess with a
-    // non-blocking snapshot (guard (c)) instead of waiting. The bound is a scheduling quantum, the
-    // same bound __gt_ppw_spin already accepts for the await hand-off.
-    _b.DefineLabel(spinLabel);
-    _b.LoadLocal(VReg.Scratch1, 0);
-    _b.LoadAcquire(VReg.Scratch0, VReg.Scratch1, GtOffIoYielded);
-    _b.JumpIfNonZero(VReg.Scratch0, enqueueLabel);
-    _b.SpinHint();
-    _b.Jump(spinLabel);
-
-    _b.DefineLabel(enqueueLabel);
+    // non-blocking snapshot (guard (c)) instead of waiting.
+    EmitStackVacatedGate(0);
     _b.LoadLocal(VReg.Scratch0, 0);
     _b.ReturnValue(VReg.Scratch0);
 

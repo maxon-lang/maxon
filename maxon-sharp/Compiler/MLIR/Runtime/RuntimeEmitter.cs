@@ -24,6 +24,49 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   private string UniqueLabel(string prefix) => $"__{prefix}_{_uniqueLabelCounter++}";
 
   /// <summary>
+  /// Panic with <paramref name="msgSymdata"/>. The equivalent of Go's <c>throw</c>: an invariant a
+  /// hand-off protocol asserts rather than tolerates, so it says which one and stops, instead of
+  /// carrying on into a lost wakeup that would be diagnosed weeks later from a wedge.
+  /// </summary>
+  private void EmitRuntimeThrow(string msgSymdata) {
+    _b.LeaSymdata(VReg.Arg0, msgSymdata);
+    _b.Call("mrt_panic"); // never returns
+  }
+
+  /// <summary>
+  /// Wait until the GT in local slot <paramref name="gtSlot"/> has VACATED ITS OWN STACK —
+  /// <c>gt.ioYielded == 1</c> — so it may be handed to another M.
+  ///
+  /// ⚠ THE CALLER OWES THE TERMINATION ARGUMENT, AND IT IS ALWAYS THE SAME ONE: the GT must
+  /// already have passed a point of no return, after which it runs to
+  /// <c>__gt_context_switch</c>'s <c>ioYielded = 1</c> without being able to turn around. Both
+  /// callers get that from an atomic word they won a race on — <c>__netpoll_claim_done</c> from a
+  /// <c>Parked</c> claim, <c>__gt_await_handoff_claim</c> from a lost CAS against
+  /// <c>AwaitHandoffParked</c> — so the bound is a scheduling quantum, never another green
+  /// thread's progress. A caller that waits here on a GT that can still decide to keep running
+  /// has written a hang, which is exactly what a naive port of arm64's <c>__gt_ppw_spin</c> to
+  /// this backend would have been.
+  ///
+  /// ⚠ AND WHY IT IS A WAIT AT ALL, since <c>ioYielded</c> is not the decision: the decision is
+  /// already made and cannot change; what is not yet true is that the GT's REGISTERS are saved.
+  /// Enqueue it a moment early and a second M resumes it onto the SP saved at its PREVIOUS
+  /// suspension.
+  /// </summary>
+  private void EmitStackVacatedGate(int gtSlot) {
+    var spinLabel = UniqueLabel("stack_vacated_spin");
+    var readyLabel = UniqueLabel("stack_vacated_ready");
+
+    _b.DefineLabel(spinLabel);
+    _b.LoadLocal(VReg.Scratch1, gtSlot);
+    _b.LoadAcquire(VReg.Scratch0, VReg.Scratch1, GtOffIoYielded);
+    _b.JumpIfNonZero(VReg.Scratch0, readyLabel);
+    _b.SpinHint();
+    _b.Jump(spinLabel);
+
+    _b.DefineLabel(readyLabel);
+  }
+
+  /// <summary>
   /// Emits all runtime functions shared between x86 and ARM64 code emitters.
   /// Consolidates the identical runtime emission sequence used by both platforms.
   /// </summary>

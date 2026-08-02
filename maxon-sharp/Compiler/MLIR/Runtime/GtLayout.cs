@@ -5,7 +5,7 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 /// shared by RuntimeEmitter and every CodeEmitter backend. Single source of truth —
 /// do not duplicate these constants in backend files.
 ///
-/// GreenThread struct (224 bytes = 0xE0):
+/// GreenThread struct (232 bytes = 0xE8):
 ///   0x00  saved SP/RSP             (per-arch name; same offset)
 ///   0x08  saved FP/RBP             (per-arch name; same offset)
 ///   0x10  status                   0=ready, 1=running, 2=completed, 3=waiting
@@ -38,8 +38,9 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0xC8  fault_redirect_rsp       SP to resume at
 ///   0xD0  fault_redirect_fp        FP to resume at
 ///   0xD8  park_state               async-I/O wakeup ownership (see the Netpoll* constants)
+///   0xE0  await_handoff            AWAIT completion ownership, on the PROMISE (see AwaitHandoff*)
 ///
-/// ProcContext struct (360 bytes = 0x168):
+/// ProcContext struct (368 bytes = 0x170):
 ///   0x00  local_queue_head         per-P run queue (no lock needed)
 ///   0x08  local_queue_tail
 ///   0x10  local_queue_len
@@ -62,7 +63,7 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0x80  main_thread              inline GT struct (replaces global __gt_main_thread); NEVER linked
 ///                                  into __gt_all_head, so any enumeration of live green threads must
 ///                                  walk the __sched_procs array as well as that list
-///   0x160 pending_sync_req         deferred sync-I/O request handed off by a parking worker GT
+///   0x168 pending_sync_req         deferred sync-I/O request handed off by a parking worker GT
 /// </summary>
 public static class GtLayout {
 
@@ -102,7 +103,11 @@ public static class GtLayout {
   // Ownership of an in-flight async-I/O wakeup — see the Netpoll* constants below. Appended after
   // the fault block so no existing offset shifts.
   public const int GtOffParkState = 0xD8;
-  public const int GtStructSize = 0xE0;      // 224 bytes
+  // Ownership of an AWAITED green thread's completion hand-off — see the AwaitHandoff* constants.
+  // It lives on the PROMISE, not on the awaiter, which is the one structural difference from
+  // GtOffParkState and the reason it cannot share that word; see AwaitHandoffNil.
+  public const int GtOffAwaitHandoff = 0xE0;
+  public const int GtStructSize = 0xE8;      // 232 bytes
 
   // ---- Backtrace walk limits (shared by every frame-chain walk: both backends' mrt_panic and
   //      mrt_fault_backtrace, and the debug agent's __dbg_walk_frames) ----
@@ -219,6 +224,58 @@ public static class GtLayout {
   public const int NetpollParked = 3;
   public const int NetpollClaiming = 4;
 
+  // ---- AWAIT completion hand-off (GtOffAwaitHandoff), the SAME QUESTION one object over ----
+  //
+  // WHO ENQUEUES THE AWAITER. An awaiter publishes `promise.waiter = self` and then keeps running
+  // its own scheduling loop; a completing child that reads that field cannot tell an awaiter that
+  // is ABOUT TO PARK from one that will notice the completion itself and carry on. Deciding it from
+  // `ioYielded` is the netpoll guard (c) failure verbatim — "still running and WILL self-detect"
+  // and "still running and is about to park" are the same instant. This word settles it with ONE
+  // atomic operation per side, so exactly one of them acts.
+  //
+  //   Nil        nothing has happened yet.
+  //   Parked     the awaiter has COMMITTED to a park and is executing straight-line code into
+  //              __gt_context_switch. A completer that loses its CAS against this owns the enqueue,
+  //              and may safely wait for ioYielded==1 because nothing on that path can turn the
+  //              awaiter around — the same termination argument __netpoll_commit's Deviation 2 makes.
+  //   Completed  the child has completed. An awaiter whose commit CAS loses against this reads
+  //              `promise.status` — published BEFORE this word — sees `completed`, and resumes
+  //              itself. The completer enqueues nothing.
+  //
+  // ⚠⚠ IT IS A SECOND WORD RATHER THAN A SECOND USE OF GtOffParkState, AND THE REASON IS NOT
+  // TIDINESS. Two independent reasons, either one fatal:
+  //
+  //   THE AWAITER'S OWN park_state IS TAKEN. The awaiter is a green thread like any other and may
+  //   arm an I/O park at any time; a hand-off living there would collide with the very mechanism it
+  //   was modelled on.
+  //
+  //   AND IT MUST BE PER-PROMISE ANYWAY, BECAUSE THE AWAITER SELF-DETECTS ON `promise.status` AND
+  //   THE NETPOLL RELEASE RULE THEREFORE CANNOT HOLD HERE. A waiter that may learn of its
+  //   completion through a channel other than the word can LEAVE, and then arm the word again for
+  //   something else — so a completer's late decision would land on that NEXT registration.
+  //   RuntimeEmitter.Netpoll.cs's class comment records what that costs: a wakeup delivered to the
+  //   wrong park, and a read on an fd nobody signalled. A promise, by contrast, completes exactly
+  //   once and is awaited exactly once (`await` is linear, E3100), so a decision taken on ITS word
+  //   has nowhere else to land. That is what makes self-detecting on `status` sound here and
+  //   unsound there — the same property, asked of a different object.
+  //
+  // ⚠ THE AWAITER SELF-DETECTS ON `status`, SO THE COMPLETER MUST PUBLISH `status` (and `result` /
+  // `threw` before it) BEFORE IT TOUCHES THIS WORD. That is claim-then-publish INVERTED, and
+  // correctly so: netpoll's completer publishes results the waiter reads THROUGH the word, whereas
+  // ours publishes them through `status`, which the awaiter was already reading. The ordering rule
+  // is the same one in both places — a waiter must never be released toward a result that is not
+  // there yet.
+  //
+  // ⭐ AND THE MAIN OS THREAD IS OUTSIDE THE HANDSHAKE ENTIRELY, on exactly the predicate
+  // __netpoll_commit and __gt_process_pending_waiter already use: a GT with `stackBase == 0` has no
+  // schedulable stack, is never enqueued by anything, and so must never publish `Parked` — a
+  // completer that saw it would wait for an ioYielded that a running thread never sets. It is
+  // handed to P->pendingWaiter all the same, because that is the slot __gt_process_pending_waiter
+  // turns into a SetEvent on its wake handle.
+  public const int AwaitHandoffNil = 0;
+  public const int AwaitHandoffParked = 1;
+  public const int AwaitHandoffCompleted = 2;
+
   // ---- Stack growth ----
   //
   // A green-thread stack has TWO parts, and both are counted TWICE — once in the ALLOCATION and once
@@ -327,8 +384,8 @@ public static class GtLayout {
   // only AFTER the GT is fully parked (ioYielded=1), so no completer can ever observe
   // the request while its waiter still runs — the double-schedule is structurally
   // impossible. Appended after the inline mainThread GT so no existing offset shifts.
-  public const int POffPendingSyncReq = POffMainThread + GtStructSize;   // 0x160
-  public const int PStructSize = POffPendingSyncReq + 8;                  // 0x168 = 360 bytes
+  public const int POffPendingSyncReq = POffMainThread + GtStructSize;   // 0x168
+  public const int PStructSize = POffPendingSyncReq + 8;                  // 0x170 = 368 bytes
 
   // ---- macOS wake lock block (Go semasleep/semawakeup primitive) ----
   // On macOS the worker park/wake (and the I/O sync worker's wake) use a Go-style

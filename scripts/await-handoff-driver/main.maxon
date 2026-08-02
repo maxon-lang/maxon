@@ -1,0 +1,59 @@
+typealias Count = int(0 to 1000000)
+
+// Hammer the AWAIT completion hand-off — the decision, taken when a green thread finishes, of
+// whether the thread awaiting it needs an enqueue or will resume itself.
+//
+// ⭐⭐ THE ONE THING THAT MAKES THIS DRIVER WORK IS THE DECOY SPAWN, AND IT IS NOT OBVIOUS.
+// The defect needs the awaited child to COMPLETE ON A DIFFERENT M from its awaiter, because the
+// awaiter has to still be executing when the completer decides. The first shape anyone writes —
+// one `async` child per `await`, in a loop — reproduces NOTHING, measured, even with the parker's
+// window stretched to 31 ms. `__gt_enqueue` puts the first child a green thread spawns into its
+// P's `runnext` slot, and `__gt_steal_work` steals only from a victim's LOCAL QUEUE and only when
+// that queue holds at least two: a lone child is therefore UNSTEALABLE, so it waits in the slot
+// until its own awaiter's scheduling loop dequeues and runs it — on the awaiter's M, with the
+// awaiter parked. The window never opens. (Measured with `--async-trace`: every spawn and every
+// completion on `M=0`, the workers waking and parking with nothing to take.)
+//
+// ⇒ `decoy` FILLS `runnext` so the three children that follow it land in the local queue, where a
+// worker on another M can and does take them. Remove it and this driver is green against the
+// unfixed compiler — a harness measuring its own blind spot.
+//
+// ⚠ THE CHILD MUST YIELD. `async` is only legal on a function that can suspend, and a child that
+// returned without ever suspending would also complete before its parent reached the `await` at
+// all, taking the already-completed fast path and registering no waiter. `File.exists` on a name
+// that does not exist is the cheapest suspension in the language.
+function leaf(n Count) returns Count
+	_ = File.exists(FilePath from "no-such-file-await-handoff-driver.txt")
+	return n
+end 'leaf'
+
+// The awaiter must be a WORKER GREEN THREAD, not the main OS thread: a main-thread awaiter has no
+// schedulable stack, nothing ever enqueues it, and it is outside the handshake by construction. So
+// the awaits under test live one level down, inside a thread `main` itself awaits.
+function outer(rounds Count) returns Count
+	var total = 0 as Count
+	var i = 0 as Count
+	while i < rounds 'round'
+		let decoy = async leaf(0)
+		let a = async leaf(1)
+		let b = async leaf(1)
+		let c = async leaf(1)
+		total = total + (await a) + (await b) + (await c) + (await decoy)
+		i = i + 1
+	end 'round'
+	return total
+end 'outer'
+
+let roundsPerRun = 8 as Count
+let scoringChildrenPerRound = 3 as Count
+
+function main() returns ExitCode
+	let q = async outer(roundsPerRun)
+	let got = await q
+	let expected = roundsPerRun * scoringChildrenPerRound
+	print("total={got} expected={expected}\n")
+	if got == expected 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
