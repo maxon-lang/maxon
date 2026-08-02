@@ -121,11 +121,20 @@ export type IrFunction
 	// A zero-copy slice of the source, straight off the declaring token. It stays bytes all
 	// the way to the COFF symbol table, which writes it as bytes anyway.
 	export var name as ByteArray
-	// Source-file namespace this function was parsed in (e.g. "stdlib",
-	// "Compiler.Parser"). Consumed by LowerMaxonToStd to resolve bare callees —
-	// `name` can be bare for entrypoints like `main`, so it is not reliable.
+	// The DIRECTORY this function was declared in, `.`-joined (`stdlib`, `stdlib.helpers.url`, `""` at the
+	// root) — see `deriveNamespace`. Stamped by the parser from `Parser.namespace`, which carried `""` at
+	// every call site until N1a derived one per file.
+	//
+	// ⚠ **STILL WRITE-ONLY, AND ITS HEADER USED TO SAY OTHERWISE**: it claimed `LowerMaxonToStd` consumed
+	// it to resolve bare callees, and that file contains the word `namespace` ZERO times. The claim was
+	// v1's, carried across with the field. The authoritative copy of this fact is
+	// `ProgramSignatures.fileNamespaces`, which `isVisibleFrom` reads and which is keyed by the path a
+	// caller already holds; this field is the per-function mirror QUALIFIED REFERENCES (`dir.fn()`) are
+	// expected to want. If that rung does not want it, DELETE it rather than leaving one fact in two homes.
 	export var namespace as String
-	// Visibility tier from the declaring source. Stamped by the parser.
+	// ⭐ **THE VISIBILITY TIER THE DECLARATION WROTE — READ, since N1a, by the call door**
+	// (`SemanticCheck.calleeVisibleFrom` ⇒ E3008 / E3088). It was written at three sites and consulted at
+	// none for the whole of P1: any file could call any other file's non-exported function.
 	export var visibility as Visibility
 	// Absolute / virtual path of the declaring file — the visibility anchor for
 	// cross-file callers. Empty for synthesized functions.
