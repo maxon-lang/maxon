@@ -133,6 +133,35 @@ exactly once. **You** do not re-derive its diagnosis or re-run what it ran; the 
 **Auditing its diff is the REVIEWER's job (§6), not yours** — that is the division, and it is why you
 can stay cheap without the diff going unread.
 
+### ⛔ NEVER ASK A SUBAGENT TO HAND-APPROXIMATE A GATE THE LOOP ALREADY RUNS
+
+**Brief it for DIAGNOSIS, never for COVERAGE.** What only you have is the symptom, the position, the
+call sites you already read, the hypothesis you already refuted — hand over all of it. What you must
+NOT hand over is a list of things to go and prove, because **the loop's own gates already prove them,
+better, one step later**:
+
+| you might be tempted to ask for | the gate that already does it |
+|---|---|
+| "enumerate every construct that could false-reject and prove each parses" | the **full unfiltered suite** (§8) — thousands of cases across closures, interfaces, generics, operators |
+| "confirm no other spec regressed" | the same run, which is the whole point of it being unfiltered |
+| "check you did not shelve anything" | the **§2 count check** |
+| "confirm you stayed in bounds / the diff is minimal" | **you**, reading `git diff` and `git status` — seconds of work |
+
+⚠ **A specific instruction in your brief OUTRANKS the agent's own standing rules.** Its definition
+already says *"YOUR SCOPE IS THE FAILING CASES. STOP WHEN THEY ARE GREEN"* — and a brief that ends
+*"…and prove these twelve constructs still parse"* silently repeals it, because a concrete task always
+beats a general rule. **You cannot brief thoroughness into an agent without briefing the stop rule out
+of it.**
+
+*(Precedent, 2026-08-01, tick 4: the brief for a one-token parser check asked the implementer to
+enumerate ~12 header shapes and prove each. It ran ~20 compiled probes and a five-tree corpus scan
+after its filter was already 6/6 — all of it re-deriving what the 3272-case suite established in 45
+seconds immediately afterwards. The same brief-written-too-thoroughly then happened AGAIN to the
+reviewer in the same tick. Both were the loop's error, not the agents'.)*
+
+**A few targeted probes at the exact position changed are fine and worth asking for.** A sweep is not.
+The rule of thumb: if the full suite would catch it, do not ask anyone to catch it by hand.
+
 ## ⛔⛔ 3b. THERE IS NO SUCH THING AS AN ACCEPTED DIVERGENCE. That is what the spec files are FOR.
 
 **Never file a "known divergence from `/specs`". Never write one into `PLAN.md`. Never record one in the
@@ -221,20 +250,36 @@ read, no other targets, no cross-target gate, no re-auditing the implementer's d
 reading the minted goldens.** `/rung`, `/code-review` and the multi-agent cloud review are the deep
 passes and they are somebody else's; this is one focused look by someone who did not write the code.
 
-**Brief it for THIS loop's failure modes, not a rung's.** Duplication is its standing top priority, and
-on top of that ask it explicitly to check that **the implementer stayed in bounds** — because that is
-what actually goes wrong here, twice in the first two ticks:
+### It is a CODE-QUALITY pass. Correctness is the SUITE's, and bounds are YOURS.
 
-- **Did it edit any spec file other than `specs-shv2/<the ported one>`?** `/specs/**` is the canonical
-  definition of the language and is never written to; other `specs-shv2/*.md` are read-only. *(Tick 2
-  rewrote `character-ownership.md`'s message and prose.)*
-- **Did it change behaviour no red case required?** *(Tick 2 rebuilt interpolated panics, which no case
-  tested.)* The acceptance list is the boundary.
-- **Is the diff MINIMAL for the cases it turned green** — no widened rules, no "while I'm here"
-  cleanups, no deleted-because-now-unused?
-- **Did it weaken any expectation to make a case pass**, in its own spec or elsewhere?
-- Plus the ordinary questions: is it correct, does it duplicate something that already exists, does a
-  new refusal false-reject.
+**Ask it for the "Code Quality" checklist in `.claude/CLAUDE.md`, and nothing else** — duplication
+first (including pre-existing duplication the diff touches), then silent unhandled cases, bare
+`default` arms, comments that restate WHAT instead of WHY, thin wrappers, sentinel returns, magic
+literals, over-wide typed ranges, redundant `match` arms.
+
+**Do NOT ask it to establish correctness.** The full suite ran one step earlier and is a far better
+false-reject detector than any probe it can write by hand — §3's table applies here unchanged. Asking
+anyway is how a 67-line review becomes a compile-and-probe expedition.
+
+**Do NOT delegate the bounds questions either — answer them yourself, from the diff, in seconds:**
+
+```bash
+diff specs/<name>.md specs-shv2/<name>.md   # byte-identical ⇒ no retractions to justify
+git status --short                          # anything outside this spec + the compiler?
+git diff --stat                             # as small as the fix warranted?
+```
+
+Those three answer *did it edit another spec file* (`/specs/**` is never written to and other
+`specs-shv2/*.md` are read-only — tick 2 rewrote `character-ownership.md`'s prose), *did it change
+behaviour no red case required* (tick 2 rebuilt interpolated panics, which no case tested), *is the
+diff minimal*, and *did it weaken an expectation to pass*. *(Tick 4 read all four off `git diff` in
+under a minute — after having asked a reviewer for them.)* They are cheap to see and expensive to
+explain, which is precisely the wrong shape to delegate.
+
+⚠ **Prefer a reviewer whose TOOLS cannot exceed the scope.** One holding the build and spec-test tools
+has been handed the means to re-do the suite's job, and a brief asking it not to is weaker than simply
+not giving it them — Read + Grep + Glob + Bash is the whole kit a quality pass needs. A 60-line diff
+does not need the heaviest model in the repo either.
 
 **Findings are FIXED BEFORE THE COMMIT**, then the suite re-run. Do not commit and follow up. ⚠ But its
 report is a lead, not a verdict — this project's history is full of agent findings that measurement
