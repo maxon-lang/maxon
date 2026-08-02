@@ -15027,6 +15027,31 @@ export type Parser
 			return
 		end 'theReservedSpacesOwnFile'
 
+		// ⭐⭐ **THE RULE'S OWN TEST COMES FIRST, AND THAT ORDER IS A COST CURVE RATHER THAN A STYLE (A1s
+		// optimizer).** This function is called at EIGHT binding sites, so it runs once per declared name in
+		// every file — and the exemption below is a LINEAR SCAN of the rename table
+		// (`isMintedStdlibShadowName`, whose own header argues why a scan is the right shape for a table that
+		// is empty in the whole existing corpus). Asked BEFORE this test, that scan ran at every stdlib
+		// declaration site whether or not the name could possibly be a mint, which is a `sites x renames`
+		// PRODUCT — and it ALLOCATES, because iterating the table does.
+		//
+		// MEASURED on `stdlib/`'s eight listed modules, one binary swapped into one path, a program whose
+		// contested-name count is swept 0 → 15: `phase:parse` allocations grew **+393 per contested name**
+		// (57,180 at one name → 62,683 at fifteen) and are now **FLAT at +12** (56,388 → 56,539) — −6,144
+		// allocations at fifteen names, −6,876 on the two-round maximal contest, and 7/7 interleaved pairs
+		// faster on CPU (−5.2% on `phase:parse`, min-of-7). The scale ladder cannot see any of this: its
+		// corpus contests NOTHING, so the product is `sites x 0` there and reads a flat zero.
+		//
+		// ⚠ **AND THE EARLY-OUT IS CORRECT FOR ANY MINT PREFIX, NOT MERELY FOR TODAY'S EQUAL ONES.** It does
+		// not assume `SignatureIndex.ReservedTypeNamePrefix` still equals `ReservedNamePrefix` — the three
+		// module-local copies of the `__` rule are deliberate (see this constant's header) and are free to
+		// drift. A name that fails THIS test is one this door was never going to refuse, so there is nothing
+		// for an exemption to rescue: whatever the mint is spelled as, an unreserved name leaves here
+		// accepted either way. The exemption can therefore only ever matter on the reserved side of it.
+		if not bytesStartWith(nameTok.value, prefix: ReservedNamePrefix) 'notReserved'
+			return
+		end 'notReserved'
+
 		// ⭐ **A NAME THE *COMPILER* MINTED FOR THIS COMPILE IS NOT A NAME THE AUTHOR WROTE (A1s wave 2).**
 		// A contested stdlib declaration is moved into the reserved space, and the move is applied to the
 		// file's identifier TOKENS — so what reaches this check is `__Clock` at `stdlib/Clock.maxon`'s own
@@ -15051,9 +15076,7 @@ export type Parser
 			return
 		end 'theCompilersOwnMint'
 
-		if bytesStartWith(nameTok.value, prefix: ReservedNamePrefix) 'reserved'
-			throw ParseError.reservedIdentifier(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
-		end 'reserved'
+		throw ParseError.reservedIdentifier(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 	end 'requireUnreservedName'
 
 	// ⭐ **A DECLARATION MAY NOT GIVE A COMPILER-OWNED TYPE NAME A *NOMINAL* IDENTITY (P1.7a slice 2b-ii).**
