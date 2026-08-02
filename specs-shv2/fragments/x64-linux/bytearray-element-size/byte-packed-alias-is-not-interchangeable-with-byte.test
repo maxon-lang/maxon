@@ -1,0 +1,18 @@
+// Test: byte-packed-alias-is-not-interchangeable-with-byte
+typealias Byte = int(0 to u8.max)
+typealias Small = int(0 to 200)
+typealias Bytes = Array with Byte
+typealias Smalls = Array with Small
+
+function takesBytes(b Bytes) returns ExitCode
+	return b.count()
+end 'takesBytes'
+
+function main() returns ExitCode
+	var s = Smalls.create()
+	s.push(7)
+	return takesBytes(s)
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:14:9: argument type mismatch for 'b': expected 'Array_Byte', got 'Array_Small'
