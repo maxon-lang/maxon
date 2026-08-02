@@ -645,6 +645,31 @@ export union ParseError implements Error
 	//   • a token past the end of a function SIGNATURE — `function foo() int`, the `returns` keyword
 	//     missing (see `requireSignatureLineEnd`).
 	strayToken(got String, line LineNumber, column ColumnNumber)
+	// A token at FILE SCOPE where a declaration has to begin — a bare `42`, an `==`, a lone identifier.
+	// Renders as **E2001** `Expected function declaration, got '<got>'`, positioned at the token, and
+	// `got` is `tokenDisplayText`'s so the message quotes the text the SOURCE wrote rather than the
+	// token's category (`identifier`, `integer literal`) which no reader can search the file for.
+	//
+	// It shares E2001 with `strayToken` and is deliberately NOT the same variant: the code means "the
+	// parser met a token that cannot appear at this point in the grammar", which is true of both, but
+	// only at file scope is there ONE construct that was legal, so only here can the message name it.
+	// Both reference compilers word the two shapes apart for the same reason (2-Parser.cs:6112,
+	// v1 `Parser.maxon:2845`).
+	//
+	// ⚠ It is not `unsupported` either, which is the code this site used to throw: E2015 means "a
+	// construct this compiler does not implement YET", and a stray `42` at file scope is malformed
+	// syntax that no future feature makes legal — a permanent refusal filed as a pending one.
+	expectedDeclaration(got String, line LineNumber, column ColumnNumber)
+	// An initializer that has to fold to a compile-time constant and does not. Renders as **E2004**
+	// `Expected constant expression, got '<got>'`, positioned at the offending token, and `got` is the
+	// token's own source text. Both reference compilers spend E2004 on exactly this sentence
+	// (2-Parser.cs:6062, v1 `Parser.maxon:3277`).
+	//
+	// It is NOT `expectedExpression`, which shares the code: that one means the token stream had no
+	// well-formed expression at all, this one means it had a perfectly good expression that is not
+	// CONSTANT. The distinction is the advice — move it into a function — and a single sentence could
+	// not carry both.
+	expectedConstantExpression(got String, line LineNumber, column ColumnNumber)
 	// --- The scalar-match arms (P1.1b wave A) ---
 	//
 	// An arm body that both `return`s and falls through (`1 then return 10 and fallthrough`).
@@ -9289,10 +9314,10 @@ export type Parser
 			// it to REPORT.
 			let decl = try self.readTopLevelBinding(visibility)
 			try self.raiseBindingFailure(decl)
-		end 'isBinding' else 'unsupported'
+		end 'isBinding' else 'notADeclaration'
 			let tok = self.current()
-			throw ParseError.unsupported("top-level {tok.kind.rawValue}", line: tok.line, column: tok.column)
-		end 'unsupported'
+			throw ParseError.expectedDeclaration(tokenDisplayText(tok), line: tok.line, column: tok.column)
+		end 'notADeclaration'
 	end 'dispatchTopLevel'
 
 	// File the type name a top-level declaration just minted, for the whole-program duplicate check
@@ -34371,7 +34396,14 @@ export type Parser
 			// A TOP-LEVEL binding folds to a compile-time constant, and a Character is a heap-shaped record
 			// the constant evaluator has no representation for (`SignatureIndex.globalStdType` says the same
 			// from the other end). A module-scope `let c = 'é'` is therefore refused rather than folded.
-			multiByte(bytes) then throw ConstEvalError.defective(ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' at module scope — a top-level binding's initializer folds to a compile-time constant and a `Character` is a byte record ({bytes.count()} bytes here); declare it inside a function", line: tok.line, column: tok.column))
+			//
+			// ⚠ The refusal is PERMANENT, so it is E2004 and not E2015: nothing about this is a feature
+			// pending implementation — a module-scope initializer IS a folded constant by definition, and
+			// a Character record can never be one. E2015 said "not yet", which was the one thing the
+			// verdict does not mean. Both reference compilers refuse a single-quoted top-level initializer
+			// under E2004 with this exact sentence (v1 `Parser.maxon:3277`), so this also brings shv2 into
+			// agreement with them on the verdict, not just the wording.
+			multiByte then throw ConstEvalError.defective(ParseError.expectedConstantExpression(String.from(tok.value), line: tok.line, column: tok.column))
 			badEscape(text) then throw ConstEvalError.defective(ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column))
 			badUnicodeEscape(text, offset) then throw ConstEvalError.defective(invalidUnicodeEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, tok: tok))
 		end 'decoded'

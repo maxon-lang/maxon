@@ -44,7 +44,7 @@ public enum ErrorCode {
   /// </summary>
   ParserExpectedType = 2003,
   /// <summary>
-  /// An expression is not well formed. Broader than its C#/v1 name (ParserExpectedExpression) suggests: all three compilers report four distinct message families under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand.
+  /// An expression is not well formed, or is well formed and not usable where only a constant is. Broader than its C#/v1 name (ParserExpectedExpression) suggests: all three compilers report five distinct message families under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand; and a top-level binding's initializer does not fold to a compile-time constant.
   /// </summary>
   ParserExpectedExpression = 2004,
   /// <summary>
