@@ -2367,7 +2367,12 @@ end 'reportTargetUnsupportedCallee'
 // x64-linux takes the syscall route (which every one of these ops rejects), and arm64/wasm have no lowering
 // at all. Written as a positive capability question rather than as "not wasm", so a target added later is
 // unsupported until someone says otherwise.
-function targetHasWin32Substrate(target Target) returns bool
+//
+// ⭐ EXPORTED because the SPEC HARNESS asks it, paired with `calleeNeedsWin32Substrate` above, to decide
+// whether a case the runner would spawn with an argv can run on this target at all
+// (`SpecTestRunner.argvUnavailableOnTarget`). It asks the two predicates rather than carrying a
+// "x64-windows only" of its own: a harness copy of this rule is a copy that can outlive it.
+export function targetHasWin32Substrate(target Target) returns bool
 	return target.cpu == CpuArch.x64 and target.os == Os.windows
 end 'targetHasWin32Substrate'
 

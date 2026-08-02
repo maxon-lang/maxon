@@ -71,8 +71,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: trunc.rt-negative -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`), and SpecTestRunner spawns the program with an empty argv because `Testing/SpecParser` has no `<!-- Args: … -->` handler; the compile-time cases above cover `trunc` itself. `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: trunc.rt-negative -->
 <!-- Args: -3.7 -->
 ```maxon
 function main() returns ExitCode
@@ -85,8 +84,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: trunc.rt-positive -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`), and SpecTestRunner spawns the program with an empty argv because `Testing/SpecParser` has no `<!-- Args: … -->` handler; the compile-time cases above cover `trunc` itself. `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: trunc.rt-positive -->
 <!-- Args: 7.9 -->
 ```maxon
 function main() returns ExitCode
@@ -99,8 +97,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: trunc.rt-zero -->
-<!-- `CommandLine.args()` + the spec harness's missing `Args:` directive — `CommandLine.args()` is undeclared here (`E2015: a member access 'get' on a 'unknown' value`), and SpecTestRunner spawns the program with an empty argv because `Testing/SpecParser` has no `<!-- Args: … -->` handler; the compile-time cases above cover `trunc` itself. `float.fromString` is NO LONGER a blocker — A1s-prim landed the `<primitive>.<method>` rewrite and `parsable-interface.md` exercises it. -->
+<!-- test: trunc.rt-zero -->
 <!-- Args: 0.5 -->
 ```maxon
 function main() returns ExitCode

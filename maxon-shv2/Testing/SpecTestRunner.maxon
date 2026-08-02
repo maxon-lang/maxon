@@ -557,7 +557,7 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	let effectiveTargetKey = targetToString(effectiveTarget)
 
 	for test in specFile.tests 'eachTest'
-		if selectedByFilter(specName, testName: test.name, filter: filter) and selectedByTarget(test, effectiveTargetKey: effectiveTargetKey) 'isSelected'
+		if selectedByFilter(specName, testName: test.name, filter: filter) and selectedByTarget(test, effectiveTarget: effectiveTarget, effectiveTargetKey: effectiveTargetKey) 'isSelected'
 			selected.push(test)
 		end 'isSelected'
 	end 'eachTest'
@@ -565,15 +565,31 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	return selected
 end 'selectedTests'
 
-// Does this test run under `effectiveTargetKey`? UNIFORM rule for EVERY target (native and cross
-// alike): a test runs on ALL targets unless it declares a `<!-- targets: … -->` RESTRICTION, in which
-// case it runs ONLY on the listed targets. A marker is a restriction for a TECHNICAL reason — an
-// ISA-specific register-allocation test (its register pool), a `RequiredData` test (the native
-// `.data` section a wasm module has no equivalent of), a fault-handler-dependent test — NEVER a
-// per-target opt-in. So an unmarked test runs on x64-windows, arm64-macos AND wasm32-wasi; there is no
-// marking to "enable" a target. A gated-out test is SKIPPED (not run, not failed), exactly as a draft
-// or filtered-out test is, which is why this lives beside `selectedByFilter` under the one door.
-function selectedByTarget(test SpecTest, effectiveTargetKey String) returns bool
+// Does this test run under `effectiveTarget`? TWO independent gates, and they are kept apart because
+// they are answered by different parties: the `<!-- targets: … -->` marker is what the SPEC AUTHOR
+// declared, and the argv substrate is what the COMPILER decides. Either one alone excludes the test.
+// A gated-out test is SKIPPED (not run, not failed), exactly as a draft or filtered-out test is,
+// which is why this lives beside `selectedByFilter` under the one door.
+function selectedByTarget(test SpecTest, effectiveTarget Target, effectiveTargetKey String) returns bool
+	if not markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) 'restrictedByMarker'
+		return false
+	end 'restrictedByMarker'
+
+	if test.programArgs.isEmpty() 'readsNoArgv'
+		return true
+	end 'readsNoArgv'
+
+	return not argvUnavailableOnTarget(effectiveTarget)
+end 'selectedByTarget'
+
+// The MARKER's own gate. UNIFORM rule for EVERY target (native and cross alike): a test runs on ALL
+// targets unless it declares a `<!-- targets: … -->` RESTRICTION, in which case it runs ONLY on the
+// listed targets. A marker is a restriction for a TECHNICAL reason — an ISA-specific
+// register-allocation test (its register pool), a `RequiredData` test (the native `.data` section a
+// wasm module has no equivalent of), a fault-handler-dependent test — NEVER a per-target opt-in. So an
+// unmarked test runs on x64-windows, arm64-macos AND wasm32-wasi; there is no marking to "enable" a
+// target.
+function markerAllowsTarget(test SpecTest, effectiveTargetKey String) returns bool
 	if test.targets.isEmpty() 'unrestricted'
 		return true
 	end 'unrestricted'
@@ -588,7 +604,41 @@ function selectedByTarget(test SpecTest, effectiveTargetKey String) returns bool
 	end 'eachListed'
 
 	return false
-end 'selectedByTarget'
+end 'markerAllowsTarget'
+
+// ⭐⭐ **THE ARGV GATE — DERIVED FROM THE `<!-- Args: … -->` MARKER THE CASE ALREADY CARRIES, AND ASKED
+// OF THE COMPILER RATHER THAN RESTATED.**
+//
+// A case carrying `Args:` is spawned with a non-default argv (`buildRunCommand`), and its expectation
+// depends on the program READING that argv. The only route from a Maxon program to argv is the
+// `__cl_*` runtime — `CommandLine.args()` and the two `__Builtins` intrinsics under it — which is
+// x64-windows only by the R4 ruling (`Runtime/CommandLineRuntime.maxon`'s header: argv has a
+// DIFFERENT SHAPE under SysV, so serving another target is a rung, not a lowering). So the case cannot
+// pass anywhere else: `SemanticCheck.requireTargetSupportsCallee` refuses it with E3104 before it links.
+//
+// ⭐ **THAT IS WHY THESE 32 CASES CARRY NO `<!-- targets: x64-windows -->` MARKER, AND MUST NOT.** The
+// host-only fact belongs to `Args:` ITSELF — argv is the harness's DELIVERY MECHANISM, not the
+// subject of `abs`/`max`/`trunc`, which are target-neutral — so writing it out per case would state a
+// limitation of the mechanism as though it were a property of the maths. It would also be 32 copies of
+// one fact, in eight files with no natural home for the reason, each able to go stale on its own. The
+// `File.*` cases in `file-io.md` DO carry a marker and that is the opposite situation: there the
+// filesystem IS the subject.
+//
+// ⚠ **MEASURED, not assumed: the derivation holds over the WHOLE corpus.** All 51 `Args:` cases in
+// `/specs` reach a `__cl_*` entry — including `builtins-type.command-line-arg-out-of-bounds`, which
+// spells it `__Builtins.commandLineArg` and would defeat a source-text search for `CommandLine`. The
+// residual risk is a future case that writes `Args:` and never reads argv, and gating that one costs
+// nothing: its marker already does nothing.
+//
+// ⭐ **IT UN-GATES ITSELF.** The expression is the compiler's own refusal, assembled from the two
+// exported predicates: "would `__cl_count` be refused on this target?" The day a POSIX/WASI argv
+// substrate lands, `calleeNeedsWin32Substrate` stops naming the `__cl_` band and this reads false on
+// every target, with no edit here and none in the eight spec files. A hand-written marker is the case
+// this repo warns about — a stale gate is indistinguishable from a real one — and there would have
+// been 32 of them.
+function argvUnavailableOnTarget(target Target) returns bool
+	return calleeNeedsWin32Substrate(CommandLineCountName) and not targetHasWin32Substrate(target)
+end 'argvUnavailableOnTarget'
 
 // ⭐ Does a binary built for `target` need an EXTERNAL RUNNER, rather than being spawned directly?
 //
