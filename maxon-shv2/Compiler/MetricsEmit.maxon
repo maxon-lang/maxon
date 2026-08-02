@@ -52,6 +52,13 @@
 // row shape and a change to the constant are the same edit.
 export let MetricsColumnSep = "\t"
 
+// What ends a row — and it is exactly as much of the contract as the column separator beside it, for
+// the same reason: a reader splits the file on this before it splits a row on that, so a writer and a
+// reader that disagreed about it would not fail to compile, they would agree about columns inside
+// rows that were never the same rows. `metricsRow` terminates with it and both readers split on it, so
+// there is one spelling of "where a row stops" in the tree rather than one per end of the pipe.
+export let MetricsRowSep = "\n"
+
 // A row a reader must SKIP. Both header lines carry it, and nothing else in the file does.
 export let MetricsCommentPrefix = "#"
 
@@ -159,5 +166,5 @@ end 'metricsText'
 // only the memory triple and returns its deltas with the time fields zeroed. Reading the
 // time out of `delta` here would print zero for every phase.
 function metricsRow(kind String, name String, cost PhaseCost, delta PhaseDelta) returns String
-	return "{kind}{MetricsColumnSep}{name}{MetricsColumnSep}{cost.nanos}{MetricsColumnSep}{delta.allocs}{MetricsColumnSep}{delta.frees}{MetricsColumnSep}{delta.bytes}{MetricsColumnSep}{cost.cpuTicks}\n"
+	return "{kind}{MetricsColumnSep}{name}{MetricsColumnSep}{cost.nanos}{MetricsColumnSep}{delta.allocs}{MetricsColumnSep}{delta.frees}{MetricsColumnSep}{delta.bytes}{MetricsColumnSep}{cost.cpuTicks}{MetricsRowSep}"
 end 'metricsRow'

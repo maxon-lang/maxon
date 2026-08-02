@@ -819,7 +819,10 @@ function readCompileCpu(path FilePath) returns CompileCpu
 		return CompileCpu.unreported
 	end 'noMetrics'
 
-	for line in text.split(LineSeparator) 'eachRow'
+	// `MetricsRowSep`, not this file's own `LineSeparator`: the spec-file text and the metrics TSV are
+	// two different formats that happen to agree about newlines today, and only one of them is
+	// MetricsEmit's to change.
+	for line in text.split(MetricsRowSep) 'eachRow'
 		let trimmed = line.trim()
 		if trimmed.isEmpty() or trimmed.startsWith(MetricsCommentPrefix) 'notARow'
 			continue
