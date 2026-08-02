@@ -17924,7 +17924,7 @@ export type Parser
 	// else is a clean E2015 naming the gap rather than a silent acceptance: a String, a byte/codepoint
 	// view, a `Set` and a `Map` each need a cursor protocol shv2 has not built.
 	function requireIterableArray(source ValueId, forTok Token) throws ParseError
-		if self.tagOf(source) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(source)) 'array'
+		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'array'
 			return
 		end 'array'
 		// A STRING iterates its GRAPHEME CLUSTERS (P1.8 slice B) — see `parseForStatement`'s String arm.
@@ -26985,7 +26985,7 @@ export type Parser
 		// An ARRAY RECEIVER (`arr.push(x)`, `[10,20].get(0)`) goes to the array runtime rather than through
 		// the struct path (which would reject a generic instance as not a plain struct). The split is on the
 		// `genericInstance` tag being an `Array` instance — the parser's type oracle.
-		if recv.tag == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(recv.nameId) 'arrayMethod'
+		if self.signatures.isArrayInstanceAt(recv.tag, nameId: recv.nameId) 'arrayMethod'
 			// `viaManagedField: false` — a receiver that arrived here was named or produced, not reached
 			// through `.managed`; whether it nonetheless denotes a BUFFER is a question about the VALUE
 			// (`valueIsBufferSurface`), which the dispatcher asks for itself.
@@ -30841,7 +30841,7 @@ export type Parser
 	// program the oracle compiles and runs (it prints `44 42`). It is the same two-part test
 	// `parseFieldChainCall` makes of a receiver's VALUE, asked here of a type.
 	function typeIsArrayInstance(t MaxonType) returns bool
-		return maxonTypeTag(t) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(t))
+		return self.signatures.isArrayInstanceAt(maxonTypeTag(t), nameId: typeNameIdOf(t))
 	end 'typeIsArrayInstance'
 
 	// ⭐ **THE DENSE-GROWTH GATE for `resize` (E3106).** `__arr_resize` lengthens by publishing a longer
@@ -31208,7 +31208,7 @@ export type Parser
 	// trivial — byte-packed or a machine word (`managedMemoryInstanceForElementSize`) — so the managed and
 	// opaque arms of the `Array` rule cannot be reached from here.
 	function requireManagedMemoryAppendArg(other ValueId, giid GenericInstanceId, methodTok Token) throws ParseError
-		if self.tagOf(other) != ValueTypeTag.genericInstance or not self.signatures.isArrayInstance(self.valueNameId(other)) or not self.sameTrivialArrayShape(giid, otherGiid: self.valueNameId(other)) 'notABuffer'
+		if not self.signatures.isArrayInstanceAt(self.tagOf(other), nameId: self.valueNameId(other)) or not self.sameTrivialArrayShape(giid, otherGiid: self.valueNameId(other)) 'notABuffer'
 			throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
 		end 'notABuffer'
 	end 'requireManagedMemoryAppendArg'
@@ -31221,7 +31221,7 @@ export type Parser
 	end 'sameTrivialArrayShape'
 
 	function requireArrayAppendArg(other ValueId, giid GenericInstanceId, otherTok Token) throws ParseError
-		if self.tagOf(other) != ValueTypeTag.genericInstance or not self.signatures.isArrayInstance(self.valueNameId(other)) 'notArray'
+		if not self.signatures.isArrayInstanceAt(self.tagOf(other), nameId: self.valueNameId(other)) 'notArray'
 			throw ParseError.unsupported("`append` takes another `Array` of the same element type — got '{typeTagName(self.tagOf(other))}'", line: otherTok.line, column: otherTok.column)
 		end 'notArray'
 		let otherGiid = self.valueNameId(other)

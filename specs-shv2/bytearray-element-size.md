@@ -302,12 +302,32 @@ not the only byte-packed element a program can have: `typealias Small = int(0 to
 the stride rule alone (`Parser.valueIsByteArray`), accepts one and prints its two bytes straight back.
 
 That is right for a builtin `__ManagedMemory` parameter, which means *"a raw byte buffer"*. It is NOT right
-for an ordinary DECLARED parameter, where the element's name is part of the type: a `Smalls` passed where a
-`Bytes` is declared could be handed a 250 through the wider parameter and read back through the narrower
-alias. So the byte-element boundary door R4.7 opened for `String.addressableBytes()` admits exactly ONE
-arriving element — the compiler-owned, `__`-reserved `__StringByte`, which no source can declare and which
-carries no range of its own — and NOT "anything that strides one"
-(`ProgramSignatures.byteBufferBoundaryAdmits`). The case below is what holds that shut.
+for an ordinary DECLARED parameter, where the element's name is part of the type. MEASURED on a compiler
+built with the symmetric "both sides byte-packed" rule: `takesBytes(b Bytes)` accepted a `Smalls`, pushed
+**250** into it through the wider parameter, and `s.get(0)` — an accessor typed `int(0 to 200)` — read that
+250 straight back, exit 0, no diagnostic.
+
+So the byte-element boundary door R4.7 opened for `String.addressableBytes()` is an IDENTITY door on BOTH
+sides, over the two element names shv2 actually gives a byte (`SignatureIndex.isByteElementName`:
+`Byte`, `__StringByte`), and NOT "anything that strides one" — the arriving side admits exactly the
+compiler-owned, `__`-reserved `__StringByte`, which no source can declare and which carries no range of its
+own, and the declared side admits exactly a one-byte-strided `Array` over one of those same two names
+(`ProgramSignatures.byteBufferBoundaryAdmits`). The case below is what holds the arriving side shut.
+
+⚠ **THE DECLARED SIDE NEEDED THE SAME ROSTER, AND IT WAS THE SAME HOLE POINTING THE OTHER WAY** (R4.7
+review). Shipped with a bare stride test there, the door admitted a String's byte view into a parameter
+declared `Array with Small`, and `b.get(0)` read back **223** from an element declared `int(0 to 200)` —
+exit 223, no diagnostic. Both sides now ask the roster; the declared side ALSO keeps the stride test, which
+is live and independently reachable (`typealias Byte = int(0 to 1000)` puts the NAME on the roster while the
+record strides two, and the door refuses there).
+
+⚠ **NONE OF THE VIEW-SIDE BEHAVIOUR CAN BE A CASE IN THIS FILE, AND THAT IS STRUCTURAL, NOT AN OMISSION.**
+Producing an `Array with __StringByte` at all requires `String.addressableBytes()`, which
+`Parser.requireStdlibOnlyStringMethod` refuses to any file not physically under `stdlib/`, and the spec
+runner stages every fragment outside `stdlib/`. So the three measurements above were made by building
+purpose-written files under `stdlib/`, and the suite can only reach the door once `stdlib/File.maxon` is
+whitelisted — which is the acceptance half of R4.7, held behind namespace-scoped generic-instance identity.
+The case below is the part that IS reachable: it pins that two byte-packed aliases are still two types.
 
 <!-- test: byte-packed-alias-is-not-interchangeable-with-byte -->
 ### Two byte-packed aliases are still two types

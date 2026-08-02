@@ -1786,12 +1786,29 @@ let ManagedArrayElementBytes = 8 as ByteOffset
 //     declaration, so it misses the same probe, and it deliberately keeps the machine word
 //     (`specs-shv2/array-enum-element-size.md` pins that stride; narrowing it is its own rung).
 function undeclaredNamedElementStorageBytes(name ByteArray) returns ByteOffset
-	if name.equals(ByteElementTypeName) or name.equals(StringByteViewElementName) 'bytePacked'
+	if isByteElementName(name) 'bytePacked'
 		return ByteStringElementSize as ByteOffset
 	end 'bytePacked'
 
 	return primitiveTypeByteSize(ValueTypeTag.named)
 end 'undeclaredNamedElementStorageBytes'
+
+// ⭐⭐ **THE TWO NAMES shv2 GIVES A BYTE — the ROSTER, in one place (R4.7 review).** `Byte` is the
+// user-visible element a `b"…"` literal, a `ByteArray` and `__ManagedMemory` all share; `__StringByte` is the
+// compiler-owned element a String's byte VIEW wears (`StringByteViewElementName`). Everything else a program
+// can name is some OTHER type that happens to be narrow.
+//
+// ⚠ **IT IS A ROSTER AND NOT A WIDTH, AND CONFLATING THE TWO WAS A MEASURED WRONG ANSWER.**
+// `rangedAliasStorageBytes` hands EVERY non-negative range that fits `u8.max` a one-byte slot, so "strides one
+// byte" is a far larger set than "is a byte": `typealias Small = int(0 to 200)` is in the first and not the
+// second. Both readers need the roster and neither may substitute the width for it — the width
+// FALLBACK above, because these are the two names no file declares and whose stride is therefore the
+// compiler's to state, and `byteBufferBoundaryAdmits`, because a door that read the width instead admitted a
+// String's byte 223 into an element declared `int(0 to 200)` (MEASURED, R4.7 review, exit 223 with no
+// diagnostic).
+function isByteElementName(name ByteArray) returns bool
+	return name.equals(ByteElementTypeName) or name.equals(StringByteViewElementName)
+end 'isByteElementName'
 
 // ⭐⭐ **THE ELEMENT OF A STRING'S BYTE VIEW (`String.addressableBytes()`, BATCH2 slice 1) — AND WHY IT IS
 // NOT `Byte`.** `__str_bytes_view` publishes a record over a String's OWN buffer, and a String's bytes are
@@ -6635,6 +6652,20 @@ export type ProgramSignatures
 		return self.isArrayBaseName(self.genericInstanceBaseName(id))
 	end 'isArrayInstance'
 
+	// ⭐⭐ **DOES THIS (tag, id) PAIR DENOTE AN `Array with T`? — the ONE home of the two-part test, and the
+	// TAG HALF IS THE LOAD-BEARING ONE (R4.7 review).** `isArrayInstance` above takes a `GenericInstanceId`,
+	// and a `TypeNameId` is the SAME numeric space: handed a plain `named` id it walks the instance registry
+	// at that number and can answer TRUE about an instance the caller never had — a wrong answer, never a
+	// compile error, because both spellings type-check (`Parser.typeIsArrayInstance` carries the measurement).
+	//
+	// ⚠ **SO THE TAG TEST MAY NOT BE A CONVENTION THAT EVERY CALLER REMEMBERS.** It was spelled out at SEVEN
+	// sites across `Parser` and this file — five value/receiver doors, a declared-TYPE door and two byte
+	// doors — each free to drift from the others, and a site that dropped the tag half would look exactly
+	// like the six that kept it. One home, so "remembering" is not a thing a caller can fail to do.
+	export function isArrayInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.isArrayInstance(nameId)
+	end 'isArrayInstanceAt'
+
 	// The element TYPE of `Array with T` — its sole type argument, in this index's own interner.
 	//
 	// ⭐⭐ **A TUPLE ARGUMENT IS CANONICALIZED ON THE WAY OUT (P1.10), and a generic instance's stored ARG is
@@ -6759,30 +6790,34 @@ export type ProgramSignatures
 	// user may declare `Byte`, and a view's stride may not follow — and they meet at a BOUNDARY, which is what
 	// this predicate lets a door recognize.
 	//
-	// ⚠ **THE TAG TEST IS NOT OPTIONAL.** `TypeNameId` and `GenericInstanceId` share a numeric space, so
-	// `isArrayInstance` asked of a plain name can answer TRUE by coincidence — `Parser.typeIsArrayInstance`
-	// carries the measurement for that.
+	// The (tag, id) pair is asked through `isArrayInstanceAt`, which is where the tag half's reason lives.
 	export function isBytePackedArrayInstance(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.isArrayInstance(nameId) and self.arrayElementSize(nameId) == ByteStringElementSize
+		return self.isArrayInstanceAt(tag, nameId: nameId) and self.arrayElementSize(nameId) == ByteStringElementSize
 	end 'isBytePackedArrayInstance'
 
-	// ⭐ **IS THIS INSTANCE THE COMPILER-OWNED BYTE VIEW `String.addressableBytes()` YIELDS?** — read off the
-	// ELEMENT NAME rather than by comparing against `internStringByteViewInstance()`, because that function
-	// WRITES: asking it would mint the view instance into `genericInstances` in every program whose only reason
-	// to ask is a diagnostic it is about to raise, and an instance the sweep never interned is one no
-	// mangled-name or witness walk expects to find.
-	function isStringByteViewInstance(tag ValueTypeTag, nameId TypeNameId) returns bool
-		if tag != ValueTypeTag.genericInstance or not self.isArrayInstance(nameId) 'notAnArrayInstance'
-			return false
+	// ⭐ **WHAT AN `Array` INSTANCE CALLS ITS ELEMENT, when the element is a `named` LEAF** — `EmptySourceText`
+	// for every other (tag, id) pair, which is the answer BOTH SIDES of the door below want: a pair that is not
+	// an Array instance at all, and an Array over a String / struct / nested instance, each name no element
+	// this file could mistake for a byte, and neither `isByteElementName` nor the `__StringByte` comparison
+	// answers true for an empty name. One walk, asked once per side, so the two sides cannot come to disagree
+	// about where an element's name is read from.
+	//
+	// ⚠ It reads the element NAME rather than comparing the instance against `internStringByteViewInstance()`,
+	// because that function WRITES: asking it would mint the view instance into `genericInstances` in every
+	// program whose only reason to ask is a diagnostic it is about to raise, and an instance the sweep never
+	// interned is one no mangled-name or witness walk expects to find.
+	function arrayNamedElementName(tag ValueTypeTag, nameId TypeNameId) returns ByteArray
+		if not self.isArrayInstanceAt(tag, nameId: nameId) 'notAnArrayInstance'
+			return EmptySourceText
 		end 'notAnArrayInstance'
 
 		let element = self.arrayElementType(nameId)
 		if maxonTypeTag(element) != ValueTypeTag.named 'notANamedElement'
-			return false
+			return EmptySourceText
 		end 'notANamedElement'
 
-		return self.nameOfId(typeNameIdOf(element)).equals(StringByteViewElementName)
-	end 'isStringByteViewInstance'
+		return self.nameOfId(typeNameIdOf(element))
+	end 'arrayNamedElementName'
 
 	// ⭐⭐ **THE BYTE-ELEMENT BOUNDARY DOOR (R4.7)** — the one place a value of one byte element type is
 	// admitted where the other is declared, and the whole of what the user ruling *"the two byte element types
@@ -6790,13 +6825,32 @@ export type ProgramSignatures
 	// `String.addressableBytes()` yields `Array with __StringByte` and `FileWriter.open(path __ManagedMemory)`
 	// declares `Array with Byte`, and both are the same 1-byte record.
 	//
-	// **THE DECLARED SIDE'S STRIDE TEST IS THE ENTIRE SAFETY ARGUMENT.** A program that declares
-	// `typealias Byte = int(0 to 1000)` makes every `Array with Byte` — including the one `__ManagedMemory`
-	// names — genuinely stride TWO, and adopting a stride-1 view into it would hand every accessor a record it
-	// reads at the wrong width: a silent wrong answer, not a refusal. Requiring stride 1 on the declared side
-	// makes this door refuse exactly there.
+	// **BOTH SIDES ARE IDENTITY TESTS OVER THE ROSTER `isByteElementName` HOLDS, AND THE DECLARED SIDE ALSO
+	// KEEPS THE STRIDE TEST. NEITHER CLAUSE IS REDUNDANT AND BOTH ARE MEASURED:**
 	//
-	// ⚠⚠ **THE ARRIVING SIDE IS AN IDENTITY TEST AND NOT A SECOND STRIDE TEST, AND THE DIFFERENCE IS A
+	//   • **The declared side's NAME test.** A program that declares `typealias Small = int(0 to 200)` gets a
+	//     byte-PACKED `Array with Small` for free (`rangedAliasStorageBytes`), and a declared side that asked
+	//     only the stride admitted a String's byte view into it — `b.get(0)`, an accessor typed
+	//     `int(0 to 200)`, then read back **223** with no diagnostic (MEASURED, R4.7 review). A one-byte slot
+	//     is not a byte. What may be declared here is one of shv2's TWO byte element names and nothing else.
+	//   • **The declared side's STRIDE test.** A program that declares `typealias Byte = int(0 to 1000)` makes
+	//     every `Array with Byte` — including the one `__ManagedMemory` names — genuinely stride TWO, so the
+	//     NAME is on the roster and the record is not a byte buffer. Adopting a stride-1 view into it would
+	//     hand every accessor a record it reads at the wrong width: a silent wrong answer, not a refusal. The
+	//     stride test refuses exactly there, and it is LIVE — measured raising
+	//     `expected 'Array_Byte', got 'Array___StringByte'` on that program.
+	//
+	// ⚠ **WHAT IS DELIBERATELY *NOT* CLOSED HERE, because this door is not its only entrance.** A program
+	// declaring `typealias Byte = int(0 to 100)` still admits a String's high byte through this door — and it
+	// admits one through `b"\xdf"` just as readily, with no door in the picture (MEASURED: a `b"\xdf"` passed
+	// to a parameter declared `Array with Byte` reads back **223** from an element typed `int(0 to 100)`, on a
+	// compiler built WITHOUT this door at all). The `b"…"` gate refuses a byte-string literal whose element is
+	// too WIDE (`requireByteStringBlobStridesLikeItsType`, E2015) and has no twin for one too NARROW to hold
+	// the blob's own bytes; that missing twin is the entrance, and curing one of its two doorways here would
+	// be the one-fact-two-answers shape this rung exists to end. It is filed, with the reproduction, as its
+	// own rung.
+	//
+	// ⚠⚠ **THE ARRIVING SIDE IS AN IDENTITY TEST AND NOT A STRIDE TEST, AND THE DIFFERENCE IS A
 	// TYPE HOLE MEASURED BEFORE IT SHIPPED.** "Both sides byte-packed" reads as the symmetric rule and is
 	// WRONG: `rangedAliasStorageBytes` gives EVERY range that fits `u8.max` a 1-byte slot, so
 	// `typealias Small = int(0 to 200)` makes `Array with Small` byte-packed too — and a symmetric door would
@@ -6814,9 +6868,18 @@ export type ProgramSignatures
 	// and `addressableBytes()` is stdlib-only, so the pair can only arise where a stdlib module RETURNS a
 	// String's view through a declared `__ManagedMemory` or OVERLOADS on one — neither of which any stdlib
 	// module does. Both twins are strictly NARROWER than this door, so neither can accept what this refuses:
-	// the worst either can do is refuse a program nobody can write, never admit one it should not.
+	// the worst either can do is refuse a program nobody can write, never admit one it should not. MEASURED
+	// (R4.7 review) by writing the two programs nobody has written yet, under `stdlib/`: the return twin
+	// answers `Cannot return 'Array___StringByte' from function declared to return 'Array_Byte'` and the
+	// reassignment twin `cannot assign 'Array___StringByte' to variable 'b' of type 'Array_Byte'` — both
+	// refusals, neither an admission.
 	export function byteBufferBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
-		return self.isBytePackedArrayInstance(declaredTag, nameId: declaredNameId) and self.isStringByteViewInstance(gotTag, nameId: gotNameId)
+		let declaredElement = self.arrayNamedElementName(declaredTag, nameId: declaredNameId)
+		if not isByteElementName(declaredElement) or not self.isBytePackedArrayInstance(declaredTag, nameId: declaredNameId) 'declaredIsNotAByteBuffer'
+			return false
+		end 'declaredIsNotAByteBuffer'
+
+		return self.arrayNamedElementName(gotTag, nameId: gotNameId).equals(StringByteViewElementName)
 	end 'byteBufferBoundaryAdmits'
 
 	// ⭐ **THE ONE PLACE A RANGED ALIAS'S DECLARED BOUNDS BECOME A STORAGE WIDTH.** A trivial element is
