@@ -3107,10 +3107,19 @@ let IsEmptyMethod = b"isEmpty"
 // free to gain punctuation the day a message reads better with it.
 //
 // ⭐ **A KEYWORD TOKEN CARRIES ITS OWN SOURCE BYTES**: `Lexer.scanIdentifier` emits `value: identBytes`
-// whatever kind it then classified them as, so `tok.value.equals(FromMethod)` is the SAME test the kind
-// comparison was making — expressed as the fact it actually is, the static's name. That is what lets
-// `stringStaticMemberNames` be derived from the very constant its arm matches on, exactly as the other five
-// rosters are, with nothing left to keep in step.
+// whatever kind it then classified them as (ONE emit for both, `Lexer.maxon:1141-1142`), so a `from`
+// keyword's `value` IS `b"from"`. That is what lets `stringStaticMemberNames` be derived from the very
+// constant its arm matches on, exactly as the other five rosters are, with nothing left to keep in step.
+//
+// ⛔ **BUT `value.equals(FromMethod)` IS NOT BY ITSELF THE KIND TEST, AND THE DIFFERENCE WAS A SILENT
+// LANGUAGE CHANGE (review, A3g).** A LITERAL carries text in `.value` too, and it carries the CONTENT with
+// the quotes stripped (`Lexer.emitStringLit`), so `"from"`, `'from'` and `b"from"` all answer that test
+// while `TokenKind.from` answers only for the keyword. Both `from`-doors therefore take their method name
+// through `consumeNameToken` FIRST — `tokenCanBeAName` admits an identifier or a keyword and excludes
+// exactly the literal kinds — and only then match on the name. Within that set the equivalence is exact and
+// structural: the only scanner that emits a non-literal token carrying text is `scanIdentifier`, whose kind
+// is `classifyIdentifier(identBytes)` of the very bytes it stores, so `value == b"from"` and
+// `kind == TokenKind.from` cannot come apart. (`scanDirective`'s tokens all carry a leading `#`.)
 //
 // ⚠ **IT IS A CONSOLIDATION, NOT A MINT, AND THAT WAS FOUND BY LOOKING (A3g).** The spelling already existed
 // as `CharacterSetRuntime.CharSetFromMethod`, sitting among the ELEVEN preset-accessor names although it is
@@ -27602,19 +27611,21 @@ export type Parser
 		try self.consume(TokenKind.dot)
 
 		// ⚠ **`from` IS A KEYWORD, NOT AN IDENTIFIER** — it opens a `Set from […]` construction — so the
-		// twelfth static cannot be read by the `consume(TokenKind.identifier)` the eleven accessors are. It is
-		// matched on its NAME regardless (`FromMethod`, A3g): a keyword token carries its own spelling as its
-		// `value`, so this file's two `from`-statics test ONE constant rather than one token kind each, and the
-		// name in the refusal below is that same constant instead of a third copy of the word.
-		let methodTok = self.current()
+		// twelfth static cannot be read by the `consume(TokenKind.identifier)` the eleven accessors were. All
+		// twelve are taken through `consumeNameToken` instead (D8's rule: after a `.`, a keyword IS a name),
+		// and then matched on their NAME (`FromMethod`, A3g) — so this file's two `from`-statics test ONE
+		// constant rather than one token kind each, and the name in the refusal below is that same constant
+		// instead of a third copy of the word.
+		//
+		// ⛔ **`consumeNameToken` AND NOT A BARE VALUE TEST, for `parseStringStaticCall`'s measured reason
+		// (review, A3g)**: a LITERAL carries its content in `.value` too, so `CharacterSet."from"(…)` matched
+		// this arm and reached `parseCharacterSetFrom` where the base commit had refused it at E2010. The
+		// predicate behind this consume (`tokenCanBeAName`) excludes exactly the literal kinds.
+		let methodTok = try self.consumeNameToken(NamePosition.declaration)
 		if methodTok.value.equals(FromMethod) 'fromStatic'
-			self.advance()
 			return try self.parseCharacterSetFrom(func, range: SourceRange.between(typeTok, last: methodTok))
 		end 'fromStatic'
 
-		// The eleven accessors are ordinary identifiers, so a token that is neither `from` nor one is still
-		// refused as the E2010 the corpus pins rather than reaching the preset walk with a `(` in hand.
-		_ = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(typeTok, last: methodTok)
 
 		for preset in characterSetPresets() 'eachPreset'
@@ -27873,17 +27884,28 @@ export type Parser
 	// method-name position to accept a keyword (`consumeNameToken`); what survives is the DISPATCH — a
 	// `String` static is recognized HERE so it never reaches the mangled `String.from` callee no file declares.
 	//
-	// ⭐⭐ **AND THE KEYWORD IS NO LONGER WHAT THE ARM TESTS (A3g).** Both arms now match a NAME
-	// (`FromMethod` / `StringInitMethod`) against the token's own bytes, which is the identical test — a
-	// keyword token carries its spelling as its `value` — expressed as the fact that is actually being asked.
-	// That is what makes the roster below derivable: it is built from the very two constants these arms match
-	// on, so the gate that admits a static, the sentence that refuses one, and the arms cannot disagree. Its
-	// predecessor was prose (*"the reference exports two, `from(bytes)` and `init(managed)`"*) with only the
-	// `init` half rendered, because `from` had no constant to render and the only spelling in reach was
-	// `TokenKind.from`'s `rawValue` — a DISPLAY string whose job is *"Expected 'identifier' but got 'from'"*.
+	// ⭐⭐ **AND THE KEYWORD IS NO LONGER WHAT THE ARM TESTS (A3g).** Both arms match a NAME
+	// (`FromMethod` / `StringInitMethod`) against the token's own bytes, expressed as the fact that is
+	// actually being asked. That is what makes the roster below derivable: it is built from the very two
+	// constants these arms match on, so the gate that admits a static, the sentence that refuses one, and the
+	// arms cannot disagree. Its predecessor was prose (*"the reference exports two, `from(bytes)` and
+	// `init(managed)`"*) with only the `init` half rendered, because `from` had no constant to render and the
+	// only spelling in reach was `TokenKind.from`'s `rawValue` — a DISPLAY string whose job is *"Expected
+	// 'identifier' but got 'from'"*.
+	//
+	// ⛔⛔ **A VALUE MATCH IS ONLY THE KIND MATCH ONCE THE TOKEN IS KNOWN TO BE NAME-SHAPED, AND THAT HALF
+	// WAS MISSING (review, A3g).** "A keyword carries its spelling in `.value`" is true and is what licenses
+	// matching by name — but a LITERAL carries its text there too, and it carries the CONTENT without the
+	// quotes: a `"from"` string literal, a `'from'` char literal and a `b"from"` byte-string literal all
+	// answer `value.equals(FromMethod)`. Matched bare, `String."from"(b"hi")` compiled to the identical
+	// program as `String.from(b"hi")` — measured, byte-for-byte the same 2,287 bytes of code, where the base
+	// commit refused it. ⇒ the name is taken through `consumeNameToken`, which is `tokenCanBeAName`'s home
+	// and excludes exactly the literal kinds, so what reaches the roster gate and the arms is a token that
+	// could be a name at all. That also makes this door read like its five siblings, every one of which
+	// consumes its method name BEFORE asking `requireSurfaceMember` — this was the only one that did not.
 	function parseStringStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
-		let methodTok = self.current()
+		let methodTok = try self.consumeNameToken(NamePosition.declaration)
 		let range = SourceRange.between(typeTok, last: methodTok)
 
 		// The roster gate — `dispatchStringMethod`'s twin one surface over, asked ahead of both arms for that
@@ -27891,7 +27913,6 @@ export type Parser
 		let roster = try self.requireSurfaceMember(MemberSurface.stringStatic, methodTok: methodTok)
 
 		if methodTok.value.equals(FromMethod) 'fromStatic'
-			self.advance()
 			try self.consume(TokenKind.leftParen)
 			let bytesTok = self.current()
 			let bytes = try self.parseExpression(func, block: self.currentBlock)
@@ -27915,7 +27936,6 @@ export type Parser
 		// `__ManagedMemory` and `from`'s a `ByteArray`, so a wrong argument names the type the SIGNATURE
 		// declares rather than one wording for two signatures.
 		if methodTok.value.equals(StringInitMethod) 'initStatic'
-			self.advance()
 			try self.consume(TokenKind.leftParen)
 			let managed = try self.parseManagedMemoryArg(func, paramName: StringInitManagedParamName, methodTok: methodTok)
 			try self.consume(TokenKind.rightParen)
