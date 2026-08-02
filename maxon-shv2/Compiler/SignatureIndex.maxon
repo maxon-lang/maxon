@@ -1491,7 +1491,14 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 	if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
 		panic("managedFieldDropCallee: a field of tag '{typeTagName(tag)}' is not a managed heap reference — every caller classifies the field managed first")
 	end 'notManagedRef'
-	let name = try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldDropCallee: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in")
+	// Resolved through `denotedAggregateName` HERE — the same tier its structural dual
+	// `managedFieldCloneStrategy` resolves at, and for the reason that door states. ⚠ It used to be resolved
+	// one frame DOWN, at `managedNameDropCallee`'s head, which made the two duals structurally different
+	// about one fact: the name-keyed clone helper panicked on an alias spelling its drop twin accepted, and
+	// the `isGenericAlias` test below read the RAW name on this side and the RESOLVED one on that. They agree
+	// today only because a tuple alias is never also a generic alias — an agreement nothing enforces. A value
+	// cloned by one strategy is dropped by the callee the other returns, so the two must resolve at ONE tier.
+	let name = signatures.denotedAggregateName(try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldDropCallee: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in"))
 	// A GENERIC-INSTANCE-alias field (an `Array`, a `Box`) arrives as a `named` (the sweep recorded the
 	// layout before the alias interned) — route it to the instance box drop callee (`__arr_decref` for an
 	// `Array`, `__mm_decref`/`__destruct_<T>` for a struct box), exactly as a re-tagged `genericInstance`
@@ -1499,10 +1506,10 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 	if signatures.isGenericAlias(name) 'genericAlias'
 		return signatures.genericInstanceBoxDropCallee(signatures.genericAliasInstance(name))
 	end 'genericAlias'
-	return managedNameDropCallee(signatures, name: name)
+	return managedNameDropCallee(signatures, declaredName: name)
 end 'managedFieldDropCallee'
 
-// The drop callee for a managed field NAMED `name` — a declared struct or boxed union. Split from
+// The drop callee for a managed field NAMED `declaredName` — a declared struct or boxed union. Split from
 // `managedFieldDropCallee` so a `structRef` (which is always a struct) and a `named` (struct or union) reach
 // the same struct/union lookup once the name is in hand.
 //
@@ -1510,19 +1517,16 @@ end 'managedFieldDropCallee'
 // a layout (`structHasManagedField`, `unionHasManagedPayload`) fetch the index's OWN and read it over the
 // index's OWN interner. It USED to thread the caller's `typeNames` through to the union arm, which is how a
 // `signatures` layout came to be resolved against `project.typeNames` — see `unionHasManagedPayload`.
-function managedNameDropCallee(signatures ProgramSignatures, name ByteArray) returns ByteArray
-	// ⭐⭐ **A TUPLE TYPEALIAS NAMES THE TUPLE'S OWN STRUCT AND NOTHING ELSE (A3e), so it is resolved
-	// ONCE at the head rather than at one of the two lookups below.** A tuple alias mints no identity of its
-	// own, so its drop IS the canonical tuple's; and it arrives here under the ALIAS spelling whenever the
-	// declaration SWEEP recorded the position before the alias's own file was walked. Every question below
-	// is keyed by the name, so resolving here is what keeps the struct arm and the union arm from having to
-	// know about aliases at all.
-	//
-	// ⚠ **MEASURED, A3e** — `typeIsManaged` must call a tuple-alias field MANAGED (a tuple is a struct box,
-	// and without that the field is dropped by nobody and the program exits 101 on the leak gate). Widening it
-	// and leaving this alone turned that leak into the `undeclared` PANIC at the bottom of this function, on a
-	// program the other walk order compiled and ran — a strictly worse answer than either.
-	let declaredName = signatures.denotedAggregateName(name)
+//
+// ⚠ **THE NAME IS ALREADY DENOTED** — `managedFieldDropCallee` put it through `denotedAggregateName`, exactly
+// as `managedFieldCloneStrategy` does for `managedNameCloneStrategy`, so a tuple typealias (which names the
+// tuple's own struct and nothing else) is a canonical tuple name by the time it arrives. The two duals
+// resolve at ONE tier so a name cannot be a struct on the drop side and an undeclared panic on the clone
+// side. **MEASURED, A3e**: `typeIsManaged` must call a tuple-alias field MANAGED (a tuple is a struct box,
+// and without that the field is dropped by nobody and the program exits 101 on the leak gate) — widening it
+// and leaving the drop router unresolved turned that leak into the `undeclared` PANIC at the bottom of this
+// function, on a program the other walk order compiled and ran.
+function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteArray) returns ByteArray
 	// ⭐ **A `CharacterSet` IS A COMPILER-OWNED AGGREGATE AND TAKES A COMPILER-OWNED DROP** (P1.8 Slice D),
 	// exactly as an `Array` takes `__arr_decref` and a `Set` takes `__set_decref`. Asked BEFORE the
 	// declared-struct lookup: its layout IS registered (it needs a nominal identity) and it DOES own a
@@ -1628,19 +1632,22 @@ export function managedFieldCloneStrategy(signatures ProgramSignatures, typeName
 	if signatures.isGenericAlias(name) 'genericAlias'
 		return instanceCloneStrategy(signatures, id: signatures.genericAliasInstance(name))
 	end 'genericAlias'
-	return managedNameCloneStrategy(signatures, name: name)
+	return managedNameCloneStrategy(signatures, declaredName: name)
 end 'managedFieldCloneStrategy'
 
-// The clone strategy for a managed field NAMED `name` — a declared struct or boxed union clones through its
-// per-type `__clone_<T>`. A scalar-only box still takes `__clone_<T>` (not the drop side's `__mm_decref`): the
-// clone MUST allocate a fresh independent box, which only a synthesized cloner does.
-function managedNameCloneStrategy(signatures ProgramSignatures, name ByteArray) returns ManagedCloneStrategy
-	if signatures.containsStruct(name) 'struct'
-		return ManagedCloneStrategy.direct(clonerSymbol(name))
+// The clone strategy for a managed field NAMED `declaredName` — a declared struct or boxed union clones
+// through its per-type `__clone_<T>`. A scalar-only box still takes `__clone_<T>` (not the drop side's
+// `__mm_decref`): the clone MUST allocate a fresh independent box, which only a synthesized cloner does.
+//
+// ⚠ **THE NAME IS ALREADY DENOTED**, exactly as `managedNameDropCallee`'s is — the two duals resolve a tuple
+// typealias at ONE tier, in the `-Field` function above each of them.
+function managedNameCloneStrategy(signatures ProgramSignatures, declaredName ByteArray) returns ManagedCloneStrategy
+	if signatures.containsStruct(declaredName) 'struct'
+		return ManagedCloneStrategy.direct(clonerSymbol(declaredName))
 	end 'struct'
-	match signatures.enumOf(name) 'union'
-		declared then return ManagedCloneStrategy.direct(clonerSymbol(name))
-		undeclared then panic("managedNameCloneStrategy: managed field '{String.from(name)}' is neither a declared struct nor a declared enum/union — the caller classified it managed")
+	match signatures.enumOf(declaredName) 'union'
+		declared then return ManagedCloneStrategy.direct(clonerSymbol(declaredName))
+		undeclared then panic("managedNameCloneStrategy: managed field '{String.from(declaredName)}' is neither a declared struct nor a declared enum/union — the caller classified it managed")
 	end 'union'
 end 'managedNameCloneStrategy'
 
@@ -6261,7 +6268,21 @@ export type ProgramSignatures
 	function typeLogicalByteSize(t MaxonType) returns ByteOffset
 		let tag = maxonTypeTag(t)
 		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedOrStruct'
-			match self.structOf(self.nameOfId(typeNameIdOf(t))) 'lookup'
+			// ⭐⭐ **RESOLVED THROUGH `denotedAggregateName` (A3e review) — a TYPE ARGUMENT is a RAW stored
+			// type, so this door reads a spelling no re-tag has passed over.** An instance's argument is
+			// interned once, by whichever pass first met `Sizer with Pair`, and the declaration SWEEP meets it
+			// with `parseTypeReference`'s tuple-alias arm answering `isTupleAlias("Pair")` — which is false
+			// until the alias's OWN file is walked. So `args[0]` is `named("Pair")` when the two files arrive
+			// in one order and `structRef(<the tuple>)` when they arrive in the other, and nothing downstream
+			// re-tags it: `genericInstanceSoleArgLogicalSize` hands it straight here.
+			//
+			// ⚠ **MEASURED, A3e review** — the same two-file program staged in both walk orders: `sizeof(T)`
+			// inside `Sizer with Pair` (`typealias Pair = (Integer, Integer)`) returned **16** with the alias
+			// file walked first and **8** with it walked last. Both compiled, both ran, and the wrong one is
+			// baked into `.rdata` as `elementLogicalSize@56` — a silent wrong ANSWER, not a diagnostic. The
+			// unresolved name simply missed `structOf` and fell to `primitiveTypeByteSize(named)`, the
+			// machine-word fallback that exists for an enum/union.
+			match self.structOf(self.denotedAggregateName(self.nameOfId(typeNameIdOf(t)))) 'lookup'
 				declared(layout) then return layout.sizeBytes()
 				undeclared then return primitiveTypeByteSize(tag)
 			end 'lookup'
@@ -6852,7 +6873,23 @@ export type ProgramSignatures
 		if tag != ValueTypeTag.named and not tagIsStructRef(tag) 'notNamedStruct'
 			return false
 		end 'notNamedStruct'
-		let name = self.nameOfId(typeNameIdOf(t))
+		// ⭐⭐ **RESOLVED THROUGH `denotedAggregateName`, AND IT MUST BE THE SAME RESOLUTION `typeIsManaged`
+		// MAKES (A3e review).** The two are read TOGETHER: `typeArgIsCoOwnedTrivial` is literally
+		// `typeIsManaged(t) and not typeArgIsOwned(t)`, so a name the two answer about DIFFERENTLY does not
+		// merely give a coarse answer — it manufactures a kind the type does not have. A tuple typealias
+		// arrives here as a bare `named` for the reason `denotedAggregateName` states (a RAW instance
+		// argument, interned by whichever pass first met `Box with Pair`, and the declaration SWEEP meets it
+		// before the alias's own file is walked whenever the filesystem hands that file over second).
+		//
+		// ⚠ **MEASURED, A3e review** — `typealias TPair = (Integer, String)` (a tuple that OWNS heap) with
+		// `typealias PairBox = Box with TPair` beside a `Box with String` whose shared body reassigns its
+		// opaque field. Unresolved, `typeIsManaged` said managed (A3e widened it) while this said not-owned,
+		// so `genericTypeFieldHasCoOwnedTrivialInstantiation` fired and `emitOpaqueFieldReassign` REFUSED with
+		// E2015 — "a trivial-struct instantiation co-owns the field", said of a tuple that owns a String — on
+		// the exact program the other walk order compiled and ran to exit 0. Before A3e the same asymmetry ran
+		// the other way (both false, so the reassign stored over the old value with no drop: a silent leak).
+		// The consume boundary and the drop boundary have to read one name.
+		let name = self.denotedAggregateName(self.nameOfId(typeNameIdOf(t)))
 		if self.structTypes.contains(name) 'struct'
 			return self.structHasManagedField(name)
 		end 'struct'

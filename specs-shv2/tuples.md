@@ -1091,3 +1091,101 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:6:2: Cannot return '__Tuple2.__Tuple2.int.int.int' from function declared to return '__Tuple2.__Tuple2.__Tuple2.__Tuple2.__Tuple2.__Tuple2.P.Int.int.int.int.int.int'
 ```
+
+### A tuple typealias as a GENERIC TYPE ARGUMENT — the RAW instance-argument doors (A3e review)
+
+⭐⭐ **A GENERIC INSTANCE'S TYPE ARGUMENT IS A *STORED* TYPE, NOT A DECLARED SLOT — so no read door re-tags
+it, and the alias-spelling repair has to happen at each door that reads it.** `Box with Pair` interns ONE
+argument, minted by whichever pass first met the spelling; the declaration SWEEP meets it with
+`parseTypeReference`'s tuple-alias arm answering `isTupleAlias("Pair")`, which is false until the alias's own
+declaration has been walked. **Within one file that is simply "the alias is declared BELOW its use", which is
+deterministic** — the cross-file lottery above is the same fact with the filesystem holding the ticket.
+
+⚠ **MEASURED, A3e review — two doors read that argument raw and both gave a WRONG ANSWER, not a diagnostic:**
+
+| door | alias declared ABOVE its use | alias declared BELOW its use (before the fix) |
+|---|---|---|
+| `ProgramSignatures.typeLogicalByteSize` (`sizeof(T)`, `elementLogicalSize@56`) | `16` | **`8`** — `structOf("Pair")` missed, so it fell to `primitiveTypeByteSize(named)`, the machine-word fallback that exists for an enum/union. Compiled, ran, baked into `.rdata`. |
+| `ProgramSignatures.typeArgIsOwned` (the CONSUME boundary) | ran | **E2015**, "a trivial-struct instantiation co-owns the field" — said of a tuple that owns a `String`, because `typeIsManaged` called it managed and this called it not-owned, and `typeArgIsCoOwnedTrivial` is exactly `typeIsManaged and not typeArgIsOwned`. |
+
+Both now resolve through `ProgramSignatures.denotedAggregateName`, the one door that says what a `named`
+denotes. The consume boundary and the drop boundary must read ONE name: they are read together, so a name
+they answer differently about does not give a coarse answer, it manufactures a kind the type does not have.
+
+<!-- test: sizeof-of-a-tuple-alias-type-argument-declared-below-its-use -->
+
+⭐ `sizeof(T)` inside a shared generic body, instantiated at a tuple typealias whose declaration sits BELOW
+the instantiation — so the SWEEP recorded the instance's argument as a bare `named`. A `(Integer, Integer)`
+tuple is a two-slot box: **16**. Answering the `named` fallback's 8 is silent — the program still compiles
+and runs.
+```maxon
+type Sizer uses T
+	export var dummy as Integer
+
+	export static function create() returns Self
+		return Self{dummy: 0}
+	end 'create'
+
+	export function typeSize() returns Integer
+		return sizeof(T)
+	end 'typeSize'
+end 'Sizer'
+
+typealias PairSizer = Sizer with TPair
+
+function main() returns ExitCode
+	let s = PairSizer.create()
+	return s.typeSize()
+end 'main'
+
+typealias Integer = int(i64.min to i64.max)
+typealias TPair = (Integer, Integer)
+```
+```exitcode
+16
+```
+
+<!-- test: shared-body-reassign-with-a-heap-owning-tuple-alias-instantiation -->
+
+⭐ A shared generic body reassigns its opaque `T` field, and the SAME generic is ALSO instantiated at a tuple
+typealias that OWNS heap (`(Integer, String)`), declared BELOW the instantiation. The reassign gate scans
+every instantiation of `Box` and asks each argument's KIND; the heap-owning tuple must read `consumeMoved`,
+not `coOwnedTrivial`. Read as co-owned-trivial it refused this program outright, and the refusal named a
+"trivial-struct instantiation" that does not exist. `PairBox` is held by a field type so the instantiation is
+live without being constructed.
+```maxon
+type Box uses Element
+	export var saved as Element
+
+	export static function create(first Element) returns Self
+		return Self{ saved: first }
+	end 'create'
+
+	export function replace(next Element)
+		self.saved = next
+	end 'replace'
+end 'Box'
+
+typealias StringBox = Box with String
+typealias PairBox = Box with TPair
+
+type Holder
+	export var b as PairBox
+
+	export static function create(b PairBox) returns Self
+		return Self{b: b}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var b = StringBox.create("alpha")
+	b.replace("beta")
+	return 0
+end 'main'
+
+typealias Integer = int(i64.min to i64.max)
+typealias TPair = (Integer, String)
+```
+```exitcode
+0
+```
