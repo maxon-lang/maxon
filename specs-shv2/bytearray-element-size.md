@@ -52,9 +52,7 @@ runs, so an over-wide erase silently overwrites live data and the array's own
 
 ## Tests
 
-<!-- disabled-test: bytearray-slice-roundtrip -->
-<!-- stdlib whitelist: `ByteArray.create()` — see `bytearray-slice-length` above for the measurement.
-     `toByteArray()` and `String.from` both SHIPPED at P1.8 Slice E -->
+<!-- test: bytearray-slice-roundtrip -->
 ### Byte-by-byte slice reconstructs the correct substring
 Pushes a `[start, end)` byte slice of a source string into a fresh `ByteArray`
 one byte at a time, then rebuilds a `String`. With a wrong 8-byte stride the
@@ -78,12 +76,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: bytearray-slice-length -->
-<!-- stdlib whitelist: `ByteArray` (`stdlib/File.maxon`'s `export typealias ByteArray = Array with Byte`)
-     is not a compiler builtin in any compiler, so `ByteArray.create()` has no type to name. ⚠ MEASURED at
-     P1.8 Slice E: `stdlib/File.maxon` cannot be listed yet either — it is `E2015 String method
-     'addressableBytes'` at its own line 60, the `__ManagedMemory` door. `toByteArray()` and `String.from`
-     both SHIPPED at that slice and are no longer blockers here -->
+<!-- test: bytearray-slice-length -->
 ### Reconstructed byte-slice has the correct length and content
 Rebuilds the whole source string byte-by-byte and returns its byte length. A
 wrong stride would still push `count` bytes but pack them 8 apart, leaving a
@@ -106,8 +99,12 @@ end 'main'
 
 <!-- disabled-test: bare-union-case-as-struct-field-init -->
 <!-- stdlib whitelist: `StringArray` (`stdlib/Json.maxon`'s `export typealias StringArray = Array with
-     String`). shv2's whitelist loads only Clock.maxon + Sleep.maxon, so the `set(vars StringArray)`
-     payload resolves to a bare `int` and `v.count()` is rejected before the byte-slice path is reached. -->
+     String`). `stdlib/Json.maxon` is not on shv2's whitelist, so the `set(vars StringArray)` payload
+     resolves to a bare `int` and `v.count()` is rejected before the byte-slice path is reached.
+     ⚠ Unlike its three siblings here, this case was NOT unlocked by `stdlib/File.maxon` (R4.7): the name
+     it wants is Json's, not File's. MEASURED on the tree that listed `File.maxon` —
+     `E3011 Unknown type 'StringArray'`, raised at the `set(v) gives v.count()` ARM (where the payload
+     binding's type must resolve), not at the `union` declaration, which accepts the unknown name -->
 ### Bare payload-free boxed-union case read as a struct-literal field initializer
 Mirrors `stdlib/Subprocess.maxon`'s `Configuration.create`: a boxed
 (payload-bearing) union's payload-free case is read bare (`Env.inherit`) as a
@@ -170,12 +167,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: bytearray-insert-preserves-tail-heap-backed -->
-<!-- stdlib whitelist: `ByteArray` (`stdlib/File.maxon`'s `export typealias ByteArray = Array with Byte`)
-     is not a compiler builtin in any compiler, so `ByteArray.create()` has no type to name. ⚠ MEASURED at
-     P1.8 Slice E: `stdlib/File.maxon` cannot be listed yet either — it is `E2015 String method
-     'addressableBytes'` at its own line 60, the `__ManagedMemory` door. `String.from(ByteArray)` SHIPPED
-     at that slice; its two sibling cases here, which build their bytes from a `b"…"` literal, now pass -->
+<!-- test: bytearray-insert-preserves-tail-heap-backed -->
 ### The same `insert`, on a `ByteArray` that was never a literal
 The twin of the test above with the bytes pushed one at a time, so the buffer is
 heap-owned from birth and no copy-on-write ever runs. It must give the identical

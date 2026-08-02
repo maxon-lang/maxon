@@ -469,6 +469,56 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// while a program that never calls it is unaffected on every target — the reachability asymmetry that
 	// function's header records. Listing the module is what makes those calls exist; it is not what gates them.
 	try listWhitelistedModule(stdlibDir, relative: "CommandLine.maxon", into: listed)
+	// ⭐⭐ **`stdlib/File.maxon` — THE LAST LINK OF THE `URL → FilePath → File` CONE (R4.7)**, and the entry
+	// that finally gives a program `File.readText`/`writeText`/`readBinary`/`writeBinary`/`exists`/`delete`/
+	// `rename`/`info`. Every public signature takes a `FilePath`, which is why the two entries above had to
+	// land first; it imports nothing else and calls only `__ManagedFile` builtins and `String`.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS (E3006): it declares NONE. All fourteen of its functions are methods or statics of
+	//     `FileInfo`, `FileReader`, `FileWriter` or `File`, so the whole free-function clause — and with it the
+	//     SILENT bare-builtin shadow that cost `Sleep.maxon` a builtin retirement — is vacuous here. Checked
+	//     against `Parser.parseCallNamed`'s bare-name `if` chain AT THE CHAIN, as that rule's last bullet
+	//     insists: nothing this module declares can be claimed by it, because it declares nothing the chain can
+	//     see. Nor does it CONSUME one, the way `Math.pow` consumes `floor`.
+	//   • TYPE NAMES: `File`, `FileInfo`, `FileReader`, `FileWriter`, `FilePermission` and the five error enums
+	//     (`FileReadError`, `FileWriteError`, `FileDeleteError`, `FileRenameError`, `FileInfoError`) are nominal
+	//     declarations, so a user program spelling any of them wins and this module's moves into the reserved
+	//     space (A1s wave 2, now directory-scoped by N1). Against the other listed modules there is no overlap,
+	//     checked the way the bullet above insists a roster be checked — AT THE SOURCE, by reading those
+	//     modules' own declarations rather than a roster transcribed here. ⚠ `FilePath.maxon` is the near miss
+	//     and it is a miss: it declares `FilePath` and `FilePathError`, neither of which this module declares.
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: none of the ten is a builtin. The `__Managed*`
+	//     names this module CALLS are builtins and are `__`-reserved, and it declares no name beginning `__`.
+	//   • `FileSize`, `Timestamp` and `Byte` are RANGED typealiases, file-local per alias FORM, so they reserve
+	//     nothing from a user program. `Byte = int(0 to u8.max)` is the canonical byte and moves no width;
+	//     `FileSize`/`Timestamp` share the `int(0 to u64.max)` FORM four of `Clock.maxon`'s aliases already
+	//     carry under other names, which is the same same-form-different-name shape every entry since Clock has
+	//     had.
+	//   • ⚠⚠ **`ByteArray` IS THE ONE NAME WORTH STOPPING ON, AND IT COINCIDES WITH THE COMPILER RATHER THAN
+	//     COLLIDING WITH IT.** `export typealias ByteArray = Array with Byte` names the EXACT instance
+	//     `__ManagedMemory` is already bound to — `parseTypeReference` folds the reserved spelling into the very
+	//     `genericInstance(Array with Byte)` this alias resolves to (`ManagedMemoryTypeName`'s header, and
+	//     `ReturnShapeSurface`, which exists precisely because the two spellings are ONE type). So this is not a
+	//     second declaration of a compiler-owned name: it is a user-writable second SURFACE on one record, told
+	//     apart by provenance (`Parser.valueIsBufferSurface`), and any program could already write it. Listing
+	//     the module supplies the name three disabled spec cases were waiting on.
+	//   • The E3112 MEMBER-name rule — the one shadowing does not rescue — is a whole-program CHECK that fires
+	//     only when a user program actually contests a spelling, so there is nothing to clear ahead of time.
+	//     What it protects is real here: `FileInfo` carries ordinary English members (`size`, `modifiedTime`,
+	//     `isDirectory`), and a user type spelled like one of them is refused rather than silently half-renamed.
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes:
+	// `maxon-shv2 build stdlib/File.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING ELSE.
+	//
+	// ⚠ **IT IS THE THIRD LISTED MODULE TO CONTAIN LITERALS, AND EXACTLY ONE COMMITTED GOLDEN MOVES — a
+	// `b"…"` CASE THAT NEVER MENTIONS `File`.** `byte-string-literal.detached-literal-drops-clean` gains three
+	// instructions, and the cause is this module's `Byte` alias rather than anything it emits: with `Byte`
+	// UNDECLARED a `b"…"` literal's element has no declared range, so `a.set(0, value: n)` got NO narrowing
+	// check; `export typealias Byte = int(0 to u8.max)` (`:45`) finally gives it one, and the slot that held
+	// `movRegReg rcx, r12` now holds `cmpRegImm32 rbx, 0` / `cmpRegImm32 rbx, 255` / `mrt_panic`. A missing
+	// check now EMITTED, not a codegen change — the measurement is written into that case's own prose.
+	try listWhitelistedModule(stdlibDir, relative: "File.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

@@ -201,8 +201,7 @@ end 'main'
 10 20
 ```
 
-<!-- disabled-test: byte-string-literal.top-level-let -->
-<!-- stdlib whitelist: the top-level managed `let` half now WORKS — supply `typealias ByteArray = Array with Byte` and this exact program builds and returns 0. What is missing is the NAME: `ByteArray` is not a compiler builtin in any compiler (the bootstrap looks it up as an ordinary type alias, 2-Parser.cs:18044), it is `stdlib/File.maxon`'s `export typealias ByteArray = Array with Byte`, and shv2's stdlib whitelist loads only `Clock.maxon`. It unlocks when the whitelist reaches that declaration — E3011 `Unknown type 'ByteArray'` until then. -->
+<!-- test: byte-string-literal.top-level-let -->
 
 A byte string literal initializes a module-scope `let`, and the global is a `ByteArray`.
 ```maxon
@@ -542,6 +541,16 @@ end 'main'
 A detached literal's `capacity@16` is no longer the rdata sentinel, so its drop now legitimately frees
 the buffer — the one it allocated, never the blob. Five detach-and-drop rounds make either mistake loud:
 a missed free leaks (exit 101) and a freed blob corrupts the allocator.
+
+⚠ **ITS GOLDEN MOVED WHEN `stdlib/File.maxon` WAS WHITELISTED (R4.7), IN A PROGRAM THAT NEVER MENTIONS
+`File` — AND THE MOVE IS A MISSING CHECK NOW EMITTED, NOT A CODEGEN CHANGE.** MEASURED by an A/B with one
+variable, `detachAndRead` textually identical in both: with `Byte` UNDECLARED the slot before `__arr_set`
+holds `movRegReg rcx, r12`; with `typealias Byte = int(0 to u8.max)` declared it holds
+`cmpRegImm32 rbx, 0` / `cmpRegImm32 rbx, 255` / `mrt_panic`. Whitelisting `File.maxon` supplies
+`export typealias Byte = int(0 to u8.max)` (`:45`), so a `b"…"` literal's element has a DECLARED RANGE for
+the first time and `a.set(0, value: n)` — an `int` into a `Byte` slot — gets the narrowing guard it was
+silently missing. The golden diff is a PURE INSERTION: nothing is removed, nothing reordered, and the
+original `movRegReg rcx, r12` / `__arr_set` sequence survives verbatim under the new `__rc_ok` label.
 ```maxon
 function detachAndRead(n int) returns int
 		var a = b"hi"
