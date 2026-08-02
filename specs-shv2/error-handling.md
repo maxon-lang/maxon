@@ -1853,7 +1853,7 @@ enum Fault implements Error
 	broken
 end 'Fault'
 
-function risky(n Code) returns Code throws Fault
+function risky(_ Code) returns Code throws Fault
 	throw Fault.broken
 end 'risky'
 
@@ -1884,7 +1884,7 @@ enum Fault implements Error
 	broken
 end 'Fault'
 
-function risky(n Code) returns Code throws Fault
+function risky(_ Code) returns Code throws Fault
 	throw Fault.broken
 end 'risky'
 
@@ -1916,7 +1916,7 @@ enum Fault implements Error
 	broken
 end 'Fault'
 
-function risky(n Code) returns Code throws Fault
+function risky(_ Code) returns Code throws Fault
 	throw Fault.broken
 end 'risky'
 

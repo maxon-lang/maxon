@@ -463,9 +463,35 @@ export type VarInfo
 	//
 	// False for every binding a `Scope` holds, which is every other constructor here.
 	export var namesModuleStorage as bool
+	// ⭐ **WAS THIS NAME EVER READ? — the whole of E3012's evidence** (`Parser.reportUnusedBindings`).
+	//
+	// ⚠ **IT IS A SECOND BIT BESIDE `lastUseToken` RATHER THAN THAT FIELD TESTED AGAINST 0, and the two are
+	// NOT the same question.** `attachPendingBorrows` SEEDS a last use ahead of any read — to the activation
+	// for a `let`/`var`, to the loop's `end` for a `for … in` element — so a binding that is never read can
+	// carry a non-zero `lastUseToken`, and E3012 would then wave through exactly the declarations it exists
+	// to catch. The forward-only rule that field is written under is a BORROW's lifetime rule; this bit
+	// answers "did the source mention it", and only a real mention sets it.
+	//
+	// ⭐ **THREE WRITERS, BECAUSE A NAME CAN BE MENTIONED IN EXACTLY THREE PLACES THE OTHERS CANNOT SEE**, and
+	// each of the three was measured to matter:
+	//
+	//   • `Parser.requireBindingLive` — every READ inside the declaring function (a bare reference, a field
+	//     read or write through it, a method call on it). The chokepoint that already exists for that
+	//     question.
+	//   • `Parser.emitCaptureRead` — a CLOSURE BODY reading an enclosing binding. It deliberately does not
+	//     route through the first (a capture is not subject to the move guard), and without this bit a
+	//     parameter read ONLY inside a closure — `function f(x Integer)` whose body is
+	//     `let g = function(n Integer) gives n + x` — is a false rejection.
+	//   • `Parser.parseAssignment` — a WRITE, `x = 2`. It must not route through the first either: an
+	//     assignment REVIVES a moved-from binding, and the guard would refuse it. MEASURED against the
+	//     oracle: `var x = 1` alone is E3012 and `var x = 1` + `x = 2` compiles, so a write counts as a
+	//     mention. ⚠ It cannot decide a verdict TODAY — shv2 parameters are immutable
+	//     (`ParametersAreMutable`), so assigning one is E2013 before this bit is read — but the rule is the
+	//     measured one and this is where it lives when `unused-variables.md` brings locals in.
+	export var referenced as bool
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false, referenced: false}
 	end 'create'
 
 	// ⭐⭐ **THE E3070 SUBJECT STAND-IN FOR A TOP-LEVEL `var`** — the ONE object a global's name is keyed
@@ -480,7 +506,7 @@ export type VarInfo
 	// ⚠ Its `boundValue`/`slot` are 0 and MUST NOT be read: `namesModuleStorage` is what says so, and it
 	// is the bit every reader of `boundValue` in the E3070 path tests first.
 	export static function createModuleStorageSubject(name ByteArray, varType MaxonType) returns VarInfo
-		return Self{name: name, varType: varType, mutable: true, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: true}
+		return Self{name: name, varType: varType, mutable: true, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: true, referenced: false}
 	end 'createModuleStorageSubject'
 
 	// A self-field alias: the name of field `fieldIndex` of the enclosing type, bound at
@@ -496,11 +522,11 @@ export type VarInfo
 	// to disagree with it; a `false` states the honest fact that no reassignment of the alias
 	// itself is ever legal, and leaves the field's own answer where it lives.
 	export static function createSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex) returns VarInfo
-		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false}
+		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false, referenced: false}
 	end 'createSelfField'
 
 	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, slot VarSlot, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName, isParameter: false, lastUseToken: 0, namesModuleStorage: false}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName, isParameter: false, lastUseToken: 0, namesModuleStorage: false, referenced: false}
 	end 'createPayloadBinding'
 
 	// Construct a value binding for M2's substitution model: `name` aliases the SSA
@@ -508,7 +534,7 @@ export type VarInfo
 	// none), so `slot` is 0 — a value binding never reads it. The slot-backed
 	// constructors above stay the home of the future mutable/mem2reg model.
 	export static function createValueBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false}
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false, referenced: false}
 	end 'createValueBinding'
 
 	// The value binding a PARAMETER gets — `createValueBinding` plus the one bit that distinguishes it
@@ -521,7 +547,7 @@ export type VarInfo
 	// re-read the constant would take that flag out of the caller's hands — exactly the defeat that
 	// tripwire's comment warns about.
 	export static function createParameterBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: true, lastUseToken: 0, namesModuleStorage: false}
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: true, lastUseToken: 0, namesModuleStorage: false, referenced: false}
 	end 'createParameterBinding'
 end 'VarInfo'
 
@@ -532,6 +558,29 @@ export typealias VarInfoMap = Map with (ByteArray, VarInfo)
 // Both need the binding OBJECT rather than its name — see Scope's header for why a
 // name cannot address a binding a nested block has shadowed.
 export typealias VarInfoArray = Array with VarInfo
+
+// ⭐ **ONE DECLARED PARAMETER THE UNUSED CHECK (E3012) MUST ACCOUNT FOR** — paired with the span of the NAME
+// the author wrote, which is where the diagnostic lands.
+//
+// It holds the `VarInfo` itself rather than the name, because the verdict is `binding.referenced`, a bit
+// written LATER (at every mention door) through the same heap object; a name copied here would have to be
+// looked up again in a `Scope` an inner block may since have shadowed — and the shadow is a different
+// declaration with its own answer.
+//
+// The RANGE rides here and not on `VarInfo` because a parameter binding is the ONLY candidate kind: a local,
+// a self-field alias, a payload binding, a `for … in` element and the module-storage stand-in all construct
+// a `VarInfo` and none of them is checked, so a declaration span on the record would be a column five of six
+// constructors fill with nothing.
+export type UnusedBindingCandidate
+	export let binding as VarInfo
+	export let nameRange as SourceRange
+
+	export static function create(binding VarInfo, nameRange SourceRange) returns UnusedBindingCandidate
+		return Self{binding: binding, nameRange: nameRange}
+	end 'create'
+end 'UnusedBindingCandidate'
+
+export typealias UnusedBindingCandidateArray = Array with UnusedBindingCandidate
 
 // --- Ranged typealiases ---
 //
@@ -3033,6 +3082,16 @@ end 'indexOfParamIn'
 // to an already-refused program, so the tie-break could only change which diagnostic that program
 // gets — the same reasoning `SemanticCheck.indexModuleFunctionsByName` states for first-index-wins.
 //
+// ⚠ **`_` IS THE ONE NAME A SIGNATURE MAY REPEAT, AND THE SLOTTING IS STILL EXACT.** The ignore name is
+// exempt from that E2014 (`Parser.parseFunctionParameters` — the oracle accepts `make(_ Integer = 1,
+// _ String = "n", item T)` and shv2 used to refuse it), so `paramNames` can carry several. It changes
+// nothing here, because the ONLY way a repeat is observable is a call that LABELS `_`, and the loop
+// below refuses the outcome directly: whichever `_` the scan picks, filling a slot twice is
+// `ArgSlotResult.duplicateArg`. The oracle draws the line in the same place, reporting
+// `parameter '_' already has a value (passed positionally)` at the CALL and nothing at the declaration.
+// A call that does not label `_` never asks about it at all — a positional argument returns at the
+// `label.isEmpty()` line above.
+//
 // MEASURED on `Testing/ladders/genmutchain.sh 1 256 <P>` (one chain, depth 256, every argument
 // labelled in declaration order): `phase:semanticCheck` at P = 64 goes **69.8 ms -> 20.5 ms**, and the
 // growth per doubling of P falls from **x3.05 to x1.89** while the program itself doubles at x2.00 —
@@ -3052,7 +3111,13 @@ export function argSlotPosition(paramNames ByteArrayArray, argIndex ParamCount, 
 	return indexOfParamIn(paramNames, name: label)
 end 'argSlotPosition'
 
-export function slotCallArgs(paramNames ByteArrayArray, args ValueIdArray, argLabels ByteArrayArray) returns ArgSlotResult
+// ⭐ **`argDefaultSlots` IS THE COMPILER'S OWN ANSWER FOR THE ARGUMENTS IT SUPPLIED** — see `MaxonOp.call`.
+// One entry per synthesized parameter default, and they are the TRAILING run of `args`, so the argument at
+// `sourceCount + k` fills slot `argDefaultSlots[k]` and no name is consulted for it. Everything before
+// `sourceCount` is the author's and resolves through `argSlotPosition` exactly as before. A caller with no
+// synthesized defaults (every witness dispatch, every lowering) passes the shared empty array and this
+// function behaves identically to the label-only version it replaced.
+export function slotCallArgs(paramNames ByteArrayArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray) returns ArgSlotResult
 	let paramCount = paramNames.count()
 	if args.count() != paramCount 'arity'
 		return ArgSlotResult.arityMismatch(paramCount, got: args.count())
@@ -3068,11 +3133,21 @@ export function slotCallArgs(paramNames ByteArrayArray, args ValueIdArray, argLa
 		filled.push(false)
 	end 'initSlots'
 
+	// The author's arguments are everything before the compiler's trailing run of defaults. The subtraction
+	// cannot underflow (`ParamCount` is unsigned, so it would be a range panic rather than a wrap): every
+	// entry of `argDefaultSlots` was pushed by `Parser.fillArgsFromParamDefaults` in lockstep with an
+	// argument APPENDED to this same list, so the column is never longer than `args`. That invariant is
+	// stated where the column is declared (`MaxonOp.call`) and named here because this is where it is spent.
+	let sourceCount = args.count() - argDefaultSlots.count()
+
 	for i in 0 upto args.count() 'placeArgs'
 		let argId = try args.get(i) otherwise panic("slotCallArgs: args.get OOB at {i}")
 		let label = try argLabels.get(i) otherwise panic("slotCallArgs: argLabels.get OOB at {i}")
 
-		let pos = argSlotPosition(paramNames, argIndex: i, label: label)
+		// A SYNTHESIZED default names its slot outright; only a SOURCE-written argument is resolved by label.
+		// That split is the whole fix for two `_` parameters: `_` binds nothing, so a signature may declare it
+		// twice, and a name lookup then cannot tell the two apart (`MaxonOp.call`'s `argDefaultSlots`).
+		let pos = (try argDefaultSlots.get(i - sourceCount) otherwise panic("slotCallArgs: argDefaultSlots.get OOB at {i - sourceCount} — the synthesized defaults are the trailing run of args")) if i >= sourceCount else argSlotPosition(paramNames, argIndex: i, label: label)
 		if pos >= paramCount 'unknown'
 			return ArgSlotResult.unknownLabel(i, label: String.from(label))
 		end 'unknown'

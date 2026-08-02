@@ -1018,7 +1018,7 @@ typealias AsyncCalleeVisited = Set with ValueId
 function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLookup
 	return match op 'op'
 		call to indirectCall gives AsyncCalleeLookup.none
-		asyncCall(result, callee, _, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
+		asyncCall(result, callee, _, _, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
 		await to tryAwait gives AsyncCalleeLookup.none
 		sizeofType gives AsyncCalleeLookup.none
 		byteStringLiteral gives AsyncCalleeLookup.none
@@ -1194,6 +1194,11 @@ typealias WitnessSlotsByInterfaceMap = Map with (ByteArray, CollectedInterfaceMe
 // whole corpus bar the generic bodies — allocates nothing. The lazy builder REPLACES the field with a fresh
 // map before its first insert, so this placeholder stays empty and is safe across the parse fan-out.
 let sharedEmptyWitnessSlots = WitnessSlotsByInterfaceMap.create()
+
+// The requirement list `Parser.requirementSlotsOf` hands back for an `implements` naming an interface that
+// resolves to nothing. Read-only (its one reader scans it for a method name), so ONE allocation serves the
+// whole compile — the discipline every `sharedEmpty*` here states.
+let sharedEmptyRequirementSlots = CollectedInterfaceMethodArray.create()
 
 // The module-level shared empty type-parameter-FEED array (P1.6-B2) every non-generic consuming function's
 // `ParamConsumeInfo` holds — a feed requires a type parameter, so such a function never fills one and it is
@@ -3722,6 +3727,11 @@ end 'uniformArgRanges'
 // per-argument column because `slotCallArgs` indexes it.
 export let NoImmutableArgNames = ByteArrayArray.create()
 
+// The `argDefaultSlots` column of a call that omitted no defaulted argument — which is nearly every call in
+// any program. Read-only (its readers only index it), so ONE allocation serves them all, exactly as
+// `NoImmutableArgNames` does for its own column. See `MaxonOp.call`.
+export let NoDefaultArgSlots = ParamCountArray.create()
+
 // The name an E3019 would blame for argument `index` of a call, or empty. Decodes BOTH shapes of the
 // column — parallel-to-`args`, or the shared empty one above — so no reader has to know which it holds.
 export function immutableArgNameAt(argImmutableNames ByteArrayArray, index ParamCount) returns ByteArray
@@ -6048,6 +6058,18 @@ export type Parser
 	// ORDER is the third reason, and `vars` could not give it either: `Scope.allVars` hands back a
 	// hash MAP, so draining it would emit the drops in hash order and no golden would reproduce.
 	var ownedBindings as VarInfoArray
+	// ⭐ **THE PARAMETERS THIS FUNCTION DECLARED THAT E3012 MUST ACCOUNT FOR**, in declaration order. Drained
+	// at the function's `end` by `reportUnusedBindings`, which reports the FIRST one never mentioned. A body
+	// `let`/`var` is NOT collected — see there for the spec boundary.
+	//
+	// ⚠ It is a LIST and not `Scope.allVars()`, which is a hash MAP: its order is not the declaration order
+	// the diagnostic must follow, and no golden would reproduce. The reason `ownedBindings` gives just above.
+	//
+	// Reset per function, and SAVED/RESTORED around a closure body like its sibling columns here. That
+	// isolation is load-bearing rather than tidy: a closure's parameters are bound through the same
+	// `bindParameters`, and left shared they would be reported against the ENCLOSING function, which
+	// declared none of them.
+	var unusedCandidates as UnusedBindingCandidateArray
 	// ⭐ **THE OWNED HEAP TEMPORARIES CREATED BY THE STATEMENT BEING PARSED, awaiting their drop.** An
 	// UNBOUND owned value — `print("{x}")`, where the interpolation result is consumed by `print` (which
 	// BORROWS it) and bound to no name — has, under static single-owner, exactly one possible owner: the
@@ -6296,6 +6318,7 @@ export type Parser
 			emptyTypeParamPositions: TypeParamIdArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
 			ownedBindings: VarInfoArray.create(),
+			unusedCandidates: UnusedBindingCandidateArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
 			inMatchArmBody: false,
 			lastFieldReadValid: false,
@@ -10080,8 +10103,13 @@ export type Parser
 	// Record a whole-program semantic DIAGNOSTIC the pure parser detected, WITHOUT unwinding the parse
 	// (P1.6-A) — the parser twin of `reportPositioned`, writing into the artifact (which `mergeArtifact`
 	// folds into `project.diagnostics`) rather than into `project`, so the pure-parser invariant holds.
-	function recordArtifactDiagnostic(code ErrorCode, message String, tok Token)
-		self.artifact.diagnostics.push(Diagnostic.create(code, message: message, line: tok.line, column: tok.column, filePath: self.artifact.filePath))
+	//
+	// It takes the SPAN and not the token, because a reporter may hold one without holding the other: a
+	// parameter's name token is consumed inside `parseFunctionParameters` and only its `SourceRange`
+	// survives into `bindParameters`, where E3012's candidate is recorded. A `Diagnostic` wants a line and
+	// a column in any case, which is exactly what a range carries.
+	function recordArtifactDiagnostic(code ErrorCode, message String, range SourceRange)
+		self.artifact.diagnostics.push(Diagnostic.create(code, message: message, line: range.line, column: range.column, filePath: self.artifact.filePath))
 	end 'recordArtifactDiagnostic'
 
 	// The argument list of a `Base with Args` (P1.6-A) — a single arg (`Box with Integer`) or a
@@ -10206,7 +10234,7 @@ export type Parser
 		// and until then the diagnostic is what makes that a decision someone takes rather than a panic
 		// someone trips over.
 		if tagIsFloat(tag) 'bareFloatArg'
-			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(typeTagName(tag)), tok: argTok)
+			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(typeTagName(tag)), range: SourceRange.ofToken(argTok))
 			return
 		end 'bareFloatArg'
 
@@ -10234,7 +10262,7 @@ export type Parser
 			// reasons the argument wins: the E3011 arm below already reports at `argTok`, so one function
 			// would otherwise answer one question from two columns; and no corpus case asserts the column.
 			let spelling = typeTagName(tag)
-			self.recordArtifactDiagnostic(ErrorCode.genericBarePrimitiveArg, message: "Cannot use bare type '{spelling}' as a type argument; use a ranged typealias instead (e.g. typealias MyType = {spelling}(...))", tok: argTok)
+			self.recordArtifactDiagnostic(ErrorCode.genericBarePrimitiveArg, message: "Cannot use bare type '{spelling}' as a type argument; use a ranged typealias instead (e.g. typealias MyType = {spelling}(...))", range: SourceRange.ofToken(argTok))
 			return
 		end 'barePrimitive'
 
@@ -10245,7 +10273,7 @@ export type Parser
 		let nameId = typeNameIdOf(argType)
 		let name = self.internedName(nameId)
 		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise 'undeclared'
-			self.recordArtifactDiagnostic(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name)), tok: argTok)
+			self.recordArtifactDiagnostic(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name)), range: SourceRange.ofToken(argTok))
 			return
 		end 'undeclared'
 
@@ -10271,7 +10299,7 @@ export type Parser
 		if tagIsFloat(maxonTypeTag(denoted)) 'floatAliasArg'
 			// Named by the ALIAS the source wrote, not by `float`: a reader told "cannot use 'float'" about a
 			// line that says `Real` would have to work out which of its aliases is meant.
-			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(String.from(name)), tok: argTok)
+			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(String.from(name)), range: SourceRange.ofToken(argTok))
 			return
 		end 'floatAliasArg'
 	end 'checkGenericArgType'
@@ -10303,7 +10331,7 @@ export type Parser
 		// an array is materialized, which has the resolved element type in hand.
 		if self.signatures.isArrayBaseName(baseTok.value) 'array'
 			if argCount != ArrayTypeParamCount 'wrongArity'
-				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {ArrayTypeParamCount} type argument(s), but {argCount} were supplied", tok: baseTok)
+				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {ArrayTypeParamCount} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
 			end 'wrongArity'
 			return
 		end 'array'
@@ -10312,7 +10340,7 @@ export type Parser
 		// enforced where a set method receives its element (which has the resolved key type in hand).
 		if self.signatures.isSetBaseName(baseTok.value) 'set'
 			if argCount != SetTypeParamCount 'wrongArity'
-				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {SetTypeParamCount} type argument(s), but {argCount} were supplied", tok: baseTok)
+				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {SetTypeParamCount} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
 			end 'wrongArity'
 			return
 		end 'set'
@@ -10327,7 +10355,7 @@ export type Parser
 	// that is a declared type with an empty `uses` list (`typeParamCount() == 0`) — which are the same
 	// diagnostic. Bound here rather than spelled at each site so the two callers cannot drift the message.
 	function recordBaseNotGeneric(baseTok Token)
-		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: "Type '{String.from(baseTok.value)}' has no associated types", tok: baseTok)
+		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: "Type '{String.from(baseTok.value)}' has no associated types", range: SourceRange.ofToken(baseTok))
 	end 'recordBaseNotGeneric'
 
 	// The declared-base half of `checkGenericInstance` — base-is-generic, then arity. The P1.6-A per-argument
@@ -10339,7 +10367,7 @@ export type Parser
 		end 'notGeneric'
 
 		if argCount != layout.typeParamCount() 'wrongArity'
-			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {layout.typeParamCount()} type argument(s), but {argCount} were supplied", tok: baseTok)
+			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {layout.typeParamCount()} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
 			return
 		end 'wrongArity'
 	end 'checkGenericInstanceAgainst'
@@ -11083,7 +11111,7 @@ export type Parser
 			return
 		end 'withinArity'
 
-		self.recordArtifactDiagnostic(ErrorCode.conformanceWithArgSurplus, message: "interface '{String.from(interfaceName)}' declares {declared} associated type(s), but this parenthesized 'with' clause binds {written}", tok: openTok)
+		self.recordArtifactDiagnostic(ErrorCode.conformanceWithArgSurplus, message: "interface '{String.from(interfaceName)}' declares {declared} associated type(s), but this parenthesized 'with' clause binds {written}", range: SourceRange.ofToken(openTok))
 	end 'checkConformanceArgsAgainstArity'
 
 	// ⭐ **THE ONE PLACE THE NUMBER COMES FROM (R6)** — how many associated types conforming to
@@ -11669,6 +11697,10 @@ export type Parser
 		// PREVIOUS function's SSA space — a wild pointer, and one the leak gate could not even
 		// report, because the count would still balance.
 		self.ownedBindings = VarInfoArray.create()
+		// Re-created per function for a plainer reason than the columns around it: a candidate left over from
+		// the previous function would be reported against THIS function's `end`, blaming a parameter no part
+		// of this declaration names.
+		self.unusedCandidates = UnusedBindingCandidateArray.create()
 		// Re-created per function for the same reason `ownedBindings` is: a stray pending temp carried
 		// across a function boundary would decref a value from the PREVIOUS function's SSA space.
 		self.pendingTempDrops = ValueIdArray.create()
@@ -11815,6 +11847,13 @@ export type Parser
 		// so the block it RETURNS — not `entry` — is the one control falls out of.
 		var bodyEnd = try self.parseStatements(func, block: entry)
 		try self.closeFunctionBody(func, bodyEnd: bodyEnd, nameTok: nameTok)
+		// ⚠ The BARE name off the token, not `sourceName` and not `name`: the interface-requirement waiver
+		// matches against the requirement an `interface` body spells, which is the method name alone.
+		// `sourceName` is already qualified for a method (`Silent.greet` — `declaredMethodName`) and `name`
+		// may be mangled on top of that for an overload; either would match no contract, silently, and the
+		// waiver would simply never fire (measured: `interface-method-local-var-still-errors` reported the
+		// contract's own `volume`).
+		self.reportUnusedBindings(nameTok.value)
 
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
@@ -12002,6 +12041,106 @@ export type Parser
 		self.artifact.emitTerminator(bodyEnd, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
 	end 'closeFunctionBody'
 
+	// ⭐⭐ **E3012 — THE FIRST PARAMETER THIS FUNCTION DECLARED AND NEVER MENTIONED.** Called at the `end` of
+	// a function, once the whole body has been seen, because "never mentioned" is a fact about the WHOLE
+	// body and about no smaller part of it.
+	//
+	// ⚠ **PARAMETERS ONLY — a body `let`/`var` is NOT checked, and that is a scope line drawn at the spec
+	// boundary rather than a gap.** The local rule belongs to `specs/unused-variables.md` (whitelist position
+	// 170, not ported), and it is not separable from two refusals shv2 also lacks: MEASURED on the oracle,
+	// `let _ = expr` is **E2001** ("use '_ = expr' to discard a result") and `_ = <pure call>` is **E3064**
+	// ("result of pure function … must be used"). Until all three land together, a borrowed element that may
+	// be neither bound, nor discarded, nor used has no legal spelling at all. `unused-parameters.md`
+	// (position 26) is about parameters, and so is this.
+	//
+	// ⭐ **ONE DIAGNOSTIC PER FUNCTION, AND IT IS THE EARLIEST DECLARATION.** `unusedCandidates` is in
+	// declaration order, so a forward scan reports the leftmost unused parameter — which is what both
+	// reference compilers produce, because both THROW on the first one they find. The scan stops for the
+	// same reason they do: the rest are the same fact about the same edit, and `multiple-unused` (two unused
+	// parameters) pins exactly one line.
+	//
+	// ⚠ **A FUNCTION WHOSE BODY FAILED TO PARSE NEVER REACHES HERE**, which is the suppression v1 has to
+	// spend a diagnostic scan on (`functionHasPriorDiagnostic`): a `ParseError` unwinds past this call, so a
+	// body with a real error never also reports its unused names as cascade noise. shv2 gets it structurally
+	// and needs no rule for it.
+	function reportUnusedBindings(methodName ByteArray)
+		for candidate in self.unusedCandidates 'eachCandidate'
+			if candidate.binding.referenced 'wasMentioned'
+				continue
+			end 'wasMentioned'
+
+			// The waiver is a fact about the METHOD, so the FIRST unused parameter settles it for the whole
+			// signature and a `return` here reports none of them. Asked at this point rather than before the
+			// loop because it walks two registries, and the overwhelming majority of functions never reach it.
+			if self.parametersAreInterfaceDictated(methodName) 'contractDictatedTheList'
+				return
+			end 'contractDictatedTheList'
+
+			self.recordArtifactDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from(candidate.binding.name)}'", range: candidate.nameRange)
+			return
+		end 'eachCandidate'
+	end 'reportUnusedBindings'
+
+	// ⭐ **DOES AN INTERFACE THIS TYPE IMPLEMENTS REQUIRE A METHOD OF THIS NAME?** — the E3012 parameter
+	// exemption. An implementer is forced to declare every parameter the contract names, even one this
+	// particular implementation has no use for, so the unused check may not be applied to a method that
+	// satisfies a requirement.
+	//
+	// ⭐ **THE WAIVER IS PER METHOD, NOT PER TYPE.** A sibling `function helper(unused Integer)` on the same
+	// conforming type is nobody's requirement and is still checked — the two cases sit one beside the other
+	// in `specs-shv2/interface-conformance.md`. And it waives the PARAMETERS only: a `let` inside an
+	// interface method is the author's own, so it stays checked (the loop above never asks for a local).
+	//
+	// ⭐ **IT IS ANSWERED AT PARSE TIME, AND THAT IS A DEPARTURE FROM v1 WITH A REASON.** v1 has to
+	// RE-evaluate its parser's flag whole-program (`checkPendingUnusedVars`), because its parse-time answer
+	// was a false negative whenever the implemented interface was parsed after the conformer. shv2's
+	// declaration sweep completes before any body is parsed, so `signatures.interfaceMap()` is already the
+	// WHOLE program here — the same store `requireInterfaceForParse` resolves a `where` constraint through —
+	// and file order cannot move the answer. Its contribution to the parse memo's key is already carried:
+	// `recordInterfaceDeclaration` mixes every requirement's name into the signature hash.
+	//
+	// Requirements are collected TRANSITIVELY through `extends` (`witnessSlotsOf`, the memoized walk the
+	// witness dispatch already uses), so a method satisfying an inherited requirement is waived too.
+	//
+	// A free function or a closure has no enclosing type, and an `enum`/`union` records no `ConformanceDecl`
+	// at all (its `implements` clause files names on the layout — see `ConformanceCheck`'s note, an enum has
+	// no methods for a requirement to be checked against), so both answer `false` after one `isEmpty` test.
+	function parametersAreInterfaceDictated(methodName ByteArray) returns bool
+		if self.enclosingType.isEmpty() 'notAMethod'
+			return false
+		end 'notAMethod'
+
+		for conformance in self.artifact.conformances 'eachDecl'
+			if not conformance.typeName.equals(self.enclosingType) 'anotherType'
+				continue
+			end 'anotherType'
+
+			for entry in conformance.interfaces 'eachInterface'
+				let slots = self.requirementSlotsOf(entry.interfaceName)
+				for slot in slots 'eachRequirement'
+					if slot.method.name.equals(methodName) 'thisMethodIsRequired'
+						return true
+					end 'thisMethodIsRequired'
+				end 'eachRequirement'
+			end 'eachInterface'
+		end 'eachDecl'
+
+		return false
+	end 'parametersAreInterfaceDictated'
+
+	// The TRANSITIVE requirement list of `interfaceName` — the memoized walk a witness dispatch already
+	// takes (`witnessSlotsOf`), so a method satisfying a requirement inherited through `extends` is seen.
+	//
+	// An `implements` naming something no file declares requires nothing, and that name is E3015's to
+	// report (`ConformanceCheck`), not this reader's to guess about — so a miss is the SHARED empty list
+	// rather than an allocation or a refusal.
+	function requirementSlotsOf(interfaceName ByteArray) returns CollectedInterfaceMethodArray
+		match lookupInterface(self.signatures.interfaceMap(), name: interfaceName) 'resolve'
+			found(iface) then return self.witnessSlotsOf(iface)
+			notFound then return sharedEmptyRequirementSlots
+		end 'resolve'
+	end 'requirementSlotsOf'
+
 	// Parse a comma-separated parameter list `name type[, name type]*` into the
 	// parallel `paramNames`/`paramTypes` lists (empty when the list is empty). Each
 	// parameter is `name type` — a bare identifier followed by a type reference. A
@@ -12051,7 +12190,26 @@ export type Parser
 			// It ALSO gives the default the scope reset it needs for free (v1 does this explicitly): drained
 			// outside every declaration, the helper's body cannot see the callee's parameters or locals, nor
 			// its enclosing `type`. A default is evaluated at the CALL site and belongs to neither frame.
-			if byteArrayContains(paramNames, name: nameTok.value) 'duplicate'
+			// ⭐ **`_` IS EXEMPT, AND IT IS THE ONLY EXEMPTION.** Two `_` parameters DO collide in `Scope.vars` —
+			// `bindParameters` installs each through `declareParameterBinding` like any other parameter, and
+			// `Scope.install` upserts, so the second displaces the first. What makes that harmless is not that
+			// the collision is absent but that NOTHING CAN OBSERVE WHICH ONE WON: both denote the same discard,
+			// no body may name `_` to read it, and neither is an E3012 candidate. A signature needs one `_` per
+			// parameter it does not want, and
+			// `function make(_ Integer = 1, _ String = "n", item T)` is the ordinary spelling of "two defaults
+			// ahead of the one that matters". MEASURED on the oracle: that declaration compiles and runs, while
+			// shv2 refused it `E2014 duplicate parameter name '_'`.
+			//
+			// Keyed on the name being EXACTLY `_`: an underscore PREFIX is an ordinary identifier, so two `_x`
+			// parameters are still E2014, as is any repeat of a real name.
+			//
+			// ⚠ **THE AMBIGUITY THIS SEEMS TO OPEN IS CAUGHT AT THE CALL, WHICH IS WHERE IT ACTUALLY OCCURS.**
+			// `_` IS a legal argument label (measured: `make(6, _: 3)` runs), so two `_` parameters mean a
+			// label that no longer names one position. `slotCallArgs` already refuses a slot filled twice
+			// (`ArgSlotResult.duplicateArg`) — and the oracle reports that same program at that same point
+			// (`E3005 … parameter '_' already has a value (passed positionally)`), never at the declaration.
+			// So the declaration-time check was never what protected the slotting; see `argSlotPosition`.
+			if not nameTok.value.equals(DiscardBindingName) and byteArrayContains(paramNames, name: nameTok.value) 'duplicate'
 				throw ParseError.duplicateParameter(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 			end 'duplicate'
 
@@ -12312,6 +12470,14 @@ export type Parser
 			end 'writesThisScanCannotSee'
 
 			let binding = try self.scope.declareParameterBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
+			// ⭐ **E3012 CANDIDATE: A DECLARED PARAMETER MUST BE READ** (`reportUnusedBindings`). Two names are
+			// not candidates and neither is a policy choice: `__self` is the RECEIVER the parser itself pushed,
+			// which no source token declares and a bare field read never mentions, so every instance method
+			// would report it; and `_` is the language's discard, which says in as many words that the author
+			// wants the slot and not the name.
+			if not paramName.equals(SelfParamName) and not paramName.equals(DiscardBindingName) 'checkedForUse'
+				self.unusedCandidates.push(UnusedBindingCandidate.create(binding, nameRange: paramRange))
+			end 'checkedForUse'
 			// ⭐ **A PARAMETER THAT NAMED `__ManagedMemory` DENOTES THE BUFFER THERE (A2j / A2m)** — the spelling
 			// was read at the declaration (`parseFunctionParameters`) and this is the site that BINDS the value it
 			// named, so this is where the fact becomes the marks `dispatchArrayMethod` and `emitFieldLoad` read.
@@ -13624,8 +13790,12 @@ export type Parser
 		try self.consume(TokenKind.equals)
 
 		// `_ = <expr>` — a DISCARD assignment: evaluate the RHS for its effect and throw the value away. `_`
-		// binds nothing (`DiscardBindingName`, the same discard the match-payload `walk(_)` uses), so it is
-		// never a scope binding and would otherwise reach `undefinedVariable`. An owned RHS temporary drops at
+		// binds nothing (`DiscardBindingName`, the same discard the match-payload `walk(_)` uses), so at file
+		// scope and in any function declaring no `_` parameter it would otherwise reach `undefinedVariable`.
+		// ⚠ It IS a scope binding inside a function that declares one — a `_` parameter is installed like any
+		// other (`bindParameters`) — so this test runs FIRST for a reason: reaching `scope.contains` would make
+		// `_ = f()` a rebinding of that parameter (E2013, a parameter is immutable) instead of the discard the
+		// language says it is. The arm is the rule, not a fallback. An owned RHS temporary drops at
 		// statement end through `drainPendingTemps`, exactly as a bare-call statement's result does. This is
 		// the value-position twin of the bare-call statement, reached by `_ = try arr.pop() otherwise 0` and
 		// any `_ = f(…)`.
@@ -13643,7 +13813,21 @@ export type Parser
 			return
 		end 'undeclared'
 
-		let binding = self.scope.getInfo(nameTok.value)
+		// `var`, because the write is RECORDED on the binding below — a `let` here is a store through an
+		// immutable local (E2013).
+		var binding = self.scope.getInfo(nameTok.value)
+
+		// ⭐ **A WRITE IS A MENTION, AND E3012 COUNTS MENTIONS.** MEASURED against the runnable oracle, both
+		// directions on the same three-line program: `var x = 1` alone is `unused variable: 'x'`, and
+		// `var x = 1` + `x = 2` compiles and exits 0. So a reassignment satisfies the check even though it
+		// reads nothing — which is the honest rule, because the author DID have to name the binding, and the
+		// diagnostic's job is to find declarations nothing in the body refers to.
+		//
+		// It is written here rather than in `requireBindingLive` because a write must NOT go through that
+		// guard: an assignment REVIVES a moved-from binding, and routing it there would reject `t = <expr>`
+		// after a move as use-after-move (see `parseVariableReference`'s note that the READ site is the only
+		// caller). Third door, same bit — see `VarInfo.referenced`.
+		binding.referenced = true
 
 		// A bare field name inside an instance method — `count = count + 1`. It is a STORE through
 		// the receiver, not a rebinding of anything, so it asks the field's mutability rather than
@@ -15212,7 +15396,7 @@ export type Parser
 
 		let op = try self.artifact.module.ops.get(opIdx) otherwise panic("rewriteLastCallToTryCall: last opRef {opIdx} not in module.ops")
 		return match op 'rewrite'
-			call(result, callee, args, argLabels, argRanges, argImmutableNames, mint) gives TryTarget.named(self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, mint: mint))
+			call(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives TryTarget.named(self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint))
 			// P1.5-B2b: `try await p` — rewrite the `await` op into a `tryAwait` defining the error flag,
 			// exactly as `call` → `tryCall`. The awaited callee (recovered from the promise) is returned for
 			// the desugar's E3055/E3059 checks and its `otherwise` error-type binding.
@@ -15268,8 +15452,8 @@ export type Parser
 	// every call field, and return the callee name.
 	// `mint` crosses the rewrite with every other operand: a `try int.fromString(s)` is the SAME call, and
 	// the noun its E3036 would name does not change because the error flag became a second result.
-	function commitTryCallRewrite(opIdx OpIndex, result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, mint CalleeMint) returns ByteArray
-		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, mint: mint)) otherwise panic("commitTryCallRewrite: module.ops.set OOB at {opIdx}")
+	function commitTryCallRewrite(opIdx OpIndex, result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, mint CalleeMint) returns ByteArray
+		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)) otherwise panic("commitTryCallRewrite: module.ops.set OOB at {opIdx}")
 		return callee
 	end 'commitTryCallRewrite'
 
@@ -16395,7 +16579,7 @@ export type Parser
 		// `notMinted`: a runtime entry's callee is not the author's bytes either, but its noun is a question
 		// about the NAME — `GtRuntime.runtimeCalleeSourceMethod` answers it, keyed by name, and may be. Only the
 		// primitive-static mint needs the per-SITE bit. See `CalleeMint`.
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, mint: CalleeMint.notMinted), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), range: range)
 		return result
 	end 'emitRuntimeCall'
 
@@ -23304,7 +23488,7 @@ export type Parser
 			return
 		end 'narrowing'
 
-		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: "unneeded cast: '{String.from(source.name)}' already fits in '{String.from(target.name)}'", tok: asTok)
+		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: "unneeded cast: '{String.from(source.name)}' already fits in '{String.from(target.name)}'", range: SourceRange.ofToken(asTok))
 	end 'reportUnneededCastBetween'
 
 	// ⭐ **THE CAST TARGET'S KIND AS THE AUTHORITY DENOTES IT — not as `maxonTypeTag` reads the
@@ -25227,7 +25411,7 @@ export type Parser
 		// `Map.contains`; the return type it does not fetch is fetched a few lines down by `emitCall`'s
 		// `mintCallResult`, which is where it is actually needed.
 		if not self.signatures.declaresCallee(callee) 'noToString'
-			self.recordArtifactDiagnostic(ErrorCode.semanticPartialInterfaceImpl, message: "Type '{String.from(structName)}' used in string interpolation must have a toString method", tok: exprTok)
+			self.recordArtifactDiagnostic(ErrorCode.semanticPartialInterfaceImpl, message: "Type '{String.from(structName)}' used in string interpolation must have a toString method", range: SourceRange.ofToken(exprTok))
 			// The recorded diagnostic fails the build; materialize an EMPTY placeholder part so the interp
 			// assembly (which needs at least one part) does not panic on a bare `"{s}"`.
 			self.materializeStringRecordPart(self.emitStringLiteral(EmptySourceText, range: range), partBufs: partBufs, partLens: partLens, range: range)
@@ -29820,7 +30004,7 @@ export type Parser
 	// `args[j+1]` convention that `requireGenuineSelfArgs`, `floatWidenedWitnessArgs` and
 	// `emitWitnessDispatch` all index by — none of which is label-aware, and none of which needs to be.
 	function slottedWitnessArgs(target WitnessDispatchTarget, receiver ValueId, userArgs ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, methodTok Token) returns ValueIdArray throws ParseError
-		match slotCallArgs(target.paramNames, args: userArgs, argLabels: argLabels) 'slot'
+		match slotCallArgs(target.paramNames, args: userArgs, argLabels: argLabels, argDefaultSlots: NoDefaultArgSlots) 'slot'
 			ordered(ids) then return withWitnessReceiver(receiver, ordered: ids)
 			// The ARITY error blames the call, the two LABEL errors blame the offending argument — the same
 			// split `SemanticCheck.validateCall` makes, `methodTok` being this call's own anchor (it is what
@@ -32603,6 +32787,14 @@ export type Parser
 			binding.lastUseToken = self.pos
 		end 'laterThanAnyUseSoFar'
 
+		// ⭐ **E3012's EVIDENCE, WRITTEN AT THE SAME CHOKEPOINT AND FOR THE SAME REASON.** "Was this name
+		// read?" is the question this routine already exists to be the single home of; the unused check asks
+		// it of the whole function instead of of one moment. It is a SEPARATE bit from `lastUseToken` because
+		// that field is SEEDED ahead of any read by `attachPendingBorrows` — see `VarInfo.referenced`.
+		// Written before the early returns below for the reason the line above is: a self-field alias and a
+		// scalar binding are reads too, and the exclusions are about a MOVE.
+		binding.referenced = true
+
 		if binding.isSelfField 'selfFieldAlias'
 			return
 		end 'selfFieldAlias'
@@ -33275,7 +33467,16 @@ export type Parser
 	// carry the enclosing value to store and the type to read back, filled in lockstep on FIRST sight only so
 	// a name captured twice shares one slot and one env store.
 	function emitCaptureRead(tok Token, enclosing Scope) returns ValueId throws ParseError
-		let binding = enclosing.getInfo(tok.value)
+		// `var`, because the read is RECORDED on the binding below — a `let` here is a store through an
+		// immutable local (E2013), the same rule `declareInitializedBinding` binds its own `VarInfo` under.
+		var binding = enclosing.getInfo(tok.value)
+
+		// ⭐ **A CAPTURE IS A READ OF THE ENCLOSING BINDING, and this is the ONE read door that does not run
+		// through `requireBindingLive`** (which owns the move guard a capture is deliberately not subject
+		// to). The enclosing function's E3012 drain happens after this closure has been parsed inline, so
+		// without this line `let x = 5` + `function(n Integer) gives n + x` would report `x` unused — a
+		// false rejection of a program both reference compilers accept.
+		binding.referenced = true
 
 		// ⭐⭐ **A SELF-FIELD ALIAS IS NOT A CAPTURABLE BINDING — IT HOLDS NO VALUE, AND `boundValue` 0 IS THE
 		// RECEIVER.** `createSelfField` leaves `boundValue` 0 because a read of the alias is a `loadIndirect`
@@ -33928,6 +34129,7 @@ export type Parser
 		let savedValueOwnsHeap = self.valueOwnsHeap
 		let savedValuePromiseMarks = self.valuePromiseMarks
 		let savedOwnedBindings = self.ownedBindings
+		let savedUnusedCandidates = self.unusedCandidates
 		let savedPendingTempDrops = self.pendingTempDrops
 		// The last-field-read record is ONE fact spread over FOUR fields, and ALL FOUR are saved/restored as
 		// a unit — not `lastFieldReadValid` alone. The closure body opens with `lastFieldReadValid = false`,
@@ -34004,6 +34206,9 @@ export type Parser
 		self.mutableVarShadowed = sharedEmptyMutableVarShadowed
 		self.mutableVarInnermost = sharedEmptyMutableVarInnermost
 		self.ownedBindings = VarInfoArray.create()
+		// A closure declares its own parameters and its body sees none of the enclosing function's bindings,
+		// so it owes its own E3012 accounting — drained under its own name below, before the restore.
+		self.unusedCandidates = UnusedBindingCandidateArray.create()
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
@@ -34130,6 +34335,10 @@ export type Parser
 		// BEFORE the restore below — because it reads the accumulators the body filled, which the restore is
 		// about to swap back. Same call `parseFunction` makes at its own end, for the same reason.
 		self.commitRangeChecks(closureName)
+		// ⚠ **NO E3012 DRAIN HERE.** A closure's parameter list is `specs/unused-variables.md`'s subject, not
+		// `unused-parameters.md`'s; the closure's own candidates are collected and ISOLATED (see the save
+		// block) purely so they cannot be reported against the enclosing function, which declared none of
+		// them. The rung that ports that spec adds the drain on this line.
 
 		// --- Restore the enclosing function's parse context. ---
 		_ = try self.closureCaptureScopes.pop() otherwise panic("parseClosureExpression: closureCaptureScopes underflow — the enclosing scope pushed at entry is missing")
@@ -34148,6 +34357,7 @@ export type Parser
 		self.valueOwnsHeap = savedValueOwnsHeap
 		self.valuePromiseMarks = savedValuePromiseMarks
 		self.ownedBindings = savedOwnedBindings
+		self.unusedCandidates = savedUnusedCandidates
 		self.pendingTempDrops = savedPendingTempDrops
 		// Restore the whole last-field-read record, not just its `Valid` flag — see the save block: the
 		// closure body may have overwritten the value/box/offset with its own SSA ids.
@@ -36046,7 +36256,7 @@ export type Parser
 		// and the emit below see `args`, a defaulted argument is indistinguishable from a written one, which
 		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
 		// it with no change to any of them.
-		try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
+		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
 		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// ⭐ **A CALLEE THAT DECLARED `returns __ManagedMemory` YIELDS THE BUFFER SURFACE (A2j).** Read HERE
@@ -36060,7 +36270,7 @@ export type Parser
 		// emitted so a refused call emits nothing.
 		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
 		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), mint: mint), range: SourceRange.between(anchor, last: rparenTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitCall'
 
@@ -36079,25 +36289,30 @@ export type Parser
 	// position, and read the RESOLVED signature rather than the tolerant sweep — E3036 and E3037, from
 	// `SemanticCheck` through `slotCallArgs`. Reporting either here would be a second opinion built on the
 	// weaker registry.
-	function fillOmittedArgDefaults(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) throws ParseError
+	function fillOmittedArgDefaults(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) returns ParamCountArray throws ParseError
 		// ⚡ The gate is the allocation-free PRESENCE test, not `defaultsOf` itself: this runs at every call
 		// in the program, and a payload-free union case still heap-allocates in Maxon — an `allRequired`
 		// minted per parsed call is the constant factor that reverted the math-intrinsic resolver
 		// (`parseCallNamed`). Only a callee that genuinely declares a default pays for the union.
 		if not self.signatures.declaresParamDefaults(callee) 'everyParameterRequired'
-			return
+			return NoDefaultArgSlots
 		end 'everyParameterRequired'
 
 		match self.signatures.defaultsOf(callee) 'defaults'
-			allRequired then return
-			defaults(info) then try self.fillArgsFromParamDefaults(info, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
+			allRequired then return NoDefaultArgSlots
+			defaults(info) then return try self.fillArgsFromParamDefaults(info, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		end 'defaults'
 	end 'fillOmittedArgDefaults'
 
-	function fillArgsFromParamDefaults(info ParamDefaultInfo, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) throws ParseError
+	// ⭐ **RETURNS THE SLOT OF EVERY ARGUMENT IT APPENDED, IN APPEND ORDER** — `MaxonOp.call`'s
+	// `argDefaultSlots`. The label it also writes is the parameter's NAME, which is what every by-name reader
+	// downstream still bridges through; the slots are what `slotCallArgs` uses, because a name cannot address
+	// a position when the signature declares `_` more than once. See the op's own header for why exactly one
+	// reader needs the exact answer.
+	function fillArgsFromParamDefaults(info ParamDefaultInfo, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) returns ParamCountArray throws ParseError
 		let paramCount = info.paramNames.count()
 		if args.count() >= paramCount 'nothingOmitted'
-			return
+			return NoDefaultArgSlots
 		end 'nothingOmitted'
 
 		var filled = BoolArray.create()
@@ -36109,10 +36324,13 @@ export type Parser
 			let label = try argLabels.get(i) otherwise panic("fillArgsFromParamDefaults: argLabels.get OOB at {i} — the label column is pushed in lockstep with args")
 			let suppliedSlot = argSlotPosition(info.paramNames, argIndex: i, label: label)
 			if suppliedSlot >= paramCount 'labelNamesNoParameter'
-				return
+				return NoDefaultArgSlots
 			end 'labelNamesNoParameter'
 			try filled.set(suppliedSlot, value: true) otherwise panic("fillArgsFromParamDefaults: filled.set OOB at {suppliedSlot} despite suppliedSlot < paramCount")
 		end 'markSupplied'
+
+		// Built lazily: a call that omitted nothing this loop can supply keeps the shared empty column.
+		var defaultSlots = NoDefaultArgSlots
 
 		for slot in 0 upto paramCount 'fillDefaults'
 			let supplied = try filled.get(slot) otherwise panic("fillArgsFromParamDefaults: filled.get OOB at {slot} despite slot < paramCount")
@@ -36125,12 +36343,19 @@ export type Parser
 				continue
 			end 'noDefault'
 
+			if defaultSlots is NoDefaultArgSlots 'firstDefaultOfThisCall'
+				defaultSlots = ParamCountArray.create()
+			end 'firstDefaultOfThisCall'
+			defaultSlots.push(slot)
+
 			let paramName = try info.paramNames.get(slot) otherwise panic("fillArgsFromParamDefaults: paramNames.get OOB at {slot} despite slot < paramCount")
 			// The helper is nullary, so this recursion bottoms out at once: no helper declares a parameter,
 			// hence none is in `funcParamDefaults` and `fillOmittedArgDefaults` returns on its first match.
 			let value = try self.emitCall(helperName, anchor: anchor, args: ValueIdArray.create(), argLabels: ByteArrayArray.create(), argRanges: SourceRangeArray.create(), argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.paramDefaultHelper)
 			pushDefaultedCallArg(args, argLabels: argLabels, argRanges: argRanges, value: value, label: paramName, range: SourceRange.ofToken(anchor))
 		end 'fillDefaults'
+
+		return defaultSlots
 	end 'fillArgsFromParamDefaults'
 
 	// ⭐ **RETYPE-OF-T AT A CONCRETE METHOD'S RETURN (D7) — `emitFieldLoad`'s rule, reached one op further.**
@@ -36329,7 +36554,7 @@ export type Parser
 		// `f()` is. It sits BEFORE the scalar check on purpose: the helper's result is an ordinary value and
 		// must meet the async argument rule exactly as a written argument does, so a MANAGED default earns
 		// the existing refusal below rather than a second one worded here.
-		try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
+		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
 			if not tagIsAsyncScalar(self.tagOf(argValue)) 'managedArg'
@@ -36363,7 +36588,7 @@ export type Parser
 		// and an UNBOUND, UNAWAITED spawn (`async f()` as a bare statement) is dropped at statement end
 		// through `drainPendingTemps` — so no spawn path can leak its thread.
 		self.pendingTempDrops.push(result)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames)), range: SourceRange.between(anchor, last: rparenTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitAsyncCall'
 

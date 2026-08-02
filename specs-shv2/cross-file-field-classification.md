@@ -179,7 +179,7 @@ typealias P1 = int(0 to 5)
 typealias P2 = int(0 to 5)
 typealias P3 = int(0 to 5)
 
-function pad(a P1, b P2, c P3) returns P1
+function pad(a P1, _ P2, _ P3) returns P1
 	return a
 end 'pad'
 

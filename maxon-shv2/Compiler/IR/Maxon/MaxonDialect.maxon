@@ -717,10 +717,33 @@ export union MaxonOp
 	// `__`-prefixed and in no signature registry — and of most user calls, so a shared empty array
 	// serves them all and the op costs nothing. `immutableArgNameAt` is the one reader and decodes both
 	// shapes.
+	// ⭐⭐ **`argDefaultSlots` — THE DECLARATION SLOT OF EACH ARGUMENT THE COMPILER SUPPLIED, and the reason it
+	// exists is that a NAME cannot address a parameter position.** A parameter default is materialized by
+	// `Parser.fillArgsFromParamDefaults` and appended with the parameter's own name as its label, which
+	// `slotCallArgs` then resolves back to a position — and `_`, the ignore name, may be declared MORE THAN
+	// ONCE in one signature (it binds nothing, so two of them cannot collide). `indexOfParamIn` answers the
+	// FIRST occurrence, so `create(_ Integer = 1, _ String = "n", item T)` called `create(2, item: s)` sent
+	// slot 1's default to slot 0 and reported `E3038 duplicate argument for parameter '_'` on a program the
+	// oracle compiles. A lossy key used as an identity — this repo's signature defect.
+	//
+	// ⭐ **ONE ENTRY PER SYNTHESIZED ARGUMENT, AND THEY ARE THE TRAILING RUN OF `args`** — `fillArgsFromParamDefaults`
+	// is the only writer and it APPENDS, so argument `args.count() - argDefaultSlots.count() + k` is the default
+	// for slot `argDefaultSlots[k]`. That shape needs no per-argument optional and no sentinel: a source-written
+	// argument simply is not in the run. EMPTY (the shared `NoDefaultArgSlots`) for every call that omitted no
+	// defaulted argument, which is nearly all of them.
+	//
+	// ⚠ **THE LABEL STAYS ON THE SYNTHESIZED ARGUMENT, AND THIS COLUMN IS AUTHORITATIVE ONLY FOR `slotCallArgs`.**
+	// Four other readers bridge an argument index to a position through `argSlotPosition` alone
+	// (`SemanticCheck.addMutationEdges`, `checkImmutableArgToMutatingParam`, `Parser.transferConsumedArgs`,
+	// `InsertRangeChecks`), and none is threaded this column — because none CAN be wrong for the only name a
+	// signature may repeat. `_` binds nothing, so no body mentions it, so every analysis keyed on what the body
+	// does with a parameter (mutates it, consumes it, feeds it, blames it) answers "nothing" for a `_` slot
+	// whichever `_` a name lookup picks. Only `slotCallArgs` places a VALUE, and only it needs the exact slot.
+	//
 	// `mint` says whether `callee` is bytes the author wrote or a name the compiler minted from a spelling
 	// that shares none of them — see `CalleeMint`. It is the LAST field for the reason a new op is appended at
 	// its band's end: every existing destructuring reads its operands positionally.
-	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
+	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
 	// --- band: plain ---
 	// Integer literal materialization. `value` is the already-parsed i64 (the
 	// parser converts the raw token text via NumberParsing.parseInt at emit
@@ -830,7 +853,7 @@ export union MaxonOp
 	// PARSER emits (`compare(errorFlag != 0)` + `condBranch`) is what reads the flag; the value is used
 	// on the success edge. Category `callFree`, the same band as `call` — it IS `call` plus the flag def.
 	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
-	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
+	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
 	// THROW an error — a `throw E.case` / `throw U.case(x)` or `otherwise (e) throw e`. TERMINATOR (control
 	// leaves the function via the error edge). `errorValue` is either the enum ORDINAL (a SCALAR error) or a
 	// heap-box POINTER (a payload-bearing/boxed union), and `errorIsBoxed` is which — the ONE bit the
@@ -918,7 +941,7 @@ export union MaxonOp
 	// promise handle (the spawned GT's pointer). The parser rejects a managed/float async arg or result
 	// (E2015) before this op is emitted, so every `args` value and the callee's return are GPR scalars.
 	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
-	asyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) = MaxonOpMeta{category: OpCategory.awaiting}
+	asyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray) = MaxonOpMeta{category: OpCategory.awaiting}
 	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;
 	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.
 	await(result ValueId, promise ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
@@ -1172,9 +1195,9 @@ end 'maxonOpCalleeKind'
 // and a caller that forgot the gate would silently resolve "the overload set named by the empty string".
 export function maxonOpCalleeName(op MaxonOp) returns ByteArray
 	return match op 'op'
-		call(_, callee, _, _, _, _, _) gives callee
-		tryCall(_, _, callee, _, _, _, _, _) gives callee
-		asyncCall(_, callee, _, _, _, _) gives callee
+		call(_, callee, _, _, _, _, _, _) gives callee
+		tryCall(_, _, callee, _, _, _, _, _, _) gives callee
+		asyncCall(_, callee, _, _, _, _, _) gives callee
 		functionRef(_, funcName) gives funcName
 		default panic("maxonOpCalleeName: asked of an op that binds no callee name — `maxonOpCalleeKind` answers `noCallee` for it, and every caller gates on that")
 	end 'op'
@@ -1190,9 +1213,9 @@ export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonO
 		// name E2051 bars from the reserved space, so a minted callee can never be its subject. Resetting the
 		// mint here would hide that if it ever changed; carrying it makes `primitiveStaticSourceSpelling`'s
 		// re-mint check panic on the spot.
-		call(result, _, args, argLabels, argRanges, argImmutableNames, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, mint: mint)
-		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, mint: mint)
-		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+		call(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots)
 		default panic("withRewrittenCallee: asked of an op that binds no direct callee — `maxonOpCalleeKind` answers `direct` for exactly three variants and every caller gates on it")
 	end 'op'
 end 'withRewrittenCallee'

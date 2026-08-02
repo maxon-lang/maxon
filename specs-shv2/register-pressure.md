@@ -81,7 +81,7 @@ used once in the loop (their own update), so they rank first (cheapest to hoist 
 array); the counter `i`, read by all sixteen updates plus the condition plus its own
 increment, ranks last. Each value points at its declaration's source span.
 ```maxon
-function hot(p int) returns int
+function hot(_ int) returns int
 	var s1 = 1
 	var s2 = 2
 	var s3 = 3
@@ -160,7 +160,7 @@ error E5001: the loop at <fragment>:21 needs 3 more register(s) than are availab
 <!-- targets: arm64-macos, arm64-linux -->
 arm64 allocates from 26 GPRs (x0-x15 ∪ x19-x28), not x64's 14, so an overflow needs more live values than `hot-loop-overflow`. Twenty-eight accumulators `s1`..`s28` are all updated every iteration, plus the counter `i`, plus the loop condition's materialized boolean — arm64 lowers `i < N` to `cmp`+`cset` into a GPR, where x64 fuses `cmp`+`jcc` and materializes nothing — so thirty values are live at the loop header against a pool of twenty-six. The deficit is exactly 4 (30 − 26), reported against the FULL arm64 pool, and each accumulator points at its declaration span.
 ```maxon
-function hot(p int) returns int
+function hot(_ int) returns int
 	var s1 = 1
 	var s2 = 2
 	var s3 = 3
@@ -295,7 +295,7 @@ function sink(x int) returns int
 	return x
 end 'sink'
 
-function hotCall(p int) returns int
+function hotCall(_ int) returns int
 	var s1 = 1
 	var s2 = 2
 	var s3 = 3
@@ -826,7 +826,7 @@ end 'main'
 ```
 
 <!-- test: dead-def-parameter-holds-a-register -->
-A DEAD DEF still costs a register, and the pressure model has to say so. `a14` is never read, so
+A DEAD DEF still costs a register, and the pressure model has to say so. The trailing `_` is never read, so
 it is live at NO program point and no popcount over a live set can see it — yet `mov rax, [rbp+k]`
 CLOBBERS a register whatever becomes of the value, so the colorer must hand it one. Fourteen live
 parameters plus that one dead materialization is FIFTEEN registers against a pool of fourteen, at a
@@ -834,12 +834,12 @@ single op. Before `addOpTransientPressure` counted it, the splitter found no ove
 declared the function relieved, and `chooseRegister` then panicked with every register blocked —
 the one demand a live-set model is structurally blind to. Result is `sum(1..14) = 105`.
 ```maxon
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int) returns int
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, _ int) returns int
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
 end 'f'
 
 function main() returns ExitCode
-	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, a14: 15)
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, _: 15)
 end 'main'
 ```
 ```exitcode
@@ -852,12 +852,12 @@ caught from both sides. Thirteen live parameters plus one dead materialization i
 of fourteen: it fits, nothing is split, and the fragment must show no store and no reload. Result
 is `sum(1..13) = 91`.
 ```maxon
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int) returns int
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, _ int) returns int
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12
 end 'f'
 
 function main() returns ExitCode
-	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14)
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, _: 14)
 end 'main'
 ```
 ```exitcode
@@ -980,12 +980,12 @@ splitter relieves it cold, which is worth pinning too. The trailing arguments ar
 fits an exit code while the first twenty stay distinct — a swapped register still changes the
 answer. Result is `sum(1..20) = 210`.
 ```maxon
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int, a15 int, a16 int, a17 int, a18 int, a19 int, a20 int, a21 int, a22 int, a23 int, a24 int, a25 int, a26 int) returns int
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int, a15 int, a16 int, a17 int, a18 int, a19 int, a20 int, a21 int, a22 int, a23 int, a24 int, a25 int, _ int) returns int
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25
 end 'f'
 
 function main() returns ExitCode
-	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, a14: 15, a15: 16, a16: 17, a17: 18, a18: 19, a19: 20, a20: 0, a21: 0, a22: 0, a23: 0, a24: 0, a25: 0, a26: 0)
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, a14: 15, a15: 16, a16: 17, a17: 18, a18: 19, a19: 20, a20: 0, a21: 0, a22: 0, a23: 0, a24: 0, a25: 0, _: 0)
 end 'main'
 ```
 ```exitcode

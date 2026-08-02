@@ -391,7 +391,9 @@ error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-a
 <!-- test: range-check-panic.entry-guard-on-a-parameter-no-body-reads -->
 <!-- targets: x64-windows, x64-linux -->
 ⭐⭐ **THE GUARD IS NOT DEAD CODE, EVEN WHEN NOTHING BUT THE PREMISE CONSUMES IT.** `unused`'s body never
-mentions `d`, so the only thing the entry guard establishes is *the premise itself* — and a guard whose
+mentions its parameter — it is spelled `_`, the ignore name, because a parameter no body reads is exactly
+what this case is about and E3012 refuses any other spelling of it — so the only thing the entry guard
+establishes is *the premise itself* — and a guard whose
 sole consumer is a premise is exactly what a naive dead-value pass deletes. That is not a hypothetical:
 the whole point of this mechanism is that the divide prover TRUSTS a `NonZero` parameter, so a pass that
 elided the guard on the grounds that nothing reads the value would silently restore the bug A1f closed,
@@ -405,7 +407,7 @@ function opaque(n Integer) returns Integer
   return n
 end 'opaque'
 
-function unused(d NonZero) returns Integer
+function unused(_ NonZero) returns Integer
   return 7
 end 'unused'
 
@@ -570,7 +572,7 @@ evidence: two entry cascades, one per parameter, and NONE at the `return`.
 ```maxon
 typealias SmallInt = int(0 to 10)
 
-function pick(a SmallInt, b SmallInt) returns SmallInt
+function pick(_ SmallInt, b SmallInt) returns SmallInt
   return b
 end 'pick'
 

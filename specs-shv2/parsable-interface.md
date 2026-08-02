@@ -457,7 +457,7 @@ readings of one call site cannot come to disagree about what "the user declared 
 type byte
 	export let n as int
 
-	export static function fromString(s String) returns int
+	export static function fromString(_ String) returns int
 		return 7
 	end 'fromString'
 end 'byte'
@@ -493,7 +493,7 @@ type Box
 		return Self{n: n}
 	end 'create'
 
-	export function fromString(s String) returns int
+	export function fromString(_ String) returns int
 		return self.n
 	end 'fromString'
 end 'Box'

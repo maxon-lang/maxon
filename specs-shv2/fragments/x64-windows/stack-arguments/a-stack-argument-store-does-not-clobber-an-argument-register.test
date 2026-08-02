@@ -1,7 +1,7 @@
 // Test: a-stack-argument-store-does-not-clobber-an-argument-register
 typealias Integer = int(i64.min to i64.max)
 
-function pick(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer) returns Integer
+function pick(_ Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer) returns Integer
 	return c
 end 'pick'
 
@@ -9,36 +9,5 @@ function main() returns ExitCode
 	return pick(0, b: 0, c: 3, d: 0, e: 0, f: 0, g: 0, h: 99)
 end 'main'
 ---
-ExitCode: 3
----
-func @pick {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rcx, [rbp + 48]
-    x64.loadRegBaseDisp.word64 rcx, [rbp + 56]
-    x64.movRegReg r8, rax
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 48
-    x64.movRegImm32 rcx, 0
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 3
-    x64.movRegImm32 r9, 0
-    x64.movRegImm32 rsi, 0
-    x64.movRegImm32 rdi, 0
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 99
-    x64.storeBaseDispReg.word64 [rsp + 32], r8
-    x64.storeBaseDispReg.word64 [rsp + 40], r10
-    x64.callDirect pick
-    x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
-}
+CompilerError:
+error E3012: <fragment>:4:26: unused variable: 'b'

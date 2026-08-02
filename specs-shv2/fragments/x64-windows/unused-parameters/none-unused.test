@@ -1,0 +1,36 @@
+// Test: none-unused
+
+typealias Integer = int(i64.min to i64.max)
+
+function multiply(a Integer, b Integer) returns Integer
+	return a * b
+end 'multiply'
+
+function main() returns ExitCode
+	return multiply(7, b: 6)
+end 'main'
+---
+ExitCode: 42
+---
+func @multiply {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.imulRegReg r8, rcx, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 7
+    x64.movRegImm32 rdx, 6
+    x64.callDirect multiply
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

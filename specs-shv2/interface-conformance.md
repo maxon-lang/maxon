@@ -426,8 +426,46 @@ end 'main'
 ```
 
 
-<!-- disabled-test: non-interface-method-on-conforming-type-still-errors -->
-<!-- P1.7a-s2: E3012 unused-variable checking is not implemented in shv2 (the conformance half works; this asserts the unused-param check still fires) -->
+<!-- test: interface-method-may-leave-a-required-parameter-unread -->
+⭐ **THE POSITIVE HALF OF THE UNUSED-PARAMETER WAIVER** (`unused-parameters`); the negative half is
+`non-interface-method-on-conforming-type-still-errors`, directly below. An implementer is forced to declare
+every parameter the CONTRACT names, so a method satisfying a requirement is exempt from E3012 even when its
+own implementation has no use for one — `Quiet.greet` ignores `volume` entirely and must still compile.
+Without the waiver this is `unused variable: 'volume'`, and `_` is not available to fix it: the name is the
+interface's to choose, not the implementer's.
+
+The receiver is CONCRETE (`q.greet(7)`), the shape `conformance-basic` uses — no interface-typed parameter
+is involved, so this does not wait on existentials.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet(volume Integer) returns Integer
+end 'Greeter'
+
+type Quiet implements Greeter
+	let value as Integer
+
+	function greet(volume Integer) returns Integer
+		return value
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Quiet'
+
+function main() returns ExitCode
+	let q = Quiet.create(42)
+	return q.greet(7)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: non-interface-method-on-conforming-type-still-errors -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

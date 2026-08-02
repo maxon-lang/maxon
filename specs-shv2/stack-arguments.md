@@ -89,10 +89,30 @@ Every argument is a constant, so each one must be materialized into some registe
 stored. The value that lands in argument register 2 is distinctive, and so is the last stack
 argument's: if the stack stores run after the register moves, the constant materialization takes the
 argument register back and the third parameter reads the eighth one's value.
+
+⛔⛔ **THIS CASE NO LONGER RUNS, AND THE PROPERTY ABOVE IS NOW PINNED BY NOTHING.** The shape that makes the
+clobber observable is exactly the shape the language forbids: SEVEN of the eight parameters exist only to
+occupy argument slots and are deliberately never read — the FIRST is already spelled `_`, which it can be
+because it is passed positionally, and the other six are `b`, `d`, `e`, `f`, `g` and `h` — and an unread
+parameter is `E3012` (see
+`unused-parameters`). The spelling for a deliberately unread parameter is `_`, and here it cannot be used —
+every one of those six is supplied BY LABEL, a repeated `_:` label resolves to the first `_` and is refused
+as a duplicate argument (E3038), and a positional `_` argument is refused by BOTH compilers (measured:
+bootstrap `E3005`, shv2 `E2053` — only the first argument may be positional). Nor may they be omitted: the
+case needs eight CONSTANT arguments to put anything on the stack at all. So there is no legal Maxon program
+with this property, and the expectation below pins the refusal instead.
+
+⚠ **`eight-scalar-parameters` DOES NOT COVER IT — do not read it as a replacement.** That case READS all
+eight parameters, so all eight are live and the stack stores cannot be reordered past a register move
+without the answer changing somewhere else; it passes today and passed before the bug this case was
+written for. **It is precisely the ONE-parameter-read shape that makes the clobber observable**, and that
+shape is unwritable. No substitute case is added here on purpose: any legal version makes the other
+parameters live, which is the shape that already passes, and a case that does not pin the property would
+read like coverage while being none.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function pick(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer) returns Integer
+function pick(_ Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer) returns Integer
 	return c
 end 'pick'
 
@@ -100,8 +120,8 @@ function main() returns ExitCode
 	return pick(0, b: 0, c: 3, d: 0, e: 0, f: 0, g: 0, h: 99)
 end 'main'
 ```
-```exitcode
-3
+```maxoncstderr
+error E3012: specs/fragments/stack-arguments/a-stack-argument-store-does-not-clobber-an-argument-register.test:4:26: unused variable: 'b'
 ```
 
 <!-- test: a-function-typed-parameter-costs-two-argument-slots -->

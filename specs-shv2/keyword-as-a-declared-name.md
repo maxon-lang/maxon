@@ -269,6 +269,15 @@ rather than a spurious opener, and LABELLED at the call site, which is the shape
 spurious opener. The body of the function that declares them runs a real `while` and a real `if`, and
 its caller runs a real `for`. The two parameters that are READ are the non-block keywords `from` and
 `to`; the case below pins why a bare read of the other three is refused instead.
+
+⭐ **IT PINS A SEMANTIC ERROR, AND THAT IS WHAT MAKES IT STILL A PARSER CASE.** `while`, `for` and `match`
+are unread by construction — the whole point is that they occupy the parameter position — and an unread
+parameter is `E3012` (see `unused-parameters`), which no spelling of these three can avoid: `_` would
+delete the very thing under test. But E3012 is raised in the SEMANTIC stage, so reaching it is proof the
+token stream was counted correctly and the declaration PARSED — a miscount would produce a spurious closer
+and a parse error instead, which is the regression this case exists to catch. The capability is still
+tested, one stage earlier than the exit code used to test it. Measured on the bootstrap: the same
+`E3012 … unused variable: 'while'`, same name, same position.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -295,8 +304,8 @@ function main() returns ExitCode
 	return total
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3012: specs/fragments/keyword-as-a-declared-name/block-keywords-as-parameter-names-beside-real-blocks.test:4:16: unused variable: 'while'
 ```
 
 <!-- test: error.a-bare-read-of-a-block-keyword-parameter -->

@@ -820,7 +820,19 @@ parameter named `Self` — which D8's keyword-as-a-declared-name rule admits —
 and `Self.make(41)` was read as a METHOD CALL on that parameter: *"'int' has no method named 'make'"*. The
 same body's `Self{n: v}` meant the TYPE all along, because `parsePrimary`'s `selfType` arm claims `{`
 ahead of any scope test — so one function had `Self` meaning two different things three lines apart. The
-reference bootstrap resolves both to the type and leaves the parameter merely unread (`E3012`).
+reference bootstrap CANNOT COMPILE this program at all, and the reason is unrelated to `Self`: it refuses
+`Gate{n: 1}.n` — a field access applied to a struct LITERAL — with `E2004 Cannot operate on int and struct`,
+which reproduces with no `Self`-named parameter anywhere in the file. shv2 accepts that expression, so the
+bootstrap is not an oracle for this case. (Its earlier claim here, that the bootstrap "resolves both to the
+type and leaves the parameter merely unread", was measured FALSE and is corrected.) With the
+struct-literal term removed the bootstrap does report `E3012 … unused variable: 'Self'`, and it reports
+exactly that on the two sibling cases below, which is what this case's expectation rests on.
+
+⭐ **IT PINS `E3012`, AND THE MISREAD IT WAS WRITTEN FOR IS STILL WHAT IT TESTS.** A parameter named `Self`
+is never read — reading one is refused outright (`error.bare-Self-read-under-a-Self-named-parameter`) — so
+the NAME is the subject and `_` would delete the case. An unread parameter is `E3012` (see
+`unused-parameters`), a SEMANTIC error: reaching it proves both `Self.make(41)` and `Self{n: v}` resolved
+to the TYPE, because the misread was a refusal this program would never have got past.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -840,8 +852,8 @@ function main() returns ExitCode
 	return Gate.make(0).twin(7)
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3012: specs/fragments/self-type-member-expression/parameter-named-Self-does-not-capture-a-static-call.test:11:23: unused variable: 'Self'
 ```
 
 <!-- test: parameter-named-Self-does-not-capture-an-enum-case -->
@@ -849,6 +861,14 @@ end 'main'
 The enum-side face of the same finding, and it took a different arm: an enum case reference is not a call,
 so it fell to the FIELD-ACCESS arm and reported *"a field access on 'Self', which is declared 'int' and
 not a struct type"* for a case that is right there in the enum.
+
+⭐ **IT NOW PINS `E3012`, AND THE MISREAD IT WAS WRITTEN FOR IS STILL WHAT IT TESTS.** A parameter named
+`Self` is never read — reading one is refused outright
+(`error.bare-Self-read-under-a-Self-named-parameter`) — so the NAME is the subject and `_` would delete the
+case. An unread parameter is `E3012` (see `unused-parameters`), a SEMANTIC error, so reaching it proves
+`Self.on` resolved to the enum case and not to the parameter: the old misread was a refusal this program
+would never have got past. Measured on the bootstrap: the same `E3012 … unused variable: 'Self'` at the
+same position.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -869,8 +889,8 @@ function main() returns ExitCode
 	return 1
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3012: specs/fragments/self-type-member-expression/parameter-named-Self-does-not-capture-an-enum-case.test:8:23: unused variable: 'Self'
 ```
 
 <!-- test: closure-parameter-named-Self-does-not-capture-Self -->
@@ -904,7 +924,15 @@ end 'main'
 <!-- test: managed-payload-through-Self-under-a-Self-named-parameter -->
 ### A MANAGED payload through `Self` while a parameter shadows the name
 The refcount half: the misread base built the box through a different arm, so the drop site has to be
-confirmed under the shadow too. An unbalanced refcount here is exit 101, not a wrong number.
+confirmed under the shadow too.
+
+⭐ **IT NOW PINS `E3012` RATHER THAN THE EXIT CODE, and the refcount half is what that costs.** A parameter
+named `Self` is never read, so the name is the subject and `_` would delete the case; an unread parameter is
+`E3012` (see `unused-parameters`), and a program that does not compile cannot be run. What SURVIVES is the
+resolution under the shadow — E3012 is semantic, so reaching it proves `Self.text("hi")` bound the union
+case rather than the parameter. What is LOST is the drop-site confirmation, which needed the program to
+run: the managed-payload refcount under a `Self`-named parameter is now covered by no case at all.
+Measured on the bootstrap: the same `E3012 … unused variable: 'Self'` at the same position.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -926,8 +954,41 @@ function main() returns ExitCode
 	end 'k'
 end 'main'
 ```
+```maxoncstderr
+error E3012: specs/fragments/self-type-member-expression/managed-payload-through-Self-under-a-Self-named-parameter.test:8:24: unused variable: 'Self'
+```
+
+<!-- test: managed-payload-through-Self-runs-without-a-Self-named-parameter -->
+### A MANAGED payload through `Self` — the RUNTIME half, with no shadowing parameter
+⭐ **THIS CASE EXISTS BECAUSE THE ONE ABOVE STOPPED RUNNING.** `managed-payload-through-Self-under-a-Self-named-parameter`
+now pins `E3012` (its parameter named `Self` is unread by construction, which is the whole subject), and a
+program that does not compile cannot check a refcount. That flip would otherwise have removed the LAST
+program reaching `Self.<case>(<managed payload>)` at run time — the exact way this repo has lost a
+mechanism's whole coverage before. The construction and the drop site are identical; only the shadowing
+parameter is gone, so an unbalanced refcount here is still exit 101 rather than a wrong number.
+```maxon
+typealias Num = int(0 to 100)
+
+union Msg
+	text(s String)
+	silent
+
+	export function shout(volume Num) returns Msg
+		return Self.text("hi{volume}")
+	end 'shout'
+end 'Msg'
+
+function main() returns ExitCode
+	let m = Msg.silent
+	let n = m.shout(1)
+	return match n 'k'
+		text(s) gives s.byteLength() as ExitCode
+		silent gives 1
+	end 'k'
+end 'main'
+```
 ```exitcode
-2
+3
 ```
 
 <!-- test: error.bare-Self-read-under-a-Self-named-parameter -->

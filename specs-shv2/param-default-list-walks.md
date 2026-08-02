@@ -36,7 +36,7 @@ typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var item as T
 
-	static function create(tag Integer = 1, item T) returns Self
+	static function create(_ Integer = 1, item T) returns Self
 		return Self{item: item}
 	end 'create'
 end 'Box'
@@ -69,7 +69,7 @@ typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var item as T
 
-	static function create(tag Integer, item T) returns Self
+	static function create(_ Integer, item T) returns Self
 		return Self{item: item}
 	end 'create'
 end 'Box'
@@ -101,7 +101,7 @@ typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var item as T
 
-	static function create(tag Integer = 1, note String = "n", item T) returns Self
+	static function create(_ Integer = 1, _ String = "n", item T) returns Self
 		return Self{item: item}
 	end 'create'
 end 'Box'
@@ -113,7 +113,7 @@ function main() returns ExitCode
 	var i = 0
 	while i < 50 'loop'
 		let s = "hello!"
-		let b = StrBox.create(2, note: "x", item: s)
+		let b = StrBox.create(2, item: s)
 		total = 6
 		i = i + 1
 	end 'loop'

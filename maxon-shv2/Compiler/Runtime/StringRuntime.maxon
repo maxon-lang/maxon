@@ -631,11 +631,11 @@ end 'scanRuntimeUsage'
 
 function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures FuncSignatureMap)
 	match op 'op'
-		call(_, callee, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
+		call(_, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
 		literal to stringLiteral then break 'op'
 		// A throwing call names a user callee whose runtime usage is scanned exactly as `call`'s is; the
 		// throw/propagate terminators and `panicAbort` name no user callee (panic exits directly) (P1.4b).
-		tryCall(_, _, callee, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
+		tryCall(_, _, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
 		throwError to panicAbort then break 'op'
 		// P1.5-A1: an `indirectCall` calls through a code POINTER and names no runtime callee, so it records
 		// nothing. A `functionRef` naming a USER function is likewise a bare `lea` of no runtime consequence —

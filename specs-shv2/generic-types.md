@@ -609,7 +609,7 @@ type Box uses T
 end 'Box'
 typealias LeafBox = Box with Leaf
 typealias OtherBox = Box with Other
-function takes(b LeafBox) returns ExitCode
+function takes(_ LeafBox) returns ExitCode
 	return 0
 end 'takes'
 function main() returns ExitCode
@@ -617,7 +617,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:26:9: argument type mismatch for 'b': expected 'Box_Leaf', got 'Box_Other'
+error E3005: <fragment>:26:9: argument type mismatch for '_': expected 'Box_Leaf', got 'Box_Other'
 ```
 
 <!-- test: error.type-parameter-arg-wrong-instance -->
@@ -710,7 +710,7 @@ type Holder
 	export static function create(b LeafBox) returns Self
 		return Self{b: b}
 	end 'create'
-	export function replace(n LeafBox) returns ExitCode
+	export function replace(_ LeafBox) returns ExitCode
 		return 0
 	end 'replace'
 end 'Holder'
@@ -720,7 +720,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:33:9: argument type mismatch for 'n': expected 'Box_Leaf', got 'Box_Other'
+error E3005: <fragment>:33:9: argument type mismatch for '_': expected 'Box_Leaf', got 'Box_Other'
 ```
 
 <!-- test: error.return-wrong-instance -->
@@ -841,7 +841,7 @@ type Box uses T
 	end 'create'
 end 'Box'
 typealias LeafBox = Box with Leaf
-function takes(b LeafBox) returns ExitCode
+function takes(_ LeafBox) returns ExitCode
 	return 0
 end 'takes'
 function main() returns ExitCode
@@ -849,7 +849,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:19:9: argument type mismatch for 'b': expected 'Box_Leaf', got 'Leaf'
+error E3005: <fragment>:19:9: argument type mismatch for '_': expected 'Box_Leaf', got 'Leaf'
 ```
 
 <!-- test: error.nested-pair-arg-wrong-instance -->
@@ -901,7 +901,7 @@ type Box uses T
 end 'Box'
 typealias LeafBox = Box with Leaf
 typealias LeafBoxAgain = Box with Leaf
-function takes(b LeafBox) returns ExitCode
+function takes(_ LeafBox) returns ExitCode
 	return 0
 end 'takes'
 function main() returns ExitCode
@@ -1067,7 +1067,7 @@ end 'Box'
 typealias N0 = Box with S0
 typealias ViaAlias = Box with N0
 typealias ViaInline = Box with (Box with S0)
-function takes(b ViaAlias) returns ExitCode
+function takes(_ ViaAlias) returns ExitCode
 	return 0
 end 'takes'
 function makeIt() returns ViaAlias
@@ -1109,7 +1109,7 @@ typealias N0 = Box with S0
 typealias N1 = Box with N0
 typealias DeepAlias = Box with (Box with N0)
 typealias DeepInline = Box with (Box with (Box with S0))
-function takes(b DeepAlias) returns ExitCode
+function takes(_ DeepAlias) returns ExitCode
 	return 0
 end 'takes'
 function main() returns ExitCode
@@ -1148,7 +1148,7 @@ type Box uses T
 	end 'create'
 end 'Box'
 typealias N0 = Box with S0
-function takes(b N0) returns ExitCode
+function takes(_ N0) returns ExitCode
 	return 0
 end 'takes'
 function main() returns ExitCode
@@ -1156,7 +1156,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:19:9: argument type mismatch for 'b': expected 'Box_S0', got 'Box'
+error E3005: <fragment>:19:9: argument type mismatch for '_': expected 'Box_S0', got 'Box'
 ```
 
 <!-- test: error.bare-generic-constructor-unbound-t-bound-first -->
@@ -1177,7 +1177,7 @@ type Box uses T
 	end 'create'
 end 'Box'
 typealias N0 = Box with S0
-function takes(b N0) returns ExitCode
+function takes(_ N0) returns ExitCode
 	return 0
 end 'takes'
 function main() returns ExitCode
@@ -1186,7 +1186,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:20:9: argument type mismatch for 'b': expected 'Box_S0', got 'Box'
+error E3005: <fragment>:20:9: argument type mismatch for '_': expected 'Box_S0', got 'Box'
 ```
 
 <!-- test: per-instance-alias-decays-at-a-type-parameter-argument -->
@@ -1228,7 +1228,7 @@ end 'Box'
 typealias WA = Wrapper with Integer
 typealias IntBox = Box with Integer
 
-function takesPlain(n Integer) returns ExitCode
+function takesPlain(_ Integer) returns ExitCode
 	return 0
 end 'takesPlain'
 

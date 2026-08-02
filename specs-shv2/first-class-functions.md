@@ -2836,11 +2836,11 @@ typealias InnerA = function(x Integer) returns Integer
 typealias InnerB = function(x Real) returns Real
 typealias Outer = function(f InnerA) returns Integer
 
-function runner(f InnerB) returns Integer
+function runner(_ InnerB) returns Integer
 	return 1
 end 'runner'
 
-function drive(o Outer) returns Integer
+function drive(_ Outer) returns Integer
 	return 2
 end 'drive'
 
@@ -2849,7 +2849,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:18:9: argument type mismatch for 'o': expected 'fn(InnerA) returns int', got 'fn(InnerB) returns int'
+error E3005: <fragment>:18:9: argument type mismatch for '_': expected 'fn(InnerA) returns int', got 'fn(InnerB) returns int'
 ```
 
 <!-- test: first-class-function.error.indirect-call-too-few-args -->

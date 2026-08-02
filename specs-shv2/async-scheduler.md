@@ -357,7 +357,7 @@ An async callee with a float parameter is refused — the trampoline passes argu
 registers, so a float parameter (which is read from an XMM register) would read the wrong register file.
 ```maxon
 
-function takesFloat(x float) returns int
+function takesFloat(_ float) returns int
 	return 5
 end 'takesFloat'
 
@@ -368,7 +368,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:16: `async takesFloat(…)` — an async function's parameters must be scalars (int/bool); parameter 'x' is a managed or float type the green-thread trampoline passes through the wrong register file at this rung (managed async is P1.5-B1c)
+error E2015: <fragment>:8:16: `async takesFloat(…)` — an async function's parameters must be scalars (int/bool); parameter '_' is a managed or float type the green-thread trampoline passes through the wrong register file at this rung (managed async is P1.5-B1c)
 ```
 
 <!-- test: async-scheduler.await-non-promise-refused -->
