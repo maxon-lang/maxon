@@ -1,0 +1,30 @@
+// Test: a-root-level-module-declaration-is-visible-from-a-subdirectory
+// --- file: root.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function helper() returns Integer
+	return 42
+end 'helper'
+
+// --- file: sub/main.maxon
+function main() returns ExitCode
+	return helper()
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl helper
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @helper {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}
