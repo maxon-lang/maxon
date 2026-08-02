@@ -1,0 +1,35 @@
+// Test: static-method-named-args
+
+typealias Integer = int(i64.min to i64.max)
+
+type Factory
+	static function create(x Integer, y Integer) returns Integer
+		return x * 10 + y
+	end 'create'
+end 'Factory'
+
+function main() returns ExitCode
+	return Factory.create(4, y: 2)
+end 'main'
+---
+ExitCode: 42
+---
+func @Factory.create {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 4
+    arm64.movImm x1, 2
+    arm64.bl Factory.create
+    arm64.epilogue 16
+    arm64.ret
+}
