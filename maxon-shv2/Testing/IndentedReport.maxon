@@ -1,0 +1,25 @@
+// Testing/IndentedReport.maxon — the ONE indented list every self-check's report is assembled from.
+//
+// ⚠ **`panic` TAKES A STRING LITERAL** — a `let`-bound String is rejected outright — so a gate that
+// found SEVERAL problems cannot hand a builder to `panic`. It has to render the list as text and
+// INTERPOLATE it into the literal, which is why every check in this directory that reports all its
+// failures together ends the same way.
+//
+// ⭐ **AND EACH OF THEM HAD WRITTEN THE LOOP ITSELF.** `LadderIndex.nameListClause`,
+// `HarnessSelfTest.brokenRefusalReport`, `ScaleHistory.cellDifferenceReport` and
+// `ScaleHistorySelfTest`'s two lists were four copies of one four-line builder, in four files, each of
+// them file-private, with nothing that would make them agree — this project's signature bug wearing the
+// costume of a formatting detail. They agreed today; a change to how a list is rendered would have
+// reached one of them and read as deliberate at the other three.
+//
+// THE INDENT STAYS THE CALLER'S, and that is not an escape hatch. How deep a list sits is a property of
+// the SENTENCE that introduces it — a fixture under a headline, a missing expectation under the fixture
+// that is missing it, a differing cell under the row it was read from — and folding those depths in here
+// would be one constant standing for three different nestings.
+export function indentedList(items StringArray, indent String) returns String
+	var out = StringBuilder.create()
+	for item in items 'eachItem'
+		out.append("{indent}{item}")
+	end 'eachItem'
+	return out.build()
+end 'indentedList'

@@ -371,7 +371,7 @@ function readTable(lines StringArray, marker String, source String) returns LogT
 
 	let lastCells = splitRow(try lines.get(markerLine - 1) otherwise panic("readTable: the last row is inside the block"))
 	if lastCells.count() != header.count() 'ragged'
-		throw ScaleError.reason("the last row of the table above `{marker}` has {lastCells.count()} cell(s) but its header has {header.count()} — the table is ragged, and a column read out of it would be the wrong column")
+		throw ScaleError.reason("the last row of the table above `{marker}` in {source} has {lastCells.count()} cell(s) but its header has {header.count()} — the table is ragged, and a column read out of it would be the wrong column")
 	end 'ragged'
 
 	return LogTable.create(source, marker: marker, header: header, last: LogTableRow.cells(lastCells))
@@ -569,14 +569,13 @@ end 'recordCellDifference'
 // A reader who sees `…` mid-sentence has to know whether they are looking at the whole cell, and the
 // answer belongs beside the excerpt rather than in the source of the tool that printed it.
 function cellDifferenceReport(differing StringArray) returns String
-	var report = StringBuilder.create()
-	for difference in differing 'each'
-		report.append("\n    {difference}")
-	end 'each'
-
-	report.append("\n    (a cell longer than {ExcerptWindowChars} characters is shown as a window of {ExcerptWindowChars} characters around the character they part at; `{OmissionMark}` marks what is cut)")
-	return report.build()
+	return "{indentedList(differing, indent: DifferingCellIndent)}{DifferingCellIndent}(a cell longer than {ExcerptWindowChars} characters is shown as a window of {ExcerptWindowChars} characters around the character they part at; `{OmissionMark}` marks what is cut)"
 end 'cellDifferenceReport'
+
+// How deep each differing cell sits under the sentence that introduces it — and the same indent the
+// truncation rule itself is printed at, because the rule is a line of that list rather than a footer
+// under it.
+let DifferingCellIndent = "\n    "
 
 // The character position at which two cells first diverge — or, when one is a prefix of the other, the
 // length of the shorter, which is exactly where they part.
@@ -667,7 +666,7 @@ end 'indexAt'
 function rungCounts(cells StringArray, source String) returns AllocCountArray throws ScaleError
 	var counts = AllocCountArray.create()
 	for i in LeadingColumns upto cells.count() 'eachRung'
-		counts.push(try parseGroupedCount(try cellAt(cells, index: i, source: source)))
+		counts.push(try parseGroupedCount(try cellAt(cells, index: i, source: source), source: source, column: i))
 	end 'eachRung'
 	return counts
 end 'rungCounts'
@@ -680,8 +679,19 @@ end 'cellAt'
 
 // `19,261,978` -> 19261978. The tables carry digit groups because a column of seven-figure numbers is
 // unreadable without them, and the reader has to undo exactly what the writer did.
-function parseGroupedCount(cell String) returns ParsedCount throws ScaleError
-	return try parseCount(cell.replace(",", with: ""))
+//
+// ⚠ **`parseCount` IS THE SUITE'S ONE DECIMAL PARSER AND ITS MESSAGE CANNOT NAME A DOCUMENT** — it is
+// shared with the metrics TSV, the `--mm-trace` `size=` fields, `--rungs` and `--repeat`, so a reader of
+// a hand-edited trend log was told only `expected a number, got 'oops'`, with nothing saying which file,
+// which table or which column. Adding a context parameter THERE would make four other call sites carry a
+// sentence two of them discard unread; the caller that knows the document is the one that says so. This
+// is that caller, and the column index is what turns "a cell" into a RUNG a reader can go and look at.
+function parseGroupedCount(cell String, source String, column ColumnIndex) returns ParsedCount throws ScaleError
+	let value = try parseCount(cell.replace(",", with: "")) otherwise (error) 'notACount'
+		throw ScaleError.reason("column {column} of a row in {source} is not a count — {scaleErrorText(error)}. Every column past the {LeadingColumns} leading ones is one rung's number, written with digit-group commas.")
+	end 'notACount'
+
+	return value
 end 'parseGroupedCount'
 
 // ===========================================================================================
@@ -766,7 +776,13 @@ export function assertRecordable(trend LoggedMemory, note String, mintedAt Strin
 		present then break 'm'
 	end 'm'
 
-	let logged = try trend.loggedRungCount()
+	// THE `absent` ARM RETURNED ABOVE, so `loggedRungCount`'s own refusal cannot be raised from here —
+	// and that is why this is `otherwise panic` rather than a bare `try` propagating it. The refusal is
+	// NOT dead: `loggedRungCount` is an exported member of an exported union, so any future caller may
+	// ask it without a guard, and a `RungCount` it could not honestly answer would have to be a sentinel.
+	// Saying so at the one site that has already established the arm is what keeps the two facts — the
+	// refusal is live, and it is unreachable from here — from having to be re-derived by a reader.
+	let logged = try trend.loggedRungCount() otherwise panic("assertRecordable: the trend is `present`, which is the arm loggedRungCount answers from — the `absent` arm returned four lines above")
 	if rungs != logged 'differentLadder'
 		throw ScaleError.reason("the log's tables have {logged} rung column(s) and this run climbed {rungs}. A row of a different width would make the tables RAGGED, and a rung's column — which is the whole point of reading them downwards — would stop meaning one rung. Re-run with --rungs={logged}.")
 	end 'differentLadder'

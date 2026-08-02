@@ -111,9 +111,12 @@ export function requireHarnessRefusalsFire(workerExe FilePath, compilerExe FileP
 
 	// ⚠ `panic` takes a STRING LITERAL — a `let`-bound String is rejected outright — so the list is
 	// built as text and INTERPOLATED. Same constraint `LadderIndex.requireLadderIndexComplete` documents.
-	let report = brokenRefusalReport(broken)
+	let report = indentedList(broken, indent: BrokenHarnessFixtureIndent)
 	panic("HarnessSelfTest: {broken.count()} of {checked} harness refusals did not fire on the fixture written to trip them. A refusal nothing runs is a claim, not a door.{report}")
 end 'requireHarnessRefusalsFire'
+
+// How deep each failing fixture sits under the sentence that introduces it — one paragraph per line.
+let BrokenHarnessFixtureIndent = "\n  "
 
 // One fixture's verdict. A union rather than an empty-String reason, so "the refusal fired" carries no
 // vestigial text and there is no sentinel to re-derive.
@@ -125,15 +128,6 @@ end 'FixtureVerdict'
 // How many fixture cases one sweep proved. Named because it is the count the empty-corpus refusal
 // reads, not a loop counter.
 typealias FixtureTally = int(0 to u64.max)
-
-// The failing fixtures, one indented paragraph each.
-function brokenRefusalReport(broken StringArray) returns String
-	var out = StringBuilder.create()
-	for reason in broken 'each'
-		out.append("\n  {reason}")
-	end 'each'
-	return out.build()
-end 'brokenRefusalReport'
 
 // Is `specDir` one of the fixture case directories — i.e. is this process a fixture sub-run? A fixture
 // case is driven by spawning this harness at `<root>/<case>`, so the question is whether `specDir`'s

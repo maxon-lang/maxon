@@ -65,6 +65,13 @@ let AllocationsCounts = "1,000 | 2,000"
 let BytesCounts = "30,000 | 60,000"
 let CpuCounts = "500 | 900"
 
+// What a hand-edit leaves in a rung cell, and the column it is written into. The INDEX is spelled here
+// rather than taken from `ScaleHistory.LeadingColumns` for this file's stated reason: a fixture built out
+// of the reader's own constants follows the reader wherever it goes. `rung 0` is the first column after
+// the three leading ones in `ValidHeaderRow`, which is the document above, not a computation.
+let NonNumericCount = "oops"
+let FirstRungColumnIndex = 3
+
 // How wide the fixture ladder is. Read back out of the parsed row by the positive control, and the width
 // a `--note` has to match.
 let FixtureRungCount = 2 as RungCount
@@ -150,18 +157,6 @@ end 'recordWrongRefusal'
 let BrokenFixtureIndent = "\n  "
 let MissingExpectationIndent = "\n      "
 
-// One list, one line each, at `indent`. ⚠ `HarnessSelfTest.brokenRefusalReport` and
-// `LadderIndex.nameListClause` build the same shape; both are file-private in files this rung is not
-// permitted to edit, so this is a third copy of four lines rather than a shared helper. Noted for the
-// coordinator rather than fixed here.
-function indentedList(items StringArray, indent String) returns String
-	var out = StringBuilder.create()
-	for item in items 'eachItem'
-		out.append("{indent}{item}")
-	end 'eachItem'
-	return out.build()
-end 'indentedList'
-
 // ============================================================================================
 // The fixtures
 // ============================================================================================
@@ -195,9 +190,11 @@ end 'TrendRefusalOutcome'
 // NOT COVERED, and each for a reason that is a fact about the refusal rather than a gap here:
 //   - `loadScaleTrend`'s missing-file and unparseable-path throws, and `recordScaleRun`'s read and write
 //     failures. All four are IO, reachable only by removing or locking the real log.
-//   - `parseGroupedCount`'s non-numeric cell, whose message belongs to `ScaleTestRunner.parseCount` and
-//     is shared with the metrics TSV and `--rungs`. Pinning it from here would wire this gate to a
-//     sentence another file owns.
+//
+// `parseGroupedCount`'s non-numeric cell WAS on that list, for the reason that its message belonged to
+// `ScaleTestRunner.parseCount` — the suite's one decimal parser, shared with the metrics TSV, `--rungs`
+// and the trace's `size=` fields — so pinning it here would have wired this gate to a sentence another
+// file owns. It now has a message of its own, naming the document and the COLUMN, and it is a fixture.
 function scaleHistoryFixtures(trend LoggedMemory) returns TrendFixtureArray
 	var fixtures = TrendFixtureArray.create()
 
@@ -234,6 +231,14 @@ function scaleHistoryFixtures(trend LoggedMemory) returns TrendFixtureArray
 
 	// ---- the row itself -------------------------------------------------------------------------
 	fixtures.push(TrendFixture.create("the TABLE MEASURING A DIFFERENT LADDER", expected: expecting("rung(s) — they measure one ladder"), outcome: parseOutcome(documentWithBytesTable(tableBlock(BytesTitle, lines: tableLines("| date | minted at | change | rung 0 | rung 1 | rung 2 |", separator: "| --- | --- | --- | ---: | ---: | ---: |", rows: rowLine(FixtureDate, mintedAt: FixtureMintedAt, note: FixtureNote, counts: "30,000 | 60,000 | 120,000")), marker: BytesMarkerLine)))))
+
+	// ⭐ THE RUNG CELL THAT IS NOT A NUMBER. Damaged in the BYTES row rather than the allocations one
+	// because `memoryRowFrom` parses the allocations columns FIRST — so this is the document that gets
+	// past every earlier door and is stopped by the one being named. Two expectations: the refusal's own
+	// words, and the COLUMN, which is the half that turns "a cell" into a cell a reader can go and find.
+	var badCountExpectations = expecting("is not a count")
+	badCountExpectations.push("column {FirstRungColumnIndex} of a row in {FixtureSource}")
+	fixtures.push(TrendFixture.create("the RUNG CELL THAT IS NOT A NUMBER", expected: badCountExpectations, outcome: parseOutcome(documentWithBytesRow(rowLine(FixtureDate, mintedAt: FixtureMintedAt, note: FixtureNote, counts: "{NonNumericCount} | 60,000")))))
 
 	// The empty cell goes into ALL THREE rows, so the row reaches `mintedAtFrom` rather than being
 	// stopped one refusal earlier by `assertSameRun`.
