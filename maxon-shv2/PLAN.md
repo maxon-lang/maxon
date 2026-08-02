@@ -4860,6 +4860,39 @@ not ported from v1's `.mxc`.
 
 ### Bootstrap (`maxon-sharp`) oracle bugs — silent wrong answers to fix when the subsystem is next touched
 
+- **🔴🔴 AN UNTERMINATED METHOD DECLARATION INSIDE A `type` BODY MAKES THE BOOTSTRAP SPIN FOREVER — NO
+  DIAGNOSTIC, NO PROGRESS, AND IT COST THIS SESSION ~40 MINUTES OF WALL CLOCK BEFORE IT WAS NAMED.**
+  Found 2026-08-02 by `N1a`'s reviewer, reduced to **thirteen lines**:
+  ```maxon
+  typealias Num = int(i64.min to i64.max)
+
+  type Box
+  	function helper() returns Num
+
+  	function helper() returns Num
+  		return 1
+  	end 'helper'
+  end 'Box'
+
+  function main() returns ExitCode
+  	return 0
+  end 'main'
+  ```
+  - **C# bootstrap:** spins. Killed at 60 s, **no diagnostic**, flat RSS.
+  - **shv2:** `error E2015: main.maxon:6:2: Unsupported: function statement` — correct, at the SECOND
+    header, in milliseconds. **shv2 is strictly better and must not be "fixed" toward the oracle here.**
+  ⚠ **TWO REDUCTION DETAILS THAT MATTER, both measured — a naive repro will NOT reproduce:** the
+  **bare-`int` variant is rejected early by E3005** and never reaches the loop, so the repro needs a
+  **RANGED typealias**; and it needs the **`type`-body context** (a free function pair does not do it).
+  ⭐ **HOW IT PRESENTED, because the symptom is the expensive part:** a real build ran **26m50s** at
+  **FLAT RSS** printing nothing but the `error-codes: OK` line — no `error EXXXX:` anywhere. It was
+  misdiagnosed twice before measurement settled it (first as a compile-time regression in the change
+  under review, then as a two-builders-in-one-tree race), and the one-variable A/B that finally
+  isolated it was **stash the change → 18.556 s exit 0 → restore it → hang**. ⇒ **A COMPILER THAT
+  SPINS IS WORSE THAN ONE THAT CRASHES**: flat memory over minutes is a SPIN and never contention, and
+  the absence of any diagnostic is what let two environmental explanations sound plausible. Related:
+  board row **`R10b`** (a hung compile holding the binary lock) and **`G10`** (the lock file), which
+  this incident is the strongest evidence for.
 - **🔴🔴 TWO FILES' SAME-NAMED `typealias` SHARE ONE GENERIC SPECIALIZATION, AND WHICHEVER THE
   FILESYSTEM ENUMERATES FIRST SILENTLY WINS THE STRIDE FOR BOTH — TRUNCATING DATA WITH NO DIAGNOSTIC OF
   ANY KIND.** Found 2026-08-02 surveying **`N1`**. **REPRODUCED on the shipped `bin/maxon.exe`, both
