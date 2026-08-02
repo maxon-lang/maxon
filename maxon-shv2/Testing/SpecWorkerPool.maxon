@@ -996,20 +996,29 @@ end 'NoSlot'
 // `compilerExe` is what each test is BUILT with; `workerExe` is what each worker process IS. See
 // `spawnNoWait` for why those are two parameters and not one.
 export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount, effectiveTarget Target) returns PoolRun throws CompileError
-	// ⭐ **THE HARNESS'S OWN REFUSALS, PROVEN TO FIRE — BEFORE THE HARNESS IS TRUSTED TO JUDGE ANYTHING
-	// ELSE.** It runs here rather than in `Main` because this is the one function only the PARENT of a
-	// pool reaches (a worker goes to `runPersistentWorker`), and it runs FIRST — ahead of `buildPlans`,
-	// which is itself one of the things under test — so a `--filter`ed run gets the same door an
-	// unfiltered one does. See `HarnessSelfTest` for why a committed malformed spec cannot do this job.
-	requireHarnessRefusalsFire(workerExe, compilerExe: compilerExe, specDir: specDir)
-
-	// ⭐ **AND THE TREND LOG'S REFUSALS, FOR THE SAME REASON, ONE FILE OVER.** `ScaleHistory` reads a
-	// document a human edits and refuses about thirty ways it can be edited into a lie; nothing in the
-	// tree ran one of them. It is wired here rather than into `scale-test` because a gate only the
-	// instrument's own command reaches is a gate nobody runs on the way to a merge — and unlike the
-	// harness fixtures above, this one spawns nothing: the refusals are catchable throws, so it is a
-	// handful of string comparisons.
+	// ⭐ **THE TREND LOG'S OWN REFUSALS, PROVEN TO FIRE.** `ScaleHistory` reads a document a human edits
+	// and refuses around thirty ways it can be edited into a lie; nothing in the tree ran one of them.
+	// It is wired here rather than into `scale-test` because a gate only the instrument's own command
+	// reaches is a gate nobody runs on the way to a merge — and unlike the harness fixtures below, this
+	// one spawns nothing: those refusals are catchable throws, so this is a few hundred string
+	// comparisons.
+	//
+	// ⚠ **IT GOES FIRST, AND THAT ORDER IS LOAD-BEARING.** The harness self-test below drives its
+	// fixtures by SPAWNING this harness, and a sub-run reaches this same function — so a broken trend
+	// refusal panics inside all eight sub-runs, every one of which the parent then reads as a harness
+	// fixture that "failed for the WRONG REASON". Measured: the suite's headline became `8 of 8 harness
+	// refusals did not fire`, which was false, with the real cause buried eight times in the body.
+	// Asking this question before any sub-run exists means the parent panics on its own terms and says
+	// exactly what broke. (A green run still answers it once per sub-run, which is string work on a
+	// document of a few hundred bytes.)
 	requireScaleHistoryRefusalsFire()
+
+	// ⭐ **AND THE HARNESS'S OWN REFUSALS, BEFORE THE HARNESS IS TRUSTED TO JUDGE ANYTHING ELSE.** It
+	// runs here rather than in `Main` because this is the one function only the PARENT of a pool reaches
+	// (a worker goes to `runPersistentWorker`), and it runs ahead of `buildPlans`, which is itself one of
+	// the things under test — so a `--filter`ed run gets the same door an unfiltered one does. See
+	// `HarnessSelfTest` for why a committed malformed spec cannot do this job.
+	requireHarnessRefusalsFire(workerExe, compilerExe: compilerExe, specDir: specDir)
 
 	let plans = try buildPlans(specDir, filter: filter, effectiveTarget: effectiveTarget)
 	if plans.count() == 0 'selectsNothing'
