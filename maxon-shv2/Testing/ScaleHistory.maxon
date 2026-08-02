@@ -25,11 +25,12 @@
 //
 // TWO TABLES, each read DOWNWARDS: one row per recorded change, one column per RUNG.
 //
-//   allocations  Exact, bit-for-bit reproducible, AND independent of where the checkout lives.
+//   allocations  Exact and bit-for-bit reproducible for one checkout. Across two, it carries a
+//                CONSTANT offset — so its SHAPE survives and its constant term does not.
 //   bytes        Exact and bit-for-bit reproducible for one checkout, and NOT comparable across two.
 //
 // ===========================================================================================
-// WHY EVERY ROW RECORDS WHERE IT WAS MINTED, AND WHY ONLY THE BYTE COLUMN NEEDS IT
+// WHY EVERY ROW RECORDS WHERE IT WAS MINTED, AND WHAT EACH COLUMN CAN STILL CARRY WITHOUT IT
 // ===========================================================================================
 //
 // A compile ALLOCATES THE PATH STRINGS IT IS WORKING WITH, so the BYTE volume of a compile carries a
@@ -57,30 +58,51 @@
 // found in review, by running one binary from a second directory: the guard said `comparable` and the
 // report printed a confident +203,310 at rung 5 — the very fiction it had just been built to withhold.
 //
-// So the two columns are NOT the same kind of number across checkouts, and that asymmetry is the whole
-// mechanism here:
+// ⚠ AND THE `allocations 0` ON BOTH ROWS ABOVE IS NOT THE GENERAL RESULT IT WAS READ AS. Both varied
+// the LENGTH of a path, and the allocation column happens not to see that. It sees something else, and
+// the two experiments could not have found it — see the third measurement below, which was run because
+// this file's own claim of `path-independent` cost an implementer most of a session.
 //
-//   - ALLOCATIONS ARE PATH-INDEPENDENT, at every rung, in both experiments above. A longer path makes
-//     the same Strings BIGGER; it does not make more of them. A delta in this column is the compiler.
-//     ⚠ This is an EMPIRICAL result about today's compiler and not a law: a path built through a
-//     doubling StringBuilder would cross a capacity boundary and add one. It has been re-measured four
-//     times (twice here in review, including the `maxon` vs `.claude/worktrees/<name>` pair a memory
-//     note records as +192) and read 0 every time.
-//   - BYTES ARE NOT. The term is concentrated in `phase:load` (flat), `phase:signatures` and
-//     `phase:parse` (both rising with the program), so it is not a constant offset a reader could
-//     subtract — it ran ~2,100 bytes per character at rung 0 to ~9,300 at rung 5.
+// So the two columns are NOT the same kind of number across checkouts, they are BOTH spoiled by a
+// mismatched pair, and the whole mechanism here is the difference in HOW:
+//
+//   - BYTES CARRY A TERM THAT GROWS WITH THE PROGRAM. It sits in `phase:load` (flat),
+//     `phase:signatures` and `phase:parse` (both rising with it), so it is not a constant offset a
+//     reader could subtract — it ran ~2,100 bytes per character at rung 0 to ~9,300 at rung 5. There is
+//     nothing left of a byte A/B across two checkouts, so the delta is WITHHELD.
+//   - ALLOCATIONS CARRY A CONSTANT. The same number at every rung — which is exactly what a startup
+//     cost looks like, and the reason the delta is still PRINTED: a flat offset cancels out of every
+//     rung-over-rung RATIO and out of any delta that GROWS per rung, so the SHAPE of an allocation A/B
+//     across two checkouts stands. Its CONSTANT TERM does not, and a flat per-rung delta between two
+//     checkouts is therefore unattributable. MEASURED, ONE binary — built twice, in two worktrees of
+//     one commit, and confirmed byte-identical by hash — run at four real checkout paths, six rungs:
+//
+//       45 chars, 7 path components   778,291 … 18,109,206   a real worktree, AND a synthetic path of
+//                                                            the same length and depth: identical cells
+//       46 chars, 5 path components   778,147 … 18,109,062
+//       45 chars, 3 path components   778,018 … 18,108,933
+//       14 chars, 3 path components   778,018 … 18,108,933   identical to the 45-character row above it
+//
+//     ⇒ +273 at all six rungs between two paths of the SAME LENGTH, and 0 at all six between paths 31
+//     characters apart. The offset is flat in every pair and lands in `phase:parse` alone.
+//     ⚠ SO THE RULE IS NOT "EQUALISE THE PATH LENGTH". What this column tracks is measurably not the
+//     character count, and this file does not claim to know what it IS — which costs nothing, because
+//     the key below needs no such knowledge.
 //
 // ⇒ A byte delta between two rows minted at different paths is a CONFIDENT FICTION, and it has been
 // read as a per-function regression four times by two agents in one session — once as a sign reversal.
-// This file therefore records the minting paths in the row and `byteComparability` decides; the runner
-// WITHHOLDS the byte delta rather than printing it. Nothing is normalised: the counts stay exactly what
-// was measured, and a subtraction that cannot be honest is simply not performed.
+// A CONSTANT allocation delta between them is the same fiction one column over, and it was nearly filed
+// as a rung's cost twice more. This file therefore records the minting paths in the row and
+// `byteComparability` decides; the runner WITHHOLDS the byte delta and prints the allocation delta under
+// the caveat that its constant term is not attributable. Nothing is normalised: the counts stay exactly
+// what was measured, and a subtraction that cannot be honest is simply not performed.
 //
-// THE PATHS THEMSELVES, NOT THEIR LENGTHS, and that is a deliberate choice of the stronger key. Length
-// is what the artifact is proportional to, so it would do — but only under an assumption (that the
+// THE PATHS THEMSELVES, NOT THEIR LENGTHS, and the third measurement above turned that from the
+// stronger key into the only correct one. For BYTES, length would do under an assumption (that the
 // executable's own file NAME is a build constant, so equal total length implies equal DIRECTORY length,
-// which is the component that multiplies). The whole string needs no assumption: equal strings allocate
-// equal bytes, full stop. It is also the thing a human reading the log downwards actually wants, since
+// which is the component that multiplies). For ALLOCATIONS it would be simply WRONG: two 45-character
+// paths differ by 273. The whole string needs no assumption in either column — equal paths allocate
+// equally, full stop — and it is also the thing a human reading the log downwards actually wants, since
 // "this row came from a worktree" is the sentence that explains a step in the column.
 //
 // ⚠ A SYMLINK OR JUNCTION IS NOT A DIFFERENT PATH. Windows resolves one before the process sees its own
@@ -207,24 +229,29 @@ export union LoggedMemory
 end 'LoggedMemory'
 
 // ===========================================================================================
-// May this run's BYTES be subtracted from the logged row's?
+// Were this run and the logged row minted at the SAME path?
 // ===========================================================================================
 
-// THE ONE DECISION THIS PROVENANCE EXISTS TO MAKE. `withheld` carries the sentence the report prints,
-// because the answer is only useful with the reason attached — a bare `false` in front of a blank
-// column is the same silence the confident wrong number replaced.
+// THE ONE DECISION THIS PROVENANCE EXISTS TO MAKE — asked once, and read by BOTH columns, because both
+// are spoiled by a mismatched pair and only the consequence differs (see this file's header). `withheld`
+// carries the sentence the report prints, because the answer is only useful with the reason attached — a
+// bare `false` in front of a blank column is the same silence the confident wrong number replaced.
 //
-// ⚠ IT IS NOT A VERDICT ABOUT THE COMPILER, and nothing branches on it but the printing of one column.
-// The run still exits 0, still reports every count it measured, and still records the row if it was
-// asked to. What is refused is one SUBTRACTION, on the ground that its two operands were not measured
-// against the same yardstick.
+// IT KEEPS THE BYTE COLUMN'S NAME because the byte column is the only thing it REFUSES. The allocation
+// column is printed either way; what the same answer buys there is the caveat under the table, and a
+// second union to say "the paths differ" a second time is the duplication this instrument is named for.
+//
+// ⚠ IT IS NOT A VERDICT ABOUT THE COMPILER. The run still exits 0, still reports every count it
+// measured, and still records the row if it was asked to. What is refused is one SUBTRACTION, on the
+// ground that its two operands were not measured against the same yardstick.
 export union ByteDelta
 	comparable
 	withheld(why String)
 end 'ByteDelta'
 
-// Compare the whole path, for the reason the header gives: equal strings allocate equal bytes, and no
-// assumption about which COMPONENT of the path multiplies has to hold for that to be true.
+// Compare the whole path, for the reason the header gives: equal paths allocate equally, and no
+// assumption about which PART of the path multiplies has to hold for that to be true — an assumption
+// the allocation column has since been measured to break.
 export function byteComparability(trend LoggedMemory, mintedAt String) returns ByteDelta
 	match trend 'm'
 		absent then return ByteDelta.comparable
@@ -710,11 +737,17 @@ end 'parseGroupedCount'
 // suite, which would have "moved" on every run without the compiler changing at all, is not measured
 // any more.
 //
-// ⚠ THE BYTE COLUMN IS ONLY CONSULTED WHEN IT MAY BE. Across two checkouts it carries a path term (see
-// the header), so asking it whether the compiler moved would answer "yes" for a run that changed
-// nothing — and this reading decides the sentence that tells the operator exactly that. When bytes are
-// withheld the question is asked of the allocation column alone, which is path-independent and can
-// answer it.
+// ⚠ THE BYTE COLUMN IS ONLY CONSULTED WHEN IT MAY BE. Across two checkouts it carries a path term that
+// GROWS with the program (see the header), so asking it whether the compiler moved would answer "yes"
+// for a run that changed nothing — and this reading decides the sentence that tells the operator exactly
+// that. When bytes are withheld the question is asked of the allocation column alone.
+//
+// ⚠ AND THAT IS THE BEST ANSWER AVAILABLE, NOT A CLEAN ONE — this comment said "which is path-independent
+// and can answer it" until that was measured and refused. Across two minting paths the allocation column
+// carries a CONSTANT offset, so it too can report a compiler that did not move. It is still the column to
+// ask: it is the only one left, and what it gets wrong is bounded — a flat per-rung delta may be the path,
+// a delta that GROWS per rung cannot be. The report does not resolve that for the reader and must not
+// pretend to; `printMintedElsewhere` prints the bound immediately above the sentence this decides.
 //
 // ⚠ AND IT IS ASKED IN EXACTLY ONE PLACE. The delta report used to accumulate its own `moved` flag from
 // its own per-cell comparison while this function answered the same question for the recording sentence,

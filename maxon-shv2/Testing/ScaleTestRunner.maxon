@@ -983,16 +983,16 @@ end 'topRungGrowth'
 
 // What the compiler allocated, against what it allocated when the trend log was last written.
 //
-// THIS IS THE POINT OF THE WHOLE INSTRUMENT. These numbers are bit-for-bit reproducible, so a
-// difference here is REAL — the same input through the same compiler cannot produce a different one
-// by accident. It is worth explaining rather than merely noticing.
+// THIS IS THE POINT OF THE WHOLE INSTRUMENT. These numbers are bit-for-bit reproducible AT ONE PATH, so
+// a difference here is REAL — the same input through the same compiler cannot produce a different one by
+// accident. It is worth explaining rather than merely noticing.
 //
-// ⚠ AND THE TWO COLUMNS ARE NOT EQUALLY COMPARABLE ACROSS CHECKOUTS, which is the one asymmetry this
-// report has to carry. Allocations are path-independent — measured, exactly zero difference at all six
-// rungs across two checkouts 44 characters apart, and again across two working directories. Bytes carry a
-// term proportional to the length of BOTH the compiler's own path and the working directory, so against a
-// row minted elsewhere the byte delta is WITHHELD rather than printed. See ScaleHistory's header for
-// every reading.
+// ⚠ AND NEITHER COLUMN IS COMPARABLE ACROSS CHECKOUTS — they are spoiled DIFFERENTLY, which is the one
+// asymmetry this report has to carry. The byte term GROWS with the program, so against a row minted
+// elsewhere the byte delta is WITHHELD rather than printed. The allocation term is a CONSTANT at every
+// rung, so that delta IS printed — a flat offset cancels out of every ratio and out of any delta that
+// grows per rung, so its shape survives — under a caveat that its constant term does not. ScaleHistory's
+// header holds the readings, and it is the only place they are written down.
 function printMemoryTrend(results RungResultArray, trend LoggedMemory, mintedAt String, bytes ByteDelta, moved bool)
 	print("\n")
 	match trend 'm'
@@ -1030,7 +1030,7 @@ function printMemoryDelta(results RungResultArray, date String, note String, log
 		print("{line.build()}\n")
 	end 'eachRung'
 
-	printWithheldBytes(bytes, mintedAt: mintedAt)
+	printMintedElsewhere(bytes, mintedAt: mintedAt)
 
 	if not moved 'unchanged'
 		// "every rung COMPARED", because a rung the logged row never climbed prints `-` above and was not
@@ -1039,24 +1039,33 @@ function printMemoryDelta(results RungResultArray, date String, note String, log
 		return
 	end 'unchanged'
 
+	// "AT ONE PATH" IS THE WHOLE QUALIFIER, and it is three words rather than a paragraph because the
+	// paragraph is already printed directly above by `printMintedElsewhere` — on exactly the runs where
+	// the qualifier bites. Without it this sentence tells a reader that a cross-checkout delta must be
+	// the compiler, which is the attribution it was measured NOT to license.
 	print("\n  A number here MOVED, and it moved for a reason: these counts are bit-for-bit reproducible,\n")
-	print("  so the same input through the same compiler cannot produce a different one by accident.\n")
-	print("  Explain it, and record it with --note — the instrument can see WHAT moved and never why.\n")
+	print("  so the same input through the same compiler AT ONE PATH cannot produce a different one by\n")
+	print("  accident. Explain it, and record it with --note — the instrument sees WHAT moved and never why.\n")
 end 'printMemoryDelta'
 
-// WHY ONE COLUMN OF THE TABLE ABOVE IS BLANK — printed under it, and only when it is.
+// WHAT THE TABLE ABOVE IS WORTH WHEN THE TWO ROWS WERE MINTED ELSEWHERE — printed under it, and only
+// when they were. One column is blank and the other is not, and a reader is owed both halves of why.
 //
 // The alternative was the confident wrong number this replaced, and the alternative to THAT would be a
 // blank column with no explanation, which reads as a bug in the tool. A reader who is refused a
 // subtraction is owed the reason and the way to get it: measure both binaries at ONE path.
-function printWithheldBytes(bytes ByteDelta, mintedAt String)
+function printMintedElsewhere(bytes ByteDelta, mintedAt String)
 	match bytes 'b'
 		comparable then return
-		withheld(why) then printWithheldBytesReason(why, mintedAt: mintedAt)
+		withheld(why) then printMintedElsewhereReason(why, mintedAt: mintedAt)
 	end 'b'
-end 'printWithheldBytes'
+end 'printMintedElsewhere'
 
-function printWithheldBytesReason(why String, mintedAt String)
+// ⚠ THE SECOND PARAGRAPH REPLACED A FALSE ONE, and the false one was this instrument's own sentence
+// about itself: "the ALLOCATION delta above is unaffected — path-independent in every A/B measured so
+// far". It was not. Saying LESS than the truth here would be the same defect: the shape of that column
+// really does survive, and withholding it too would throw away a reading that is sound.
+function printMintedElsewhereReason(why String, mintedAt String)
 	print("\n  ⚠ The BYTE delta is WITHHELD, not zero: {why}.\n")
 	print("    A compile allocates the path strings it works with: it derives every stdlib source path from\n")
 	print("    the COMPILER's own path, and resolves every rung source path against the WORKING DIRECTORY. So\n")
@@ -1064,10 +1073,18 @@ function printWithheldBytesReason(why String, mintedAt String)
 	print("    per character at rung 0 rising to ~9,300 at rung 5, which is not a constant a reader could\n")
 	print("    subtract. Nothing is normalised here: the counts are exactly what was measured, and the one\n")
 	print("    subtraction that cannot be honest is not performed.\n")
-	print("    The ALLOCATION delta above is unaffected — path-independent in every A/B measured so far.\n")
-	print("    To compare bytes, run both binaries from ONE directory, swapped into one location. This run\n")
-	print("    was minted at `{mintedAt}`.\n")
-end 'printWithheldBytesReason'
+	print("\n")
+	print("  ⚠ The ALLOCATION delta above is NOT clean either — it is spoiled DIFFERENTLY, and the difference\n")
+	print("    is what SURVIVES. Its path term is a CONSTANT, the same number at every rung, where the byte\n")
+	print("    term grows with the program. So the SHAPE of that column stands — a flat offset cancels out of\n")
+	print("    every rung-over-rung ratio and out of any delta that GROWS per rung — while a FLAT per-rung\n")
+	print("    delta between these two rows is unattributable and must not be filed as a cost.\n")
+	print("    ⇒ AND EQUALISING THE PATH LENGTH IS NOT THE FIX: measured on ONE byte-identical binary, two\n")
+	print("    45-character checkouts of different DEPTH read +273 allocations at every one of six rungs,\n")
+	print("    while a 45- and a 14-character checkout of the same depth read 0 at every one.\n")
+	print("    ⇒ Both columns take the SAME remedy: run both binaries from ONE directory, swapped into one\n")
+	print("    location. This run was minted at `{mintedAt}`.\n")
+end 'printMintedElsewhereReason'
 
 // A rung this run climbed that the logged row did not have is not a delta of zero; it is not a delta
 // at all. (`assertRecordable` refuses to LOG such a run, but a --rungs=3 run with no --note is a
@@ -1125,7 +1142,19 @@ export typealias LadderIndex = int(0 to u64.max)
 // portable nor constant: measured at 12 allocations / 4,879 bytes per stray directory on arm64-macOS
 // against A2y's 14 / 829 on its own host, because `Directory.list` is `FindFirstFile` on Windows and
 // `opendir`/`readdir` here, and because the byte column carries the path-length term
-// `printWithheldBytesReason` already documents. The COUNT is the only signal that survives the move.
+// `printMintedElsewhereReason` already documents. The COUNT is the only signal that survives the move.
+//
+// ⭐⭐ **THE RULE THIS IS ONE HALF OF: AN A/B ACROSS TWO CHECKOUTS IS NOT SOUND BY DEFAULT.** Two known
+// ways it goes wrong are now named by this instrument, and BOTH produce a FLAT per-rung delta — which is
+// precisely the shape of a real per-compile cost, and is why each was read as one:
+//
+//   - the TREE differs, because git cannot see ignored content (A2y, above — this census);
+//   - the PATH differs, because a compile allocates the path strings it works with (A3p — see
+//     ScaleHistory's header for the readings, and `printMintedElsewhereReason` for what it prints).
+//
+// They are separate mechanisms with separate remedies, so they are detected separately; what they share
+// is the reading they corrupt. ⇒ A FLAT delta between two checkouts is the one shape to distrust, and a
+// delta that GROWS per rung is the one neither mechanism can fake.
 //
 // It is a number a reader COMPARES against the checkout a logged row was minted at, and nothing more.
 // No threshold, no baseline, no refusal — this instrument renders no verdicts (see this file's header),

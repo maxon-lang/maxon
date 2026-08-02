@@ -39,11 +39,18 @@
 // which. TWO absolute paths reach the BYTE volume of every compile — the compiler's own (every stdlib
 // source path is derived from it) and the working directory (every rung source path is resolved against
 // it) — so a byte delta between two documents minted at different paths is a confident fiction, measured
-// at +92,576…+407,660 bytes across two checkouts and +34,515…+203,310 across two working directories,
-// against exactly ZERO allocations either way. `mintedAt` is the pair, rendered by `mintedAtCell` so that
-// what is written and what is compared are one string. `bytesDelta` is therefore ABSENT when the logged
-// row this run was differenced against was minted elsewhere, while `allocsDelta` is always present: the
-// allocation column is path-independent in every A/B measured. See ScaleHistory's header.
+// at +92,576…+407,660 bytes across two checkouts and +34,515…+203,310 across two working directories.
+// `mintedAt` is the pair, rendered by `mintedAtCell` so that what is written and what is compared are one
+// string. `bytesDelta` is therefore ABSENT when the logged row this run was differenced against was
+// minted elsewhere.
+//
+// ⚠ `allocsDelta` IS STILL ALWAYS PRESENT, AND IT IS NOT PATH-INDEPENDENT — this comment claimed it was
+// until it was measured. That column carries a CONSTANT offset across two checkouts (+273 at every one of
+// six rungs, measured on one byte-identical binary), where the byte term grows with the program. It stays
+// present because a flat offset leaves the SHAPE intact — ratios between rungs, and any delta that grows
+// per rung — and a consumer reading the CONSTANT term across a mismatched pair already has its signal in
+// the same document: `previous.bytesComparable: false` is that pair, and it is one flag rather than two
+// spellings of it. See ScaleHistory's header for the readings.
 //
 // Shape:
 //   {
