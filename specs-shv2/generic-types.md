@@ -1318,9 +1318,15 @@ error E3091: <fragment>:14:11: typealias 'A' forms a type cycle: its type argume
 `Array` and `Set` are BUILTIN generic bases: shv2 synthesizes their runtime records
 rather than compiling `stdlib/Array.maxon`, so no `type` declaration carries a field
 table and no field of an instance is reachable. The field is missing from the
-COMPILER, not from the language — `stdlib/Array.maxon` really does declare
-`export var managed as ElementMemory` — so this reports a not-implemented-yet
-construct, never an unknown field. It used to be a `panic` with no diagnostic at all.
+COMPILER, not from the language — so this reports a not-implemented-yet construct,
+never an unknown field. It used to be a `panic` with no diagnostic at all.
+
+⚠ The field named here is deliberately NOT `managed`. That one spelling — the only
+field `stdlib/Array.maxon` actually declares — is now SERVED, in both the chained
+(`arr.managed.setLength(2)`) and the value (`f(arr.managed)`) forms, because it is
+routed to the array dispatcher ahead of the field machinery (`arrayManagedFieldAt`,
+BATCH2 slice 6). Every OTHER field of the synthesized record still lands here, which
+is what this case pins.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -1328,7 +1334,7 @@ typealias IntArray = Array with Int
 function main() returns ExitCode
 	var arr = IntArray.create()
 	arr.push(1)
-	return arr.managed
+	return arr.value
 end 'main'
 ```
 ```maxoncstderr

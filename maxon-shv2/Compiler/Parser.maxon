@@ -12440,7 +12440,7 @@ export type Parser
 			// predicate, and `assignedBindingsIn` reads only `assignsAt`: see `assignsAt` for why
 			// widening that one instead would have minted the loop's phi for the FIELD's name.
 			try self.parseFieldAssignment(func, block: block)
-		end 'fieldAssign' else if self.methodCallsAt(self.pos) or self.arrayManagedFieldAt(self.pos) 'methodCallStmt'
+		end 'fieldAssign' else if self.methodCallsAt(self.pos) or self.arrayManagedMemberCallAt(self.pos) 'methodCallStmt'
 			// `c.increment()` / `self.increment()` — a method call for its EFFECT. Void methods are
 			// most of what a type declares, and this is the only position that wants no value, so
 			// `resultUsed: false` is what makes them callable at all.
@@ -14333,7 +14333,8 @@ export type Parser
 		// last op for `rewriteLastCallToTryCall`.
 		// `try arr.managed.get(0) otherwise …` — asked BEFORE the field chain, which would otherwise claim the
 		// two-hop shape and resolve `.managed` as a field of a record that has none (see `arrayManagedFieldAt`).
-		if self.arrayManagedFieldAt(self.pos) 'managedFieldTarget'
+		// The CHAINED predicate: a `try` target must be a throwing CALL, and a bare `try arr.managed` is not one.
+		if self.arrayManagedMemberCallAt(self.pos) 'managedFieldTarget'
 			return try self.parseMethodCall(func, resultUsed: false)
 		end 'managedFieldTarget'
 		if self.fieldChainMethodCallAt(self.pos) 'fieldChainTarget'
@@ -24950,6 +24951,9 @@ export type Parser
 		// statement dispatcher.
 		// `arr.managed` joins the method arm rather than the field arm below — see `arrayManagedFieldAt`. It is
 		// asked WITH `methodCallsAt` because both route to `parseMethodCall` and the two shapes are disjoint.
+		// This is the ONE position that reads the UNCHAINED predicate: an expression is where a bare
+		// `arr.managed` is a value somebody wants (`f(content.managed)`), which the two call-only positions
+		// (`methodCallStmt`, the `try` target) are not.
 		if self.methodCallsAt(self.pos) or self.arrayManagedFieldAt(self.pos) 'methodCall'
 			return try self.parseMethodCall(func, resultUsed: resultUsed)
 		end 'methodCall'
@@ -29044,6 +29048,43 @@ export type Parser
 		return roster
 	end 'requireSurfaceMember'
 
+	// ⭐⭐ **`arr.managed` IN VALUE POSITION — THE SAME RECORD, SEEN AS THE BUFFER (BATCH2 slice 6), AND THE
+	// EXACT INVERSE OF `parseArrayInitStatic`.** `init(managed)` adopts a buffer AS the array around it; this
+	// hands the array's buffer BACK. One record, two surfaces, and the two directions owe the same two things:
+	// a FRESH `ValueId` to carry the surface mark, and a refcount that still balances.
+	//
+	// ⭐ **THE OWNERSHIP QUESTION IS "WHO ALREADY OWES THIS RECORD A DROP?", AND IT HAS TWO ANSWERS.**
+	//   • **THE STATEMENT DOES** — `arr` is an UNBOUND owned temporary (`"…".toByteArray().managed`,
+	//     `[1,2,3].managed`). `.managed` changes nothing about who drops it: the value carries the statement's
+	//     one obligation on, to a binding that takes it over (`removeFromPendingTemps`) or to the statement-end
+	//     drain. A second owner here would be a retain nobody needs, on every `path.toByteArray().managed` in
+	//     the corpus. And the mark is safe on the receiver's OWN `ValueId` precisely BECAUSE it is a pending
+	//     temp: `pendingTempsContain`'s contract is that such a value is owned by no binding, so there is no
+	//     second name through which the `Array` surface could still be wanted — which is the whole hazard
+	//     `error.managed-field-chain-does-not-mark-the-array` pins for the CHAINED spelling.
+	//   • **SOMEBODY ELSE DOES** — `arr` is a BINDING's value (`var a = […]`, dropped at ITS scope exit) or a
+	//     BORROW (a `ByteArray` PARAMETER, owned in the caller's frame — `stdlib/File.maxon:147`). Whatever
+	//     this value is bound to or handed to drops independently, so it must become a SECOND owner:
+	//     `retainBorrowedAggregate` mints the fresh id with `__mm_retain` — the same refcount word
+	//     `__arr_decref` lowers — and `trackOwnedTemp` adds the statement-scoped obligation an UNBOUND result
+	//     needs, exactly as `parseArrayInitStatic` does for the other direction.
+	//
+	// ⚠⚠ **HANDING BACK THE RECEIVER'S OWN `ValueId` IN THE SECOND CASE IS A DOUBLE FREE, NOT A COSMETIC
+	// IDENTITY.** `let m = a.managed` is three tokens, so `rhsWasBareLocalReference` reads it as a CONSUME and
+	// does NOT poison `a` — yet `declareInitializedBinding` enrols `m` in `ownedBindings` all the same, because
+	// the value's provenance says owned-heap. `a` and `m` would be one box with two scope-exit drops.
+	function bufferSurfaceOf(arr ValueId, range SourceRange) returns ValueId
+		if self.pendingTempsContain(arr) 'statementAlreadyOwnsIt'
+			self.markBufferSurface(arr)
+			return arr
+		end 'statementAlreadyOwnsIt'
+
+		let buffer = self.retainBorrowedAggregate(arr, range: range)
+		self.trackOwnedTemp(buffer)
+		self.markBufferSurface(buffer)
+		return buffer
+	end 'bufferSurfaceOf'
+
 	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
 	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`). An OPAQUE-`T` array
 	// (`self.items.push(x)` in a generic body, P1.7 slice 3b) dispatches here too, and the shared body treats the
@@ -29161,7 +29202,7 @@ export type Parser
 		// handed to the one dispatch that fact reaches.
 		if methodTok.value.equals(ManagedMemoryFieldName) 'managedField'
 			if not self.memberCallFollows(self.pos) 'bufferAsAValue'
-				return arr
+				return self.bufferSurfaceOf(arr, range: range)
 			end 'bufferAsAValue'
 
 			try self.consume(TokenKind.dot)
@@ -32087,18 +32128,19 @@ export type Parser
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
 	// identical copy-on-write reason, through the same one home for it (`privateValueMarkSet`).
 	//
-	// Its FIVE call sites, DERIVED by grepping them rather than remembered: the four producers of a buffer
-	// VALUE that mint one — `__ManagedMemory.create` (`parseManagedMemoryStaticCall`), a `slice` taken
-	// THROUGH the buffer surface (`parseArraySlice`), `__ManagedDirectory.filename`/`currentPath`
-	// (`emitOwnedManagedMemoryResult`, R4.3) and `String.addressableBytes()` (`dispatchStringMethod`,
-	// BATCH2 slice 1) — plus `markDeclaredSurface` below, which A2j reaches from the three sites that
-	// bind a value whose DECLARED type spelled the alias.
+	// Its SIX call sites, DERIVED by grepping them rather than remembered: the five producers of a buffer
+	// VALUE — `__ManagedMemory.create` (`parseManagedMemoryStaticCall`), a `slice` taken THROUGH the buffer
+	// surface (`parseArraySlice`), `__ManagedDirectory.filename`/`currentPath` (`emitOwnedManagedMemoryResult`,
+	// R4.3), `String.addressableBytes()` (`dispatchStringMethod`, BATCH2 slice 1) and `arr.managed` in VALUE
+	// position (`bufferSurfaceOf`, BATCH2 slice 6) — plus `markDeclaredSurface` below, which A2j reaches from
+	// the three sites that bind a value whose DECLARED type spelled the alias.
 	// ⚠⚠ **THIS COUNT HAS NOW BEEN WRONG THREE TIMES** — it said TWO while there were three, THREE while
 	// there were four, and the two independent corrections (A2j's and BATCH2's) each restated it without
 	// the other's caller, so a clean textual rebase would have landed a fourth wrong count. **Count them,
 	// do not copy this sentence.**
-	// ⚠ D11b's own measurement enumerated a further producer that mints NO value to mark: `.managed`, an
-	// identity read, which passes the surface along the dispatch instead (see `dispatchArrayMethod`).
+	// ⚠ The CHAINED `.managed` (`arr.managed.setLength(2)`) is still the producer that mints NO value to mark
+	// — D11b measured it as one — and it passes the surface along the dispatch instead (`viaManagedField`).
+	// Only the VALUE form has a value to mark, and it mints one for exactly that reason.
 	//
 	// ⚠⚠ **THE MARK IS A FACT ABOUT A `ValueId`, SO IT DOES NOT SURVIVE TYPE ERASURE — AND A *DECLARED*
 	// SPELLING IS THEREFORE AN ENTRANCE A SWEEP OVER VALUE PRODUCERS STRUCTURALLY CANNOT SEE.** That is the
@@ -35608,8 +35650,14 @@ export type Parser
 	// (a VALUE receiver, `"…".toByteArray().managed`, has always worked).
 	//
 	// ⇒ So this predicate routes the BINDING spelling to `parseMethodCall`, the very door `methodCallsAt` routes
-	// to, and the dispatcher's own `.managed` arm does the rest. It is asked beside `methodCallsAt` at each of the
-	// three sites that ask it, never instead of it: the two are disjoint by the `(` at +3.
+	// to, and the dispatcher's own `.managed` arm does the rest. Where the two are asked together they are asked
+	// BESIDE each other, never instead: they are disjoint by the `(` immediately after `managed`, which
+	// `methodCallsAt` requires and no `.managed` read has.
+	//
+	// ⭐ **TWO SPELLINGS, ONE RULE PLUS ONE CONJUNCT (BATCH2 slice 6).** `arr.managed` is now claimed in VALUE
+	// position too, so the member call is no longer part of *this* question — it is asked by
+	// `arrayManagedMemberCallAt` below, which is literally this predicate `and` the `.<member>(` at +3, and
+	// which the two positions that need a CALL read instead. The EXPRESSION door reads this one.
 	//
 	// ⚠ **IT IS NARROW ON PURPOSE, IN TWO WAYS.** The member must be `managed` — `arr.someOtherField` keeps
 	// `missingBaseLayout`'s carefully-worded refusal, which is still the true answer for every other field of a
@@ -35623,19 +35671,16 @@ export type Parser
 		if self.kindAt(index + 1) != TokenKind.dot or not self.tokenAt(index + 2).value.equals(ManagedMemoryFieldName) 'notTheManagedField'
 			return false
 		end 'notTheManagedField'
-		// ⚠ **A MEMBER CALL MUST FOLLOW, and the narrowness is the corpus's own shape.** Every `.managed` in
-		// `/specs` reached through a BINDING is `arr.managed.<member>(…)`; the bare value form
-		// (`return arr.managed`, `f(arr.managed)`) appears only on a VALUE receiver
-		// (`"…".toByteArray().managed`), which `parsePostfix` has served since R4.1 and which this predicate
-		// never sees. Claiming the bare binding form too would buy nothing — `.managed` is an IDENTITY, so the
-		// value it yields is the array's own — and would silently retire the refusal
-		// `generic-types.error.field-access-on-builtin-array-base` pins for a field access on a synthesized
-		// builtin record. The day a binding's buffer is genuinely wanted as a value, this is the line to widen,
-		// with the case that wants it.
-		if not self.memberCallFollows(index + 3) 'notAMemberOnTheBuffer'
-			return false
-		end 'notAMemberOnTheBuffer'
-
+		// ⭐ **THE BARE VALUE FORM IS CLAIMED TOO (BATCH2 slice 6), AND THE CASE THAT WANTED IT ARRIVED:**
+		// `stdlib/File.maxon:147` is `try writer.writeAll(content.managed)` — the buffer of a BORROWED
+		// `ByteArray` parameter, in ARGUMENT position, with no member call after it. This predicate used to
+		// require a `.<member>(` at +3 and left that spelling to the field machinery, where an `Array`'s
+		// synthesized record has no field table and `missingBaseLayout` reported E2015. The member-call
+		// conjunct now lives in `arrayManagedMemberCallAt` below, which the two positions that genuinely need
+		// a CALL ask instead.
+		// ⚠ **IT IS NOT AN IDENTITY ANY MORE, AND THAT IS WHAT MADE THE WIDENING SAFE** — see
+		// `dispatchArrayMethod`'s `bufferAsAValue` arm, where the receiver's own `ValueId` handed back to a
+		// `let` would have made the binding and the array two owners of one record.
 		let baseName = self.baseBindingName(self.tokenAt(index))
 		if not self.scope.contains(baseName) 'notALocalBinding'
 			return false
@@ -35643,6 +35688,18 @@ export type Parser
 
 		return self.typeIsArrayInstance(self.scope.getInfo(baseName).varType)
 	end 'arrayManagedFieldAt'
+
+	// ⭐ **`<arrayBinding> . managed . <member>(` — the CHAINED spelling, for the two positions where a bare
+	// `arr.managed` denotes nothing a program can want.** A STATEMENT of it would build a buffer reference and
+	// discard it on the same line; a `try` TARGET needs a throwing CALL to be the target at all, and a bare
+	// `.managed` throws nothing. Both would be accepted-and-useless under the widened rule, so both ask for
+	// the member call and the EXPRESSION door (`parseDottedPrimary`) asks the rule itself.
+	//
+	// It is the widened predicate `and` one conjunct rather than a second copy of the base/scope/element
+	// tests: the day the base rule changes, there is one place it changes.
+	function arrayManagedMemberCallAt(index TokenIndex) returns bool
+		return self.arrayManagedFieldAt(index) and self.memberCallFollows(index + 3)
+	end 'arrayManagedMemberCallAt'
 
 	function methodCallsAt(index TokenIndex) returns bool
 		// The BASE is anything `tokenCanBeAName` admits, which subsumes both the identifier and the `self`

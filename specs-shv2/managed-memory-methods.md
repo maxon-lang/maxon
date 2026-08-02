@@ -2371,9 +2371,9 @@ regressions a rung that moves the buffer mark is most likely to cause, so they a
 
 <!-- test: managed-field-chained-serves-the-buffer-roster -->
 
-`arr.managed` is an IDENTITY read that passes the buffer surface along the dispatch rather than minting a
-value, so the chained spelling reaches the buffer's roster. (A bare `let m = arr.managed` is refused one
-level earlier, by the `Array`-is-a-builtin field rule — a different gap, and not this one.)
+The CHAINED `arr.managed.<member>()` is an IDENTITY read that passes the buffer surface along the dispatch
+rather than minting a value, so it reaches the buffer's roster with no allocation and no runtime call. (The
+bare VALUE form, `let m = arr.managed`, is a different door and mints a value — see the cases below it.)
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -2407,6 +2407,106 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:10:18: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+<!-- test: managed-field-as-a-value-binds-serves-the-roster-and-drops-once -->
+
+**`arr.managed` IN VALUE POSITION (BATCH2 slice 6).** Four doors in one program, all on the SAME record: a
+`let` binding, a call ARGUMENT, a `return` out of a function whose receiver is a borrowed PARAMETER, and a
+LOOP that takes the buffer once per iteration. `.managed` hands back the record the array already owns, so
+every one of them must become a second OWNER (`__mm_retain`) rather than a second name for one owner — with
+a binding and an array both enrolled to drop one box, this program double-frees. The exit code is the leak
+gate: a missed retain corrupts the allocator, a missed drop exits 101.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function bufLength(m __ManagedMemory) returns int
+	return m.length()
+end 'bufLength'
+
+function bufferOf(a ByteArray) returns __ManagedMemory
+	return a.managed
+end 'bufferOf'
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(1 as Byte)
+	arr.push(2 as Byte)
+	let m = arr.managed
+	var total = m.length() + bufLength(arr.managed) + bufferOf(arr).length() + arr.count()
+	var i = 0
+	while i < 4 'round'
+		total = total + bufLength(arr.managed)
+		i = i + 1
+	end 'round'
+	print("{total}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+16
+```
+
+<!-- test: error.managed-field-as-a-value-does-not-mark-the-array -->
+
+The VALUE form's surface mark rides the value `.managed` MINTS, never the receiver — the same property the
+chained form has, for the same reason, and the one a pass-through `ValueId` would break in both directions at
+once (the array would answer the buffer's roster, and the two would be one owner). After `let m =
+arr.managed`, `arr` is still an `Array` and still refused `length`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(1 as Byte)
+	let m = arr.managed
+	return (m.length() + arr.length()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:9:27: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+```
+
+<!-- test: managed-field-on-a-value-receiver-binds-and-serves-the-roster -->
+
+The OTHER door onto the same arm: a VALUE receiver, whose record the STATEMENT already owns. It takes no
+retain — a second owner of a temporary nobody else will drop is a retain and a release that cancel — and the
+binding takes the statement's one obligation over exactly as it would for any other owned temporary. The
+SURFACE is the same either way, which is what makes the two doors agree: `m.length()` is the buffer's member,
+not the `Array`'s.
+```maxon
+function main() returns ExitCode
+	let m = "abcd".toByteArray().managed
+	return m.length() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: error.managed-field-alone-is-not-a-statement -->
+
+The value form is claimed in EXPRESSION position only. A statement of it would build a buffer reference and
+discard it on the same line, so the statement dispatcher keeps asking for the chained `.<member>(` spelling
+(`Parser.arrayManagedMemberCallAt`) and a bare one falls through refused.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(1 as Byte)
+	arr.managed
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:2: Unsupported: identifier statement
 ```
 
 <!-- test: buffer-surface-survives-a-var-reassignment -->
