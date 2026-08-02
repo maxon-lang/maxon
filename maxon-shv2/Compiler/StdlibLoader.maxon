@@ -343,6 +343,61 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	try listWhitelistedModule(stdlibDir, relative: "URL.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "helpers/url/urlHelpers.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "FilePath.maxon", into: listed)
+	// ⭐ `stdlib/Math.maxon` — `Math.sin/cos/exp/log/log10/log2/tan/pow/atan/atan2`, every one of them PURE
+	// MAXON (Taylor series over `float`). No libm, no intrinsic and no backend work: the module is loadable
+	// exactly as written, which is why the entry is one line and not a rung.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS (E3006): it declares NONE. All ten of its functions are `static`s of `Math`, so the
+	//     whole free-function clause — and with it the SILENT bare-builtin shadow that cost `Sleep.maxon` a
+	//     builtin retirement — is vacuous here. Checked against `Parser.parseCallNamed`'s bare-name `if` chain
+	//     AT THE CHAIN, as that rule's last bullet insists: nothing this module declares can be claimed by it,
+	//     because it declares nothing the chain can see.
+	//   • ⚠ It is instead the first listed module that CONSUMES one: `Math.pow` calls `floor(exponent)` by bare
+	//     name, which the chain answers with `MaxonUnaryOp.floor`. That direction is sound and is what the
+	//     builtins are for — what a bare builtin reserves is a DECLARATION no call site can reach, and there is
+	//     no declaration here.
+	//   • TYPE NAMES: `Math` is a nominal declaration, so a user program spelling it wins and this one moves
+	//     into the reserved space (A1s wave 2). Against the other listed modules there is no overlap, checked
+	//     the way the bullet above insists a roster be checked — AT THE SOURCE, by reading the declarations of
+	//     the modules the calls above name, not against a roster transcribed here: no listed module declares
+	//     `Math` or `Real`. (A prose list of the other entries' type names is the same thing written down
+	//     twice, and the two copies in this file had already drifted apart.)
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: `Math` is not a builtin. It appears NOWHERE in
+	//     shv2's own sources — the four math intrinsics are BARE names (`floor`/`ceil`/`round`/`sqrt`), never
+	//     `Math.`-qualified — which is also why `Math.exp` reaches `emitCall` as an ordinary qualified callee
+	//     instead of being intercepted by `parseCallNamed`'s `__Builtins.`-prefixed intrinsic table.
+	//   • `Real` is a RANGED typealias, file-local per alias FORM, so it reserves nothing from a user program.
+	//     Its form `float(f64.min to f64.max)` is already declared under a second name by a listed module
+	//     (`Builtins.maxon`'s `ParsedFloat`) — the same same-form-different-name shape `Clock`'s four
+	//     `int(0 to u64.max)` aliases and `Sleep.maxon`'s `Milliseconds` have carried since those entries.
+	//   • The E3112 MEMBER-name rule is a whole-program CHECK that fires only when a user program actually
+	//     contests a spelling, so there is nothing to clear ahead of time. `Math` has no fields at all — it is
+	//     a statics-only type — so the surface it exposes to that rule is just the ten method names.
+	//   • It has NO imports and calls into no other module.
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes:
+	// `maxon-shv2 build stdlib/Math.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING ELSE —
+	// the module parses and analyzes clean under shv2 and fails only for not being a program.
+	//
+	// ⭐ It is the second listed module to contain LITERALS (after `Builtins.maxon`, whose **317 goldens** are
+	// recorded above), and it carries 14 distinct float constants. **MEASURED on this entry: ZERO committed
+	// goldens moved** — 3422/0 with no fragment but this spec's own newly minted one. That is not luck and it
+	// is the first independent confirmation that the debt `Builtins.maxon` came due on was actually PAID:
+	// `InsertRangeChecks` and `lowerMaxonToStd` both skip an UNREACHABLE stdlib body (`StdlibFacts.unreachable`,
+	// with `eliminateDeadFunctions.requireUnreachableStdlibStayedDead` proving the skip), so a literal in a
+	// function no path from `main` reaches now registers no `.rdata` and no `__fconst` slot to displace anyone
+	// else's. A module listed before that repair would have moved goldens here; this one cannot.
+	//
+	// ⚠⚠ **LOADABLE IS NOT CORRECT, AND THIS ENTRY SHIPS A MEASURED WRONG ANSWER — the filed
+	// float-compare/bool miscompile (PLAN.md "Future rungs"), which this listing is what EXPOSED to user
+	// programs.** `Math.exp` holds `is_negative = val < 0.0` across the `while val > 1.0` reduction loop and
+	// re-tests it at `invert`; MEASURED, `Math.exp(-2.0)` is `>= 1.0` under shv2 and `< 1.0` under the
+	// bootstrap, so the inversion is silently skipped. `sin`/`cos`/`log`/`log2`/`atan` carry the same
+	// hold-a-flag-across-a-loop shape. The spec case that motivated this entry is `Math.exp(0.0)`, which
+	// takes the early return and cannot see it. ⇒ this entry is sound as a LISTING — nothing about the
+	// whitelist is what is wrong — and the module's answers are only as good as that rung leaves them.
+	try listWhitelistedModule(stdlibDir, relative: "Math.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

@@ -2078,6 +2078,64 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   is the env slot's WIDTH; this is `closureReturns` threading through a NESTED env, which is P1.5-A2's
   mechanism and wants its own survey of how a lifted closure's file-local return type reaches an inner
   closure's call site.
+- **⬜⬜ A `bool` COMPUTED FROM A FLOAT COMPARISON AND HELD ACROSS A LOOP READS BACK FALSE — A SILENT
+  WRONG ANSWER ON PLAIN USER CODE.** **Found 2026-08-02 by `/spec-port` while listing `stdlib/Math.maxon`;
+  PRE-EXISTING and nothing to do with that entry.** ⭐ **Reproduced minimally, with an oracle control —
+  21 lines, no `Math`, no stdlib, no generics:**
+
+  ```maxon
+  typealias Real = float(f64.min to f64.max)
+
+  function probe(x Real) returns ExitCode
+      var val = x
+      let isNeg = val < 0.0            // TRUE for x = -8.0
+      if isNeg 'neg'                   // ... and this arm IS taken
+          val = -val
+      end 'neg'
+      var n = 0
+      while val > 1.0 'reduce'         // a loop whose compare writes EFLAGS
+          val = val / 2.0
+          n = n + 1
+      end 'reduce'
+      if isNeg 'wasNeg'                // ... but THIS one is not
+          return 11
+      end 'wasNeg'
+      return 22
+  end 'probe'
+
+  function main() returns ExitCode
+      return probe(-8.0)
+  end 'main'
+  ```
+
+  **MEASURED: the C# bootstrap returns 11, shv2 returns 22.** The first `if isNeg` takes its arm and the
+  second does not, in one function, with no assignment to `isNeg` between them.
+  ⚠ **AND IT IS ALREADY LIVE IN THE STDLIB, not only in a probe: `stdlib/Math.exp` is this exact shape**
+  (`is_negative = val < 0.0`, held across `while val > 1.0`, re-tested at `invert`). **MEASURED
+  independently at review, 2026-08-02: `Math.exp(-2.0)` is `< 1.0` under the bootstrap and `>= 1.0` under
+  shv2** — the reciprocal is silently skipped, so every negative argument gets a wrong number.
+  `sin`/`cos`/`log`/`log2`/`atan` carry the same hold-a-flag-across-a-loop shape and want checking with it.
+  The spec case that listed the module is `Math.exp(0.0)`, which takes the early return and cannot see it.
+  ⭐ **THE MECHANISM IS SHOWN OUTRIGHT BY THE GOLDEN, not inferred** — verified independently by the
+  reviewer and by the coordinator before this entry was written. At `@Math.exp` the FIRST
+  `if is_negative` (`ifcont:`) emits its own `x64.ucomisdRegReg xmm1, xmm0` immediately before
+  `x64.jcc above, neg`. The SECOND (`forexit:`) emits **NO COMPARE AT ALL** — a bare `x64.jcc above,
+  invert` whose EFLAGS come from the preceding block `forhdr:`'s `x64.cmpRegReg rcx, rax`, the squaring
+  loop's INTEGER counter compare. At loop exit `rcx == rax` ⇒ ZF=1 ⇒ `above` is false ⇒ the reciprocal is
+  skipped, which is exactly the measured `Math.exp(-2.0) >= 1.0`. So the `bool` is materialized nowhere and
+  the second test consumes a clobbered condition code. **What remains INFERRED is only the GENERALITY** —
+  which producers/consumers of a comparison-derived `bool` take this path, and therefore how wide the fix
+  and its sabotage must be. The float compare is very likely incidental (the clobber here is an *integer*
+  `cmp`), but that is the survey the rung owes.
+  ⚠ **Why it is its own rung and could not ride the port that found it:** the fix is backend flags
+  liveness, so it needs a decision at `Targets/Shared` and an equivalent one on **arm64** (cross-target
+  consistency is binding), plus sabotage to prove the guard is load-bearing. **And it wants a spec of its
+  own** — the corpus has ~3,420 cases and not one of them catches this, which is the more alarming half of
+  the finding.
+  ⚠⚠ **A COMMITTED GOLDEN NOW PINS THE MISCOMPILED LOWERING** —
+  `specs-shv2/fragments/x64-windows/stdlib-basic/stdlib-call-exp.test`, minted by the tick that found this.
+  A golden records what the compiler emits, so it is a correct artifact of a wrong compiler; **re-mint it
+  with `--update-required` as part of this rung and do not read it as a specification.**
 - **⬜ THE UNUSED-BINDING CHECK (E3012) DOES NOT EXIST IN shv2 AT ALL** — not for parameters, not for
   locals. **Filed 2026-08-02 by `/spec-port`, which took the §7 DEFERRED exit on
   `specs/unused-parameters.md` (4 of its 6 cases blocked, past the half-the-file floor).** Measured, not
