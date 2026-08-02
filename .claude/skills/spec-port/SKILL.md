@@ -43,12 +43,13 @@ Three exclusions, and each is load-bearing:
 
 `/spec-port <name>` overrides all three and takes that spec.
 
-## 0. Start — CARRY the baseline, do not re-measure it
+## 0. Start — no baseline run. There is nothing to measure yet.
 
-**Do NOT open the tick with a full suite run.** The previous tick already ended with one, and its number
-is written down: the last row of `docs/spec-port-log.md` records `Suite <before> → <after>`, and that
-`<after>` is this tick's baseline. Read it and carry it. A ~43 s unfiltered run whose answer is already
-on disk buys nothing.
+**Do NOT open the tick with a full suite run.** It is ~43 s spent on a number the tick does not need:
+**the §8 gate is `failed: 0`, not an arithmetic total** (see the box there). A suite that ends green is
+green whatever it started at, and the check that catches this loop's real failure mode — a spec landing
+green having tested NOTHING — is §2's, which compares this spec's markers against this spec's own filter
+total and needs no history at all.
 
 ```
 build target=shv2 repoRoot=C:/Users/Eric/dev/maxon      # bootstrap first if it is stale
@@ -62,26 +63,22 @@ byte-identical on every probe. It costs ~19 s and it is not optional.
 ⚠ **`git status` must be clean before you copy anything.** The suite MINTS goldens as a side effect
 (§5); if the tree is already dirty you cannot tell yours from the leftovers.
 
-### What carrying the number costs, and where you pay it
+### The one thing a baseline bought, and where you now pay for it
 
-The measured baseline bought ONE thing: when the §8 suite comes back red, it told you instantly whether
-the red was yours. Carrying the number moves that question to §8 — which is the right trade, because
-**the baseline is green on almost every tick, and paying 43 s every time to insure against the rare red
-is the expensive way round.** So:
+It told you, the instant §8 came back red, whether the red was yours. Without it that question moves to
+§8 — the right trade, because **the suite is green on almost every tick, and paying 43 s every time to
+insure against the rare red is the expensive way round.**
 
-- **§8 green at the expected total ⇒ nothing to think about.** This is the normal tick.
-- **§8 RED ⇒ you may no longer assume the red is yours.** Attribute it: do the failures touch what you
-  changed? If that is not obvious in a minute, **measure the control then** — `git stash -u`, rerun the
-  suite, `git stash pop`. One run, in the rare case, instead of one run every tick. A red you did not
-  cause still gets fixed first, in its own commit, before the port (precedent: `d45cb0007`, a stale
-  golden + eight unminted ones left by another rung's arm64-only sweep).
-- **§8 green but the TOTAL is not `baseline + this spec's cases` ⇒ the carried number is stale, and that
-  is information, not an error.** The usual cause is upstream: other agents commit to `main` between
-  ticks and during them. **`docs/spec-port-log.md` already shows it happening** — tick 5 ended at
-  **3285** and tick 6 opened at **3288**, a +3 that arrived between the two. *(And seven commits landed
-  mid-tick on 2026-08-02, two of them spec files.)* `git log <last-tick's-commit>..HEAD` names what
-  moved. Reconcile against that, say so in the log row, and carry on — **do not "fix" a total that
-  upstream legitimately changed**, and do not treat the gap as evidence your own work miscounted.
+⇒ **When §8 is RED you may no longer assume the red is yours.** Attribute it: do the failures touch what
+you changed? If that is not obvious in a minute, **measure the control THEN** — `git stash -u`, rerun,
+`git stash pop`. One run in the rare case instead of one run every tick. A red you did not cause still
+gets fixed first, in its own commit, before the port (precedent: `d45cb0007`, a stale golden + eight
+unminted ones left by another rung's arm64-only sweep).
+
+⛔ **Do not reach for `docs/spec-port-log.md` to reconstruct a baseline.** It is INFORMATIONAL — a trend
+someone reads, exactly like `docs/optimization-log.md`. Nothing in this loop may depend on it, and a tick
+that needs a number it can only get from a log has invented a dependency the log never agreed to carry.
+If you genuinely need a before-number, MEASURE it (the control above); do not read one.
 
 ## 1. Copy it BYTE-IDENTICAL
 
@@ -378,11 +375,30 @@ Nothing here is optional, and none of it needs permission:
 | Gate | What red means |
 |---|---|
 | `build target=shv2` exit 0 | stop |
-| **full** `run_spec_test compiler=shv2` (unfiltered) ≥ the CARRIED baseline (§0) + this spec's cases | stop — and §0 says how to attribute it, since the baseline was carried and not measured |
+| **full** `run_spec_test compiler=shv2` (unfiltered) reports **`failed: 0`** | stop — and §0 says how to attribute it, since no baseline was measured |
 | `memoryLeak: false` / no exit **101** | stop |
 | test-count check (§2) | stop |
 | every new `.test` **committed** (§5 — not read, committed) | stop |
 | **`maxon-rung-reviewer` run and its findings resolved (§6)** — the LAST thing before `git commit` | stop |
+
+> ### ⛔ THE SUITE GATE IS `failed: 0`. IT IS NOT A TOTAL, AND IT NEVER NEEDED A BEFORE-NUMBER.
+>
+> **`0 failed` is the whole condition.** A green suite is green whatever it started at, so there is
+> nothing to subtract and nothing to remember from last time — which is why §0 no longer opens with a
+> measuring run.
+>
+> A `baseline + this spec's cases` total was the old spelling, and it was a **worse** test of the same
+> thing in both directions: it goes wrong when nothing is wrong (other agents commit to `main` between
+> ticks and during them — measured 2026-08-02, seven commits mid-tick, two of them spec files), and it
+> can come out RIGHT while something is: a spec that silently dropped two cases and a suite that gained
+> two elsewhere sum to the number you expected.
+>
+> **The test-count check on the row below is the one that catches that**, and it is deliberately local —
+> this spec's `<!-- test:` markers against this spec's own filter total (§2). It asks a question the
+> whole-suite total structurally cannot, and it needs no history to ask it.
+>
+> ⇒ **Read `failed`, read `memoryLeak`, and read §2's count. The `total` is context for your report, not
+> a gate.**
 
 **The order is fixed: build → full suite → REVIEW → fix any findings → re-run the suite → commit →
 push.** A review after the commit is a bug report; a review before it is a gate. That is the whole
@@ -422,19 +438,15 @@ Append one row to `docs/spec-port-log.md` (create it on the first tick, mirrorin
 | <name> | <date> | DEFERRED | 0/31 | needs the whole ownership model — filed as PLAN.md future rung. Suite unchanged at 3271. |
 ```
 
-> ### ⛔ THE `Suite <before> → <after>` FIGURE IS NOW LOAD-BEARING. WRITE IT IN EVERY ROW.
->
-> Since §0 stopped measuring a baseline, **that number IS the next tick's baseline** — it is no longer
-> commentary, it is the handoff. A row that omits it forces the next tick to either re-measure (the
-> thing this change exists to avoid) or start from a number nobody wrote down.
->
-> **A `DEFERRED` row still needs it** — say the suite is *unchanged* and give the figure. "Nothing
-> landed" is exactly the case where a reader would otherwise have to guess whether the count moved.
+⚠ **This log is INFORMATIONAL and nothing may depend on it.** It is a trend a person reads, exactly like
+`docs/optimization-log.md` — write the suite figure in the row because it is useful to a reader, not
+because anything downstream consumes it. **The one exception is the `DEFERRED` first column**, which the
+§"ordering" selector reads to stop the loop retrying a spec forever; that is a name, not a measurement.
+No tick may reconstruct a number from here — if you need one, MEASURE it (§0).
 
 Then report to the user in a few lines: which spec, the gap you closed, what you shelved and why, the
 suite delta, and what the next tick will take. **The loop's next tick re-reads the whitelist and picks
-up from the file system — it carries nothing in its head except the one number this row hands it, which
-is what makes it restartable.**
+up from the file system — it carries nothing in its head, which is what makes it restartable.**
 
 ## ⛔ HALT AND ASK
 
