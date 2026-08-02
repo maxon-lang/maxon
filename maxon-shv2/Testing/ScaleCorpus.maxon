@@ -89,12 +89,14 @@
 // `let`/`var`, `type` declarations with field reads AND writes, structs across a call, `enum` + `match`,
 // `String`, `Array`, the `__ManagedMemory` BUFFER SURFACE over one, unconstrained generics, interfaces
 // with concrete dispatch, `print`, `or`/`xor`/`not`, `as` casts, bitwise + shifts (`and`/`shl`/`shr`),
-// and ranged typealiases. No `for`, no closures, no async, no witness-table dispatch. Everything below
+// ranged typealiases, and NAMESPACES — a file's directory, the `module` visibility tier over it, and
+// `dir.Name` / `dir.fn()` references at every segment count.
+// No `for`, no closures, no async, no witness-table dispatch. Everything below
 // stays inside it — and `printCorpusManifest` states exactly this boundary on every run, so a construct
 // outside it (and the codegen change to it that would be invisible) is NAMED rather than silently absent.
 //
 // ⚠ THE SUBSET AND THE CORPUS ARE TWO DIFFERENT SETS, AND THE GAP BETWEEN THEM IS WHERE BUGS LIVE.
-// This is the file's most durable defect, and it has now recurred SIX times:
+// This is the file's most durable defect, and it has now recurred SEVEN times:
 //   • `float` was in the subset for a full rung before one line of this file generated any. See
 //     `FloatOpsBase` for what that cost (a panicking emitter, shipped).
 //   • integer `/` and `mod` were in it since P1.0d.3 — the entire `idiv` fixed-register path — and
@@ -119,6 +121,14 @@
 //     `BufferSurfaceSitesBase`. ⚠ **A FAMILY WHOSE NEIGHBOUR IS COVERED IS THE HARDEST KIND TO SEE** — the
 //     same shape as `RangedReturnSitesBase`, where the cast door was priced and the `return` door was not,
 //     and the manifest line above it read as covering both.
+//   • ⭐ AND THE SEVENTH IS THE ONE NO KNOB COULD HAVE CLOSED, BECAUSE IT WAS THE DIRECTORY LAYOUT
+//     ITSELF. Every rung's files went into ONE FLAT DIRECTORY, so `deriveModuleDirectory` answered `""`
+//     for every source file in every rung and the ENTIRE namespace mechanism — N1a's `module` visibility
+//     tier, N1b's qualified-alias mirror, its namespace-qualified function set, its dotted-chain
+//     recognizer and its multi-segment walk — ran zero times at rung 0 and zero times at rung 5. This one
+//     was NAMED BY ITS OWN IMPLEMENTER before it shipped ("the ladder is structurally blind to the USER
+//     half of this rung"), which is why it is the first that cost nothing to find. See
+//     `NamespacedModulesBase`.
 //
 // The manifest named the first two as blind spots the whole time and they were read as footnotes. It
 // did not name the third and fourth AT ALL. And for the fifth it did worse than either: it named the
@@ -861,8 +871,108 @@ let BufferSurfaceElementSize = 1
 let BufferSurfaceByteMask = 255
 
 // ===========================================================================================
+// The NAMESPACE knob (N1b) — SUBDIRECTORIES, and references written `dir.fn()` / `dir.Name`
+// ===========================================================================================
+//
+// ⚠ **THE SEVENTH RECURRENCE OF THIS FILE'S FOUNDING DEFECT, AND THIS TIME THE RUNG'S OWN IMPLEMENTER
+// NAMED IT BEFORE SHIPPING.** N1a taught the compiler that a file's DIRECTORY is its namespace and N1b
+// taught it to resolve `dir.Name` / `dir.fn()` against it — and this generator wrote every rung's files
+// into ONE FLAT DIRECTORY. So `deriveModuleDirectory` answered `""` for every source file in every rung,
+// `Parser.namespace` was empty everywhere, and the whole user half of both rungs — the qualified-alias
+// MIRROR, the namespace-qualified FUNCTION set, the dotted-chain recognizer, the multi-segment walk —
+// ran EXACTLY ZERO TIMES on every rung of the ladder. N1b's own A/B measured −22,639 allocations at
+// rung 5 and every one of them came from `splitQualifiedName` and the stdlib's mirrors; not one came
+// from a user declaration or a user reference, because the corpus could not spell either.
+//
+// ⭐⭐ **THIS KNOB IS A WIDENING OF WHAT THE INSTRUMENT CAN EXPRESS, WHICH IS THE OPPOSITE OF TUNING IT.**
+// Nothing here makes a number look better; it makes a dimension VISIBLE that read a structural zero
+// before. ⚠ It therefore changes the ladder's ABSOLUTES — every rung compiles more files and more
+// declarations than it did — so `docs/optimization-log.md` rows minted before this knob are NOT
+// comparable to rows minted after it. That is the price of curing a blind spot and it is paid once.
+//
+// ⭐ **IT IS A DIRECTORY KNOB, WHICH IS WHY IT GROWS FILES — AND IT IS THE THIRD THAT DOES** (after
+// `manyFiles` and `interfaceTypes`). A namespace is not a syntactic decoration this generator could
+// emit into an existing file: it IS the directory a file sits in, so the only way to double the number
+// of namespaces is to double the number of directories. Two files per module, both of them load-bearing
+// and neither of them padding — see `writeNamespacedModules`.
+//
+// FOUR, the per-TYPE band's base (`EnumTypesBase`, `ManagedStructTypesBase`, `GenericBasesBase`), and
+// for the same test: a module is a DECLARING unit, not a call site. It grows how many namespaces the
+// index must hold mirrors for; the qualified REFERENCE count rides along with it (one consumer group
+// per module) rather than getting a second knob, because a reference cannot exist without a namespace
+// to name and the two would then double in lockstep anyway — which is one knob wearing two names.
+let NamespacedModulesBase = 4 as KnobSize
+
+// The subdirectory a module's SECOND file sits in, giving it the MULTI-SEGMENT namespace `ns{m}.inner`.
+//
+// ⚠ **MULTI-SEGMENT IS NOT A LONGER STRING, IT IS A DIFFERENT PARSER ARM.** A one-dot callee
+// (`ns0.helper0()`) is claimed by `Parser.parseQualifiedCall`, which reaches the namespace registry with
+// a name it already built for its `Type.method` mangling; a two-dot one (`ns0.inner.deep0()`) is claimed
+// by `parseDottedPrimary`'s own arm, which is the one that WALKS the chain and ASSEMBLES the name. A
+// corpus with only single-segment namespaces would exercise the probe and never the walk.
+let NsInnerDirName = "inner"
+
+// The directory name prefix. A module is `ns{m}/`, so its namespace is `ns{m}` and its inner file's is
+// `ns{m}.inner` — the spelling every generated reference below is written with.
+let NsModuleDirPrefix = "ns"
+
+// What joins a NAMESPACE's segments in the generated SOURCE — `ns3` + `inner` ⇒ `ns3.inner`.
+//
+// ⚠ It is not a second copy of the compiler's `Project.NamespaceSeparator`, and the distinction matters
+// because this file's whole job is to WRITE MAXON. Every knob here spells `typealias`, `export`,
+// `module`, `and` and `as` as literal source text; a namespace's `.` is the same kind of literal, on the
+// user's side of the boundary rather than the compiler's. Named only because it is written at two sites
+// (the reference group and the module's own header comment) and the two must agree.
+let NsQualifierSeparator = "."
+
+// The mask that drives every qualified-alias cast in this knob, and the alias's own upper bound. One
+// constant for both, so the cast can never be provably out of range: `(acc and 255)` is an opaque value
+// the folder cannot see through (so the guard is emitted, and this is a real ranged-cast site) that
+// nonetheless cannot exceed the bound (so a rung that someone one day RUNS does not panic).
+let NsAliasMask = 255
+
+// ⭐ **THE ALIAS NAME EVERY MODULE DECLARES, DELIBERATELY THE SAME IN ALL OF THEM.** M modules declaring
+// one name is what puts M entries in `RangedAliasRegistry.multiplyDeclared`, and it is the exact
+// situation a qualified spelling EXISTS for: the bare `NsScore` is M-way contested and resolves by
+// `nameable`'s last-wins, while `ns7.NsScore` names one declaration and only one. A corpus that gave
+// each module a unique alias name would register the mirrors and never make them matter.
+//
+// ⚠ ALL M DECLARATIONS SHARE ONE RANGE, and that is a correctness constraint rather than laziness: the
+// bare reference inside a module's own inner file resolves through the contested door, so a per-module
+// range would make what that cast admits depend on merge order. The CONTEST is the dimension; the range
+// is not.
+let NsSharedAliasName = "NsScore"
+
+// The inner file's alias — a SECOND M-way contested name, reached only through a two-segment qualifier
+// (`ns7.inner.NsDeep`). Distinct from `NsSharedAliasName` so the one-segment and two-segment mirror
+// lookups are asked about different keys and cannot be answered by each other's map entry.
+let NsDeepAliasName = "NsDeep"
+
+// The generated names, each written ONCE — this file's own standing discipline (see `LongIfDriver`), and
+// it binds harder here than anywhere else in the corpus: every one of these is spelled at a DECLARATION
+// site in one generated file and at a REFERENCE site in another, and the reference is written with a
+// QUALIFIER that must name the same function. A rename that reached only one of the two would produce a
+// rung that does not compile — which `scale-test` reports as a BROKEN RUN, not as a number.
+let NsHelperPrefix = "nsHelper"
+let NsHiddenPrefix = "nsHidden"
+let NsSharedPrefix = "nsShared"
+let NsDeepFuncPrefix = "nsDeep"
+let NsPrivateAliasPrefix = "NsLocal"
+
+let NamespacesDriver = "scaleNamespaces"
+
+// ===========================================================================================
 // Rung layout on disk
 // ===========================================================================================
+
+// What separates a rung-relative path's segments in `written`, and what marks a recorded entry as a
+// DIRECTORY rather than a file (a trailing one). `pruneRungDir` is the only reader; see there for why the
+// generated set has to name directories at all.
+//
+// ⚠ It is `/` and never the platform separator: these strings are built by this generator and compared
+// against strings this generator built, never against a `FilePath`'s rendering — `FilePath.filename()`
+// hands back one segment on either host, and the prefix is assembled here.
+let RungRelativePathSeparator = "/"
 
 // Shared with ScalePerType, which locates the rungs this generator wrote, and with the runner, which
 // names each rung's metrics + output file after it — in the corpus ROOT, never in the rung.
@@ -990,6 +1100,9 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	// about them share this ONE file deliberately: `bufferSurfaceValues` is per-PARSER, i.e. per file, so the
 	// product a value-keyed regression would cost only exists where both halves are.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "y_bufsurf", source: bufferSurfacesSource(knobAt(BufferSurfaceSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(BufferSurfacesDriver))
+	// The NAMESPACE knob (N1b) — the only one that creates DIRECTORIES, because a namespace IS a
+	// directory. It writes and registers itself, and registers ONE driver for M modules; see there.
+	sourceBytes = sourceBytes + try writeNamespacedModules(dir, moduleCount: knobAt(NamespacedModulesBase, rung: rung), written: written, drivers: drivers)
 	// `z_`, not `k_`, so `main` sorts last however many knobs are added above it. The prefixes are
 	// cosmetic (shv2 merges in listing order and the merge is order-independent), but a `main` wedged
 	// mid-alphabet would have to be renamed by every future knob, and `pruneRungDir` deletes the old
@@ -1014,7 +1127,7 @@ union RungDriver
 	// The file's single entry point, which `main` threads the accumulator through: `acc = name(acc)`.
 	threads(name String)
 
-	// The file contributes no single entry point THIS CALL can name. Two shapes qualify, both real:
+	// The file contributes no single entry point THIS CALL can name. Three shapes qualify, all real:
 	//
 	//  • A knob that WRITES AND REGISTERS ITSELF, because its driver names are minted inside its own
 	//    loop and are not knowable here — `writeManyFunctions` (N functions in one file, each
@@ -1022,12 +1135,28 @@ union RungDriver
 	//    `writeInterfaceTypes` (one driver per generated file). Each pushes onto `drivers` itself.
 	//  • The two files `main` does not thread at all — `a_seed`, whose `scaleSeed()` SEEDS the
 	//    accumulator rather than taking it, and `z_main`, which IS `main`.
+	//  • ⭐ A file whose functions are reached TRANSITIVELY, through another file's driver, because the
+	//    REFERENCE SHAPE is what that knob measures (N1b). `main` threads only `writeNamespacedModules`'
+	//    root consumer; every module's own functions hang off it by a QUALIFIED reference, and a driver
+	//    entry for them would make `main` call them BARE — measuring precisely what the knob exists to
+	//    stop measuring. The DCE property `RungDriver` defends is unaffected: reachable from `main` is
+	//    reachable from `main` however many calls away, and the chain is spelled out at that generator.
 	threadsNothing
 end 'RungDriver'
 
 // Write one generated file, returning its byte length so the caller can total the rung's source
 // size without stat-ing the directory back, recording its NAME so the prune below knows it belongs
 // there, and registering its entry point so `main` can call it without re-spelling the name.
+//
+// ⭐ **`name` MAY CARRY A RUNG-RELATIVE DIRECTORY PREFIX (`"ns3/mod"`), WHICH IS HOW THE NAMESPACE KNOB
+// WRITES INTO A SUBDIRECTORY (N1b).** `FilePath.join` normalizes the separator to the host's, so the
+// PATH is right on either host, while `written` records the `/`-joined RELATIVE spelling — which is
+// exactly the key `pruneRungDir` rebuilds as it walks. Nothing else about this routine changes, and no
+// flat-directory call site moves: a name with no separator IS its own relative path.
+//
+// ⚠ The caller owns creating the directory. This writes a file and does not mkdir, because the knob that
+// needs a subdirectory also needs it recorded in `written` — one caller, one place, rather than a
+// create-if-missing here that would leave the prune's set to be filled in somewhere else.
 function writeRungFile(dir FilePath, name String, source String, written StringArray, drivers StringArray, driver RungDriver) returns SourceByteCount throws ScaleError
 	let fileName = "{name}{MaxonExtension}"
 	let path = dir.join(fileName)
@@ -1042,32 +1171,53 @@ function writeRungFile(dir FilePath, name String, source String, written StringA
 	return source.byteLength() as SourceByteCount
 end 'writeRungFile'
 
-// Delete everything in the rung directory that this run did not just generate — see the header.
+// Delete everything in the rung directory TREE that this run did not just generate — see the header.
 //
 // A rung directory is not a place, it is a VALUE: it is exactly the program this rung's knobs
 // describe. Anything else in it — a stale `b_funcs_9.maxon` from a run with a bigger `FilesBase`, an
 // executable an older version of the runner wrote there — is compiled or listed by `build <dir>`, and
 // so is part of the measurement, silently and unreproducibly.
 //
-// A stale SUBDIRECTORY is a THROW rather than a delete: `build <dir>` walks recursively, so its
-// contents would be compiled, and the stdlib has no recursive remove with which to fix it. Refusing
-// with the path is the honest answer; the fix is one `rm -rf` and it should be a person's decision,
-// not this generator's.
+// ⭐ **IT RECURSES, BECAUSE A RUNG NOW HAS SUBDIRECTORIES AND A NAMESPACE IS A DIRECTORY (N1b).** The
+// invariant is unchanged and now covers the whole tree: every `.maxon` file under the rung is one this
+// run wrote. `generated` therefore holds `/`-joined RUNG-RELATIVE paths (`"ns3/mod.maxon"`) rather than
+// bare filenames, and names each generated DIRECTORY with a trailing separator (`"ns3/"`) — a directory
+// has to be IN the set for the same reason a file does, or the walk could not tell a namespace this run
+// created from one left behind by a run with a bigger `NamespacedModulesBase`.
+//
+// A stale SUBDIRECTORY is still a THROW rather than a delete, at every depth: `build <dir>` walks
+// recursively, so its contents would be compiled, and the stdlib has no recursive remove with which to
+// fix it. Refusing with the path is the honest answer; the fix is one `rm -rf` and it should be a
+// person's decision, not this generator's.
 function pruneRungDir(dir FilePath, generated StringArray) throws ScaleError
+	try pruneRungSubtree(dir, generated: generated, prefix: "")
+end 'pruneRungDir'
+
+// One level of the prune, and its own recursion. `prefix` is the `/`-joined path of `dir` relative to
+// the rung root, with a trailing separator (empty at the root) — so `"{prefix}{entry.filename()}"` is
+// exactly the key `writeRungFile` and `writeNamespacedModules` recorded.
+function pruneRungSubtree(dir FilePath, generated StringArray, prefix String) throws ScaleError
 	let entries = try Directory.list(dir) otherwise throw ScaleError.reason("could not list the rung directory {dir.toString()}")
 
 	for entry in entries 'each'
-		if Directory.isDirectory(entry) 'staleSubdir'
-			throw ScaleError.reason("{entry.toString()} is a directory inside a rung, and `build <dir>` walks recursively — so it would be COMPILED as part of this rung and the measurement would be of a program this generator did not write. Delete the corpus root and re-run.")
-		end 'staleSubdir'
+		let relative = "{prefix}{entry.filename()}"
 
-		if generated.contains(entry.filename()) 'generated'
+		if Directory.isDirectory(entry) 'subdir'
+			if not generated.contains("{relative}{RungRelativePathSeparator}") 'staleSubdir'
+				throw ScaleError.reason("{entry.toString()} is a directory inside a rung that this generator did not write, and `build <dir>` walks recursively — so it would be COMPILED as part of this rung and the measurement would be of a program this generator did not write. Delete the corpus root and re-run.")
+			end 'staleSubdir'
+
+			try pruneRungSubtree(entry, generated: generated, prefix: "{relative}{RungRelativePathSeparator}")
+			continue
+		end 'subdir'
+
+		if generated.contains(relative) 'generated'
 			continue
 		end 'generated'
 
 		try File.delete(entry) otherwise throw ScaleError.reason("could not delete the stale file {entry.toString()} from the rung directory, and leaving it there would put it in the measurement")
 	end 'each'
-end 'pruneRungDir'
+end 'pruneRungSubtree'
 
 // ===========================================================================================
 // The knobs, as source
@@ -2777,6 +2927,162 @@ function genericInstancesSource(instanceCount KnobSize) returns String
 	return out.build()
 end 'genericInstancesSource'
 
+// ⭐⭐ **THE NAMESPACE KNOB (N1b): M module DIRECTORIES, and one root consumer that names every one of
+// them with a QUALIFIER.** See `NamespacedModulesBase` for why the corpus had none of this and what it
+// meant. This is the only knob that creates directories, because a namespace IS a directory.
+//
+// ⭐ IT WRITES AND REGISTERS IN ONE FUNCTION, for `writeManyFunctions`' reason — but registers only ONE
+// driver, the root consumer, and that asymmetry is the design rather than an omission. `main` calling
+// each module's `nsHelper{m}` directly would call it BARE (`mainSource` writes `acc = {name}(acc)`),
+// which is exactly the reference shape this knob exists to stop measuring. Every generated function here
+// is instead reachable THROUGH a qualified reference: `main` ⇒ `scaleNamespaces` ⇒ `ns{m}.nsHelper{m}`
+// and `ns{m}.inner.nsDeep{m}` ⇒ (bare, inside the module) `nsHidden{m}` / `nsShared{m}` ⇒ (qualified,
+// from inside a namespaced file) `ns{m-1}.nsHelper{m-1}`. So a future DCE deletes nothing, which is the
+// property `RungDriver` exists to defend.
+//
+// **WHAT EACH MODULE `ns{m}/` GENERATES, and every line of it is a door the flat corpus could not open:**
+//
+//   `ns{m}/mod.maxon` (namespace `ns{m}`)
+//     • `export typealias {NsSharedAliasName}` — M-way CONTESTED, mirrored under `ns{m}.{NsSharedAliasName}`.
+//       This is the whole point: the bare key is ambiguous and the qualified key is not.
+//     • a FILE-PRIVATE typealias, referenced bare in this file — `RangedAliasRegistry`'s file arm, and a
+//       declaration that gets NO mirror (`pushNamespaceQualifiedAlias` gates on `visibility != file`),
+//       so the corpus prices the gate's false arm as well as its true one.
+//     • `module function nsShared{m}` — the `Visibility.module` SUBTREE tier, which this corpus generated
+//       ZERO of before this knob (`grep -c 'module ' ` read 0). Reached bare from `ns{m}/inner/`, so the
+//       expensive subtree-prefix arm of `isVisibleFrom` runs at every rung.
+//     • `export function nsHelper{m}` and a FILE-PRIVATE `nsHidden{m}` — and BOTH get an entry in
+//       `ProgramSignatures.namespaceQualifiedFunctions`, because the function side deliberately does not
+//       gate on the tier. That is the per-declaration cost this knob is really pricing.
+//
+//   `ns{m}/inner/deep.maxon` (namespace `ns{m}.inner` — MULTI-SEGMENT)
+//     • a second M-way contested `export typealias {NsDeepAliasName}`, reachable only as
+//       `ns{m}.inner.{NsDeepAliasName}`.
+//     • `export function nsDeep{m}`, which reaches its ENCLOSING directory's `module` declaration BARE
+//       and the PREVIOUS module's export by QUALIFIER — a qualified reference written from INSIDE a
+//       namespaced file, which is not the same parser state as one written from the root.
+//
+// ⚠ **N1a's INTENT IS PRESERVED, NOT REPLACED.** That rung exported only `driverHeader` and left every
+// other generated function file-private ON PURPOSE, so the ladder exercises `isVisibleFrom`'s expensive
+// `file` arm rather than only the cheap `global` one. Every file-private declaration in the flat corpus
+// is untouched, and this knob ADDS a private free function and a private alias per module — so the
+// `file` arm gets MORE traffic here, not less, and the `module` arm gets its first.
+function writeNamespacedModules(dir FilePath, moduleCount KnobSize, written StringArray, drivers StringArray) returns SourceByteCount throws ScaleError
+	var total = 0 as SourceByteCount
+	var consumer = StringBuilder.create()
+	consumer.append("// Generated by ScaleCorpus: the namespace knob's CONSUMER — one qualified reference group per module, written from the ROOT namespace.\n")
+	consumer.append(driverHeader(NamespacesDriver))
+	consumer.append("\tvar acc = a\n")
+
+	for m in 0 upto moduleCount 'eachModule'
+		let moduleDir = "{NsModuleDirPrefix}{m}"
+		let innerDir = "{moduleDir}{RungRelativePathSeparator}{NsInnerDirName}"
+		try createRungSubdir(dir, relative: moduleDir, written: written)
+		try createRungSubdir(dir, relative: innerDir, written: written)
+
+		total = total + try writeRungFile(dir, name: "{moduleDir}{RungRelativePathSeparator}mod", source: namespacedModuleSource(m), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
+		total = total + try writeRungFile(dir, name: "{innerDir}{RungRelativePathSeparator}deep", source: namespacedInnerSource(m), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
+
+		consumer.append(qualifiedReferenceGroup(m))
+	end 'eachModule'
+
+	consumer.append("\treturn acc\n")
+	consumer.append("end '{NamespacesDriver}'\n")
+	total = total + try writeRungFile(dir, name: "y_nsuse", source: consumer.build(), written: written, drivers: drivers, driver: RungDriver.threads(NamespacesDriver))
+	return total
+end 'writeNamespacedModules'
+
+// Create one rung-relative directory and record it in `written` as a DIRECTORY — the trailing separator
+// is what `pruneRungDir` reads it back by. The two facts (it exists on disk, the prune knows it is ours)
+// are written here together, because a directory recorded but not created is a rung that fails to write
+// and a directory created but not recorded is a rung that fails to prune.
+function createRungSubdir(dir FilePath, relative String, written StringArray) throws ScaleError
+	let path = dir.join(relative)
+	if not Directory.create(path) 'noDir'
+		throw ScaleError.reason("could not create the module directory {path.toString()}")
+	end 'noDir'
+
+	written.push("{relative}{RungRelativePathSeparator}")
+end 'createRungSubdir'
+
+// One module's own file. See `writeNamespacedModules` for what each declaration is here to price.
+function namespacedModuleSource(m KnobSize) returns String
+	let privateAlias = "{NsPrivateAliasPrefix}{m}"
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: namespace `{NsModuleDirPrefix}{m}` — the namespace knob's module {m}.\n")
+	out.append("export typealias {NsSharedAliasName} = int(0 to {NsAliasMask})\n")
+	out.append("typealias {privateAlias} = int(0 to {NsAliasMask})\n")
+	out.append("\n")
+	// The `module` tier: nameable from this directory's SUBTREE and nowhere else. `ns{m}/inner/deep.maxon`
+	// is what names it, which is the subtree arm rather than the same-directory one.
+	out.append("module function {NsSharedPrefix}{m}(a int) returns int\n")
+	out.append("\treturn a + {m mod 7 + 1}\n")
+	out.append("end '{NsSharedPrefix}{m}'\n")
+	out.append("\n")
+	out.append(driverHeader("{NsHelperPrefix}{m}"))
+	// The file-private alias, named BARE from the file that declares it — the one door a file-private
+	// declaration has, and the arm `pushNamespaceQualifiedAlias` mints no mirror for.
+	out.append("\tlet v = (a and {NsAliasMask}) as {privateAlias}\n")
+	out.append("\treturn {NsHiddenPrefix}{m}(a) + (v as int)\n")
+	out.append("end '{NsHelperPrefix}{m}'\n")
+	out.append("\n")
+	// FILE-PRIVATE, and it still earns a `ns{m}.nsHidden{m}` entry in the namespace-qualified function set:
+	// that side does not gate on the tier, so a private helper is exactly as expensive to REGISTER as an
+	// exported one. Half the per-declaration cost this knob prices lives in functions nothing can call.
+	out.append("function {NsHiddenPrefix}{m}(a int) returns int\n")
+	out.append("\treturn a + {m mod 5 + 2}\n")
+	out.append("end '{NsHiddenPrefix}{m}'\n")
+	return out.build()
+end 'namespacedModuleSource'
+
+// The module's INNER file — namespace `ns{m}.inner`, the multi-segment half of the knob.
+function namespacedInnerSource(m KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: namespace `{NsModuleDirPrefix}{m}{NsQualifierSeparator}{NsInnerDirName}` — the MULTI-SEGMENT half of the namespace knob.\n")
+	out.append("export typealias {NsDeepAliasName} = int(0 to {NsAliasMask})\n")
+	out.append("\n")
+	out.append(driverHeader("{NsDeepFuncPrefix}{m}"))
+	// The enclosing directory's `module` declaration, named BARE from a file one level DOWN — the subtree
+	// prefix compare, which is `isVisibleFrom`'s most expensive arm and had no traffic at all before N1b.
+	out.append("\tvar acc = {NsSharedPrefix}{m}(a)\n")
+
+	// A qualified reference written from INSIDE a namespaced file, and pointing at a DIFFERENT namespace.
+	// Module 0 has no predecessor and simply skips it — the chain is what makes these references
+	// cross-module, and a module naming ITSELF by qualifier would be a shape no real program writes.
+	if m > 0 'namesThePreviousModule'
+		out.append("\tacc = acc + {NsModuleDirPrefix}{m - 1}{NsQualifierSeparator}{NsHelperPrefix}{m - 1}(acc)\n")
+	end 'namesThePreviousModule'
+
+	out.append("\treturn acc\n")
+	out.append("end '{NsDeepFuncPrefix}{m}'\n")
+	return out.build()
+end 'namespacedInnerSource'
+
+// One module's worth of QUALIFIED references, as written from the ROOT namespace. Five sites, and each
+// is a different door — a corpus that emitted only one of them would price a fifth of the rung.
+function qualifiedReferenceGroup(m KnobSize) returns String
+	let moduleNs = "{NsModuleDirPrefix}{m}"
+	let innerNs = "{moduleNs}{NsQualifierSeparator}{NsInnerDirName}"
+	var out = StringBuilder.create()
+	// ONE-SEGMENT qualified TYPE reference: the ranged-alias mirror, resolved against the key
+	// `pushNamespaceQualifiedAlias` filed. The cast is a real guarded site (the value is opaque).
+	out.append("\tlet ns{m}a = (acc and {NsAliasMask}) as {moduleNs}{NsQualifierSeparator}{NsSharedAliasName}\n")
+	// TWO-SEGMENT qualified TYPE reference: the same mirror mechanism over a name whose qualifier is
+	// itself dotted, which is the walk `parseTypeToken`'s greedy `.identifier` loop had to be widened for.
+	out.append("\tlet ns{m}b = (acc and {NsAliasMask}) as {innerNs}{NsQualifierSeparator}{NsDeepAliasName}\n")
+	// ONE-DOT qualified CALL — `parseQualifiedCall`'s door, which asks the namespace registry with the
+	// `Type.method` name it had already mangled.
+	out.append("\tacc = acc + {moduleNs}{NsQualifierSeparator}{NsHelperPrefix}{m}(acc) + (ns{m}a as int)\n")
+	// TWO-DOT qualified CALL — `parseDottedPrimary`'s own arm, the one that WALKS the token chain and
+	// ASSEMBLES the name before probing.
+	out.append("\tacc = acc + {innerNs}{NsQualifierSeparator}{NsDeepFuncPrefix}{m}(acc) + (ns{m}b as int)\n")
+	// A qualified call as a STATEMENT — the third door, and the one whose absence made a namespaced
+	// module's void function uncallable (`E2015: Unsupported: identifier statement`). Its result is
+	// discarded here exactly as a bare call statement's is.
+	out.append("\t{moduleNs}{NsQualifierSeparator}{NsHelperPrefix}{m}(acc)\n")
+	return out.build()
+end 'qualifiedReferenceGroup'
+
 // The `interfaceTypes` knob: N interfaces and their conforming types, spread `InterfacesPerFile` to a
 // file — the per-CONFORMANCE cost.
 //
@@ -3300,6 +3606,17 @@ export function printCorpusManifest()
 	print("      instance's own cascade)\n")
 	print("    INTERFACES: `interface` declarations, `type X implements I` conformance, and CONCRETE\n")
 	print("      dispatch (`x.method()`, with and without arguments) — a direct call to a known body\n")
+	print("    NAMESPACES (N1b): a rung is no longer ONE FLAT DIRECTORY. M module SUBDIRECTORIES, each with a\n")
+	print("      nested `{NsInnerDirName}/` of its own, so `deriveModuleDirectory` answers something for the first\n")
+	print("      time — and every reference to them is written with a QUALIFIER, at all three doors and both\n")
+	print("      segment counts: a one-segment and a two-segment qualified TYPE name (`ns3.{NsSharedAliasName}`,\n")
+	print("      `ns3.{NsInnerDirName}.{NsDeepAliasName}` — the ranged-alias MIRROR), a ONE-DOT qualified call\n")
+	print("      (`parseQualifiedCall`'s door), a TWO-DOT one (`parseDottedPrimary`'s chain WALK), and a\n")
+	print("      qualified call as a STATEMENT. Plus the three VISIBILITY tiers on one declaration set: an\n")
+	print("      `export`ed alias CONTESTED by every module (so the bare key is ambiguous and the qualified\n")
+	print("      key is not), a file-private alias and a file-private free function (which still earns a\n")
+	print("      qualified entry — that side does not gate on the tier), and `module function` — the SUBTREE\n")
+	print("      tier, named BARE from one directory down, of which this corpus generated exactly ZERO before\n")
 	print("\n")
 	print("  COST DIMENSIONS ON THE DOUBLING LADDER (each DOUBLES per rung; the rung-over-rung RATIO is\n")
 	print("  the growth — x2 linear, x4 quadratic — read straight off the counts):\n")
@@ -3323,7 +3640,11 @@ export function printCorpusManifest()
 	print("    BUFFER-SURFACE group count (per-SITE, over the fixed aliases above: it grows how many places a\n")
 	print("    buffer is PRODUCED and how many marks one file's mark set holds, against the array-method\n")
 	print("    dispatches in that same file that ASK about them — the product both halves of a value-keyed\n")
-	print("    regression would cost, which is why they are one file)\n")
+	print("    regression would cost, which is why they are one file),\n")
+	print("    NAMESPACED-MODULE count (per-NAMESPACE, and the third knob that grows FILES — two per module,\n")
+	print("    one of them a level deeper — because a namespace IS a directory and cannot be simulated inside\n")
+	print("    one. It doubles the qualified-reference count with it, deliberately: a reference cannot exist\n")
+	print("    without a namespace to name, so two knobs would double in lockstep and be one knob twice)\n")
 	print("\n")
 	print("  NOT GENERATED — a codegen change to any of these is INVISIBLE here (structural blind spot):\n")
 	print("    `for`-in, closures, async. Float ARGUMENTS and float RETURNS are absent because they do not\n")
