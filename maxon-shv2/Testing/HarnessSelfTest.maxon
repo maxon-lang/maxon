@@ -156,8 +156,22 @@ end 'isHarnessFixtureSubRun'
 // (Measured before the fix: pointing a run at a case directory whose parent was spelled differently
 // took 0.575s against the guarded 0.061s — the self-test running inside what is structurally a
 // sub-run.)
+//
+// ⚠ **A TRAILING SEPARATOR IS STRIPPED FIRST, AND SINCE THE TREE LOCK THAT MATTERS.** `a/b/c/` and
+// `a/b/c` name one directory, but the empty last component IS a component: `parent()` answers `a/b/c`
+// for the first and `a/b` for the second (measured), so the unstripped spelling asks the question one
+// level too shallow and every fixture dir stops recognising itself. Shell tab completion produces that
+// spelling by default. The miss used to cost only the fan-out below; now it costs a REFUSAL — an
+// unrecognised sub-run takes the tree lock and is turned away by the parent that spawned it
+// (measured: `spec-test <fixture>/` exited 2 saying the checkout was BUSY, while the same path without
+// the slash ran the fixture). A path that is nothing BUT separators has no case name and is not one.
 function isFixtureCaseDir(specDir FilePath, root FilePath) returns bool
-	let parent = try specDir.parent() otherwise return false
+	var caseDir = specDir
+	while caseDir.filename().isEmpty() 'trailingSeparator'
+		caseDir = try caseDir.parent() otherwise return false
+	end 'trailingSeparator'
+
+	let parent = try caseDir.parent() otherwise return false
 	return parent.filename() == root.filename()
 end 'isFixtureCaseDir'
 

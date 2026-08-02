@@ -89,9 +89,15 @@
 // side is displayed by the other with no edit, and the only thing either side must parse is the one
 // key it acts on. Both write plain `key=value` lines and neither may reorder them for prettiness.
 
+// ⚠ **THE THREE CONSTANTS BELOW ARE EXPORTED BECAUSE THE PARITY GATE READS THEM** — see
+// `Testing/TreeLockParity.maxon`. They are the terms of the contract this file shares with
+// `maxon-sharp/TreeLock.cs`, and a gate that spelled them itself would be a THIRD copy of exactly the
+// thing it is checking. The same move `FragmentsSubdir` makes for `GoldenTracking`, for the same
+// reason: the one place a fact is written is the only place anything may read it from.
+
 // Where the record lives, relative to the checkout root: at the top, visibly, under a name that says
 // what it is. Gitignored (`/.maxon-tree.lock`).
-let LockFileName = ".maxon-tree.lock"
+export let LockFileName = ".maxon-tree.lock"
 
 // The record's fields. `heldSeconds` is computed BY THE HOLDER — which knows when it started — so a
 // reader needs no clock arithmetic and no decimal parser to say how long this has been going on.
@@ -110,8 +116,8 @@ let RecordLineSeparator = "\n"
 // factor of twelve, and both directions of being wrong are cheap and visible: a break that should not
 // have happened prints a line saying it broke a lock, and a wait that should not have happened is
 // bounded by one minute.
-let TouchIntervalMs = 5000
-let AbandonedAfterSeconds = 60
+export let TouchIntervalMs = 5000
+export let AbandonedAfterSeconds = 60
 
 // The pause between writing the record and reading it back — see `takeLock`.
 let AcquireVerifyDelayMs = 20

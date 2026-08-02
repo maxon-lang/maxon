@@ -1,0 +1,108 @@
+// TreeLockParity — the tree lock is ONE MECHANISM IN TWO LANGUAGES, and this is the thing that makes
+// the two copies agree.
+//
+// ⭐ **THE C# SIDE ASKS FOR THIS IN A SENTENCE, AND A SENTENCE IS NOT A GATE.**
+// `maxon-sharp/TreeLock.cs` says of its intervals *"both numbers must match it, because a holder
+// written by one and read by the other has to agree about what 'still moving' means"* — and nothing
+// checked that they did. That is the exact shape of the rule the tree lock itself was written to
+// replace, one level in: a shared invariant carried by prose that a later edit cannot see. The two
+// files HAVE to be two, because `build maxon-shv2` is a bootstrap command and `spec-test` is an shv2
+// one, so the two processes that contend are not the same program. What was missing was not a way to
+// write it once — it is a wire format — but a way to be TOLD when the copies stopped matching.
+//
+// ============================================================================================
+// WHAT IS GATED, AND WHY EACH DIVERGENCE IS A WRONG ANSWER RATHER THAN A COMPILE ERROR
+// ============================================================================================
+//
+// Every fact below fails SILENTLY when the two sides disagree: both compilers go on building, both
+// suites go on passing, and the only symptom is the race the lock exists to prevent, back again.
+//
+//   * **The lock FILE NAME.** Change it on one side and the two take DIFFERENT locks — neither ever
+//     sees the other, and both run. That is the original bug restored in full, under a green suite on
+//     both sides and with a lock file sitting there looking like it works.
+//   * **`AbandonedAfterSeconds`.** Whichever side holds the SMALLER window breaks the other's LIVE
+//     holder. Two commands then run in one tree, and the second prints a line announcing it broke an
+//     abandoned lock belonging to a process that is still working — the one piece of evidence, and it
+//     says the opposite of what happened.
+//   * **`TouchIntervalMs`.** It is the numerator of the margin, and the margin has to hold ACROSS the
+//     pair: a record refreshed at the C# interval must stay alive against the shv2 window, and the
+//     reverse. Raise one alone and it is the same steal, arrived at from the other end.
+//
+// ⚠ **AND WHAT IS DELIBERATELY NOT GATED, each because a divergence there CANNOT produce a wrong
+// answer** — a gate over a fact that does not need one is a false red waiting for the next reformat:
+//
+//   * **The record's FIELD KEYS** (`pid`, `token`, `sinceUnix`, …). Neither side ever parses the
+//     other's record. `token` is read back only by the process that WROTE it, and every other field is
+//     ECHOED verbatim into the refusal. A rename can therefore change how a quoted record is spelled
+//     and nothing else.
+//   * **`AcquireVerifyDelayMs`.** It is each side's own pause between writing the record and reading
+//     it back — a private safety margin, not a term of the shared contract. A divergence widens one
+//     side's residual race and cannot make the two disagree about who holds the lock.
+//
+// ⚠ **IT MATCHES C# SOURCE TEXT, and that is the honest ceiling rather than a shortcut.** A Maxon
+// program cannot evaluate a C# constant; the alternative is not something better, it is nothing. The
+// trade is deliberate and one-sided: a reformat that breaks the match costs a LOUD failure naming the
+// file and the value, while the thing it replaces costs a silent one nobody finds for three rungs.
+
+// The bootstrap's half of the mechanism, relative to the repo root — the same relative-to-cwd contract
+// `LadderIndex` and `HarnessSelfTest` state, and the same instruction when it cannot be read.
+let BootstrapTreeLockSource = "maxon-sharp/TreeLock.cs"
+
+// How C# spells the two things this reads: a quoted string literal, and a `const` initializer. The
+// member NAMES are shared with the C# file by convention and are checked as part of the match, so a
+// rename on one side reads as a disagreement — which it is.
+let CSharpQuote = "\""
+let CSharpAssignment = " = "
+let TouchIntervalMemberName = "TouchIntervalMs"
+let AbandonedAfterMemberName = "AbandonedAfterSeconds"
+
+// One disagreement per line, indented under the sentence that introduces them.
+let DisagreementIndent = "\n    "
+
+// ⭐ **PROVE THE BOOTSTRAP'S TREE LOCK STILL SPEAKS THIS ONE'S FORMAT.** Called ONCE, by the spec
+// suite's parent, beside `requireScaleHistoryRefusalsFire` and `requireHarnessRefusalsFire` and for
+// their reason: it is a property of the TREE rather than of any test, so there is no test to fail and
+// nothing downstream that could act on it.
+//
+// It PANICS, naming EVERY disagreement together — one edit to the C# file routinely moves more than
+// one of these, and a report naming the first sends the reader back for another suite run per
+// remaining term.
+export function requireTreeLockParity()
+	let path = try FilePath.from(BootstrapTreeLockSource) otherwise panic("TreeLockParity: '{BootstrapTreeLockSource}' is not a valid path")
+	let source = try File.readText(path) otherwise panic("TreeLockParity: could not read {BootstrapTreeLockSource} — it is the bootstrap's half of the tree lock, and the two halves cannot be compared with only one of them in hand. Run the suite from the repo root.")
+
+	var disagreements = StringArray.create()
+	recordIfAbsent(disagreements, source: source, expected: "{CSharpQuote}{LockFileName}{CSharpQuote}", term: "the lock FILE NAME", consequence: "the two compilers would take DIFFERENT locks, never see each other, and both run")
+	recordIfAbsent(disagreements, source: source, expected: "{TouchIntervalMemberName}{CSharpAssignment}{TouchIntervalMs}", term: "the HEARTBEAT interval", consequence: "one side's live holder would stop looking alive to the other, and have its lock broken out from under it")
+	recordIfAbsent(disagreements, source: source, expected: "{AbandonedAfterMemberName}{CSharpAssignment}{AbandonedAfterSeconds}", term: "the ABANDONMENT window", consequence: "the side with the smaller window would break the other's LIVE lock and announce it as abandoned")
+
+	if disagreements.isEmpty() 'bothSidesAgree'
+		return
+	end 'bothSidesAgree'
+
+	// ⚠ `panic` takes a STRING LITERAL — a `let`-bound String is rejected outright — so the list is
+	// built as text and INTERPOLATED. The same constraint `HarnessSelfTest`, `LadderIndex` and
+	// `ScaleHistorySelfTest` each document.
+	let report = disagreementReport(disagreements)
+	panic("TreeLockParity: {disagreements.count()} term(s) of the tree lock's wire format are NOT the same in {BootstrapTreeLockSource} as in Compiler/TreeLock.maxon. One lock guards this checkout against BOTH compilers, so a term either side spells differently is a lock that silently stops excluding anything.{report}")
+end 'requireTreeLockParity'
+
+// Does the bootstrap's source carry `expected` verbatim? A miss is recorded rather than thrown, so the
+// caller can report all three terms at once.
+function recordIfAbsent(disagreements StringArray, source String, expected String, term String, consequence String)
+	if source.contains(expected) 'agrees'
+		return
+	end 'agrees'
+
+	disagreements.push("{term}: this compiler's TreeLock.maxon requires {BootstrapTreeLockSource} to contain `{expected}`, and it does not. Left as it is, {consequence}.")
+end 'recordIfAbsent'
+
+// The disagreements as one indented block. Empty when there are none, which is the only state the
+// caller never prints.
+function disagreementReport(disagreements StringArray) returns String
+	var out = StringBuilder.create()
+	for disagreement in disagreements 'each'
+		out.append("{DisagreementIndent}{disagreement}")
+	end 'each'
+	return out.build()
+end 'disagreementReport'

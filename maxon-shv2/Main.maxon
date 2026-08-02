@@ -316,6 +316,14 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// runs: a check nobody runs is exactly the drift it exists to catch, one level up (see LadderIndex).
 	requireLadderIndexComplete()
 
+	// ⭐ **AND THAT THE BOOTSTRAP'S HALF OF THE TREE LOCK STILL SPEAKS THIS ONE'S FORMAT**, asked
+	// immediately BEFORE the lock is used rather than after — the mechanism is checked, then relied on.
+	// The order also decides what a failure costs: everything below this line runs while HOLDING the
+	// lock, and a panic down there leaves the record behind for the abandonment window to clear, so a
+	// door that can fail is cheaper on this side of it. See `TreeLockParity` for which terms of the
+	// shared format are gated and which deliberately are not.
+	requireTreeLockParity()
+
 	// ⭐ **AND WHETHER ANY OTHER COMMAND IS ALREADY WRITING THIS TREE.** Two suites share
 	// `<specDir>/.spec-tmp`, so one deletes what the other is compiling — a measured FALSE RED — and a
 	// build running alongside replaces the very binary this run is drawing verdicts from. Asked here,

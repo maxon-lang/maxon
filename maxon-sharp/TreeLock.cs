@@ -46,6 +46,13 @@ internal static class TreeLock {
   /// abandoned. The gap between them is the whole margin — see the Maxon side for the reasoning; both
   /// numbers must match it, because a holder written by one and read by the other has to agree about
   /// what "still moving" means.
+  ///
+  /// <para>⚙ <b>THAT IS MACHINE-CHECKED, NOT ASKED FOR.</b> These two numbers and
+  /// <see cref="LockFileName"/> are the terms of the shared wire format, and every one of them fails
+  /// SILENTLY when the two sides disagree — both compilers build, both suites pass, and the race comes
+  /// back. So the shv2 spec suite reads THIS FILE and refuses to run when any of the three no longer
+  /// matches its own (<c>maxon-shv2/Testing/TreeLockParity.maxon</c>, which also records which terms
+  /// are deliberately NOT gated and why). Change one here and the shv2 suite names it.</para>
   /// </summary>
   private const int TouchIntervalMs = 5000;
   private const int AbandonedAfterSeconds = 60;
