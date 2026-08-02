@@ -1,0 +1,46 @@
+// Test: duplicate-block-identifiers.multiple-nested
+function main() returns ExitCode
+	var x = 0
+	if true 'outer'
+		x = 1
+		while true 'inner'
+			x = 2
+			break
+		end 'inner'
+	end 'outer'
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, outer
+    x64.jmp critsplit
+  outer:
+    x64.movRegImm32 rax, 1
+    x64.jmp whilehdr
+  whilehdr:
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, inner
+    x64.jmp critsplit
+  inner:
+    x64.movRegImm32 rax, 2
+    x64.jmp whileexit
+  critsplit:
+    x64.jmp whileexit
+  whileexit:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}
