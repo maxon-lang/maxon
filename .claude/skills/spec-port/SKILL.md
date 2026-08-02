@@ -101,19 +101,35 @@ Then read the failures. The MCP result is structured; when you want per-case det
 `spec_test_outcome filter=<name>/`. If you run the binary by hand instead, **redirect to a file** — never
 pipe through `head`/`grep` (CLAUDE.md).
 
-## 3. Implement the gaps
+## 3. Implement the gaps — DELEGATE to `maxon-spec-implementer`
 
-Ordinary compiler work, under the project's ordinary rules. Two that bite here specifically:
+**Hand the fix to the `maxon-spec-implementer` agent. Do not do it inline.** Not because you could not,
+but because **the loop's context is the scarce resource**: an implementation is greps, dead ends, IR
+dumps and refuted hypotheses, and none of that is anything the *next tick* needs. The agent absorbs it
+and returns a report. You stay small enough to run tick after tick.
 
-- **Read the v1 file that already does it first.** `maxon-selfhosted/` is 191,487 lines of debugged
-  Maxon and this spec passed there. Find how, then decide whether shv2 should do the same — **a copy
-  needs a reason exactly as much as a divergence does.**
-- **A diagnostic needs a registry entry.** New error code ⇒ `docs/error-codes.txt` + `maxon error-codes
-  generate` + the code that emits it, in the same commit. Never a bare `"E3xxx"` literal in source.
+**Brief it with what you already know** — the spec name, the failing case names, the exact symptoms
+(exit codes, stderr, diffs), and any diagnosis you did while reading the failures. **Diagnosis you have
+already done is the most valuable thing in the brief**; making the agent re-derive it is the one waste
+this delegation is supposed to prevent.
+
+Its brief (`.claude/agents/maxon-spec-implementer.md`) fixes the reference ORDER: **`maxon-selfhosted`
+(v1) first** — the closest code, in the same language against the same `stdlib/`, and *it passes this
+spec, because the whitelist is v1's* — then **`maxon-sharp` (the bootstrap)** as the RUNNABLE oracle
+when the question is *what is the right answer* rather than *how is it built*. **Neither binds it.**
+shv2 is a deliberate rewrite; where it departs, the departure is the thesis, and an implementation that
+does not fit gets designed rather than copied.
+
+**Inline is the exception, and a narrow one:** a one-line fix you have already located and can prove
+with a single filtered run. The moment it needs a second hypothesis, hand it over.
 
 ⛔ **A defect this spec reaches is FIXED, not filed** — a wrong answer as much as a leak, and whether or
-not the suite is green over it. That is the CLAUDE.md rule and the loop does not soften it. What you may
-shelve is a case needing a *feature that does not exist yet* (§4) — never a case that is broken.
+not the suite is green over it. That is the CLAUDE.md rule and neither you nor the agent softens it.
+What may be shelved is a case needing a *feature that does not exist yet* (§4) — never a case that is
+broken.
+
+**Then verify its claims yourself.** Its report is a lead: re-run the filtered suite and the full one,
+and read its diff. This project's history is full of agent findings that measurement refuted.
 
 ## 4. Shelving a case — the only legal way, and it has a floor
 
@@ -155,14 +171,18 @@ tick was found at 3257/1 with eight unminted fragments and one stale one sitting
 git status --short specs-shv2/fragments/     # every one of these gets committed with the spec
 ```
 
-## 6. The agents — a judgement call, and here is the call
+## 6. The other two agents — a judgement call, and here is the call
 
-**REVIEWER — run `maxon-rung-reviewer` whenever compiler source changed. Every time.** You are unattended
-and you wrote the code; it is the only second pair of eyes in the loop, and *duplication is its top
-priority* — which is precisely what a long tail of small similar gaps generates. Skip it only for a
-**zero-code-change port** (the spec copied in and passed as-is), where there is nothing to review but
-the goldens, and §5 already did that. **Verify its claims yourself before acting on them** — an agent's
-finding is a lead, and this project's own history is full of refuted ones.
+*(The implementer of §3 is not a judgement call — it is the default. These two are.)*
+
+**REVIEWER — run `maxon-rung-reviewer` whenever compiler source changed. Every time.** The loop is
+unattended, and delegating §3 makes this *structurally* right rather than merely advisable: the reviewer
+is now never the agent that wrote the code, which is the rule `/rung` states and could not enforce when
+the coordinator implemented inline. *Duplication is its top priority* — precisely what a long tail of
+small similar gaps generates, one near-miss helper at a time. Skip it only for a **zero-code-change
+port** (the spec copied in and passed as-is), where there is nothing to review. **Verify its claims
+yourself before acting on them** — an agent's finding is a lead, and this project's own history is full
+of refuted ones.
 
 **OPTIMIZER — the LADDER READ is yours and routine; the AGENT is TRIGGERED.**
 - **Always, if compiler source changed:** `run_scale_test repoRoot=...` (~17 s) and *read* it. It is an
