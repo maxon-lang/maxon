@@ -174,10 +174,11 @@ export function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
 		shl then return StdBinOpcode.shl
 		shr then return StdBinOpcode.shr
 		shrLogical then return StdBinOpcode.shrLogical
-		// The `min` intrinsic — a 1:1 rename like the arithmetic band's. Float-only on both sides of
-		// the boundary, and `appendStdBinOp`'s guard is what makes that unrepresentable rather than
+		// The `min`/`max` intrinsics — 1:1 renames like the arithmetic band's. Float-only on both sides
+		// of the boundary, and `appendStdBinOp`'s guard is what makes that unrepresentable rather than
 		// merely unwritten (`stdBinOpcodeIsFloatOnly`).
 		min then return StdBinOpcode.min
+		max then return StdBinOpcode.max
 	end 'map'
 end 'maxonBinOpToStdOpcode'
 
@@ -2026,11 +2027,11 @@ type MaxonToStdLowering
 			div then self.lowerDivision(result, lhs: lhs, rhs: rhs, dstBlock: dstBlock)
 			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs))
 			bitAnd to shrLogical then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
-			// `min` needs no `lowerDivision`-style fork the way `div` does: only ONE of the two
+			// `min`/`max` need no `lowerDivision`-style fork the way `div` does: only ONE of the two
 			// divisions is a pure `binOp`, so `/` has to ask its operand type which op it becomes,
-			// while `min` is float-only outright (`stdBinOpcodeIsFloatOnly`) and the parser has
-			// already promoted both operands. So it takes the plain append, like the arith band.
-			min then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
+			// while these are float-only outright (`stdBinOpcodeIsFloatOnly`) and the parser has
+			// already promoted both operands. So they take the plain append, like the arith band.
+			min to max then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 		end 'op'
 	end 'lowerBinOp'
 
@@ -2072,13 +2073,14 @@ type MaxonToStdLowering
 
 		// The FLOAT-ONLY opcodes may not be built over an integer operand type, and the guard is what
 		// makes that unrepresentable rather than merely unwritten. Not representable beats not written
-		// down. The two have different stakes and one gate, so the message names which opcode arrived:
+		// down. The two kinds have different stakes and one gate, so the message names which opcode
+		// arrived:
 		//   • `div` — an integer one would declare the trapping `idiv` PURE, free for the scheduler to
 		//     reorder or delete. `lowerDivision` is the gate that makes it unreachable.
-		//   • `min` — there is no integer `min` in the language at all, and every target lowering
-		//     assumes f64 registers. `Parser.emitBinaryMathIntrinsic` promotes both operands.
+		//   • `min`/`max` — there is no integer form of either in the language at all, and every target
+		//     lowering assumes f64 registers. `Parser.emitBinaryMathIntrinsic` promotes both operands.
 		if stdBinOpcodeIsFloatOnly(opcode) and not stdTypeIsFloat(operandType) 'floatOnlyOverInteger'
-			panic("appendStdBinOp: `binOp({opcode.name})` over an INTEGER operand type — `{opcode.name}` is FLOAT-ONLY (stdBinOpcodeIsFloatOnly). Integer division lowers to the non-pure `StdOp.div` (`lowerDivision` decides), and `min` has no integer form: its operands are promoted by `Parser.emitBinaryMathIntrinsic`")
+			panic("appendStdBinOp: `binOp({opcode.name})` over an INTEGER operand type — `{opcode.name}` is FLOAT-ONLY (stdBinOpcodeIsFloatOnly). Integer division lowers to the non-pure `StdOp.div` (`lowerDivision` decides), and `min`/`max` have no integer form: their operands are promoted by `Parser.emitBinaryMathIntrinsic`")
 		end 'floatOnlyOverInteger'
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType))

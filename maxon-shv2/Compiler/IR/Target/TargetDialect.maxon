@@ -276,21 +276,26 @@ end 'Arm64Register'
 // (`lt`/`le`/`gt`/`ge`), the unsigned family (`hi`/`ls`), equality (`eq`/`ne`), and — for IEEE-754
 // float `<` / `<=` — the N-flag conditions `mi`/`pl`.
 //
-// ⚠ THE NaN-SAFE FLOAT MAPPING. `fcmp` sets N=0 on an unordered (NaN) result, so float `<` lowers
-// to `mi` (N==1, FALSE on NaN) and float `<=` to `ls` (C==0 ∨ Z==1, also FALSE on NaN) — NOT `lt`
-// / `le`, which would read TRUE on NaN and violate IEEE-754's "every relational predicate is false
-// on unordered". This mirrors the x64 float compare's use of the UNSIGNED family (see X64CondCode).
+// ⚠ THE NaN-SAFE FLOAT MAPPING. `fcmp` sets N=0, Z=0, C=1, V=1 on an unordered (NaN) result, so
+// float `<` lowers to `mi` (N==1, FALSE on NaN) and float `<=` to `ls` (C==0 ∨ Z==1, also FALSE on
+// NaN) — NOT `lt` / `le`, which would read TRUE on NaN and violate IEEE-754's "every relational
+// predicate is false on unordered". The other direction takes `gt` (Z==0 ∧ N==V) and `ge` (N==V),
+// which are false on unordered for the OTHER reason the flags allow: N=0 and V=1 there, so N≠V. Their
+// complements `pl` and `hi` read TRUE on unordered and are therefore NOT the float `>=` / `>`
+// conditions, however much their names suggest it — `arm64FloatCondForPred` is the one mapping, and
+// nothing in the compiler emits `pl` or `hi`. This mirrors the x64 float compare's use of the
+// UNSIGNED family (see X64CondCode).
 export enum Arm64CondCode
 	eq = 0  // Z==1                 (== ; float ==)
 	ne = 1  // Z==0                 (!= ; float !=)
 	hs = 2  // C==1                 (unsigned >= — the jump table's out-of-bounds bounds check)
 	mi = 4  // N==1                 (float <  — false on NaN)
-	pl = 5  // N==0                 (float >= — the ordered complement)
-	hi = 8  // C==1 ∧ Z==0          (unsigned > ; float >)
+	pl = 5  // N==0                 (⚠ TRUE on NaN — `mi`'s arithmetic complement, NOT float >=)
+	hi = 8  // C==1 ∧ Z==0          (unsigned > ; ⚠ TRUE on NaN — NOT float >)
 	ls = 9  // C==0 ∨ Z==1          (unsigned <= ; float <=)
-	ge = 10  // N==V                (signed >=)
+	ge = 10  // N==V                (signed >= ; float >= — false on NaN)
 	lt = 11  // N!=V                (signed <)
-	gt = 12  // Z==0 ∧ N==V         (signed >)
+	gt = 12  // Z==0 ∧ N==V         (signed > ; float > — false on NaN)
 	le = 13  // Z==1 ∨ N!=V         (signed <=)
 end 'Arm64CondCode'
 
@@ -893,21 +898,31 @@ export union TargetOp
 	// until it is consciously extended to `andRegReg to leaRegRdata`, exactly where `leaRegGlobal`
 	// already sits inside it.
 	leaRegRdata(dest TargetVReg, label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
-	// `minsd xmm1, xmm2/m64` (F2 0F 5D /r) — the `min` intrinsic (specs/min.md), and the ONE target
-	// where the language's definition of `min` is a single native instruction.
+	// `minsd`/`maxsd xmm1, xmm2/m64` (F2 0F 5D /r and F2 0F 5F /r) — the `min` and `max` intrinsics
+	// (specs/min.md, specs/max.md), and the ONE target where the language's definition of each is a
+	// single native instruction.
+	//
+	// ⭐ **ONE OP CARRYING A `FloatMinMaxKind`, NOT TWO OPS.** The two instructions differ in one opcode
+	// BYTE and in nothing this dialect models: same operand shape, same two-address reuse, same (empty)
+	// metadata, same encoder path. A second variant would have duplicated an arm in the operand model,
+	// the printer, the allocator's rewrite, the splitter's substitution, two liveness tables, the
+	// prologue pass and both foreign-ISA panics — a dozen arms to say one thing. This is the division
+	// `roundsdRegReg` already makes with `FloatRoundMode`: the dialect names the OPERATION and the
+	// encoder owns the byte.
 	//
 	// ⭐⭐ **THE HARDWARE'S RULE IS THE LANGUAGE'S RULE HERE, WHICH IS WHY THIS IS THE READING shv2
-	// ADOPTED ON ALL THREE TARGETS.** `minsd dest, src` computes `dest < src ? dest : src` — it returns
-	// its SECOND source whenever that compare is not strictly true, which covers BOTH the unordered
-	// case (a NaN in either operand) and two zeros of opposite sign. That is exactly what
-	// `StdBinOpcode.min` defines `min` to be, so on x64 there is nothing to correct. arm64 and wasm are
-	// the targets that have to BUILD it, out of a compare and a select, because their native
-	// `fmin`/`f64.min` mean something else — read that header for why the choice went this way.
+	// ADOPTED ON ALL THREE TARGETS.** `minsd dest, src` computes `dest < src ? dest : src` and
+	// `maxsd dest, src` computes `dest > src ? dest : src` — each returns its SECOND source whenever
+	// that compare is not strictly true, which covers BOTH the unordered case (a NaN in either operand)
+	// and two zeros of opposite sign. That is exactly what `StdBinOpcode`'s `min`/`max` header defines
+	// them to be, so on x64 there is nothing to correct. arm64 and wasm are the targets that have to
+	// BUILD them, out of a compare and a select, because their native `fmin`/`fmax`/`f64.min`/`f64.max`
+	// mean something else — read that header for why the choice went this way.
 	//
 	// ⚠ **NOT COMMUTATIVE — `lhs` AND `rhs` MAY NOT BE SWAPPED.** The two-address reuse makes `lhs` the
-	// operand that survives into `dest`, and `minsd` answers with its SECOND source on unordered input,
-	// so swapping the pair changes the answer for a NaN. `binOpcodeIsCommutative` is the only pass that
-	// would, and it says so.
+	// operand that survives into `dest`, and both instructions answer with their SECOND source on
+	// unordered input, so swapping the pair changes the answer for a NaN. `binOpcodeIsCommutative` is
+	// the only pass that would, and it says so.
 	//
 	// Genuinely two-address like the four SSE ALU ops (SSE has no 3-operand form without AVX), so —
 	// unlike `sqrtsd`/`roundsd`/`movq` above — `dest` is a REUSE-of-`lhs` def and the ALLOCATOR, not
@@ -920,7 +935,7 @@ export union TargetOp
 	// future range arm meaning "the four SSE ALU ops"; the band's documented append point is the one
 	// position no existing or future range silently swallows. Every `andRegReg to leaRegRdata` arm was
 	// re-read and extended when this landed.
-	minsdRegReg(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	minMaxSdRegReg(dest TargetVReg, lhs TargetVReg, rhs TargetVReg, kind FloatMinMaxKind) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// --- arm64-macOS SCALAR-CORE band (USER RULING 2026-07-17) ---
 	//
 	// APPENDED AT THE END OF THE UNION, one contiguous band, per the band-append invariant every
@@ -1104,18 +1119,25 @@ export union TargetOp
 	arm64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F8000FFFF}
 	// `FCSEL Dd, Dn, Dm, cond` (0x1E600C00 | Rm<<16 | cond<<12 | Rn<<5 | Rd) — pick `ifTrue` when the
 	// flags a preceding `arm64Fcmp` set satisfy `cond`, else `ifFalse`. It exists for exactly one
-	// caller: the `min` intrinsic (specs/min.md).
+	// caller: the `min`/`max` intrinsics (specs/min.md, specs/max.md), which differ here in the `cond`
+	// FIELD and in nothing else — the whole reason the condition is an operand rather than two ops.
 	//
-	// ⭐⭐ **arm64 HAS `fmin` AND shv2 DELIBERATELY DOES NOT EMIT IT.** `fmin d0, d1, d2` is IEEE
-	// NaN-PROPAGATING and treats −0.0 as less than +0.0 in either operand order, which is a DIFFERENT
-	// FUNCTION from the one `StdBinOpcode.min` defines (`a` when `a < b`, else `b` — see there for why
-	// that definition, and for the measurement showing both reference compilers ship the split). So
-	// arm64 spells `min` as `fcmp` + `fcsel …, mi`, two instructions, and the pair is EXACT rather than
-	// approximate: `fcmp` leaves N=0 on an unordered result, and `mi` tests N==1, so the condition is
-	// false whenever either operand is a NaN and false for `+0.0 < -0.0` — picking `ifFalse` in every
-	// one of those cases, which is precisely what x64's `minsd` returns. This is the same `mi` the float
-	// `<` comparison already lowers to (see `Arm64CondCode`), so the NaN rule is stated once for the
-	// target and read twice, never decided twice.
+	// ⭐⭐ **arm64 HAS `fmin`/`fmax` AND shv2 DELIBERATELY DOES NOT EMIT THEM.** `fmin d0, d1, d2` is
+	// IEEE NaN-PROPAGATING and treats −0.0 as less than +0.0 in either operand order, and `fmax` is its
+	// mirror — a DIFFERENT FUNCTION from the ones `StdBinOpcode`'s `min`/`max` header defines (`a` when
+	// `a < b` / when `a > b`, else `b` — see there for why those definitions, and for the measurement
+	// showing both reference compilers ship the split). So arm64 spells them `fcmp` + `fcsel …, mi` and
+	// `fcmp` + `fcsel …, gt`, two instructions each, and each pair is EXACT rather than approximate:
+	// `fcmp` leaves N=0 and V=1 on an unordered result, `mi` tests N==1 and `gt` tests Z==0 ∧ N==V, so
+	// BOTH conditions are false whenever either operand is a NaN, and both are false when the operands
+	// compare EQUAL (which is where `+0.0` against `-0.0` lands) — picking `ifFalse` in every one of
+	// those cases, which is precisely what x64's `minsd`/`maxsd` return.
+	//
+	// ⚠ These are the SAME two conditions the float `<` and `>` comparisons already lower to
+	// (`arm64FloatCondForPred`), so the NaN rule is stated once for the target and read twice, never
+	// decided twice. The near misses are `pl` and `hi` — each the arithmetic complement of the one
+	// above it, each TRUE on unordered. Either would compile, pass every ordered test, and answer a NaN
+	// wrongly.
 	//
 	// ⚠ IT READS FLAGS AND SO MUST STAY ADJACENT TO ITS `arm64Fcmp`. That is not a new hazard: `fcmp` +
 	// `arm64Cset` is the existing shape for every materialised compare on this target, and the arm64
@@ -1327,6 +1349,27 @@ export enum FloatRoundMode
 	towardNegative
 	towardPositive
 end 'FloatRoundMode'
+
+// ⭐ WHICH END of the ordering a compare-and-select keeps — the operand carried by x64's
+// `minMaxSdRegReg`, and the discriminator arm64's and wasm's lowerings read to pick their comparison.
+// It is `FloatRoundMode`'s twin in every structural respect, and for the same reason.
+//
+// TARGET-NEUTRAL, and deliberately so: `minsd` vs `maxsd` (opcode byte 0x5D vs 0x5F), `fcsel …, mi`
+// vs `fcsel …, gt`, and `f64.lt` vs `f64.gt` are three ENCODINGS of one decision, and the decision is
+// made by the isel from a Std opcode. `floatMinMaxKindFor` is the ONE place that mapping lives, so no
+// backend keeps its own copy of "which comparison does `max` want" — the same fact written down
+// three times, one ISA apart, which is exactly the fork `floatRoundModeFor` was extracted to close.
+//
+// ⚠⚠ EVERY ONE OF THE SIX SPELLINGS IS A **STRICT** COMPARISON, AND THAT IS THE WHOLE NaN ARGUMENT.
+// The definitions are `a < b ? a : b` and `a > b ? a : b`; a strict compare is false on unordered, so
+// each op answers with its SECOND operand whenever a NaN is involved. Substituting a non-strict
+// condition (arm64 `pl` for `mi`, or `hi` for `gt`, both of which read TRUE on unordered) silently
+// changes the answer on a NaN and on nothing else — a wrong answer no ordered input can expose. See
+// `StdBinOpcode`'s `min`/`max` header for the definitions and for why they were chosen.
+export enum FloatMinMaxKind
+	min
+	max
+end 'FloatMinMaxKind'
 
 export typealias TargetOpArray = Array with TargetOp
 

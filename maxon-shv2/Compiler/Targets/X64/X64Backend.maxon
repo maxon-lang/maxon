@@ -197,11 +197,23 @@ let OpcodeCvttsd2si = 0x2C
 // has already selected scalar-double.
 let OpcodeSqrtsd = 0x51
 
-// minsd xmm, xmm/m64 (F2 0F 5D /r) — another ordinary two-byte scalar-double form, so it too shares
-// `encodeSseRegReg`. NO REX.W: both operands are XMM and the mandatory F2 has already selected
-// scalar-double. It computes `dest < src ? dest : src`, which is the language's whole definition of
-// `min` — see `TargetOp.minsdRegReg`.
+// minsd / maxsd xmm, xmm/m64 (F2 0F 5D /r and F2 0F 5F /r) — two more ordinary two-byte
+// scalar-double forms, so they too share `encodeSseRegReg`. NO REX.W: both operands are XMM and the
+// mandatory F2 has already selected scalar-double. They compute `dest < src ? dest : src` and
+// `dest > src ? dest : src`, which are the language's whole definitions of `min` and `max` — see
+// `TargetOp.minMaxSdRegReg`. The two differ in this BYTE and in nothing else, which is why one op
+// carrying a `FloatMinMaxKind` covers both.
 let OpcodeMinsd = 0x5D
+let OpcodeMaxsd = 0x5F
+
+// The opcode byte a `minMaxSdRegReg` encodes to — the ONE place the target-neutral `FloatMinMaxKind`
+// becomes an x86 opcode, the twin of `roundsdImm8` below.
+function minMaxSdOpcode(kind FloatMinMaxKind) returns MachineWord
+	return match kind 'k'
+		min gives OpcodeMinsd
+		max gives OpcodeMaxsd
+	end 'k'
+end 'minMaxSdOpcode'
 
 // movq r/m64, xmm (66 REX.W 0F 7E /r) — reg field = XMM SOURCE, r/m = GPR DEST. The BIT
 // REINTERPRETATION `float.hash` rests on: the same 64 bits, moved to the other register file, with
@@ -1614,12 +1626,13 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// The `.rdata` address `lea` (P1.2 wave A) — `leaRegGlobal`'s twin, GPR dest, its label filed
 		// as an `.rdata` relocation. See `encodeLeaRegRdata`.
 		leaRegRdata(dest, label) then encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)
-		// `minsd` is a two-address SSE form like `addsd`, so `lhs` is deliberately unused for the same
-		// reason `absF64RegReg` ignores its `src`: the REUSE def means coloring has already made `dest`
-		// and `lhs` the same register, and naming `lhs` here would be a second claim about a fact the
-		// allocator established. `rhs` is the encoded source — and it is the operand `minsd` returns on
-		// an unordered compare, which is what makes `min`'s NaN behaviour come out right.
-		minsdRegReg(dest, _, rhs) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeMinsd, dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
+		// `minsd`/`maxsd` are two-address SSE forms like `addsd`, so `lhs` is deliberately unused for the
+		// same reason `absF64RegReg` ignores its `src`: the REUSE def means coloring has already made
+		// `dest` and `lhs` the same register, and naming `lhs` here would be a second claim about a fact
+		// the allocator established. `rhs` is the encoded source — and it is the operand both
+		// instructions return on an unordered compare, which is what makes the NaN behaviour come out
+		// right. Only the opcode BYTE distinguishes them (`minMaxSdOpcode`).
+		minMaxSdRegReg(dest, _, rhs, kind) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: minMaxSdOpcode(kind), dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
 		// The arm64 band is encoded by the arm64 backend (`Arm64Backend`, wave 1), never here — the
 		// x64 encoder only ever sees x64 ops (`buildBackend` dispatches on `target.cpu`). The
 		// band-append invariant forced this arm; a panic keeps the ISA boundary loud.

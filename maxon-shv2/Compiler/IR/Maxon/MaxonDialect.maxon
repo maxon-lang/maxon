@@ -520,30 +520,32 @@ end 'MaxonOpMeta'
 // way left to ask which fill was meant. The decision is a FRONT-END fact, and it is written into
 // the opcode at the one moment it is still knowable.
 //
-// ⭐⭐ `min` IS THE FIRST MEMBER THAT IS NOT AN INFIX OPERATOR (`specs/min.md`), and it belongs here
-// anyway for the reason the arity-1 intrinsics belong in `MaxonUnaryOp`: this dialect's membership
-// rule is the op's SHAPE, not its source spelling. `min(a, b)` is two operands in, one result out,
-// non-trapping, both operands and the result the same type — `add`'s shape exactly — so it rides
-// `binOp` rather than earning a variant. `floor`/`ceil`/`round`/`sqrt`/`abs` made the identical
-// trade one arity down, and they are builtin CALLS too. `infixMaxonOp` simply never yields it:
-// there is no token that spells it, and `Parser.emitBinaryMathIntrinsic` is its only emit site.
-// v1 draws the same line and puts `minF64` beside `addF64` in `StdArithBinaryOpcode`.
+// ⭐⭐ `min`/`max` ARE THE MEMBERS THAT ARE NOT INFIX OPERATORS (`specs/min.md`, `specs/max.md`), and
+// they belong here anyway for the reason the arity-1 intrinsics belong in `MaxonUnaryOp`: this
+// dialect's membership rule is the op's SHAPE, not its source spelling. `min(a, b)` is two operands
+// in, one result out, non-trapping, both operands and the result the same type — `add`'s shape
+// exactly — so it rides `binOp` rather than earning a variant, and `max(a, b)` is that same shape.
+// `floor`/`ceil`/`round`/`sqrt`/`abs` made the identical trade one arity down, and they are builtin
+// CALLS too. `infixMaxonOp` simply never yields either: there is no token that spells them, and
+// `Parser.emitBinaryMathIntrinsic` is their only emit site. v1 draws the same line and puts
+// `minF64`/`maxF64` beside `addF64` in `StdArithBinaryOpcode`.
 //
-// ⭐ IT IS f64 → f64, like the arity-1 intrinsics and unlike `+`: both operands are PROMOTED to
-// float before the op is emitted, so there is no integer `min` and no mixed pair to type. The
+// ⭐ THEY ARE f64 → f64, like the arity-1 intrinsics and unlike `+`: both operands are PROMOTED to
+// float before the op is emitted, so there is no integer `min`/`max` and no mixed pair to type. Each
 // spec's signature says so outright (`min(a float, b float) float`).
 //
-// ⚠⚠ **IT IS NOT COMMUTATIVE, AND THE REASON IS NaN.** `min(a, b)` is defined as *`a` when `a < b`,
-// and `b` otherwise* — see `StdBinOpcode.min`, where the three targets' lowerings and the reason
-// for that definition live. `a < b` is FALSE when either operand is NaN, so `min(nan, 5.0)` is
-// `5.0` while `min(5.0, nan)` is `nan`: swapping the operands changes the answer. Any pass that
-// reorders a `binOp`'s operands must therefore exclude it (`binOpcodeIsCommutative`), and v1
-// carries the identical exclusion for the identical reason (`CommuteForCoalescing.maxon:269`).
+// ⚠⚠ **NEITHER IS COMMUTATIVE, AND THE REASON IS NaN.** `min(a, b)` is *`a` when `a < b`, else `b`*
+// and `max(a, b)` is *`a` when `a > b`, else `b`* — see `StdBinOpcode`'s `min`/`max` header, where
+// the three targets' lowerings and the reason for those definitions live. Both `a < b` and `a > b`
+// are FALSE when either operand is NaN, so `min(nan, 5.0)` is `5.0` while `min(5.0, nan)` is `nan`,
+// and `max` answers the same pair: swapping the operands changes the answer. Any pass that reorders
+// a `binOp`'s operands must therefore exclude both (`binOpcodeIsCommutative`), and v1 carries the
+// identical exclusion for the identical reason (`CommuteForCoalescing.maxon:269`).
 //
 // Appended at the END of the enum, per the band-append invariant: the existing range arms name the
-// arithmetic band (`add to mod`), the bit band and the shifts, and `min` is in none of them. Every
-// `match` over this enum gained an explicit `min` arm when it landed, rather than being swallowed
-// by a range whose comment describes something else.
+// arithmetic band (`add to mod`), the bit band and the shifts, and neither is in any of them. Every
+// `match` over this enum gained an explicit arm when each landed, rather than being swallowed by a
+// range whose comment describes something else.
 export enum MaxonBinOp
 	add
 	sub
@@ -557,6 +559,7 @@ export enum MaxonBinOp
 	shr
 	shrLogical
 	min
+	max
 end 'MaxonBinOp'
 
 // The unary (prefix) operators the Maxon tier represents. M3 lands `neg` (the

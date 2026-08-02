@@ -134,6 +134,51 @@ export function floatRoundModeFor(opcode StdUnaryOpcode) returns FloatRoundMode
 	end 'k'
 end 'floatRoundModeFor'
 
+// ⭐⭐ **WHICH END OF THE ORDERING `min`/`max` KEEP** — the exact twin of `floatRoundModeFor` above,
+// living here for the same reason: it reads a Std OPCODE and nothing else, so it is target-independent
+// by construction, and ALL THREE isels need it.
+//
+// It exists so the `min`/`max` distinction is decided ONCE rather than in each backend's `match`. That
+// is not a hypothetical: the rounding mapping WAS forked across two isels and had to be extracted, and
+// this one would have forked across three — x64 choosing an opcode byte, arm64 a condition code, wasm a
+// comparison instruction. All three would still compile with the wrong one, and every ORDERED test
+// would still pass, because `min` and `max` differ only on ordered-and-distinct operands, which is
+// exactly what a per-backend copy would keep getting right by accident on some targets and not others.
+//
+// `div` is the third float-only opcode and is deliberately absent: it is neither a `min` nor a `max`,
+// it lowers to one native instruction on every target, and it never reaches a compare-and-select.
+// Asking this for any non-`min`/`max` opcode is a lowering bug, not a missing arm.
+export function floatMinMaxKindFor(opcode StdBinOpcode) returns FloatMinMaxKind
+	match opcode 'k'
+		min then return FloatMinMaxKind.min
+		max then return FloatMinMaxKind.max
+		add to div then panic("floatMinMaxKindFor: `{opcode.name}` is not a compare-and-select — only `min` and `max` pick an end of the ordering, and the isels route only those two here")
+	end 'k'
+end 'floatMinMaxKindFor'
+
+// ⭐⭐ **THE COMPARISON A `min`/`max` SELECT IS BUILT ON — AND IT IS THE LANGUAGE'S OWN FLOAT `<`
+// AND `>`, NOT A SECOND SET OF CONDITIONS INVENTED FOR THE INTRINSICS.** `min(a, b)` is `a` when
+// `a < b` and `max(a, b)` is `a` when `a > b`, so this returns exactly the predicate that sentence
+// names, and the two targets that BUILD a select (arm64, wasm) each feed it to the float-compare
+// mapping they already own — `arm64FloatCondForPred` and `emitFloatCmpPred`.
+//
+// ⭐ That is what makes the NaN behaviour a CONSEQUENCE rather than a coincidence. Both of those
+// mappings are already NaN-safe, because IEEE-754 requires every relational predicate to be false on
+// unordered and a source-level `a < b` must obey that. Routing through them means `min`/`max` cannot
+// drift from `<`/`>` on a NaN without a source comparison drifting too — and there are spec cases on
+// float comparison. A backend that instead picked its own condition here would be re-deciding the
+// unordered rule, per ISA, with nothing holding the copies together; that is the exact shape of the
+// fork `floatRoundModeFor` above was extracted to close.
+//
+// x64 does not call this: `minsd`/`maxsd` ARE the compare-and-select, so its isel needs the
+// `FloatMinMaxKind` and an opcode byte, not a predicate.
+export function floatMinMaxSelectPred(kind FloatMinMaxKind) returns StdCmpPred
+	return match kind 'k'
+		min gives StdCmpPred.lt
+		max gives StdCmpPred.gt
+	end 'k'
+end 'floatMinMaxSelectPred'
+
 // The class a function's RETURN lands in. `void` is `gpr` because a void call still defines a value —
 // see `calleeResultClass`.
 function returnTypeResultClass(returnType StdReturnType) returns RegClass

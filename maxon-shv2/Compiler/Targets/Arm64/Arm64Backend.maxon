@@ -965,8 +965,9 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		loadRegBaseDisp(dest, base, disp, width) then arm64EmitDataLoad(code, dest: dest, base: arm64GprField(base), disp: disp, width: width)
 		storeBaseDispReg(base, disp, src, width) then arm64EmitDataStore(code, base: arm64GprField(base), disp: disp, src: src, width: width)
 		// --- x64-only SSE band ---
-		addsdRegReg to minsdRegReg then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
-		// `minsd` is inside the range above; the arm64 spelling of `min` is `fcmp` + `fcsel`, not one op.
+		addsdRegReg to minMaxSdRegReg then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
+		// `minsd`/`maxsd` are inside the range above; the arm64 spelling of `min`/`max` is `fcmp` +
+		// `fcsel`, not one op.
 		// --- arm64 band ---
 		arm64Ret then emitArm64Insn(code, insn: Arm64OpRet)
 		arm64Branch(targetBlockId) then arm64EmitBranch(code, fixups: branchFixups, targetBlock: targetBlockId)

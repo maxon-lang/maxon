@@ -335,7 +335,7 @@ function isCaptureMove(op TargetOp) returns bool
 	return match op 'm'
 		movRegReg(dst, src) gives vregIsVirtual(dst) and vregIsPhysical(src)
 		prologue to movRegImm32 gives false
-		movReg32Reg32 to minsdRegReg gives false
+		movReg32Reg32 to minMaxSdRegReg gives false
 		arm64Ret to arm64Fcsel gives false
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none is a
 		// call-result capture move — the same `false` every non-`movRegReg` op gets here.
@@ -446,7 +446,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		pushReg to popReg then return false
 		storeSlotReg to loadRegSlot then return false
 		// None of the data-section band is a register-to-register move, so none can be a self-move.
-		andRegReg to minsdRegReg then return false
+		andRegReg to minMaxSdRegReg then return false
 		// arm64 reg-reg moves are the SHARED `movRegReg` (handled above), so the arm64 band — arm64's
 		// own ALU / control / call ops — is never a register-to-register move, hence never a self-move.
 		arm64Ret to arm64Fcsel then return false
@@ -708,7 +708,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			movRegImm to idivReg then panic("retargetControlOp: non-terminator op as terminator")
 			pushReg to popReg then panic("retargetControlOp: pushReg/popReg reached as a terminator — they are body ops inserted post-regalloc")
 			storeSlotReg to loadRegSlot then panic("retargetControlOp: a spill/reload reached as a terminator — the splitter inserts them as body ops, never as terminators")
-			andRegReg to minsdRegReg then panic("retargetControlOp: non-terminator op as terminator")
+			andRegReg to minMaxSdRegReg then panic("retargetControlOp: non-terminator op as terminator")
 			// The arm64 band: `arm64Branch` is the unconditional terminator (retargeted like `jmp`);
 			// `arm64Ret` is the ret terminator (like x64 `ret`). Everything else — the conditional
 			// branches, ALU, frame, call ops — is not a terminator here.

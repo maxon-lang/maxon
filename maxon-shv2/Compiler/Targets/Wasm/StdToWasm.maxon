@@ -1536,49 +1536,56 @@ type WasmFuncEmitter
 	function emitFloatBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType)
 		requireF64(operandType, what: "binOp")
 
-		// `min` is the one float opcode whose operands go on the stack TWICE, so it cannot share the
-		// push-then-opcode shape the other four have — it is a compare-and-select, not an ALU op. One
-		// `match` arm, exactly as arm64's `lowerFloatBinOp` routes it, so the three backends read alike.
-		// ⚠ `add to div` is EVERY opcode but `min` — `div` is the enum's second-to-last member and the bit
+		// `min`/`max` are the float opcodes whose operands go on the stack TWICE, so they cannot share
+		// the push-then-opcode shape the other four have — each is a compare-and-select, not an ALU op.
+		// One `match` arm for the pair, exactly as arm64's `lowerFloatBinOp` routes them, so the three
+		// backends read alike.
+		// ⚠ `add to div` is EVERY opcode but those two — `div` is the last member before them and the bit
 		// band sits inside that span, so the integer-only opcodes ride this arm too and are rejected once,
 		// inside `emitFloatAluOp`, rather than by a second arm here.
 		match opcode 'op'
 			add to div then self.emitFloatAluOp(lhs, rhs: rhs, opcode: opcode)
-			min then self.emitFloatMin(lhs, rhs: rhs)
+			min to max then self.emitFloatMinMax(lhs, rhs: rhs, kind: floatMinMaxKindFor(opcode))
 		end 'op'
 
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitFloatBinOp'
 
-	// ⭐⭐ `min(a, b)` AS `f64.lt` + `select`, WHICH IS THE LANGUAGE'S DEFINITION SPELLED LITERALLY:
-	// "take `a` if `a < b`, else `b`" (`StdBinOpcode.min`).
+	// ⭐⭐ `min(a, b)` / `max(a, b)` AS A FLOAT COMPARE + `select`, WHICH IS THE LANGUAGE'S DEFINITION
+	// SPELLED LITERALLY: "take `a` if `a < b` / if `a > b`, else `b`" (`StdBinOpcode`'s `min`/`max`
+	// header). ONE function for both, because the two differ in the COMPARISON and in nothing else —
+	// same stack discipline, same `select`, same operand order.
 	//
-	// ⚠ **wasm HAS `f64.min` AND shv2 DELIBERATELY DOES NOT EMIT IT.** `f64.min` is NaN-PROPAGATING and
-	// returns −0.0 for `min(±0.0, ∓0.0)` in either operand order — a DIFFERENT FUNCTION from the one
-	// this language defines, and the same disagreement arm64's `fmin` has with x64's `minsd`. Rather
-	// than let the answer depend on which target the program was built for (which is what both
-	// reference compilers ship — see `StdBinOpcode.min`), all three targets emit the one definition.
+	// ⭐ The comparison is DERIVED, not chosen here: `floatMinMaxSelectPred` says which predicate the
+	// definition names and `emitFloatCmpPred` — the same door a source-level float `<` goes through —
+	// emits `f64.lt` or `f64.gt`. So the intrinsics cannot drift from the operators on a NaN.
 	//
-	// The sequence is EXACT, not approximate: `f64.lt` carries IEEE-754's unordered rule natively — it
-	// is FALSE whenever either operand is a NaN, and FALSE for `+0.0 < -0.0` (they compare equal) — so
-	// `select` takes the second value in precisely the cases x64's `minsd` returns its second source.
-	// That is the same native NaN-safety `emitFloatCmp` already relies on, which is why no parity test
-	// or operand swap appears here either.
+	// ⚠ **wasm HAS `f64.min`/`f64.max` AND shv2 DELIBERATELY DOES NOT EMIT THEM.** `f64.min` is
+	// NaN-PROPAGATING and returns −0.0 for `min(±0.0, ∓0.0)` in either operand order (and `f64.max` is
+	// its mirror) — a DIFFERENT FUNCTION from the ones this language defines, and the same disagreement
+	// arm64's `fmin`/`fmax` have with x64's `minsd`/`maxsd`. Rather than let the answer depend on which
+	// target the program was built for (which is what both reference compilers ship — see
+	// `StdBinOpcode`'s `min`/`max` header), all three targets emit the one definition.
 	//
-	// The stack discipline: [a, b] are the two SELECT candidates, then [a, b] again are consumed by
-	// `f64.lt` to leave the i32 condition on top — `select` pops (cond, valueIfFalse, valueIfTrue) and
+	// The sequence is EXACT, not approximate: `f64.lt`/`f64.gt` carry IEEE-754's unordered rule
+	// natively — each is FALSE whenever either operand is a NaN, and FALSE when the operands compare
+	// equal (where `+0.0` and `-0.0` land) — so `select` takes the second value in precisely the cases
+	// x64's `minsd`/`maxsd` return their second source. No parity test or operand swap is needed.
+	//
+	// The stack discipline: [a, b] are the two SELECT candidates, then [a, b] again are consumed by the
+	// compare to leave the i32 condition on top — `select` pops (cond, valueIfFalse, valueIfTrue) and
 	// pushes `a` when cond ≠ 0. Both pushes go through `pushBinaryOperands`, so each operand is width-
 	// coerced by the one helper that owns that.
-	function emitFloatMin(lhs ValueId, rhs ValueId)
+	function emitFloatMinMax(lhs ValueId, rhs ValueId, kind FloatMinMaxKind)
 		self.pushBinaryOperands(lhs, rhs: rhs, opVt: WasmValType.f64)
 		self.pushBinaryOperands(lhs, rhs: rhs, opVt: WasmValType.f64)
-		self.body.f64Lt()
+		self.emitFloatCmpPred(floatMinMaxSelectPred(kind))
 		self.body.select()
-	end 'emitFloatMin'
+	end 'emitFloatMinMax'
 
-	// The four float ALU opcodes: both operands pushed at f64, then the one native instruction. `min` is
-	// not among them — it needs its operands twice — so this takes only the opcodes that fit the shape,
-	// and `emitFloatBinOp`'s `match` is what decides which is which.
+	// The four float ALU opcodes: both operands pushed at f64, then the one native instruction.
+	// `min`/`max` are not among them — each needs its operands twice — so this takes only the opcodes
+	// that fit the shape, and `emitFloatBinOp`'s `match` is what decides which is which.
 	function emitFloatAluOp(lhs ValueId, rhs ValueId, opcode StdBinOpcode)
 		self.pushBinaryOperands(lhs, rhs: rhs, opVt: WasmValType.f64)
 		match opcode 'op'
@@ -1587,7 +1594,7 @@ type WasmFuncEmitter
 			mul then self.body.f64Mul()
 			div then self.body.f64Div()
 			bitAnd to shrLogical then panic("wasm: `binOp({opcode.rawValue})` has no float form — the bitwise/shift operators are integer-only and a float operand is rejected at the Maxon tier")
-			min then panic("wasm: `min` is not an ALU opcode — it is `f64.lt` + `select` (`emitFloatMin`), which needs each operand on the stack twice, and `emitFloatBinOp` routes it there")
+			min to max then panic("wasm: `{opcode.name}` is not an ALU opcode — it is a float compare + `select` (`emitFloatMinMax`), which needs each operand on the stack twice, and `emitFloatBinOp` routes it there")
 		end 'op'
 	end 'emitFloatAluOp'
 
@@ -1617,7 +1624,7 @@ type WasmFuncEmitter
 				shl then self.body.i64Shl()
 				shr then self.body.i64ShrS()
 				shrLogical then self.body.i64ShrU()
-				div to min then panic("wasm: `binOp({opcode.name})` is FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`) and cannot reach the integer ALU; integer division is `StdOp.div` and there is no integer `min`")
+				div to max then panic("wasm: `binOp({opcode.name})` is FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`) and cannot reach the integer ALU; integer division is `StdOp.div` and there is no integer `min`/`max`")
 			end 'w'
 		end 'i64' else 'i32'
 			match opcode 'n'
@@ -1630,7 +1637,7 @@ type WasmFuncEmitter
 				shl then self.body.i32Shl()
 				shr then self.body.i32ShrS()
 				shrLogical then self.body.i32ShrU()
-				div to min then panic("wasm: `binOp({opcode.name})` is FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`) and cannot reach the integer ALU; integer division is `StdOp.div` and there is no integer `min`")
+				div to max then panic("wasm: `binOp({opcode.name})` is FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`) and cannot reach the integer ALU; integer division is `StdOp.div` and there is no integer `min`/`max`")
 			end 'n'
 		end 'i32'
 	end 'emitBinOpcode'

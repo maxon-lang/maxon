@@ -4125,7 +4125,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// relocation — and there is no `movsd xmm, imm64` to rebuild it with even if the IEEE bits
 		// ARE an integer the compiler holds. `constValueOfDef` would panic. When someone
 		// generalizes remat to "an op with no register inputs", it buys BOTH of these at once.
-		andRegReg to minsdRegReg gives false
+		andRegReg to minMaxSdRegReg gives false
 		// The arm64 band. `arm64MovImm` IS the arm64 constant materialization (the `movz`/`movk` ladder),
 		// so it is rematerializable exactly as x64's `movRegImm`/`movRegImm32` are — `constDefInfo` reads
 		// its immediate and `freshConstOp` re-emits a fresh `arm64MovImm`. Every other arm64 op reads a
@@ -4900,7 +4900,7 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		movRegImm32(_, value) gives (value, false)
 		arm64MovImm(_, value) gives (value, true)
 		prologue to jcc panic("constDefInfo: def is not a constant materialization")
-		movRegReg to minsdRegReg panic("constDefInfo: def is not a constant materialization")
+		movRegReg to minMaxSdRegReg panic("constDefInfo: def is not a constant materialization")
 		arm64Ret to arm64Cbnz panic("constDefInfo: def is not a constant materialization")
 		arm64Prologue to arm64Fcsel panic("constDefInfo: def is not a constant materialization")
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not const materializations —
@@ -5039,10 +5039,11 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		// The `.rdata` address `lea` (P1.2 wave A) — substitutes its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(substituteVReg(dest, from: from, to: to), label: label)
-		// `minsd` substitutes all three XMM operands, keeping `lhs` and `rhs` in their own slots: the op
-		// is not commutative on a NaN, so a rewrite that treated the two sources as interchangeable
-		// would change the program's answer.
-		minsdRegReg(dest, lhs, rhs) then return TargetOp.minsdRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		// `minsd`/`maxsd` substitute all three XMM operands, keeping `lhs` and `rhs` in their own slots:
+		// neither op is commutative on a NaN, so a rewrite that treated the two sources as
+		// interchangeable would change the program's answer. `kind` is carried through untouched — it
+		// names no register.
+		minMaxSdRegReg(dest, lhs, rhs, kind) then return TargetOp.minMaxSdRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to), kind: kind)
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// The SAME `substituteVReg`-per-operand rewrite the x64 arms use — neutral over `TargetVReg`, so

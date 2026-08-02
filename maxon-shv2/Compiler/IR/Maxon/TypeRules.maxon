@@ -818,10 +818,10 @@ export function wordOperator(op MaxonBinOp) returns bool
 		add to mod gives false
 		bitAnd to bitXor gives true
 		shl to shrLogical gives false
-		// `min` is a BUILTIN CALL, not a word operator: its meaning does not follow its operands' type
-		// (it is float-only, and both operands are promoted before the op exists), and it has no
-		// bool reading to be the other half of a duality.
-		min gives false
+		// `min`/`max` are BUILTIN CALLS, not word operators: their meaning does not follow their
+		// operands' type (both are float-only, and both operands are promoted before the op exists), and
+		// neither has a bool reading to be the other half of a duality.
+		min to max gives false
 	end 'k'
 end 'wordOperator'
 
@@ -831,9 +831,9 @@ export function shiftOperator(op MaxonBinOp) returns bool
 	return match op 'k'
 		add to bitXor gives false
 		shl to shrLogical gives true
-		// `min`'s second operand is an ordinary number, not a shift DISTANCE — both sides are values
-		// to compare, and both are promoted to float.
-		min gives false
+		// `min`/`max` take a second operand that is an ordinary number, not a shift DISTANCE — both
+		// sides are values to compare, and both are promoted to float.
+		min to max gives false
 	end 'k'
 end 'shiftOperator'
 
@@ -851,10 +851,10 @@ export function divisionOperator(op MaxonBinOp) returns bool
 		add to mul gives false
 		div to mod gives true
 		bitAnd to shrLogical gives false
-		// `min` divides nothing, so it has neither a legality nor a fallibility question — which is
+		// `min`/`max` divide nothing, so neither has a legality nor a fallibility question — which is
 		// also what lets `emitBinaryMathIntrinsic` reach the bare emitter past `emitBinOp`'s
 		// division panic.
-		min gives false
+		min to max gives false
 	end 'k'
 end 'divisionOperator'
 
@@ -1453,12 +1453,13 @@ export function foldIntBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) return
 		bitOr gives FoldedInt.folded(lhs or rhs)
 		bitXor gives FoldedInt.folded(lhs xor rhs)
 		shl to shrLogical gives FoldedInt.notFoldable
-		// `min` is FLOAT-only, so it has no integer fold to compute — and it never reaches here anyway:
-		// `Parser.recordBinOpFold` folds only when `tagIsInteger(resultTag)`, and `min`'s result tag is
-		// float by construction. The arity-1 math intrinsics decline in `foldIntUnaryOp` for the same
-		// reason and in the same words (`trunc to abs gives FoldedInt.notFoldable`). shv2 has no float
-		// constant domain at all yet, so there is nothing to fold INTO.
-		min gives FoldedInt.notFoldable
+		// `min`/`max` are FLOAT-only, so neither has an integer fold to compute — and neither ever
+		// reaches here anyway: `Parser.recordBinOpFold` folds only when `tagIsInteger(resultTag)`, and
+		// their result tag is float by construction. The arity-1 math intrinsics decline in
+		// `foldIntUnaryOp` for the same reason and in the same words (`trunc to abs gives
+		// FoldedInt.notFoldable`). shv2 has no float constant domain at all yet, so there is nothing to
+		// fold INTO.
+		min to max gives FoldedInt.notFoldable
 	end 'o'
 end 'foldIntBinOp'
 
@@ -1799,13 +1800,13 @@ export function binOpResultTag(op MaxonBinOp, left ValueTypeTag, right ValueType
 		add to mod gives arithResultTag(left, right: right)
 		bitAnd to bitXor gives wordOpResultTag(left, right: right)
 		shl to shrLogical gives ValueTypeTag.integer
-		// `min` PROMOTES exactly as the arithmetic band does, and it reaches this function having
-		// been handed two operands already in the float domain — `Parser.emitBinaryMathIntrinsic`
+		// `min`/`max` PROMOTE exactly as the arithmetic band does, and each reaches this function
+		// having been handed two operands already in the float domain — `Parser.emitBinaryMathIntrinsic`
 		// promotes both before it emits, the way `emitMathIntrinsic` does for the arity-1 intrinsics.
 		// So this answers `float` for every call the language admits. Asking `arithResultTag` rather
 		// than naming `float` outright keeps ONE promotion rule: if the pair could ever meet somewhere
-		// other than f64, `min` would meet them there too instead of asserting an answer of its own.
-		min gives arithResultTag(left, right: right)
+		// other than f64, these would meet them there too instead of asserting an answer of their own.
+		min to max gives arithResultTag(left, right: right)
 	end 'k'
 end 'binOpResultTag'
 
@@ -1880,11 +1881,11 @@ export function operatorIsIntegral(op MaxonBinOp) returns bool
 		// bit operation on them cannot mean what the source said — `3.14 shl 1` is not `6.28`, and
 		// `3.14 and 2.0` is not any number the author had in mind.
 		bitAnd to shrLogical gives true
-		// `min` is the OPPOSITE of `mod`: not merely float-ADMITTING but float-ONLY, since
-		// `specs/min.md` types it `min(a float, b float) float` and an integer argument is PROMOTED
-		// rather than kept. `false` is therefore the answer that lets a float through, which is the
-		// only kind of operand it ever has.
-		min gives false
+		// `min`/`max` are the OPPOSITE of `mod`: not merely float-ADMITTING but float-ONLY, since
+		// `specs/min.md` and `specs/max.md` type them `(a float, b float) float` and an integer argument
+		// is PROMOTED rather than kept. `false` is therefore the answer that lets a float through, which
+		// is the only kind of operand either ever has.
+		min to max gives false
 	end 'k'
 end 'operatorIsIntegral'
 

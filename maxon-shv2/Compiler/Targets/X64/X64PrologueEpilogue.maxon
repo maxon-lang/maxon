@@ -391,12 +391,12 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// The `.rdata` address `lea` (P1.2 wave A) — its GPR dest can be colored into a callee-saved
 		// register, so it MUST be counted here, exactly like `leaRegGlobal` above.
 		leaRegRdata(d, _) gives physRegBit(d)
-		// `minsd` — both operands are XMMs, and xmm6–xmm15 are CALLEE-SAVED under the Windows x64 ABI,
+		// `minsd`/`maxsd` — both operands are XMMs, and xmm6–xmm15 are CALLEE-SAVED under the Windows x64 ABI,
 		// so this is the same real-miscompile trap the two arms above name rather than a missed
 		// optimization. `rhs` is counted as well as `dest`/`lhs`: it is a genuine second source
 		// register, unlike `absF64RegReg`'s ignored `src`, which coloring has already merged into
 		// `dest`.
-		minsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		minMaxSdRegReg(d, l, r, _) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
 		// arm64 does not run the x64 prologue pass (its frame is `Arm64PrologueEpilogue`, wave 1), so
 		// no arm64 op reaches here — an empty mask is unreachable AND correct (none of these arms names
 		// a register the x64 prologue counts). `gives` cannot host a `panic`; the band-append
@@ -559,7 +559,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		jmp to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to minsdRegReg gives false
+		andRegReg to minMaxSdRegReg gives false
 		// Unreachable this rung (arm64 uses Arm64PrologueEpilogue, wave 1). `gives` cannot host a
 		// `panic`; wave 1 answers `arm64Ret` true here when it wires the arm64 return block.
 		arm64Ret to arm64Fcsel gives false

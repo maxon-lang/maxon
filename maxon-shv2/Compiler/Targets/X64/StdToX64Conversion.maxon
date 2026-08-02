@@ -1362,7 +1362,7 @@ type StdToX64Lowering
 			// eliminated. It has its own non-pure variant, `StdOp.div`. Reaching here means a float
 			// division arrived carrying an integer operand type, which would declare a trapping
 			// instruction pure.
-			div to min then panic("lowerBinOp: `binOp({opcode.name})` with an INTEGER operand type — both are FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`). Float division rides the pure arith band because `divsd` cannot fault, while integer division traps and is `StdOp.div`; `min` has no integer form at all and its operands are promoted by the parser. See StdBinOpcode.")
+			div to max then panic("lowerBinOp: `binOp({opcode.name})` with an INTEGER operand type — all three are FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`). Float division rides the pure arith band because `divsd` cannot fault, while integer division traps and is `StdOp.div`; `min`/`max` have no integer form at all and their operands are promoted by the parser. See StdBinOpcode.")
 		end 'op'
 	end 'lowerBinOp'
 
@@ -1390,12 +1390,14 @@ type StdToX64Lowering
 			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.subsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.mulsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			div then self.targetModule.appendOp(dstBlock, op: TargetOp.divsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
-			// ⭐ `min` IS ONE INSTRUCTION HERE AND TWO ON THE OTHER TWO TARGETS — the reverse of `abs`,
-			// which x64 alone has to synthesize. `minsd` computes `lhs < rhs ? lhs : rhs` including the
-			// unordered and signed-zero cases, which IS the language's definition of `min`
-			// (`StdBinOpcode.min`), so nothing is corrected and the operand order is passed through
-			// unchanged — swapping it would change the answer on a NaN.
-			min then self.targetModule.appendOp(dstBlock, op: TargetOp.minsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
+			// ⭐ `min`/`max` ARE ONE INSTRUCTION HERE AND TWO ON THE OTHER TWO TARGETS — the reverse of
+			// `abs`, which x64 alone has to synthesize. `minsd` computes `lhs < rhs ? lhs : rhs` and
+			// `maxsd` computes `lhs > rhs ? lhs : rhs`, each including the unordered and signed-zero
+			// cases, which IS the language's definition of them (`StdBinOpcode`'s `min`/`max` header), so
+			// nothing is corrected and the operand order is passed through unchanged — swapping it would
+			// change the answer on a NaN. ONE arm for both: which instruction is a `FloatMinMaxKind`
+			// operand, decided by `floatMinMaxKindFor` for all three targets at once.
+			min to max then self.targetModule.appendOp(dstBlock, op: TargetOp.minMaxSdRegReg(dest, lhs: lhsReg, rhs: rhsReg, kind: floatMinMaxKindFor(opcode)))
 			// The word ALU and the shifts have no float form, and it is the TYPE SYSTEM that keeps
 			// them out rather than this arm: `and`/`or`/`xor`/`shl`/`shr` are integer operators, and
 			// a float operand is rejected long before lowering. An f64 reaching here under one of
@@ -1433,7 +1435,7 @@ type StdToX64Lowering
 			shr gives ShiftInstruction.sar
 			shrLogical gives ShiftInstruction.shr
 			add to bitXor panic("shiftInstructionOf: {opcode.rawValue} is not a shift — only `shl`/`shr`/`shrLogical` name a group-2 instruction")
-			div to min panic("shiftInstructionOf: `{opcode.name}` is a FLOAT-ONLY opcode, not a shift — only `shl`/`shr`/`shrLogical` name a group-2 instruction")
+			div to max panic("shiftInstructionOf: `{opcode.name}` is a FLOAT-ONLY opcode, not a shift — only `shl`/`shr`/`shrLogical` name a group-2 instruction")
 		end 'o'
 	end 'shiftInstructionOf'
 
@@ -1545,7 +1547,7 @@ type StdToX64Lowering
 			// takes an immediate operand, so a float `binOp` has no immediate form to fold to
 			// and `foldConstOperands` refuses one. If this ever fires, that guard is gone and
 			// IEEE bit patterns are riding the integer ALU.
-			div to min then panic("lowerBinOpImm: `{opcode.name}` is FLOAT-ONLY and no SSE form takes an immediate — foldConstOperands must never produce this")
+			div to max then panic("lowerBinOpImm: `{opcode.name}` is FLOAT-ONLY and no SSE form takes an immediate — foldConstOperands must never produce this")
 		end 'op'
 	end 'lowerBinOpImm'
 

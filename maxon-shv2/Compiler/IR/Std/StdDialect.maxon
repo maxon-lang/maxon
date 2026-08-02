@@ -211,59 +211,69 @@ end 'OpRole'
 // ⚠ `binOp(div)` with an INTEGER `operandType` is ILLEGAL and the validator throws on it —
 // it would declare a trapping instruction pure. Integer division stays `StdOp.div`.
 //
-// ⭐⭐⭐ `min` (specs/min.md) IS APPENDED PAST `div`, AS THE SECOND FLOAT-ONLY MEMBER — same
-// membership argument as `div`'s: two operands, one result, all f64, and it cannot fault. What it
-// does NOT share with `div` is a single agreed hardware meaning, and that is what the rest of this
-// block is about.
+// ⭐⭐⭐ `min` (specs/min.md) AND `max` (specs/max.md) ARE APPENDED PAST `div`, AS THE FLOAT-ONLY
+// MEMBERS — same membership argument as `div`'s: two operands, one result, all f64, and neither can
+// fault. What they do NOT share with `div` is a single agreed hardware meaning, and that is what the
+// rest of this block is about. **They are ONE decision, made once, read twice**: every sentence below
+// is about the PAIR, and the only thing that differs between them is which strict comparison the
+// definition names.
 //
-// ⭐⭐ **THE DEFINITION: `min(a, b)` IS `a` WHEN `a < b`, AND `b` OTHERWISE.** One sentence, and it
-// settles NaN and signed zero at the same time, because `a < b` is FALSE whenever either operand is
-// NaN (IEEE-754's unordered rule) and FALSE for `+0.0 < -0.0` (they compare EQUAL). So:
+// ⭐⭐ **THE DEFINITION: `min(a, b)` IS `a` WHEN `a < b`, AND `b` OTHERWISE. `max(a, b)` IS `a` WHEN
+// `a > b`, AND `b` OTHERWISE.** One sentence each, and each settles NaN and signed zero at the same
+// time, because a STRICT comparison is FALSE whenever either operand is NaN (IEEE-754's unordered
+// rule) and FALSE for two zeros of opposite sign (they compare EQUAL). So:
 //
 //   min(nan, 5.0) = 5.0     min(5.0, nan) = nan     min(+0.0, -0.0) = -0.0     min(-0.0, +0.0) = +0.0
+//   max(nan, 5.0) = 5.0     max(5.0, nan) = nan     max(+0.0, -0.0) = -0.0     max(-0.0, +0.0) = +0.0
 //
-// ⇒ **IT IS DELIBERATELY NOT COMMUTATIVE.** That is not a defect of the definition, it is what any
+// ⚠ The two rows are IDENTICAL, and that is the definition being honest rather than a typo: on an
+// unordered or an equal-compare input the strict test is false whichever direction it points, so both
+// ops answer with their SECOND operand. `min` and `max` differ only where the operands are ORDERED
+// and DISTINCT — exactly the cases a program without NaNs ever sees.
+//
+// ⇒ **NEITHER IS COMMUTATIVE, DELIBERATELY.** That is not a defect of the definitions, it is what any
 // definition reachable in one or two instructions on all three targets looks like; see below.
-// `binOpcodeIsCommutative` answers `false` for it, and so does v1's `CommuteForCoalescing` for the
-// same opcode. **A pass that swaps a `binOp(min)`'s operands changes its answer on NaN input.**
+// `binOpcodeIsCommutative` answers `false` for both, and so does v1's `CommuteForCoalescing` for the
+// same opcodes. **A pass that swaps a `binOp(min)`'s or `binOp(max)`'s operands changes its answer on
+// NaN input.**
 //
-// ⭐⭐ **WHY THIS DEFINITION AND NOT IEEE'S `minimum` — THE THREE TARGET INSTRUCTIONS DISAGREE WITH
-// EACH OTHER, AND THAT IS A MEASURED FACT ABOUT BOTH REFERENCE COMPILERS, NOT A RISK.** The obvious
-// lowering is one native instruction per target, and the obvious lowering is WRONG:
+// ⭐⭐ **WHY THESE DEFINITIONS AND NOT IEEE'S `minimum`/`maximum` — THE THREE TARGET INSTRUCTIONS
+// DISAGREE WITH EACH OTHER, AND THAT IS A MEASURED FACT ABOUT BOTH REFERENCE COMPILERS, NOT A RISK.**
+// The obvious lowering is one native instruction per target, and the obvious lowering is WRONG:
 //
-//   • x64  `minsd xmm1, xmm2`  — returns SRC2 when the operands are unordered OR are both zeros.
-//                                It IS `a < b ? a : b`, exactly.
-//   • arm64 `fmin d0, d1, d2`  — IEEE NaN-PROPAGATING: a NaN in either operand gives a NaN, in
-//                                either order, and `fmin(+0,-0)` is `-0` in either order.
-//   • wasm  `f64.min`          — same as arm64's, and unlike x64's.
+//   • x64  `minsd`/`maxsd`     — return SRC2 when the operands are unordered OR are both zeros.
+//                                They ARE `a < b ? a : b` and `a > b ? a : b`, exactly.
+//   • arm64 `fmin`/`fmax`      — IEEE NaN-PROPAGATING: a NaN in either operand gives a NaN, in
+//                                either order, and the signed zeros are ordered −0 < +0 either way.
+//   • wasm  `f64.min`/`f64.max`— same as arm64's, and unlike x64's.
 //
-// **The bootstrap and v1 BOTH emit exactly those three, unreconciled**, so each of them answers
+// **The bootstrap and v1 BOTH emit exactly those, unreconciled**, so each of them answers
 // `min(nan, 5.0)` differently depending on which target it compiled for. Measured on the bootstrap's
-// x64 host: `min(nan, 5.0)` is `5.0` and `min(5.0, nan)` is `nan` — the `minsd` reading. Nothing in
-// `specs/min.md` exercises a NaN or a signed zero, so no suite on either compiler can see the split;
-// it is a wrong answer waiting for a corpus, and 'both references do it' is how it survived.
+// x64 host: `min(nan, 5.0)` is `5.0` and `min(5.0, nan)` is `nan` — the `minsd` reading; `max` reads
+// the same on `maxsd`. Nothing in `specs/min.md` or `specs/max.md` exercises a NaN or a signed zero,
+// so no suite on either compiler can see the split; it is a wrong answer waiting for a corpus, and
+// 'both references do it' is how it survived.
 //
 // ⇒ **shv2 PICKS ONE MEANING AND MAKES ALL THREE TARGETS EMIT IT.** The x64 reading is the one
 // picked, for three reasons, in order: it is the only one of the two that the OTHER two targets can
-// reproduce EXACTLY (see the lowerings — `fcmp`+`fcsel mi` and `f64.lt`+`select` are bit-for-bit
-// `a < b ? a : b`, whereas rebuilding NaN-propagation on x64 costs three SSE ops and still cannot
-// promise a NaN PAYLOAD); it keeps shv2 bit-identical to the bootstrap on the host target, where the
-// spec suite and the oracle both live; and it is one sentence a reader can implement, where IEEE's
-// `minimum` is a table.
+// reproduce EXACTLY (see the lowerings — `fcmp`+`fcsel mi`/`gt` and `f64.lt`/`f64.gt`+`select` are
+// bit-for-bit the compare-and-select, whereas rebuilding NaN-propagation on x64 costs three SSE ops
+// and still cannot promise a NaN PAYLOAD); it keeps shv2 bit-identical to the bootstrap on the host
+// target, where the spec suite and the oracle both live; and it is one sentence a reader can
+// implement, where IEEE's `minimum`/`maximum` is a table.
 //
-// ⚠ THE PRICE, NAMED: `min` is then not commutative, and `min(a, b)` is not `-max(-a, -b)`. Both
-// follow from `a < b` being false on unordered, both are properties of the definition rather than of
-// any one target, and neither is observable by a program that never makes a NaN. `max` is not
-// implemented (it is its own spec at its own whitelist position); when it lands it takes the mirror
-// definition — `a` when `b < a`, else `b` — or the pair will disagree about NaN.
+// ⚠ THE PRICE, NAMED: neither is commutative, and `min(a, b)` is not `-max(-a, -b)`. Both follow from
+// a strict comparison being false on unordered, both are properties of the definitions rather than of
+// any one target, and neither is observable by a program that never makes a NaN.
 //
 // ⚠ APPENDED AT THE END, PAST `div`, per the band-append invariant — and here that invariant did
-// real work: every `match` over this enum that carried a `div` arm had to gain a `min` arm, because
-// no range could swallow it. `div` and `min` are adjacent, so those arms mostly widened to
-// `div to min`; that adjacency is a convenience of the current order and NOT the definition of the
-// set. `stdBinOpcodeIsFloatOnly` is where the set is named, so a third float-only opcode that cannot
-// be appended adjacent to these two changes that one function rather than being silently misjudged
-// by a range whose endpoints happened to work.
+// real work twice: every `match` over this enum that carried a `div` arm had to gain a `min` arm, and
+// then every `div to min` arm had to gain `max`, because no range could swallow either.
+// `div`/`min`/`max` are adjacent, so those arms mostly widened to `div to max`; that adjacency is a
+// convenience of the current order and NOT the definition of the set. `stdBinOpcodeIsFloatOnly` is
+// where the set is named, so a fourth float-only opcode that cannot be appended adjacent to these
+// three changes that one function rather than being silently misjudged by a range whose endpoints
+// happened to work.
 export enum StdBinOpcode
 	add
 	sub
@@ -276,6 +286,7 @@ export enum StdBinOpcode
 	shrLogical
 	div
 	min
+	max
 end 'StdBinOpcode'
 
 // ⭐⭐ **THE STD BINARY OPCODES WITH NO INTEGER FORM** — THE one place that set is stated, for the
@@ -284,9 +295,9 @@ end 'StdBinOpcode'
 //
 // `div` is float-only because the INTEGER division that shares its spelling traps (`idiv` faults on
 // a zero divisor and on `i64.min / -1`) and so needs `StdOp.div`'s own `isPure: false` — a `binOp`
-// carrying it would declare a trapping instruction pure. `min` is float-only because the language
-// has no integer `min` at all: `specs/min.md` types it `min(a float, b float) float` and the parser
-// promotes both operands before emitting the op.
+// carrying it would declare a trapping instruction pure. `min`/`max` are float-only because the
+// language has no integer form of either: `specs/min.md` and `specs/max.md` type them
+// `(a float, b float) float` and the parser promotes both operands before emitting the op.
 //
 // Its one CALLER is the boundary that must not CREATE an illegal op
 // (`LowerMaxonToStd.appendStdBinOp`), which is the only place the question can still be answered
@@ -298,7 +309,7 @@ end 'StdBinOpcode'
 export function stdBinOpcodeIsFloatOnly(opcode StdBinOpcode) returns bool
 	return match opcode 'k'
 		add to shrLogical gives false
-		div to min gives true
+		div to max gives true
 	end 'k'
 end 'stdBinOpcodeIsFloatOnly'
 

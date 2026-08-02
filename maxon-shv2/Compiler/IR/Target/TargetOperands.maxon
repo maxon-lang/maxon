@@ -329,13 +329,14 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// The `.rdata` address `lea` (P1.2 wave A) — one plain def, no uses, exactly like
 		// `leaRegGlobal`: a RIP-relative `lea` reads no allocatable register.
 		leaRegRdata(dest, _) then pushDef(buf, vreg: dest)
-		// `minsd` (specs/min.md) is TWO-ADDRESS like the four SSE ALU ops, not a plain def like
-		// `sqrtsd` beside it: it computes `dest < src ? dest : src`, so `dest` must arrive holding
-		// `lhs` and reads its own previous value. Declaring a plain def here would let the allocator
-		// give `dest` a register `lhs` does not occupy and emit no copy, and the op would compare
-		// whatever happened to be there. ⚠ The two uses are ORDERED — `minsd` is not commutative on a
-		// NaN, so `lhs` and `rhs` are not interchangeable (see `TargetOp.minsdRegReg`).
-		minsdRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		// `minsd`/`maxsd` (specs/min.md, specs/max.md) are TWO-ADDRESS like the four SSE ALU ops, not
+		// plain defs like `sqrtsd` beside them: each computes `dest <cmp> src ? dest : src`, so `dest`
+		// must arrive holding `lhs` and reads its own previous value. Declaring a plain def here would
+		// let the allocator give `dest` a register `lhs` does not occupy and emit no copy, and the op
+		// would compare whatever happened to be there. ⚠ The two uses are ORDERED — neither is
+		// commutative on a NaN, so `lhs` and `rhs` are not interchangeable (see
+		// `TargetOp.minMaxSdRegReg`). `kind` names no register, so the operand model is one arm for both.
+		minMaxSdRegReg(dest, lhs, rhs, _) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// The COMPLETE operand model for the arm64 arms — the contract wave 1's encoder + allocator

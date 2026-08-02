@@ -2723,23 +2723,24 @@ let RoundBuiltinName = b"round"
 let SqrtBuiltinName = b"sqrt"
 let AbsBuiltinName = b"abs"
 
-// ⭐ **THE ARITY-2 FLOAT MATH INTRINSIC** (`specs/min.md`) — a builtin for the same reason its five
-// arity-1 siblings above are: it is ONE instruction on x64 (`minsd`) and a two-instruction
-// compare-and-select on arm64 and wasm, so a stdlib function would be a call/ret around almost
-// nothing. Both reference compilers make it a builtin too, and both make it arity-2 alongside `max`
-// (the bootstrap's `BuiltinOps2` table, 2-Parser.cs:882; v1's `mathBinaryIntrinsicTarget`,
-// LowerMaxonToStd.maxon:13901).
+// ⭐ **THE ARITY-2 FLOAT MATH INTRINSICS** (`specs/min.md`, `specs/max.md`) — builtins for the same
+// reason their five arity-1 siblings above are: each is ONE instruction on x64 (`minsd`/`maxsd`) and a
+// two-instruction compare-and-select on arm64 and wasm, so a stdlib function would be a call/ret
+// around almost nothing. Both reference compilers make them builtins too, and both make them the
+// arity-2 pair (the bootstrap's `BuiltinOps2` table, 2-Parser.cs:882; v1's
+// `mathBinaryIntrinsicTarget`, LowerMaxonToStd.maxon:13901).
 //
-// ⚠ **ONLY `min`. `max` IS NOT REGISTERED HERE**, and its absence is deliberate rather than pending:
-// it has its own spec at its own position in the port order, and it must arrive with the mirror-image
-// NaN definition `StdBinOpcode.min` sets out (`a` when `b < a`, else `b`) or the pair will disagree
-// about unordered operands. Registering it early would reserve the name with no spec pinning what it
-// does with a NaN.
+// ⭐ **THEY ARE ONE DECISION, NOT TWO.** `max` took the MIRROR of the NaN definition `min` landed
+// with — `a` when `a > b`, else `b`, against `min`'s `a` when `a < b`, else `b` — because a STRICT
+// comparison is false on unordered whichever direction it points, so both settle NaN and signed zero
+// by the same clause. The reasoning is stated ONCE, in `StdBinOpcode`'s `min`/`max` header.
 //
-// ⚠ Like every bare builtin, the name is RESERVED wherever a call is parsed: a user `function min` is
-// shadowed by this and never linked, undiagnosed. v1 and the bootstrap have the identical property for
-// the identical set, and `stdlib/`, `specs/` and `specs-shv2/` declare no `min` for it to shadow.
+// ⚠ Like every bare builtin, each name is RESERVED wherever a call is parsed: a user `function min`
+// is shadowed by this and never linked, undiagnosed. v1 and the bootstrap have the identical property
+// for the identical set, and `stdlib/`, `specs/` and `specs-shv2/` declare no `min` or `max` for
+// either to shadow.
 let MinBuiltinName = b"min"
+let MaxBuiltinName = b"max"
 
 // ⭐⭐ **THE CALLEES WHOSE ARGUMENTS ARE ALL POSITIONAL — THE ONE PLACE THE `name:` LABEL RULE IS
 // SWITCHED OFF, AND THE REASON IT CAN BE.** A label names a PARAMETER OF A DECLARATION, and it is
@@ -2750,23 +2751,30 @@ let MinBuiltinName = b"min"
 // named* — therefore has nothing to name, and `min(3.0, 5.0)` is the spelling every spec file, both
 // reference compilers and the documentation all use.
 //
-// ⭐⭐ **THE SET IS THE WHOLE MATH-BUILTIN FAMILY, NOT JUST `min`, AND THAT IS THE POINT.** `min` is
-// what FORCED the question — it is the first bare builtin with a second argument, so E2053 ("the
-// second and later arguments must be named") had never had a builtin to fire on before. But the
-// ANSWER was always true of its six arity-1 siblings as well: none of them has a declaration either,
-// so none of them has a parameter a label could name.
+// ⭐⭐ **THE SET IS THE WHOLE MATH-BUILTIN FAMILY, NOT JUST THE ARITY-2 PAIR, AND THAT IS THE POINT.**
+// `min` is what FORCED the question — it was the first bare builtin with a second argument, so E2053
+// ("the second and later arguments must be named") had never had a builtin to fire on before. But the
+// ANSWER was always true of the arity-1 siblings as well: none of them has a declaration either, so
+// none of them has a parameter a label could name.
 //
 // ⚠⚠ **RESTRICTING THIS TO `min` WOULD HAVE LEFT THE DEFECT CLASS ALIVE INSIDE ITS OWN FIX** — this
 // repo's recorded scar (a wrong noun corrected for one family and left standing one door over). The
 // arity-1 builtins reach E2052, whose registered sentence is *"the first argument cannot be named;
 // only the second and later arguments take 'name:' labels"* — which invites the reader to fix
 // `abs(x: 1.0)` by writing `abs(1.0, x: …)`, nonsense for a one-argument callee with no declaration.
-// Same wrong noun, one door over. E2067 says the true thing for all seven.
+// Same wrong noun, one door over. E2067 says the true thing for every member.
+//
+// ⭐ **AND THE WIDENING IS WHAT LET `max` COST NOTHING HERE.** When `max` landed at its own whitelist
+// position it needed one more `equals` on this line and nothing else — no new rule, no second
+// diagnostic, and no chance of the wrong-noun answer, because the family had already been named as a
+// family rather than as `min` plus an exception.
 //
 // ⚠ Widening moves NO WORKING PROGRAM: a program that labels one of these arguments is already
 // refused today (E2052), so only the code and the wording change. Every live `maxoncstderr` pin of
 // E2052 is a USER function or method call — never a builtin — so no committed expectation moves
-// either. `min.md` and `abs.md` pin the new answer on both arities.
+// either. `min.md` and `abs.md` pin the new answer on both arities; `max.md` deliberately adds no
+// fourth pin of the same rule, since removing `max` from this line already turns its fourteen value
+// cases red.
 //
 // ⚠⚠ **THE SUBPROCESS BUILTINS ARE ARITY-2 AND ARE DELIBERATELY *NOT* HERE**, which is what stops
 // this predicate from collapsing into "is it a builtin". `subpWriteLine(h, line: s)` LABELS its second
@@ -2792,7 +2800,7 @@ let MinBuiltinName = b"min"
 // Every one of them is a stand-in for a declaration that does not exist yet, which is exactly why they
 // keep the ordinary label rule.
 function calleeTakesPositionalArgsOnly(callee ByteArray) returns bool
-	return callee.equals(TruncBuiltinName) or callee.equals(FloorBuiltinName) or callee.equals(CeilBuiltinName) or callee.equals(RoundBuiltinName) or callee.equals(SqrtBuiltinName) or callee.equals(AbsBuiltinName) or callee.equals(MinBuiltinName)
+	return callee.equals(TruncBuiltinName) or callee.equals(FloorBuiltinName) or callee.equals(CeilBuiltinName) or callee.equals(RoundBuiltinName) or callee.equals(SqrtBuiltinName) or callee.equals(AbsBuiltinName) or callee.equals(MinBuiltinName) or callee.equals(MaxBuiltinName)
 end 'calleeTakesPositionalArgsOnly'
 
 // ⭐ **THE `__Builtins` INTRINSIC TABLE (P1.0b step 2) — THE ONE PLACE THE RECOGNIZED SET IS STATED.**
@@ -24082,8 +24090,8 @@ export type Parser
 	// ⭐ **ITS TWO CALLERS TAKE IT FOR DIFFERENT REASONS, and neither is "convenience".**
 	//   • `emitDivOrMod` — because `emitBinOp` REFUSES `/` and `mod` outright (it panics on them), so
 	//     this is the only route to the emit, taken on its provably-non-zero verdict alone.
-	//   • `emitBinaryMathIntrinsic` — because `min` is a BUILTIN CALL, not an operator. `emitBinOp`
-	//     would accept it, but `requireBinOpOperands` words its rejection in terms of an OPERATOR
+	//   • `emitBinaryMathIntrinsic` — because `min`/`max` are BUILTIN CALLS, not operators. `emitBinOp`
+	//     would accept them, but `requireBinOpOperands` words its rejection in terms of an OPERATOR
 	//     ("the operands of '<op>' …"), and there is no operator symbol anywhere in `min(3.0, true)`.
 	//     The builtin path has already rejected a non-numeric operand in the callee's own name
 	//     (`numericBuiltinOperandAt`), which is the sentence the user can act on.
@@ -35947,18 +35955,23 @@ export type Parser
 		return self.emitUnaryOp(self.promoteToFloat(operand, opTok: calleeTok), op: op, resultTag: ValueTypeTag.float, opTok: calleeTok)
 	end 'emitMathIntrinsic'
 
-	// ⭐ `min(a, b)` — the ARITY-2 FLOAT MATH INTRINSIC (`specs/min.md`), and the exact mirror of
-	// `emitMathIntrinsic` one arity up: same arity gate, same operand-class gate, same promotion, same
-	// explicitly-float result. Only the operand COUNT and the op's tier differ, which is why the two
-	// share `requireNumericBuiltinArity` and `numericBuiltinOperandAt` rather than each stating the
-	// rules again.
+	// ⭐ `min(a, b)` / `max(a, b)` — the ARITY-2 FLOAT MATH INTRINSICS (`specs/min.md`,
+	// `specs/max.md`), and the exact mirror of `emitMathIntrinsic` one arity up: same arity gate, same
+	// operand-class gate, same promotion, same explicitly-float result. Only the operand COUNT and the
+	// op's tier differ, which is why the two share `requireNumericBuiltinArity` and
+	// `numericBuiltinOperandAt` rather than each stating the rules again.
+	//
+	// ⭐ **ONE FUNCTION SERVES BOTH, PARAMETERISED BY THE OPCODE**, exactly as `emitMathIntrinsic` serves
+	// five: `min` and `max` differ in nothing this function does — not the arity, not the operand class,
+	// not the promotion, not the result tag — so a second copy of it would have been five identical
+	// rules and one differing token.
 	//
 	// ⭐ **BOTH OPERANDS ARE PROMOTED, exactly as the arity-1 intrinsics promote their one.** These
 	// stay INSIDE the float domain (`min(3, 5)` is `3.0`, not an integer 3), so an integer argument is
 	// converted rather than short-circuited the way `trunc`'s is — and the promotion is what keeps
-	// `StdBinOpcode.min`'s f64-operand precondition true (`appendStdBinOp`'s float-only guard). The
-	// spec's Notes say the same in its own words: *"For integer inputs, values are automatically
-	// promoted to float."*
+	// `StdBinOpcode`'s f64-operand precondition true (`appendStdBinOp`'s float-only guard). Each spec's
+	// Notes say the same in its own words: *"For integer inputs, values are automatically promoted to
+	// float."*
 	//
 	// ⭐ It reaches `emitBinOpOverCheckedOperands`, NOT `emitBinOp`: the operand rule has already been
 	// asked, in the BUILTIN's words (which quote the callee the user wrote) rather than the operator's
@@ -35966,21 +35979,23 @@ export type Parser
 	// exactly this — a caller that has done the checking itself — and taking it is what keeps
 	// `requireBinOpOperands` a single copy instead of gaining a "trust me" flag.
 	//
-	// ⚠ The operand ORDER is load-bearing and must not be normalised anywhere downstream: `min` is not
-	// commutative on NaN input. See `StdBinOpcode.min`.
+	// ⚠ The operand ORDER is load-bearing and must not be normalised anywhere downstream: neither op is
+	// commutative on NaN input. See `StdBinOpcode`'s `min`/`max` header.
 	// ⭐⭐⭐ **THE MATH-INTRINSIC FAMILY'S ONE DISPATCH, ENTERED ONLY THROUGH ITS ONE ROSTER.** Every arm
 	// here is reachable exactly when `calleeTakesPositionalArgsOnly` admits the name, because
 	// `parseCallNamed` gates the whole function on that predicate — so the SET is written down once and
 	// the emit hangs off it, rather than the two being parallel lists 33,000 lines apart that happen to
 	// agree today.
 	//
-	// ⚠⚠ **THE PARALLEL LISTS WERE SCHEDULED TO DIVERGE, AND THE APPOINTMENT WAS ALREADY IN THE DIARY.**
-	// `max` arrives at its own whitelist position, arity-2, beside `min`. An implementer who adds its emit
-	// arm and forgets the roster gets a compiler where `max(3.0, b: 5.0)` answers **E2052** — the exact
-	// wrong noun this family was moved off — as a WRONG ANSWER rather than a compile error, with a green
-	// suite, because no `max` label case exists yet to catch it. That is this project's signature bug (ONE
-	// FACT WRITTEN DOWN TWICE), and it is the same shape that left the arity-1 builtins on the old noun
-	// when `min` first landed.
+	// ⚠⚠ **THE PARALLEL LISTS WERE SCHEDULED TO DIVERGE, THE APPOINTMENT WAS IN THE DIARY, AND IT HAS NOW
+	// BEEN KEPT.** `max` arrived at its own whitelist position, arity-2, beside `min`. Under the old shape
+	// an implementer who added its emit arm and forgot the roster would have got a compiler where
+	// `max(3.0, b: 5.0)` answers **E2052** — the exact wrong noun this family was moved off — as a WRONG
+	// ANSWER rather than a compile error, with a green suite, because no `max` label case exists to catch
+	// it. That is this project's signature bug (ONE FACT WRITTEN DOWN TWICE), and it is the same shape
+	// that left the arity-1 builtins on the old noun when `min` first landed. Under THIS shape the
+	// half-edit is not writable: the roster is the gate, so an emit arm alone is dead code and a roster
+	// entry alone panics by name.
 	//
 	// ⭐ IT CLOSES BOTH DIRECTIONS, which is the whole point of the shape:
 	//   • a name cannot reach an emit arm without being in the roster — STRUCTURALLY, since the gate is
@@ -35991,7 +36006,9 @@ export type Parser
 	//
 	// The three emitters differ and that difference is the family's real content: `trunc` LEAVES the float
 	// domain (so an integer argument is the identity), the five arity-1 intrinsics STAY inside it (so an
-	// integer argument is promoted), and `min` is the arity-2 one. See each.
+	// integer argument is promoted), and `min`/`max` are the arity-2 pair. See each. Note the emitters
+	// number three while the roster numbers eight — the arms below are a NAME→OP map, and how many names
+	// share an emitter is the point of having one.
 	function emitPositionalMathBuiltin(args ValueIdArray, callee ByteArray, calleeTok Token) returns ValueId throws ParseError
 		if callee.equals(TruncBuiltinName) 'truncBuiltin'
 			return try self.emitTrunc(args, calleeTok: calleeTok)
@@ -36017,11 +36034,16 @@ export type Parser
 			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.abs, name: callee, calleeTok: calleeTok)
 		end 'absBuiltin'
 
-		// The ARITY-2 intrinsic. A `MaxonBinOp` rather than a `MaxonUnaryOp`, so it reaches
-		// `emitBinaryMathIntrinsic`; everything else about it is the same shape as its five siblings.
+		// The ARITY-2 intrinsics. A `MaxonBinOp` rather than a `MaxonUnaryOp`, so they reach
+		// `emitBinaryMathIntrinsic`; everything else about them is the same shape as their five siblings,
+		// and the two differ from each other in nothing but which opcode they name.
 		if callee.equals(MinBuiltinName) 'minBuiltin'
 			return try self.emitBinaryMathIntrinsic(args, op: MaxonBinOp.min, name: callee, calleeTok: calleeTok)
 		end 'minBuiltin'
+
+		if callee.equals(MaxBuiltinName) 'maxBuiltin'
+			return try self.emitBinaryMathIntrinsic(args, op: MaxonBinOp.max, name: callee, calleeTok: calleeTok)
+		end 'maxBuiltin'
 
 		panic("emitPositionalMathBuiltin: '{String.from(callee)}' is in `calleeTakesPositionalArgsOnly` but has no emit arm here — the roster and the dispatch are one fact, and adding a name to the roster without an emit is the half-edit this function exists to catch")
 	end 'emitPositionalMathBuiltin'

@@ -885,7 +885,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// the operand model — so it covers every one of them without an arm here.
 		// The data-section band carries no COPY hint either: a `lea`, a load and a store are
 		// none of them a move, so no two of their operands want the same register.
-		andRegReg to minsdRegReg then break 'hint'
+		andRegReg to minMaxSdRegReg then break 'hint'
 		// The arm64 band carries NO copy hint: arm64 is 3-ADDRESS (no ALU op is a move, none has a
 		// two-address reuse to bias). The arm64 moves that DO carry a fixed-register hint — the param
 		// capture, the call-arg pre-move, the return move — are the SHARED `movRegReg` handled above,
@@ -1603,11 +1603,11 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		// The `.rdata` address `lea` (P1.2 wave A) — colors its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(colorVRegWith(dest, alloc: alloc), label: label)
-		// `minsd` colors its three XMM operands like any other binary SSE op. That it is a REUSE def is
+		// `minsd`/`maxsd` color their three XMM operands like any other binary SSE op. That it is a REUSE def is
 		// the OPERAND MODEL's statement, already honoured by the time coloring runs — and the operand
 		// ORDER is preserved verbatim, which matters here more than for the commutative arms: swapping
 		// `lhs` and `rhs` would change the answer on a NaN.
-		minsdRegReg(dest, lhs, rhs) then return TargetOp.minsdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		minMaxSdRegReg(dest, lhs, rhs, kind) then return TargetOp.minMaxSdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc), kind: kind)
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// The SAME `colorVRegWith`-per-operand reconstruction the x64 arms use: the rewrite is NEUTRAL —

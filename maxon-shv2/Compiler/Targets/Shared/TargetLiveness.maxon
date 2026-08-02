@@ -1306,7 +1306,7 @@ function opIsCondBranch(op TargetOp) returns bool
 		movRegImm to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to minsdRegReg gives false
+		andRegReg to minMaxSdRegReg gives false
 		// The arm64 conditional branches — a flag test (`arm64CondBranch`) or a register zero-test
 		// (`arm64Cbz`/`arm64Cbnz`) — are the twins of `jcc`: each carries only the THEN edge, paired
 		// with an `arm64Branch` terminator for the else edge. `arm64Ret`/`arm64Branch` and the ALU band
@@ -1343,7 +1343,7 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		jcc to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to minsdRegReg gives false
+		andRegReg to minMaxSdRegReg gives false
 		arm64Ret gives false
 		arm64Branch gives true
 		arm64CondBranch to arm64Fcsel gives false
@@ -1395,7 +1395,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			movRegImm to idivReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			pushReg to popReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
 			storeSlotReg to loadRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
-			andRegReg to minsdRegReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			andRegReg to minMaxSdRegReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			// The arm64 terminators: `arm64Branch` names the (unconditional / else) target, `arm64Ret`
 			// names none — the exact mirror of `jmp`/`ret`. The conditional branches
 			// (`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`) are BODY ops paired with an `arm64Branch`
@@ -3006,7 +3006,7 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			prologue to movRegImm32 then break 'capture'
 			movReg32Reg32 to popReg then break 'capture'
 			storeSlotReg to loadRegSlot then break 'capture'
-			andRegReg to minsdRegReg then break 'capture'
+			andRegReg to minMaxSdRegReg then break 'capture'
 			arm64Ret to arm64Fcsel then break 'capture'
 			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none
 			// is an entry param capture — skipped exactly like every other non-`movRegReg` op here.
@@ -3563,7 +3563,7 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		// splitter spill a value to a stack SLOT here?", and a `.data` store answers no: it writes a
 		// global at a link-time address, not a `SpillSlot` this function's frame owns. Claiming a slot
 		// for it would hand the allocator a spill record for a value it never spilled.
-		andRegReg to minsdRegReg gives OpSlotRole.touchesNoSlot
+		andRegReg to minMaxSdRegReg gives OpSlotRole.touchesNoSlot
 		// arm64 spills go through the SHARED `storeSlotReg` (handled above), so the arm64 band never
 		// carries a spill store — `touchesNoSlot` is unreachable this rung AND correct.
 		arm64Ret to arm64Fcsel gives OpSlotRole.touchesNoSlot

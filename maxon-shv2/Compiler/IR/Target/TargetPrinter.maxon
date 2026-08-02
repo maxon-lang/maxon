@@ -453,7 +453,7 @@ end 'moduleTargetCpu'
 // holds at least one of these. Exhaustive, so a new op variant is a compile error, not a mis-classify.
 function opIsArm64Band(op TargetOp) returns bool
 	return match op 'p'
-		prologue to minsdRegReg gives false
+		prologue to minMaxSdRegReg gives false
 		arm64Ret to arm64Fcsel gives true
 		// P1.5-A1: the x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
 		// arm64 band (band-append), but they are x64 ops, so `false` — a module is NOT arm64 for holding them.
@@ -551,11 +551,16 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		// The LABEL is printed for the same reason `leaRegGlobal`'s is: a fragment showing which
 		// `.rdata` record a `lea` names makes a wrong record a reviewable diff.
 		leaRegRdata(dest, label) gives "leaRegRdata {vregName(dest)}, [rip + {String.from(label)}]"
-		// `minsd` prints its real mnemonic, unlike `absF64RegReg` above: it IS one instruction, so
-		// there is no encoder expansion for a golden to leak. Both operands are shown because the
-		// ORDER is semantic here — `minsd` answers with its second source on a NaN — so a fragment
-		// that showed only the destination could not catch a swap.
-		minsdRegReg(dest, lhs, rhs) gives "minsd {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		// `minsd`/`maxsd` print their real mnemonic, unlike `absF64RegReg` above: each IS one
+		// instruction, so there is no encoder expansion for a golden to leak. The mnemonic's PREFIX is
+		// the `FloatMinMaxKind` member name spliced in — NOT the suffix construction `roundsd` uses
+		// (`roundsdRegReg.{mode.name}`, a literal variant name with the mode appended). ⚠ So these two
+		// member names are LOAD-BEARING FOR COMMITTED GOLDEN TEXT: they are spelled to match the x86
+		// mnemonics, and renaming `max` to `maximum` would silently emit `maximumsd` into every
+		// fragment. Both operands are shown because the ORDER is
+		// semantic here — each answers with its second source on a NaN — so a fragment that showed only
+		// the destination could not catch a swap.
+		minMaxSdRegReg(dest, lhs, rhs, kind) gives "{kind.name}sd {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// Each arm64 operand prints through `arm64VregName` (its `RegNum` mapped to an arm64 register
