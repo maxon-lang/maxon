@@ -1898,8 +1898,13 @@ end 'builtinOrderingEnum'
 // `upsertDeclaredEnum`, which is a last-wins upsert — so the PARSED layout displaced the seed and every
 // handler arm was already being selected from it, while `BuiltinErrorOrdinalCheck` went on verifying the
 // synthesized copy. MEASURED before this change: swapping `notFound` and `accessDenied` in
-// `stdlib/Builtins.maxon` made `managed-directory.open-search-not-found-variant` abort (exit 134 for an
-// expected 42) with the drift guard SILENT — the guard was checking a layout the program did not use.
+// `stdlib/Builtins.maxon` made `managed-directory.open-search-not-found-variant` abort (for an expected 42)
+// with the drift guard SILENT — the guard was checking a layout the program did not use.
+//
+// ⚠ **THE ABORT'S EXIT CODE IN THAT MEASUREMENT WAS 134 AND IS NOW `PanicExitCode` (1).** The abort is a
+// stdlib `panic(…)`, which used to exit 134 with no output at all; since it was wired to the `mrt_panic`
+// runtime it prints `panic at <file>:<line>: …` plus a backtrace and exits 1. Re-running the measurement
+// today reproduces the same DEFECT with a different, louder number — the record is what was seen then.
 //
 // ⇒ There is now ONE declaration of each, in `stdlib/Builtins.maxon`, and the compiler READS it
 // (`declaredBuiltinErrorEnum`). The three constructors are gone; the case-NAME constants stay in
@@ -1964,8 +1969,9 @@ end 'addBuiltinEnumCase'
 // alone left the suite **2758/0 GREEN**. And at A1s — with the guard in place, but anchored to the
 // COMPILER's transcribed copy while the program already resolved its handler arms from the PARSED one —
 // swapping `notFound` and `accessDenied` in `stdlib/Builtins.maxon` made
-// `managed-directory.open-search-not-found-variant` **abort (exit 134 for an expected 42) with this guard
-// SILENT**. A guard anchored to a copy the program does not use is not a guard. Correspondence is
+// `managed-directory.open-search-not-found-variant` **abort (for an expected 42) with this guard
+// SILENT** — see this file's `declaredBuiltinErrorEnum` header for what the abort's exit code was then and
+// is now. A guard anchored to a copy the program does not use is not a guard. Correspondence is
 // well-checked only by coincidence of coverage — three directory ordinals happen to be pinned by committed
 // `match` arms, and the rest need an OS failure mid-iteration that no test can provoke.
 //

@@ -1412,7 +1412,9 @@ unnecessary**, and all four bugs above are unrepresentable rather than fixed.
 > excludes it was preserved on the merits (E5001, 18 live values against a 14-register pool).
 >
 > **⏭ Also blocking, not this rung's:** there is **no non-Windows panic runtime** (`mrt_panic` is a
-> hand-assembled Windows `.text` chunk; everywhere else `osRangePanic` lowers to a bare exit 1), which
+> hand-assembled x64 `.text` chunk, on both x64 lanes since A1j; on arm64 and wasm `osPanic` lowers to a
+> bare exit 1 — and since the `/spec-port panic` tick that gap covers USER `panic("…")` too, not just the
+> range-check guard), which
 > is what keeps those 8 panic-MESSAGE cases gated on four targets; and wasm's `call_indirect` result
 > type is arg-count-derived to `(i64ⁿ)→i64`, so an `ExitCode`-returning function VALUE traps.
 
@@ -2023,6 +2025,22 @@ tests shv2 — which is what `maxon-selfhosted` does, and is the Phase-1 goal.
 
 Distinct front-end / IR features the corpus surfaced that do NOT ride an existing rung; each gets a ladder
 number when it is sequenced (each also has a `disabled-test:` or oracle-divergence pinning it):
+
+- **⬜ AN INTERPOLATED `panic("… {x} …")` RENDERS ITS HOLE AS A LITERAL `{}`** (`/spec-port` tick 2,
+  2026-08-01, MEASURED against the oracle both ways). The `panic` tick routed user panics through
+  `mrt_panic`, which takes an **`.rdata` LABEL** — a compile-time blob. A literal message bakes exactly;
+  a hole has no compile-time text, so each one is spelled `{}` and the located line + backtrace + exit 1
+  are correct around it. **Measured divergence:** `panic("value was {n} at end")` with `n = 7` prints
+  `value was 7 at end` on the bootstrap and `value was {} at end` on shv2.
+  ⭐ **It is a placeholder, not a silent drop, and that WAS the choice** — the alternative shapes were
+  both worse: refusing interpolated panics breaks the build outright (stdlib panics with interpolation in
+  dozens of places, `Array.maxon` alone several), and the pre-tick behaviour printed **nothing at all**
+  and exited 134. The interpolation is still fully PARSED (the value is discarded), so a malformed hole
+  is still the same compile error it always was — a token skip would have silently accepted it.
+  ⇒ **What it needs is a SECOND panic entry point taking a runtime pointer + length instead of an
+  `.rdata` label, plus its lowering in each of three backends** — which is `panic-interpolation`'s own
+  spec, further down the `/spec-port` whitelist, and genuinely a separate feature rather than a gap in
+  this one. **`specs-shv2/panic.md`'s four cases are all literals, so none is shelved for it.**
 
 - **⬜ u32 MEMORY ACCESS — `ExitCode` IS A SIGNATURE/ABI TYPE AND NOT YET A STORAGE TYPE** (D7's tail +
   W1b, 2026-07-30, MEASURED not predicted). `parseTypeReference` claims `String` and `Character`

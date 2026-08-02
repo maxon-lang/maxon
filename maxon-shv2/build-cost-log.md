@@ -53,6 +53,12 @@ executable alone.
 `code bytes` is the emitted machine code alone (from the build's own report); `exe bytes` is the whole
 PE/ELF on disk, which also carries rdata, data, ucddata, symdata and headers.
 
+⚠ **A row cannot carry the hash of the commit that creates it** — the row is *in* that commit. So the
+first column is the commit's SUBJECT, not its hash: `git log --oneline --grep=` finds it, and nothing
+has to be filled in afterwards by a second commit that would then need its own row. (The first row is
+the exception: it measures a tree that already existed.)
+
 | date | commit | change | build s | exe bytes | code bytes | suite s | tests |
 |------|--------|--------|---------|-----------|------------|---------|-------|
 | 2026-08-01 | `f3a208b5b` | baseline — the tree `/spec-port` was built against (no compiler change of its own) | 19.7 | 10,076,672 | 9,002,998 | 48.0 / 48.9 / 50.4 | 3262 |
+| 2026-08-01 | `spec-port: tick 2 — panic` | `panic("…")` routed to the `mrt_panic` runtime (`StdOp.osPanic`), message baked at parse time. Exe +4,096 B (one page); emitted panic BLOCKS shrank 4 instructions → 2 everywhere, but the compiler gained the parse-time baking, so `code bytes` is +3,093. Both times inside the ~5% band ⇒ no reading. | 19.0 | 10,080,768 | 9,006,091 | 49.6 | 3266 |

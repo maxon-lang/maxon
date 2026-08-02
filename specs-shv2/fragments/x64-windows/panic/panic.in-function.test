@@ -1,0 +1,35 @@
+// Test: panic.in-function
+function fail()
+		panic("failure in helper")
+end 'fail'
+
+function main() returns ExitCode
+		fail()
+		return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @fail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect fail
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

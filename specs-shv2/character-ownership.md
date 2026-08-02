@@ -650,11 +650,14 @@ end 'main'
 ```
 
 <!-- test: panic-takes-a-string-not-a-character -->
-### `panic` takes a String, exactly as `print` does
+### `panic` takes a string literal, and a Character is not one
 
-The twin of `print-takes-a-string-not-a-character`, and it needs its own case: both doors ask
-`tagIsText`, and a `tagIsText` widened to answer for a Character left only ONE of the thirteen
-type-side sites red under sabotage.
+The near-twin of `print-takes-a-string-not-a-character`. ⚠ **The two doors ask DIFFERENT questions and
+this case no longer pins `tagIsText`** — `print` does (and that case still carries the whole
+thirteen-site sabotage argument), but `panic`'s argument must be a string **literal**, not merely a
+value of string type, because its message is baked into `.rdata` at parse time along with the file and
+line the runtime prints. A `'中'` is a character-literal token, so it is refused at the literal door
+before any type tag is consulted — which is why the message names the rule that actually rejected it.
 
 ```maxon
 function main() returns ExitCode
@@ -663,7 +666,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/character-ownership/panic-takes-a-string-not-a-character.test:4:2: 'panic' requires a String, but its argument is Character
+error E3005: specs/fragments/character-ownership/panic-takes-a-string-not-a-character.test:4:8: 'panic' requires a string literal, but its argument is Character
 ```
 
 <!-- test: an-array-literal-element-is-not-a-character -->

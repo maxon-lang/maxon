@@ -3776,6 +3776,22 @@ end 'invalidUnicodeEscapeError'
 let CharacterLiteralEscapeKind = "character literal"
 let StringLiteralEscapeKind = "string interpolation"
 
+// What a `panic(…)` argument must be, as the diagnostic spells it. Deliberately narrower than
+// `typeTagName(ValueTypeTag.string)`: a `String` BINDING is refused too (see `parsePanicMessage`), so a
+// message naming only the type would be a rule that does not match the one being enforced.
+let PanicMessageRequirement = "string literal"
+
+// What an interpolation hole reads as inside a baked panic message, until `panic-interpolation` renders
+// it. Escaped (`\{\}`) and not a bare `{}` because THIS source file is itself Maxon: an unescaped brace
+// pair here would open an interpolation in the very literal that describes one.
+//
+// ⚠ A FUNCTION and not a `let` because the BOOTSTRAP that compiles this file const-evaluates top-level
+// declarations through an escape resolver that does not know `\{` (E9001), while its ordinary literal
+// path does. The value is a constant; only its declaration form is negotiable.
+function unrenderedInterpolationHole() returns ByteArray
+	return "\{\}".toByteArray()
+end 'unrenderedInterpolationHole'
+
 // One byte as a one-element ByteArray, so an offending escape can be interpolated into a
 // diagnostic as text.
 function byteSlice(b Byte) returns ByteArray
@@ -14221,21 +14237,107 @@ export type Parser
 		self.markValueOwnsHeap(value)
 	end 'retainThrownField'
 
-	// `panic("message")` — abort the process after printing the message. Emits a `panicAbort` body op
-	// (expanded to `osWriteStdout` + `osExit` in lowering) followed by a dead return terminator (control
-	// never returns, so the return is unreachable but keeps the block well-formed).
+	// ⭐ **`panic("message")` — ABORT, PRINTING `panic at <file>:<line>: <message>` AND A BACKTRACE, EXIT 1.**
+	// Emits a `panicAbort` body op carrying the BAKED message bytes, followed by a dead return terminator
+	// (control never returns, so the return is unreachable but keeps the block well-formed).
+	//
+	// ⭐ **THE MESSAGE IS ASSEMBLED HERE BECAUSE TWO OF ITS THREE PARTS ONLY EXIST HERE** — the source
+	// BASENAME and the LINE of the `panic` keyword. The format itself is `panicMessageLine`'s, shared with
+	// the P1.9 range-check guard so the runtime prints one shape whichever producer baked it. This is v1's
+	// arrangement (`maxon-selfhosted/Compiler/Parser.parsePanicStatement` interns a location-prefixed
+	// message at parse time) and it is kept for v1's reason, which shv2 does not improve on.
 	function parsePanicStatement(func IrFunction, block IrBlock) throws ParseError
 		self.currentBlock = block
 		let panicTok = try self.consume(TokenKind.panic)
 		try self.consume(TokenKind.leftParen)
-		let msg = try self.parseExpression(func, block: self.currentBlock)
+		let message = try self.parsePanicMessage(func, panicTok: panicTok)
 		try self.consume(TokenKind.rightParen)
-		if not tagIsText(self.tagOf(msg)) 'notAString'
-			throw ParseError.builtinOperandType("panic", required: typeTagName(ValueTypeTag.string), got: typeTagName(self.tagOf(msg)), line: panicTok.line, column: panicTok.column)
-		end 'notAString'
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.panicAbort(msg), range: SourceRange.ofToken(panicTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.panicAbort(message), range: SourceRange.ofToken(panicTok))
 		self.emitDeadReturn(func, anchor: panicTok)
 	end 'parsePanicStatement'
+
+	// The full `panic at <file>:<line>: <text>\n` line a `panic(…)` bakes, having consumed its argument.
+	//
+	// ⚠ **THE ARGUMENT MUST BE A STRING *LITERAL*, NOT MERELY A `String`** — the ORACLE's rule, measured:
+	// `panic(m)` on a `String` binding is `E3005 panic requires a string argument` from the bootstrap, and
+	// shv2 used to accept it (and then exit with no message at all, because there was nothing to bake). The
+	// requirement is not an implementation limit dressed as a rule: a panic message is a compile-time
+	// constant by design, which is exactly what lets it live in `.rdata` and print from a process whose heap
+	// may be the thing that failed.
+	function parsePanicMessage(func IrFunction, panicTok Token) returns ByteArray throws ParseError
+		if not self.at(TokenKind.stringLiteral) 'notALiteral'
+			let argTok = self.current()
+			let arg = try self.parseExpression(func, block: self.currentBlock)
+			throw ParseError.builtinOperandType("panic", required: PanicMessageRequirement, got: self.valueDisplayTypeName(arg), line: argTok.line, column: argTok.column)
+		end 'notALiteral'
+
+		return panicMessageLine(self.filePath, line: panicTok.line, text: try self.consumePanicMessageText(func))
+	end 'parsePanicMessage'
+
+	// The TEXT between the location prefix and the newline, with the argument's tokens consumed.
+	//
+	// ⚠ **AN INTERPOLATED MESSAGE BAKES ITS LITERAL FRAGMENTS AND SPELLS EACH HOLE `{}` — the rendered
+	// value is `panic-interpolation`'s, and it is NOT built here.** Rendering it needs a panic entry that
+	// takes a RUNTIME pointer rather than an `.rdata` label, which is a second `StdOp` and a lowering in
+	// each of the three backends. What this tick refuses to do is leave the case silent: before it, EVERY
+	// interpolated panic — including the dozen in `stdlib/Array.maxon` — printed nothing at all and exited
+	// 134, so the message, the file, the line and the backtrace were all lost. A visible `{}` in an
+	// otherwise complete, located line is not the answer, but it is an honest statement of what is missing,
+	// and it cannot be mistaken for a rendered value: `{` opens an interpolation and can reach output no
+	// other way.
+	//
+	// The interpolation is still PARSED (its value discarded) rather than skipped, so a malformed hole is
+	// reported exactly as it is anywhere else — a token skip would silently accept it.
+	function consumePanicMessageText(func IrFunction) returns String throws ParseError
+		if self.peekKind() != TokenKind.stringInterpStart 'staticLiteral'
+			let tok = try self.consume(TokenKind.stringLiteral)
+			return String.from(try self.decodedStringLiteralBytes(tok))
+		end 'staticLiteral'
+
+		let text = try self.interpolatedPanicMessageText()
+		_ = try self.parseStringInterpolation(func)
+		return text
+	end 'consumePanicMessageText'
+
+	// Read the fragments of the interpolation at the cursor WITHOUT moving it, joining them with a `{}` per
+	// hole. Non-consuming on purpose: `consumePanicMessageText` then runs the real parse over the very same
+	// tokens, so this scan can never leave the cursor somewhere the parse did not put it.
+	//
+	// `depth` is why the hole skip is a loop and not a search for the next `stringInterpEnd`: a hole may
+	// contain an interpolated string of its own (`"a{ "b{c}" }d"`), whose `stringInterpEnd` is not ours.
+	function interpolatedPanicMessageText() returns String throws ParseError
+		var text = ByteArray.create()
+		var i = self.pos
+		text.append(try self.decodedStringLiteralBytes(self.tokenAt(i)))
+		i = (i + 1) as TokenIndex
+
+		while self.kindAt(i) == TokenKind.stringInterpStart 'holes'
+			text.append(unrenderedInterpolationHole())
+			var depth = 1
+			i = (i + 1) as TokenIndex
+			while depth > 0 'skipHole'
+				let kind = self.kindAt(i)
+				if kind == TokenKind.eof 'ranOff'
+					// A hole the lexer never closed. The real parse reports it; this scan just stops.
+					return String.from(text)
+				end 'ranOff'
+				if kind == TokenKind.stringInterpStart 'nested'
+					depth = depth + 1
+				end 'nested'
+				if kind == TokenKind.stringInterpEnd 'closes'
+					depth = depth - 1
+				end 'closes'
+				i = (i + 1) as TokenIndex
+			end 'skipHole'
+
+			// The lexer emits a fragment after every hole, empty ones included, so a `stringLiteral` is
+			// always what follows a closed hole.
+			text.append(try self.decodedStringLiteralBytes(self.tokenAt(i)))
+			i = (i + 1) as TokenIndex
+		end 'holes'
+
+		return String.from(text)
+	end 'interpolatedPanicMessageText'
 
 	// The dead return terminator emitted after a diverging op (`panicAbort`): a `retVoid` for a void
 	// function, else a zero. Unreachable — the preceding op never returns — but every block must commit
@@ -24155,12 +24257,21 @@ export type Parser
 	// in one place.
 	function consumeStringLiteralValue() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.stringLiteral)
+		return self.emitStringLiteral(try self.decodedStringLiteralBytes(tok), range: SourceRange.ofToken(tok))
+	end 'consumeStringLiteralValue'
+
+	// A `stringLiteral` token's payload with its escapes resolved, or the positioned diagnostic the escape
+	// earned. THE one door onto `decodeEscapes` for string literals, because there are two callers with
+	// nothing else in common: the value path above, which emits a record, and `panic("…")`'s message, which
+	// bakes bytes and emits no value at all. Written twice, the panic path would have been free to accept an
+	// escape the value path rejects.
+	function decodedStringLiteralBytes(tok Token) returns ByteArray throws ParseError
 		match decodeEscapes(tok.value) 'decoded'
-			bytes(buf) then return self.emitStringLiteral(buf, range: SourceRange.ofToken(tok))
+			bytes(buf) then return buf
 			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
 			badUnicodeEscape(text, offset) then throw invalidUnicodeEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, tok: tok)
 		end 'decoded'
-	end 'consumeStringLiteralValue'
+	end 'decodedStringLiteralBytes'
 
 	// Append a `stringLiteral` op carrying the DECODED bytes; return the `string`-typed ValueId it
 	// defines. The one emit site, so a caller that already holds decoded bytes (none today, but the

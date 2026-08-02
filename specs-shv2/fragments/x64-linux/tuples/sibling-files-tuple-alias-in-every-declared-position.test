@@ -1,0 +1,332 @@
+// Test: sibling-files-tuple-alias-in-every-declared-position
+// --- file: aaa-alias.maxon
+export typealias Int = int(i64.min to i64.max)
+export typealias Pair = (Int, Int)
+export typealias PairArray = Array with Pair
+
+// --- file: zzz-main.maxon
+type Holder
+	export var p as Pair
+
+	export static function create() returns Holder
+		return Self{p: (2, 4)}
+	end 'create'
+
+	export function pair() returns Pair
+		return (6, 8)
+	end 'pair'
+end 'Holder'
+
+union Slot
+	empty
+	some(v Pair)
+end 'Slot'
+
+function make() returns Pair
+	return (10, 0)
+end 'make'
+
+function nested() returns (Pair, Int)
+	return ((12, 0), 0)
+end 'nested'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var xs = PairArray.create()
+	xs.push((14, 0))
+	let e = try xs.get(0) otherwise return 1
+	let n = nested()
+	let s = Slot.some((16, 0))
+	let sv = match s 'm'
+		empty gives 0
+		some(v) gives v.0
+	end 'm'
+	return (h.p.0 + h.p.1 + h.pair().0 + h.pair().1 + make().0 + n.0.0 + e.0 + sv) as ExitCode
+end 'main'
+---
+ExitCode: 72
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 2
+    x64.movRegImm32 r12, 4
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.storeBaseDispReg.word64 [rbx + 0], r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.pair {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 6
+    x64.movRegImm32 r12, 8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 10
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @nested {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 12
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.storeBaseDispReg.word64 [r12 + 0], r8
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.callDirect Holder.create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegImm32 r13, 14
+    x64.movRegImm32 r14, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], r13
+    x64.storeBaseDispReg.word64 [r15 + 8], r14
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r15 + 8]
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Holder
+    x64.movRegReg r8, r13
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.callDirect nested
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r14, 16
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], r14
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r15 + 8], rax
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot2, r14
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r15 + 8]
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], r8
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r14, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.loadRegBaseDisp.word64 rcx, [r14 + 8]
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 8], rax
+    x64.loadRegBaseDisp.word64 r14, [rcx + 0]
+    x64.callDirect __mm_decref
+    x64.jmp matchcont
+  matchcont:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r15, rax, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect Holder.pair
+    x64.storeSlotReg slot3, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.leaRegRegReg r15, r15, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect Holder.pair
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.leaRegRegReg r15, r15, rax
+    x64.callDirect make
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.leaRegRegReg rax, r15, rax
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg r13, rax, r14
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_Slot
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct___Tuple2.__Tuple2.int.int.int
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __arr_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_Holder
+    x64.movRegReg r8, r13
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

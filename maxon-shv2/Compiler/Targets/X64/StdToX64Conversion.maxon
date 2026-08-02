@@ -786,7 +786,7 @@ type StdToX64Lowering
 			// The two VALUE-callee calls carry their own per-argument mask (there is no callee name to look one
 			// up by), and overflow through the identical shared rule.
 			callIndirect(_, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
-			osRangePanic to osSleepMs gives 0
+			osPanic to osSleepMs gives 0
 			// The four ≤4-argument subprocess ops (spawn is named above) reserve no outgoing stack space.
 			// `osFreePages`'s `VirtualFree(addr, 0, MEM_RELEASE)` is three register args, so it reserves none either.
 			osProcessExitCode to osFreePages gives 0
@@ -1169,7 +1169,7 @@ type StdToX64Lowering
 			// P1.5-A1: a function's address (`lea dest, [rip+func]`), and a call THROUGH a function value.
 			funcAddr(resultId, funcName) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegFunc(TargetVReg.virtual(resultId), funcName: funcName))
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
-			osRangePanic(label) then self.lowerRangePanic(label, dstBlock: dstBlock)
+			osPanic(label) then self.lowerPanic(label, dstBlock: dstBlock)
 			// P1.5 mid-body-yield: the green-thread sleep substrate's clock read and OS wait.
 			osReadClock(ticksPtrId, freqPtrId) then self.lowerOsReadClock(ticksPtrId, freqPtrId: freqPtrId, dstBlock: dstBlock)
 			osSleepMs(msId) then self.lowerOsSleepMs(msId, dstBlock: dstBlock)
@@ -1260,7 +1260,7 @@ type StdToX64Lowering
 			osExit then panic("lowerStdToX64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op followed by a dead return)")
 			funcAddr then panic("lowerStdToX64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
 			callIndirect then panic("lowerStdToX64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
-			osRangePanic then panic("lowerStdToX64: an `osRangePanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
+			osPanic then panic("lowerStdToX64: an `osPanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
 			osReadClock then panic("lowerStdToX64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
 			osSleepMs then panic("lowerStdToX64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op)")
 			osProcessSpawn to osWaitHandle then panic("lowerStdToX64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
@@ -1835,7 +1835,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallExitGroup))
 	end 'lowerOsExitLinux'
 
-	// Lower `osRangePanic <label>` (a P1.9 range-check violation) to `mrt_panic`, which reads the baked
+	// Lower `osPanic <label>` (a P1.9 range-check violation) to `mrt_panic`, which reads the baked
 	// `panic at …` line, prints it plus a symbolized backtrace, and exits — the message address in RCX,
 	// then the call. A `callDirect` (not `iatCall`) because `mrt_panic` is one of the program's own
 	// `.text` runtime chunks, resolved by the intra-`.text` call fixup. `functionMakesCall` sees the
@@ -1851,10 +1851,10 @@ type StdToX64Lowering
 	// process exit, and it lives inside the chunk, reached by a route `appendX64RuntimeChunks` derives
 	// from `x64OsCallKind(target.os)` — the same door `lowerOsExit` consults here. A third spelling of
 	// "which OS am I" bought nothing but a lane that silently said less.
-	function lowerRangePanic(label ByteArray, dstBlock IrBlock)
+	function lowerPanic(label ByteArray, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(x64PhysReg(X64Register.rcx), label: label))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(PanicName))
-	end 'lowerRangePanic'
+	end 'lowerPanic'
 
 	// Lower `osAllocPages` to the x64-windows page source: `VirtualAlloc(NULL, size,
 	// MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` through the IAT.

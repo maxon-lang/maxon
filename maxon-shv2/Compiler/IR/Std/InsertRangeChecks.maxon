@@ -812,15 +812,15 @@ type RangeCheckEmitter
 		end 'eachBlockId'
 	end 'materializeChainTails'
 
-	// The panic block: `osRangePanic <message-label>`, then a dead return (the panic never returns, but
+	// The panic block: `osPanic <message-label>`, then a dead return (the panic never returns, but
 	// every block must terminate). The message is interned as a NUL-terminated `.rdata` cstr blob — the
-	// same immortal-rdata path a String literal's blob uses, deduped by bytes — and `osRangePanic`
+	// same immortal-rdata path a String literal's blob uses, deduped by bytes — and `osPanic`
 	// carries its label to the backend, which loads the address into the ABI's first-arg register and
 	// calls `mrt_panic`.
 	function emitPanicBlock(message ByteArray) returns IrBlock
 		var panicBlock = self.module.addBlock(self.func, label: b"__rc_panic")
 		let blobLabel = registerStringBlob(self.project.globalData, bytes: message)
-		self.module.appendOp(panicBlock, op: StdOp.osRangePanic(blobLabel.toByteArray()))
+		self.module.appendOp(panicBlock, op: StdOp.osPanic(blobLabel.toByteArray()))
 		self.emitDeadReturn(panicBlock)
 		return panicBlock
 	end 'emitPanicBlock'
@@ -1042,12 +1042,12 @@ type RangeCheckEmitter
 
 	// ---- the panic message ----
 
-	// The runtime panic string, baked at compile time: `panic at <file>:<line>: Range check failed:
-	// value outside typealias '<Alias>'\n`. `<file>` is the source BASENAME (the bootstrap's
-	// `Path.GetFileName`), `<line>` the `as`/`return` source line. `mrt_panic` prints this verbatim,
-	// then the `Stack trace:` block, then exits 1.
+	// The runtime panic string, baked at compile time. THIS pass owns only the TEXT a range violation
+	// says; the `panic at <file>:<line>: ` prefix and the trailing newline are `panicMessageLine`'s, so
+	// this message and a user `panic("…")`'s cannot drift into two formats. `mrt_panic` prints the
+	// result verbatim, then the `Stack trace:` block, then exits `PanicExitCode`.
 	function rangeCheckMessage(filePath FilePath, line LineNumber, aliasName ByteArray) returns ByteArray
-		return "panic at {baseName(filePath.toString())}:{line}: Range check failed: value outside typealias '{String.from(aliasName)}'\n".toByteArray()
+		return panicMessageLine(filePath, line: line, text: "Range check failed: value outside typealias '{String.from(aliasName)}'")
 	end 'rangeCheckMessage'
 
 	// Map each `const` result value id to its constant — the literals whose out-of-range use is the
@@ -1277,7 +1277,7 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		// P1.5 subprocess: only `osWaitHandle` (the `WaitForSingleObject` poll) defines a value; the other four
 		// consume their `BOOL` via memory or ignore it (see StdDialect's ⭐ note).
 		osWaitHandle(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osRangePanic to osCloseHandle gives DefinedValueLookup.none
+		osPanic to osCloseHandle gives DefinedValueLookup.none
 		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
 		osFreePages gives DefinedValueLookup.none
 		// The jump table defines no value — a terminator branches, it does not produce a result.
@@ -1329,21 +1329,6 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osFileAttributes(resultId, _) gives DefinedValueLookup.defines(resultId)
 	end 'r'
 end 'stdOpDefinedValue'
-
-// The base file name (last path segment) of a compiler source path, for the runtime panic message —
-// the shv2 equivalent of the bootstrap's `Path.GetFileName`. Strips both separators so a Windows temp
-// path and a POSIX one both reduce to `<name>.test`.
-function baseName(path String) returns String
-	return lastSegment(lastSegment(path, separator: "/"), separator: "\\")
-end 'baseName'
-
-function lastSegment(s String, separator String) returns String
-	let parts = s.split(separator)
-	if parts.isEmpty() 'whole'
-		return s
-	end 'whole'
-	return try parts.get(parts.count() - 1) otherwise s
-end 'lastSegment'
 
 // The literal-const map this pass reads is `ConstValueMap` (FoldConstOperands) — each `const` result id
 // to the literal it materializes, so a cast/return of a literal is a compile-time decision (E3005 or

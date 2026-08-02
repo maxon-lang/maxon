@@ -383,7 +383,7 @@ type StdToArm64Lowering
 			tryCall(_, _, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), argCount: args.count())
 			errorReturn to funcAddr gives 0
 			callIndirect(_, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
-			osRangePanic to switch gives 0
+			osPanic to switch gives 0
 			witnessCall(_, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osPipeCreate to osReadWallClock gives 0
@@ -478,7 +478,7 @@ type StdToArm64Lowering
 			// marker and are pinned by arm64 goldens like every other target's.
 			funcAddr(resultId, funcName) then self.emit(dstRef, op: TargetOp.arm64LeaFuncAddr(TargetVReg.virtual(resultId), funcName: funcName))
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
-			osRangePanic then self.lowerRangePanic(dstRef)
+			osPanic then self.lowerPanic(dstRef)
 			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
 			// only at this rung — its QueryPerformanceCounter clock and Windows `Sleep` have no arm64 primitive
 			// yet, and a `sleep` program is spec-gated to x64-windows, so neither op ever reaches arm64 lowering.
@@ -537,7 +537,7 @@ type StdToArm64Lowering
 			callIndirect then panic("lowerStdToArm64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
 			witnessCall then panic("lowerStdToArm64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
 			witnessTryCall then panic("lowerStdToArm64: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
-			osRangePanic then panic("lowerStdToArm64: an `osRangePanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
+			osPanic then panic("lowerStdToArm64: an `osPanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
 			osReadClock then panic("lowerStdToArm64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op; also x64-windows only)")
 			osSleepMs then panic("lowerStdToArm64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op; also x64-windows only)")
 			osProcessSpawn to osWaitHandle then panic("lowerStdToArm64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops; also x64-windows only)")
@@ -1059,7 +1059,7 @@ type StdToArm64Lowering
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: Arm64LinuxSyscallExitGroup)
 	end 'lowerOsExit'
 
-	// Lower `osRangePanic` (a P1.9 range-check violation) on arm64 to a BARE EXIT. arm64 has
+	// Lower `osPanic` (a P1.9 range-check violation) on arm64 to a BARE EXIT. arm64 has
 	// no panic runtime / backtrace of its own — `mrt_panic` and its walker are hand-assembled x64 chunks
 	// in `X64Runtime`, appended to BOTH x64 lanes since rung A1j — so a violated guard aborts WITHOUT the
 	// message + backtrace the x64 path prints.
@@ -1071,10 +1071,10 @@ type StdToArm64Lowering
 	// x64-linux gained the runtime (there are 16, on both x64 lanes). The real reason arm64 exits bare is
 	// that nobody has written an arm64 `mrt_panic`. Same primitive as `lowerOsExit`, over the one
 	// `PanicExitCode` every backend's panic path reads (`Targets/Shared/PanicExitCode`).
-	function lowerRangePanic(dstRef BlockRef)
+	function lowerPanic(dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: PanicExitCode))
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: Arm64LinuxSyscallExitGroup)
-	end 'lowerRangePanic'
+	end 'lowerPanic'
 
 	// Lower `osAllocPages(size)` to the POSIX page source `mmap(NULL, size, PROT_READ|PROT_WRITE,
 	// MAP_ANON|MAP_PRIVATE, -1, 0)` — the arm64 twin of x64's `lowerOsAllocPages` (VirtualAlloc), and FAR

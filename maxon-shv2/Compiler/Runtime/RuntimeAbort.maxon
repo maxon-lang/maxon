@@ -23,8 +23,15 @@
 // already use 1/2/3/4/5/25/45/123 — so an abort down there is indistinguishable from a program that
 // simply returned. (`runProcess`'s two failures used to break that rule with aborts 1 and 70; since
 // P1.5 #93 they THROW `RunProcessError` and the caller catches them, so no abort sits below 71 any more.)
-// 101 and 134 are the two the compiler already spends outside this band and they are declared here so
-// the enum's own duplicate check covers them.
+// 101 is the one code the compiler already spends outside this band and it is declared here so the
+// enum's own duplicate check covers it.
+//
+// ⚠ **134 IS NOT HERE, AND ITS ABSENCE IS DELIBERATE.** It was `userPanic`, the code a user `panic("…")`
+// exited with while the message was going unprinted; the panic statement now routes to the SAME
+// `mrt_panic` runtime the range-check guard uses (`StdOp.osPanic`), which exits `PanicExitCode` — so
+// nothing emits 134 any longer. A case nothing emits is a DEAD CLAIM, the same rot as a code that
+// reports another abort's number, so it was deleted rather than kept as a number this space defends
+// against a claimant that no longer exists.
 export enum RuntimeAbort
 	// `__arr_grow`: `capacity·element_size` overflowed i64. Without the guard the wrapped byte count
 	// under-allocates and the next element write runs off the buffer — a silent heap overflow.
@@ -78,11 +85,11 @@ export enum RuntimeAbort
 	// `__str_byte_at_or_panic`: the index is not a byte position of this string — negative, or at or past
 	// `length@8`. The method's whole contract is that the CALLER has already bounds-checked
 	// (`stdlib/String.maxon:281-283` is `try byteAt(index) otherwise panic(…)`), so an out-of-range index is
-	// a stdlib bug and the process ends. ⭐ It gets its own number rather than borrowing `userPanic` for the
-	// reason `stringSliceInvalidRange` above got one: the reference's abort is spelled `panic(…)` in stdlib
-	// SOURCE, but shv2 answers it from a synthesized runtime function, and an abort that reports another
-	// abort's number is this file's founding bug. Same CLASS of answer as the oracle (the process ends),
-	// not the same message.
+	// a stdlib bug and the process ends. ⭐ It gets its own number rather than riding the user-panic route for
+	// the reason `stringSliceInvalidRange` above got one: the reference's abort is spelled `panic(…)` in stdlib
+	// SOURCE, but shv2 answers it from a SYNTHESIZED runtime function, which has no source line and no message
+	// to bake — so it cannot reach `osPanic` and reports its own number instead. Same CLASS of answer as the
+	// oracle (the process ends), not the same message.
 	stringByteAtOutOfRange = 80
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
@@ -93,12 +100,38 @@ export enum RuntimeAbort
 	// with three independent producers; this enum owns shv2's, and its job here is to stop a second shv2
 	// abort taking the number.
 	leakDetected = 101
-	// A user `panic(…)`, emitted by `LowerMaxonToStd.lowerPanicAbort` — the conventional 128 + SIGABRT.
-	// It is the one abort a SOURCE PROGRAM asks for rather than the runtime deciding, which is exactly
-	// why it belongs in this space and not beside its emitter: it ends the process the same way, so a
-	// later abort must not be allowed to take 134.
-	userPanic = 134
 end 'RuntimeAbort'
+
+// ⭐ **THE PANIC LINE ITSELF — `panic at <file>:<line>: <text>\n` — WRITTEN ONCE.**
+//
+// Two producers bake a message for `mrt_panic`, and they must not each spell the format: the P1.9
+// range-check guard (`InsertRangeChecks.rangeCheckMessage`) and a user `panic("…")`
+// (`Parser.parsePanicStatement`). They differ ONLY in the TEXT after the colon — "Range check failed:
+// …" against whatever the program wrote — so the location prefix, the separator and the trailing
+// newline are this function's, and neither caller restates them. `mrt_panic` prints the result
+// verbatim, then `Stack trace:` and its frames, then exits `PanicExitCode`.
+//
+// ⚠ **THE NEWLINE IS PART OF THE MESSAGE, NOT OF THE RUNTIME.** `mrt_panic` writes the cstr it is
+// handed and starts the backtrace header immediately after; a caller that omitted it would run the
+// message into `Stack trace:` on one line.
+export function panicMessageLine(filePath FilePath, line LineNumber, text String) returns ByteArray
+	return "panic at {baseName(filePath.toString())}:{line}: {text}\n".toByteArray()
+end 'panicMessageLine'
+
+// The base file name (last path segment) of a source path, for the runtime panic message — the shv2
+// equivalent of the bootstrap's `Path.GetFileName`. Strips both separators so a Windows temp path and a
+// POSIX one both reduce to `<name>.test`.
+function baseName(path String) returns String
+	return lastSegment(lastSegment(path, separator: "/"), separator: "\\")
+end 'baseName'
+
+function lastSegment(s String, separator String) returns String
+	let parts = s.split(separator)
+	if parts.isEmpty() 'whole'
+		return s
+	end 'whole'
+	return try parts.get(parts.count() - 1) otherwise s
+end 'lastSegment'
 
 // ⭐ **ABORT THE PROCESS FROM A BUILDER-BUILT RUNTIME FUNCTION — THE ONE HOME OF THE ABORT SHAPE.**
 // `osExit` DIVERGES, so the block it sits in never falls out; but a block must still carry a

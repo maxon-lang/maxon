@@ -20,7 +20,7 @@
 // Ops that SYNTHESIZE new values (the 1:N desugarings) must not collide with the parser's ids: they
 // mint from `nextValueId`, a per-function counter seeded at the parser's dense id count (the next free
 // id). P1.4b's error lowering is the first to synthesize — the `+1` flag re-encode, the zero flag of a
-// throwing return, the `panicAbort` exit code — and the Std passes downstream grow their dense columns
+// throwing return — and the Std passes downstream grow their dense columns
 // to fit, so a monotonic counter is all that is needed (no per-function object).
 //
 // THIN for maxon-shv2 M1: lowers exactly the `return 42` slice —
@@ -630,7 +630,7 @@ type MaxonToStdLowering
 	var rangeSites as RangeSiteWalk
 	// The next fresh ValueId for the CURRENT function — a plain counter (no per-function object) seeded at
 	// the parser's dense id count, i.e. the next free id. The ops this pass synthesizes (the flag re-encode
-	// of a throw, the zero flag of a normal throwing return, the exit code a `panicAbort` expands into) mint
+	// of a throw, the zero flag of a normal throwing return) mint
 	// from here so their ids collide with none the parser minted; the Std passes downstream grow their dense
 	// columns to fit the highest id, so a monotonic counter is all that is required.
 	var nextValueId as ValueId
@@ -862,8 +862,7 @@ type MaxonToStdLowering
 			stringLiteral(result, bytes) then self.lowerStringLiteral(result, bytes: bytes, dstBlock: dstBlock)
 			// A throwing call: like `call`, plus the second `errorFlag` result (the Std `tryCall`).
 			tryCall(result, errorFlag, callee, args, argLabels, _, _, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
-			// `panicAbort` expands into `osExit` (the message is validated but not printed — see the helper).
-			panicAbort then self.lowerPanicAbort(dstBlock)
+			panicAbort(message) then self.lowerPanicAbort(message, dstBlock: dstBlock)
 			// A function VALUE — a `.text` code address (P1.5-A1). Lowers to the Std `funcAddr`, the
 			// `.text` twin of `globalAddr`; a PLAIN function routes through its `__fnref_` env-thunk so the
 			// materialized address has the uniform `(userargs, env) -> R` shape (P1.5-A2b-2).
@@ -2441,29 +2440,23 @@ type MaxonToStdLowering
 		return safeDivisor
 	end 'emitOrredSafeDivisor'
 
-	// `panic("message")` — exit the process with a non-zero code. The parser emitted a dead return
-	// terminator after this op, so the block stays well-formed though control never reaches it.
+	// ⭐ **`panic("message")` — THE SAME `mrt_panic` ROUTE THE RANGE-CHECK GUARD TAKES**, reached with the
+	// message the parser already baked. The parser emitted a dead return terminator after this op, so the
+	// block stays well-formed though control never reaches it.
 	//
-	// ⚠ **THE MESSAGE IS NOT PRINTED at this rung.** It is parsed and type-checked (it must be a `String`),
-	// but printing it would need `osWriteStdout` — and hence the Win64 `WriteFile` import wired even for a
-	// panic-only program that never uses `print`, plus a stderr write path. No Wave-1 case ever REACHES a
-	// panic (every one is a `default panic(…)` on a matched value or an `otherwise panic(…)` on a
-	// succeeding call), so the message text is untested; printing it is a follow-up. The exit — via
-	// `ExitProcess`, always imported by the entry stub — is what makes a reached panic observably a
-	// failure, and that IS emitted.
+	// ⭐ **THIS DOOR WAS THE ONLY THING MISSING.** It used to materialize `RuntimeAbort.userPanic` (134) and
+	// `osExit`, dropping the message on the floor — while `InsertRangeChecks`, one tier along, was already
+	// interning a `panic at <file>:<line>: …` blob and calling a runtime that prints it, walks the stack and
+	// exits 1. Two panics, one runtime, and a user's was wired to neither the printer nor the exit code the
+	// language promises. The mechanism needed no work; the wire did.
 	//
-	// ⚠ **THE NUMBER IS `RuntimeAbort`'s, NOT THIS FILE'S.** It used to be a local `UserPanicExitCode =
-	// 134` beside a comment calling it "a conventional abort code", which is precisely how
-	// `ArrayRuntime` and `GtRuntime` came to spend 70 twice: a number picked against whatever list the
-	// picker could see from where they stood. A user panic and a runtime abort end the same process the
-	// same way, so they share one space, and that space now has one declaration site whose duplicate
-	// check is the language's (E3031). Bound to a local first for the same E9001 reason
-	// `emitRuntimeAbort` documents.
-	function lowerPanicAbort(dstBlock IrBlock)
-		let panicCode = RuntimeAbort.userPanic.rawValue as ParsedInt
-		let code = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(code, value: panicCode, valueType: StdType.i64))
-		self.stdModule.appendOp(dstBlock, op: StdOp.osExit(code))
+	// The blob is registered through `registerStringBlob` — the same immortal, NUL-terminated, DEDUPED BY
+	// BYTES `.rdata` path a String literal's payload takes. Deduping by bytes is what makes two panics with
+	// distinct messages take distinct labels (and two with identical text at identical positions correctly
+	// share one), so `osPanic` can never print a neighbour's message.
+	function lowerPanicAbort(message ByteArray, dstBlock IrBlock)
+		let blobLabel = registerStringBlob(self.globalData, bytes: message)
+		self.stdModule.appendOp(dstBlock, op: StdOp.osPanic(blobLabel.toByteArray()))
 	end 'lowerPanicAbort'
 
 	// A fresh `const 0` (i64) — the ZERO ERROR FLAG (always a GPR value) needs one, at several sites, so

@@ -128,14 +128,9 @@ not the suite is green over it. That is the CLAUDE.md rule and neither you nor t
 What may be shelved is a case needing a *feature that does not exist yet* (§4) — never a case that is
 broken.
 
-**The agent runs ONLY its own spec's filter — the full battery is YOURS** (§8), and one tick must run it
-exactly once. It is not the agent's job to pre-verify what you are about to verify anyway: a second full
-suite, a second `x64-linux` lane and a second wasm lane cost minutes per tick and tell you nothing you
-were not about to measure. What you cannot derive yourself is its reasoning about **blast radius**, so
-that is what its report owes you instead.
-
-**Then verify its claims yourself.** Its report is a lead: run the full battery once and read its diff.
-This project's history is full of agent findings that measurement refuted.
+**The agent runs ONLY its own spec's filter — the full suite is YOURS** (§8), and one tick runs it
+exactly once. Do not re-derive its diagnosis, re-audit its diff, or re-run what it ran. **The suite is
+the check.** If it is green, the tick is good.
 
 ## 4. Shelving a case — the only legal way, and it has a floor
 
@@ -177,30 +172,20 @@ tick was found at 3257/1 with eight unminted fragments and one stale one sitting
 git status --short specs-shv2/fragments/     # every one of these gets committed with the spec
 ```
 
-## 6. The other two agents — a judgement call, and here is the call
+## 6. ⛔ NO REVIEW AGENT, NO LADDER READ. This process is EXPEDITED ON PURPOSE.
 
-*(The implementer of §3 is not a judgement call — it is the default. These two are.)*
+**Do not spawn `maxon-rung-reviewer`. Do not run `run_scale_test`. Do not run other targets. Do not
+re-audit the implementer's diff.** A tick is: copy, run, fix, full suite, land.
 
-**REVIEWER — run `maxon-rung-reviewer` whenever compiler source changed. Every time.** The loop is
-unattended, and delegating §3 makes this *structurally* right rather than merely advisable: the reviewer
-is now never the agent that wrote the code, which is the rule `/rung` states and could not enforce when
-the coordinator implemented inline. *Duplication is its top priority* — precisely what a long tail of
-small similar gaps generates, one near-miss helper at a time. Skip it only for a **zero-code-change
-port** (the spec copied in and passed as-is), where there is nothing to review. **Verify its claims
-yourself before acting on them** — an agent's finding is a lead, and this project's own history is full
-of refuted ones.
+**This is a deliberate division of labour, not a gap** (user, 2026-08-01). The long tail of `/specs` is
+hundreds of files, and a tick that costs an hour of ceremony never gets through them. **The thorough
+passes are REAL and they are SOMEBODY ELSE'S** — `/rung` for anything with a contract, `/code-review`
+and the multi-agent cloud review over the branch, and the optimizer's ladder when a rung touches a pass.
+Those run against this code later, with more eyes than a tick can afford.
 
-**OPTIMIZER — the LADDER READ is yours and routine; the AGENT is TRIGGERED.**
-- **Always, if compiler source changed:** `run_scale_test repoRoot=...` (~17 s) and *read* it. It is an
-  instrument with no verdict — you are looking for a ratio that bends across a DOUBLING ladder (×2
-  linear, ×4 quadratic), in allocations/bytes (exact — any movement is real) and CPU (noise band of a
-  few percent). Do **not** pass `note:` for a routine tick; a log of every tick is a log nobody reads.
-  Pass it only when the row is a datapoint, and then say WHY it moved.
-- **Spawn `maxon-rung-optimizer` only on a trigger:** a bent curve you cannot explain; or a change that
-  added a pass, a whole-program walk, a new collection the compiler indexes by, or a per-site scan. A
-  leaf parser/typecheck fix trips none of these and does not get an agent.
-
-Both agents work in this same checkout — tell them so, and tell the reviewer to report, not edit.
+⇒ **What this loop owes is a green suite and an honest spec file. Nothing more.** The one thing it must
+never do is manufacture that green by testing less — hence §2's count and §4's floor, which cost a grep
+apiece and are the only guards that survive.
 
 ## 7. The exit for a spec that is really a rung
 

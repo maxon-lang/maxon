@@ -550,7 +550,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 	match op 'k'
 		const to funcAddr then break 'k'
 		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
-		osRangePanic to osFreePages then break 'k'
+		osPanic to osFreePages then break 'k'
 		// The jump table makes no indirect call — it branches on an integer index.
 		switch then break 'k'
 		// ⭐ A witness call IS an indirect call on wasm (P1.7a slice 2b-iv-B): its callee is a funcref-table
@@ -885,7 +885,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		// dead slot with no def — record no valtype (an unread i64-fill local, like any DCE gap). A value one
 		// takes the function value's own return width (f64 for a float-returning value, else i64).
 		callIndirect(resultId, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
-		osRangePanic to osFreePages then break 'def'
+		osPanic to osFreePages then break 'def'
 		// The jump table defines no value — a terminator has no result valtype to record.
 		switch then break 'def'
 		// A witness call defines exactly what a `callIndirect` does — the op-carried `resultType`'s width, and
@@ -1141,7 +1141,7 @@ type WasmFuncEmitter
 			// mirror of the `call`/`tryCall` arms above (P1.5-A1).
 			funcAddr then panic("emitStraightLineTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitStraightLineTerminator: a `callIndirect` is a value-producing body op, never a terminator")
-			osRangePanic to osFreePages then panic("emitStraightLineTerminator: an `osRangePanic` is a body op, never a terminator")
+			osPanic to osFreePages then panic("emitStraightLineTerminator: an `osPanic` is a body op, never a terminator")
 			// A jump table has multiple successors, so `decideDispatcher` always routes its function through
 			// the loop+br_table dispatcher — it never reaches the straight-line terminator path.
 			switch then panic("emitStraightLineTerminator: a `switch` (multiway) block always takes the dispatcher path, never straight-line")
@@ -1218,7 +1218,7 @@ type WasmFuncEmitter
 			// mirror of the `call`/`tryCall` arms above (P1.5-A1).
 			funcAddr then panic("emitDispatcherTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitDispatcherTerminator: a `callIndirect` is a value-producing body op, never a terminator")
-			osRangePanic to osFreePages then panic("emitDispatcherTerminator: an `osRangePanic` is a body op, never a terminator")
+			osPanic to osFreePages then panic("emitDispatcherTerminator: an `osPanic` is a body op, never a terminator")
 			witnessCall then panic("emitDispatcherTerminator: a `witnessCall` is a value-producing body op, never a terminator")
 			witnessTryCall then panic("emitDispatcherTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
 			osPipeCreate to osWriteFile then panic("emitDispatcherTerminator: a P1.5 IOCP op is a body op, never a terminator")
@@ -1265,7 +1265,7 @@ type WasmFuncEmitter
 			// call THROUGH one (`callIndirect`). See the two emitters for the funcref-table lowering.
 			funcAddr(resultId, funcName) then self.emitFuncAddr(resultId, funcName: funcName)
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask)
-			osRangePanic then self.emitRangePanic()
+			osPanic then self.emitPanic()
 			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
 			// only — its QueryPerformanceCounter clock and Windows `Sleep` have no wasm primitive, and a
 			// `sleep` program is spec-gated to x64-windows, so neither op ever reaches the wasm emitter.
@@ -1864,7 +1864,7 @@ type WasmFuncEmitter
 		self.body.unreachable()
 	end 'emitOsExit'
 
-	// `osRangePanic` (a P1.9 range-check violation) on wasm — a BARE `exit-with-code`, no message or
+	// `osPanic` (a P1.9 range-check violation) on wasm — a BARE `exit-with-code`, no message or
 	// backtrace, over the one `PanicExitCode` every backend's panic path reads
 	// (`Targets/Shared/PanicExitCode`).
 	//
@@ -1880,11 +1880,11 @@ type WasmFuncEmitter
 	// `whitelisted-stdlib-keeps-its-range-check` is `targets: wasm32-wasi`, reaches this exit under
 	// wasmtime, and asserts the code is 1 (an unguarded build returns 7). So `PanicExitCode` is pinned by
 	// EXECUTION here, not merely by compiling. Same shape as `emitOsExit` with a constant status.
-	function emitRangePanic()
+	function emitPanic()
 		self.body.i32Const(PanicExitCode as Imm32)
 		self.body.call(ExitImportFuncIdx)
 		self.body.unreachable()
-	end 'emitRangePanic'
+	end 'emitPanic'
 
 	// ----------------------------------------------------------------------
 	// Memory band: top-level `var` globals (globalAddr / loadIndirect / storeIndirect)
@@ -2387,7 +2387,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		// invariant `tryCall`/`osExit` assert (P1.5-A1).
 		funcAddr then panic("decideDispatcher: a `funcAddr` is a value-producing body op, never a terminator")
 		callIndirect then panic("decideDispatcher: a `callIndirect` is a value-producing body op, never a terminator")
-		osRangePanic to osFreePages then panic("decideDispatcher: an `osRangePanic` is a body op, never a terminator")
+		osPanic to osFreePages then panic("decideDispatcher: an `osPanic` is a body op, never a terminator")
 		// A jump table is a multiway branch — its function MUST use the loop+br_table dispatcher. (A `match`
 		// always creates several arm-body blocks, so `blockCount > 1` catches this first; the arm is here so
 		// a hypothetical single-block switch still forces the dispatcher rather than a straight-line path.)
