@@ -194,12 +194,19 @@ end 'emitHtMask'
 // The fused `callMem [hashWitness + 24]`; for an int key the slot holds `int.hash`, so this is
 // `key & 0xFFFFFFFF`.
 //
-// ⚠ **BOTH PER-ARGUMENT ABI MASKS ARE 0, AND THAT IS A CLAIM ABOUT THE KEY TYPES `Map` ADMITS.** The receiver
-// is the sole argument, and every `Hashable` conformer declares its `hash` receiver as a whole machine word:
-// `int.hash` an i64, `String.hash`/`Character.hash` the record POINTER, a user type its box pointer. The two
-// conformers that would break it are unreachable — `bool` declares no `Hashable` at all
-// (`isIntrinsicBuiltinConformance`), and `float.hash`'s f64 receiver cannot be a key because E2062 refuses a
-// float TYPE ARGUMENT outright, so `Map with float` does not exist.
+// ⚠ **BOTH PER-ARGUMENT ABI MASKS ARE 0, AND WHAT MAKES THAT TRUE IS THE KEY-TYPE WHITELIST.** The receiver is
+// the sole argument, and it is the KEY's type — so this is a claim about which key types a `Map`/`Set` admits,
+// and the load-bearing guard is the one that decides that. MEASURED: `Map with (ExitCode, Integer)` and
+// `Set with ExitCode` are BOTH refused (E2015). That matters more than it looks: `ExitCode` is the only
+// narrow (`u32`) type a Maxon signature can name, so it is the one type whose `hash` receiver would be a wasm
+// `i32` against a call site declaring `i64` — a `wasm trap: indirect call type mismatch`, exactly the defect
+// `LowerMaxonToStd.witnessFormalTypes` records for a user interface. Every key type the whitelist DOES admit
+// declares its `hash` receiver as a whole machine word: `int.hash` an i64, `String.hash`/`Character.hash` the
+// record POINTER, a user type its box pointer. (`float.hash`'s f64 receiver is out for a second, independent
+// reason — E2062 refuses a float TYPE ARGUMENT — and `bool` declares no `Hashable` at all.)
+//
+// ⇒ **WIDENING THE WHITELIST TO `ExitCode` MUST COME BACK HERE**, and would be silent on x64 and a run-time
+// trap on wasm if it did not.
 function emitHtKeyHash(module StdModule, block IrBlock, hashWitness ValueId, key ValueId, ids ValueMinter) returns ValueId
 	let hash = ids.mint()
 	module.appendOp(block, op: StdOp.witnessCall(hash, witnessAddr: hashWitness, methodIndex: HtWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), argFloatMask: 0, argNarrowMask: 0, args: argsOf(key)))
@@ -214,7 +221,8 @@ end 'emitHtKeyHash'
 // is checked exactly on wasm — see that function. `bool` here, a machine word for the `hash` above.
 //
 // Both per-argument ABI masks are 0 for `emitHtKeyHash`'s reason, one argument further: `equals(self, other
-// Self)` takes the key type TWICE, and the key types `Map` admits are all whole machine words.
+// Self)` takes the key type TWICE, and the key types the whitelist admits are all whole machine words. The
+// same "widening the whitelist must come back here" obligation applies to this site.
 function emitHtKeyEquals(module StdModule, block IrBlock, eqWitness ValueId, a ValueId, b ValueId, ids ValueMinter) returns ValueId
 	let equal = ids.mint()
 	module.appendOp(block, op: StdOp.witnessCall(equal, witnessAddr: eqWitness, methodIndex: HtWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), argFloatMask: 0, argNarrowMask: 0, args: twoArgs(a, second: b)))

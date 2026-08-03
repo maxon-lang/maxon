@@ -425,6 +425,40 @@ export type IrInterface
 	end 'create'
 end 'IrInterface'
 
+// ⭐ **WHICH `uses` PARAMETER A WRITTEN TYPE NAME IN A REQUIREMENT IS, IF ANY** — the ONE scan of an
+// interface's associated-type list, and the reason it is here rather than at either caller. Two very
+// different questions turn out to be this one:
+//
+//   • `ConformanceCheck.boundTypeName` needs the POSITION, to pick the argument a conformance bound there;
+//   • `LowerMaxonToStd.witnessFormalType` needs only WHETHER, because an associated type is the one formal
+//     whose ABI width the interface cannot state (a conformer binds it) and the actual has to stand in.
+//
+// A linear scan and not a map, for the reason `boundTypeName` gave when it owned the scan: an interface
+// declares a handful of `uses` names at most, so the scan is cheaper than building a map would be and it
+// allocates nothing. Absence is a THROW rather than a sentinel index or a `count()`-means-no answer, both of
+// which are exactly the shape this project forbids; `MapError.keyNotFound` is the absence channel every other
+// registry here already speaks.
+export function associatedTypePositionOf(associatedTypeNames ByteArrayArray, name ByteArray) returns ElementCount throws MapError
+	for i in 0 upto associatedTypeNames.count() 'eachAssociatedType'
+		if (try associatedTypeNames.get(i) otherwise panic("associatedTypePositionOf: associatedTypeNames.get OOB at {i} below count {associatedTypeNames.count()}")).equals(name) 'isAssociatedType'
+			return i
+		end 'isAssociatedType'
+	end 'eachAssociatedType'
+	throw MapError.keyNotFound
+end 'associatedTypePositionOf'
+
+// Whether `name` names one of `iface`'s OWN `uses` parameters — the MEMBERSHIP shape of the scan above, for
+// the caller that needs only that a conformer binds this position and can never know to what
+// (`LowerMaxonToStd.witnessFormalType`). It is not a second scan: it is the same one, asked without its
+// answer, and keeping it here is what stops a second `.equals` walk of `associatedTypeNames` from appearing
+// in a third file.
+export function namesAssociatedType(iface IrInterface, name ByteArray) returns bool
+	if let position = try associatedTypePositionOf(iface.associatedTypeNames, name: name) 'aConformerBindsIt'
+		return true
+	end 'aConformerBindsIt'
+	return false
+end 'namesAssociatedType'
+
 export typealias IrInterfaceMap = Map with (ByteArray, IrInterface)
 
 // The per-file artifact contribution form — declaration order, folded into the
@@ -544,6 +578,14 @@ export type WitnessDispatchTarget
 	// reservation cannot disagree with itself, where the lowering re-deriving the count whole-program could.
 	export let witnessValue as ValueId
 	export let methodIndex as WitnessMethodIndex
+	// ⭐ **WHICH INTERFACE'S SLOT LIST `methodIndex` INDEXES** — the declaration-order handle
+	// (`ProgramSignatures.interfaceNamesInDeclOrder`), which is the CONSTRAINT's or the EXISTENTIAL's interface
+	// and NOT `declaringInterfaceName` below. The two differ under `extends`: a dispatch of `Base`'s method
+	// through `where T is Derived` reads slot `k` of DERIVED's table while the requirement it binds against
+	// is Base's. `methodIndex` is meaningless without it, so the pair travels together onto the emitted op —
+	// it is what lets `LowerMaxonToStd` recover the requirement's declared FORMALS and derive the call's
+	// per-argument ABI widths from the CALLEE's signature rather than from the actuals.
+	export let interfaceDeclIndex as InterfaceDeclIndex
 	export let returnTypeName as ByteArray
 	export let paramTypeNames as ByteArrayArray
 	// ⭐ **THE AUTHORITATIVE `name:` LABEL VOCABULARY OF THIS DISPATCH (P1.7a slice 2b-vi)** — parallel to
@@ -574,8 +616,8 @@ export type WitnessDispatchTarget
 	// the last field of the requirement the two R10c rejects need and the only one nothing else reads.
 	export let isStatic as bool
 
-	export static function create(witnessValue ValueId, methodIndex WitnessMethodIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
-		return Self{witnessValue: witnessValue, methodIndex: methodIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames, declaringInterfaceName: declaringInterfaceName, isStatic: isStatic}
+	export static function create(witnessValue ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
+		return Self{witnessValue: witnessValue, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames, declaringInterfaceName: declaringInterfaceName, isStatic: isStatic}
 	end 'create'
 end 'WitnessDispatchTarget'
 
@@ -946,6 +988,45 @@ export function builtinInterface(name ByteArray) returns InterfaceLookup
 		error then return InterfaceLookup.found(markerInterface(ErrorInterfaceName))
 	end 'which'
 end 'builtinInterface'
+
+// ⭐⭐ **EVERY SYNTHESIZED PROTOCOL'S NAME, IN ONE FIXED ORDER** — the prefix
+// `ProgramSignatures.interfaceNamesInDeclOrder` is seeded with, so that a `witnessDispatch` through
+// `Equatable` or `Comparable` has the same kind of scalar handle a dispatch through a user interface has. A
+// synthesized protocol is in NO registry (`lookupInterface` answers for it before consulting the map), so
+// without this it would have no position at all — MEASURED: `where T is Comparable` with `T = bool` panicked
+// at the parser's own guard, which is the guard doing its job.
+//
+// ⚠ **IT IS A DERIVED ROSTER, AND A ROSTER GOES STALE THE DAY A KIND IS ADDED.** The count is asserted
+// against `BuiltinInterfaceCount` below and every entry is asserted to CLASSIFY as a builtin, so a renamed
+// constant and a miscounted list both fail loudly at the first `ProgramSignatures.create` rather than
+// silently giving one protocol no index. What neither can catch is a new `BuiltinInterfaceKind` arm whose
+// name is not added here — which is why the count is a named constant beside the enum rather than a literal.
+export function builtinInterfaceNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(StringableInterfaceName)
+	names.push(FormattedStringableInterfaceName)
+	names.push(HashableInterfaceName)
+	names.push(EquatableInterfaceName)
+	names.push(ComparableInterfaceName)
+	names.push(CloneableInterfaceName)
+	names.push(ErrorInterfaceName)
+
+	if names.count() != BuiltinInterfaceCount 'rosterDrifted'
+		panic("builtinInterfaceNames: the roster lists {names.count()} protocols but `BuiltinInterfaceCount` says {BuiltinInterfaceCount} — a `BuiltinInterfaceKind` arm was added without giving its name a position, and a dispatch through it would have no handle")
+	end 'rosterDrifted'
+
+	for rosterName in names 'eachName'
+		if builtinInterfaceKind(rosterName) == BuiltinInterfaceKind.notABuiltin 'notAProtocolAfterAll'
+			panic("builtinInterfaceNames: '{String.from(rosterName)}' is in the roster but `builtinInterfaceKind` does not classify it as a protocol — the two read the same name constants and have drifted")
+		end 'notAProtocolAfterAll'
+	end 'eachName'
+
+	return names
+end 'builtinInterfaceNames'
+
+// One per `BuiltinInterfaceKind` arm EXCEPT `notABuiltin`, which classifies rather than names. Stated here so
+// `builtinInterfaceNames` can check itself against the enum instead of against a literal.
+export let BuiltinInterfaceCount = 7
 
 // ⭐⭐ **WHICH SYNTHESIZED PROTOCOL A NAME IS, AS A SCALAR — the CLASSIFICATION half of `builtinInterface`
 // (P1.7a-existentials slice 1).**

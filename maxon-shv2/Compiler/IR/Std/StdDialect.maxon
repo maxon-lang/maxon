@@ -97,7 +97,41 @@ export function stdTypeIsNarrow(t StdType) returns bool
 	return stdTypeStorageBytes(t) < stdTypeStorageBytes(StdType.i64)
 end 'stdTypeIsNarrow'
 
-// A per-ARGUMENT float bitmask carried by `callIndirect` — bit k set iff argument k is a float (an f64,
+// ⭐⭐ **THE INVERSE OF THE TWO PREDICATES ABOVE — the canonical `StdType` of an ABI class, so that a backend
+// which holds only the two BITS can rejoin the one type→valtype door instead of restating it.**
+// `stdTypeOfAbiClass(stdTypeIsFloat(t), isNarrow: stdTypeIsNarrow(t))` is `t`'s class representative, and
+// every `StdType` in a class maps to one valtype by construction, so
+// `wasmValTypeOf(stdTypeOfAbiClass(…)) == wasmValTypeOf(t)` for all eleven of them.
+//
+// ⚠ **IT EXISTS BECAUSE THE TWO ENDS OF A `call_indirect` WERE TWO STATEMENTS OF ONE RULE.** The CALLEE's
+// wasm functype is derived from its declared `StdType`s (`funcParamValTypes` → `wasmValTypeOf`); the CALL
+// SITE's was derived from the op's `ArgFloatMask`/`ArgNarrowMask` by a second, independent float/narrow →
+// valtype table. The two agreed across every `StdType`, and nothing made them: an edit to either would have
+// diverged silently into a run-time `indirect call type mismatch`, which is the one failure mode neither end
+// can report at compile time. Now the bits become a type here and the type becomes a valtype there.
+//
+// The f32 row is unreachable (nothing in the tree constructs a `StdType.f32`, see `StdToWasm.requireF64`)
+// and is still written: the two bits are orthogonal, and a silent `else` on the float half would be exactly
+// the fallthrough this project forbids.
+export function stdTypeOfAbiClass(isFloat bool, isNarrow bool) returns StdType
+	if isFloat 'floatClass'
+		return StdType.f32 if isNarrow else StdType.f64
+	end 'floatClass'
+
+	return StdType.u32 if isNarrow else StdType.i64
+end 'stdTypeOfAbiClass'
+
+// ⭐ **THE SHAPE BOTH PER-ARGUMENT ABI MASKS ARE** — one bit per argument, low `argCount` bits meaningful,
+// stored in a full machine word, ceiling `MaxAbiArgs`. It exists so that `argMaskBit`'s signature can be TRUE
+// of either mask: `ArgFloatMask` and `ArgNarrowMask` below say WHICH FACT a mask carries, and a reader that
+// takes "an ABI mask" should say that rather than naming one of them and being handed the other. The three
+// are spelled over the same range rather than derived from this one because a typealias of a typealias is
+// not a type this language admits (E2003) — so what makes them one shape is this paragraph and the identical
+// bound, and a change to the bound belongs to all three at once.
+export typealias ArgAbiMask = int(0 to u64.max)
+
+// A per-ARGUMENT float bitmask carried by the three indirect-call ops (`callIndirect`, `witnessCall`,
+// `witnessTryCall`) — bit k set iff argument k is a float (an f64,
 // which a backend routes to a float argument register / declares as an f64 wasm valtype rather than a GPR
 // i64). Only the low arg-count bits are meaningful; the storage is a full machine word. A SCALAR, so the op
 // stays at one managed field (P1.5 #78 — see `callIndirect`).
@@ -162,7 +196,7 @@ export let MaxAbiArgs = 64 as ParamCount
 // register file (`ArgFloatMask`) and per-argument width (`ArgNarrowMask`) through. ONE reader for both,
 // rather than a named predicate each: the masks are the same shape over the same argument list and differ
 // only in which fact they carry, so the bit test is stated once and the CALL SITE names the mask it means.
-export function argMaskBit(mask ArgFloatMask, argIndex ParamCount) returns bool
+export function argMaskBit(mask ArgAbiMask, argIndex ParamCount) returns bool
 	return ((mask shr argIndex) and 1) != 0
 end 'argMaskBit'
 

@@ -1173,7 +1173,15 @@ export union MaxonOp
 	// `where` constraints, which only the parser holds. So the parser stamps the interface method's
 	// throwing-ness here and `checkCalls` reads it, keeping the rule ("a throwing call needs `try`") in ONE
 	// place for both call shapes rather than making the witness form the exception.
-	witnessDispatch(result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
+	// ⭐⭐ **`interfaceDeclIndex` SAYS WHOSE SLOT LIST `methodIndex` INDEXES, AND WITHOUT IT THE PAIR MEANS
+	// NOTHING.** It is the declaration-order handle `ProgramSignatures.interfaceNamesInDeclOrder` mints — a plain
+	// scalar, deliberately: a NAME would be a second MANAGED field beside `args` (which the bootstrap's
+	// synthesized destructor mishandles) and an interner `TypeNameId` would be the first one ever to ride an
+	// op, which `ParseStaging.remapArtifact` does not walk. It carries no WIDTH and no `MaxonType`, so the
+	// tier invariant holds: it is an IDENTITY, and `LowerMaxonToStd` does the width collapse, recovering the
+	// requirement's declared FORMALS from it so a call's per-argument ABI comes from the CALLEE's signature
+	// rather than from whatever the actuals happen to be typed.
+	witnessDispatch(result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
 	// --- P1.7a slice 2b-v: the THROWING witness dispatch ---
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `witnessDispatch`, per the band-append invariant: a
@@ -1189,7 +1197,7 @@ export union MaxonOp
 	//
 	// ⚠ Its `args` is bound only in a SMALL match (`lowerWitnessTryDispatch`), never in `lowerOp`'s big one —
 	// `witnessDispatch`'s trap, unchanged.
-	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
+	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
 	// --- A3n: a panic whose message is RENDERED AT RUN TIME ---
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `witnessTryDispatch`, per the band-append invariant: a

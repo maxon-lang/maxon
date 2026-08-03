@@ -9,8 +9,8 @@
 // the parameter: its DIRECT calls `triple(10)` must stay `(userargs) -> R` (unchurned — and on wasm a
 // direct `call`'s arity is checked too). So `functionRef(triple)` materializes the address of a thunk
 // `__fnref_triple(n, __env)` whose signature IS `(userargs, env) -> R` — it ignores `__env` and forwards to
-// `triple`. On wasm the `call_indirect` functype is arg-count-derived, so the table element's own functype
-// must match; on register targets the extra arg would be harmless, but ONE thunk keeps a single
+// `triple`. On wasm the `call_indirect` functype is SIGNATURE-derived (P1.5 #78: per-argument register file,
+// and since `argNarrowMask` per-argument WIDTH), so the table element's own functype must match exactly; on register targets the extra arg would be harmless, but ONE thunk keeps a single
 // cross-target lowering. This is v1's `__fnref_` design (LowerMaxonToStd.maxon:11408) — its knowledge, not
 // its cost curve: the thunk is synthesized once per referenced plain function, not per reference.
 //
@@ -144,10 +144,12 @@ end 'installFnRefThunks'
 // ⭐ EACH USER PARAMETER TAKES THE TARGET'S REAL TYPE, the trailing `__env` an i64 (P1.5 #78). A FLOAT
 // parameter is an f64: the thunk must capture it from a float argument register and forward it to the
 // target — which reads it from a float register too — so a float user param typed i64 here would forward
-// a GPR value into the target's XMM parameter (a cross-register-file move). Everything else (int / named /
-// String / struct-pointer) is an i64 machine word exactly as before. The caller's indirect-call argument
-// routing uses this same float classification (the `argFloatMask` the `callIndirect` carries), so caller, thunk, and target
-// agree on every argument's register file. The forwarded call is a DIRECT `call` to the target by name (a
+// a GPR value into the target's XMM parameter (a cross-register-file move). A `bool` is an `i1` and an
+// `ExitCode` a `u32` for the WIDTH half of the same argument: see the loop's own header for the trap that
+// cost. Everything else — int, String, a struct pointer, a type parameter — is an i64 machine word, and a
+// `named` residue PANICS rather than being widened to one. The caller's indirect-call argument routing is
+// derived from the identical `maxonTypeToStdType` collapse (the `argFloatMask`/`argNarrowMask` the
+// `callIndirect` carries), so caller, thunk and target agree on every argument's register file AND width. The forwarded call is a DIRECT `call` to the target by name (a
 // wasm `call`, arity- and type-checked against the target's OWN `(userargs) -> R` functype), so the thunk
 // is precisely what bridges the uniform indirect signature to the target's direct one.
 function synthesizeFnRefThunk(module StdModule, project Project, targetName ByteArray)

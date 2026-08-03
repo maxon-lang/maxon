@@ -78,8 +78,9 @@ typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
 // that signature. Keyed by the SIGNATURE, not the arg count, because a function value now carries floats
 // (P1.5 #78): `(f64) -> f64` and `(i64) -> i64` are distinct functypes of the same arity, and
 // `call_indirect` runtime-checks the funcref against exactly the declared type. Each call's signature comes
-// from the `resultType`/`argFloatMask` the Std op carries (a float → f64, everything else — incl. the
-// trailing uniform-ABI env pointer — i64), plus the trailing i64 error flag for a THROWING one. THREE ops
+// from the `resultType`/`argFloatMask`/`argNarrowMask` the Std op carries (`indirectCallArgValType` reads
+// the two per-argument bits; the trailing uniform-ABI env pointer is a plain i64), plus the trailing i64
+// error flag for a THROWING one. THREE ops
 // populate it: `callIndirect`, and the two fused witness calls (P1.7a slice 2b-iv-B), whose callee is a
 // table index loaded out of a witness-table method slot. Built once per module — pre-interned into the
 // WasmModuleBuilder before body emission — and read by each emitter, which recovers the index by the SAME
@@ -725,15 +726,14 @@ end 'indirectCallParamValTypes'
 // `wasm trap: indirect call type mismatch` under wasmtime (MEASURED). Both halves close on this one fact,
 // which is why the fix is a mask and never was a wider guard.
 //
-// ⚠ Nothing constructs an `f32` (see `requireF64`), so the `(1,1)` row is the encoding's natural reading rather
-// than a reachable path; it is spelled out because the two bits are orthogonal and a silent `else` on the float
-// half would be the fallthrough this project forbids.
+// ⚠ **IT STATES NO valtype TABLE OF ITS OWN, AND THAT IS THE POINT.** The two bits become the ABI class's
+// canonical `StdType` (`stdTypeOfAbiClass`) and that goes through `wasmValTypeOf` — the SAME door the CALLEE's
+// own functype comes through (`funcParamValTypes`). It used to answer with a second float/narrow → valtype
+// table written out here: the two agreed for all eleven `StdType`s and nothing made them, so an edit to
+// either would have diverged silently into a run-time `indirect call type mismatch` — the one failure mode
+// neither end of a `call_indirect` can report at compile time.
 function indirectCallArgValType(argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, argIndex ParamCount) returns WasmValType
-	if argMaskBit(argFloatMask, argIndex: argIndex) 'floatArg'
-		return WasmValType.f32 if argMaskBit(argNarrowMask, argIndex: argIndex) else WasmValType.f64
-	end 'floatArg'
-
-	return WasmValType.i32 if argMaskBit(argNarrowMask, argIndex: argIndex) else WasmValType.i64
+	return wasmValTypeOf(stdTypeOfAbiClass(argMaskBit(argFloatMask, argIndex: argIndex), isNarrow: argMaskBit(argNarrowMask, argIndex: argIndex)))
 end 'indirectCallArgValType'
 
 // ==========================================================================
@@ -1977,7 +1977,7 @@ type WasmFuncEmitter
 	end 'emitFuncAddr'
 
 	// A call THROUGH a function value (`callIndirect`, P1.5-A1): `resultId = calleeReg(args…)`. Marshal each
-	// argument coerced to ITS wasm valtype (a float → f64, else i64 — the function-value parameter width),
+	// argument coerced to ITS wasm valtype (`indirectCallArgValType`, off the op's two per-argument ABI bits),
 	// push the table index (the function value, wrapped from its i64 flow-width down to the i32
 	// `call_indirect` operand), then `call_indirect (type $sig) (table 0)`. `$sig` is the pre-interned
 	// `(paramTypes) -> resultType` functype for THIS signature, which wasm checks at runtime against the

@@ -39,6 +39,11 @@
 // not run, or left a residue) — not a user error — so it panics loudly rather
 // than silently guessing a width. GROWS at Chunk C to resolve `named` widths
 // through the registry once that registry exists.
+// An interface's transitive witness-slot list, held per interface for the module being lowered — keyed by
+// the declaration-order handle a `witnessDispatch` names its interface by, so the memo is asked with the
+// very scalar the op carries and needs no name round-trip. See `MaxonToStdLowering.witnessSlotsOf`.
+typealias WitnessSlotListMemo = Map with (InterfaceDeclIndex, CollectedInterfaceMethodArray)
+
 export function maxonTypeToStdType(ref MaxonType) returns StdType
 	// The two arms TypeResolution was supposed to eliminate. They are a PIPELINE-ORDERING bug
 	// (that pass did not run, or left a residue) rather than a user error, and they are checked
@@ -273,10 +278,13 @@ end 'maxonCmpOpToStdPred'
 // alias-resolved (TypeResolution re-syncs the signatures and builds the shapes), so `maxonTypeToStdType`
 // cannot meet a residual `named` from either.
 // Bit k set iff DECLARED parameter k is a float — the per-argument register-file mask an indirect call
-// carries, read off the callee's signature rather than off the argument values (see
-// `MaxonToStdLowering.argFloatMaskOf` for why the two sources are not interchangeable). The trailing
-// uniform-ABI env pointer is an i64 no parameter describes, so the walk over the parameters alone leaves its
-// bit clear, which is exactly right.
+// carries, read off the CALLEE's declared types and never off the argument values. Both indirect shapes come
+// through here now: a function value hands it the declared `FunctionShape`'s parameters
+// (`appendCallIndirect`), a witness call the requirement's declared formals (`witnessFormalTypes`), and the
+// second of those used to read the actuals instead — see that function for the wasm trap it cost. The
+// trailing uniform-ABI env pointer is an i64 no parameter describes, so the walk over the parameters alone
+// leaves its bit clear, which is exactly right; a witness call's RECEIVER is covered the same way, by the
+// `integer` its formal list is seeded with.
 function paramFloatMask(paramTypes MaxonTypeArray) returns ArgFloatMask
 	var mask = 0 as ArgFloatMask
 	for k in 0 upto paramTypes.count() 'eachParam'
@@ -594,6 +602,9 @@ type MaxonToStdLowering
 	// the synthesized builtins) to read an interface's method LIST when building a witness table blob (one slot
 	// per method, in decl order). Fully merged by lowering time, so a cross-file interface resolves here.
 	var interfaces as IrInterfaceMap
+	// The transitive witness-slot list of each interface a dispatch in this module goes through, built on
+	// first use — see `witnessSlotsOf` for why it is memoized rather than re-walked per dispatch op.
+	var witnessSlotMemo as WitnessSlotListMemo
 	// The witness tables already emitted (P1.7a slice 2a) — the dedup gate for the blob's relocations + root.
 	var emittedWitnessTables as WitnessTableLabelSet
 	// Which member `checkConformance` accepted for each witness slot (R10), from `project.witnessSlotImpls` —
@@ -699,7 +710,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1855,61 +1866,142 @@ type MaxonToStdLowering
 		return functionTypeNameOf(self.functionTypes, nameId: nameId)
 	end 'functionValueName'
 
-	// Bit k set iff argument k is a float (an f64, routed to a float argument register) — the per-argument
-	// register-file mask a `witnessCall` carries, computed from the already-typed arg VALUES (`stdTypeOf`).
+	// ⭐⭐ **THE DECLARED FORMALS OF THE REQUIREMENT A WITNESS CALL DISPATCHES — the one fact the call's whole
+	// ABI is derived from, and the twin of `indirectCalleeParamTypes` for the other indirect shape.** A direct
+	// call reads its callee's parameter types from `funcSignatures`; a function VALUE reads them off the
+	// declared `FunctionShape`; a witness call has no callee to ask at all — under dictionary passing the
+	// shared body binds against the INTERFACE and the concrete impl is chosen at run time. So it asks the
+	// interface, through the identity the op carries (`interfaceDeclIndex` + `methodIndex`), and every
+	// conformer's impl is forced by E3016 to declare exactly these types.
 	//
-	// ⚠ **AN INDIRECT CALL USES `paramFloatMask` INSTEAD, off the DECLARED parameter types, and the two are
-	// not interchangeable.** A witness dispatch's arguments are all values the parser minted and typed, so
-	// the column can answer for every one. An indirect call's may include a value THIS PASS minted — the
-	// `siToFp` result of an int→float widening — which is not in `valueTags` at all (that column is the
-	// parser's, aliased from the memoized artifact, and appending to it would corrupt the memo for every
-	// later compile). Asking the declared types is also the more direct answer: the mask exists to say which
-	// register file the CALLEE reads each argument from, which is a property of its signature.
-	function argFloatMaskOf(args ValueIdArray) returns ArgFloatMask
-		var mask = 0 as ArgFloatMask
-		for k in 0 upto args.count() 'eachArg'
-			let arg = try args.get(k) otherwise panic("argFloatMaskOf: args.get OOB at {k}")
-			if stdTypeIsFloat(self.stdTypeOf(arg)) 'floatArg'
-				mask = mask or (1 shl k)
-			end 'floatArg'
-		end 'eachArg'
-		return mask
-	end 'argFloatMaskOf'
+	// ⚠⚠ **IT USED TO READ THE ARGUMENT VALUES, AND THAT WAS A SILENT MISCOMPILE ON wasm.** `stdTypeOf` reads
+	// the parser's `valueTags` column, which is NOT resolved: `parseTypeReference` mints a bare `named` for the
+	// IDENTIFIER `ExitCode`, and `named` collapses to `i64` — while the conformer's impl declares its parameter
+	// from the RESOLVED signature, where `exitCode` collapses to `u32`, a wasm `i32`. MEASURED on four shapes
+	// (an existential receiver, a constrained type parameter, a throwing requirement, and an `ExitCode`-typed
+	// parameter binding as the actual): every one compiled clean, answered correctly on x64-windows, and died
+	// `wasm trap: indirect call type mismatch`, `call_indirect` declaring `(param i64 i64)` against
+	// `(param i64 i32)`. The discriminator that named the cause: the SAME requirement and the SAME conformer
+	// WORK when the actual is an interface method's result, one of the few expressions the parser does tag
+	// `exitCode` — so the answer depended on which SPELLING of "this is an `ExitCode`" the actual happened to
+	// carry, not on the formal. `bool` was safe only by an accident of syntax (it is a KEYWORD, so
+	// `parseTypeReference` tags it directly, and `typealias Flag = bool` is E2015), which is why `ExitCode` is
+	// the only narrow type that ever reached this and why 3,958 green tests could not see it.
+	//
+	// ⚠ **AND REPAIRING THE TAG WOULD NOT HAVE BEEN ENOUGH.** An actual's type can genuinely differ from its
+	// formal's: `g.greet(loud: 5)` at a `greet(loud bool)` requirement compiles in shv2 AND in the bootstrap
+	// (the E3005 a DIRECT call gets is missing for a witness dispatch). Arg-derived widths are unsound while
+	// that check is absent; formal-derived widths are sound regardless, because `pushIndirectArgs` then coerces
+	// the actual to the width the callee declares — which is exactly what the register targets already do by
+	// moving a whole 64-bit register.
+	//
+	// ⭐ **POSITION 0 IS THE RECEIVER, WHICH NO FORMAL DESCRIBES, AND IT IS A MACHINE WORD BY AN ENFORCED
+	// RULE.** A constrained type parameter is an opaque 8-byte slot — E2062 REFUSES a float type argument in so
+	// many words — and an existential's receiver is its fat pointer's value half, a pointer. So the receiver
+	// takes `integer`, and the formals fill positions 1…n.
+	//
+	// ⭐ **A FORMAL WHOSE NAME IS NOT A BUILTIN TYPE IS A MACHINE WORD — EXCEPT AN ASSOCIATED TYPE, WHICH IS
+	// THE ONE THING THE INTERFACE GENUINELY CANNOT SAY.** The formals are RENDERED SOURCE NAMES, so
+	// `builtinTypeNameTag` — the one table every door that holds a type only as its spelling asks — answers
+	// `named` for `Self`, for a user type, for a type parameter, for a RANGED ALIAS and for an ASSOCIATED TYPE
+	// alike. Four of those five are machine words under dictionary passing and are taken as such.
+	//
+	// The fifth is not, and it is not because a CONFORMER binds it rather than the interface:
+	// `interface Taker uses Element` with `take(e Element)`, implemented by `implements Taker with float`,
+	// declares its impl parameter `f64`, and the spelling `Element` can never say so. MEASURED: that program
+	// answers 40 on BOTH targets, and a rule that called every `named` formal a machine word would have declared
+	// the argument an i64 against an f64 callee and regressed it into a trap. An associated type is recognised
+	// EXACTLY — by membership of the declaring interface's own `uses` list (`associatedTypeNames`) — and only
+	// there does the ACTUAL stand in, because there it is the only witness that exists.
+	//
+	// ⚠ **THE TEST HAS TO BE THAT EXACT, AND A LOOSER ONE WAS MEASURED WRONG.** Falling back to the actual for
+	// every `named` formal re-opens this defect one type over: `take(n Integer)` given `true` declares the
+	// argument an i32 against an i64 callee — x64 answered 21 and wasm trapped. The interface DOES name that
+	// type; only an associated type leaves it unnamed.
+	//
+	// (⚠ Two conformers binding one associated type to types of DIFFERENT ABI class would make the shared
+	// body's single `call_indirect` type wrong for one of them whichever source is asked — a hole in associated
+	// types under the uniform witness ABI, not in this derivation, and neither opened nor closed by it.)
+	function witnessFormalTypes(args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns MaxonTypeArray
+		let slot = self.witnessRequirementSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		let formals = slot.method.paramTypeNames
 
-	// ⭐⭐ **BIT K SET IFF ARGUMENT K OCCUPIES LESS THAN THE MACHINE WORD — the WIDTH half of the pair, and it
-	// comes from the SAME `stdTypeOf` column its float twin does, deliberately.** The mask a call carries must
-	// describe the CALLEE's declared parameter list, because wasm's `call_indirect` type-checks the declared
-	// functype against the target's own EXACTLY. A witness call has no callee to ask — under dictionary passing
-	// the shared body binds against the INTERFACE and the concrete impl is chosen at run time — so the
-	// already-typed argument VALUES stand in for the formals. That substitution is sound position by position:
+		var types = MaxonTypeArray.create()
+		types.push(MaxonType.integer)
+
+		for j in 0 upto formals.count() 'eachFormal'
+			let formalName = try formals.get(j) otherwise panic("witnessFormalTypes: formals.get OOB at {j} below count {formals.count()}")
+			let actual = try args.get(j + 1) otherwise panic("witnessFormalTypes: formal {j} has no actual — `Parser.slottedWitnessArgs` supplies one actual per formal plus the receiver at 0, so `args` holding {args.count()} for {formals.count()} formals means the arity check did not run")
+			types.push(self.witnessFormalType(formalName, slot: slot, actual: actual))
+		end 'eachFormal'
+
+		return types
+	end 'witnessFormalTypes'
+
+	// The declared type of ONE witness formal — the per-position half of the rule its caller's header states, so
+	// the precedence (a builtin NAME, then an associated type, then a machine word) is written down once.
+	function witnessFormalType(formalName ByteArray, slot CollectedInterfaceMethod, actual ValueId) returns MaxonType
+		let declaredTag = builtinTypeNameTag(formalName)
+		if declaredTag != ValueTypeTag.named 'theInterfaceNamesABuiltinType'
+			return maxonTypeOfTag(declaredTag, nameId: UnnamedTypeId)
+		end 'theInterfaceNamesABuiltinType'
+
+		if self.isAssociatedTypeOf(formalName, interfaceName: slot.sourceInterfaceName) 'aConformerBindsIt'
+			return maxonTypeOfTag(self.valueTagOf(actual), nameId: UnnamedTypeId)
+		end 'aConformerBindsIt'
+
+		return MaxonType.integer
+	end 'witnessFormalType'
+
+	// Is `name` one of `interfaceName`'s OWN `uses` parameters? Asked of the interface that DECLARED the
+	// requirement rather than of the one whose table is being indexed: under `extends`, a projected requirement
+	// spells its PARENT's associated types, which the child's `uses` list does not contain.
+	function isAssociatedTypeOf(name ByteArray, interfaceName ByteArray) returns bool
+		match lookupInterface(self.interfaces, name: interfaceName) 'declaringInterface'
+			// A requirement whose declaring interface does not resolve could not have been projected into a slot
+			// list at all, so this arm is unreachable for a slot that came out of that walk — and it names no
+			// associated type either way.
+			notFound then return false
+			found(iface) then return namesAssociatedType(iface, name: name)
+		end 'declaringInterface'
+	end 'isAssociatedTypeOf'
+
+	// Witness slot `methodIndex` of the interface `interfaceDeclIndex` names — the same `(interface, slot)` pair
+	// `Parser.appendInterfaceDispatchCandidates` numbered the dispatch by, so the requirement this recovers is
+	// the one the call was resolved against.
+	function witnessRequirementSlot(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns CollectedInterfaceMethod
+		let slots = self.witnessSlotsOf(interfaceDeclIndex)
+		return try slots.get(methodIndex) otherwise panic("witnessRequirementSlot: slot {methodIndex} is outside the {slots.count()} witness slots of interface {interfaceDeclIndex} — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")
+	end 'witnessRequirementSlot'
+
+	// `interfaceDeclIndex`'s transitive witness slot list, built on the FIRST dispatch through that interface
+	// and held after — the lowering's twin of `Parser.witnessSlotsOf`, memoized for the reason stated there.
 	//
-	//   • the RECEIVER (`args[0]`) and every `Self`-typed formal carry the conformer's OWN type, which is
-	//     exactly what its impl declares for `self` / `other Self` — and the parser proves the actual there
-	//     really is a `Self` (`requireGenuineSelfArgs` for a constrained type parameter, `requireWitnessSelfArgs`
-	//     refusing the existential case outright, since two values held at one interface may differ);
-	//   • a `float` formal is reached only by an actual the parser has already widened to an f64
-	//     (`Parser.floatWidenedWitnessArgs`), which is what lets the float mask read the value at all;
-	//   • every other formal is the interface's declared type, which E3016 forces every conformer to declare
-	//     identically.
-	//
-	// ⚠ **THE LAST CLAUSE ASSUMES THE ACTUAL WAS TYPED AGAINST THE FORMAL, AND THE `.method()` DISPATCH FORM
-	// DOES NOT CHECK THAT.** `g.greet(loud: 5)` at a `greet(loud bool)` requirement compiles in shv2 AND in the
-	// bootstrap (MEASURED): its actual is an i64 where the impl declares an i1, so both masks describe that
-	// position as a machine word and wasm's type check rejects the call. That is a MISSING FRONT-END CHECK and
-	// not a mask defect — it is the same hole `Parser.requireOperatorWitness`'s header records as a measured
-	// silent WRONG ANSWER on x64 for the OPERATOR form (a receiver pointer marshalled into an `int` formal), it
-	// breaks the FLOAT mask identically and did so before this width mask existed, and no per-argument bit can
-	// close it. Both masks inherit exactly that one soundness condition — no better and no worse.
-	function argNarrowMaskOf(args ValueIdArray) returns ArgNarrowMask
-		var mask = 0 as ArgNarrowMask
-		for k in 0 upto args.count() 'eachArg'
-			let arg = try args.get(k) otherwise panic("argNarrowMaskOf: args.get OOB at {k}")
-			if stdTypeIsNarrow(self.stdTypeOf(arg)) 'narrowArg'
-				mask = mask or (1 shl k)
-			end 'narrowArg'
-		end 'eachArg'
-		return mask
-	end 'argNarrowMaskOf'
+	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION.** `interfaceWitnessSlots` walks the `extends` graph and builds a
+	// fresh array plus a visited set on every call; asked once per dispatch OP that is the measured quadratic
+	// the parser's memo exists to remove, ported into a second pass. Keyed the same way, on the same property:
+	// the list is a pure function of the interface, which is fixed before any body is parsed.
+	// The interface a dispatch's handle names, resolved through the ONE rule — `lookupInterface`, over the
+	// merged registry this pass holds, so a synthesized protocol answers before any user declaration exactly as
+	// it does at every other reader. `ProgramSignatures` stores the NAME rather than the declaration precisely
+	// so this resolution happens here (see `interfaceNamesInDeclOrder`).
+	function interfaceAtDeclIndex(interfaceDeclIndex InterfaceDeclIndex) returns IrInterface
+		let name = self.signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
+		match lookupInterface(self.interfaces, name: name) 'resolve'
+			found(iface) then return iface
+			notFound then panic("interfaceAtDeclIndex: interface '{String.from(name)}' holds position {interfaceDeclIndex} in the signature index but resolves to nothing in the merged registry — a witness dispatch was numbered against a declaration the merge did not carry")
+		end 'resolve'
+	end 'interfaceAtDeclIndex'
+
+	function witnessSlotsOf(interfaceDeclIndex InterfaceDeclIndex) returns CollectedInterfaceMethodArray
+		if let memoized = try self.witnessSlotMemo.get(interfaceDeclIndex) 'alreadyWalked'
+			return memoized
+		end 'alreadyWalked'
+
+		let slots = interfaceWitnessSlots(self.interfaces, iface: self.interfaceAtDeclIndex(interfaceDeclIndex))
+		self.witnessSlotMemo.upsert(interfaceDeclIndex, value: slots)
+		return slots
+	end 'witnessSlotsOf'
 
 	// ⭐ **LOWER A CONSTRAINED-TYPE-PARAMETER DISPATCH TO THE FUSED `StdOp.witnessCall` (P1.7a slice 2a).** The
 	// witness ADDRESS is the enclosing (generic) function's own threaded witness parameter for this constraint
@@ -1920,7 +2012,7 @@ type MaxonToStdLowering
 	// corruption `lowerIndirectCall` documents).
 	function lowerWitnessDispatch(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'w'
-			witnessDispatch(result, args, witness, methodIndex, isVoid, _) then self.appendWitnessCall(dstBlock, result: result, args: args, witness: witness, methodIndex: methodIndex, isVoid: isVoid)
+			witnessDispatch(result, args, witness, methodIndex, interfaceDeclIndex, isVoid, _) then self.appendWitnessCall(dstBlock, result: result, args: args, witness: witness, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, isVoid: isVoid)
 			default panic("lowerWitnessDispatch: expected a `witnessDispatch` op, got a different MaxonOp variant — `lowerOp` routes only `witnessDispatch` here")
 		end 'w'
 	end 'lowerWitnessDispatch'
@@ -1932,7 +2024,7 @@ type MaxonToStdLowering
 	// `lowerOp`'s big one (the tail-slot-`Array` decref corruption `lowerIndirectCall` documents).
 	function lowerWitnessTryDispatch(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'w'
-			witnessTryDispatch(result, errorFlag, args, witness, methodIndex, isVoid) then self.appendWitnessTryCall(dstBlock, result: result, errorFlag: errorFlag, args: args, witness: witness, methodIndex: methodIndex, isVoid: isVoid)
+			witnessTryDispatch(result, errorFlag, args, witness, methodIndex, interfaceDeclIndex, isVoid) then self.appendWitnessTryCall(dstBlock, result: result, errorFlag: errorFlag, args: args, witness: witness, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, isVoid: isVoid)
 			default panic("lowerWitnessTryDispatch: expected a `witnessTryDispatch` op, got a different MaxonOp variant — `lowerOp` routes only `witnessTryDispatch` here")
 		end 'w'
 	end 'lowerWitnessTryDispatch'
@@ -1948,23 +2040,34 @@ type MaxonToStdLowering
 	// receiver, whose witness is the fat pointer's own second half, with no index to name. The parser resolves
 	// its own reservation now (`Parser.witnessParamValueId`), so both receiver kinds arrive here already
 	// pointing at a value and this is the single Std emission for them.
-	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, isVoid bool)
+	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), argNarrowMask: self.argNarrowMaskOf(args), args: args))
+		let declaredParams = self.witnessFormalTypes(args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: args))
 	end 'appendWitnessCall'
 
 	// The throwing twin of `appendWitnessCall`, sharing its result typing (`witnessCallResultType`) verbatim —
 	// the two differ ONLY in which Std op they append and in the second result the throwing one defines. A
 	// helper for the same reason its twin is one: `lowerWitnessTryDispatch`'s arm must hand `args` to a
 	// function and touch it no other way.
-	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, isVoid bool)
+	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), argNarrowMask: self.argNarrowMaskOf(args), args: args))
+		let declaredParams = self.witnessFormalTypes(args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: args))
 	end 'appendWitnessTryCall'
 
 	// The Std return type a witness call CAPTURES its result in — the result value's own type, or `void` for
 	// an `isVoid` method (no result register to capture). Shared by both witness lowerings so the throwing and
 	// non-throwing forms cannot drift on how a result is typed.
+	//
+	// ⚠ **IT READS THE VALUE COLUMN WHERE `witnessFormalTypes` MAY NOT, AND THE ASYMMETRY IS EARNED.** A
+	// witness call's ARGUMENT widths cannot come from `stdTypeOf` — the parser tags an `ExitCode` ANNOTATION
+	// as a bare `named` and that collapses to the wrong width (see there). The RESULT is the opposite case:
+	// its value was minted by `Parser.interfaceReturnMaxonType`, which asks `TypeResolution.builtinTypeNameTag`
+	// about the requirement's rendered return type, so the tag on it IS the interface's own answer already —
+	// this is the formals rule arriving by a shorter road, not a second source. That is the W1 fix, and
+	// `where-clauses.witness-exitcode-return-high` pins it. If that door ever stops asking the table, this
+	// reads the wrong width and the fix belongs THERE, not here.
 	function witnessCallResultType(result ValueId, isVoid bool) returns StdReturnType
 		return StdReturnType.void if isVoid else StdReturnType.value(self.stdTypeOf(result))
 	end 'witnessCallResultType'

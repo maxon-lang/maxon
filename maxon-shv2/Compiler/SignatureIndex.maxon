@@ -3553,6 +3553,26 @@ end 'InterfaceDeclSite'
 
 export typealias InterfaceDeclSiteArray = Array with InterfaceDeclSite
 
+// ⭐ **AN INTERFACE'S POSITION IN DECLARATION ORDER — the whole-program, interner-FREE handle a
+// `witnessDispatch` names its requirement's interface by.** See `ProgramSignatures.interfaceNamesInDeclOrder`
+// for why an index and not a name or an interner id. The range is the machine word rather than a tight
+// bound because nothing caps how many interfaces a program declares.
+export typealias InterfaceDeclIndex = int(0 to u64.max)
+
+export typealias InterfaceDeclIndexMap = Map with (ByteArray, InterfaceDeclIndex)
+
+// The name → position map for the SYNTHESIZED protocols, built from the very roster that seeds the ordered
+// list so the two halves of the relation are one act here exactly as they are in
+// `recordInterfaceDeclaration`. `ProgramSignatures.create` is the only caller.
+function builtinInterfaceDeclIndices() returns InterfaceDeclIndexMap
+	var indices = InterfaceDeclIndexMap.create()
+	let names = builtinInterfaceNames()
+	for i in 0 upto names.count() 'eachProtocol'
+		indices.upsert(try names.get(i) otherwise panic("builtinInterfaceDeclIndices: builtinInterfaceNames().get OOB at {i} below count {names.count()}"), value: i)
+	end 'eachProtocol'
+	return indices
+end 'builtinInterfaceDeclIndices'
+
 // ⭐ **THE ONE PLACE A `throws` CLAUSE ENTERS A CONTENT HASH.** Both arms are marked, because both are
 // possible in the positions this is asked from and a hash that mixed nothing for `none` would let a
 // requirement LOSE its `throws` without any reader's memo moving — and the ABI a witness dispatch picks is
@@ -4032,6 +4052,37 @@ export type ProgramSignatures
 	// the declaration the real parse would build, field for field. What is deliberately narrow is the HASH:
 	// only the fields a PARSE copies ride it (see `recordInterfaceDeclaration`).
 	var interfaces as IrInterfaceMap
+	// ⭐⭐ **EVERY INTERFACE NAME THE PROGRAM CAN DISPATCH THROUGH, IN ONE FIXED ORDER — the interner-FREE
+	// scalar handle a witness dispatch names its requirement's interface by.** A `witnessDispatch` op has to
+	// say WHICH interface's slot list its `methodIndex` indexes, so that `LowerMaxonToStd` can recover the
+	// requirement's declared FORMALS and collapse them to ABI widths where that collapse belongs. It may not
+	// say so with a NAME (a `ByteArray` would be a second MANAGED field on the variant, which the bootstrap's
+	// synthesized destructor mishandles) and it may not say so with a `TypeNameId`: no `MaxonOp` carries an
+	// interner id today, because `ParseStaging.remapArtifact` does not walk the op stream — every id in the
+	// module rides the per-value NAME COLUMN precisely so the merge can move it. An INDEX into this list needs
+	// no remap: it is whole-program by construction, fixed before the first body is parsed, and identical for
+	// every file.
+	//
+	// ⭐ **IT STORES NAMES, NOT DECLARATIONS, SO THAT AN INDEX RESOLVES BY THE ONE RULE.** `lookupInterface`
+	// answers a SYNTHESIZED protocol before it consults any registry, and a user may declare a type of the same
+	// name; storing the declaration here would let an index resolve to the user's while every other reader saw
+	// the builtin's. A name goes through `lookupInterface` at the asking end instead — with whichever map that
+	// caller's PHASE holds, which is exactly the split `IrInterface.lookupInterface`'s header defends.
+	//
+	// The SYNTHESIZED protocols occupy the fixed prefix (`builtinInterfaceNames`) because they are in no
+	// registry and would otherwise have no position; `recordInterfaceDeclaration` — the SINGLE writer of
+	// `interfaces` above — appends every declared name after them, in the same act, so the two cannot come to
+	// hold different sets. A name already present keeps its index, so an index always names one interface.
+	//
+	// ⚠ **A PARSE MEMO CANNOT SERVE A STALE INDEX.** `ParseMemo.keyHash` mixes `ProgramSignatures.hash`, and
+	// `recordInterfaceDeclaration` folds every interface into that hash — so an added, removed or reordered
+	// interface re-parses every file, and no cached op can survive holding an index into a list it no longer
+	// describes.
+	var interfaceNamesInDeclOrder as ByteArrayArray
+	// Name → its position in `interfaceNamesInDeclOrder`. The reverse direction of the one relation above,
+	// filled in the same single act; the parser asks it once per resolved dispatch target, so the answer is
+	// O(1) rather than a scan of every declared interface per dispatch.
+	var interfaceDeclIndexByName as InterfaceDeclIndexMap
 	// ⭐ Where each `interface` declaration sits, as the tolerant sweep passed it (R8) — see
 	// `InterfaceDeclSite` for why a POSITION and not the declaration. Read once, by
 	// `foldInterfaceDeclarations`, after the last file folds.
@@ -4285,7 +4336,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -5024,6 +5075,15 @@ export type ProgramSignatures
 	export function recordInterfaceDeclaration(iface IrInterface)
 		self.interfaces.upsert(iface.name, value: iface)
 
+		// The declaration-order handle, minted in the SAME act as the map entry (see
+		// `interfaceNamesInDeclOrder`). A name already present keeps its index — a redeclaration, and a user
+		// type sharing a synthesized protocol's name, both resolve through `lookupInterface` at the asking
+		// end, so one position per NAME is exactly right and nothing here has to decide which wins.
+		if not self.interfaceDeclIndexByName.contains(iface.name) 'firstDeclarationOfThisName'
+			self.interfaceDeclIndexByName.upsert(iface.name, value: self.interfaceNamesInDeclOrder.count())
+			self.interfaceNamesInDeclOrder.push(iface.name)
+		end 'firstDeclarationOfThisName'
+
 		self.hash = mix(mixBytes(mix(self.hash, value: DeclShapeInterface), bytes: iface.name), value: iface.associatedTypeNames.count())
 		for parentName in iface.extendsInterfaces 'eachParent'
 			self.hash = mixBytes(mix(self.hash, value: DeclShapeInterfaceParent), bytes: parentName)
@@ -5052,6 +5112,22 @@ export type ProgramSignatures
 	export function interfaceMap() returns IrInterfaceMap
 		return self.interfaces
 	end 'interfaceMap'
+
+	// The declaration-order handle for an interface a dispatch resolved against — see `interfaceNamesInDeclOrder`
+	// for what a `witnessDispatch` needs it for. It throws rather than returning a sentinel: every caller
+	// holds an `IrInterface` that came OUT of `interfaceMap()`, so a miss is a compiler defect and the caller
+	// says so.
+	export function interfaceDeclIndexOf(name ByteArray) returns InterfaceDeclIndex throws MapError
+		return try self.interfaceDeclIndexByName.get(name)
+	end 'interfaceDeclIndexOf'
+
+	// The interface NAME an `interfaceDeclIndexOf` handle names — the read half, asked by `LowerMaxonToStd`
+	// once per witness call. It answers a NAME and not a declaration for the reason
+	// `interfaceNamesInDeclOrder` gives: the caller resolves it through `lookupInterface`, with the map its
+	// own phase holds, so there is one rule for what a name denotes and this is not a second one.
+	export function interfaceNameAtDeclIndex(index InterfaceDeclIndex) returns ByteArray
+		return try self.interfaceNamesInDeclOrder.get(index) otherwise panic("ProgramSignatures.interfaceNameAtDeclIndex: index {index} is outside the {self.interfaceNamesInDeclOrder.count()} interface positions — a witness dispatch is naming an interface this program does not have, which means the op outlived the signature index it was numbered against")
+	end 'interfaceNameAtDeclIndex'
 
 	// Add one declared struct type to the index AND fold it into the hash. The one write, for
 	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree

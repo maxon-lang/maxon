@@ -1043,3 +1043,152 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: interface-dispatch.narrow-formal-through-existential -->
+⭐⭐ **A REQUIREMENT WHOSE FORMAL IS NARROWER THAN THE MACHINE WORD, DISPATCHED THROUGH AN
+EXISTENTIAL.** `ExitCode` is a `u32`, so `Runner.take` is emitted with a wasm `i32` parameter while
+every other argument of every indirect call is an `i64`; `call_indirect` type-checks the call site's
+declared functype against the target's own EXACTLY, so the two must agree on that one argument or the
+call cannot be made at all. Returns `31`.
+**MEASURED RED before the fix, on this exact program: exit `31` on x64-windows, and
+`wasm trap: indirect call type mismatch` under wasmtime — `call_indirect` declaring
+`(param i64 i64) (result i64)` against `$Runner.take (param i64 i32) (result i64)`.**
+⚠ **`ExitCode` IS THE ONLY NARROW TYPE THAT CAN REACH THIS, WHICH IS WHY 3,958 GREEN TESTS COULD NOT
+SEE IT.** `bool` is the other narrow Std type, and it is safe by an accident of SYNTAX rather than by
+the mechanism: it is a KEYWORD, so `parseTypeReference` tags it `boolean` directly and never mints a
+`named`, and `typealias Flag = bool` is refused (E2015). `ExitCode` is an IDENTIFIER, so the same
+function mints a bare `named` for it, which collapses to `i64` — while the conformer's impl declares
+its parameter from the RESOLVED signature, where `exitCode` collapses to `u32`. Deriving the call
+site's widths from the interface's own declared formals is what makes the two ends one answer.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Exiter
+	function take(c ExitCode) returns Integer
+end 'Exiter'
+
+type Runner implements Exiter
+	let base as Integer
+
+	function take(c ExitCode) returns Integer
+		return base + c
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function useExiter(e Exiter) returns Integer
+	return e.take(11 as ExitCode)
+end 'useExiter'
+
+function main() returns ExitCode
+	return useExiter(Runner.create(20)) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: interface-dispatch.narrow-formal-through-type-parameter -->
+The CONSTRAINED-TYPE-PARAMETER twin of the case above — the other receiver kind the one witness
+dispatch mechanism serves. It is not a second repro: the two receivers reach `appendWitnessCall`
+by different routes (a threaded witness PARAMETER against a fat pointer's witness half), and a
+call-site width derived from anything the RECEIVER carries would have to answer for both.
+**MEASURED RED before the fix: `31` on x64-windows, `indirect call type mismatch` on wasm.**
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Exiter
+	function take(c ExitCode) returns Integer
+end 'Exiter'
+
+type Runner implements Exiter
+	let base as Integer
+
+	function take(c ExitCode) returns Integer
+		return base + c
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T where T is Exiter
+	let item as T
+
+	export function run() returns Integer
+		return self.item.take(11 as ExitCode)
+	end 'run'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias RunnerBox = Box with Runner
+
+function main() returns ExitCode
+	return RunnerBox.create(Runner.create(20)).run() as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: interface-dispatch.narrow-formal-through-throwing-requirement -->
+The THROWING twin, which lowers to `witnessTryCall` rather than `witnessCall` — a different Std op
+with its own argument marshalling and its own interned functype (the trailing i64 error flag makes it
+a distinct wasm type even at the same arity). The masks are built at both `appendWitnessCall` and
+`appendWitnessTryCall`, so a fix applied to one and not the other leaves exactly this program broken.
+**MEASURED RED before the fix: `31` on x64-windows, `indirect call type mismatch` on wasm.**
+See `witness-throws.md` for the throwing witness ABI itself; this case is about the ARGUMENT width.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum TakeError implements Error
+	tooSmall
+end 'TakeError'
+
+interface Exiter
+	function take(c ExitCode) returns Integer throws TakeError
+end 'Exiter'
+
+type Runner implements Exiter
+	let base as Integer
+
+	function take(c ExitCode) returns Integer throws TakeError
+		if c < 5 'small'
+			throw TakeError.tooSmall
+		end 'small'
+		return base + c
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T where T is Exiter
+	let item as T
+
+	export function run() returns Integer
+		return try self.item.take(11 as ExitCode) otherwise 55
+	end 'run'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias RunnerBox = Box with Runner
+
+function main() returns ExitCode
+	return RunnerBox.create(Runner.create(20)).run() as ExitCode
+end 'main'
+```
+```exitcode
+31
+```

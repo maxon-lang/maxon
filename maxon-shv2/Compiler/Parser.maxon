@@ -16664,7 +16664,7 @@ export type Parser
 		end 'staleRecord'
 
 		match try self.artifact.module.ops.get(opIdx) otherwise panic("commitWitnessTryDispatchRewrite: opIdx {opIdx} not in module.ops") 'w'
-			witnessDispatch(result, args, witness, methodIndex, isVoid, _) then try self.artifact.module.ops.set(opIdx, value: MaxonOp.witnessTryDispatch(result, errorFlag: flag, args: args, witness: witness, methodIndex: methodIndex, isVoid: isVoid)) otherwise panic("commitWitnessTryDispatchRewrite: module.ops.set OOB at {opIdx}")
+			witnessDispatch(result, args, witness, methodIndex, interfaceDeclIndex, isVoid, _) then try self.artifact.module.ops.set(opIdx, value: MaxonOp.witnessTryDispatch(result, errorFlag: flag, args: args, witness: witness, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, isVoid: isVoid)) otherwise panic("commitWitnessTryDispatchRewrite: module.ops.set OOB at {opIdx}")
 			default panic("commitWitnessTryDispatchRewrite: the op at {opIdx} is not a `witnessDispatch` — `rewriteLastCallToTryCall`'s match routes only that arm here")
 		end 'w'
 		return TryTarget.witness(self.lastWitnessDispatchName, throwsClause: self.lastWitnessDispatchThrows)
@@ -33603,16 +33603,15 @@ export type Parser
 		self.lastWitnessDispatchIndex = self.artifact.module.ops.count()
 		self.lastWitnessDispatchName = target.methodName
 		self.lastWitnessDispatchThrows = target.throwsClause
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(result, args: placed, witness: target.witnessValue, methodIndex: target.methodIndex, isVoid: isVoid, isThrowing: throwsClauseIsThrowing(target.throwsClause)), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(result, args: placed, witness: target.witnessValue, methodIndex: target.methodIndex, interfaceDeclIndex: target.interfaceDeclIndex, isVoid: isVoid, isThrowing: throwsClauseIsThrowing(target.throwsClause)), range: range)
 	end 'emitWitnessDispatch'
 
 	// ⭐⭐ **WIDEN AN INTEGRAL ACTUAL SUPPLIED FOR A `float` INTERFACE FORMAL — the witness twin of
 	// `LowerMaxonToStd.widenIntArgsToFloatParams`, and it was MISSING.** A DIRECT call gets this from the
 	// callee's resolved signature at the Maxon→Std boundary; a witness dispatch has no callee to look up, so
-	// its arguments reached the fused `witnessCall` exactly as written — and the op's `argFloatMask`
-	// (`LowerMaxonToStd.argFloatMaskOf`) is read off those already-typed arg VALUES, not off the interface.
-	// An `int` actual for a `float` formal therefore declared the argument a GPR/i64 while the conforming impl
-	// declares it XMM/f64:
+	// its arguments reached the fused `witnessCall` exactly as written, while the op's `argFloatMask` said what
+	// the CALLEE reads. An `int` actual for a `float` formal therefore travelled as a GPR/i64 while the
+	// conforming impl reads it from XMM/f64:
 	//
 	// **MEASURED (both on `interface Scaled { function scale(k float) returns float }` with
 	// `self.item.scale(2)`): x64 compiled clean and returned the WRONG ANSWER** — `movRegImm32 rdx, 2` ahead of
@@ -33620,9 +33619,12 @@ export type Parser
 	// trapped `indirect call type mismatch`**, since `call_indirect` checks the declared functype against the
 	// target's own exactly. The wasm half is the hole the `requireIndirectlyReachableParamsAreMachineWords`
 	// guard could not see while it existed: it refused a narrow (i32) parameter, but an f64 one is legal and
-	// only DIVERGES when the call site's float mask disagrees — which is precisely what this widening removes.
-	// (That guard is gone since `argNarrowMask` gave the call site the width the narrow half needed; the float
-	// half was never a width and is still closed HERE, by making the actual an f64 before the mask is taken.)
+	// only DIVERGES when the actual is in the wrong register file — which is precisely what this widening fixes.
+	//
+	// ⚠ **AND IT IS MORE LOAD-BEARING NOW, NOT LESS.** `LowerMaxonToStd.witnessFormalTypes` derives the masks
+	// from the INTERFACE's declared formals, so a `float` formal declares XMM whatever the actual is — which
+	// means an unwidened `int` actual would be a raw integer bit pattern moved into a float register rather than
+	// a mask disagreement. Making the VALUE an f64 is this function's job and nothing downstream can do it.
 	//
 	// It runs in `emitWitnessDispatch` because that is the ONE door both dispatch forms come through, so the
 	// `.method()` and comparison-OPERATOR forms cannot acquire different argument placement. `promoteToFloat`
@@ -33816,6 +33818,11 @@ export type Parser
 	// `witnessCandidateAlreadyCollected` for why a requirement reached twice is one requirement, not a rival.
 	function appendInterfaceDispatchCandidates(candidates WitnessDispatchTargetArray, iface IrInterface, witness ValueId, methodName ByteArray)
 		let slots = self.witnessSlotsOf(iface)
+		// The handle that makes `methodIndex` meaningful downstream — read ONCE per interface here rather than
+		// per candidate, and off the very interface whose slot list is being numbered, so the index and the
+		// numbering cannot describe two different interfaces. `iface` came out of `interfaceMap()`, which is
+		// the same store `recordInterfaceDeclaration` fills, so a miss is a compiler defect.
+		let interfaceDeclIndex = try self.signatures.interfaceDeclIndexOf(iface.name) otherwise panic("appendInterfaceDispatchCandidates: interface '{String.from(iface.name)}' resolved out of `interfaceMap()` but has no declaration-order index — the two are filled in one act by `recordInterfaceDeclaration`")
 		for slotIndex in 0 upto slots.count() 'eachSlot'
 			let slot = try slots.get(slotIndex) otherwise panic("appendInterfaceDispatchCandidates: slots.get OOB at {slotIndex} below count {slots.count()}")
 			if not slot.method.name.equals(methodName) 'otherMethod'
@@ -33826,7 +33833,7 @@ export type Parser
 				continue
 			end 'reachedByAnEarlierConstraint'
 
-			candidates.push(WitnessDispatchTarget.create(witness, methodIndex: slotIndex, returnTypeName: slot.method.returnTypeName, paramTypeNames: slot.method.paramTypeNames, throwsClause: slot.method.throwsClause, methodName: methodName, paramNames: slot.method.paramNames, declaringInterfaceName: slot.sourceInterfaceName, isStatic: slot.method.isStatic))
+			candidates.push(WitnessDispatchTarget.create(witness, methodIndex: slotIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: slot.method.returnTypeName, paramTypeNames: slot.method.paramTypeNames, throwsClause: slot.method.throwsClause, methodName: methodName, paramNames: slot.method.paramNames, declaringInterfaceName: slot.sourceInterfaceName, isStatic: slot.method.isStatic))
 		end 'eachSlot'
 	end 'appendInterfaceDispatchCandidates'
 

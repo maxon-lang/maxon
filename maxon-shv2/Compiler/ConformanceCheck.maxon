@@ -463,15 +463,13 @@ function substituteAssociatedTypes(method InterfaceMethodSig, associatedTypeName
 end 'substituteAssociatedTypes'
 
 // What ONE written type name in a requirement denotes under this conformance's bindings: the argument bound
-// at the associated type's position, or the name itself when it names no associated type. A linear scan and
-// not a map — an interface declares a handful of `uses` names at most, so the scan is cheaper than building
-// a map would be, and it needs no allocation on a path the whole corpus walks.
+// at the associated type's position, or the name itself when it names no associated type. The scan that
+// decides WHICH `uses` parameter a name is lives in `IrInterface.associatedTypePositionOf` — one statement of
+// it, because the witness-call lowering asks the same question for a different reason (see there).
 function boundTypeName(name ByteArray, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns ByteArray
-	for i in 0 upto associatedTypeNames.count() 'eachAssociatedType'
-		if (try associatedTypeNames.get(i) otherwise panic("boundTypeName: associatedTypeNames.get OOB at {i}")).equals(name) 'isAssociatedType'
-			return try boundTypeNames.get(i) otherwise panic("boundTypeName: boundTypeNames.get OOB at {i} below associated-type count {associatedTypeNames.count()} — `checkOneInterfaceConformance` reports a short argument list and returns before any requirement is collected")
-		end 'isAssociatedType'
-	end 'eachAssociatedType'
+	if let position = try associatedTypePositionOf(associatedTypeNames, name: name) 'isAssociatedType'
+		return try boundTypeNames.get(position) otherwise panic("boundTypeName: boundTypeNames.get OOB at {position} below associated-type count {associatedTypeNames.count()} — `checkOneInterfaceConformance` reports a short argument list and returns before any requirement is collected")
+	end 'isAssociatedType'
 	return name
 end 'boundTypeName'
 

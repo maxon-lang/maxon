@@ -984,8 +984,8 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 		// ⭐ A WITNESS DISPATCH IS A CALL WITH NO CALLEE NAME, so it escapes for BOTH subjects — see
 		// `directCallArgEscapes` for why the capturing-closure delegation stops here (P1.7a slice 2a).
 		// Its receiver + user args are all in `args`.
-		witnessDispatch(_, args, _, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
-		witnessTryDispatch(_, _, args, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
+		witnessDispatch(_, args, _, _, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
+		witnessTryDispatch(_, _, args, _, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
 		// A panic's message pointer is bytes handed to a diverging runtime — nothing outlives the frame,
 		// because there is no frame afterwards.
 		panicAbortValue then break 'op'
@@ -1734,7 +1734,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// that is still a plain `witnessDispatch` was written without `try`, so its flag would be
 					// dropped — the mirror of `validatePlainCall`'s E3057, keyed on the stamp the op carries
 					// because there is no callee name to key it on (P1.7a slice 2b-v).
-					witnessDispatch(_, _, _, _, _, isThrowing) then requireTriedWitnessDispatch(project, func: func, opIndex: opIdx, isThrowing: isThrowing)
+					witnessDispatch(_, _, _, _, _, _, isThrowing) then requireTriedWitnessDispatch(project, func: func, opIndex: opIdx, isThrowing: isThrowing)
 					// A `witnessTryDispatch` IS the `try` — it is produced by nothing else — so the rule above is
 					// satisfied by its existence, exactly as a `tryCall` satisfies `validatePlainCall`'s.
 					witnessTryDispatch then break 'op'
