@@ -468,11 +468,12 @@ export union ParseError implements Error
 	// is a valid but MULTI-BYTE character — `'é'`, an emoji — is not this: it is a
 	// legitimate program shv2 cannot yet compile, so it reports as `unsupported`.)
 	invalidCharacterLiteral(reason String, line LineNumber, column ColumnNumber)
-	// A `\uNNNN` escape with the wrong number of hex digits, in a character or string literal. Renders as
-	// E1004, the same `LexerInvalidEscape` code both reference compilers use for it — NOT the E2016 an
-	// unrecognized `\q` gets, because `\u` IS a recognized escape and only its digit count is wrong. It
-	// carries the FULLY-BUILT message (`invalidUnicodeEscapeError`, the one place the two variables meet).
-	invalidUnicodeEscape(message String, line LineNumber, column ColumnNumber)
+	// A `\xNN`/`\uNNNN` escape with the wrong number of hex digits, in a character or string literal.
+	// Renders as E1004, the same `LexerInvalidEscape` code both reference compilers use for it — NOT the
+	// E2016 an unrecognized `\q` gets, because `\x` and `\u` ARE recognized escapes and only their digit
+	// count is wrong. It carries the FULLY-BUILT message (`invalidDigitEscapeError`, the one place the
+	// three variables meet).
+	invalidDigitEscape(message String, line LineNumber, column ColumnNumber)
 	// A `b"…"` byte-string literal names a codepoint above 0xFF — a literal character or a `\uNNNN` escape
 	// with no single-byte Latin-1 encoding (`b"Ā"`, `b"Ā"`, an emoji). Renders as E1004, the same
 	// `LexerInvalidEscape` code v1 uses. It carries the FULLY-BUILT message (`byteStringCodepointRangeMessage`,
@@ -3992,12 +3993,12 @@ union CharLiteralValue
 	multiByte(bytes ByteArray)
 	// A `\` escape this decoder does not know.
 	badEscape(text String)
-	// A `\uNNNN` escape with the wrong number of hex digits. It carries the text the author actually
-	// wrote (`\u00`) and its OFFSET in the literal's body, and it is its OWN case rather than a
-	// `badEscape`: the escape's SHAPE is recognized, only its digit count is wrong, and the canonical
-	// corpus pins a distinct diagnostic for it (E1004, `specs/unicode-escape.md:151`) where an
-	// unrecognized `\q` is E2016.
-	badUnicodeEscape(text String, offset ByteOffset)
+	// A `\xNN`/`\uNNNN` escape with the wrong number of hex digits. It carries the text the author
+	// actually wrote (`\u00`, `\xZZ`), its OFFSET in the literal's body, and the MARKER byte after the
+	// backslash — and it is its OWN case rather than a `badEscape`: the escape's SHAPE is recognized, only
+	// its digit count is wrong, and the canonical corpus pins a distinct diagnostic for it (E1004,
+	// `specs/unicode-escape.md:151`, `specs/hex-escape.md:147`) where an unrecognized `\q` is E2016.
+	badDigitEscape(text String, offset ByteOffset, marker Byte)
 end 'CharLiteralValue'
 
 // Decode a character-literal body. Ported from maxon-selfhosted's `parseCharLiteralExpr`
@@ -4010,7 +4011,7 @@ function decodeCharLiteral(raw ByteArray) returns CharLiteralValue
 	match decoded 'd'
 		bytes(buf) then return charValueOf(buf)
 		unknownEscape(text) then return CharLiteralValue.badEscape(text)
-		badUnicodeEscape(text, offset) then return CharLiteralValue.badUnicodeEscape(text, offset: offset)
+		badDigitEscape(text, offset, marker) then return CharLiteralValue.badDigitEscape(text, offset: offset, marker: marker)
 	end 'd'
 end 'decodeCharLiteral'
 
@@ -4029,9 +4030,9 @@ end 'charValueOf'
 union DecodedLiteral
 	bytes(buf ByteArray)
 	unknownEscape(text String)
-	// A `\uNNNN` escape with the wrong number of hex digits — see `CharLiteralValue.badUnicodeEscape`
+	// A `\xNN`/`\uNNNN` escape with the wrong number of hex digits — see `CharLiteralValue.badDigitEscape`
 	// for why the digit count gets a case of its own rather than riding `unknownEscape`.
-	badUnicodeEscape(text String, offset ByteOffset)
+	badDigitEscape(text String, offset ByteOffset, marker Byte)
 end 'DecodedLiteral'
 
 // The escape sequences a quoted literal accepts, decoded to their bytes. The set is
@@ -4057,27 +4058,35 @@ function decodeEscapes(raw ByteArray) returns DecodedLiteral
 
 		let next = try raw.get(i + 1) otherwise panic("decodeEscapes: i + 1 < len just held but get({i + 1}) failed")
 
-		// ⭐ **`\uNNNN` — THE ONE ESCAPE THAT PRODUCES MORE THAN ONE BYTE**, which is why it cannot ride
-		// `escapeByte`'s table (that answers with a single byte). In a REGULAR literal the codepoint is
+		// ⭐ **`\xNN` AND `\uNNNN` — THE TWO ESCAPES THAT SPELL A VALUE IN HEX DIGITS**, and the only ones
+		// that can produce MORE THAN ONE BYTE, which is why neither can ride `escapeByte`'s table: that
+		// maps one letter to one fixed byte, with no digits to read and only a single byte to answer with.
+		// In a REGULAR literal BOTH name a CODEPOINT and both are
 		// UTF-8 ENCODED, so `"e\u0301"` is three bytes and one grapheme; in a `b"…"` literal the same
-		// escape means one LATIN-1 byte and is decoded by `appendByteStringEscape` instead. Two spellings
-		// of one syntax with genuinely different meanings — see that function's header — so they are two
-		// decoders on purpose, sharing the digit VALIDATION and the digit ARITHMETIC.
+		// escape means one LATIN-1 byte and is decoded by `appendByteStringEscape` instead.
 		//
-		// ⚠ **A MALFORMED `\uNN` IS ITS OWN DIAGNOSTIC (E1004), NOT THE UNKNOWN-ESCAPE ONE.** `\u` IS an
-		// escape this decoder recognizes — what is wrong is the DIGIT COUNT — so reporting it as
-		// *"unknown escape sequence '\u'"* named the wrong fault and quoted only two of the characters
+		// ⚠ **THE 2-DIGIT MARKER SPLITS THE SAME WAY, AND THAT WAS MEASURED RATHER THAN ASSUMED.** The
+		// bootstrap oracle prints `"\xC0"` as the two bytes `C3 80` and `'\xC0'` as the character `À` — a
+		// CODEPOINT, UTF-8 encoded, exactly as its 4-digit twin — while `b"\xC0"` is the single raw byte
+		// `C0`. Two spellings of one syntax with genuinely different meanings — see that function's header
+		// — so they stay two decoders on purpose, sharing the marker's digit COUNT, the digit VALIDATION
+		// and the digit ARITHMETIC, and nothing else.
+		//
+		// ⚠ **A MALFORMED DIGIT ESCAPE IS ITS OWN DIAGNOSTIC (E1004), NOT THE UNKNOWN-ESCAPE ONE.** `\x`
+		// and `\u` ARE escapes this decoder recognizes — what is wrong is the DIGIT COUNT — so reporting
+		// one as *"unknown escape sequence"* named the wrong fault and quoted only two of the characters
 		// the author wrote. Both reference compilers say so with a code and a message of their own
 		// (`maxon-sharp/StringUtils.cs:29`, `maxon-selfhosted/Compiler/Parser.maxon:16987`), and the
-		// canonical corpus pins that spelling (`specs/unicode-escape.md:151`).
-		if next == LowerU 'uniEscape'
-			if not hexEscapeWellFormed(raw, at: i, len: len, digitCount: UniEscapeDigits) 'malformed'
-				return DecodedLiteral.badUnicodeEscape(availableUnicodeEscapeText(raw, at: i, len: len), offset: i)
+		// canonical corpus pins both spellings (`specs/unicode-escape.md:151`, `specs/hex-escape.md:147`).
+		if next == LowerX or next == LowerU 'digitEscape'
+			let form = digitEscapeOf(next)
+			if not hexEscapeWellFormed(raw, at: i, len: len, digitCount: form.digitCount) 'malformed'
+				return DecodedLiteral.badDigitEscape(availableDigitEscapeText(raw, at: i, len: len, digitCount: form.digitCount), offset: i, marker: next)
 			end 'malformed'
-			appendUtf8Encoded(buf, codepoint: uniEscapeCodepoint(raw, at: i))
-			i = i + EscapeMarkerBytes + UniEscapeDigits
+			appendUtf8Encoded(buf, codepoint: digitEscapeValue(raw, at: i, digitCount: form.digitCount))
+			i = i + EscapeMarkerBytes + form.digitCount
 			continue
-		end 'uniEscape'
+		end 'digitEscape'
 
 		match escapeByte(next) 'esc'
 			byte(b) then buf.push(b)
@@ -4090,9 +4099,9 @@ end 'decodeEscapes'
 
 // ⭐ **UTF-8 ENCODE a codepoint into `buf`** — the inverse of `decodeUtf8Sequence`, and the dual of
 // `stdlib/Character.maxon`'s `fromCodepoint` (`:170-235`), whose four-way ladder and bit layout this is.
-// Its one caller is the `\uNNNN` escape in a regular literal, which is the only place shv2 turns a
-// codepoint back into bytes: every other source character is ALREADY UTF-8 in the file and is copied
-// through verbatim.
+// Its one caller is the digit escape (`\xNN`/`\uNNNN`) in a regular literal, which is the only place shv2
+// turns a codepoint back into bytes: every other source character is ALREADY UTF-8 in the file and is
+// copied through verbatim.
 function appendUtf8Encoded(buf ByteArray, codepoint ParsedInt)
 	if codepoint < Utf8OneByteCeiling 'ascii'
 		buf.push(codepoint as Byte)
@@ -4148,32 +4157,34 @@ function escapeByte(c Byte) returns EscapeByte
 	return EscapeByte.unknown
 end 'escapeByte'
 
-// The escape text a malformed `\uNNNN` diagnostic QUOTES: the backslash plus every byte the literal
-// actually has, up to the six a well-formed escape occupies. `'\u00'` quotes `\u00` — what the author
+// The escape text a malformed digit-escape diagnostic QUOTES: the backslash plus every byte the literal
+// actually has, up to the whole a well-formed escape occupies. `'\u00'` quotes `\u00` — what the author
 // wrote — rather than the `\uNNNN` they failed to write or the bare `\u` the old unknown-escape arm
 // showed. v1's `validateEscapes` computes exactly this window (`maxon-selfhosted/Compiler/Parser.maxon:
 // 16982-16986`) and the bootstrap quotes the same bytes (`maxon-sharp/StringUtils.cs:29`).
-function availableUnicodeEscapeText(raw ByteArray, at ByteOffset, len ByteOffset) returns String
-	let whole = EscapeMarkerBytes + UniEscapeDigits
+function availableDigitEscapeText(raw ByteArray, at ByteOffset, len ByteOffset, digitCount ByteOffset) returns String
+	let whole = EscapeMarkerBytes + digitCount
 	var available = whole
 	if len - at < whole 'truncated'
 		available = len - at
 	end 'truncated'
-	return String.from(try raw.slice(at, endIndex: at + available) otherwise panic("availableUnicodeEscapeText: [{at}, {at + available}) is inside a {len}-byte body by construction"))
-end 'availableUnicodeEscapeText'
+	return String.from(try raw.slice(at, endIndex: at + available) otherwise panic("availableDigitEscapeText: [{at}, {at + available}) is inside a {len}-byte body by construction"))
+end 'availableDigitEscapeText'
 
-// ⭐ **THE ONE MALFORMED-`\uNNNN` DIAGNOSTIC (E1004), built where its two variables meet.** `text` is
-// what the author wrote, `kind` is the literal FORM they wrote it in — and the message exists once so a
-// character literal and a string literal cannot come to word the same fault differently. Both reference
-// compilers phrase it this way and the canonical corpus pins the character-literal spelling.
+// ⭐ **THE ONE MALFORMED-DIGIT-ESCAPE DIAGNOSTIC (E1004), built where its three variables meet.** `text`
+// is what the author wrote, `kind` is the literal FORM they wrote it in, `marker` is WHICH digit escape
+// they wrote — and the message exists once so a character literal and a string literal, and `\x` and
+// `\u`, cannot come to word the same fault differently. Both reference compilers phrase it this way and
+// the canonical corpus pins both markers' spelling.
 // ⚠ The column is the LITERAL's, advanced by the escape's byte offset in the body — v1's own
 // `token.column + i` (`maxon-selfhosted/Compiler/Parser.maxon:16987`), so the SECOND escape in a string is
 // blamed where it is written rather than at the opening quote.
-function invalidUnicodeEscapeError(text String, kind String, offset ByteOffset, tok Token) returns ParseError
-	return ParseError.invalidUnicodeEscape("Invalid unicode escape '{text}': expected {UniEscapeDigits} hex digits in {kind}", line: tok.line, column: tok.column + offset)
-end 'invalidUnicodeEscapeError'
+function invalidDigitEscapeError(text String, kind String, offset ByteOffset, marker Byte, tok Token) returns ParseError
+	let form = digitEscapeOf(marker)
+	return ParseError.invalidDigitEscape("Invalid {form.noun} escape '{text}': expected {form.digitCount} hex digits in {kind}", line: tok.line, column: tok.column + offset)
+end 'invalidDigitEscapeError'
 
-// The trailing context phrase the diagnostic above names, one per literal form that admits a `\uNNNN`.
+// The trailing context phrase the diagnostic above names, one per literal form that admits a digit escape.
 // v1 takes the same three (`maxon-selfhosted/Compiler/Parser.maxon:16953-16955`); shv2 has only two,
 // because its byte-string decoder raises its own `unsupported` for a malformed escape.
 let CharacterLiteralEscapeKind = "character literal"
@@ -4246,6 +4257,35 @@ let HexEscapeDigits = 2 as ByteOffset
 let UniEscapeDigits = 4 as ByteOffset
 let EscapeMarkerBytes = 2 as ByteOffset
 
+// The noun each digit escape goes by in its E1004 diagnostic — the canonical corpus pins both
+// (`specs/hex-escape.md:147`, `specs/unicode-escape.md:151`).
+let HexEscapeNoun = "hex"
+let UniEscapeNoun = "unicode"
+
+// ⭐ **THE TWO DIGIT ESCAPES, KEYED BY THE MARKER BYTE AFTER THE BACKSLASH.** Everything that varies
+// between `\x` and `\u` is a function of that ONE byte — how many hex digits follow it, and what a
+// diagnostic calls it — so both derivations are made together, once. Three callers ask (the regular-literal
+// decoder, the byte-string decoder, and the malformed-escape diagnostic they share), and a second copy of
+// the mapping is exactly how a decoder that reads 2 digits and a message that says "expected 4" arise.
+type DigitEscape
+	export let digitCount as ByteOffset
+	export let noun as String
+
+	static function of(digitCount ByteOffset, noun String) returns Self
+		return Self{digitCount: digitCount, noun: noun}
+	end 'of'
+end 'DigitEscape'
+
+function digitEscapeOf(marker Byte) returns DigitEscape
+	if marker == LowerX 'hex'
+		return DigitEscape.of(HexEscapeDigits, noun: HexEscapeNoun)
+	end 'hex'
+	if marker == LowerU 'unicode'
+		return DigitEscape.of(UniEscapeDigits, noun: UniEscapeNoun)
+	end 'unicode'
+	panic("digitEscapeOf: byte {marker} is no digit-escape marker — only `\\x` and `\\u` spell a value in hex digits")
+end 'digitEscapeOf'
+
 // The UTF-8 masks, shifts, lead floors and codepoint ceilings this file's compile-time decoder
 // (`decodeUtf8Sequence`) and encoder (`appendUtf8Encoded`) read are declared ONCE, by
 // `Runtime/GraphemeRuntime.maxon`, alongside the runtime decoder that reads the same numbers — see that
@@ -4304,18 +4344,21 @@ end 'appendLiteralByteStringByte'
 // table (an unknown one is E2015). Returns the index of the next byte to decode.
 function appendByteStringEscape(buf ByteArray, raw ByteArray, at ByteOffset, len ByteOffset, tok Token) returns ByteOffset throws ParseError
 	let next = try raw.get(at + 1) otherwise panic("appendByteStringEscape: at + 1 < len just held but get({at + 1}) failed")
-	if next == LowerX 'hexEscape'
-		try requireByteStringHexEscape(raw, at: at, len: len, digitCount: HexEscapeDigits, tok: tok)
-		buf.push(hexEscapeByte(raw, at: at))
-		return at + EscapeMarkerBytes + HexEscapeDigits
-	end 'hexEscape'
-	if next == LowerU 'uniEscape'
-		try requireByteStringHexEscape(raw, at: at, len: len, digitCount: UniEscapeDigits, tok: tok)
-		let cp = uniEscapeCodepoint(raw, at: at)
-		try requireByteCodepoint(cp)
-		buf.push((cp and ByteMask) as Byte)
-		return at + EscapeMarkerBytes + UniEscapeDigits
-	end 'uniEscape'
+	if next == LowerX or next == LowerU 'digitEscape'
+		let form = digitEscapeOf(next)
+		try requireByteStringHexEscape(raw, at: at, len: len, digitCount: form.digitCount, tok: tok)
+		let value = digitEscapeValue(raw, at: at, digitCount: form.digitCount)
+
+		// ⚠ THE TWO MARKERS MEAN DIFFERENT THINGS HERE, which is the whole reason this decoder exists
+		// beside `decodeEscapes`. `\xNN` names the RAW BYTE, which two hex digits cannot put out of range;
+		// `\uNNNN` names a CODEPOINT, which has a Latin-1 encoding only up to 0xFF.
+		if next == LowerU 'codepoint'
+			try requireByteCodepoint(value)
+		end 'codepoint'
+
+		buf.push((value and ByteMask) as Byte)
+		return at + EscapeMarkerBytes + form.digitCount
+	end 'digitEscape'
 	match escapeByte(next) 'esc'
 		byte(b) then buf.push(b)
 		unknown then throw ParseError.unsupported("the escape sequence '\\{String.from(byteSlice(next))}' in a byte string literal is not a recognized escape", line: tok.line, column: tok.column)
@@ -4394,9 +4437,9 @@ function requireByteStringHexEscape(raw ByteArray, at ByteOffset, len ByteOffset
 end 'requireByteStringHexEscape'
 
 // Is the `\x`/`\u` escape at `at` followed by exactly `digitCount` hex digits, in bounds? THE one
-// statement of a hex escape's well-formedness, shared by the two decoders that admit one — the
-// byte-string one (which THROWS on a malformed escape) and the regular-literal one (which reports it as
-// an unknown escape). They differ only in what they do with the answer, so only the answer is shared.
+// statement of a digit escape's well-formedness, shared by the two decoders that admit one — the
+// byte-string one (which raises its own `unsupported`) and the regular-literal one (which reports the
+// E1004 `badDigitEscape`). They differ only in what they do with the answer, so only the answer is shared.
 function hexEscapeWellFormed(raw ByteArray, at ByteOffset, len ByteOffset, digitCount ByteOffset) returns bool
 	let firstDigit = at + EscapeMarkerBytes
 	let afterDigits = firstDigit + digitCount
@@ -4428,21 +4471,20 @@ function hexDigitValue(b Byte) returns ParsedInt
 	panic("hexDigitValue: byte {b} is not a hex digit (caller must validate via hexDigitsPresent)")
 end 'hexDigitValue'
 
-// The raw byte a `\xNN` escape at `at` denotes: `(hi << 4) | lo`.
-function hexEscapeByte(raw ByteArray, at ByteOffset) returns Byte
-	let hi = hexDigitValue(try raw.get(at + 2) otherwise panic("hexEscapeByte: validated digit at {at + 2} missing"))
-	let lo = hexDigitValue(try raw.get(at + 3) otherwise panic("hexEscapeByte: validated digit at {at + 3} missing"))
-	return ((hi shl HexNibbleBits) or lo) as Byte
-end 'hexEscapeByte'
-
-// The codepoint a `\uNNNN` escape at `at` names (4 validated hex digits at `at+2 .. at+5`).
-function uniEscapeCodepoint(raw ByteArray, at ByteOffset) returns ParsedInt
-	let d1 = hexDigitValue(try raw.get(at + 2) otherwise panic("uniEscapeCodepoint: validated digit at {at + 2} missing"))
-	let d2 = hexDigitValue(try raw.get(at + 3) otherwise panic("uniEscapeCodepoint: validated digit at {at + 3} missing"))
-	let d3 = hexDigitValue(try raw.get(at + 4) otherwise panic("uniEscapeCodepoint: validated digit at {at + 4} missing"))
-	let d4 = hexDigitValue(try raw.get(at + 5) otherwise panic("uniEscapeCodepoint: validated digit at {at + 5} missing"))
-	return (d1 shl 12) or (d2 shl 8) or (d3 shl HexNibbleBits) or d4
-end 'uniEscapeCodepoint'
+// ⭐ The value the digit escape at `at` spells — THE one hex accumulation, for both markers and both
+// decoders. It was two hand-unrolled copies (one 2-digit, one 4-digit) of the same `value * 16 + digit`
+// fold; the digit COUNT is the only thing that ever differed, and it is now the parameter. The caller
+// must have validated the digits via `hexEscapeWellFormed`.
+function digitEscapeValue(raw ByteArray, at ByteOffset, digitCount ByteOffset) returns ParsedInt
+	var value = 0 as ParsedInt
+	var i = at + EscapeMarkerBytes
+	let pastDigits = i + digitCount
+	while i < pastDigits 'digits'
+		value = (value shl HexNibbleBits) or hexDigitValue(try raw.get(i) otherwise panic("digitEscapeValue: validated digit at {i} missing"))
+		i = i + 1
+	end 'digits'
+	return value
+end 'digitEscapeValue'
 
 // Decode the UTF-8 sequence starting at `start` to its codepoint + byte length (1..4). A malformed or
 // truncated sequence decodes as its lone lead byte (length 1) so the decode stays aligned — a byte-string
@@ -25325,7 +25367,7 @@ export type Parser
 			multiByte(bytes) then return self.emitCharacterLiteral(bytes, range: SourceRange.ofToken(tok))
 			empty then throw ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
-			badUnicodeEscape(text, offset) then throw invalidUnicodeEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, tok: tok)
+			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, marker: marker, tok: tok)
 		end 'decoded'
 	end 'parseCharLiteral'
 
@@ -25372,7 +25414,7 @@ export type Parser
 			multiByte(bytes) then panic("characterizedOperand: the {bytes.count()}-byte literal '{String.from(tok.value)}' already materialized as a Character, so the tag guard above cannot have let it reach here")
 			empty then panic("characterizedOperand: an empty character literal is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
 			badEscape(text) then panic("characterizedOperand: the unknown escape '{text}' is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
-			badUnicodeEscape(text, _) then panic("characterizedOperand: the malformed unicode escape '{text}' is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
+			badDigitEscape(text, _, _) then panic("characterizedOperand: the malformed digit escape '{text}' is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
 		end 'decoded'
 	end 'characterizedOperand'
 
@@ -25399,7 +25441,7 @@ export type Parser
 			// pattern machinery meeting this type, not this rung's.
 			multiByte(bytes) then throw ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' as a `match` pattern — a pattern bound is a compile-time integer and a `Character` is a byte record ({bytes.count()} bytes here); comparing Characters in a `match` needs pattern dispatch over a runtime equality", line: tok.line, column: tok.column)
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
-			badUnicodeEscape(text, offset) then throw invalidUnicodeEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, tok: tok)
+			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, marker: marker, tok: tok)
 		end 'decoded'
 	end 'decodeCharPatternValue'
 
@@ -25443,7 +25485,7 @@ export type Parser
 		match decodeEscapes(tok.value) 'decoded'
 			bytes(buf) then return buf
 			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
-			badUnicodeEscape(text, offset) then throw invalidUnicodeEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, tok: tok)
+			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, marker: marker, tok: tok)
 		end 'decoded'
 	end 'decodedStringLiteralBytes'
 
@@ -25578,7 +25620,7 @@ export type Parser
 		match decodeEscapes(tok.value) 'decoded'
 			bytes(buf) then self.materializeFragmentBytes(buf, partBufs: partBufs, partLens: partLens, range: range)
 			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
-			badUnicodeEscape(text, offset) then throw invalidUnicodeEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, tok: tok)
+			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, marker: marker, tok: tok)
 		end 'decoded'
 	end 'materializeLiteralFragment'
 
@@ -35022,7 +35064,7 @@ export type Parser
 		match decodeEscapes(tok.value) 'decoded'
 			bytes(buf) then return buf
 			unknownEscape(text) then throw ConstEvalError.defective(ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column))
-			badUnicodeEscape(text, offset) then throw ConstEvalError.defective(invalidUnicodeEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, tok: tok))
+			badDigitEscape(text, offset, marker) then throw ConstEvalError.defective(invalidDigitEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, marker: marker, tok: tok))
 		end 'decoded'
 	end 'decodeConstStringLiteral'
 
@@ -35565,7 +35607,7 @@ export type Parser
 			// agreement with them on the verdict, not just the wording.
 			multiByte then throw ConstEvalError.defective(ParseError.expectedConstantExpression(String.from(tok.value), line: tok.line, column: tok.column))
 			badEscape(text) then throw ConstEvalError.defective(ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column))
-			badUnicodeEscape(text, offset) then throw ConstEvalError.defective(invalidUnicodeEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, tok: tok))
+			badDigitEscape(text, offset, marker) then throw ConstEvalError.defective(invalidDigitEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, marker: marker, tok: tok))
 		end 'decoded'
 	end 'evalConstCharLiteral'
 
