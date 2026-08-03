@@ -1252,8 +1252,12 @@ type MaxonToStdLowering
 	// `0` filler rather than passing it: a null table address is a wild jump at the callee's first dispatch,
 	// and every producer of an interface-typed value pairs it at the moment it mints it
 	// (`Parser.pairInterfaceWitness`), so a miss is a compiler invariant break.
+	//
+	// The column is grown on demand and stops at its highest paired value, so a ValueId PAST its end is the
+	// same fact as a 0 within it — unpaired — and takes the same refusal. `Parser.witnessOfValue` states that
+	// equivalence at the other end of the handoff.
 	function pairedWitnessOf(value ValueId, site ByteArray) returns ValueId
-		let witness = try self.valueWitnessIds.get(value) otherwise panic("pairedWitnessOf: value v{value} has no witness slot — the column is dense by ValueId in lockstep with `valueTags`")
+		let witness = try self.valueWitnessIds.get(value) otherwise 0 as ValueId
 		if witness == 0 'unpaired'
 			panic("pairedWitnessOf: v{value} is typed as an interface at '{String.from(site)}' but carries no witness half — the parser pairs every existential it mints (`Parser.pairInterfaceWitness`)")
 		end 'unpaired'

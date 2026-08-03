@@ -250,9 +250,6 @@ type SynthesizedFunction
 	var valueNameIds as TypeNameIdArray
 	var valueClosureEnv as ValueIdArray
 	var valueIsCapturingClosure as BoolArray
-	// Dense in lockstep with `valueTags`, and all-zero by construction: a synthesized module-init function
-	// builds no existential, so nothing here is ever paired (see `IrFunction.valueWitnessIds`).
-	var valueWitnessIds as ValueIdArray
 
 	// Create the function, register it and its single `entry` block on `module`, and seed the value
 	// columns with the parameters — whose ids (`0..paramCount-1`) the value numbering RESERVES rather than
@@ -262,13 +259,11 @@ type SynthesizedFunction
 		var valueNameIds = TypeNameIdArray.create()
 		var valueClosureEnv = ValueIdArray.create()
 		var valueIsCapturingClosure = BoolArray.create()
-		var valueWitnessIds = ValueIdArray.create()
 		for paramType in paramTypes 'eachParam'
 			valueTags.push(maxonTypeTag(paramType))
 			valueNameIds.push(typeNameIdOf(paramType))
 			valueClosureEnv.push(0)
 			valueIsCapturingClosure.push(false)
-			valueWitnessIds.push(0)
 		end 'eachParam'
 
 		// ⚠ `synthesized()` is a POSITIVE claim, not a default: it is what makes `__module_init` /
@@ -277,11 +272,11 @@ type SynthesizedFunction
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
 		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. These are the ONLY two Maxon-tier
 		// functions the compiler builds.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: valueWitnessIds, returnLine: 0, declaredAt: SourcePosition.synthesized())
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized())
 		let funcIndex = module.funcCount()
 		module.pushFunc(func)
 
-		return Self{module: module, project: project, funcIndex: funcIndex, block: module.addBlock(func, label: b"entry"), valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: valueWitnessIds}
+		return Self{module: module, project: project, funcIndex: funcIndex, block: module.addBlock(func, label: b"entry"), valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure}
 	end 'open'
 
 	// Allocate a fresh ValueId AND record its type, in lockstep — `Parser.mintValue`'s twin over the
@@ -297,7 +292,6 @@ type SynthesizedFunction
 		self.valueNameIds.push(nameId)
 		self.valueClosureEnv.push(0)
 		self.valueIsCapturingClosure.push(false)
-		self.valueWitnessIds.push(0)
 		return id
 	end 'mint'
 

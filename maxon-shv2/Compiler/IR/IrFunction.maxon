@@ -207,15 +207,20 @@ export type IrFunction
 	// It marks the LITERAL, not a function-typed parameter (which also carries an env): a param passed onward is
 	// not refused, because the refusal lands at the site that passes the literal. Empty on a Std-phase function.
 	export var valueIsCapturingClosure as BoolArray
-	// ⭐⭐ **THE PER-VALUE WITNESS-PAIRING COLUMN (P1.7a-existentials slice 1), DENSE by ValueId in lockstep
-	// with `valueTags`.** For a value tagged `interfaceRef` it holds the ValueId of the fat pointer's OTHER
-	// half — the `__witness_<Type>.<Iface>` address; for every other value it holds 0. This column IS the
-	// second half of the fat pointer: shv2 has no aggregate here and no slot to spill one into, so an
-	// existential is two SSA values and this is what says WHICH two.
+	// ⭐⭐ **THE PER-VALUE WITNESS-PAIRING COLUMN (P1.7a-existentials slice 1), DENSE by ValueId.** For a
+	// value tagged `interfaceRef` it holds the ValueId of the fat pointer's OTHER half — the
+	// `__witness_<Type>.<Iface>` address; for every other value it holds 0. This column IS the second half of
+	// the fat pointer: shv2 has no aggregate here and no slot to spill one into, so an existential is two SSA
+	// values and this is what says WHICH two.
 	//
 	// A real witness is always a minted id or a hidden parameter past the first (`>= 1`), so a stored 0
 	// unambiguously means "not an existential", exactly as `valueClosureEnv`'s does — and it is read only on
 	// the `interfaceRef` arm, where a 0 is a compiler invariant break rather than an answer.
+	//
+	// ⚠ **UNLIKE ITS SIBLINGS IT IS NOT IN LOCKSTEP WITH `valueTags`: it is GROWN ON DEMAND and stops at its
+	// HIGHEST PAIRED VALUE**, so it is normally EMPTY and never longer than it has to be. A ValueId past its
+	// end reads exactly as a 0 within it — unpaired — which is why the shortfall needs no separate answer.
+	// See `Parser.valueWitnessIds` for the ladder measurement that made it lazy.
 	//
 	// PUBLISHED here for `valueClosureEnv`'s reason, one mechanism over: threading an existential ARGUMENT's
 	// witness to a callee is done at LOWERING (`LowerMaxonToStd.appendExistentialWitnessArgs`), the first tier

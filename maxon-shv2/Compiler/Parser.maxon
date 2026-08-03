@@ -6282,9 +6282,24 @@ export type Parser
 	var valueIsCapturingClosure as BoolArray
 	var valueClosureEnv as ValueIdArray
 	// ⭐ **THE PER-VALUE WITNESS PAIRING (P1.7a-existentials slice 1)** — for a value tagged `interfaceRef`,
-	// the ValueId of the fat pointer's witness half; 0 for every other value. Dense by ValueId in lockstep
-	// with `valueTags`, filled by `mintValue`/`recordValueType` and written by `pairInterfaceWitness`. See
+	// the ValueId of the fat pointer's witness half; 0 for every other value. See
 	// `IrFunction.valueWitnessIds`, which this column is handed to by reference.
+	//
+	// ⚠⚠ **DENSE, BUT GROWN ON DEMAND — it is the one value column `mintValue` does NOT push to**, and that
+	// is a measurement rather than a taste. Its sibling columns hold a fact about EVERY value (a tag, a name,
+	// a constant, an owned-heap mark), so a slot per mint is the cheapest form they have. This one holds a
+	// fact about the values that are EXISTENTIALS, which in almost every program is none of them — and a
+	// column pushed per mint bills the whole program for a question only an interface can ask.
+	// `pairInterfaceWitness` extends it to reach the value it is pairing, laying down the identical UNPAIRED
+	// zeroes on the way, so every read below the high-water mark is bit-identical to the per-mint form.
+	//
+	// MEASURED on the doubling ladder, same binary path and same corpus, A/B against the per-mint push:
+	// **`phase:parse` -6,500 allocations and -11,390,384 BYTES at rung 5** (-978/-1,180/-1,558/-2,287/-3,705/
+	// -6,500 across rungs 0-5, the delta's own ratio converging on the ladder's x2 ⇒ the term removed was
+	// LINEAR, not a constant). The BYTES are the headline and the allocations are not: a per-mint push grows
+	// one i64 slot per SSA value, so what it cost was a `ValueIdArray` growth series the size of the whole
+	// function — 3.4% of the phase's bytes — for a fact about values that are existentials, of which the
+	// rung-5 corpus contains **zero** (it declares 132 interfaces and never uses one as a TYPE).
 	var valueWitnessIds as ValueIdArray
 	// ⭐ **THE PER-INSTANCE ALIAS PROVENANCE OF EACH GENERIC-INSTANCE VALUE (P1.6-C)** — see
 	// `ValueInstanceAliasMap`. Reset per function and SWAPPED across a closure body (its value ids are a
@@ -24237,9 +24252,9 @@ export type Parser
 		// `parseClosureExpression` on the one value a capturing closure produces (see the field header).
 		self.valueIsCapturingClosure.push(false)
 		self.valueClosureEnv.push(0)
-		// The witness pairing rides the same lockstep, seeded UNPAIRED; set by `pairInterfaceWitness` on the
-		// values that are existentials (a merge phi, a field load, an interface-returning call's result).
-		self.valueWitnessIds.push(0)
+		// ⚠ **THE WITNESS COLUMN DELIBERATELY DOES *NOT* RIDE THIS LOCKSTEP** — it is grown ON DEMAND by
+		// `pairInterfaceWitness`, so a function that builds no existential never grows it at all. See the
+		// field header for the measurement that put it there.
 		return id
 	end 'mintValue'
 
@@ -24264,8 +24279,18 @@ export type Parser
 	// ⭐ **PAIR AN EXISTENTIAL WITH ITS WITNESS HALF (P1.7a-existentials slice 1)** — the one writer of
 	// `valueWitnessIds`, so every producer of an interface-typed value (a parameter, a merge phi, a field
 	// load, an interface-returning call's result) says so through one door and cannot half-record it.
+	//
+	// ⭐ **AND THE ONE PLACE THE COLUMN GROWS.** It is extended to reach `value` here rather than pushed a
+	// slot per mint, which is what makes an interface-free function pay NOTHING for it — see the field header.
+	// The zeroes it lays down on the way are the same UNPAIRED filler a per-mint push wrote, so a read below
+	// `value` is unchanged; a read ABOVE the grown prefix is the identical "unpaired" answer by a second
+	// route, which `witnessOfValue` states once for both.
 	function pairInterfaceWitness(value ValueId, witness ValueId)
-		try self.valueWitnessIds.set(value, value: witness) otherwise panic("Parser.pairInterfaceWitness: value v{value} has no witness slot — every SSA value is minted through mintValue")
+		while self.valueWitnessIds.count() <= value 'growToReachIt'
+			self.valueWitnessIds.push(0)
+		end 'growToReachIt'
+
+		try self.valueWitnessIds.set(value, value: witness) otherwise panic("Parser.pairInterfaceWitness: value v{value} has no witness slot after the column was grown to reach it — `growToReachIt` above pushes up to and including it")
 	end 'pairInterfaceWitness'
 
 	// ⭐ **THE WITNESS HALF OF AN EXISTENTIAL — the one reader**, and it PANICS on an unpaired value rather
@@ -24273,8 +24298,11 @@ export type Parser
 	// dispatched, stored or returned: 0 would be a null table address, i.e. a wild jump at the first method
 	// call instead of a diagnostic. Every producer of an `interfaceRef`-tagged value pairs it at the moment it
 	// mints it, so a miss here is a compiler invariant break and not user input.
+	//
+	// A value ABOVE the grown prefix and a 0 WITHIN it are the same fact — nobody paired it — so they raise
+	// the same panic rather than two that would have to be kept saying the same thing.
 	function witnessOfValue(value ValueId) returns ValueId
-		let witness = try self.valueWitnessIds.get(value) otherwise panic("Parser.witnessOfValue: value v{value} has no witness slot — every SSA value is minted through mintValue")
+		let witness = try self.valueWitnessIds.get(value) otherwise 0 as ValueId
 		if witness == 0 'unpaired'
 			panic("Parser.witnessOfValue: value v{value} is typed as an interface but no witness half is paired with it — every producer of an existential (a parameter, a merge phi, a field load, an interface-returning call result) must call `pairInterfaceWitness` when it mints the value")
 		end 'unpaired'
@@ -24302,10 +24330,9 @@ export type Parser
 		// every ValueId, params (including a lifted closure's trailing `__env`) included.
 		self.valueIsCapturingClosure.push(false)
 		self.valueClosureEnv.push(0)
-		// Seeded UNPAIRED, and then written for exactly the interface-typed parameters by
-		// `bindExistentialWitnessParams` — which runs after the whole parameter block is seeded, because the
-		// companion it pairs each one with is itself a parameter further along this very column.
-		self.valueWitnessIds.push(0)
+		// ⚠ The witness column is NOT seeded here either — `bindExistentialWitnessParams` grows it to exactly
+		// the interface-typed parameters it pairs, and it runs after the whole parameter block is seeded
+		// because the companion it pairs each one with is itself a parameter further along.
 	end 'recordValueType'
 
 	// Remember the integer behind a value the parser has just DEFINED. Called by the emitters, on
