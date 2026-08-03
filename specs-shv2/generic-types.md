@@ -1700,21 +1700,66 @@ error E2062: <fragment>:9:31: Cannot use 'Real' as a type argument: a float type
 ```
 
 <!-- test: error.float-type-arg-builtin-generic -->
-Both float spellings again on a BUILTIN base, where the panic was equally reachable (`Array with Real`
-died in the same emitter): the rule is about the ARGUMENT, so `Array` reaches it through the same
-`parseGenericArgNode` a declared generic does. Only the FIRST offending argument in a file is shown
-here because each alias is its own declaration — two declarations, two diagnostics.
+Both float spellings again on a BUILTIN base: the rule is about the ARGUMENT, so a synthesized base
+reaches it through the same `parseGenericArgNode` a declared generic does. Only the FIRST offending
+argument in a file is shown here because each alias is its own declaration — two declarations, two
+diagnostics.
+
+`Set` and `List` are the bases still under the rule, and `Array` and `Vector` are the two that are not
+(A4d / the `vector` port): a buffer STRIDE is written and read at the element's own type, where a
+dictionary-passed type parameter is one opaque general-purpose slot. `Set` hashes its key and `List`
+boxes its payload, and each refuses a float in its own terms at its own door — so the refusal that
+belongs at the DECLARATION is still theirs.
 ```maxon
 typealias Real = float(f64.min to f64.max)
-typealias RealArray = Array with Real
+typealias RealSet = Set with Real
+typealias FloatList = List with float
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2062: <fragment>:3:30: Cannot use 'Real' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
+error E2062: <fragment>:4:33: Cannot use 'float' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
+```
+
+<!-- test: a-float-element-is-admitted-on-a-buffer-base -->
+### The exemption, stated as an acceptance
+The refusal above is about a dictionary-passed type-parameter slot, so it lifts exactly where there is
+no such slot. Both buffer bases take both float spellings, and this is the case that turns RED if the
+exemption is ever narrowed back to `Vector` alone.
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Reals = Array with Real
+typealias Vec2 = Vector with 2 Real
+
+function main() returns ExitCode
+	var a = Reals.create()
+	a.push(1.5)
+	var v = Vec2.create()
+	try v.set(0, value: 3.5) otherwise panic("test invariant: set OOB")
+	return trunc((try a.get(0) otherwise 0.0) + (try v.get(0) otherwise 0.0))
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.bare-float-type-arg-on-a-buffer-base -->
+### A BARE `float` on a buffer base is E2061, and only there is its advice true
+The rules overlap on the bare keyword, and the order between them decides which sentence a reader
+gets. Off a buffer base E2062 claims it, because *"declare a ranged typealias"* would send the reader
+into the very refusal they are already in. ON one the exemption lifts E2062, E2061 takes the keyword
+back, and its advice is now a working program — `error.float-type-arg-builtin-generic`'s `Array` half
+became this case.
+```maxon
 typealias FloatArray = Array with float
 function main() returns ExitCode
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2062: <fragment>:3:34: Cannot use 'Real' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
-error E2062: <fragment>:4:35: Cannot use 'float' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
+error E2061: <fragment>:2:35: Cannot use bare type 'float' as a type argument; use a ranged typealias instead (e.g. typealias MyType = float(...))
 ```
 
 <!-- test: error.bare-type-arg-builtin-generic -->

@@ -2022,3 +2022,161 @@ end 'main'
 ```exitcode
 16
 ```
+
+<!-- test: a-float-element-reads-back-out-of-the-slot -->
+### A FLOAT element rides the slot as its 64 bits and reads back a float
+The element load and store reinterpret (`containerElementWord` out, its inverse in), so the slot is
+an ordinary 8-byte stride and the value that comes back is a `float` rather than the raw pattern.
+This is the read that PANICKED — *"a float payload has no lowerable value type"* — while the
+container path asked a UNION PAYLOAD's rule about it. A payload's float genuinely has no lowering
+(there is no re-encode at the construct or the extract, which is what E2015 says); an element's
+does, and the two are different questions about different storage.
+```maxon
+function main() returns ExitCode
+	var a = [1.5, 2.5]
+	let v = try a.get(0) otherwise 0.0
+	return trunc(v + 1.0)
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: a-float-element-round-trips-through-set -->
+### `set` writes a float element and `get` reads the same value back
+```maxon
+function main() returns ExitCode
+	var a = [1.5, 2.5]
+	try a.set(1, value: 4.75) otherwise panic("test invariant: set OOB")
+	return trunc(try a.get(1) otherwise 0.0)
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: a-float-element-iterates -->
+### `for … in` yields float elements
+```maxon
+function main() returns ExitCode
+	let a = [1.5, 2.5, 3.5]
+	var sum = 0.0
+	for e in a 'each'
+		sum = sum + e
+	end 'each'
+	return trunc(sum)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-float-element-survives-a-clone -->
+### A cloned float array carries its elements' bits
+```maxon
+function main() returns ExitCode
+	var a = [1.5, 2.5]
+	a.push(3.5)
+	let c = a.clone()
+	return trunc((try c.get(2) otherwise 0.0) + (try c.get(0) otherwise 0.0))
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-declared-float-element-array-round-trips -->
+### A float element is spellable in SOURCE, not only mintable by a literal
+`[1.5, 2.5]` has always minted an `Array with float` the compiler stores, loads, clones and
+iterates, so refusing the same instance when a program NAMES it refused a type this compiler
+already builds and runs. An `Array`'s element is a stride in a buffer, not a dictionary-passed
+type-parameter slot, so E2062's stated reason — a general-purpose 8-byte slot a float cannot
+travel in — is not true of it; `Box with float`, where the reason IS true, is still refused.
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Reals = Array with Real
+
+function main() returns ExitCode
+	var a = Reals.create()
+	a.push(1.5)
+	a.push(2.5)
+	return trunc((try a.get(0) otherwise 0.0) + (try a.get(1) otherwise 0.0))
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: a-declared-float-element-array-crosses-a-call-boundary -->
+### A named float-element array is a parameter type, a return type and a field type
+The whole point of naming the instance: none of these three positions can be spelled with a bare
+`Array with float`, so before the element was nameable a float array could not leave the
+expression that built it.
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Reals = Array with Real
+
+type Samples
+	export var values as Reals
+
+	export static function create() returns Self
+		var v = Reals.create()
+		v.push(2.5)
+		return Self{values: v}
+	end 'create'
+end 'Samples'
+
+function total(xs Reals) returns Real
+	var sum = 0.0
+	for x in xs 'each'
+		sum = sum + x
+	end 'each'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	let s = Samples.create()
+	return trunc(total(s.values) + 1.5)
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: error.a-raw-byte-write-is-refused-on-a-float-element -->
+### A raw byte write is refused on a float element, and it is the SLOT's rule that refuses it
+E3118 admits raw bytes into an element only when the element's own value set covers every bit
+pattern of its slot. A `float`'s bounds are IEEE-754 patterns that order nothing like integers, so
+there is no comparison to make and the honest answer is refusal — the same one an element with no
+integer value set gets everywhere else. Now that the element is nameable this rule is reachable
+from source rather than only from a literal.
+```maxon
+function main() returns ExitCode
+	var a = [1.5, 2.5]
+	try a.managed.setByte(0, value: 223) otherwise panic("test invariant: setByte OOB")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3118: <fragment>:4:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'float' does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+```
+
+<!-- test: error.a-raw-byte-write-is-refused-on-a-declared-float-element -->
+### The same refusal, off the element's DECLARED float alias
+The alias arm of the element's value set (`integerAliasValueRange`) answers *"not integer valued"*
+for a float alias for the reason the bare keyword's arm does; before the element was nameable that
+arm had no program that could reach it.
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias Reals = Array with Real
+
+function main() returns ExitCode
+	var a = Reals.create()
+	a.push(1.5)
+	try a.managed.setByte(0, value: 223) otherwise panic("test invariant: setByte OOB")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3118: <fragment>:8:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'Real' (float(-1.7976931348623157E+308 to 1.7976931348623157E+308)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+```

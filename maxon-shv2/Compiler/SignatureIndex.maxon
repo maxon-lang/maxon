@@ -1968,8 +1968,11 @@ let BareIntegerElementHigh = i64.max as ParsedInt
 
 // A ranged alias's declared bounds as a value set — `notIntegerValued` for a FLOAT alias, whose `low`/`high`
 // are IEEE-754 bit patterns and order nothing like integers (`floatBoundOrderKey` is where that is spelled
-// out). shv2 has no float array element to reach it with today (`E2062` refuses a float type argument),
-// which is why this arm returns the honest answer rather than inventing a comparison.
+// out), so the honest answer is that there is no comparison to make rather than an invented one.
+//
+// ⚠ The float arm is LIVE as of A4d — `typealias Reals = Array with Real` is a spellable element now — and
+// `error.a-raw-byte-write-is-refused-on-a-declared-float-element` is the program that reaches it. It was
+// written when nothing could, which is exactly when a conservative arm is cheapest to get wrong.
 function integerAliasValueRange(alias RangedTypeAlias) returns ElementIntegerRange
 	if aliasIsFloat(alias) 'aFloatAliasHasNoIntegerValueSet'
 		return ElementIntegerRange.notIntegerValued

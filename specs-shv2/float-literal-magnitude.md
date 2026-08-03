@@ -194,6 +194,24 @@ end 'main'
 7
 ```
 
+<!-- test: f64-max-prints-its-shortest-round-trip-digits -->
+`f64.max` is the one magnitude at which the shortest-round-trip search can round its own candidate
+OUT of the finite range: the expansion opens `17976931348623157…`, so the one-digit candidate rounds
+to `2` at scale 309 — 2e308, past `f64.max` and therefore not convertible. That arm shared a `panic`
+with the genuinely-impossible `malformed` one, so `print`ing this value **killed the program**, and
+the COMPILER died the same way rendering the bound of a `float(f64.min to f64.max)` alias into a
+diagnostic. An overflowing candidate is simply a length that did not round-trip; the search keeps
+going, and the 17 digits below are what it settles on.
+```maxon
+function main() returns ExitCode
+	print("{1.7976931348623157e308}")
+	return 0
+end 'main'
+```
+```stdout
+179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0
+```
+
 <!-- test: error.just-above-f64-max -->
 `1.8e308` is above `f64.max` but its floor(log10) is 308, so the decimal magnitude window admits it
 and only the CONVERTED value can reject it. Reaching the infinity pattern is the rejection.

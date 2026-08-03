@@ -10689,8 +10689,14 @@ export type Parser
 	// finding 3): with the derivation spelled at each site, `Vector with 2 Real` would stop earning E2062
 	// while `Box with (Vector with 2 Real)` went on earning it, or the reverse, with nothing to say which is
 	// the rule. `checkGenericArgType`'s header promises the exemption widens in one line; this is that line.
+	//
+	// ⚠ **IT IS A ROSTER OF THE BASES WHOSE FLOAT SLOT IS MEASURED, NOT `isBuiltinGenericBaseName` (A4d).**
+	// `Set` and `Map` hash their key and `List` boxes its payload, and each already REFUSES a float in its
+	// own terms at its own door (E2015, naming the container and the slot). Admitting them here would delete
+	// a DECLARATION-site diagnostic in exchange for a later one at the first method call — and for a
+	// declared-but-unused alias, for none at all.
 	function baseStoresArgumentsInline(name ByteArray) returns bool
-		return self.signatures.isVectorBaseName(name)
+		return self.signatures.isVectorBaseName(name) or self.signatures.isArrayBaseName(name)
 	end 'baseStoresArgumentsInline'
 
 	function readSizedBaseElementCount(baseTok Token) returns FixedElementCount throws ParseError
@@ -10833,14 +10839,15 @@ export type Parser
 	// this port had to build for `/specs/vector.md`'s float cases and which works. So the exemption is exactly
 	// as wide as the reason is narrow.
 	//
-	// ⚠⚠ **IT IS `Vector`'s ALONE TODAY, AND THAT IS A DELIBERATE STOP, NOT A DISTINCTION THE LANGUAGE MAKES.**
-	// An `Array`'s element is a buffer stride by the identical argument and `Array with float` now WORKS end
-	// to end (a bare `[1.5, 2.5]` literal compiles, stores and reads back), so the E2062 an
-	// `Array with Real` still earns is a POLICY rather than a limitation. It is left standing because
-	// `specs-shv2/generic-types.md:error.float-type-arg-builtin-generic` pins it, and retiring a committed
-	// expectation is the spec owner's call and not a side effect of porting a different file. The day that
-	// case is retracted, widen `baseStoresArgumentsInline` to `isBuiltinGenericBaseName` — ONE line, in ONE
-	// place, and both `Base with …` doors follow, which is exactly why that predicate has a home of its own.
+	// ⚠⚠ **`Array` IS IN IT TOO (A4d), BECAUSE THE COMPILER ALREADY MINTS AND RUNS THE VERY INSTANCE THE
+	// REFUSAL NAMED.** `[1.5, 2.5]` types as `Array with float` — the literal's instance is minted rather
+	// than read off a `Base with Args`, so it never reached this check — and that instance stores, loads,
+	// clones and iterates end to end. Refusing the same type when a program NAMES it was therefore not a
+	// limitation but a POLICY, and an expensive one: `Array with float` cannot be written in a parameter, a
+	// return or a field position at all (`Expected ')' but got 'with'`), so before the element was nameable
+	// a float array could not leave the expression that built it. E2062's stated reason — an opaque 8-byte
+	// general-purpose slot — is simply not true of a buffer stride. `Box with float`, where it IS true,
+	// still earns the refusal, and `error.float-type-arg` still pins that.
 	//
 	// **2. It may not be a BARE NUMERIC KEYWORD (E2061).** A bare `int` is minted CONCRETE by
 	// `parseTypeReference`, so it too is answered before the `named` cascade it never enters.
@@ -10895,6 +10902,13 @@ export type Parser
 		// `error.float-type-arg` is the spec case that turns RED the moment the two arms are swapped. The
 		// ALIAS spelling is decided further down instead, off the name cascade's own answer — see there for
 		// why that is the cheap place and not merely the late one.
+		//
+		// ⭐ **ON A BUFFER BASE THE OVERLAP RESOLVES THE OTHER WAY, AND IT DOES SO BY ITSELF (A4d).** The
+		// exemption drops this arm, E2061 takes the bare keyword back, and its advice is no longer a trap
+		// there but a working program: `Array with float` is E2061, and the `typealias Real = float(…)` it
+		// recommends now compiles. Two rules, one keyword, and which one answers is decided by whether the
+		// workaround exists — pinned in both directions by `error.bare-float-type-arg-on-a-buffer-base` and
+		// `error.float-type-arg`.
 		//
 		// ⚠ **A DELIBERATE DIVERGENCE FROM BOTH REFERENCES**, which accept a float type argument because
 		// they MONOMORPHIZE — the instantiation gets a genuine f64 slot and the question never arises. This
@@ -34345,8 +34359,11 @@ export type Parser
 	// spelled here as well as there, which is exactly how the FUNCTION-alias element went missing: an
 	// `Array with <function alias>` element stayed `named`, i.e. an int.
 	//
-	// A FLOAT element cannot reach `payloadValueTypeOf`'s float panic: `Array with Float` and
-	// `Array with float` are both E2062 at the type ARGUMENT, one gate earlier.
+	// ⚠ **THE FLOAT ARM BELOW IS WHAT KEEPS A FLOAT ELEMENT OFF `payloadValueTypeOf`'s PANIC — NOT E2062,
+	// WHICH NEVER HELD IT SHUT (A4d).** The line here used to say the type ARGUMENT gate caught every float
+	// element one step earlier. It did not, in EITHER direction: a diagnostic recorded at a `typealias` is
+	// RECORDED, not thrown, so the file's bodies are walked anyway and the accessor is minted regardless;
+	// and `[1.5, 2.5]`'s instance is MINTED by the compiler and never passes a type-argument gate at all.
 	//
 	// ⭐ **IT TAKES THE SLOT'S DECLARED TYPE, NOT A `giid`, because a `Map`'s VALUE column asks the identical
 	// question of a different slot.** Keyed on the instance it would have had to re-derive "which argument is

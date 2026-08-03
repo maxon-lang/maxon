@@ -1416,12 +1416,24 @@ function __shortestRoundTrip(digits DigitString, scale DecimalPointScale, target
 		// `value = 0.<digits> × 10^scale`, and the converter wants the digits as a WHOLE number times a
 		// power of ten — which moves the point past all of them: `<digits> × 10^(scale - count)`.
 		var readBack = 0
-		// NEITHER failure arm is reachable and they share one: `malformed` describes TEXT and no text is
-		// involved here, and a rounded prefix of a real double's own decimal expansion is between that
-		// double's neighbours, so it cannot leave the range the double itself is in.
+		// ⭐⭐ **A ROUNDED-UP PREFIX *CAN* LEAVE THE FINITE RANGE, AND SHARING ONE ARM WITH `malformed`
+		// TURNED THAT INTO A PANIC.** The two arms were joined on the claim that a rounded prefix of a
+		// double's own expansion sits between that double's neighbours — true in the middle of the range
+		// and FALSE at its top, where there is no neighbour above. MEASURED: `f64.max`'s expansion opens
+		// `17976931348623157…`, so the ONE-digit candidate rounds to `2` at scale 309 — 2e308, past
+		// f64.max — and `"{1.7976931348623157e308}"` killed every program that printed it, while the
+		// COMPILER died rendering the same bound into a diagnostic (`formatBound`).
+		//
+		// An overflowing candidate is simply not this double: `target` is finite by construction (both
+		// callers return early on zero and on the infinity/NaN exponent field), and nothing past f64.max
+		// is. So it is a length that did not round-trip, which is what the loop already exists to skip —
+		// the digits keep growing until the rounding falls back inside the range, and the 17-digit
+		// candidate always does. `malformed` keeps its own arm and stays a genuine invariant: it
+		// describes TEXT, and no text is involved here.
 		match __float_bitsFromDecimal(__bigFromDigits(candidate.digits), totalExp: candidate.scale - candidate.digits.count(), sigDigits: candidate.digits.count(), droppedNonZeroDigit: false) 'probeRead'
 			bits(value) then readBack = value
-			overflow to malformed then panic("__shortestRoundTrip: the {candidate.digits.count()}-digit candidate at scale {candidate.scale} did not convert, but it is a rounded prefix of a real double's own expansion — the digit search and the converter have diverged")
+			overflow then continue
+			malformed then panic("__shortestRoundTrip: the {candidate.digits.count()}-digit candidate at scale {candidate.scale} is not a number, but it is a rounded prefix of a real double's own expansion and no text was involved — the digit search and the converter have diverged")
 		end 'probeRead'
 		if readBack == target 'roundTrips'
 			return candidate
