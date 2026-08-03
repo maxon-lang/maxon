@@ -568,6 +568,16 @@ export union ParseError implements Error
 	// PATTERNS for a float alias and numbers for an integer one, and the renderer cannot tell from the
 	// payloads which it has been handed.
 	constantCastOutOfRange(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, line LineNumber, column ColumnNumber)
+	// ⭐ **A BYTE OF A `b"…"` LITERAL THAT ITS ELEMENT'S DECLARED RANGE DOES NOT ADMIT (A3r).** Renders as
+	// E3005 through `byteStringByteOutOfRangeMessage`, positioned at the literal token.
+	//
+	// It is a DISTINCT arm from `constantCastOutOfRange` above even though both are E3005 over a ranged
+	// alias, and for the reason that variant's own header gives about its message: the subject differs. A
+	// cast narrows ONE value the author wrote; a blob is a RUN of values the source never spelled out, so
+	// this arm carries the OFFSET, which is the only way to say which of them is wrong. `low`/`high` and
+	// `isFloat` ride along for the same reason they do above — the renderer cannot tell a float alias's bit
+	// patterns from an integer alias's numbers by looking at them.
+	byteStringByteOutOfRange(value ParsedInt, offset ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, line LineNumber, column ColumnNumber)
 	// --- The struct arms (P1.0r) ---
 	//
 	// A struct literal (`Point{…}`) written outside the type's OWN methods. Renders as E3076,
@@ -2837,6 +2847,7 @@ let BuiltinsCurrentTimeNanosName = b"__Builtins.currentTimeNanos"
 let BuiltinsCurrentTimeMsName = b"__Builtins.currentTimeMs"
 let BuiltinsCurrentUnixTimeSecondsName = b"__Builtins.currentUnixTimeSeconds"
 let BuiltinsSleepName = b"__Builtins.sleep"
+
 // ⭐ **THE TWO COMMAND-LINE INTRINSICS**, `stdlib/CommandLine.maxon`'s only floor. The bootstrap declares
 // exactly these two names with exactly these shapes (`2-Parser.cs:10952-10957`): a count that takes nothing
 // and answers an `int`, and an accessor that takes one index and answers an OWNED `__ManagedMemory` the
@@ -26097,7 +26108,7 @@ export type Parser
 	// `Array with Byte` gid) and its OWNERSHIP (an owned temp the statement drops) cannot drift between
 	// the two spellings of the same literal.
 	function emitByteStringLiteralValue(bytes ByteArray, range SourceRange) returns ValueId throws ParseError
-		try self.requireByteStringBlobStridesLikeItsType(range)
+		try self.requireByteStringBlobFitsItsElement(bytes, line: range.line, column: range.column)
 
 		let giid = self.signatures.internArrayByteInstance(self.filePath)
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
@@ -26106,39 +26117,88 @@ export type Parser
 		return result
 	end 'emitByteStringLiteralValue'
 
-	// ⭐ **A `b"…"` BLOB IS BYTE-PACKED BY CONSTRUCTION, so the literal is a value of `Array with Byte` only
-	// while THIS program's `Byte` is one byte wide** — the rule, what it costs when it does not hold, and why
-	// it is a refusal rather than a widened blob are all on `byteStringBlobStrideMessage`, beside the words
-	// both throw sites emit.
+	// ⭐⭐ **EVERYTHING A `b"…"` BLOB MUST SATISFY TO BE A VALUE OF `Array with Byte`, ASKED IN ONE PLACE.**
+	// Two rules, and they are two halves of one question — *"is this run of raw bytes a legal value of the
+	// element THIS file's `Byte` denotes?"* — so they are asked together or the literal has been let through
+	// on half an answer:
 	//
-	// ⚠ **THE SAME RULE HAS A SECOND THROW SITE**, `requireConstByteStringBlobStridesLikeItsType`, because a
-	// top-level `let G = b"…"` / `var G = b"…"` never reaches this emitter: the initializer sweep folds it to
-	// bytes and `ModuleInit` builds the record, so a STORED byte-string global would otherwise slip the gate
-	// (measured: it did). The two differ ONLY in the error union their tier speaks — `ParseError` here,
-	// `ConstEvalError.defective` there — so the stride and the message are each computed by ONE function and
-	// only the `throw` is written twice.
-	function requireByteStringBlobStridesLikeItsType(range SourceRange) throws ParseError
-		let declaredStride = self.byteElementDeclaredStride()
-		if declaredStride != ByteStringElementSize 'blobStrideDisagreesWithTheElement'
-			throw ParseError.unsupported(byteStringBlobStrideMessage(declaredStride), line: range.line, column: range.column)
-		end 'blobStrideDisagreesWithTheElement'
-	end 'requireByteStringBlobStridesLikeItsType'
+	//   1. **THE STRIDE.** The blob is byte-PACKED by construction, so the record it produces strides 1 while
+	//      every other `Array with Byte` record strides whatever `Byte`'s declared range needs. The rule, the
+	//      silent wrong answer it costs, and why it is a refusal rather than a widened blob are all on
+	//      `byteStringBlobStrideMessage`, beside the words it emits.
+	//   2. **THE BOUNDS (A3r).** ⛔ **A ONE-BYTE SLOT IS NOT A BYTE, AND THE STRIDE CANNOT SEE THE
+	//      DIFFERENCE.** `rangedAliasStorageBytes` gives EVERY non-negative range that fits `u8.max` a
+	//      one-byte slot, so `typealias Byte = int(0 to 100)` passes rule 1 and cannot hold `223`. MEASURED
+	//      on `origin/main`: `takes(b"\xdf")` into `takes(b Array with Byte)` returned **223** out of an
+	//      element declared `int(0 to 100)` — exit 223, no diagnostic. It is the same reading
+	//      `SignatureIndex.isByteElementName`'s header records twice for the boundary door, reached this time
+	//      with no compiler-synthesized buffer at all.
+	//
+	// ⚠ **RULE 2 IS PER-VALUE, NOT PER-TYPE, AND THAT ASYMMETRY WITH RULE 1 IS THE POINT.** A wide `Byte`
+	// makes EVERY literal unemittable (the blob's layout is wrong whatever bytes are in it); a narrow one
+	// makes only the literals that overflow it wrong — `b"abc"` under `int(0 to 100)` is three bytes that all
+	// fit and must keep compiling. So this is the ordinary compile-time narrowing every other literal gets
+	// (`literalInRange` against the element's DECLARED bounds, E3005), applied once per byte, and NOT a
+	// second `unsupported`: E2015 would say *"shv2 cannot emit this"*, which is true of a wide `Byte` and
+	// false here — the emission is fine and the program is wrong.
+	//
+	// ⚠ **THE STRIDE IS ASKED FIRST, AND THE BOUNDS TEST DEPENDS ON IT HAVING PASSED.** Bounds ride as RAW
+	// 64-bit patterns (`RangedTypeAlias`), so `int(0 to u64.max)` carries `high == -1` and a negative lower
+	// bound is indistinguishable from one above `i64.max`. `rangedAliasStorageBytes` gives every such range
+	// the machine word, so a stride of 1 is exactly the proof that `low` and `high` are honest small
+	// non-negative numbers — `literalInRange` is handed no ambiguous pattern to mis-order.
+	//
+	// ⚠⚠ **AND THE WHOLE RULE HAS A SECOND DOORWAY**, `requireConstByteStringBlobFitsItsElement`, because a
+	// top-level `let G = b"…"` / `var G = b"…"` never reaches the expression emitter: the initializer sweep
+	// folds it to bytes and `ModuleInit` builds the record, so a STORED byte-string global would otherwise
+	// slip the gate (measured for the stride rule: it did, and the narrow rule inherits the same doorway).
+	// The two differ ONLY in the error union their tier speaks — `ParseError` here, `ConstEvalError.defective`
+	// there — so the RULE is this one function and only the `throw` is written twice. Wiring rule 2 beside
+	// rule 1 rather than into this function's callers is what makes "one of the two doors was taught" a shape
+	// the code cannot express.
+	function requireByteStringBlobFitsItsElement(bytes ByteArray, line LineNumber, column ColumnNumber) throws ParseError
+		// ONE read of the instance, so the stride and the bounds are provably the same element's — the
+		// coupling `bytearray-element-size.md` names as the thing that would go quiet if the literal ever
+		// stopped resolving through `ProgramSignatures.internArrayByteInstance(readerFilePath)`.
+		let giid = self.signatures.internArrayByteInstance(self.filePath)
 
-	// The `requireByteStringBlobStridesLikeItsType` twin for the top-level initializer sweep — same stride,
-	// same message, positioned at the `b"…"` token of the declaration rather than at a use.
-	function requireConstByteStringBlobStridesLikeItsType(tok Token) throws ConstEvalError
-		let declaredStride = self.byteElementDeclaredStride()
+		let declaredStride = self.signatures.arrayElementSize(giid) as ParsedInt
 		if declaredStride != ByteStringElementSize 'blobStrideDisagreesWithTheElement'
-			throw ConstEvalError.defective(ParseError.unsupported(byteStringBlobStrideMessage(declaredStride), line: tok.line, column: tok.column))
+			throw ParseError.unsupported(byteStringBlobStrideMessage(declaredStride), line: line, column: column)
 		end 'blobStrideDisagreesWithTheElement'
-	end 'requireConstByteStringBlobStridesLikeItsType'
 
-	// What THIS program's `Byte` element strides — `arrayElementSize` over the very instance a `b"…"` literal
-	// carries, so the gate's antecedent is the number every other `Array with Byte` record is stamped with and
-	// not a second reading of the same declaration.
-	function byteElementDeclaredStride() returns ParsedInt
-		return self.signatures.arrayElementSize(self.signatures.internArrayByteInstance(self.filePath)) as ParsedInt
-	end 'byteElementDeclaredStride'
+		match self.signatures.arrayElementAliasOf(giid, readerFilePath: self.filePath) 'element'
+			// No declared range constrains the element, so no byte can be outside one. It is the program
+			// that declares no `Byte` at all, whose only `Array with Byte` record is the literal's own
+			// (`SignatureIndex.undeclaredNamedElementStorageBytes`).
+			undeclared then return
+			declared(alias) then try self.requireEveryByteInRange(bytes, alias: alias, line: line, column: column)
+		end 'element'
+	end 'requireByteStringBlobFitsItsElement'
+
+	// Rule 2's walk, split out so the rule above reads as its two clauses. EVERY byte is tested and the FIRST
+	// offending one is reported: a blob is a run the source never spelled out, so a diagnostic naming one byte
+	// of it has to name WHICH (`byteStringByteOutOfRangeMessage`).
+	function requireEveryByteInRange(bytes ByteArray, alias RangedTypeAlias, line LineNumber, column ColumnNumber) throws ParseError
+		let isFloat = aliasIsFloat(alias)
+		let len = bytes.count()
+		var i = 0 as ByteOffset
+		while i < len 'eachByte'
+			let value = (try bytes.get(i) otherwise panic("requireEveryByteInRange: i < len just held but get({i}) failed")) as ParsedInt
+			if not literalInRange(value, low: alias.low, high: alias.high, isFloat: isFloat) 'outsideTheElementsRange'
+				throw ParseError.byteStringByteOutOfRange(value, offset: i as ParsedInt, aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, line: line, column: column)
+			end 'outsideTheElementsRange'
+			i = i + 1
+		end 'eachByte'
+	end 'requireEveryByteInRange'
+
+	// The doorway the top-level initializer sweep speaks through — the rule above in `ConstEvalError`'s
+	// union, positioned at the `b"…"` token of the declaration rather than at a use.
+	function requireConstByteStringBlobFitsItsElement(bytes ByteArray, tok Token) throws ConstEvalError
+		try self.requireByteStringBlobFitsItsElement(bytes, line: tok.line, column: tok.column) otherwise (err) 'rejected'
+			throw ConstEvalError.defective(err)
+		end 'rejected'
+	end 'requireConstByteStringBlobFitsItsElement'
 
 	// ⭐⭐ **`"prefix {x} suffix"` — WHERE THE FIRST OWNED HEAP STRING IS BUILT.** An interpolation lowers to
 	// ONE `__mm_alloc`'d fused record: the 48-byte String record with its UTF-8 bytes INLINE right behind it
@@ -35679,8 +35739,11 @@ export type Parser
 		end 'stringLiteral'
 		if self.at(TokenKind.byteStringLiteral) 'byteStringLiteral'
 			let byteStringTok = self.consumeManagedLiteral()
-			try self.requireConstByteStringBlobStridesLikeItsType(byteStringTok)
+			// DECODED FIRST, because the rule is about the blob's BYTES and not only about its element's
+			// stride (A3r) — the escapes have to be resolved before there is a byte to range-check. The
+			// expression door has always asked in this order, and now the two doors ask one question.
 			let decoded = try self.decodeConstByteStringLiteral(byteStringTok)
+			try self.requireConstByteStringBlobFitsItsElement(decoded, tok: byteStringTok)
 			try self.requireInitializerConsumed(decl)
 
 			return ConstInitializerValue.managed(decoded, kind: ManagedConstKind.byteArray)

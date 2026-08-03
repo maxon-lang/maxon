@@ -3466,18 +3466,23 @@ end 'sourceSpelledAliasName'
 // `LiveGlobalLabelSet`, `InterfaceNameSet` — rather than a list plus a linear scan, which is what makes
 // "linear in the graph" a fact about this walk rather than a hope.
 typealias StructNameSet = Set with ByteArray
+
 // Source-file path (stringified) ⇒ that file's MODULE DIRECTORY. See
 // `ProgramSignatures.fileModuleDirectories`.
 typealias FileModuleDirectoryMap = Map with (String, String)
+
 // Every FREE function's namespace-qualified spelling (N1b). See
 // `ProgramSignatures.namespaceQualifiedFunctions`.
 typealias NamespaceQualifiedFunctionSet = Set with ByteArray
+
 // Bare free-function name ⇒ the module directory of the file that FIRST declared it (N1c). See
 // `ProgramSignatures.freeFunctionDirectories`.
 typealias FreeFunctionDirectoryMap = Map with (ByteArray, String)
+
 // Bare free-function name ⇒ every namespace-qualified spelling of it, for the names more than one
 // DIRECTORY declares (N1c). See `ProgramSignatures.contestedFreeFunctions`.
 typealias ContestedFreeFunctionMap = Map with (ByteArray, ByteArrayArray)
+
 // Every REGISTRATION name a contested free function was filed under (N1c) — the same strings
 // `ContestedFreeFunctionMap`'s values hold, indexed the way the CALL DOOR asks for them. See
 // `ProgramSignatures.contestedRegistrationNames`.
@@ -7245,6 +7250,29 @@ export type ProgramSignatures
 		let args = self.genericInstances.instanceArgs(id)
 		return self.canonicalTupleStructRef(try args.get(0) otherwise panic("ProgramSignatures.arrayElementType: `Array` instance {id} has no type argument — arity (1) was checked at instantiation"))
 	end 'arrayElementType'
+
+	// ⭐⭐ **THE DECLARED RANGE OF AN `Array` INSTANCE'S ELEMENT, AS `readerFilePath` RESOLVES IT** — the
+	// BOUNDS twin of `arrayElementSize`, and the question a value being stored INTO the instance has to be
+	// asked (`Parser.requireByteStringBlobFitsItsElement`).
+	//
+	// ⚠ **IT READS THE ELEMENT OFF THE INSTANCE RATHER THAN RE-DERIVING THE NAME, AND THAT IS THE POINT.**
+	// `Byte` is a name a program may declare, so a range-contested one wears the reader's own mint
+	// (`RangedAliasRegistry.rangeScopedName`) by the time it is an instance's type argument. Spelling the
+	// element a second time here — `aliasOf(ByteElementTypeName, …)` at the call site — would be a second
+	// derivation of a fact the instance already carries, free to disagree with the very `arrayElementSize`
+	// its answer is paired with. One instance, one element, one range.
+	//
+	// A non-`named` element (an `int`, a `String`, a nested instance) is `undeclared`: there is no ranged
+	// alias to have bounds, which is the same answer a `named` element no file declares gets, and both mean
+	// "no declared range constrains this element" to every caller.
+	export function arrayElementAliasOf(id GenericInstanceId, readerFilePath FilePath) returns DeclaredAlias
+		let element = self.arrayElementType(id)
+		if maxonTypeTag(element) != ValueTypeTag.named 'notANamedElement'
+			return DeclaredAlias.undeclared
+		end 'notANamedElement'
+
+		return self.typeAliases.lookup(self.nameOfId(typeNameIdOf(element)), readerFilePath: readerFilePath)
+	end 'arrayElementAliasOf'
 
 	// --- The `Set` builtin generic (P1.7b slice A) ---
 	//

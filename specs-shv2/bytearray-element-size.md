@@ -286,6 +286,232 @@ end 'main'
 0
 ```
 
+### ⚠ THE STRIDE RULE HAS A NARROW TWIN, AND WITHOUT IT THE LITERAL IS A SILENT WRONG ANSWER
+
+The section above is the WIDE half of one rule: a blob that is byte-PACKED by construction is a value of
+`Array with Byte` only while `Byte` strides one byte. **The stride is only half of what a value has to
+satisfy.** `rangedAliasStorageBytes` gives EVERY non-negative range that fits `u8.max` a one-byte slot, so
+`typealias Byte = int(0 to 100)` strides 1 and passes that rule — and it cannot hold `223`.
+
+⛔ **MEASURED on `origin/main` (A3r), on a compiler built without R4.7's boundary door at all, so this is
+neither R4.7's nor N2's doing**: `takes(b"\xdf")` into `function takes(b Bytes)` returned **223** out of an
+element declared `int(0 to 100)`. Exit 223, no diagnostic anywhere. It is the third sighting of one reading
+in this file, and the first one that needs no compiler-synthesized buffer to reach it — a `b"…"` literal is
+four keystrokes of ordinary source.
+
+⇒ **EVERY BYTE OF THE BLOB IS A LITERAL VALUE BEING NARROWED INTO THE ELEMENT**, and it is checked exactly
+as any other compile-time value narrowed into a ranged alias is: `TypeRules.literalInRange` against the
+element's DECLARED bounds, reported as the same **E3005** a `300 as Byte` or a `made.push(2000)` earns. It
+is deliberately NOT the wide side's E2015: that code says *"shv2 cannot emit this literal"*, which is true
+of a wide `Byte` (an element-wise widening emission is a real mechanism and its own rung) and false here —
+the emission is fine, the program is wrong.
+
+⚠ **IT IS A PER-VALUE RULE AND NOT A PER-TYPE ONE.** `b"abc"` under `int(0 to 100)` is three bytes that all
+fit, and it must keep compiling; refusing every literal a narrow `Byte` might not hold would be its own
+wrong answer, pointing the other way. The three acceptance cases below are what hold that shut.
+
+⚠ **AND IT IS ASKED AT BOTH OF THE LITERAL'S DOORS, WHICH IS WHY THE STRIDE RULE'S TWO THROW SITES BECAME
+ONE RULE FUNCTION** (`Parser.requireByteStringBlobFitsItsElement`). A top-level `let`/`var` never reaches
+the expression emitter — the initializer sweep folds it to bytes and `ModuleInit` builds the record — so a
+rule wired to the emitter alone would let a stored byte-string global slip it, exactly as the stride rule's
+own history records (measured: it did).
+
+<!-- test: byte-string-literal-refused-when-a-byte-is-outside-the-elements-range -->
+### A `b"…"` literal is refused when a byte does not fit this program's `Byte`
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	return takes(b"\xdf")
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/bytearray-element-size/byte-string-literal-refused-when-a-byte-is-outside-the-elements-range.test:10:15: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
+```
+
+<!-- test: byte-string-literal-checks-every-byte-not-only-the-first -->
+### Every byte is checked, not just the first
+The first byte fits and the second does not. A rule that looked at the blob's head — or at its WIDTH, which
+`0xdf` passes since it is eight bits — reads this program as legal.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(1) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	return takes(b"\x41\xdf")
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/bytearray-element-size/byte-string-literal-checks-every-byte-not-only-the-first.test:10:15: byte 223 at offset 1 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
+```
+
+<!-- test: byte-string-literal-accepted-at-the-elements-exact-maximum -->
+### The element's exact maximum is IN range
+The boundary is inclusive, and this is the case that separates `<=` from `<`.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	return 0 if takes(b"\x64") == 100 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: byte-string-literal-refused-one-past-the-elements-maximum -->
+### …and one past it is not
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	return takes(b"\x65")
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/bytearray-element-size/byte-string-literal-refused-one-past-the-elements-maximum.test:10:15: byte 101 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
+```
+
+<!-- test: byte-string-literal-of-in-range-bytes-still-compiles -->
+### A narrow `Byte` that genuinely admits the literal's bytes keeps compiling
+`a`, `b` and `c` are 97, 98 and 99, all inside `int(0 to 100)`. A refusal derived from the element's TYPE
+rather than from the literal's VALUES would reject this program, which is a wrong answer pointing the
+other way.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(2) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	return 0 if takes(b"abc") == 99 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-empty-byte-string-literal-fits-any-byte-element -->
+### An EMPTY literal has no byte to be out of range
+The degenerate end of a per-value rule: nothing to check, so nothing to refuse.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return b.count() as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	return takes(b"")
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: byte-string-global-refused-when-a-byte-is-outside-the-elements-range -->
+### The refusal reaches a top-level byte-string global, which no function body ever parses
+The narrow twin of `byte-string-global-refused-when-byte-is-wider-than-one-byte`, and it is here for the
+same measured reason: a file-scope `let`/`var` is folded to bytes by the initializer sweep and its record
+is built by `__module_init`, so it never reaches the expression-position emitter.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+var BUFFER = b"\xdf"
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(1)
+	BUFFER.push(2)
+	return made.count() + BUFFER.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/bytearray-element-size/byte-string-global-refused-when-a-byte-is-outside-the-elements-range.test:5:14: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
+```
+
+<!-- test: readers-own-byte-decides-which-literal-bytes-fit -->
+### A byte legal under ONE file's `Byte` stays legal there while a sibling file's is narrower
+The exact analogue of `readers-own-byte-decides-the-literal-not-the-whole-program-fold` for the RANGE half
+of the rule: `wide.maxon`'s literal is checked against `wide.maxon`'s `int(0 to u8.max)`, and `main.maxon`'s
+against its own `int(0 to 100)`. A whole-program fold over both declarations — or a check that read the
+declaring file of whichever `Byte` was recorded last — gets one of the two wrong.
+```maxon
+// --- file: wide.maxon
+typealias Byte = int(0 to u8.max)
+
+export function anyByte(b Byte) returns int
+	var a = b"\xdf"
+	return (try a.get(0) otherwise 0) - b
+end 'anyByte'
+
+// --- file: main.maxon
+typealias Byte = int(0 to 100)
+
+function narrow(b Byte) returns int
+	return b
+end 'narrow'
+
+function main() returns ExitCode
+	var mine = b"\x41"
+	return anyByte(narrow(try mine.get(0) otherwise 0)) as ExitCode
+end 'main'
+```
+```exitcode
+158
+```
+
+<!-- test: the-narrow-files-own-byte-literal-is-still-refused -->
+### …and the identical literal moved into the NARROW file meets its own declaration's wall
+The half that proves the case above is not simply a lost refusal. One program, two files, two answers.
+```maxon
+// --- file: wide.maxon
+typealias Byte = int(0 to u8.max)
+
+export function anyByte(b Byte) returns int
+	var a = b"\xdf"
+	return (try a.get(0) otherwise 0) - b
+end 'anyByte'
+
+// --- file: main.maxon
+typealias Byte = int(0 to 100)
+
+function narrow(b Byte) returns int
+	return b
+end 'narrow'
+
+function main() returns ExitCode
+	var mine = b"\xdf"
+	return anyByte(narrow(try mine.get(0) otherwise 0)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:18:13: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
+```
+
 ### ⚠ A ONE-BYTE SLOT IS NOT A BYTE — the stride is what the RECORD says, the RANGE is what it does not
 
 `rangedAliasStorageBytes` gives EVERY non-negative range that fits `u8.max` a one-byte slot, so `Byte` is
@@ -533,8 +759,9 @@ the whole-program fold (`RangedAliasRegistry.storageBytesInEveryFile`, the MAX o
 declaration) are the SAME number — so the two wide-`Byte` refusals above pass identically against a
 compiler that scopes the stride to the reader and against one that folds it, and neither pins which
 is running. The four cases here are the two-file shapes that separate them, and they are the ones
-that would go quiet if `Parser.byteElementDeclaredStride` ever stopped resolving through
-`ProgramSignatures.internArrayByteInstance(readerFilePath)`.
+that would go quiet if `Parser.requireByteStringBlobFitsItsElement` ever stopped resolving through
+`ProgramSignatures.internArrayByteInstance(readerFilePath)`. The RANGE half of that rule has the same
+exposure and its own pair — `readers-own-byte-decides-which-literal-bytes-fit` and its twin, above.
 
 <!-- test: readers-own-byte-decides-the-literal-not-the-whole-program-fold -->
 ### A `b"…"` in a file with no `Byte` of its own stays packed while a SIBLING file is wide

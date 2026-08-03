@@ -1322,6 +1322,23 @@ export function otherwiseOutOfRangeMessage(value ParsedInt, aliasName String, lo
 	return "otherwise value {value} is outside the range of '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: false)})"
 end 'otherwiseOutOfRangeMessage'
 
+// ⭐ **THE E3005 A `b"…"` BYTE-STRING LITERAL'S OWN BYTE REPORTS (A3r)** — the third subject of the one
+// range fact, worded here for the reason its `otherwise` sibling above is: the NAME spells through
+// `quotedAliasName` and the BOUNDS through `formatRangeDisplay`, so no site can print an alias or a range
+// two ways, while the subject stays the site's own.
+//
+// ⚠ **THE SUBJECT IS NOT A NARROWING, AND SAYING SO COSTS THE READER THE OFFSET.** A blob is a run of
+// values the source never wrote out one by one, so `literalOutOfRangeMessage`'s `Value 223` would leave the
+// author of `b"\x41\xdf\x02"` to work out WHICH byte is 223. The offset is the only thing this sentence
+// carries that its sibling cannot, and it is exactly why it is a sentence rather than a reuse.
+//
+// ⚠ The VALUE is a byte and is spelled plainly — it is never the wrapped `u64.max` pattern `formatBound`
+// exists to un-wrap. The RANGE is not: an element alias's bounds may be a float's bit patterns, so it keeps
+// the alias's own domain rather than assuming the byte's.
+export function byteStringByteOutOfRangeMessage(value ParsedInt, offset ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
+	return "byte {value} at offset {offset} of a `b\"…\"` byte-string literal is outside the range of '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
+end 'byteStringByteOutOfRangeMessage'
+
 // ⭐ **AN ALIAS NAME AS AN E3005 QUOTES IT** — `sourceSpelledAliasName` applied at the one tier a name
 // becomes text an author reads, so no renderer can quote the compiler's bookkeeping and no PRODUCER has to
 // remember to strip before filling in an error's payload.
