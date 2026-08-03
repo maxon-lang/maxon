@@ -2489,7 +2489,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private void EmitDeferredExprDecls(List<DeferredDecl> deferred, bool isMutable) {
     foreach (var decl in deferred)
-      EmitSingleDeferredGlobalInit(decl.Name, _tokens, decl.TokenStart, isMutable);
+      EmitSingleDeferredGlobalInit(decl.Name, _tokens, decl.TokenStart, decl.TokenEnd, isMutable);
   }
 
   /// <summary>
@@ -2537,7 +2537,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         && seedModule?.Functions.Any(f => f.IsStdlib && f.SourceFilePath == init.SourceFilePath) == true;
       if (initIsStdlib) Ir.Core.IrContext.Current.StdlibLoweringMode = true;
       try {
-        EmitSingleDeferredGlobalInit(init.Name, init.Tokens, init.TokenStart, init.IsMutable);
+        EmitSingleDeferredGlobalInit(init.Name, init.Tokens, init.TokenStart, init.TokenEnd, init.IsMutable);
       } catch (CompileError ex) {
         ex.FilePath ??= init.SourceFilePath;
         throw;
@@ -2631,7 +2631,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
 
         // Evaluate the initializer expression and store result
-        EmitSingleDeferredGlobalInit(field.QualifiedName, field.Tokens, field.TokenStart, field.IsMutable);
+        EmitSingleDeferredGlobalInit(field.QualifiedName, field.Tokens, field.TokenStart, field.TokenEnd, field.IsMutable);
         _currentTypeName = savedTypeName;
 
         _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
@@ -2646,36 +2646,51 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   /// <summary>
   /// Parse and emit a single deferred global variable initialization.
-  /// Temporarily swaps the token list and position if needed.
+  ///
+  /// The initializer's tokens are copied into a private EOF-terminated list rather than parsed in
+  /// place, which is what lets this door ask <see cref="RequireInjectedStreamConsumed"/> the same
+  /// question the interpolation and default-value doors ask. Parsed in place it could not: the
+  /// "did it stop early?" test would have to compare against `tokenEnd`, which is a SECOND spelling
+  /// of the rule, and the door that had no test at all is exactly how `var g = f() zzz` compiled and
+  /// ran with `zzz` discarded.
+  ///
+  /// The swap is undone in a `finally` for ParseExpression's sake, which throws on an initializer
+  /// naming something unresolvable — the same reason <see cref="EmitDefaultFromTokens"/> gives.
+  /// Restored only on the success path, a caught error would leave the parser reading this
+  /// initializer's private array at an offset into the real one.
   /// </summary>
-  private void EmitSingleDeferredGlobalInit(string name, List<Token> tokens, int tokenStart, bool isMutable) {
+  private void EmitSingleDeferredGlobalInit(string name, List<Token> tokens, int tokenStart, int tokenEnd, bool isMutable) {
     var savedTokens = _tokens;
     int savedPos = _pos;
-    _tokens = tokens;
-    _pos = tokenStart;
+    _tokens = [.. tokens.GetRange(tokenStart, tokenEnd - tokenStart), new Token(TokenType.Eof, "", 0, 0)];
+    _pos = 0;
 
-    var exprResult = ParseExpression();
-    var value = ResolveExprValue(exprResult);
+    try {
+      var exprResult = ParseExpression();
+      var value = ResolveExprValue(exprResult);
 
-    // Every runtime-initialized global holds a managed record, and all but one shape of them is
-    // struct-like (struct, String, Array, Map) — a boxed union is the exception, and it must be
-    // Enum-kinded so `match` reads it as cases rather than as an opaque struct pointer.
-    // `RegisterDeferredExprGlobals` already inferred that from the initializer's leading tokens;
-    // the parsed value is the same fact known exactly, so it REFINES the registration rather than
-    // replacing it — the visibility tier and declaring file were recorded there and are not
-    // re-derivable here, and dropping them desynchronized `_globalVars` from
-    // `module.GlobalVarInfos`, which then disagreed about whether the slot held an enum or a struct.
-    if (value is MaxonEnum valueEnum) {
-      _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Enum, valueEnum.TypeName));
-      RefineGlobalVarType(name, isMutable, MaxonValueKind.Enum, typeName: null, enumTypeName: valueEnum.TypeName);
-    } else {
-      _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Struct));
-      if (value is MaxonStruct valueStruct)
-        RefineGlobalVarType(name, isMutable, MaxonValueKind.Struct, typeName: valueStruct.TypeName, enumTypeName: null);
+      RequireInjectedStreamConsumed("'end of global initializer'");
+
+      // Every runtime-initialized global holds a managed record, and all but one shape of them is
+      // struct-like (struct, String, Array, Map) — a boxed union is the exception, and it must be
+      // Enum-kinded so `match` reads it as cases rather than as an opaque struct pointer.
+      // `RegisterDeferredExprGlobals` already inferred that from the initializer's leading tokens;
+      // the parsed value is the same fact known exactly, so it REFINES the registration rather than
+      // replacing it — the visibility tier and declaring file were recorded there and are not
+      // re-derivable here, and dropping them desynchronized `_globalVars` from
+      // `module.GlobalVarInfos`, which then disagreed about whether the slot held an enum or a struct.
+      if (value is MaxonEnum valueEnum) {
+        _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Enum, valueEnum.TypeName));
+        RefineGlobalVarType(name, isMutable, MaxonValueKind.Enum, typeName: null, enumTypeName: valueEnum.TypeName);
+      } else {
+        _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Struct));
+        if (value is MaxonStruct valueStruct)
+          RefineGlobalVarType(name, isMutable, MaxonValueKind.Struct, typeName: valueStruct.TypeName, enumTypeName: null);
+      }
+    } finally {
+      _tokens = savedTokens;
+      _pos = savedPos;
     }
-
-    _tokens = savedTokens;
-    _pos = savedPos;
   }
 
   /// Narrow a runtime-initialized global's recorded type to what its parsed initializer actually
@@ -25416,16 +25431,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   /// ⭐ AN INJECTED TOKEN STREAM MUST BE CONSUMED WHOLE, and this is the single place that says so.
   ///
-  /// Two constructs hand `ParseExpression` a private token list carved out of the real one — an
-  /// interpolation's `{...}` body and a captured parameter/field default — and both used to keep
-  /// whatever the expression did not consume and then THROW IT AWAY. Everywhere else in the language
-  /// the leftovers are caught for free, because the statement parser meets a newline or EOF and says
-  /// so; `let x = 1 zzz` has never been legal. The cost of the omission was not cosmetic: `1e100` is
-  /// not a float literal (one must contain a decimal point — see lexer-edge-cases' float-exponent-eof),
-  /// so `e100` lexed as an identifier and vanished, and BOTH doors printed a number a hundred orders of
-  /// magnitude wrong with no diagnostic.
+  /// THREE constructs hand `ParseExpression` a private token list carved out of the real one — an
+  /// interpolation's `{...}` body, a captured parameter/field default, and a top-level or static
+  /// field's runtime-initialized value — and each used to keep whatever the expression did not
+  /// consume and then THROW IT AWAY. Everywhere else in the language the leftovers are caught for
+  /// free, because the statement parser meets a newline or EOF and says so; `let x = 1 zzz` has never
+  /// been legal. The cost of the omission was not cosmetic: `1e100` is not a float literal (one must
+  /// contain a decimal point — see lexer-edge-cases' float-exponent-eof), so `e100` lexed as an
+  /// identifier and vanished, and the first two doors printed a number a hundred orders of magnitude
+  /// wrong with no diagnostic while `var g = f() zzz` compiled and ran.
   ///
-  /// One rule, one place: a third injected stream must call this rather than re-derive the answer.
+  /// ⚠ It is the EOF sentinel that makes one rule serve all three, so a new door must copy its region
+  /// into a private list and terminate it — see <see cref="EmitSingleDeferredGlobalInit"/>, which was
+  /// the door that parsed IN PLACE and therefore had nothing it could ask.
+  ///
+  /// ⚠ <see cref="ExpectConstInitializerFullyConsumed"/> is NOT a second copy of this and must not be
+  /// merged into it: it fires when the constant EVALUATOR stopped folding, not when the parser stopped
+  /// parsing, and its diagnostic says so ("not a constant expression"). Same shape, different cause —
+  /// a global whose initializer is unfoldable is a legal expression in the wrong place, not junk.
+  ///
+  /// One rule, one place: a fourth injected stream must call this rather than re-derive the answer.
   private void RequireInjectedStreamConsumed(string endDisplay) {
     if (!Check(TokenType.Eof)) throw ExpectedTokenError(endDisplay, Current());
   }

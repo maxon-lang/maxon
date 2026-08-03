@@ -421,3 +421,37 @@ end 'main'
 ```stdout
 A1B2A3 A1A3
 ```
+
+### Error: A lazy static field's initializer must consume everything up to the end of its line
+
+A static field with a non-constant initializer is deferred to its first access and re-parsed from a
+stored token region — the same door a top-level `var` uses, and it dropped its leftovers the same way:
+`static var b = Box.create() zzz` initialized `b` and said nothing about `zzz`.
+
+<!-- test: error.static-field-init-trailing-tokens -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+
+	export static function create() returns Self
+		return Self{v: 3}
+	end 'create'
+end 'Box'
+
+type Holder
+	static var b = Box.create() zzz
+
+	export static function get() returns Integer
+		return Holder.b.v
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	return Holder.get()
+end 'main'
+```
+```maxoncstderr
+error E2010: specs/fragments/lazy-static/error.static-field-init-trailing-tokens.test:13:30: Expected 'end of global initializer' but got 'zzz'
+```

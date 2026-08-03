@@ -518,3 +518,32 @@ export let BVAL = SECRET + 1
 ```exitcode
 122
 ```
+
+### Error: A runtime-initialized global must consume everything up to the end of its line
+
+A global whose initializer is not constant-foldable is re-parsed later, out of the token region the
+declaration scan marked off, and whatever the expression did not reach was abandoned — so
+`var g = Box.create() zzz` compiled, ran, and ignored `zzz`. The same rule the interpolation body and
+the captured parameter default now follow.
+
+<!-- test: error.runtime-init-trailing-tokens -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+
+	export static function create() returns Self
+		return Self{v: 3}
+	end 'create'
+end 'Box'
+
+var g = Box.create() zzz
+
+function main() returns ExitCode
+	return g.v
+end 'main'
+```
+```maxoncstderr
+error E2010: specs/fragments/top-level-let/error.runtime-init-trailing-tokens.test:12:22: Expected 'end of global initializer' but got 'zzz'
+```
