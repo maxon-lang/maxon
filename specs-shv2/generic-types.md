@@ -1122,6 +1122,143 @@ end 'main'
 0
 ```
 
+<!-- test: alias-named-type-argument-owning-heap-is-not-co-owned-trivial -->
+⭐⭐ **A `Box with N0` whose `N0` owns a String is an OWNING argument, and the CONSUME boundary has to
+say so as loudly as the DROP boundary already did (A3k).** `typeArgIsOwned` looked the alias name up in
+`structTypes` and `enumTypes`, which a generic-instance typealias is in neither of, and answered "not
+owned" — while its twin `typeIsManaged` has always ended in `isGenericAlias(name)` and answered
+"managed". The pair is read as `typeArgIsCoOwnedTrivial = typeIsManaged and not typeArgIsOwned`, so the
+box classified as CO-OWNED TRIVIAL: every construction paid an `__mm_incref` plus a destructor call
+where a move was owed, and this program — a shared-body reassign of `Box.value`, which is refused
+whenever ANY instantiation of `Box` is co-owned trivial — was refused **E2015** "a trivial-struct
+instantiation co-owns the field", said of a box that owns a String. Order-INDEPENDENTLY, unlike the
+tuple-alias half A3e's review closed.
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function swap(v T)
+		self.value = v
+	end 'swap'
+end 'Box'
+typealias N0 = Box with S0
+typealias N1 = Box with N0
+function main() returns ExitCode
+	var v0 = N0.create(S0.make("x"))
+	var v1 = N1.create(v0)
+	v1.swap(N0.create(S0.make("y")))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: alias-named-type-argument-reassigned-in-a-loop-is-leak-free -->
+The same reassignment 200 times over, so the balance is a COUNT and not a coincidence: each round moves
+a fresh `N0` into the box and drops the one it replaces. A retain that no longer has a matching decref
+— or a decref for a reference the move never took — is a leak or a double free rather than an exit 0.
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function swap(v T)
+		self.value = v
+	end 'swap'
+end 'Box'
+typealias N0 = Box with S0
+typealias N1 = Box with N0
+function main() returns ExitCode
+	var v1 = N1.create(N0.create(S0.make("start")))
+	for i in 0 upto 200 'rounds'
+		v1.swap(N0.create(S0.make("round")))
+	end 'rounds'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.alias-named-type-argument-is-moved-not-borrowed -->
+⭐ **The narrowing that comes with it, and the half that proves the move is real.** An owning argument
+is MOVED into the box, so the source is no longer the caller's to read. Spelled through the alias this
+used to be a BORROW the caller kept — the box merely `__mm_incref`'d it — so this program compiled;
+the `Box with (Box with S0)` spelling below is the same program and has always been refused, which is
+the disagreement this rung removes.
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias N0 = Box with S0
+typealias N1 = Box with N0
+function main() returns ExitCode
+	let v0 = N0.create(S0.make("x"))
+	let v1 = N1.create(v0)
+	let again = v0.value
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:14: use of moved value 'v0': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.inline-nested-type-argument-is-moved-not-borrowed -->
+The inline spelling of the case above, refused identically. It is the CONTROL that makes the pair a
+statement about agreement rather than about one spelling: its argument arrives tagged
+`genericInstance`, which `typeArgIsOwned` has always classified through the instance, so this half was
+already correct and did not move.
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias N0 = Box with S0
+typealias N1 = Box with (Box with S0)
+function main() returns ExitCode
+	let v0 = N0.create(S0.make("x"))
+	let v1 = N1.create(v0)
+	let again = v0.value
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:14: use of moved value 'v0': its ownership moved to another binding at an earlier bind or assignment
+```
+
 <!-- test: error.bare-generic-constructor-unbound-t -->
 ⭐ **A generic type's constructor called on the BASE rather than on an instance alias is REFUSED, and
 that closes a LEAK.** `Box.create(…)` binds no type argument, so `T` is never bound: there is no

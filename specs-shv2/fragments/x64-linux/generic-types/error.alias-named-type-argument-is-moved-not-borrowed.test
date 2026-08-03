@@ -1,0 +1,24 @@
+// Test: error.alias-named-type-argument-is-moved-not-borrowed
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias N0 = Box with S0
+typealias N1 = Box with N0
+function main() returns ExitCode
+	let v0 = N0.create(S0.make("x"))
+	let v1 = N1.create(v0)
+	let again = v0.value
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:19:14: use of moved value 'v0': its ownership moved to another binding at an earlier bind or assignment

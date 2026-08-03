@@ -769,3 +769,113 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: error.contested-generic-alias-as-a-type-argument-is-not-a-panic -->
+⛔ **A generic instance's TYPE ARGUMENT is not a declared SLOT, and `settleGenericAliasContest` rewrites
+slots.** `Box with Bag` is interned once, by whichever pass first met it — the declaration SWEEP, which
+runs before any contest can be known — so its argument stays a bare `named("Bag")`. The settle then
+re-interns each declaration SCOPED, and the registry is append-only, so the pre-settle instance survives
+beside its two scoped replacements and every whole-program walk over `instancesOfBase` still meets it.
+⛔ MEASURED (A3k): once the consume boundary learned to resolve a generic alias, that spelling took
+`isManagedOpaqueTypeParamField` AND `noteDestructorUsage`'s opaque-element drop rooting straight into the
+file-less door's refusal — two unrelated walks — on a program whose single-file spelling compiles. A
+superseded spelling classifies NOTHING (`genericAliasSpellingIsSuperseded`), so the verdict is the one
+each file's own declarations earn: the co-owned-trivial reassign refusal, identical to the single-file
+program's.
+```maxon
+// --- file: aboxdef.maxon
+export type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function swap(v T)
+		self.value = v
+	end 'swap'
+end 'Box'
+
+// --- file: bhigh.maxon
+typealias High = int(1000 to 2000)
+typealias Bag = Array with High
+typealias BB = Box with Bag
+
+export function fromHigh() returns int
+	var b = Bag.create()
+	b.push(1500)
+	let box = BB.create(b)
+	return 1
+end 'fromHigh'
+
+// --- file: cmain.maxon
+typealias Low = int(0 to 100)
+typealias Bag = Array with Low
+typealias BB = Box with Bag
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.push(40)
+	var box = BB.create(b)
+	box.swap(Bag.create())
+	return fromHigh() - 1
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:9:8: Unsupported: reassigning the type-parameter field 'value' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type
+```
+
+<!-- test: error.contested-generic-alias-at-the-opaque-copy-gate -->
+The twin of the case above at the OTHER reader-free classifier, and this one was reachable BEFORE the
+consume boundary learned anything: `typeSupportsDeepClone` carries the identical
+`isGenericAlias → genericAliasInstance` arm, and `requireOpaqueArrayCopyable` drives it over the same
+`instancesOfBase` walk. ⛔ MEASURED: the compiler PANICKED out of the file-less door. A superseded
+spelling refuses nothing, so the refusal that stands is the one the live instantiations earn — the
+managed-element array `Bag` genuinely has no single `copyFunc`.
+```maxon
+// --- file: acontainer.maxon
+export type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function duplicate() returns Self
+		return Self{ items: self.items.clone() }
+	end 'duplicate'
+end 'Container'
+
+// --- file: bstrings.maxon
+typealias Bag = Array with String
+typealias NestedContainer = Container with Bag
+
+export function useStrings() returns int
+	var sa = Bag.create()
+	sa.push("a string long enough to force a heap allocation")
+	var nc = NestedContainer.create()
+	nc.push(sa)
+	return 1
+end 'useStrings'
+
+// --- file: cmain.maxon
+typealias Low = int(0 to 100)
+typealias Bag = Array with Low
+typealias NestedContainer = Container with Bag
+
+function main() returns ExitCode
+	var sa = Bag.create()
+	sa.push(7)
+	var nc = NestedContainer.create()
+	nc.push(sa)
+	var dup = nc.duplicate()
+	return useStrings() - 1
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:17:34: Unsupported: `clone` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
+```

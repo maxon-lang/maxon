@@ -1,0 +1,39 @@
+// Test: error.contested-generic-alias-as-a-type-argument-is-not-a-panic
+// --- file: aboxdef.maxon
+export type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function swap(v T)
+		self.value = v
+	end 'swap'
+end 'Box'
+
+// --- file: bhigh.maxon
+typealias High = int(1000 to 2000)
+typealias Bag = Array with High
+typealias BB = Box with Bag
+
+export function fromHigh() returns int
+	var b = Bag.create()
+	b.push(1500)
+	let box = BB.create(b)
+	return 1
+end 'fromHigh'
+
+// --- file: cmain.maxon
+typealias Low = int(0 to 100)
+typealias Bag = Array with Low
+typealias BB = Box with Bag
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.push(40)
+	var box = BB.create(b)
+	box.swap(Bag.create())
+	return fromHigh() - 1
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:9:8: Unsupported: reassigning the type-parameter field 'value' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type

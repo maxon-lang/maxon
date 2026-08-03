@@ -7327,6 +7327,11 @@ export type ProgramSignatures
 	// `__destruct_Array_String` and free each element as a pointer. That is why `settleGenericAliasContest`
 	// resolves every RECORDED field type against its own declaring file — and why a spelling it missed must
 	// arrive here as a loud panic rather than as a plausible id.
+	//
+	// ⚠ **A CALLER THAT CANNOT NAME A READER *AND* CANNOT BE HANDED A LIVE SPELLING ASKS
+	// `genericAliasSpellingIsSuperseded` FIRST** — the reader-free CLASSIFIERS, which whole-program walks drive
+	// over an append-only registry that still holds pre-settle instances. That is not a bypass of this refusal;
+	// it is the one case where the refusal is right and the caller must nevertheless not stop. See there.
 	export function genericAliasInstance(name ByteArray) returns GenericInstanceId
 		if self.contestedGenericAliases.contains(name) 'contestedAndThisDoorNamesNoReader'
 			panic("ProgramSignatures.genericAliasInstance: '{String.from(name)}' is declared by two files over different instances, and this door names no reader to choose between them — `settleGenericAliasContest` resolves every recorded declared type against its declaring file, so a spelling reaching here is one that pass does not cover")
@@ -7334,6 +7339,35 @@ export type ProgramSignatures
 
 		return self.bareGenericAliasInstance(name)
 	end 'genericAliasInstance'
+
+	// ⭐⭐ **IS A GENERIC-ALIAS SPELLING ONE THE CONTEST HAS ALREADY REPLACED — i.e. is the instance carrying it
+	// SUPERSEDED? (A3k)** Precondition: `isGenericAlias(name)`.
+	//
+	// **THIS IS THE OTHER HALF OF `genericAliasInstance`'s REFUSAL, and it exists because a WHOLE-PROGRAM WALK
+	// legitimately meets what that door legitimately refuses.** An instance's TYPE ARGUMENT is stored once, by
+	// whichever pass first met `Box with Bag`, and the declaration SWEEP meets it before any contest can be
+	// known — so `args[0]` is a bare `named("Bag")`. `settleGenericAliasContest` then re-interns every
+	// declaration and every instantiation site SCOPED (`fileScopedArg` rewrites exactly such a `named` to that
+	// file's mint), and the real parse resolves every written `Bag` through `genericAliasInstanceFrom`; the
+	// registry is APPEND-ONLY, so the pre-settle instance stays in the by-base bucket beside its scoped
+	// replacements. It is the registry's MEMORY of a spelling, not an instantiation the program has —
+	// `IrModule.ops`' orphans under `liveOpIndices` are the same shape and the same rule.
+	//
+	// ⚠ **A CLASSIFIER THAT MEETS ONE MUST CONTRIBUTE NOTHING, NOT GUESS.** The two declarations of `Bag`
+	// genuinely differ, and the reader-free classifiers (`typeArgIsOwned`, `typeSupportsDeepClone`) are read by
+	// disjunctions over instantiations, where the scoped siblings in the same bucket already carry the real
+	// answers. Each therefore returns ITS OWN identity for "classifies nothing" — `false` for "nothing is
+	// consumed through a spelling no call site can name", `true` for "nothing is refused for a spelling no copy
+	// site can name" — which is the answer the same program written in ONE file gives, verified both ways.
+	//
+	// ⚠ **MEASURED (A3k), and it is not hypothetical**: two files declaring `typealias Bag = Array with
+	// <different element>` plus a `typealias BB = Box with Bag` reached `genericAliasInstance`'s refusal from
+	// `isManagedOpaqueTypeParamField` AND from `noteDestructorUsage`'s opaque-element drop rooting — two
+	// unrelated whole-program walks — while the single-file program compiles. The `Container with Bag`
+	// deep-clone twin reaches it from `requireOpaqueArrayCopyable`.
+	function genericAliasSpellingIsSuperseded(name ByteArray) returns bool
+		return self.contestedGenericAliases.contains(name)
+	end 'genericAliasSpellingIsSuperseded'
 
 	// The raw map read, with no contest test — the tier `scopedGenericAliasInstance` falls through to, and
 	// the one `genericAliasInstance` guards. Split so the guard has exactly one bypass and it is named.
@@ -9667,6 +9701,26 @@ export type ProgramSignatures
 		// the other way (both false, so the reassign stored over the old value with no drop: a silent leak).
 		// The consume boundary and the drop boundary have to read one name.
 		let name = self.denotedSlotAggregateName(t)
+		// ⭐⭐ **A GENERIC-INSTANCE ALIAS IS THE SECOND SPELLING THIS DOOR WAS BLIND TO, AND ITS DROP TWIN WAS
+		// NOT (A3k).** `typealias N0 = Box with S0` mints no identity of its own, so `structTypes` and
+		// `enumTypes` both miss it and the whole function answered `false` — while `typeIsManaged`'s own
+		// `named` arm has always ended in `isGenericAlias(name)` and answered `true`. That is the tuple-alias
+		// asymmetry A3e's review measured, one alias family over: the pair is read as
+		// `typeArgIsCoOwnedTrivial = typeIsManaged and not typeArgIsOwned`, so `Box with N0` classified as a
+		// CO-OWNED TRIVIAL box even though `N0` owns a String through `S0`.
+		//
+		// ⚠ **MEASURED, and order-INDEPENDENTLY** (unlike the tuple half, which needed a walk order): every
+		// construction of such a box paid an `__mm_incref` plus a destructor call where a MOVE was owed, and
+		// `v1.swap(N0.create(S0.make("y")))` — a shared-body reassign of ANY `Box` field once one such
+		// instantiation exists — was refused **E2015** "a trivial-struct instantiation co-owns the field",
+		// said of a box that owns a String. The answer is the INSTANCE's, which is exactly what the
+		// `genericInstance`-tagged spelling above already returns, so `Box with N0` and
+		// `Box with (Box with S0)` now classify alike rather than by which spelling reached the argument.
+		if self.isGenericAlias(name) 'genericAlias'
+			// A SUPERSEDED spelling consumes nothing — no call site can name it. See
+			// `genericAliasSpellingIsSuperseded`, which records the two walks that reach this arm with one.
+			return not self.genericAliasSpellingIsSuperseded(name) and self.genericInstanceHasManagedField(self.genericAliasInstance(name))
+		end 'genericAlias'
 		if self.structTypes.contains(name) 'struct'
 			return self.structHasManagedField(name)
 		end 'struct'
@@ -10496,6 +10550,16 @@ export type ProgramSignatures
 		// nobody can emit.
 		let name = self.denotedSlotAggregateName(type)
 		if self.isGenericAlias(name) 'genericAlias'
+			// A SUPERSEDED spelling refuses nothing — no copy site can name it. `typeArgIsOwned`'s twin guard,
+			// off the SAME predicate: both are reader-free classifiers that a whole-program walk drives over the
+			// registry's pre-settle memory, and this one was ALREADY reachable — a two-file
+			// `typealias Bag = Array with <different element>` with `typealias NestedContainer = Container with
+			// Bag` took `requireOpaqueArrayCopyable` straight into `genericAliasInstance`'s refusal on a program
+			// whose single-file spelling compiles. See `genericAliasSpellingIsSuperseded`.
+			if self.genericAliasSpellingIsSuperseded(name) 'theContestReplacedThisOne'
+				return true
+			end 'theContestReplacedThisOne'
+
 			return self.instanceSupportsDeepClone(self.genericAliasInstance(name), asElement: asElement, visited: visited)
 		end 'genericAlias'
 		if visited.contains(name) 'cycle'
