@@ -2399,6 +2399,9 @@ export let ManagedMemoryNewLengthParamName = b"newLength"
 export let ManagedMemoryNewCapacityParamName = b"newCapacity"
 export let ManagedMemoryOffsetParamName = b"offset"
 export let ManagedMemoryIndexParamName = b"index"
+// ⚠ `Array.append`'s parameter carries this SAME label, so `Parser.requireArrayAppendArg` reads this
+// constant rather than minting a second `b"other"` — one label, one spelling. It is in this block because
+// the buffer surface is where the label was first written down, not because the `Array` surface has another.
 export let ManagedMemoryOtherParamName = b"other"
 export let ManagedMemoryValueParamName = b"value"
 
@@ -7733,6 +7736,17 @@ export type ProgramSignatures
 	//     (`int(0 to 100)`) source into a `Small` (`int(0 to 200)`) destination cannot produce an
 	//     out-of-range read and stays legal, and refusing both directions would be over-refusal.
 	//
+	// ⚠ **AND THERE IS NO THIRD QUESTION — IN PARTICULAR NOT `byteBufferBoundaryAdmits` (A4b review).** The
+	// byte boundary is a NOMINAL whole-container door and is one-way by design: only `__ManagedByte` may be
+	// adopted where a byte-holding `Byte` is DECLARED, never the reverse. `append` adopts nothing, so asking
+	// it here imported that one-way-ness into a site with no reason for it — MEASURED, a `currentPath()`
+	// buffer receiving an `Array with Byte` compiled at `59b56fda1` and stopped compiling once the rule
+	// landed, the exact mirror of the acceptance case this rung added. The cure is not a second door in the
+	// other direction: it is that the compiler-owned byte element HAS a value set
+	// (`elementIntegerValueRange`), which makes the domain test answer both directions on its own. Asking
+	// both would be one byte fact with two answers that nothing keeps in agreement — and the one that
+	// diverges silently is the nominal door, because it admits rather than refuses.
+	//
 	// ⛔ **REPLACING THE FIRST WITH INSTANCE IDENTITY WOULD REFUSE A CORRECT PROGRAM.** `[1, 2, 3]` mints
 	// `Array with int` (`internBuiltinIntegerInstance`) and `IntArray.create()` an `Array with Integer` —
 	// two instances over ONE value set — and `arrays.md`'s `append-empty-to-nonempty` /
@@ -7740,11 +7754,6 @@ export type ProgramSignatures
 	// pairs above; the giids genuinely differ and always will, because an instance interns on the element's
 	// NAME.
 	//
-	// ⭐ **AND THE BYTE BOUNDARY IS ASKED HERE LIKE IT IS AT THE OTHER EIGHT SITES (R4.7).** A
-	// compiler-synthesized buffer wears `__ManagedByte`, which is not a ranged alias and therefore has no
-	// declared domain to compare — so without `byteBufferBoundaryAdmits` a `currentPath()` buffer appended
-	// to an `Array with Byte` would stop compiling, which is the correct program R4.7 exists to keep. It is
-	// asked SECOND, after the domain test has already answered no, so an ordinary append pays nothing for it.
 	export function arrayAppendArgAdmits(receiverGiid GenericInstanceId, argTag ValueTypeTag, argNameId TypeNameId, readerFilePath FilePath) returns bool
 		if not self.isArrayInstanceAt(argTag, nameId: argNameId) 'notAnArrayAtAll'
 			return false
@@ -7754,6 +7763,13 @@ export type ProgramSignatures
 		// stamp and an OPAQUE one through the receiver's descriptor `copyFunc@32`; both are
 		// receiver-specific, so nothing but the receiver's own instance fits. There is no representation to
 		// share and no range to widen — the instance IS the question, which is why the two arms are one.
+		//
+		// ⚠ **THE `==` IS SAFE ONLY BECAUSE THE TAG TEST ABOVE HAS ALREADY RUN, AND THAT ORDER IS AN
+		// INVARIANT, NOT AN ACCIDENT.** `TypeNameId` and `GenericInstanceId` share a numeric space
+		// (`isArrayInstanceAt`'s own header), so comparing a bare name's number against an instance id can
+		// answer TRUE by coincidence — never a compile error, and a non-`Array` argument would be admitted.
+		// `isArrayInstanceAt` is what pins `argNameId` to a generic instance; hoisting this arm above it
+		// would reintroduce that exact wrong answer.
 		// ⚠ `main` grew a SEPARATELY-SPELLED opaque arm in `requireArrayAppendArg` while this rung was in
 		// flight (the `list-custom-types` port, citing P1.7 slice 3b-vi-b-β). It states the SAME rule —
 		// identical giid — and was subsumed here at the merge rather than kept beside this one, because two
@@ -7766,11 +7782,7 @@ export type ProgramSignatures
 			return false
 		end 'noSharedRepresentation'
 
-		if self.trivialElementAdmitsEveryValueOf(receiverGiid, sourceGiid: argNameId, readerFilePath: readerFilePath) 'theReceiverAdmitsEveryValue'
-			return true
-		end 'theReceiverAdmitsEveryValue'
-
-		return self.byteBufferBoundaryAdmits(ValueTypeTag.genericInstance, declaredNameId: receiverGiid, gotTag: argTag, gotNameId: argNameId)
+		return self.trivialElementAdmitsEveryValueOf(receiverGiid, sourceGiid: argNameId, readerFilePath: readerFilePath)
 	end 'arrayAppendArgAdmits'
 
 	// Do two array instances hold TRIVIAL elements of the same storage width — the REPRESENTATION half of
@@ -7819,6 +7831,22 @@ export type ProgramSignatures
 		if maxonTypeTag(self.arrayElementType(giid)) == ValueTypeTag.integer 'aBareMachineWordInt'
 			return ElementIntegerRange.inclusive(BareIntegerElementLow, high: BareIntegerElementHigh)
 		end 'aBareMachineWordInt'
+
+		// ⭐⭐ **THE COMPILER-OWNED BYTE ELEMENT HAS A VALUE SET — IT SIMPLY HAS NO DECLARATION TO READ IT
+		// OFF, AND ANSWERING `notIntegerValued` MADE THE DOMAIN TEST ONE-WAY (A4b review).** MEASURED: a
+		// `currentPath()` buffer receiving an `Array with Byte` whose `Byte` is `int(0 to u8.max)` compiled
+		// at `59b56fda1` and stopped compiling here — `expected '__ManagedMemory', got 'Array_Byte'` — the
+		// exact MIRROR of `a-byte-that-holds-every-byte-still-appends-a-synthesized-buffer`, which this rung
+		// added as an acceptance case. Nothing can be read back out of range in either direction: both
+		// elements admit exactly the byte values, so both appends are correct programs.
+		//
+		// ⚠ The two bounds are `Project.ByteValueSetLow`/`High` — the SAME pair `rangeHoldsEveryByte`
+		// measures every declared byte element against, because a second spelling of them here would be a
+		// second definition of what a byte is. `arrayAppendArgAdmits`'s header carries the rest of the
+		// argument, including why no nominal door belongs beside this one.
+		if self.arrayNamedElementName(ValueTypeTag.genericInstance, nameId: giid).equals(SynthesizedByteElementName) 'aCompilerMintedBufferHoldsRawBytes'
+			return ElementIntegerRange.inclusive(ByteValueSetLow, high: ByteValueSetHigh)
+		end 'aCompilerMintedBufferHoldsRawBytes'
 
 		return match self.arrayElementAliasOf(giid, readerFilePath: readerFilePath) 'element'
 			undeclared gives ElementIntegerRange.notIntegerValued

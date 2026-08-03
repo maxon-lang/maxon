@@ -1509,8 +1509,16 @@ end 'holdsRange'
 // (`rangedAliasStorageBytes` gives it the machine word), so the boundary's stride test refuses it a second
 // time. The two clauses agree here rather than one leaning on the other.
 export function rangeHoldsEveryByte(low ParsedInt, high ParsedInt) returns bool
-	return low == 0 and high >= u8.max
+	return low == ByteValueSetLow and high >= ByteValueSetHigh
 end 'rangeHoldsEveryByte'
+
+// ⭐ **WHAT A BYTE'S VALUE SET IS, WRITTEN DOWN ONCE.** The test above measures a DECLARED element against
+// these two bounds; `ProgramSignatures.elementIntegerValueRange` hands the same two out as the value set the
+// COMPILER-OWNED byte element (`SynthesizedByteElementName`) admits, because a buffer the compiler minted is
+// a run of raw bytes and has no declaration to read bounds off. Spelling `0` and `u8.max` at the second site
+// would be a second definition of what a byte is — the thing this file's own header refuses at length.
+export let ByteValueSetLow = 0 as ParsedInt
+export let ByteValueSetHigh = u8.max as ParsedInt
 
 // --- The TYPE-NAME namespace: one name, one declaration ---
 

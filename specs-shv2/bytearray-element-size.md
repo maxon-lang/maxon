@@ -1410,10 +1410,17 @@ error E3117: <fragment>:12:16: 'setByte' stores RAW bytes into an element declar
 ### `append`'s argument is a coercion site, and a synthesized buffer crosses it like any other
 
 A compiler-synthesized buffer wears `__ManagedByte` (`SynthesizedByteElementName`) and a declared
-`Array with Byte` wears the program's own element, so the two meet at the boundary door — the same
-`byteBufferBoundaryAdmits` the eight other coercion sites ask. `append` is the ninth, and it asked a
-bare STRIDE test instead: `__ManagedByte` strides one byte, so it walked into a `Byte` declared
-`int(0 to 100)` and a raw path byte read back out of that element with no diagnostic.
+`Array with Byte` wears the program's own element. `append` asked a bare STRIDE test between them:
+`__ManagedByte` strides one byte, so it walked into a `Byte` declared `int(0 to 100)` and a raw path
+byte read back out of that element with no diagnostic.
+
+⚠ **IT IS THE NINTH COERCION SITE BUT IT DOES *NOT* ASK `byteBufferBoundaryAdmits`, AND THE DIFFERENCE
+IS THE WHOLE OF WHY THESE FOUR CASES ARE FOUR AND NOT TWO.** That door is a NOMINAL whole-container test
+and is one-way by design — `__ManagedByte` may be ADOPTED where a byte-holding `Byte` is declared, never
+the reverse — which is right at the eight sites that adopt a container and wrong here, where `append`
+adopts nothing and merely copies values. Asking it made the receiver-side cases below stop compiling.
+`append` asks the VALUE DOMAIN instead, in both directions, which it can because the compiler-owned
+element has a value set of its own (`ProgramSignatures.elementIntegerValueRange`): a byte's.
 
 <!-- test: a-narrow-byte-refuses-a-synthesized-buffer-appended-to-it -->
 ### A narrow `Byte` refuses a synthesized buffer appended into its array
@@ -1458,6 +1465,59 @@ function main() returns ExitCode
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	b.append(cwd)
 	return 0 if b.count() > 1 else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+### And the MIRROR of it, which the first cut of this rule refused
+
+The two cases above put the synthesized buffer on the ARGUMENT side. Putting it on the RECEIVER side is
+the same operation with the same answer — a buffer the compiler minted is a run of raw bytes, and every
+value of an element declared `int(0 to 100)` or `int(0 to u8.max)` is a byte — but the first cut answered
+it through `byteBufferBoundaryAdmits`, which is a NOMINAL door and one-way on purpose, so it refused. Both
+of these compiled at `59b56fda1` and stopped compiling; the cure was to give the compiler-owned element
+the value set it has always had (`ProgramSignatures.elementIntegerValueRange`), which the domain test then
+answers in both directions on its own.
+
+<!-- test: a-synthesized-buffer-takes-a-byte-array-appended-to-it -->
+<!-- targets: x64-windows -->
+### A synthesized buffer takes a declared byte array appended to it
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(65)
+	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	let before = cwd.length()
+	try cwd.append(b) otherwise panic("test invariant: append")
+	return 0 if cwd.length() == before + 1 else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-synthesized-buffer-takes-a-NARROWER-byte-array-appended-to-it -->
+<!-- targets: x64-windows -->
+### …and a NARROWER one too, because every one of its values is a byte
+The asymmetry that makes `error.append-narrower-element-array` a refusal runs the other way here: an
+`int(0 to 100)` value stored into a raw byte buffer can never be read back out of range, because the
+buffer's element admits every byte. Refusing this direction as well would be over-refusal.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(65)
+	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	let before = cwd.length()
+	try cwd.append(b) otherwise panic("test invariant: append")
+	return 0 if cwd.length() == before + 1 else 2
 end 'main'
 ```
 ```exitcode
