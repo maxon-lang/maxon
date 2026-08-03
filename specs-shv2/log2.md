@@ -1,0 +1,244 @@
+---
+feature: log2
+status: stable
+keywords: log2, logarithm, base-2, math
+category: stdlib
+---
+# log2
+
+## Documentation
+
+Calculate the base-2 logarithm of a number.
+
+**Signature:** `Math.log2(x float) float`
+
+**Parameters:**
+- `x` - The number to take the base-2 logarithm of (must be positive)
+
+**Returns:** The base-2 logarithm of the input
+
+**Example:**
+
+```maxon
+var x = 8.0
+var y = Math.log2(x)     // 3.0 (2^3 = 8)
+
+var z = 16.0
+var w = Math.log2(z)     // 4.0 (2^4 = 16)
+
+var a = 1024.0
+var b = Math.log2(a)     // 10.0 (2^10 = 1024)
+```
+**Notes:**
+- Input must be positive. ⚠ **RETRACTED — this line said "returns 0 for non-positive values in current
+  implementation".** That hedge was honest and it was also the whole problem: the sentinel `0` is what
+  `log2(1.0)` returns too, so it could not be distinguished from a real answer. By user ruling the
+  implementation no longer needs the hedge — it answers as IEEE 754 defines it: `log2(+0.0)` and
+  `log2(-0.0)` are both `-inf`, and `log2(x)` for `x < 0` is `nan`.
+- `log2(1.0)` returns `0.0` (exact)
+- `log2(2.0)` returns `1.0` (exact)
+- Powers of 2 return exact integer results
+- For integer inputs, the value is automatically promoted to float
+- `log2(0.5)` returns `-1.0` (2^-1 = 0.5)
+- Useful for understanding binary scales and data structures
+
+## Tests
+
+⚠ **EVERY `stdout` BLOCK IN THIS FILE IS RETRACTED TO SHORTEST ROUND-TRIP, for the reason
+`specs-shv2/sin.md` sets out at length.** `/specs` renders floats in the bootstrap's fixed-6-decimal
+format; shv2 prints the shortest round-trip representation by user ruling. It changes the rendering, not
+the numbers — each old value is exactly the 6-decimal rendering of the double replacing it
+(`1.5849625007211563` → `1.584963`, `19.931568569324174` → `19.931569`, and so on). ⭐ Note
+`log2.powers-of-two` needs **no** retraction: those results are exact, so their shortest form already
+*is* what six decimals rendered.
+
+<!-- test: log2.powers-of-two -->
+```maxon
+function main() returns ExitCode
+	// Test various powers of 2 - should all be exact
+	let r1 = Math.log2(1.0)      // 2^0 = 1
+	let r2 = Math.log2(2.0)      // 2^1 = 2
+	let r4 = Math.log2(4.0)      // 2^2 = 4
+	let r8 = Math.log2(8.0)      // 2^3 = 8
+	let r16 = Math.log2(16.0)    // 2^4 = 16
+	let r1024 = Math.log2(1024.0) // 2^10 = 1024
+	
+	// Test fractional powers (negative exponents)
+	let r_half = Math.log2(0.5)   // 2^(-1) = 0.5
+	let r_quarter = Math.log2(0.25) // 2^(-2) = 0.25
+	
+	// Print results
+	print("{r1}\n")
+	print("{r2}\n")
+	print("{r4}\n")
+	print("{r8}\n")
+	print("{r16}\n")
+	print("{r1024}\n")
+	print("{r_half}\n")
+	print("{r_quarter}\n")
+	
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0.0
+1.0
+2.0
+3.0
+4.0
+10.0
+-1.0
+-2.0
+```
+
+<!-- test: log2.non-powers-and-precision -->
+```maxon
+function main() returns ExitCode
+	// Non-powers of 2 require high precision
+	let r3 = Math.log2(3.0)
+	let r5 = Math.log2(5.0)
+	let r6 = Math.log2(6.0)
+	let r1000000 = Math.log2(1000000.0)
+	
+	print("{r3}\n")
+	print("{r5}\n")
+	print("{r6}\n")
+	print("{r1000000}\n")
+	
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1.5849625007211563
+2.321928094887362
+2.584962500721156
+19.931568569324174
+```
+
+
+<!-- test: log2.integer-promotion-and-relationships -->
+```maxon
+function main() returns ExitCode
+	// Test integer promotion
+	let int_val = 32
+	let r_int = Math.log2(int_val)  // Should promote 32 to 32.0
+	print("{r_int}\n")
+	
+	let r_literal = Math.log2(64)   // Integer literal promotion
+	print("{r_literal}\n")
+	
+	// Verify relationship: log2(x) = log(x) / log(2)
+	let test_val = 100.0
+	let log2_result = Math.log2(test_val)
+	// `Math.log(2.0)` is ln(2) ≈ 0.693 — non-zero — but float `/` cannot prove a runtime divisor
+	// non-zero, so the safe divide rides `try`; the `otherwise` is unreachable.
+	let log_result = try (Math.log(test_val) / Math.log(2.0)) otherwise panic("log(2.0) is non-zero")
+	
+	// Check difference is negligible
+	var abs_diff = log2_result - log_result
+	if abs_diff < 0.0 'abs'
+		abs_diff = 0.0 - abs_diff
+	end 'abs'
+	
+	if abs_diff < 0.000001 'pass'
+		print("{r_int}\n")    // Print again to show test passed
+	end 'pass'
+	
+	// Test relationship: log2(2^x) = x
+	let exponent = 7.0
+	let power_val = Math.pow(2.0, exponent: exponent)
+	let r_pow = Math.log2(power_val)
+	print("{r_pow}\n")
+	
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5.0
+6.0
+5.0
+7.0
+```
+
+<!-- test: log2.special-values -->
+```maxon
+function main() returns ExitCode
+	// Test with e (natural log base)
+	// log2(e) should equal 1/ln(2) ≈ 1.442695
+	let e = 2.71828182845904523536
+	let r_e = Math.log2(e)
+	print("{r_e}\n")
+	
+	// Test with 10
+	let r_10 = Math.log2(10.0)
+	print("{r_10}\n")
+	
+	// Test value exactly between powers of 2
+	let r_between = Math.log2(12.0)  // Between 2^3 and 2^4
+	print("{r_between}\n")
+	
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1.4426950408889634
+3.321928094887362
+3.584962500721156
+```
+
+⭐ **shv2-authored, and it is the pin on the ruling the Notes above retract to.** `log2` does not
+delegate to `log` — it normalizes by exact halvings so that every power of two comes back an exact
+integer — so its non-positive answer is a SECOND site that had to be made IEEE-correct, and this case
+is what keeps the two from drifting apart the way the file's two spellings of ln 2 once did.
+
+<!-- test: log2.non-positive-is-ieee -->
+```maxon
+function main() returns ExitCode
+	let negativeZero = -0.0
+	print("{Math.log2(0.0)}\n")
+	print("{Math.log2(negativeZero)}\n")
+	print("{Math.log2(-1.0)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-inf
+-inf
+nan
+```
+
+⭐ **shv2-authored, and the SECOND site of the same hang.** IEEE 754 gives `log2(+inf)` as `+inf`, and
+because `log2` does not delegate it needed its own guard: its `normalize_down` halves x until it drops
+under 2.0, and `inf / 2.0` is `inf`. MEASURED by removing that guard — this program does not print a
+wrong number, it runs until it is killed, exactly as `log`'s does. Two functions, one failure mode, and
+`stdlib/Math.maxon` says so at both.
+
+<!-- test: log2.positive-infinity -->
+```maxon
+function main() returns ExitCode
+	let positiveInfinity = 0.0 - Math.log(0.0)
+	print("{Math.log2(positiveInfinity)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+inf
+```

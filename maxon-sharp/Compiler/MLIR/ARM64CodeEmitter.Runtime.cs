@@ -1758,6 +1758,10 @@ public partial class ARM64CodeEmitter {
     var stripDoneLabel = $"__f64str_stripdone_{_uniqueLabelCounter}";
     var epilogueLabel = $"__f64str_epilogue_{_uniqueLabelCounter}";
     var fracOkLabel = $"__f64str_frac_ok_{_uniqueLabelCounter}";
+    var notNanLabel = $"__f64str_notnan_{_uniqueLabelCounter}";
+    var positiveInfinityLabel = $"__f64str_posinf_{_uniqueLabelCounter}";
+    var writeInfinityLabel = $"__f64str_writeinf_{_uniqueLabelCounter}";
+    var finiteLabel = $"__f64str_finite_{_uniqueLabelCounter}";
     _uniqueLabelCounter++;
 
     EmitRuntimeFunctionStart("maxon_f64_to_string", 1, 0x60);
@@ -1766,6 +1770,99 @@ public partial class ARM64CodeEmitter {
     // Save D0 to [x29, #48] using STR D0, [X29, #48]
     EmitWord(0xFD000000 | ((48u / 8) << 10) | (Reg(ARM64Register.X29) << 5) | 0u); // STR D0, [X29, #48]
 
+    // ---- Special case: the two NON-FINITE classes ----
+    // ⭐ EVERY path below this point converts through FCVTZS, and A64's conversion SATURATES rather
+    // than answering one indefinite value: NaN becomes 0, +inf becomes i64.max, -inf becomes i64.min.
+    // So each class left its own kind of wreckage here, and the worst by far was NaN — FCVTZS gave 0
+    // for the integer part and 0 again for the scaled fraction, while the sign test below (`B.GE`) is
+    // false for an UNORDERED compare and therefore took the negate path, so a NaN printed `-0.0`. That
+    // is a legal Maxon float literal: not merely wrong, but unrecognisable as wrong. +inf printed
+    // `9223372036854775807.999999` and -inf the same digits behind a '-'.
+    //
+    // ⚠ THOSE THREE SYMPTOMS ARE DERIVED BY READING THIS ROUTINE, NOT MEASURED: arm64 does not
+    // execute on the host this was written on. What IS measured is the x64 pair below. The previous
+    // version of this comment asserted arm64 behaved exactly like x64 — it does not, because FCVTZS
+    // and CVTTSD2SI disagree about out-of-range conversions — which is precisely the mistake an
+    // unrunnable file invites. Say which claims were run.
+    //
+    // ⚠ X86CodeEmitter.Runtime.cs HAD A HOLE HERE TOO AND IT IS NOT THIS ONE. CVTTSD2SI answers the
+    // integer-indefinite value i64.min for all three classes, so there -inf printed
+    // `--9223372036854775808.775808` — two minus signs, one from maxon_i64_to_string and one from the
+    // routine's own sign byte — and a NaN printed those digits behind a single '-'. The two targets
+    // coincide in NEEDING THIS SAME INTERCEPTION and in nothing else. Port the structure between these
+    // files; never port a symptom. There is no mechanism that can keep two hand-emitted instruction
+    // streams in step, so the reciprocal pointers ARE the anti-drift device: change one, open the other.
+    //
+    // ⚠ THIS CLOSES THE NON-FINITE CLASSES AND NOTHING ELSE. A FINITE |value| >= 2^63 overflows the
+    // very same conversion and still prints nonsense — here it saturates to i64.max, so a 1e300 reads
+    // `9223372036854775807.999999`. That is the fixed-6-decimal design's limit rather than a missing
+    // special case (there is no i64 to route a 1e300 through at all), so closing it is a rewrite of
+    // this routine, not another branch here.
+    //
+    // The spellings are shv2's — `stdlib/Builtins.maxon`'s `__InfinityText` and `__NotANumberText` —
+    // so the two compilers agree on the TEXT of a special value even though, by the standing ruling,
+    // they still differ on how they render a finite one. NaN is written unsigned: the sign bit of a
+    // NaN is not a property of the value, so there is no `-nan`.
+
+    // NaN is the only double that compares UNORDERED with itself, which leaves Z clear.
+    EmitWord(0x1E602000); // FCMP D0, D0
+    _condBranchFixups.Add((_code.Count, notNanLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq)); // B.EQ notNan (ordered ⇒ not a NaN)
+
+    EmitReloadArg(0); // X0 = buffer
+    EmitMovRegImm(ARM64Register.X1, (long)'n');
+    EmitWord(0x39000000 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB 'n', [X0]
+    EmitMovRegImm(ARM64Register.X1, (long)'a');
+    EmitWord(0x39000400 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB 'a', [X0, #1]
+    EmitMovRegImm(ARM64Register.X1, (long)'n');
+    EmitWord(0x39000800 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB 'n', [X0, #2]
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitWord(0x39000C00 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB 0, [X0, #3]
+    EmitMovRegImm(ARM64Register.X0, 3);
+    EmitBranch(epilogueLabel);
+
+    DefineLabel(notNanLabel);
+    // With NaN excluded, `|value| > f64.max` is true of the two infinities and of nothing else. Both
+    // bounds arrive through a GPR and FMOV, the same way this routine's other constants do.
+    EmitMovRegImm(ARM64Register.X1, BitConverter.DoubleToInt64Bits(double.MaxValue));
+    EmitWord(0x9E670000 | (Reg(ARM64Register.X1) << 5) | 1u); // FMOV D1, X1
+    EmitWord(0x1E612000); // FCMP D0, D1
+    _condBranchFixups.Add((_code.Count, positiveInfinityLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Gt)); // B.GT positiveInfinity
+
+    EmitMovRegImm(ARM64Register.X1, BitConverter.DoubleToInt64Bits(-double.MaxValue));
+    EmitWord(0x9E670000 | (Reg(ARM64Register.X1) << 5) | 1u); // FMOV D1, X1
+    EmitWord(0x1E612000); // FCMP D0, D1
+    _condBranchFixups.Add((_code.Count, finiteLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE finite (>= -f64.max ⇒ finite)
+
+    // -inf: write the sign, then fall into the ONE copy of the "inf" writer below. X2 carries the
+    // byte the sign contributed, so the length is computed in one place for both infinities.
+    EmitReloadArg(0); // X0 = buffer
+    EmitMovRegImm(ARM64Register.X1, (long)'-');
+    EmitWord(0x39000000 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB '-', [X0]
+    EmitWord(0x91000400 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X0)); // ADD X0, X0, #1
+    EmitMovRegImm(ARM64Register.X2, 1);
+    EmitBranch(writeInfinityLabel);
+
+    DefineLabel(positiveInfinityLabel);
+    EmitReloadArg(0); // X0 = buffer
+    EmitMovRegImm(ARM64Register.X2, 0);
+
+    DefineLabel(writeInfinityLabel);
+    EmitMovRegImm(ARM64Register.X1, (long)'i');
+    EmitWord(0x39000000 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB 'i', [X0]
+    EmitMovRegImm(ARM64Register.X1, (long)'n');
+    EmitWord(0x39000400 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB 'n', [X0, #1]
+    EmitMovRegImm(ARM64Register.X1, (long)'f');
+    EmitWord(0x39000800 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB 'f', [X0, #2]
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitWord(0x39000C00 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB 0, [X0, #3]
+    // length = sign byte + 3 for "inf": ADD X0, X2, #3
+    EmitWord(0x91000C00 | (Reg(ARM64Register.X2) << 5) | Reg(ARM64Register.X0));
+    EmitBranch(epilogueLabel);
+
+    DefineLabel(finiteLabel);
     // Check if value == 0.0
     // FCMP D0, #0.0
     EmitWord(0x1E602008); // FCMP D0, #0.0

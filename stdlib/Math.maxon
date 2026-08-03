@@ -38,6 +38,42 @@ let mathLn10 = 2.302585092994046
 // correctly-rounded √2 - 1.
 let mathTanPiEighth = 0.41421356237309503
 
+// IEEE 754's non-finite doubles, as binary64 BIT PATTERNS — because Maxon has no literal for any of
+// them: a float literal big enough to become an infinity is refused at E2011, and nothing spells a
+// NaN at all. `__Builtins.bitsToFloat` is the only door, and these are its keys.
+//
+// ⚠⚠ **THESE ARE A SECOND COPY. THE FIRST IS `stdlib/Builtins.maxon`'s IEEE 754 LAYOUT BLOCK** —
+// `__InfinityBits` at :405 and `__FloatSignBit` at :410, the same two values reached by the same
+// reasoning (`i64.min` because a signed int is the only way Maxon writes a set top bit), though not
+// the same TEXT: that one is `i64.min as ParsedInt` and this one is bare, because the alias differs.
+// Nothing makes the two agree, and a typo in either is a wrong NUMBER rather than a compile error,
+// so the twin is named here and named there, which is the only guard available.
+//
+// ⭐ MEASURED, because the obvious fix was tried first and does not exist: those constants are
+// FILE-LOCAL, so `Math` cannot read them, and `Builtins` cannot hand them over either. An export
+// named `__float_negativeInfinity` is refused at the CALL site with E3004 — *"the '__' prefix names a
+// compiler intrinsic, and no intrinsic of that name exists"* — and so is `__FloatSpecials.negativeInfinity()`,
+// because the rule keys on the leading `__` of the whole call and not on what follows it.
+// (`__Builtins.bitsToFloat` resolves only because it IS a real intrinsic.) The one spelling that
+// would resolve is an UNPREFIXED global, and an unprefixed global declared in `stdlib/` is LANGUAGE
+// SURFACE — a name every user program loses, exactly as `print` and `sleep` are. Trading a duplicated
+// constant for a reserved word is a language change, and not one a duplication fix gets to make.
+//
+// An exponent field of all ones is what makes a double non-finite; a zero significand alongside it is
+// an infinity, any non-zero significand is a NaN. The composites are built from those parts rather
+// than written out, so `-4503599627370496` never appears in this file meaning something a reader has
+// to decode.
+//
+// `Real` is `float(f64.min to f64.max)` and holds all of them. MEASURED: a float bound written as
+// `f64.min` or `f64.max` is elided as "unbounded on that side", so `Real` carries no range check at
+// all — while `float(-1.0 to f64.max)` does panic on -inf, and `float(0.0 to 1.0)` panics on either
+// infinity.
+let mathFloatSignBit = i64.min                  // bit 63; `i64.min` is the only way Maxon writes a set top bit
+let mathInfinityBits = 0x7FF0000000000000       // exponent all ones, significand zero — this IS +inf
+let mathQuietNaNSignificandBit = 0x0008000000000000  // top significand bit — what makes the NaN quiet
+let mathNegativeInfinityBits = mathFloatSignBit or mathInfinityBits
+let mathQuietNaNBits = mathInfinityBits or mathQuietNaNSignificandBit
+
 export type Math
 	/// Bring an angle into [-π, π] by whole turns, which is where both trigonometric series below
 	/// converge fast enough for their term counts. Shared by `sin` and `cos`: the loop pair was
@@ -141,6 +177,25 @@ export type Math
 			return 1.0
 		end 'zero'
 
+		// ⚠ IEEE 754: exp(+inf) is +inf and exp(-inf) is +0. Both guards are LOAD-BEARING for the
+		// same reason `log`'s is — the reduction loop below halves `val` until it is <= 1.0, and
+		// inf/2.0 is inf, so either infinity spins forever (the negative one after `val = -val`).
+		//
+		// `pow` reaches here with a PRODUCT, `exponent * log(base)`, and a product of two finite
+		// doubles overflows: `Math.pow(10.0, exponent: 1e308)` hands this function +inf. So the
+		// argument is reachable from ordinary finite inputs, not only from an infinity a caller
+		// built on purpose.
+		//
+		// NaN needs no guard and gets none: every comparison with one is false, so the reduction
+		// loop is skipped and the series propagates it.
+		if Math.isPositiveInfinity(x) 'positiveInfinity'
+			return x
+		end 'positiveInfinity'
+
+		if Math.isNegativeInfinity(x) 'negativeInfinity'
+			return 0.0
+		end 'negativeInfinity'
+
 		// For large positive x, use exp(x) = exp(x/2)^2 repeatedly
 		// For large negative x, use exp(x) = 1/exp(-x)
 		var val = x
@@ -219,14 +274,100 @@ export type Math
 		return 2.0 * sum
 	end 'lnBySeries'
 
+	// ⭐ THE NON-FINITE AND SIGN VOCABULARY, DECLARED ONCE. `log`, `log2`, `exp`, `pow` and `atan2`
+	// all have to NAME an infinity or a NaN, or ask which side of zero a value sits on — and Maxon
+	// can spell none of those, so every such site would otherwise carry its own
+	// `bitsToFloat`/`floatToBits` call against a raw constant. These eight one-line functions are
+	// what stops `pow`'s twenty-odd IEEE arms from becoming twenty-odd bit-twiddles. They are not
+	// wrappers over a call: the call is meaningless without the constant, and the pair together is
+	// the value's only NAME.
+
+	static function positiveInfinity() returns Real
+		return __Builtins.bitsToFloat(mathInfinityBits)
+	end 'positiveInfinity'
+
+	static function negativeInfinity() returns Real
+		return __Builtins.bitsToFloat(mathNegativeInfinityBits)
+	end 'negativeInfinity'
+
+	static function quietNaN() returns Real
+		return __Builtins.bitsToFloat(mathQuietNaNBits)
+	end 'quietNaN'
+
+	static function isPositiveInfinity(z Real) returns bool
+		return __Builtins.floatToBits(z) == mathInfinityBits
+	end 'isPositiveInfinity'
+
+	static function isNegativeInfinity(z Real) returns bool
+		return __Builtins.floatToBits(z) == mathNegativeInfinityBits
+	end 'isNegativeInfinity'
+
+	static function isInfinite(z Real) returns bool
+		return Math.isPositiveInfinity(z) or Math.isNegativeInfinity(z)
+	end 'isInfinite'
+
+	/// True when `z`'s IEEE 754 sign bit is set — which includes -0.0, the one thing no COMPARISON
+	/// can report: -0.0 == 0.0, so `z < 0.0` and `z >= 0.0` both answer as though every zero were
+	/// positive. Reading the bit pattern is the only way to ask, and `__Builtins.floatToBits` is
+	/// the only way to see it (`stdlib/Builtins.maxon`'s `__float_toString` asks the same question
+	/// the same way, which is why an interpolated -0.0 prints with its sign).
+	///
+	/// ⚠ TOTAL over every double, which is what lets `powOfExtremeBase` ask ONE question about a
+	/// zero and an infinity alike: `floatToBits(-inf)` is `0xFFF0000000000000`, negative as an i64,
+	/// exactly as `floatToBits(-0.0)` is. Nothing here is special-cased to the zeros.
+	static function hasNegativeSignBit(z Real) returns bool
+		return __Builtins.floatToBits(z) < 0
+	end 'hasNegativeSignBit'
+
+	/// ⚠ The ONE test that cannot be done on bits: a NaN is not a bit pattern but a whole CLASS of
+	/// them (any non-zero significand under an all-ones exponent), so comparing against
+	/// `mathQuietNaNBits` would recognise exactly the one this file mints and miss every other. The
+	/// unordered-with-itself property is the only total test, and it is IEEE 754's own.
+	static function isNaN(z Real) returns bool
+		return z != z
+	end 'isNaN'
+
+	/// IEEE 754's answer for a logarithm of a non-positive argument: -inf at either zero, NaN below.
+	/// The caller has already established `x <= 0.0`; this decides WHICH of the two.
+	///
+	/// ⚠ `x <= 0.0` is not a decision, it is only a door — it is true of -0.0, and IEEE 754 defines
+	/// log(-0) as -inf exactly like log(+0), not as NaN. So the split here is `x == 0.0` (true of BOTH
+	/// zeros) against everything else, and never `x < 0.0` against `x == 0.0` at the door.
+	///
+	/// Shared by `log` and `log2`; `log10` does not call it because it inherits both answers through
+	/// its divide (-inf/ln10 is -inf, NaN/ln10 is NaN).
+	static function nonPositiveLogResult(x Real) returns Real
+		if x == 0.0 'zero'
+			return Math.negativeInfinity()
+		end 'zero'
+
+		return Math.quietNaN()
+	end 'nonPositiveLogResult'
+
 	/// Calculate natural logarithm (ln) of x
 	/// Uses Taylor series approximation around x=1
 	export static function log(x Real) returns Real
-		// Handle special cases
-		if x <= 0.0 'invalid'
-			return 0.0  // undefined for non-positive values
-		end 'invalid'
+		// ⭐ These used to be the sentinel 0.0, which `log(1.0)` also returns — so a caller could not
+		// tell a valid answer from an invalid argument. IEEE 754's answers collide with nothing.
+		if x <= 0.0 'nonPositive'
+			return Math.nonPositiveLogResult(x)
+		end 'nonPositive'
 
+		// IEEE 754: log(+inf) is +inf. LOAD-BEARING, not a courtesy — `normalize_down` below halves x
+		// until it drops under 1.0, and inf/2.0 is inf, so an infinity never leaves that loop. Deleting
+		// this guard does not print a wrong number, it HANGS. And the argument is reachable in one
+		// line now that this module answers `-inf`: `0.0 - Math.log(0.0)` is `+inf`.
+		//
+		// The question is put to the BITS because there is no way to write `+inf` as a comparand —
+		// the same absence of a literal that makes the constants above necessary.
+		if Math.isPositiveInfinity(x) 'positiveInfinity'
+			return x
+		end 'positiveInfinity'
+
+		// ⚠ NaN falls through on purpose and comes back NaN by ARITHMETIC: every comparison with a NaN
+		// is false, so both normalization loops are skipped and `lnBySeries` propagates it. Written
+		// down because "correct by accident" is exactly the property that stops being true when
+		// someone reorders the guards above, and nothing here would say so.
 		if x == 1.0 'one'
 			return 0.0
 		end 'one'
@@ -262,15 +403,13 @@ export type Math
 	/// Calculate base-10 logarithm of x
 	/// Uses the identity: log10(x) = log(x) / log(10)
 	export static function log10(x Real) returns Real
-		// Handle special cases
-		if x <= 0.0 'invalid'
-			return 0.0  // undefined for non-positive values
-		end 'invalid'
-
-		if x == 1.0 'one'
-			return 0.0
-		end 'one'
-
+		// ⭐ NO non-positive guard, deliberately: this function is `log` divided by a finite non-zero
+		// constant, and IEEE 754 division carries both of `log`'s special answers through unchanged
+		// (-inf/ln10 is -inf, NaN/ln10 is NaN, +inf/ln10 is +inf). A guard here would be a second,
+		// independently maintained statement of a rule `log` already owns — which is exactly how the
+		// two ln 2 literals at the top of this file came to disagree. That applies to the ORDINARY
+		// cases too: an `x == 1.0` shortcut used to sit here, and it was the same duplication in
+		// miniature — `log(1.0)` is exactly 0.0 and 0.0/ln10 is exactly 0.0, so it decided nothing.
 		// log10(x) = ln(x) / ln(10)
 		let ln_x = Math.log(x)
 		return ln_x / mathLn10
@@ -279,17 +418,26 @@ export type Math
 	/// Calculate base-2 logarithm of x
 	/// Normalizes x to [1.0, 2.0) then uses series for the fractional part
 	export static function log2(x Real) returns Real
-		// Handle special cases
-		if x <= 0.0 'invalid'
-			return 0.0
-		end 'invalid'
+		// Not delegated to `log`: the normalization below is by exact halvings, which is what makes
+		// every power of two come back an exact integer. But the two share the special-case answer —
+		// and the guard is load-bearing here for a second reason: `normalize_up` below multiplies by
+		// 2.0 until y reaches 1.0, which a zero or a negative never does.
+		if x <= 0.0 'nonPositive'
+			return Math.nonPositiveLogResult(x)
+		end 'nonPositive'
 
-		if x == 1.0 'one'
-			return 0.0
-		end 'one'
+		// IEEE 754: log2(+inf) is +inf — and the same non-termination `log` has, for the same reason:
+		// `normalize_down` below halves x until it drops under 2.0, and inf/2.0 is inf. Deleting this
+		// guard HANGS. NaN needs no guard and gets none: every comparison with one is false, so both
+		// normalization loops are skipped and the series propagates it (see `log`'s note).
+		if Math.isPositiveInfinity(x) 'positiveInfinity'
+			return x
+		end 'positiveInfinity'
 
 		// Decompose: log2(x) = n + log2(y) where y in [1.0, 2.0)
-		// Powers of 2 normalize to y=1.0 exactly, giving exact integer results
+		// Powers of 2 normalize to y=1.0 exactly, giving exact integer results. That is also why the
+		// `x == 1.0` shortcut that used to sit here is gone: y stays 1.0, z is 0, the series is 0 and
+		// `n` is 0, so the general path already answers exactly 0.0.
 		var n = 0
 		var y = x
 
@@ -347,36 +495,158 @@ export type Math
 		return try (s / c) otherwise panic("tan: cos(x) is guarded non-zero above")
 	end 'tan'
 
-	/// Calculate base^exponent for Real values
-	/// Uses simple multiplication for small positive integers, exp/log otherwise
+	/// True when `value` is a mathematical integer. `pow` asks this of its exponent from several
+	/// arms — a negative base is defined only at integer exponents, and the sign rules below turn on
+	/// the parity of that integer — so the `floor` round-trip is written once.
+	static function isIntegerValue(value Real) returns bool
+		return (value - floor(value)) == 0.0
+	end 'isIntegerValue'
+
+	/// True when `value` is an ODD mathematical integer, which is the single question that carries a
+	/// SIGN through `pow`: (-x)^y keeps the minus exactly when y is odd. Every ±0 and ±inf answer
+	/// below reads it, and so does the finite negative base.
+	///
+	/// ⚠ Total, not partial: a non-integer answers false rather than falling through the halving
+	/// test, which on 2.5 would otherwise report "odd". And from 2^53 up every double IS an even
+	/// integer — the spacing is 2 across [2^53, 2^54) and doubles again in each binade above it, so
+	/// it is never odd anywhere in that range — so this answers false, which is what IEEE 754
+	/// requires and not an artefact of the test.
+	static function isOddIntegerValue(value Real) returns bool
+		if not Math.isIntegerValue(value) 'notAnInteger'
+			return false
+		end 'notAnInteger'
+
+		return not Math.isIntegerValue(value / 2.0)
+	end 'isOddIntegerValue'
+
+	/// IEEE 754's `pow` where the EXPONENT is an infinity. Preconditions, all established by `pow`
+	/// before it delegates: `base` is not 1.0, and neither argument is a NaN.
+	///
+	/// The table turns on |base| against 1, because the limit is driven by y·ln|base| and the sign of
+	/// ln|base| is the side of 1 that |base| falls on. The irregular row is `pow(-1, ±inf) = 1`,
+	/// which IEEE 754 states outright: |-1| is exactly 1, so the limit is 1 from both directions
+	/// rather than the oscillation the bare sequence suggests.
+	static function powOfInfiniteExponent(base Real, exponent Real) returns Real
+		let magnitude = abs(base)
+
+		if magnitude == 1.0 'unitMagnitude'
+			return 1.0
+		end 'unitMagnitude'
+
+		let exponentIsPositive = Math.isPositiveInfinity(exponent)
+
+		if magnitude > 1.0 'growing'
+			return Math.positiveInfinity() if exponentIsPositive else 0.0
+		end 'growing'
+
+		return 0.0 if exponentIsPositive else Math.positiveInfinity()
+	end 'powOfInfiniteExponent'
+
+	/// IEEE 754's `pow` at the two EXTREME bases — a zero or an infinity. Precondition: `exponent` is
+	/// finite and non-zero, because `pow` answers every infinite and NaN exponent before delegating.
+	///
+	/// ⭐ ONE TABLE READ IN TWO DIRECTIONS, because that is what 0^y and inf^y ARE: reciprocals.
+	/// `0^y == inf^(-y)`, so the only thing that differs between them is which sign of `y` runs
+	/// toward zero — which is exactly what `baseIsInfinite` selects. They were two functions with
+	/// four-line bodies and the magnitudes swapped, and the reason given for keeping them apart was
+	/// false twice over: `hasNegativeSignBit` is TOTAL, so an infinity's sign needs no second
+	/// spelling, and the merge needs ONE boolean, which the caller already knows.
+	///
+	/// ⚠ That mattered more than tidiness. The odd-integer sign rule below is stated ONCE now; as two
+	/// bodies, a later correction applied to one and not the other is a WRONG SIGN at runtime — `-0.0`
+	/// where `0.0` belongs, or `-inf` for `+inf` — and never a compile error.
+	///
+	/// ⚠ THIS IS ALSO THE ARM THAT USED TO RETURN THE SENTINEL `0.0` for a zero base with a negative
+	/// exponent, where the answer is an INFINITY: `pow(0.0, exponent: -1.0)` is a division by zero and
+	/// IEEE 754 says so in as many words.
+	static function powOfExtremeBase(base Real, exponent Real, baseIsInfinite bool) returns Real
+		// The sign survives only through an odd integer power, and it is read from the BITS for both
+		// kinds of base: `-0.0 < 0.0` is false, so no comparison can tell the two zeros apart, and
+		// the same test answers correctly for -inf.
+		let negative = Math.hasNegativeSignBit(base) and Math.isOddIntegerValue(exponent)
+
+		// An infinite base grows with a positive exponent; a zero base shrinks with one. Everything
+		// else about the two is identical, so this is the whole of the difference.
+		if baseIsInfinite == (exponent > 0.0) 'growsWithoutBound'
+			return Math.negativeInfinity() if negative else Math.positiveInfinity()
+		end 'growsWithoutBound'
+
+		return -0.0 if negative else 0.0
+	end 'powOfExtremeBase'
+
+	/// Calculate base^exponent for Real values, as IEEE 754 defines it.
+	///
+	/// ⭐ THE ORDER OF THE GUARDS BELOW IS THE SPECIFICATION, not a convenience. IEEE 754 makes
+	/// `pow(x, ±0)` and `pow(1, y)` beat EVERY other rule including the NaN ones, so they come first
+	/// and a NaN argument does not reach the NaN arm at all. Everything after them is a table on the
+	/// class of the two arguments, read once each.
+	///
+	/// ⚠ The general path at the bottom calls `Math.log` and `Math.exp`, and every arm above it
+	/// exists partly to keep those two honest: by the time control reaches the series, `base` is
+	/// FINITE and STRICTLY POSITIVE and `exponent` is FINITE and non-zero. No zero, no negative, no
+	/// infinity and no NaN ever reaches `log`.
 	export static function pow(base Real, exponent Real) returns Real
-		// Handle special cases
-		if exponent == 0.0 'exp_zero'
+		// Any x to the power of either zero is 1.0 — NaN and the infinities included.
+		if exponent == 0.0 'exponentZero'
 			return 1.0
-		end 'exp_zero'
+		end 'exponentZero'
 
-		if base == 0.0 'base_zero'
-			if exponent > 0.0 'exp_positive'
-				return 0.0
-			end 'exp_positive'
-			return 0.0
-		end 'base_zero'
-
-		if base == 1.0 'base_one'
+		// 1.0 to any power is 1.0, a NaN exponent included.
+		if base == 1.0 'baseOne'
 			return 1.0
-		end 'base_one'
+		end 'baseOne'
 
-		// Handle negative base (only works for integer exponents in real domain)
-		if base < 0.0 'negative_base'
-			return 0.0  // Simplified: return 0 for negative base
-		end 'negative_base'
+		// With those two spent, either NaN gives NaN. Both are tested here so that neither can reach
+		// a comparison below, where every answer about a NaN is silently false.
+		if Math.isNaN(base) or Math.isNaN(exponent) 'notANumber'
+			return Math.quietNaN()
+		end 'notANumber'
+
+		if Math.isInfinite(exponent) 'infiniteExponent'
+			return Math.powOfInfiniteExponent(base, exponent: exponent)
+		end 'infiniteExponent'
+
+		// The two extreme bases share one table, and this is where the direction is chosen — the
+		// caller is the only party that has already asked which kind of base it holds.
+		if Math.isInfinite(base) 'infiniteBase'
+			return Math.powOfExtremeBase(base, exponent: exponent, baseIsInfinite: true)
+		end 'infiniteBase'
+
+		if base == 0.0 'zeroBase'
+			return Math.powOfExtremeBase(base, exponent: exponent, baseIsInfinite: false)
+		end 'zeroBase'
+
+		if base < 0.0 'negativeBase'
+			// A negative base has no real power at a fractional exponent — there is no real number
+			// whose square is negative — and IEEE 754 answers NaN rather than picking a branch cut.
+			if not Math.isIntegerValue(exponent) 'nonIntegerExponent'
+				return Math.quietNaN()
+			end 'nonIntegerExponent'
+
+			// ⭐ At an INTEGER exponent it is an ordinary computation, and this used to answer the
+			// sentinel `0.0`: `pow(-2.0, exponent: 3.0)` returned 0.0 where the answer is -8.0. Not a
+			// rejected input dressed as a value — a WRONG ANSWER to a valid question, which is why it
+			// outranked the other sentinels.
+			//
+			// Recursing on the magnitude runs the ONE numerical implementation below rather than a
+			// second copy of it, and the sign is the single parity rule. `-base` is finite and
+			// strictly positive, so the recursion lands past this arm and cannot come back here.
+			let magnitude = Math.pow(-base, exponent: exponent)
+
+			return -magnitude if Math.isOddIntegerValue(exponent) else magnitude
+		end 'negativeBase'
+
+		// The exponent MAGNITUDE below which repeated multiplication beats `exp(y·ln x)` — it is
+		// exact for an integer power, where the series is not. Named once because the positive and
+		// negative arms below both test it: raising one and leaving the other would silently make
+		// `x^21` and `x^-21` disagree about which algorithm computed them, and the two have
+		// different last bits.
+		let repeatedMultiplicationLimit = 20.0
 
 		// Check if exponent is a small positive integer (optimize common case)
-		// Use floor to check if it's an integer
-		let exp_floor = floor(exponent)
-		if (exponent - exp_floor) == 0.0 'is_int'
+		if Math.isIntegerValue(exponent) 'is_int'
 			if exponent > 0.0 'positive_int'
-				if exponent <= 20.0 'small_int'
+				if exponent <= repeatedMultiplicationLimit 'small_int'
 					// Simple multiplication for small positive integers
 					var result = 1.0
 					var i = 0.0
@@ -391,7 +661,7 @@ export type Math
 			// Handle small negative integer exponents: base^(-n) = 1 / base^n
 			if exponent < 0.0 'negative_int'
 				let neg_exp = -exponent
-				if neg_exp <= 20.0 'small_neg'
+				if neg_exp <= repeatedMultiplicationLimit 'small_neg'
 					var result = 1.0
 					var i = 0.0
 					while i < neg_exp 'div_loop'
@@ -489,15 +759,6 @@ export type Math
 
 		return sum
 	end 'atan'
-
-	/// True when `z`'s IEEE 754 sign bit is set — which includes -0.0, the one thing no COMPARISON
-	/// can report: -0.0 == 0.0, so `z < 0.0` and `z >= 0.0` both answer as though every zero were
-	/// positive. Reading the bit pattern is the only way to ask, and `__Builtins.floatToBits` is
-	/// the only way to see it (`stdlib/Builtins.maxon`'s `__float_toString` asks the same question
-	/// the same way, which is why an interpolated -0.0 prints with its sign).
-	static function hasNegativeSignBit(z Real) returns bool
-		return __Builtins.floatToBits(z) < 0
-	end 'hasNegativeSignBit'
 
 	/// Calculate the two-argument arc tangent
 	/// Returns the angle in radians between [-π, π]

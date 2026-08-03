@@ -1050,13 +1050,84 @@ public partial class X86CodeEmitter {
     // Overwrite [rbp-8] with the actual float value.
     EmitMovMemXmm(-0x08, X86XmmRegister.Xmm0, FloatPrecision.F64);
 
+    // ---- Special case: the two NON-FINITE classes ----
+    // ⭐ EVERY path below this point converts through CVTTSD2SI, whose answer for a value it cannot
+    // represent is i64.min — the same i64.min for an infinity and for a NaN. Without this block a
+    // -inf printed `--9223372036854775808.775808` (maxon_i64_to_string writes i64.min's own '-', on
+    // top of the one this routine writes for the sign) and a NaN printed the same digits with a
+    // single '-', which is the worse of the two: it reads as a plausible number.
+    //
+    // ⚠ ARM64CodeEmitter.Runtime.cs CARRIES THE SECOND COPY OF THIS BLOCK and there is no mechanism
+    // that can make them agree — two instruction sets, emitted a byte at a time, with no shared
+    // representation to factor into. These reciprocal pointers ARE the anti-drift device: change one,
+    // open the other. But port only the STRUCTURE, never the symptom — A64's FCVTZS saturates instead
+    // of answering one indefinite value, so the hole it left is a different hole, described there.
+    //
+    // ⚠ THIS CLOSES THE NON-FINITE CLASSES AND NOTHING ELSE. A FINITE |value| >= 2^63 overflows the
+    // very same conversion and still prints nonsense: MEASURED, `Math.pow(10.0, exponent: 300.0)`
+    // prints `-9223372036854775808.775808` — the identical string -inf used to produce. That is the
+    // fixed-6-decimal design's limit rather than a missing special case (there is no i64 to route a
+    // 1e300 through at all), so closing it is a rewrite of this routine, not another branch here.
+    //
+    // The spellings are shv2's — `stdlib/Builtins.maxon`'s `__InfinityText` and `__NotANumberText` —
+    // so the two compilers agree on the TEXT of a special value even though, by the standing ruling,
+    // they still differ on how they render a finite one. NaN is written unsigned: the sign bit of a
+    // NaN is not a property of the value, so there is no `-nan`.
+
+    // NaN is the only double that compares UNORDERED with itself, which UCOMISD reports as PF.
+    EmitUcomisXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm0, FloatPrecision.F64);
+    EmitJcc("np", "rt_f64str_not_nan");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitBytes(0xC6, 0x00, 0x6E);              // MOV byte [rax], 'n'
+    EmitBytes(0xC6, 0x40, 0x01, 0x61);        // MOV byte [rax+1], 'a'
+    EmitBytes(0xC6, 0x40, 0x02, 0x6E);        // MOV byte [rax+2], 'n'
+    EmitBytes(0xC6, 0x40, 0x03, 0x00);        // MOV byte [rax+3], 0
+    EmitMovRegImm(X86Register.Rax, 3);
+    EmitJmp("rt_f64str_epilogue");
+
+    DefineLabel("rt_f64str_not_nan");
+    // With NaN excluded, `|value| > f64.max` is true of the two infinities and of nothing else.
+    // Both bounds are loaded through a GPR, the same way the constants further down are, so this
+    // routine keeps its property of needing no rdata.
+    EmitMovRegImm(X86Register.Rax, BitConverter.DoubleToInt64Bits(double.MaxValue));
+    EmitBytes(0x66, 0x48, 0x0F, 0x6E, 0xC8);  // MOVQ XMM1, RAX
+    EmitUcomisXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, FloatPrecision.F64);
+    EmitJcc("a", "rt_f64str_positive_infinity");
+    EmitMovRegImm(X86Register.Rax, BitConverter.DoubleToInt64Bits(-double.MaxValue));
+    EmitBytes(0x66, 0x48, 0x0F, 0x6E, 0xC8);  // MOVQ XMM1, RAX
+    EmitUcomisXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, FloatPrecision.F64);
+    EmitJcc("ae", "rt_f64str_finite");        // not below -f64.max ⇒ finite, take the general path
+
+    // -inf: write the sign, then fall into the ONE copy of the "inf" writer below. RCX carries the
+    // byte the sign contributed, so the length is computed in one place for both infinities.
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitBytes(0xC6, 0x00, 0x2D);              // MOV byte [rax], '-'
+    EmitBytes(0x48, 0xFF, 0xC0);              // INC RAX
+    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitJmp("rt_f64str_write_infinity");
+
+    DefineLabel("rt_f64str_positive_infinity");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitMovRegImm(X86Register.Rcx, 0);
+
+    DefineLabel("rt_f64str_write_infinity");
+    EmitBytes(0xC6, 0x00, 0x69);              // MOV byte [rax], 'i'
+    EmitBytes(0xC6, 0x40, 0x01, 0x6E);        // MOV byte [rax+1], 'n'
+    EmitBytes(0xC6, 0x40, 0x02, 0x66);        // MOV byte [rax+2], 'f'
+    EmitBytes(0xC6, 0x40, 0x03, 0x00);        // MOV byte [rax+3], 0
+    EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitAddRegImm(X86Register.Rax, 3);        // 3 for "inf", plus the sign byte if there was one
+    EmitJmp("rt_f64str_epilogue");
+
+    DefineLabel("rt_f64str_finite");
     // ---- Special case: value == 0.0 ----
     // XORPD xmm1, xmm1 to get 0.0
     EmitBytes(0x66, 0x0F, 0x57, 0xC9); // XORPD xmm1, xmm1
     EmitUcomisXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, FloatPrecision.F64);
     EmitJcc("nz", "rt_f64str_not_zero");
-    // Also jump if parity is set (NaN)
-    EmitJcc("p", "rt_f64str_not_zero");
+    // (A `JP` for the NaN case used to follow. It is gone because NaN can no longer reach here — the
+    // only route to rt_f64str_finite is through the JNP above — and removing it also leaves this
+    // routine structurally identical to the ARM64 one, which never had an equivalent.)
     // Write "0.0\0" to buffer
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
     EmitBytes(0xC6, 0x00, 0x30);             // MOV byte [rax], '0'
