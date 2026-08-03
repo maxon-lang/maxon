@@ -2182,3 +2182,189 @@ end 'main'
 ```stdout
 8 4
 ```
+
+<!-- test: generic-alias-union-payload-round-trips -->
+⭐⭐ **A UNION PAYLOAD IS A SLOT TOO, AND ITS CASCADE ANSWERED THE SLOT QUESTION DIFFERENTLY (A4k).**
+`ProgramSignatures.declaredSlotType` re-tags a bare `named` that names a generic alias to the instance
+it denotes; `classifyUnionPayload` resolved a `named` through its OWN cascade, which had a struct arm
+and NO generic-alias arm — so a payload declared `b PB` fell through to `undeclaredName`, the binding
+kept the bare `named`, and reading it was `E3011 Unknown type 'PB'` on a program the oracle compiles
+and runs. Both now come out of one door (`denotedSlotType`), so a name cannot denote one thing to a
+struct field and another to a payload.
+```maxon
+typealias Num = int(0 to 1000)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias NumBox = Box with Num
+union Payload
+	boxed(b NumBox)
+	empty
+end 'Payload'
+function main() returns ExitCode
+	let p = Payload.boxed(NumBox.create(7))
+	match p 'k'
+		empty then print("none\n")
+		boxed(b) then print("v={b.value}\n")
+	end 'k'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=7
+```
+
+<!-- test: array-alias-union-payload-round-trips -->
+The same gap under the alias form the corpus actually writes: an `Array` typealias is a generic alias,
+so `list(xs Nums)` was `E3011 Unknown type 'Nums'` at the binding — and with it every container-typed
+payload. The payload is the instance now, so `xs.count()` dispatches.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Nums = Array with Integer
+union Payload
+	list(xs Nums)
+	empty
+end 'Payload'
+function main() returns ExitCode
+	var a = Nums.create()
+	a.push(4)
+	a.push(5)
+	let p = Payload.list(a)
+	match p 'k'
+		empty then print("none\n")
+		list(xs) then print("n={xs.count()} first={try xs.get(0) otherwise 0}\n")
+	end 'k'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=2 first=4
+```
+
+<!-- test: managed-instance-union-payload-moves-out-and-drops-once -->
+⚠ **THE OWNERSHIP DIRECTION, AND IT IS WHY THE REFUSAL WAS NOT MERELY AN INCONVENIENCE.** Classified
+`undeclaredName`, the payload was NOT managed: `moveInPayload` stored the pointer without consuming the
+temporary, so the box was freed at the end of the construct statement while the union kept pointing at
+it — the same dangling store `emitFieldWrite` was measured printing the free poison from. Classified as
+the instance it is, the construct MOVES it in and the match binding moves it out and drops it once. The
+instance owns a `String`, so a missed drop leaks (exit 101) and a double drop faults — the runner treats
+either as a failure.
+```maxon
+type Label
+	export var text as String
+	export static function create(t String) returns Self
+		return Self{text: t}
+	end 'create'
+end 'Label'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LabelBox = Box with Label
+union Payload
+	boxed(b LabelBox)
+	empty
+end 'Payload'
+function show(b LabelBox)
+	let q = b.value
+	print("t={q.text}\n")
+end 'show'
+function main() returns ExitCode
+	let p = Payload.boxed(LabelBox.create(Label.create("{9}")))
+	match p 'k'
+		empty then print("none\n")
+		boxed(b) then show(b)
+	end 'k'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+t=9
+```
+
+<!-- test: generic-alias-union-payload-drops-through-the-cascade -->
+The drop half, with NOTHING bound: an unmatched managed payload is freed by the union's own
+`__destruct_<U>` cascade, which is synthesized only when `caseHasManagedField` says the case carries
+one — a whole-program walk that reads the payload column with no reader file and so asked the same
+broken cascade. It compiled before this rung too, and that is the point: the payload was silently
+freed at the construct statement instead, so the box outlived its own content. Now the box owns it and
+the cascade frees it exactly once.
+```maxon
+type Label
+	export var text as String
+	export static function create(t String) returns Self
+		return Self{text: t}
+	end 'create'
+end 'Label'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LabelBox = Box with Label
+union Payload
+	boxed(b LabelBox)
+	empty
+end 'Payload'
+function main() returns ExitCode
+	let p = Payload.boxed(LabelBox.create(Label.create("{9}")))
+	match p 'k'
+		empty then print("none\n")
+		boxed then print("boxed\n")
+	end 'k'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+boxed
+```
+
+<!-- test: function-alias-union-payload-calls-through -->
+The THIRD arm the payload cascade was missing, found by deriving the difference rather than by probing
+for it: a FUNCTION typealias is re-tagged by the shared door exactly as a generic one is, and was
+equally absent here. Bound out of the payload it was a bare `named` — an int — so interpolating it was
+`E2015 … a value of type 'unknown'` and calling it had no signature to check. It is a code pointer, a
+scalar payload, and it calls.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+function twice(v Integer) returns Integer
+	return v * 2
+end 'twice'
+union Payload
+	op(f UnaryOp)
+	empty
+end 'Payload'
+function main() returns ExitCode
+	let p = Payload.op(twice)
+	match p 'k'
+		empty then print("none\n")
+		op(f) then print("f={f(3)}\n")
+	end 'k'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+f=6
+```

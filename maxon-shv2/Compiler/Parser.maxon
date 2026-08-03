@@ -22909,9 +22909,12 @@ export type Parser
 				continue
 			end 'discard'
 			let range = SourceRange.ofToken(binding.nameTok)
-			// Adopt the signatures-layout payload id into this file's interner before classifying — the
-			// match-bind twin of the construct-site adopt in `requirePayloadLowerable` (OPEN #52).
-			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.signatures.adoptType(binding.field.declaredType, into: self.artifact.typeNames))
+			// Through `payloadTypeOf` — the payload's own slot door — which adopts the signatures-layout id
+			// into this file's interner (OPEN #52) AND resolves what the declaration sweep could not name.
+			// It was a bare `adoptType` here, at the construct check and at the payload LOAD, which is the
+			// spelling A4k retired: a generic-alias payload arrived `named`, i.e. an int (A4i's defect one
+			// slot over).
+			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.signatures.payloadTypeOf(binding.field, layout: layout, into: self.artifact.typeNames), slotScopeFilePath: layout.declFilePath)
 			let loaded = try self.emitUnionPayloadLoad(scrutBox, field: binding.field, slot: binding.slot, layout: layout, posTok: binding.nameTok, range: range)
 			var bindingInfo = try self.scope.declareValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), mutable: false, value: loaded) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
 			if payloadClassIsManaged(class) 'managedPayload'
@@ -27557,7 +27560,7 @@ export type Parser
 	// A MANAGED field returns its value untouched — there is no scalar widening on a pointer, and the
 	// move-in the callers perform is a separate decision made downstream.
 	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, anchor Token) returns ValueId throws ParseError
-		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
+		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
 		if payloadClassIsManaged(class) 'managed'
 			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: value, siteName: self.fieldSiteName(layout, index: index), anchor: anchor)
 			return value
@@ -27771,7 +27774,7 @@ export type Parser
 			let value = try fieldValues.get(i) otherwise panic("emitStructLiteral: fieldValues.get OOB at {i} — the column is sized to the layout's field count")
 			let bareLocal = try fieldBareLocal.get(i) otherwise panic("emitStructLiteral: fieldBareLocal.get OOB at {i} — the column is sized to the layout's field count")
 			let fieldType = self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames)
-			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
+			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
 			let stored = try self.moveInPayload(class, arg: value, argBareLocal: bareLocal, anchor: anchor, range: range)
 			self.emitFieldStore(box, layout: layout, index: i, value: stored, range: range)
 		end 'eachField'
@@ -28271,9 +28274,10 @@ export type Parser
 		var classes = PayloadClassArray.create()
 		for i in 0 upto payloads.count() 'validate'
 			let field = try payloads.get(i) otherwise panic("emitEnumBox: payloadsAt returned fewer fields than its own count at {i}")
-			let class = try self.requirePayloadLowerable(field, layout: layout, posTok: caseTok)
+			let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
+			let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: caseTok)
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.count() was checked to equal the arity but get OOB at {i}")
-			try self.requirePayloadArgType(field, class: class, value: arg, layout: layout, caseTok: caseTok)
+			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, layout: layout, caseTok: caseTok)
 			classes.push(class)
 		end 'validate'
 
@@ -28409,11 +28413,13 @@ export type Parser
 	// slot's width derived the field way (a follow-up slice); until then this refuses it cleanly rather
 	// than panic the lowering. Only `emitEnumBox`/`emitUnionPayloadLoad` call this — the struct-field path
 	// classifies through `classifyUnionPayload` directly and never reaches here.
-	function requirePayloadLowerable(field PayloadField, layout EnumLayout, posTok Token) returns PayloadClass throws ParseError
-		// The payload's `declaredType` is a signatures-layout id; adopt it into this file's interner
-		// before classifying, or a ranged alias that shifts the interning order makes `classifyUnionPayload`
-		// read the wrong name off the id — the wrong E3005 reject (OPEN #52). `adoptType` re-interns by NAME.
-		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.signatures.adoptType(field.declaredType, into: self.artifact.typeNames))
+	// `declared` is the payload's type out of `payloadTypeOf` — a signatures-layout id adopted into this
+	// file's interner (or a ranged alias that shifts the interning order makes `classifyUnionPayload` read
+	// the wrong name off the id, the wrong E3005 reject — OPEN #52) AND resolved. It is threaded in rather
+	// than derived here because both callers need it for themselves as well (the arg check's declared tag,
+	// the load's value type), and asking one door twice per payload is what a shared answer replaces.
+	function requirePayloadLowerable(field PayloadField, declared MaxonType, layout EnumLayout, posTok Token) returns PayloadClass throws ParseError
+		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)
 		match class 'c'
 			scalar then break 'c'
 			managed then break 'c'
@@ -28441,9 +28447,9 @@ export type Parser
 	// the same coercion-site rule a struct literal field, a call argument and a `return` ask; a MANAGED
 	// payload requires the matching heap kind (a String, or a struct of the same name). Anchored at the
 	// case name (the whole construct's anchor); no per-argument span is tracked at this rung.
-	function requirePayloadArgType(field PayloadField, class PayloadClass, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
+	function requirePayloadArgType(field PayloadField, declared MaxonType, class PayloadClass, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
 		match class 'c'
-			scalar then try self.requireScalarPayloadArg(field, value: value, layout: layout, caseTok: caseTok)
+			scalar then try self.requireScalarPayloadArg(field, declared: declared, value: value, layout: layout, caseTok: caseTok)
 			managed(storage, isString) then try self.requireManagedPayloadArg(field, storage: storage, isString: isString, value: value, layout: layout, caseTok: caseTok)
 			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
@@ -28453,18 +28459,21 @@ export type Parser
 		end 'c'
 	end 'requirePayloadArgType'
 
-	function requireScalarPayloadArg(field PayloadField, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
-		let declared = maxonTypeTag(field.declaredType)
+	// ⚠ **THE TAG COMES OFF THE RESOLVED `declared`, NEVER OFF `field.declaredType` (A4k).** Read raw, a
+	// FUNCTION-alias payload is a `named` — an int — so `Payload.op(twice)` met the
+	// `functionIntoNonFunction` arm below and was refused E3005 on a program the payload cascade had, until
+	// this rung, never even classified as a scalar. Resolved, it is the function type the value is.
+	function requireScalarPayloadArg(field PayloadField, declared MaxonType, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
+		let declaredTag = maxonTypeTag(declared)
 		let got = self.tagOf(value)
-		match checkDeclaredType(got, declared: declared) 'declared'
+		match checkDeclaredType(got, declared: declaredTag) 'declared'
 			ok then break 'declared'
-			mismatch then throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: typeTagName(got), expected: typeTagName(declared), line: caseTok.line, column: caseTok.column)
-			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declared), line: caseTok.line, column: caseTok.column)
-			// A FUNCTION VALUE into a scalar union PAYLOAD (P1.5-A1) — unreachable by A1's enabled cases (a
-			// function value in a union payload co-lands with closures at P1.5-A2, where a function-typed
-			// payload is functionized like a struct field). The arm keeps the `match` exhaustive with the
-			// shared E3005; A2 supplies the accept path.
-			functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction("payload", name: String.from(field.name), heldType: typeTagName(declared), line: caseTok.line, column: caseTok.column)
+			mismatch then throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: typeTagName(got), expected: typeTagName(declaredTag), line: caseTok.line, column: caseTok.column)
+			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: caseTok.line, column: caseTok.column)
+			// A FUNCTION VALUE into a scalar union PAYLOAD whose declared type is NOT a function — the same
+			// E3005 a function value meeting any other non-function slot earns. A function-ALIAS payload no
+			// longer reaches it: `declaredTag` is `function` there and `checkDeclaredType` answers `ok`.
+			functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction("payload", name: String.from(field.name), heldType: typeTagName(declaredTag), line: caseTok.line, column: caseTok.column)
 		end 'declared'
 	end 'requireScalarPayloadArg'
 
@@ -28489,12 +28498,16 @@ export type Parser
 	// ownership is read off the tag. The op carries the concrete storage width in both cases
 	// (`maxonTypeToStdType` panics on a `named`). `requirePayloadLowerable` rejects float/nested here.
 	function emitUnionPayloadLoad(box ValueId, field PayloadField, slot CaseIndex, layout EnumLayout, posTok Token, range SourceRange) returns ValueId throws ParseError
-		let class = try self.requirePayloadLowerable(field, layout: layout, posTok: posTok)
-		let storage = payloadStorageOf(class)
 		// A scalar payload's loaded value is tagged with its DECLARED type (an enum payload stays
-		// `named(<Enum>)` so a nested `match` recognizes it); adopt that id into this file's interner
-		// or the minted value carries a signatures id `enumMatchFor` would misresolve (OPEN #52).
-		let valueType = payloadValueTypeOf(class, declared: self.signatures.adoptType(field.declaredType, into: self.artifact.typeNames))
+		// `named(<Enum>)` so a nested `match` recognizes it), so it is the RESOLVED one that must be handed
+		// on: a function-alias payload bound out as a bare `named` is an int, which is what made
+		// `print("{f(3)}")` on such a binding `E2015 … a value of type 'unknown'` (A4k). `payloadTypeOf`
+		// also adopts the id into this file's interner, or the minted value carries a signatures id
+		// `enumMatchFor` would misresolve (OPEN #52).
+		let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
+		let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: posTok)
+		let storage = payloadStorageOf(class)
+		let valueType = payloadValueTypeOf(class, declared: declared)
 		return self.emitIndirectLoad(valueType, box: box, offset: layout.payloadSlotOffset(slot), storageType: storage, range: range)
 	end 'emitUnionPayloadLoad'
 
@@ -34379,7 +34392,7 @@ export type Parser
 		if tagIsFloat(tag) 'floatSlot'
 			return MaxonType.float
 		end 'floatSlot'
-		return payloadValueTypeOf(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared), declared: declared)
+		return payloadValueTypeOf(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath), declared: declared)
 	end 'containerSlotValueType'
 
 	// ⭐⭐ **AN ELEMENT ARGUMENT MUST AGREE WITH THE INSTANCE'S ELEMENT TYPE.** The `Array` mutators are
@@ -34450,7 +34463,7 @@ export type Parser
 
 		let declared = self.signatures.declaredSlotType(self.signatures.containerElementType(giid), into: self.artifact.typeNames, slotScopeFilePath: self.filePath)
 		let element = try self.characterizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
-		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared)
+		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath)
 		if payloadClassIsManaged(class) 'managed'
 			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: element, siteName: String.from(methodTok.value), anchor: methodTok)
 			return element
@@ -35339,7 +35352,7 @@ export type Parser
 			end 'unexpectedBox'
 		end 'opaqueTypeParamField'
 
-		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
+		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
 		if not payloadClassIsManaged(class) 'scalarField'
 			self.emitFieldStore(box, layout: layout, index: index, value: value, range: range)
 			return

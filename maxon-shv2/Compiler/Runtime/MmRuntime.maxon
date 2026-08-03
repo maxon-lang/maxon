@@ -1101,7 +1101,7 @@ function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, projec
 		let payloads = layout.payloadsAt(ci)
 		for fi in 0 upto payloads.count() 'eachField'
 			let field = try payloads.get(fi) otherwise panic("addNestedUnionDestructors: payloadsAt count disagrees with get at {fi}")
-			let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
+			let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
 			if not payloadClassIsManaged(class) 'scalar'
 				continue
 			end 'scalar'
@@ -1371,7 +1371,7 @@ function emitManagedFieldDrops(module StdModule, startBlock IrBlock, box ValueId
 	var cur = startBlock
 	for fi in 0 upto payloads.count() 'eachField'
 		let field = try payloads.get(fi) otherwise panic("emitManagedFieldDrops: payloadsAt count disagrees with get at {fi}")
-		let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
+		let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
 		if not payloadClassIsManaged(class) 'scalarField'
 			continue
 		end 'scalarField'

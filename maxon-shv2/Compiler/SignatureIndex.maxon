@@ -1036,9 +1036,23 @@ end 'PayloadClass'
 
 // Classify a union payload field's storage and ownership. `typeNames` resolves a `named` field's id to
 // a NAME; pass the interner the LAYOUT's ids live in — the file-local artifact interner at the
-// construct/extract sites, `project.typeNames` at the destructor-synthesis site. All three lookups
-// below are keyed by that name, so they are interner-independent once the name is in hand.
-export function classifyUnionPayload(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType) returns PayloadClass
+// construct/extract sites, `project.typeNames` at the destructor-synthesis site. Every lookup
+// below is keyed by that name, so they are interner-independent once the name is in hand.
+//
+// ⭐⭐ **A PAYLOAD IS A SLOT, AND WHAT ITS BARE `named` DENOTES IS ASKED THROUGH THE SLOT DOOR (A4k).**
+// This used to answer that with a cascade of its own, and the two disagreed exactly where the copy was
+// thinner: `declaredSlotType` re-tags a function alias and a generic alias, this did not — so a
+// `boxed(b PB)` payload fell through to `undeclaredName`, the construct stored the pointer without
+// consuming the temporary (the box was freed at the end of the construct statement while the union kept
+// pointing at it), the cascade dropped nothing, and reading the binding was `E3011 Unknown type 'PB'` on
+// a program the oracle compiles and runs. See `denotedSlotType`, which is now the only home of that
+// resolution.
+//
+// `slotScopeFilePath` is the UNION's `declFilePath` — the file whose reading of a contested generic
+// alias fixes this payload's identity, exactly as a struct field's is its own declaring file's. It is
+// the same file `resolveRecordedGenericAliasTypes` settled the recorded payload column against (N3), so
+// the column and this classifier cannot come to mean two different declarations of one name.
+export function classifyUnionPayload(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType, slotScopeFilePath FilePath) returns PayloadClass
 	match fieldType 'kind'
 		boolean then return PayloadClass.scalar(fieldType)
 		integer then return PayloadClass.scalar(fieldType)
@@ -1078,52 +1092,40 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		named then break 'kind'
 	end 'kind'
 
-	// Resolved through `denotedAggregateName` for the reason that door states: a payload spelled with a TUPLE
-	// typealias (`some(v Pair)`) reaches here as a bare alias name whenever the sweep read the declaration
-	// before the alias's own file was walked, and `Pair` is a registered nothing — the struct arm below missed
-	// it and the binding stayed `named`, which TypeResolution then rejected as `E3011 Unknown type 'Pair'` on a
-	// program the other walk order compiled and ran.
-	let name = signatures.denotedAggregateName(try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("classifyUnionPayload: a payload field's named type id is not in the interner it was resolved against — pass the interner the layout's ids live in"))
+	let name = try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("classifyUnionPayload: a payload field's named type id is not in the interner it was resolved against — pass the interner the layout's ids live in")
 
-	// A ranged-int alias is a scalar of its underlying width; a float-underlying alias would be a float
-	// payload (none are declarable yet).
-	//
-	// ⚠ Bare-name, and NOT the caller's file: the alias that governs a payload field is the one visible
-	// where the UNION was declared, which `EnumLayout` does not record. Passing the classifying file
-	// would not be a partial answer, it would be the wrong one — this is asked from the emitted
-	// runtime's walk of `project.enumTypes` as well as from the parser.
-	if let underlying = try signatures.aliasUnderlyingInAnyFile(name) 'alias'
-		return aliasPayloadClass(underlying)
-	end 'alias'
+	// ⭐⭐ **THE SHARED CASCADE, and it answers every payload whose name denotes a DIFFERENT type** — a
+	// STRUCT (a managed heap pointer, re-tagged `structRef` because `maxonTypeToStdType` panics on a `named`
+	// and a struct binding's field access requires the tag), a TUPLE alias (the tuple's own `structRef` —
+	// `Pair` is a registered nothing, and unresolved it was `E3011 Unknown type 'Pair'` on a program the
+	// other walk order ran), a GENERIC alias (the instance), a FUNCTION alias (a code pointer), and a ranged
+	// FLOAT alias (a genuine f64). Re-entered rather than re-classified by hand: `denotedSlotType` never
+	// answers with a `named`, so the recursion is exactly one deep and the tag→class mapping above stays the
+	// only one there is.
+	if let denoted = try signatures.denotedSlotType(name, into: typeNames, slotScopeFilePath: slotScopeFilePath) 'theNameDenotesAnotherType'
+		return classifyUnionPayload(signatures, typeNames: typeNames, fieldType: denoted, slotScopeFilePath: slotScopeFilePath)
+	end 'theNameDenotesAnotherType'
+
+	// A ranged INT alias is a scalar of its underlying width. It is asked HERE and not in the shared door
+	// because it is a different question: that door answers "what type does this name denote", and an int
+	// alias's answer is the bare `named` it already is (its NAME carries the range) — what a PAYLOAD needs
+	// on top is the STORAGE primitive the slot occupies, which only this side wants. A float-underlying
+	// alias cannot reach this line; the door re-tagged it `float` and the `floatPayload` arm above took it.
+	if let underlying = try signatures.aliasUnderlyingInAnyFile(name) 'rangedIntAlias'
+		return PayloadClass.scalar(underlying)
+	end 'rangedIntAlias'
 
 	// A payload-FREE enum's value is an i64 tag — a scalar; a BOXED union is a managed heap pointer
 	// (its box carries the field's `named(<union>)` id, which `enumPayloadClass` reads off `fieldType`).
+	// Also asked here rather than in the shared door, and for the same reason: an enum name denotes no
+	// other type — a `named` IS what both forms are stored as — so there is nothing for that door to
+	// re-tag, and only the CLASS differs between them. An undeclared name is a user error TypeResolution
+	// reports as E3011; the caller keeps the op well-formed until the pipeline's error gate throws.
 	match signatures.enumOf(name) 'asEnum'
 		declared(enumLayout) then return enumPayloadClass(enumLayout, fieldType: fieldType)
-		undeclared then break 'asEnum'
-	end 'asEnum'
-
-	// A `type` (struct) payload is a managed heap pointer. Its storage type is a `structRef` — NOT the
-	// `named` the field was spelled with: `maxonTypeToStdType` panics on a `named` (an op's type must be
-	// concrete by lowering), and a struct BINDING's field access (`b.mass`) requires the `structRef`
-	// tag (`requireStructBase`). An undeclared name is a user error TypeResolution reports as E3011.
-	// The id is re-interned from the RESOLVED name rather than reused off `fieldType`: for a struct spelled by
-	// its own name the two are the same id (the name is already in this table), and for a tuple alias they are
-	// not — the alias's id spells `Pair`, which names no struct for `requireStructBase` to resolve.
-	match signatures.structOf(name) 'asStruct'
-		declared then return PayloadClass.managed(MaxonType.structRef(typeNames.intern(name)), isString: false)
 		undeclared then return PayloadClass.undeclaredName
-	end 'asStruct'
+	end 'asEnum'
 end 'classifyUnionPayload'
-
-// A ranged-int alias payload is a scalar of its underlying width. A float-underlying alias would be a
-// float payload, rejected the same way a bare `float` is.
-function aliasPayloadClass(underlying MaxonType) returns PayloadClass
-	if tagIsFloat(maxonTypeTag(underlying)) 'floatAlias'
-		return PayloadClass.floatPayload
-	end 'floatAlias'
-	return PayloadClass.scalar(underlying)
-end 'aliasPayloadClass'
 
 // A payload whose type is another enum/union: a payload-FREE enum is a scalar (its value is its i64
 // tag, stored inline); a BOXED union is a MANAGED heap pointer carrying the field's own `named(<union>)`
@@ -1158,7 +1160,7 @@ export function caseHasManagedField(signatures ProgramSignatures, typeNames Type
 	let payloads = layout.payloadsAt(ci)
 	for fi in 0 upto payloads.count() 'eachField'
 		let field = try payloads.get(fi) otherwise panic("caseHasManagedField: payloadsAt count disagrees with get at {fi}")
-		let class = classifyUnionPayload(signatures, typeNames: typeNames, fieldType: field.declaredType)
+		let class = classifyUnionPayload(signatures, typeNames: typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
 		let needsDrop = payloadClassIsString(class) if wantStringOnly else payloadClassIsManaged(class)
 		if needsDrop 'found'
 			return true
@@ -10192,6 +10194,22 @@ export type ProgramSignatures
 		return self.declaredSlotType(declared, into: into, slotScopeFilePath: layout.declFilePath)
 	end 'fieldTypeOf'
 
+	// ⭐ **THE UNION-PAYLOAD TWIN OF `fieldTypeOf` (A4k)** — a payload slot's DECLARED type, resolved and
+	// ADOPTED into `into`, scoped to the union's own declaring file for the reason `declaredSlotType`'s
+	// header gives a struct field.
+	//
+	// ⛔ **THE THREE PARSER SITES THAT NEEDED IT SPELLED A BARE `adoptType` INSTEAD** — the construct's
+	// lowerability check, the match-bind classification, and the payload LOAD's value type — so a payload
+	// declared with a generic alias reached each of them still `named`, i.e. an INT. That is A4i's defect
+	// one slot over, and it is here rather than in the parser for A4i's cure: the door a payload's type
+	// comes out of is a fact about the LAYOUT, so it belongs beside the layout's other one.
+	//
+	// It takes the LAYOUT and not the union NAME for `fieldTypeOf`'s measured reason: every caller already
+	// holds it, and a name-keyed fetch would hash a string per payload to find a record in hand.
+	export function payloadTypeOf(field PayloadField, layout EnumLayout, into TypeNameInterner) returns MaxonType
+		return self.declaredSlotType(field.declaredType, into: into, slotScopeFilePath: layout.declFilePath)
+	end 'payloadTypeOf'
+
 	// ⭐ **THE PRE-ERASURE `__ManagedMemory` SPELLING OF FIELD `index` (A2j / A2m)** — `fieldTypeOf`'s twin
 	// for the half a `MaxonType` cannot hold, and the door `Parser.emitFieldLoad` asks at the one site a
 	// field read mints its value.
@@ -10233,7 +10251,8 @@ export type ProgramSignatures
 	// FIELD and an `Array` ELEMENT both come out of, ADOPTED into `into` (the calling file's own artifact
 	// interner) exactly as `returnTypeOf` does.
 	//
-	// Every re-tag below exists for the same reason: the DECLARATION SWEEP that recorded
+	// Every re-tag in `denotedSlotType` — the cascade this reads the name for — exists for the same reason:
+	// the DECLARATION SWEEP that recorded
 	// the slot ran before any alias was interned, so an alias-typed slot arrives as a bare `named` and the
 	// registries are the only thing that can say what it is. Leaving one unresolved is not a cosmetic loss
 	// — `named` reads as an INTEGER (`tagIsIntegral`), so a function slot admits an int, a generic-instance
@@ -10249,7 +10268,7 @@ export type ProgramSignatures
 	//
 	// ⚠⚠ **`slotScopeFilePath` IS WHICHEVER FILE *FIXES* THIS SLOT'S TYPE, AND FOR A FIELD THAT IS ITS
 	// DECLARING FILE AND NEVER A READER'S (N2) — the difference there is a SILENT WRONG ANSWER.** The
-	// generic-alias arm below resolves a compiler-minted alias — `__ManagedMemory` — whose element is the
+	// generic-alias arm resolves a compiler-minted alias — `__ManagedMemory` — whose element is the
 	// reader's `Byte` by design, so a range-contested program has two answers to choose from.
 	//
 	// **THE KINDS OF ASKER, AND WHY ONE PARAMETER SERVES THEM ALL.** They are not separate policies; they are
@@ -10274,9 +10293,16 @@ export type ProgramSignatures
 	//     and a `T`-typed field WRITE all learn what `T` is through, and it reached here as a bare `adoptType`
 	//     — see that function for the three faces that cost. ⚠ The WRITE arrived one commit later and by the
 	//     SAME lesson: it kept its own copy of the pre-A4i `adoptType(substitutedInstanceArg(…))`, so the fix
-	//     reached the read and not its twin, and the twin's consumer (`classifyUnionPayload`) resolves a bare
-	//     `named` through a cascade with a struct arm and NO generic-alias arm — which turned a
-	//     `Holder with IntBox` field write into a SCALAR store that dropped nothing and moved nothing in.
+	//     reached the read and not its twin, and the twin's consumer (`classifyUnionPayload`) then resolved
+	//     that bare `named` through a SECOND cascade with a struct arm and NO generic-alias arm — which
+	//     turned a `Holder with IntBox` field write into a SCALAR store that dropped nothing and moved
+	//     nothing in. There is only one cascade now (`denotedSlotType`); A4k is what made that true.
+	//   • **A UNION PAYLOAD** (`payloadTypeOf`, and the classifier itself) passes `EnumLayout.declFilePath`,
+	//     the struct FIELD's answer for the struct FIELD's reason — a payload's type must be ONE type
+	//     program-wide, and the alias that governs it is the one visible where the UNION was declared, never
+	//     where a `match` reads it. It is the SAME file `resolveRecordedGenericAliasTypes` already settled
+	//     that payload's recorded column against (N3), so the column and the classifier cannot come to mean
+	//     two different declarations of one contested name.
 	//   • **A TUPLE element and a COMPILER-SYNTHESIZED layout** carry `CompilerOwnedDeclFilePath`, the same
 	//     probe a file declaring none of a contested name makes: a type declared in no file resolves like a
 	//     stranger, which is the one answer that is the same for all of them.
@@ -10287,75 +10313,108 @@ export type ProgramSignatures
 	// purpose — this file has already shipped a wrong call-site count four times, and a number in prose is a
 	// second derivation of something `grep -n 'declaredSlotType('` derives correctly every time.)
 	export function declaredSlotType(declared MaxonType, into TypeNameInterner, slotScopeFilePath FilePath) returns MaxonType
-		// A FUNCTION-typed slot (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
-		// recorded its declaration ran before the function alias was known — so it is re-tagged `function`
-		// HERE, over this index's own function-alias registry (P1.5-A1). One place, so every reader (a
-		// field READ, a `Self{op: op}` construction check, the store-width query) sees a function VALUE
-		// and not an int. Re-interned into `into` by NAME exactly as `adoptType`'s `named` arm is.
 		if maxonTypeTag(declared) == ValueTypeTag.named 'maybeAlias'
-			let name = self.nameOfId(typeNameIdOf(declared))
-			if self.isFunctionAlias(name) 'functionAlias'
-				return MaxonType.function(into.intern(name))
-			end 'functionAlias'
-			// A GENERIC-INSTANCE-typed slot (`export var ops as IntArray`, an `Array` instance) arrives as a
-			// `named` for the same reason a function alias does — the SWEEP recorded the declaration before the
-			// generic alias was interned — so it is re-tagged `genericInstance` here, over this index's own
-			// generic-alias registry (P1.7). One place, so every reader (a field READ, a `Self{ops: ops}`
-			// construction check, the array method dispatch, the drop cascade) sees the instance and not an
-			// `int`. The gid is this index's own, needing no interner remap.
-			if self.isGenericAlias(name) 'genericAlias'
-				return MaxonType.genericInstance(self.genericAliasInstanceFrom(name, readerFilePath: slotScopeFilePath))
-			end 'genericAlias'
-			// ⭐ A TUPLE-ALIAS-typed slot (`export var p as Pair`, `typealias Pair = (Int, Int)`) arrives as a
-			// `named` for the reason the arms around it do, and is re-tagged to the tuple's own `structRef`
-			// here — the read-side twin of `parseTypeReference`'s tuple-alias arm. A tuple alias mints NO
-			// identity of its own, so the tag carries the CANONICAL tuple name and a `Pair`-typed slot and a
-			// `(Int, Int)`-typed one are ONE type, which is the whole rule the alias form has.
-			//
-			// ⚠ **MEASURED, A3e** — without it, three of this door's readers answered by the filesystem's walk
-			// order: `var p as Pair` was `E3005 cannot assign 'struct' to variable 'p' of type 'int'`, a tuple
-			// SLOT spelled `(Pair, Int)` canonicalized to `__Tuple2.Pair.int` and read its own element as an
-			// int, and `Array with Pair` refused the `push` of a matching literal — each on a program the other
-			// walk order compiled and ran.
-			if self.isTupleAlias(name) 'tupleAlias'
-				return MaxonType.structRef(into.intern(self.tupleAliasTarget(name)))
-			end 'tupleAlias'
-			// ⭐ A RANGED FLOAT-ALIAS-typed slot (`export var mass as Weight`) arrives as a `named` for the
-			// same reason the two above do — the SWEEP recorded the declaration before any alias was known — and
-			// it is the one `named` whose VALUE is a genuine f64. Left overloaded it reads as an INTEGER
-			// (`tagIsIntegral`), which made `Self{mass: 2.5}` a false E3009 on legal code while `Self{mass: 3}`
-			// was admitted unconverted into a slot the store then wrote as an i64. Re-tagged here, in the ONE
-			// door a field's type comes out of, so the construction check, the field READ, the field WRITE and
-			// the store-width query all see the float and cannot disagree about it.
-			//
-			// It returns the bare primitive and interns nothing: a `float` carries no name (`typeNameIdOf` is
-			// `UnnamedTypeId`), so there is nothing for `into` to adopt. The RANGE is dropped exactly as
-			// `TypeResolution.resolveNamedType` drops it — a float alias has no range check today.
-			if self.isFloatAlias(name) 'floatAlias'
-				return MaxonType.float
-			end 'floatAlias'
-			// ⭐⭐ **A STRUCT-TYPED SLOT (`export var leaf as Leaf`) arrives as a `named` for the reason the
-			// three above do** — the SWEEP recorded the declaration before anything could say what the name
-			// denoted — and it is the re-tag that was MISSING, with exactly the consequence this header warns
-			// of: `named` reads as an INTEGER. MEASURED before this line, against the runnable oracle:
-			//   • `return self.leaf` from a `returns Leaf` method was `E3005 Cannot return 'int' from function
-			//     declared to return 'struct'` — a false reject of a program the oracle runs;
-			//   • `fieldStorageType` fell through to its undeclared-name recovery and typed the field's
-			//     `loadIndirect` `integer` (the same machine word, so no emitted byte moved — which is why it
-			//     went unnoticed);
-			//   • `emitFieldLoad` recorded the read as a BOXED-UNION candidate, a slot its own header says a
-			//     struct field never touches.
-			// Every other reader already resolved the name for itself — `classifyUnionPayload` re-tags it
-			// `structRef` for the construct/drop path, `structLayoutOfField` calls `resolveNamedStruct` for the
-			// chain walk — so the field's VALUE was the one place the answer was never given. Re-interned into
-			// `into` by NAME exactly as the function-alias arm is.
-			if self.structTypes.contains(name) 'structType'
-				return MaxonType.structRef(into.intern(name))
-			end 'structType'
+			if let denoted = try self.denotedSlotType(self.nameOfId(typeNameIdOf(declared)), into: into, slotScopeFilePath: slotScopeFilePath) 'theNameDenotesAnotherType'
+				return denoted
+			end 'theNameDenotesAnotherType'
 		end 'maybeAlias'
 
 		return self.adoptType(declared, into: into)
 	end 'declaredSlotType'
+
+	// ⭐⭐ **THE CASCADE ITSELF, KEYED BY THE NAME RATHER THAN BY AN ID — SO THE OTHER FAMILY OF ASKER CAN
+	// SHARE IT (A4k).** `declaredSlotType` above holds an id minted against THIS index's interner; the
+	// whole-program payload/field CLASSIFIERS hold one minted against `project.typeNames` or a file
+	// artifact's, and an id is only a number without its table (`typeIsManaged`'s header records both
+	// directions in which reading it against the wrong one is a silent wrong answer). A name is the one
+	// currency both hold, so the cascade lives here and the id-keyed door is a two-line adapter over it.
+	//
+	// ⛔ **IT IS ONE FUNCTION BECAUSE THERE WERE TWO, AND THE SECOND ONE'S GAP WAS A READ-AFTER-FREE.**
+	// `classifyUnionPayload` resolved a `named` through a cascade of its own with a struct arm and no
+	// generic-alias arm, so `Holder with IntBox` fell through to `undeclaredName`, took the SCALAR store,
+	// and `h.item = IntBox.create(8)` printed `4557430888798830399` — `0x3F3F3F3F3F3F3F3F`, the free poison
+	// (A4i review). Closing that at the caller left the two cascades still disagreeing, and the next caller
+	// to hand it a bare `named` — a union PAYLOAD declared with a generic alias — was a clean but wrong
+	// `E3011 Unknown type 'PB'` on a program the oracle runs, plus a payload the construct never moved in.
+	//
+	// **`MapError` IS AN ANSWER, NOT A GAP.** Three names denote nothing this door can re-tag, and each is
+	// deliberate: a ranged INT alias (its NAME is what carries the range and the signedness — see
+	// `isFloatAlias`), an enum/union name (a `named` IS its type — a payload-free enum's value is its i64
+	// tag and a boxed one's is its box), and a name no file declares (E3011's subject). All three are
+	// correctly left as the bare `named` they arrived as, which is why the caller's fallthrough — an
+	// `adoptType` here, an enum lookup at the payload classifier — is the rest of the answer and not a
+	// recovery path.
+	function denotedSlotType(name ByteArray, into TypeNameInterner, slotScopeFilePath FilePath) returns MaxonType throws MapError
+		// A FUNCTION-typed slot (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
+		// recorded its declaration ran before the function alias was known — so it is re-tagged `function`
+		// HERE, over this index's own function-alias registry (P1.5-A1). One place, so every reader (a
+		// field READ, a `Self{op: op}` construction check, the store-width query, a union PAYLOAD's class)
+		// sees a function VALUE and not an int. Re-interned into `into` by NAME exactly as `adoptType`'s
+		// `named` arm is.
+		if self.isFunctionAlias(name) 'functionAlias'
+			return MaxonType.function(into.intern(name))
+		end 'functionAlias'
+		// A GENERIC-INSTANCE-typed slot (`export var ops as IntArray`, an `Array` instance) arrives as a
+		// `named` for the same reason a function alias does — the SWEEP recorded the declaration before the
+		// generic alias was interned — so it is re-tagged `genericInstance` here, over this index's own
+		// generic-alias registry (P1.7). One place, so every reader (a field READ, a `Self{ops: ops}`
+		// construction check, the array method dispatch, the drop cascade) sees the instance and not an
+		// `int`. The gid is this index's own, needing no interner remap.
+		if self.isGenericAlias(name) 'genericAlias'
+			return MaxonType.genericInstance(self.genericAliasInstanceFrom(name, readerFilePath: slotScopeFilePath))
+		end 'genericAlias'
+		// ⭐ A TUPLE-ALIAS-typed slot (`export var p as Pair`, `typealias Pair = (Int, Int)`) arrives as a
+		// `named` for the reason the arms around it do, and is re-tagged to the tuple's own `structRef`
+		// here — the read-side twin of `parseTypeReference`'s tuple-alias arm. A tuple alias mints NO
+		// identity of its own, so the tag carries the CANONICAL tuple name and a `Pair`-typed slot and a
+		// `(Int, Int)`-typed one are ONE type, which is the whole rule the alias form has.
+		//
+		// ⚠ **MEASURED, A3e** — without it, three of this door's readers answered by the filesystem's walk
+		// order: `var p as Pair` was `E3005 cannot assign 'struct' to variable 'p' of type 'int'`, a tuple
+		// SLOT spelled `(Pair, Int)` canonicalized to `__Tuple2.Pair.int` and read its own element as an
+		// int, and `Array with Pair` refused the `push` of a matching literal — each on a program the other
+		// walk order compiled and ran. It is also what retired `classifyUnionPayload`'s own
+		// `denotedAggregateName` step: a tuple-alias payload is answered by THIS arm now, so the payload
+		// door no longer pre-resolves a name the shared cascade resolves.
+		if self.isTupleAlias(name) 'tupleAlias'
+			return MaxonType.structRef(into.intern(self.tupleAliasTarget(name)))
+		end 'tupleAlias'
+		// ⭐ A RANGED FLOAT-ALIAS-typed slot (`export var mass as Weight`) arrives as a `named` for the
+		// same reason the two above do — the SWEEP recorded the declaration before any alias was known — and
+		// it is the one `named` whose VALUE is a genuine f64. Left overloaded it reads as an INTEGER
+		// (`tagIsIntegral`), which made `Self{mass: 2.5}` a false E3009 on legal code while `Self{mass: 3}`
+		// was admitted unconverted into a slot the store then wrote as an i64. Re-tagged here, in the ONE
+		// door a field's type comes out of, so the construction check, the field READ, the field WRITE and
+		// the store-width query all see the float and cannot disagree about it.
+		//
+		// It returns the bare primitive and interns nothing: a `float` carries no name (`typeNameIdOf` is
+		// `UnnamedTypeId`), so there is nothing for `into` to adopt. The RANGE is dropped exactly as
+		// `TypeResolution.resolveNamedType` drops it — a float alias has no range check today.
+		if self.isFloatAlias(name) 'floatAlias'
+			return MaxonType.float
+		end 'floatAlias'
+		// ⭐⭐ **A STRUCT-TYPED SLOT (`export var leaf as Leaf`) arrives as a `named` for the reason the
+		// three above do** — the SWEEP recorded the declaration before anything could say what the name
+		// denoted — and it is the re-tag that was MISSING, with exactly the consequence this cascade's
+		// header warns of: `named` reads as an INTEGER. MEASURED before this line, against the runnable
+		// oracle:
+		//   • `return self.leaf` from a `returns Leaf` method was `E3005 Cannot return 'int' from function
+		//     declared to return 'struct'` — a false reject of a program the oracle runs;
+		//   • `fieldStorageType` fell through to its undeclared-name recovery and typed the field's
+		//     `loadIndirect` `integer` (the same machine word, so no emitted byte moved — which is why it
+		//     went unnoticed);
+		//   • `emitFieldLoad` recorded the read as a BOXED-UNION candidate, a slot its own header says a
+		//     struct field never touches.
+		// It is the arm the payload cascade DID have, which is exactly why the split hid for as long as it
+		// did: a struct-typed payload was answered correctly by both, so only the arms the copy lacked —
+		// the generic-instance one and the function one — ever showed the disagreement. Re-interned into
+		// `into` by NAME exactly as the function-alias arm is.
+		if self.structTypes.contains(name) 'structType'
+			return MaxonType.structRef(into.intern(name))
+		end 'structType'
+
+		throw MapError.keyNotFound
+	end 'denotedSlotType'
 
 	// Does field `index` of struct `structName` own DROPPABLE HEAP — a String, a struct, or a
 	// payload-bearing (boxed) union? Drives the struct's `__destruct_<T>` drop CASCADE: every field this
@@ -10538,10 +10597,27 @@ export type ProgramSignatures
 	// `__mm_decref`), a boxed union, and a GENERIC INSTANCE (a base-struct box, P1.6-B2, dropped through
 	// its own instance destructor or `__mm_decref`) are managed; a scalar (int/bool/float/ExitCode, a
 	// ranged alias, a payload-free enum), a function code pointer, and an opaque type PARAMETER (a borrow
-	// at this rung) are not. `structFieldIsManaged` (a struct field), `classifyUnionPayload` (a union
-	// payload) and the generic-instance field classification all delegate here, so "managed" means ONE
-	// thing across struct, union and instance — the dropped set, the moved-in set and the usage gates
-	// agree by construction.
+	// at this rung) are not. `structFieldIsManaged` (a struct field) and the generic-instance field
+	// classification delegate here, so "managed" means ONE thing across struct and instance — the dropped
+	// set, the moved-in set and the usage gates agree by construction.
+	//
+	// ⚠ **`classifyUnionPayload` DOES NOT DELEGATE HERE, AND THIS HEADER CLAIMED IT DID UNTIL A4k.** It is a
+	// SECOND implementation of the same question and a deliberate one: it must name the KIND (String vs
+	// struct vs nested union vs float) and carry the storage type, where this answers a `bool`
+	// ALLOCATION-FREE — which is exactly why neither is folded into the other
+	// (`Parser.requireContainerElementType`'s header prices the alternative at one `PayloadClass` box per
+	// trivial-element `push` site, and this door must reach its `false` for a scalar field without boxing a
+	// `DeclaredStruct`). Delegating here to `denotedSlotType` would cost an `into.intern` per read, so it
+	// deliberately does not.
+	//
+	// ⛔ **THEY DID DISAGREE, AND IT WAS A READ-AFTER-FREE.** Until A4k the payload classifier's own name
+	// cascade had no generic-alias arm while the cascade below does, so a `Holder with IntBox` field was
+	// MANAGED here and `undeclaredName` there. That half is fixed at the source (`denotedSlotType`), and
+	// what remains written twice is the name cascade's *projection* — this one to a `bool`, that one through
+	// the shared door to a type. The two agree case for case today (a tuple alias resolves to the tuple's
+	// own struct on both sides; a function alias, a float alias and a ranged int alias are all `false` here
+	// and all non-managed classes there), and that agreement is by INSPECTION rather than by construction:
+	// a new alias FORM must be taught to both, and the shared door is the one that will remember.
 	//
 	// ⚠⚠ **`from` IS THE INTERNER `fieldType`'s `named` ID WAS MINTED AGAINST, AND IT IS A PARAMETER
 	// BECAUSE THE ANSWER IS OTHERWISE DECIDED BY INTERNING ORDER.** A `named` type is only a NUMBER; the
@@ -10745,7 +10821,7 @@ export type ProgramSignatures
 			let payloads = layout.payloadsAt(ci)
 			for fi in 0 upto payloads.count() 'eachField'
 				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.unionPayloadsSupportDeepClone: payloadsAt count disagrees with get at {fi}")
-				if not payloadClassIsManaged(classifyUnionPayload(self, typeNames: self.typeNames, fieldType: field.declaredType)) 'scalar'
+				if not payloadClassIsManaged(classifyUnionPayload(self, typeNames: self.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
 					continue
 				end 'scalar'
 				if not self.typeSupportsDeepClone(field.declaredType, asElement: false, visited: visited) 'unsupportedPayload'

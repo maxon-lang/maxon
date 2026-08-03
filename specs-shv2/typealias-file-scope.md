@@ -602,11 +602,23 @@ error E3005: <fragment>:17:11: otherwise value 0 is outside the range of 'Byte' 
 <!-- test: generic-alias-union-payload-drops-through-its-own-files-element -->
 The union-payload twin of the field case: `Bag` names an `Array with String` in one file and an
 `Array with Num` in the other, and each is a boxed union's PAYLOAD. A payload's declared type is
-recorded by the same sweep, read by the same file-less drop and deep-clone walks
+recorded by the same sweep, read by the same drop and deep-clone walks
 (`unionPayloadsSupportDeepClone`), and so needs the same one-time resolution against its declaring
-file. The payload is deliberately not BOUND — a `match` arm that binds a generic-alias payload is
-refused for an unrelated, pre-existing reason (`E3011 Unknown type 'Bag'`, single-file, and the C#
-bootstrap answers it), and what this case is about is the DROP.
+file. The payload is not BOUND here, and what this case is about is the DROP.
+
+⭐ **THE `E3011 Unknown type 'Bag'` THIS PARAGRAPH USED TO CALL "an unrelated, pre-existing reason" WAS
+NOT UNRELATED — IT WAS THE SAME FACT, ONE DOOR OVER, AND A4k CLOSED IT.** A generic-alias payload was
+refused at a binding because `classifyUnionPayload` resolved a bare `named` through a cascade of its own
+that had no generic-alias arm, while `declaredSlotType` — the door this case's own drop walk goes
+through — did. `specs-shv2/generic-types.md` binds one now. What is deliberate here is only the SCOPE:
+this case is the two-file one, and the reader-free walks are what it pins.
+
+⚠ **AND THE EMITTED CODE FOR THIS CASE MOVED WHEN THAT LANDED, CORRECTLY.** Classified
+`undeclaredName`, the payload was not managed: `WordBox.filled(b)` stored the array pointer WITHOUT
+consuming `b`, so `b`'s own scope exit freed the buffer and the box held a stale pointer nothing read —
+right answer, wrong owner. Classified as the instance it is, the construct MOVES the array into the box
+and the union's `__destruct_<U>` cascade frees it. Both spellings exit 8 and neither leaks, which is
+exactly why the split survived here.
 ```maxon
 // --- file: words.maxon
 typealias Bag = Array with String

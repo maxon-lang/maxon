@@ -3720,7 +3720,7 @@ function noteUnionClonerNeeds(usage RuntimeUsage, layout EnumLayout, project Pro
 		let payloads = layout.payloadsAt(ci)
 		for fi in 0 upto payloads.count() 'eachField'
 			let field = try payloads.get(fi) otherwise panic("noteUnionClonerNeeds: payloadsAt count disagrees with get at {fi}")
-			if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType)) 'scalar'
+			if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
 				continue
 			end 'scalar'
 			noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType), work: work)
@@ -3866,7 +3866,7 @@ function emitManagedFieldClones(module StdModule, func IrFunction, startBlock Ir
 	var cur = startBlock
 	for fi in 0 upto payloads.count() 'eachField'
 		let field = try payloads.get(fi) otherwise panic("emitManagedFieldClones: payloadsAt count disagrees with get at {fi}")
-		if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType)) 'scalar'
+		if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
 			continue
 		end 'scalar'
 		let strategy = managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
