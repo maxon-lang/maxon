@@ -288,6 +288,33 @@ function paramFloatMask(paramTypes MaxonTypeArray) returns ArgFloatMask
 	return mask
 end 'paramFloatMask'
 
+// Bit k set iff DECLARED parameter k occupies less than the machine word — the WIDTH half of the pair above,
+// read off the SAME `maxonTypeToStdType(paramType)` collapse so the two masks cannot come to describe
+// different parameter lists. Two folds rather than one returning a pair, because this tier has no VALUE
+// struct: a `type` holding the pair would be a heap object minted per indirect-call op, on a path whose whole
+// design (see `callIndirect`'s header) is about not allocating.
+//
+// ⭐ **THE UNIFORM `(userargs, env)` INDIRECT ABI DECLARES EVERY PARAMETER AT ITS OWN WIDTH, AND THE
+// `__fnref_` THUNK IS THE OTHER HALF OF THAT SENTENCE.** A function value's callee is either a LIFTED
+// CLOSURE — an ordinary function whose parameters are its declared types — or, for a plain named function, the
+// synthesized `__fnref_` thunk, whose parameter types `FnRefThunk.synthesizeFnRefThunk` declares. Both must
+// agree with this mask or wasm's `call_indirect` type check rejects the call, so that routine declares them
+// through the identical `maxonTypeToStdType` collapse. It did NOT — it had a widen-everything-non-float rule of
+// its own — and the disagreement was a MEASURED `wasm trap: indirect call type mismatch` on
+// `function(loud bool) gives …` called through a typealias, where a lifted CLOSURE has no thunk to lose the
+// width symmetrically. Pinned by `specs-shv2/first-class-functions.md`'s `bool-param-through-closure` and its
+// `bool-param-through-fnref-thunk` twin.
+function paramNarrowMask(paramTypes MaxonTypeArray) returns ArgNarrowMask
+	var mask = 0 as ArgNarrowMask
+	for k in 0 upto paramTypes.count() 'eachParam'
+		let paramType = try paramTypes.get(k) otherwise panic("paramNarrowMask: paramTypes.get OOB at {k}")
+		if stdTypeIsNarrow(maxonTypeToStdType(paramType)) 'narrowParam'
+			mask = mask or (1 shl k)
+		end 'narrowParam'
+	end 'eachParam'
+	return mask
+end 'paramNarrowMask'
+
 function paramTypesIncludeFloat(paramTypes MaxonTypeArray) returns bool
 	for paramType in paramTypes 'eachParam'
 		if stdTypeIsFloat(maxonTypeToStdType(paramType)) 'float'
@@ -1804,7 +1831,7 @@ type MaxonToStdLowering
 	// A helper because `lowerIndirectCall`'s arm must hand `args` to a function and touch it no other way.
 	function appendCallIndirect(dstBlock IrBlock, result ValueId, callee ValueId, args ValueIdArray)
 		let declaredParams = self.indirectCalleeParamTypes(callee)
-		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: paramFloatMask(declaredParams), args: self.widenIntArgsToFloatParams(args, paramTypes: declaredParams, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.widenIntArgsToFloatParams(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendCallIndirect'
 
 	// ⭐ **THE DECLARED PARAMETER TYPES OF THE FUNCTION VALUE BEING CALLED — the one fact an indirect call's
@@ -1849,6 +1876,41 @@ type MaxonToStdLowering
 		return mask
 	end 'argFloatMaskOf'
 
+	// ⭐⭐ **BIT K SET IFF ARGUMENT K OCCUPIES LESS THAN THE MACHINE WORD — the WIDTH half of the pair, and it
+	// comes from the SAME `stdTypeOf` column its float twin does, deliberately.** The mask a call carries must
+	// describe the CALLEE's declared parameter list, because wasm's `call_indirect` type-checks the declared
+	// functype against the target's own EXACTLY. A witness call has no callee to ask — under dictionary passing
+	// the shared body binds against the INTERFACE and the concrete impl is chosen at run time — so the
+	// already-typed argument VALUES stand in for the formals. That substitution is sound position by position:
+	//
+	//   • the RECEIVER (`args[0]`) and every `Self`-typed formal carry the conformer's OWN type, which is
+	//     exactly what its impl declares for `self` / `other Self` — and the parser proves the actual there
+	//     really is a `Self` (`requireGenuineSelfArgs` for a constrained type parameter, `requireWitnessSelfArgs`
+	//     refusing the existential case outright, since two values held at one interface may differ);
+	//   • a `float` formal is reached only by an actual the parser has already widened to an f64
+	//     (`Parser.floatWidenedWitnessArgs`), which is what lets the float mask read the value at all;
+	//   • every other formal is the interface's declared type, which E3016 forces every conformer to declare
+	//     identically.
+	//
+	// ⚠ **THE LAST CLAUSE ASSUMES THE ACTUAL WAS TYPED AGAINST THE FORMAL, AND THE `.method()` DISPATCH FORM
+	// DOES NOT CHECK THAT.** `g.greet(loud: 5)` at a `greet(loud bool)` requirement compiles in shv2 AND in the
+	// bootstrap (MEASURED): its actual is an i64 where the impl declares an i1, so both masks describe that
+	// position as a machine word and wasm's type check rejects the call. That is a MISSING FRONT-END CHECK and
+	// not a mask defect — it is the same hole `Parser.requireOperatorWitness`'s header records as a measured
+	// silent WRONG ANSWER on x64 for the OPERATOR form (a receiver pointer marshalled into an `int` formal), it
+	// breaks the FLOAT mask identically and did so before this width mask existed, and no per-argument bit can
+	// close it. Both masks inherit exactly that one soundness condition — no better and no worse.
+	function argNarrowMaskOf(args ValueIdArray) returns ArgNarrowMask
+		var mask = 0 as ArgNarrowMask
+		for k in 0 upto args.count() 'eachArg'
+			let arg = try args.get(k) otherwise panic("argNarrowMaskOf: args.get OOB at {k}")
+			if stdTypeIsNarrow(self.stdTypeOf(arg)) 'narrowArg'
+				mask = mask or (1 shl k)
+			end 'narrowArg'
+		end 'eachArg'
+		return mask
+	end 'argNarrowMaskOf'
+
 	// ⭐ **LOWER A CONSTRAINED-TYPE-PARAMETER DISPATCH TO THE FUSED `StdOp.witnessCall` (P1.7a slice 2a).** The
 	// witness ADDRESS is the enclosing (generic) function's own threaded witness parameter for this constraint
 	// — FORWARDED, exactly as `forwardCallerLayout` forwards the layout descriptor: a `witnessDispatch` is only
@@ -1888,7 +1950,7 @@ type MaxonToStdLowering
 	// pointing at a value and this is the single Std emission for them.
 	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), args: args))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), argNarrowMask: self.argNarrowMaskOf(args), args: args))
 	end 'appendWitnessCall'
 
 	// The throwing twin of `appendWitnessCall`, sharing its result typing (`witnessCallResultType`) verbatim —
@@ -1897,7 +1959,7 @@ type MaxonToStdLowering
 	// function and touch it no other way.
 	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), args: args))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), argNarrowMask: self.argNarrowMaskOf(args), args: args))
 	end 'appendWitnessTryCall'
 
 	// The Std return type a witness call CAPTURES its result in — the result value's own type, or `void` for

@@ -977,15 +977,18 @@ end 'emitElementDestroyRange'
 
 // ⭐ **CALL AN ELEMENT/KEY DESTRUCTOR on `elem` through the `destroy` function pointer (P1.7 / P1.7b).** THE one
 // home of the element-destructor register-file ABI: an element destructor is `(i64) -> void`, so its result slot
-// is an unused i64 (matching every scalar indirect call) and its single element-pointer argument is never a float
-// (mask 0). Shared by the array's per-slot destroy walk (`emitElementDestroyRange`), the single-value
+// is an unused i64 (matching every scalar indirect call) and its single element-pointer argument is a whole
+// machine word — never a float (float mask 0) and never sub-word (narrow mask 0). Both masks are 0 because the
+// callee is a POINTER-taking function whichever destructor is stamped in the slot: `__str_decref`,
+// `__mm_decref`, `__arr_decref` and every synthesized `__destruct_<T>` declare one `i64`. Shared by the array's
+// per-slot destroy walk (`emitElementDestroyRange`), the single-value
 // descriptor-gated drop (`buildDropTypeParam`, P1.7 slice 3b-v), AND `SetRuntime`'s key drop sites (a managed
 // set's stored key destructor IS its source array's element destructor — same `funcAddr`, same ABI), so the
 // copies cannot drift if that ABI changes. The caller has already loaded `destroy` and confirmed it non-null;
 // this only emits the indirect call.
 export function emitElementDestructorCall(module StdModule, block IrBlock, destroy ValueId, elem ValueId, ids ValueMinter)
 	let dropped = ids.mint()
-	module.appendOp(block, op: StdOp.callIndirect(dropped, calleeReg: destroy, resultType: StdReturnType.void, argFloatMask: 0 as ArgFloatMask, args: argsOf(elem)))
+	module.appendOp(block, op: StdOp.callIndirect(dropped, calleeReg: destroy, resultType: StdReturnType.void, argFloatMask: 0, argNarrowMask: 0, args: argsOf(elem)))
 end 'emitElementDestructorCall'
 
 // ⭐ **GATE THE MANAGED-ELEMENT DESTROY WALK on `element_destroy@40` (P1.7 slice 3a).** Load the array's stamped
@@ -3361,7 +3364,9 @@ function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, s
 	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: doClone.id, elseBlockId: step.id))
 
 	let cloned = ids.mint()
-	module.appendOp(doClone, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0 as ArgFloatMask, args: argsOf(elem)))
+	// Both ABI masks are 0 for the reason `emitElementDestructorCall`'s are: a stamped `copyFunc@32` is a
+	// `(box) -> newBox`, so its one argument is a whole-machine-word POINTER — never a float, never sub-word.
+	module.appendOp(doClone, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, argNarrowMask: 0, args: argsOf(elem)))
 	let destSlot = emitSlotAddr(module, block: doClone, buffer: destBase, index: i, elementSize: elementSize, ids: ids)
 	module.appendOp(doClone, op: StdOp.storeIndirect(destSlot, offset: 0, valueId: cloned, valueType: StdType.i64))
 	module.setTerminator(doClone, op: StdOp.branch(step.id))

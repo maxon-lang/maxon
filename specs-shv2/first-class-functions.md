@@ -3123,11 +3123,16 @@ end 'main'
 The PARAMETER half of the same registry, isolated from the return half — the alias takes an
 `ExitCode` and returns a user ranged alias, so the only sub-64 name in the signature is on the
 argument side. It already agreed, and the asymmetry is the point: an indirect call's argument
-widths come from the RESOLVED `functionAliasShapes` (and the uniform function-value ABI passes
-every non-float argument as one machine word regardless), where the RETURN width was taken from
+widths come from the RESOLVED `functionAliasShapes`, where the RETURN width was taken from
 the parser's own rebuild instead. So this case is the evidence for that asymmetry rather than a
 second repro of it, and it is what would catch a fix that single-sourced the two columns by moving
 the return's answer onto the param's footing instead of the other way round. `8 + 1`.
+⚠ It passed for a WEAKER reason than it does now, and the two are worth telling apart. The uniform
+function-value ABI used to pass every non-float argument as one machine word whatever it was
+declared: the call site said i64 and the `__fnref_` thunk said i64, so the two agreed by both
+being wrong together, and the narrow width was simply lost. `argNarrowMask` carries it now, so
+both ends say i32 — and the case that catches the difference is `bool-param-through-closure`
+below, where there is no thunk to lose the width symmetrically.
 ```maxon
 typealias Outcome = int(0 to u32.max)
 typealias Bump = function(ExitCode) returns Outcome
@@ -3146,6 +3151,68 @@ end 'main'
 ```
 ```exitcode
 9
+```
+
+<!-- test: first-class-function.bool-param-through-closure -->
+⭐⭐ **THE PARAMETER WIDTH WHERE NOTHING CAN LOSE IT SYMMETRICALLY — a LIFTED CLOSURE taking a
+`bool`.** The `ExitCode`-parameter case above passed while the width was being dropped, because a
+plain function reached as a value goes through the `__fnref_` thunk and the thunk was widening every
+non-float parameter to a machine word, so the call site's i64 met the thunk's i64. A closure has NO
+thunk — it is already `(userargs, __env)`-shaped, so it is called at its OWN declared widths — and
+that is the shape the two ends could not agree on. **MEASURED before `argNarrowMask` existed: this
+program compiled clean, answered `11` on x64-windows, and died `wasm trap: indirect call type
+mismatch` under wasmtime**, because `call_indirect` checks the declared functype against the target's
+own EXACTLY and a `bool` is a wasm `i32` on one side and an `i64` on the other. It is the same missing
+fact `interface-conformance/interface-impl-ignore-param-name` hit through a witness table, reached by
+the one route the wasm backend's now-deleted `.rdata`-slot guard structurally could not see: a
+function value's address is a `.text` `funcAddr`, in no `.rdata` slot at all.
+The captured `bump` is what keeps it a genuine closure rather than a closure the compiler could lower
+as a plain function, and the `if loud` is what makes the answer depend on the argument actually
+arriving: pass the wrong word and `7 + 4` does not come back.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BoolFn = function(bool) returns Integer
+
+function apply(f BoolFn) returns Integer
+	return f(true)
+end 'apply'
+
+function main() returns ExitCode
+	let bump = 4
+	return apply(function(loud bool) gives (7 + bump) if loud else 3) as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: first-class-function.bool-param-through-fnref-thunk -->
+The `__fnref_` half of the case above, and the reason the fix had to move BOTH ends at once. A plain
+named function used as a value is reached through the synthesized `__fnref_<name>` thunk, whose
+parameter types are its own declaration — so the moment the call site began declaring a `bool`
+argument at its real i32 width, a thunk still widening that parameter to an i64 would have started
+trapping exactly where the closure had stopped. The thunk asks the one `maxonTypeToStdType` collapse
+the call site's masks ask, which is what makes the two callable shapes of a function value one shape.
+This case is the guard on that agreement: it passed before the width existed (both ends wrong
+together) and passes after (both ends right), and it fails the moment they diverge again. Returns `7`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BoolFn = function(bool) returns Integer
+
+function takesBool(loud bool) returns Integer
+	return 7 if loud else 3
+end 'takesBool'
+
+function apply(f BoolFn) returns Integer
+	return f(true)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(takesBool) as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```
 
 <!-- test: first-class-function.exitcode-return-through-alias-high -->

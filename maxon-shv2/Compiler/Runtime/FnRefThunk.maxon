@@ -157,9 +157,26 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	let thunkParamCount = (userParamCount + 1) as ParamCount
 	let targetReturn = maxonReturnTypeToStdReturnType(ret)
 
+	// ⭐⭐ **EACH FORWARDED USER PARAMETER IS DECLARED THROUGH `maxonTypeToStdType` — THE SAME COLLAPSE THE CALL
+	// SITE'S ABI MASKS ASK, AND THAT IDENTITY IS THE POINT.** A `callIndirect`'s per-argument register file and
+	// width come from the DECLARED parameter types (`LowerMaxonToStd.paramFloatMask`/`paramNarrowMask`, both
+	// through that one function); this thunk IS the callee those masks describe whenever the function value
+	// names a plain function. Two collapses would be one fact written twice, and wasm's `call_indirect` —
+	// which type-checks the declared functype against the funcref's own EXACTLY — is the only thing that would
+	// ever report the drift, at RUN time.
+	//
+	// ⚠ **IT USED TO BE ITS OWN RULE (`f64` for a float TAG, `i64` for absolutely everything else), AND THAT
+	// COST A TRAP.** Widening a `bool` parameter to an i64 here was invisible while the call site declared every
+	// non-float argument an i64 too — but a LIFTED CLOSURE is called with NO thunk, at its own declared widths,
+	// so the two callable shapes of one function VALUE already disagreed: `function(loud bool) gives …` passed
+	// through a `function(bool) returns int` typealias compiled clean, answered correctly on x64 and trapped
+	// `wasm trap: indirect call type mismatch` under wasmtime. One collapse makes thunk and closure the same
+	// shape by construction. (`maxonTypeToStdType` is total over every type a RESOLVED signature can hold — a
+	// struct/String/function/type-parameter is an i64 pointer or opaque word by its own arm there — and panics
+	// only on the `named`/`unresolved` residues TypeResolution is required to have eliminated.)
 	var paramTypes = StdTypeArray.create()
 	for i in 0 upto userParamCount 'eachUserParamType'
-		paramTypes.push(thunkUserParamStdType(try sig.paramTypes.get(i) otherwise panic("synthesizeFnRefThunk: sig.paramTypes.get OOB at {i} for '{String.from(targetName)}'")))
+		paramTypes.push(maxonTypeToStdType(try sig.paramTypes.get(i) otherwise panic("synthesizeFnRefThunk: sig.paramTypes.get OOB at {i} for '{String.from(targetName)}'")))
 	end 'eachUserParamType'
 	// The trailing companion `__env` pointer is always an i64 machine word.
 	paramTypes.push(StdType.i64)
@@ -216,12 +233,3 @@ function emitVoidThunkReturn(module StdModule, block IrBlock, dummy ValueId)
 	module.appendOp(block, op: StdOp.const(dummy, value: 0, valueType: StdType.i64))
 	module.setTerminator(block, op: StdOp.ret(dummy))
 end 'emitVoidThunkReturn'
-
-// The Std type the thunk gives one forwarded USER parameter (P1.5 #78): an f64 for a FLOAT parameter — the
-// one case whose register file (XMM/SIMD) differs from the i64 GPR every other function-value argument uses
-// — and an i64 machine word for everything else (int / named / String / struct-pointer). Decided off the
-// resolved MaxonType's TAG rather than `maxonTypeToStdType`, so a struct/named param (which that collapse
-// panics on but which is still an i64 pointer) keeps its i64 exactly as before this rung.
-function thunkUserParamStdType(paramType MaxonType) returns StdType
-	return StdType.f64 if maxonTypeTag(paramType) == ValueTypeTag.float else StdType.i64
-end 'thunkUserParamStdType'

@@ -193,9 +193,16 @@ end 'emitHtMask'
 // `hash()` of `key` through the `Hashable` witness — `witnessCall(hashWitness, method 0, key) -> HashValue`.
 // The fused `callMem [hashWitness + 24]`; for an int key the slot holds `int.hash`, so this is
 // `key & 0xFFFFFFFF`.
+//
+// ⚠ **BOTH PER-ARGUMENT ABI MASKS ARE 0, AND THAT IS A CLAIM ABOUT THE KEY TYPES `Map` ADMITS.** The receiver
+// is the sole argument, and every `Hashable` conformer declares its `hash` receiver as a whole machine word:
+// `int.hash` an i64, `String.hash`/`Character.hash` the record POINTER, a user type its box pointer. The two
+// conformers that would break it are unreachable — `bool` declares no `Hashable` at all
+// (`isIntrinsicBuiltinConformance`), and `float.hash`'s f64 receiver cannot be a key because E2062 refuses a
+// float TYPE ARGUMENT outright, so `Map with float` does not exist.
 function emitHtKeyHash(module StdModule, block IrBlock, hashWitness ValueId, key ValueId, ids ValueMinter) returns ValueId
 	let hash = ids.mint()
-	module.appendOp(block, op: StdOp.witnessCall(hash, witnessAddr: hashWitness, methodIndex: HtWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), argFloatMask: 0 as ArgFloatMask, args: argsOf(key)))
+	module.appendOp(block, op: StdOp.witnessCall(hash, witnessAddr: hashWitness, methodIndex: HtWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), argFloatMask: 0, argNarrowMask: 0, args: argsOf(key)))
 	return hash
 end 'emitHtKeyHash'
 
@@ -205,9 +212,12 @@ end 'emitHtKeyHash'
 // ⚠ The result type is `builtinProtocolResultStdType`'s and NOT a hand-written `i64`, because this runtime is
 // a THIRD party to a witness slot's signature (beside the dispatch site and the impl) and a slot's signature
 // is checked exactly on wasm — see that function. `bool` here, a machine word for the `hash` above.
+//
+// Both per-argument ABI masks are 0 for `emitHtKeyHash`'s reason, one argument further: `equals(self, other
+// Self)` takes the key type TWICE, and the key types `Map` admits are all whole machine words.
 function emitHtKeyEquals(module StdModule, block IrBlock, eqWitness ValueId, a ValueId, b ValueId, ids ValueMinter) returns ValueId
 	let equal = ids.mint()
-	module.appendOp(block, op: StdOp.witnessCall(equal, witnessAddr: eqWitness, methodIndex: HtWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), argFloatMask: 0 as ArgFloatMask, args: twoArgs(a, second: b)))
+	module.appendOp(block, op: StdOp.witnessCall(equal, witnessAddr: eqWitness, methodIndex: HtWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), argFloatMask: 0, argNarrowMask: 0, args: twoArgs(a, second: b)))
 	return equal
 end 'emitHtKeyEquals'
 

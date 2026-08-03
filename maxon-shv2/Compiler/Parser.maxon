@@ -33618,9 +33618,11 @@ export type Parser
 	// `self.item.scale(2)`): x64 compiled clean and returned the WRONG ANSWER** — `movRegImm32 rdx, 2` ahead of
 	// `callMem [rbx + 24]`, so the callee's `mulsd xmm0, …` multiplied whatever was left in xmm0 — **and wasm
 	// trapped `indirect call type mismatch`**, since `call_indirect` checks the declared functype against the
-	// target's own exactly. The wasm half is the hole `requireIndirectlyReachableParamsAreMachineWords` cannot
-	// see: it refuses a narrow (i32) parameter, but an f64 one is legal and only DIVERGES when the call site's
-	// float mask disagrees — which is precisely what this widening removes.
+	// target's own exactly. The wasm half is the hole the `requireIndirectlyReachableParamsAreMachineWords`
+	// guard could not see while it existed: it refused a narrow (i32) parameter, but an f64 one is legal and
+	// only DIVERGES when the call site's float mask disagrees — which is precisely what this widening removes.
+	// (That guard is gone since `argNarrowMask` gave the call site the width the narrow half needed; the float
+	// half was never a width and is still closed HERE, by making the actual an f64 before the mask is taken.)
 	//
 	// It runs in `emitWitnessDispatch` because that is the ONE door both dispatch forms come through, so the
 	// `.method()` and comparison-OPERATOR forms cannot acquire different argument placement. `promoteToFloat`

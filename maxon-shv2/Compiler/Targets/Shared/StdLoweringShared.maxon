@@ -275,7 +275,7 @@ end 'floatParamMaskOf'
 // register with no compile error, which is the whole failure mode this file exists to make unspellable.
 //
 // The mask is returned WHOLE rather than truncated to `argCount` bits, and that is deliberate twice over:
-// every reader (`argIsFloat` / `abiFileSlotIndex` / `abiStackSlotsBefore`) is only ever asked about an index
+// every reader (`argMaskBit` / `abiFileSlotIndex` / `abiStackSlotsBefore`) is only ever asked about an index
 // below `argCount`, so the high bits are unreadable; and the truncation itself — `(1 shl argCount) - 1` —
 // would overflow the machine word at the perfectly legal `argCount` of `MaxAbiArgs`.
 export function calleeArgFloatMask(calleeParamClasses CalleeParamClassMap, callee ByteArray, argCount ParamCount, registerCapacity RegisterArgCapacity) returns ArgFloatMask
@@ -364,10 +364,10 @@ export typealias RegisterArgCapacity = int(1 to 32)
 // its file. The integer and float files are counted INDEPENDENTLY (v1's internal convention), so a float at
 // source position 1 following an integer is float-slot 0, not slot 1.
 export function abiFileSlotIndex(mask ArgFloatMask, index ParamCount) returns ParamCount
-	let isFloat = argIsFloat(mask, argIndex: index)
+	let isFloat = argMaskBit(mask, argIndex: index)
 	var slotIndex = 0 as ParamCount
 	for i in 0 upto index 'countPreceding'
-		if argIsFloat(mask, argIndex: i) == isFloat 'sameFile'
+		if argMaskBit(mask, argIndex: i) == isFloat 'sameFile'
 			slotIndex = slotIndex + 1
 		end 'sameFile'
 	end 'countPreceding'
@@ -395,7 +395,7 @@ export function abiStackSlotsBefore(mask ArgFloatMask, index ParamCount, capacit
 	var floatFileSlots = 0 as ParamCount
 	var stackSlots = 0 as ParamCount
 	for i in 0 upto index 'eachPreceding'
-		if argIsFloat(mask, argIndex: i) 'floatArg'
+		if argMaskBit(mask, argIndex: i) 'floatArg'
 			if floatFileSlots >= capacity 'floatOverflows'
 				stackSlots = stackSlots + 1
 			end 'floatOverflows'
@@ -499,7 +499,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// float-returning function value is XMM-classed and captured from xmm0/d0, everything else GPR from
 		// R8/x0. There is no callee NAME to look a return type up against as `call`/`tryCall` do, so the front
 		// end's own type for the result value rides on the op (`LowerMaxonToStd.lowerIndirectCall`).
-		callIndirect(resultId, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+		callIndirect(resultId, _, resultType, _, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
 		// The ops that define NOTHING. Named individually rather than collapsed into a range: `StdOp`'s
 		// declaration order interleaves value-defining ops (`param`, `call`) between the non-defining
 		// ones, so a tempting range would span them. Naming each keeps the band-append rule enforcing it.
@@ -526,11 +526,11 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		switch then break 'result'
 		// A witness call classes its result by the `resultType` the op carries — the same register-file
 		// question as `callIndirect` (there is no callee NAME to look a return type up against).
-		witnessCall(resultId, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+		witnessCall(resultId, _, _, resultType, _, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
 		// A THROWING witness call classes its primary result exactly as `witnessCall` does (off the `resultType`
 		// the op carries); its error-flag second result is an i64, which the column's `gpr` default already
 		// covers — the same split `tryCall`'s two results take.
-		witnessTryCall(resultId, _, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+		witnessTryCall(resultId, _, _, _, resultType, _, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
 		// P1.5 dogfood slice 1a: the five value-defining IOCP ops define GPR i64 results (kernel handles, the
 		// ReadFile BOOL, the GetLastError DWORD — all integers); the rest define nothing.
 		osPipeCreate then break 'result'
