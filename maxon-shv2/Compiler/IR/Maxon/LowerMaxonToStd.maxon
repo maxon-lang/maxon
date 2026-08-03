@@ -591,6 +591,12 @@ type MaxonToStdLowering
 	// `valueTags`, from `IrFunction.valueNameIds`. For a `genericInstance`-tagged receiver at a `sizeof(T)`
 	// call site it carries the `GenericInstanceId`, which `materializeLayoutArg` resolves to a descriptor.
 	var valueNameIds as TypeNameIdArray
+	// ⭐ The whole-program type-name interner `valueNameIds` indexes into (`project.typeNames`) — copied out
+	// at `create` like every other registry here, because this pass holds no `Project`. It is what turns an
+	// argument's recorded name id back into the declaration `signatures` is keyed by, which is the ONE
+	// question this tier cannot answer from Std types alone: by here a float-backed enum and an `int` are
+	// both `i64` (`argIsFloatBackedEnum`).
+	var typeNames as TypeNameInterner
 	// The name of the function CURRENTLY being lowered — re-pointed per function, for the diagnostics the
 	// dictionary-passing invariant checks raise (`bindImplicitLayoutParam` / `forwardCallerLayout`).
 	var currentFuncName as ByteArray
@@ -647,7 +653,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), typeNames: project.typeNames, currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1970,22 +1976,52 @@ type MaxonToStdLowering
 		return widened
 	end 'widenIntArgsToFloatParams'
 
-	// One argument: widened to `float` when its parameter is `float` and the argument is integral,
-	// else the argument verbatim. A non-float argument bound for a float parameter is ALWAYS an
-	// integer — SemanticCheck has already rejected every other type (`bool`/`String`/struct disagree
-	// with `float`, E3005) — so `not stdTypeIsFloat` on the argument is exactly "the integer that
-	// widens", and it is also what keeps `assertConversionCrossesDomain` satisfied (`siToFp`'s operand
-	// is never a float). The conversion REUSES `lowerUnaryOp` through the `promoteToFloat` unary op
-	// (which maps to `siToFp`), so the op construction and its guard stay in the one place that owns them.
+	// One argument: converted into the float domain when its parameter is `float` and the argument is not
+	// already there, else the argument verbatim. A non-float argument bound for a float parameter is ALWAYS
+	// an integer — SemanticCheck has already rejected every other type (`bool`/`String`/struct disagree
+	// with `float`, E3005) — so `not stdTypeIsFloat` on the argument is exactly "the value that converts",
+	// and it is also what keeps `assertConversionCrossesDomain` satisfied (neither conversion's operand is
+	// a float). The conversion REUSES `lowerUnaryOp`, so the op construction and its guard stay in the one
+	// place that owns them.
+	//
+	// ⭐⭐ **WHICH CONVERSION IS NOT THE SAME QUESTION AS WHETHER (A4o).** An ordinary integer WIDENS
+	// (`promoteToFloat` → `siToFp`); a FLOAT-BACKED ENUM's i64 is already the double's IEEE-754 encoding and
+	// is REINTERPRETED (`bitsToFloat` → `bitcastI64ToF64`). MEASURED with only the widening here:
+	// `takesFloat(Weight.light)` for `light = 2.5` printed **4612811918334231000.0**.
+	//
+	// ⚠ **AND THIS IS THE ONE SUCH SITE THE PARSER CANNOT OWN**, which is why the fix lands at this tier
+	// rather than beside its five siblings in `Parser.floatBehindEnumValue`: the conversion is forced by the
+	// CALLEE's declared parameter type, a whole-program fact a file's parse may not hold (this function's
+	// own header states the same split for the widening). The enum identity survives to here only because
+	// the parser publishes `valueTags`/`valueNameIds` on the `IrFunction` — by the Std tier itself, a
+	// float-backed enum and an `int` are both `i64`.
 	function floatWidenedArg(argId ValueId, paramType MaxonType, dstBlock IrBlock) returns ValueId
 		if not stdTypeIsFloat(maxonTypeToStdType(paramType)) or stdTypeIsFloat(self.stdTypeOf(argId)) 'noWiden'
 			return argId
 		end 'noWiden'
 
-		let widened = self.mintStdValueId()
-		self.lowerUnaryOp(widened, operand: argId, op: MaxonUnaryOp.promoteToFloat, dstBlock: dstBlock)
-		return widened
+		let conversion = MaxonUnaryOp.bitsToFloat if self.argIsFloatBackedEnum(argId) else MaxonUnaryOp.promoteToFloat
+		let converted = self.mintStdValueId()
+		self.lowerUnaryOp(converted, operand: argId, op: conversion, dstBlock: dstBlock)
+		return converted
 	end 'floatWidenedArg'
+
+	// Is `value` a FLOAT-BACKED enum's — the question `floatWidenedArg` picks its conversion by. The
+	// Maxon-tier twin of `Parser.valueIsFloatBackedEnum`, reading the very columns that parser published,
+	// so the two tiers cannot come to disagree about which values carry an encoded double.
+	//
+	// A name id that is not an enum's answers `false` through `enumIsFloatBacked`; an UNKNOWN id cannot
+	// happen for a `named` value (the parser mints every one of them from this interner) and so panics
+	// rather than being read as "not an enum", which would silently restore the widening.
+	function argIsFloatBackedEnum(value ValueId) returns bool
+		if self.valueTagOf(value) != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+
+		let nameId = try self.valueNameIds.get(value) otherwise panic("argIsFloatBackedEnum: value v{value} has no recorded type name — the two type columns are minted in lockstep by Parser.mintValue")
+		let name = try self.typeNames.nameOf(nameId) otherwise panic("argIsFloatBackedEnum: type-name id {nameId} is not in the whole-program interner — every `named` tag is minted with an id folded into it")
+		return self.signatures.enumIsFloatBacked(name)
+	end 'argIsFloatBackedEnum'
 
 	// ⭐ **APPEND THE COMPANION ENVIRONMENT ARGUMENT FOR EACH FUNCTION-TYPED PARAMETER (P1.5-A2b-2).** The
 	// uniform ABI splits a function value into (fn ptr, env): the slotted `argIds` carry the fn-ptr half at

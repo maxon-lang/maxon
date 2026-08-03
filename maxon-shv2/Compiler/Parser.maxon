@@ -5383,30 +5383,27 @@ union MatchGiveValue
 	value(id ValueId)
 end 'MatchGiveValue'
 
-// The stateful bookkeeping a single enum/union declaration's case loop threads across its cases:
-// the auto-increment TAG counter, and the BACKING (int vs float) that the first explicitly-typed
-// case fixes.
+// The one piece of bookkeeping a single enum/union declaration's case loop threads across its cases
+// and does NOT keep: the auto-increment TAG counter.
 //
-// A `type` (one heap object per declaration, on the cold declaration path) rather than three
-// out-params, which Maxon has no clean spelling for: the counter and the backing decision must
-// PERSIST across cases (a bare `b` after `a = 5` must read `6`), so a caller that read them back by
-// value would lose the update. `backingResolved` gates `backingIsFloat` — the latter is meaningless
-// until the first `= <literal>` sets it, exactly as `StructLayout` has no field until `addField`.
-type EnumBackingState
+// A `type` (one heap object per declaration, on the cold declaration path) rather than an out-param,
+// which Maxon has no clean spelling for: the counter must PERSIST across cases (a bare `b` after
+// `a = 5` must read `6`), so a caller that read it back by value would lose the update.
+//
+// ⚠ **THE BACKING USED TO LIVE HERE TOO, AND THAT WAS THE DEFECT (A4o).** This record is built by
+// `parseEnumDeclaration` and DISCARDED when the declaration closes, so a fact stored here is a fact no
+// later reader can ask for — and every consumer of an enum VALUE needs to know whether its i64 is a
+// number or an f64's bits. The backing therefore lives on `EnumLayout`, which survives; the counter
+// stays here, because the next tag is genuinely about the parse and not about the enum.
+type EnumTagCounter
 	// The tag the NEXT bare (or first) case takes. Starts at 0; an explicit `= N` resets it to N+1,
 	// which is what gives `enum E { a = 5  b }` the tag 6.
 	export var nextTag as ParsedInt
-	// Has any case fixed the backing yet? Until one does, a case of either kind is accepted and sets
-	// it; after, a mismatch is E3032.
-	export var backingResolved as bool
-	// Which backing, once resolved: float (`= 1.5`) or int (bare, or `= 5`). Read only when
-	// `backingResolved`.
-	export var backingIsFloat as bool
 
-	export static function create() returns EnumBackingState
-		return Self{nextTag: 0, backingResolved: false, backingIsFloat: false}
+	export static function create() returns EnumTagCounter
+		return Self{nextTag: 0}
 	end 'create'
-end 'EnumBackingState'
+end 'EnumTagCounter'
 
 // Is `kind` a LITERAL token — an int/float/string/char/byte-string literal? Used to tell a keyword
 // used as a case NAME (`keyword-as-case-name.md`: `function`, `end`, ...) from a literal, which the
@@ -9657,8 +9654,8 @@ export type Parser
 		let conformsTo = try self.readOptionalImplementsClause() otherwise return
 		self.enterTypeScope(nameTok, isEnum: true)
 
-		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath)
-		var state = EnumBackingState.create()
+		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath, backing: EnumBacking.unresolved)
+		var counter = EnumTagCounter.create()
 
 		var depth = 0 as BlockDepth
 		while not self.isEof() 'body'
@@ -9684,7 +9681,7 @@ export type Parser
 			if depth == 0 'caseMember'
 				// A case the sweep cannot read leaves the layout SHORT, which would misassign every later
 				// case's tag — so the scan stops rather than recording a layout it knows is wrong.
-				try self.readEnumCaseInto(layout, state: state) otherwise break
+				try self.readEnumCaseInto(layout, counter: counter) otherwise break
 				continue
 			end 'caseMember'
 
@@ -11933,8 +11930,8 @@ export type Parser
 		let conformsTo = try self.readOptionalImplementsClause()
 		self.enterTypeScope(nameTok, isEnum: true)
 
-		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath)
-		var state = EnumBackingState.create()
+		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath, backing: EnumBacking.unresolved)
+		var counter = EnumTagCounter.create()
 
 		// The cursor sits at the enum body start; remember it so the lazy sibling-receiver walk (#65) can
 		// begin here once a method body's bare call needs it — exactly as `parseTypeDeclaration` does. It is
@@ -11959,7 +11956,7 @@ export type Parser
 				continue
 			end 'method'
 
-			try self.readEnumCaseInto(layout, state: state)
+			try self.readEnumCaseInto(layout, counter: counter)
 		end 'members'
 
 		try self.consume(TokenKind.end)
@@ -12047,13 +12044,13 @@ export type Parser
 		return p
 	end 'enumMethodKeywordIndex'
 
-	// Read ONE enum/union case into `layout`, threading the tag counter + backing through `state`.
-	// Reports the three declaration diagnostics: E3030 (duplicate case name), E3031 (duplicate raw
-	// value), E3032 (raw value type mismatch). SHARED by the real parse and the tolerant sweep
-	// (`recordScannedEnum`), which wraps it in `otherwise` — so the two cannot drift on how a tag is
-	// assigned, the one fact they MUST agree on (the sweep's layout is what the parser reads tags
-	// from at a use site).
-	function readEnumCaseInto(layout EnumLayout, state EnumBackingState) throws ParseError
+	// Read ONE enum/union case into `layout`, threading the auto-increment tag through `counter` and
+	// fixing the layout's BACKING. Reports the three declaration diagnostics: E3030 (duplicate case
+	// name), E3031 (duplicate raw value), E3032 (raw value type mismatch). SHARED by the real parse and
+	// the tolerant sweep (`recordScannedEnum`), which wraps it in `otherwise` — so the two cannot drift
+	// on how a tag is assigned OR on how it is to be READ, the two facts they MUST agree on (the sweep's
+	// layout is what the parser reads both from at a use site).
+	function readEnumCaseInto(layout EnumLayout, counter EnumTagCounter) throws ParseError
 		let nameTok = try self.readEnumCaseNameToken()
 		let caseName = nameTok.value
 
@@ -12076,18 +12073,18 @@ export type Parser
 		// refused at its USE site (`requireStructBase`) rather than at declaration.
 		if self.at(TokenKind.leftParen) 'payload'
 			let payloads = try self.readPayloadFieldsInto()
-			try self.requireIntBacking(state, caseTok: nameTok)
-			let tag = state.nextTag
-			state.nextTag = state.nextTag + 1
+			try self.requireIntBacking(layout, caseTok: nameTok)
+			let tag = counter.nextTag
+			counter.nextTag = counter.nextTag + 1
 			try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawDisplay: "{tag}", caseTok: nameTok, payloads: payloads)
 			return
 		end 'payload'
 
 		if not self.at(TokenKind.equals) 'bareName'
 			// A bare case takes the auto-increment tag and requires integer backing.
-			try self.requireIntBacking(state, caseTok: nameTok)
-			let tag = state.nextTag
-			state.nextTag = state.nextTag + 1
+			try self.requireIntBacking(layout, caseTok: nameTok)
+			let tag = counter.nextTag
+			counter.nextTag = counter.nextTag + 1
 			try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawDisplay: "{tag}", caseTok: nameTok, payloads: PayloadFieldArray.create())
 			return
 		end 'bareName'
@@ -12109,7 +12106,7 @@ export type Parser
 			let magnitude = try self.floatLiteralBits(floatTok)
 			let bits = negatedFloatBits(magnitude) if floatNegated else magnitude
 			let rawDisplay = "-{String.from(floatTok.value)}" if floatNegated else String.from(floatTok.value)
-			try self.requireFloatBacking(state, caseTok: nameTok)
+			try self.requireFloatBacking(layout, caseTok: nameTok)
 			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawDisplay: rawDisplay, caseTok: nameTok, payloads: PayloadFieldArray.create())
 			return
 		end 'floatValue'
@@ -12117,8 +12114,8 @@ export type Parser
 		// An INTEGER raw value (possibly negated). It resets the auto-increment counter to value + 1,
 		// which is what makes `enum E { a = 5  b }` give `b` the tag 6.
 		let intValue = try self.readEnumIntRawValue()
-		try self.requireIntBacking(state, caseTok: nameTok)
-		state.nextTag = intValue + 1
+		try self.requireIntBacking(layout, caseTok: nameTok)
+		counter.nextTag = intValue + 1
 		try self.appendEnumCase(layout, caseName: caseName, tag: intValue, rawDisplay: "{intValue}", caseTok: nameTok, payloads: PayloadFieldArray.create())
 	end 'readEnumCaseInto'
 
@@ -12182,24 +12179,22 @@ export type Parser
 		throw ParseError.unsupported("a raw value of kind '{tok.kind.rawValue}' (only integer and float raw values are parsed; string, char, struct and function backings arrive with later rungs)", line: tok.line, column: tok.column)
 	end 'readEnumIntRawValue'
 
-	// Fix the backing to INTEGER, or raise E3032 if a FLOAT backing was already fixed. `caseTok`
+	// Fix the layout's backing to INTEGER, or raise E3032 if a FLOAT backing was already fixed. `caseTok`
 	// positions the diagnostic — the bootstrap anchors a mismatch at the offending case.
-	function requireIntBacking(state EnumBackingState, caseTok Token) throws ParseError
-		if state.backingResolved and state.backingIsFloat 'mismatch'
+	function requireIntBacking(layout EnumLayout, caseTok Token) throws ParseError
+		if layout.backing == EnumBacking.float 'mismatch'
 			throw ParseError.enumRawValueTypeMismatch("expected float, got int", line: caseTok.line, column: caseTok.column)
 		end 'mismatch'
-		state.backingResolved = true
-		state.backingIsFloat = false
+		layout.backing = EnumBacking.integer
 	end 'requireIntBacking'
 
-	// Fix the backing to FLOAT, or raise E3032 if an INTEGER backing was already fixed. The exact
+	// Fix the layout's backing to FLOAT, or raise E3032 if an INTEGER backing was already fixed. The exact
 	// `expected int, got float` phrasing is the bootstrap's, gated by `error.raw-value-type-mismatch`.
-	function requireFloatBacking(state EnumBackingState, caseTok Token) throws ParseError
-		if state.backingResolved and not state.backingIsFloat 'mismatch'
+	function requireFloatBacking(layout EnumLayout, caseTok Token) throws ParseError
+		if layout.backing == EnumBacking.integer 'mismatch'
 			throw ParseError.enumRawValueTypeMismatch("expected int, got float", line: caseTok.line, column: caseTok.column)
 		end 'mismatch'
-		state.backingResolved = true
-		state.backingIsFloat = true
+		layout.backing = EnumBacking.float
 	end 'requireFloatBacking'
 
 	// Append a case after checking E3031 (duplicate raw value) — a linear scan of the tags recorded
@@ -24400,7 +24395,11 @@ export type Parser
 		// `and`, so `4 shr flag` would be rejected as a bad `and` rather than as a bad `shr`
 		// (E3005 for the wrong operator instead of E2004 for the right one). A rejected program
 		// must also leave no ops behind.
-		try requireBinOpOperands(op, left: self.tagOf(lhs), right: self.tagOf(count), opTok: opTok)
+		//
+		// ⭐ Asked through `numberTagOf` for `emitBinOp`'s reason (A4o): a float-backed enum's bits are a
+		// sign/exponent/mantissa triple, so `Weight.light shl 1` has no shift reading and is refused HERE,
+		// in the shift's own words, rather than shifting a mantissa.
+		try requireBinOpOperands(op, left: self.numberTagOf(lhs), right: self.numberTagOf(count), opTok: opTok)
 
 		// ⭐ THE SHIFT RULE's one question, asked ONCE, of the LEFT operand — and then CARRIED: to
 		// the opcode, to the fold, and to the guard. Never re-derived, because the whole class of
@@ -24978,6 +24977,7 @@ export type Parser
 		// struct box — a double free). See `castHasNoLegalConversion` and `ParseError.invalidCast`.
 		let sourceTag = self.tagOf(value)
 		let targetTag = try self.castTargetTag(targetType, asTok: asTok)
+		try self.requireCastSourceIsNotEnum(value, targetTag: targetTag, asTok: asTok)
 		try self.requireCastKindsConvert(sourceTag, targetTag: targetTag, asTok: asTok)
 
 		// ⭐ **A FUNCTION-TO-FUNCTION CAST IS THE ONE `requireCastKindsConvert` LETS THROUGH UNEXAMINED.**
@@ -25184,6 +25184,35 @@ export type Parser
 
 		return self.floatResolvedTagOfName(maxonTypeTag(denoted), name: name)
 	end 'denotedCastTargetTag'
+
+	// ⛔⛔ **A CAST WHOSE SOURCE IS AN ENUM/UNION IS E3009, WHATEVER THE TARGET (A4o)** — the oracle's rule,
+	// word for word (`Cannot cast from enum to float` / `… to int`, MEASURED on both backings).
+	//
+	// It cannot be `castHasNoLegalConversion`'s job, because that rule reads only the TAG and an enum wears
+	// the same `named` tag a ranged alias does — which is exactly why every enum cast fell through to the
+	// representational no-op at the end of `applyCast` and handed back the raw i64 wearing the target's
+	// type. For a FLOAT-backed enum that was a silent wrong answer: `Weight.light as Real` printed
+	// `4612811918334231000.0`, the bit pattern of 2.5 widened as if it were a magnitude.
+	//
+	// ⚠ **BOTH BACKINGS, ONE RULE.** An int-backed enum's no-op returned the right NUMBER, so refusing it
+	// looks like a loss — but what that spelling provided was `.rawValue` under another name, an accessor
+	// this compiler does not have and the oracle does not reach this way either. Two rules ("a float-backed
+	// enum may not be cast, an int-backed one may") would be one fact written twice, and the day
+	// `.rawValue` lands the wrong half would still be here.
+	function requireCastSourceIsNotEnum(value ValueId, targetTag ValueTypeTag, asTok Token) throws ParseError
+		// `valueIsUnion`'s measured allocation guard: `enumMatchFor` boxes a `DeclaredEnum` even to answer
+		// `undeclared`, and only a `named` value can be an enum at all.
+		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
+			return
+		end 'notNamed'
+
+		let decl = self.enumMatchFor(value)
+		if not enumMatchIsDeclared(decl) 'notAnEnum'
+			return
+		end 'notAnEnum'
+
+		throw ParseError.invalidCast(requireEnumLayout(decl).kindWord(), targetType: typeTagName(targetTag), line: asTok.line, column: asTok.column)
+	end 'requireCastSourceIsNotEnum'
 
 	// May a `sourceTag` value BECOME a `targetTag` one (E3009) — the other half of the cast-target
 	// decision, and shared for a sharper reason than tidiness. Sharing `denotedNamedType` alone would
@@ -25514,8 +25543,10 @@ export type Parser
 	function emitDivOrMod(dividend ValueId, divisor ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
 		// The OPERAND rule first, for `emitShift`'s stated reason: a rejected program must leave no ops
 		// behind, and the proof below would otherwise decide the fallibility of operands that are not numbers.
-		let leftTag = self.tagOf(dividend)
-		let rightTag = self.tagOf(divisor)
+		// Through `numberTagOf`, and the DECODE below it, for `emitBinOp`'s reason (A4o): a `/` is a question
+		// about the number, so `Weight.light / 2.0` divides 2.5 rather than an encoding.
+		let leftTag = self.numberTagOf(dividend)
+		let rightTag = self.numberTagOf(divisor)
 		try requireBinOpOperands(op, left: leftTag, right: rightTag, opTok: opTok)
 
 		// ⭐⭐ **ONE PROOF, TWO HAZARDS, THREE ROUTES (A1x).** The verdict is asked ONCE and both of its facts
@@ -25540,6 +25571,13 @@ export type Parser
 			neverZero to possiblyZero then break 'verdict'
 		end 'verdict'
 
+		// ⭐ **THE FLOAT-BACKED ENUM DECODE (A4o), PAID ONCE FOR BOTH ROUTES BELOW.** It sits past every
+		// refusal in this function — the operand rule and E3103 — so a rejected program still leaves no ops
+		// behind, and past `divisorProof`, which must read the value the SOURCE wrote. Every other value
+		// passes through unchanged, so the two routes divide exactly what they divided before.
+		let dividendNumber = self.floatBehindEnumValue(dividend, anchor: opTok)
+		let divisorNumber = self.floatBehindEnumValue(divisor, anchor: opTok)
+
 		// The BARE divide goes to `emitBinOpOverCheckedOperands`, not to `emitBinOp` — which now REFUSES a
 		// division outright, so that a division reaching the general emitter is a loud parser bug rather
 		// than an unguarded `idiv`. The operand rule this verdict sits behind is the one that door would
@@ -25548,7 +25586,7 @@ export type Parser
 		// ⭐ **NEITHER HAZARD OPEN IS THE ONLY ROUTE TO A BARE `idiv`**, and that conjunction is the rung: the
 		// left half alone was A1's rule, and it waved `i64.min mod -1` through.
 		if zeroVerdict == DivisorZeroVerdict.neverZero and not needsOverflowGuard 'noHazardLeftOpen'
-			return self.emitBinOpOverCheckedOperands(dividend, rhs: divisor, op: op, leftTag: leftTag, rightTag: rightTag, opTok: opTok)
+			return self.emitBinOpOverCheckedOperands(dividendNumber, rhs: divisorNumber, op: op, leftTag: leftTag, rightTag: rightTag, opTok: opTok)
 		end 'noHazardLeftOpen'
 
 		// ⭐ **THE PROMOTION IS THE SAME ONE `emitBinOp` OWES, PAID HERE FOR THE SAME REASON.** The Std
@@ -25559,8 +25597,8 @@ export type Parser
 		// It happens AFTER the verdict, which reads the operand the SOURCE wrote: the divisor's own constant
 		// domain is what says whether it is zero, and a promotion would only move the same value into a
 		// different domain's spelling.
-		let promotedDividend = self.promotedOperand(dividend, left: leftTag, right: rightTag, opTok: opTok)
-		let promotedDivisor = self.promotedOperand(divisor, left: leftTag, right: rightTag, opTok: opTok)
+		let promotedDividend = self.promotedOperand(dividendNumber, left: leftTag, right: rightTag, opTok: opTok)
+		let promotedDivisor = self.promotedOperand(divisorNumber, left: leftTag, right: rightTag, opTok: opTok)
 
 		var args = ValueIdArray.create()
 		args.push(promotedDividend)
@@ -25670,15 +25708,29 @@ export type Parser
 	// the same way (by reading) or not at all. A `panic` names the caller, on the first program that
 	// compiles it, and needs nobody to be reading.
 	function emitBinOp(lhs ValueId, rhs ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
-		let leftTag = self.tagOf(lhs)
-		let rightTag = self.tagOf(rhs)
+		// ⭐ **THE OPERAND RULE IS ASKED OF THE NUMBER, NOT OF THE ENCODING (A4o).** `numberTagOf` answers
+		// `float` for a float-backed enum, which decides two things at once and both match the oracle:
+		// `Weight.light + Weight.heavy` is float addition (6.5 — MEASURED, against the sum of two bit
+		// patterns shv2 answered), and `Weight.light shl 1` becomes the E3005 `lacksIntegralReading` refuses
+		// a float with, instead of shifting a mantissa. UNCONDITIONAL here because every operator this
+		// emitter serves is a question about the number; only `emitCompare`'s equality has an identity
+		// reading, and it gates.
+		let leftTag = self.numberTagOf(lhs)
+		let rightTag = self.numberTagOf(rhs)
 		try requireBinOpOperands(op, left: leftTag, right: rightTag, opTok: opTok)
 
 		if divisionOperator(op) 'divisionSkippedItsPolicy'
 			panic("emitBinOp: '{op.rawValue}' is a DIVISION, and reaching this emitter is how one gets emitted with NO divide-by-zero verdict asked — an unguarded `idiv` where a catchable `DivisionByZero` was promised. Route it through `emitDivOrMod`, which owns the rule for every `/` and `mod` in the language; `parseBinary`'s `divisionOperator` gate is the source-level door and `emitMonotonicMs` is the intrinsic-level one.")
 		end 'divisionSkippedItsPolicy'
 
-		return self.emitBinOpOverCheckedOperands(lhs, rhs: rhs, op: op, leftTag: leftTag, rightTag: rightTag, opTok: opTok)
+		// The DECODE is paid only past the rule, so a refused program leaves no ops behind — the property
+		// `emitShift`'s header states and the reason the tag question above is asked without emitting. Bound
+		// to locals rather than written inline, because each one may EMIT and the left operand's
+		// reinterpretation has to reach the block before the right one's.
+		let left = self.floatBehindEnumValue(lhs, anchor: opTok)
+		let right = self.floatBehindEnumValue(rhs, anchor: opTok)
+
+		return self.emitBinOpOverCheckedOperands(left, rhs: right, op: op, leftTag: leftTag, rightTag: rightTag, opTok: opTok)
 	end 'emitBinOp'
 
 	// The emit itself, entered only with the operand rule ALREADY asked — so a caller that has done the
@@ -25768,12 +25820,68 @@ export type Parser
 	// promotes in the PARSER, off the `valueTags` column it already keeps for the word operators.
 	// Same op, same place in the value graph, one fewer table.
 	function promoteToFloat(value ValueId, opTok Token) returns ValueId
-		if tagIsFloat(self.tagOf(value)) 'alreadyFloat'
-			return value
+		// ⚠⚠ **THE ENUM DECODE COMES FIRST, AND SKIPPING IT IS A SILENT WRONG ANSWER BY ~300 ORDERS OF
+		// MAGNITUDE.** A float-backed enum value is an f64 already — in the WRONG REGISTER FILE — so the
+		// move into the float domain is a reinterpretation, never the `cvtsi2sd` below. This is the same
+		// hazard `coerceToDeclared` PANICS against for an unlifted ranged float alias; an enum cannot take
+		// that cure (its value must stay a GPR i64 for `match`), so it takes this one.
+		let number = self.floatBehindEnumValue(value, anchor: opTok)
+		if tagIsFloat(self.tagOf(number)) 'alreadyFloat'
+			return number
 		end 'alreadyFloat'
 
-		return self.emitUnaryOp(value, op: MaxonUnaryOp.promoteToFloat, resultTag: ValueTypeTag.float, range: SourceRange.ofToken(opTok))
+		return self.emitUnaryOp(number, op: MaxonUnaryOp.promoteToFloat, resultTag: ValueTypeTag.float, range: SourceRange.ofToken(opTok))
 	end 'promoteToFloat'
+
+	// ⭐⭐ **THE ONE DOOR EVERY SITE THAT READS A FLOAT-BACKED ENUM AS A NUMBER GOES THROUGH (A4o).** The
+	// value is an i64 carrying the f64's IEEE-754 bits (`EnumLayout`'s header states why the representation
+	// is uniform), so the read is a `movq xmm, r64` REINTERPRETATION — `MaxonUnaryOp.bitsToFloat`, the same
+	// op `emitContainerElementAccessor` reads a float array element back through. Any other value passes
+	// through untouched, which is what lets a caller apply it unconditionally.
+	//
+	// ⚠ **IT IS A DECODE, NOT A PROMOTION, AND THE TWO ARE NOT INTERCHANGEABLE.** `promoteToFloat`'s
+	// `cvtsi2sd` reads the operand as a MAGNITUDE: applied to `light = 2.5`'s bits it answers
+	// 4612811918334231000.0. MEASURED before this door existed, all four silently: `"{w}"` printed
+	// `4612811918334230528`; `Weight.light * scale` and `Weight.light + Weight.heavy` multiplied and added
+	// bit patterns; `takesFloat(Weight.light)` widened the encoding; and `below < mid` ordered `-2.2`
+	// against `-1.1` BACKWARDS, because a negative double's bits do not order like the double.
+	//
+	// ⚠ **THE `==`/`!=` OF ONE ENUM DELIBERATELY DOES NOT COME HERE** — an enum's equality is its IDENTITY,
+	// answered by the i64 tag compare that `match` dispatch uses, and routing it through a float compare
+	// would make `SignedZero.negz == SignedZero.posz` disagree with `match negz` (`enums-simple.md`'s
+	// `float-backed-signed-zero` pins that single equality). See `emitCompare`'s gate.
+	function floatBehindEnumValue(value ValueId, anchor Token) returns ValueId
+		if not self.valueIsFloatBackedEnum(value) 'notAFloatBackedEnum'
+			return value
+		end 'notAFloatBackedEnum'
+
+		return self.emitUnaryOp(value, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: SourceRange.ofToken(anchor))
+	end 'floatBehindEnumValue'
+
+	// ⭐ **THE TAG OF THE NUMBER BEHIND A VALUE — the question every OPERAND RULE asks, and the one
+	// `tagOf` cannot answer for a float-backed enum.** The value's own tag is `named` and its register file
+	// is a GPR, both truthfully; what the rule needs to know is the DOMAIN the operator will work in, and
+	// for a float-backed enum that is `float`.
+	//
+	// ⚠ **IT IS SPLIT FROM `floatBehindEnumValue` SO THE RULE CAN BE ASKED WITHOUT EMITTING** — a refused
+	// program must leave no ops behind (`emitShift`'s header), and a decode placed before the verdict would
+	// leave a stray `bitsToFloat` in the block of every program rejected for its operands. Same split, same
+	// reason, as `rangedAliasResolvedTag` beside `promoteToFloat`.
+	function numberTagOf(value ValueId) returns ValueTypeTag
+		return ValueTypeTag.float if self.valueIsFloatBackedEnum(value) else self.tagOf(value)
+	end 'numberTagOf'
+
+	// Is `value` a FLOAT-BACKED enum's value — `valueIsUnion`'s twin, differing only in the layout fact it
+	// reads. The `named` pre-check is that function's measured hot-path guard, kept for the identical
+	// reason: this is asked of both operands of every binary operator and of every interpolation hole, and
+	// a scalar column read allocates nothing where a registry probe on an `int` would.
+	function valueIsFloatBackedEnum(value ValueId) returns bool
+		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+
+		return self.signatures.enumIsFloatBacked(self.internedName(self.valueNameId(value)))
+	end 'valueIsFloatBackedEnum'
 
 	// ⭐ **FLOAT NEGATION IS A SUBTRACT FROM ZERO**, and that is a PORT, not a shortcut — v1 says
 	// the same of its own parser ("Float negation is normally lowered by the parser as `0.0 - x`",
@@ -25938,12 +26046,40 @@ export type Parser
 			return try self.emitStructEqualityCall(lhs, rhs: rhs, op: op, opTok: opTok)
 		end 'structEquality'
 
-		if not comparableOperands(leftTag, right: rightTag) 'mismatch'
-			throw ParseError.comparisonTypeMismatch(typeTagName(leftTag), right: typeTagName(rightTag), line: opTok.line, column: opTok.column)
+		// ⭐⭐ **A FLOAT-BACKED ENUM IS COMPARED AS ITS NUMBER — EXCEPT WHERE THE COMPARISON IS AN IDENTITY
+		// TEST (A4o).** Everything else here is exact for an enum already, because an enum value IS its i64
+		// tag; this is the one question the tag cannot answer, and it splits by operator:
+		//
+		//   • ORDERING (`<`/`>`/`<=`/`>=`) has no identity reading at all, so it is always the number.
+		//     MEASURED before this arm, on `below = -2.2` and `mid = -1.1`: shv2 answered `below < mid`
+		//     FALSE, because a negative double's bit pattern does not order like the double. The oracle
+		//     answers true. A bit-pattern order that happens to agree for POSITIVE cases is exactly why
+		//     `enum-match-exhaustive`'s float range arm passes under both readings and pins neither.
+		//   • EQUALITY between two values of ONE enum stays the TAG compare, and that is not a concession:
+		//     `x == Type.case` is the language's way of asking which CASE a value is, and it must agree
+		//     with `match`, whose dispatch is an i64 compare (`emitDispatchCompare`). Routing it through
+		//     `ucomisd` would make `SignedZero.negz == SignedZero.posz` TRUE while `match negz` selects
+		//     `negz` — `enums-simple.md`'s `float-backed-signed-zero` pins that single equality.
+		//   • EQUALITY against anything else (`w == 2.5`) names no case, so it is the number, which is what
+		//     lets the oracle's `w == 2.5` compile here too.
+		//
+		// ⚠ The VERDICT is asked of the number TAGS and the decode is paid only past it, so a comparison
+		// rejected for its operands still leaves no ops behind — `emitBinOp`'s split, for its reason. The
+		// message names those same tags, so a refused float-backed enum reads "cannot compare float with
+		// bool" rather than the `int` `typeTagName` prints for every `named`.
+		let identityEquality = comparisonIsEquality(op) and leftTag == ValueTypeTag.named and self.valueNameId(lhs) == self.valueNameId(rhs)
+		let leftNumberTag = leftTag if identityEquality else self.numberTagOf(lhs)
+		let rightNumberTag = rightTag if identityEquality else self.numberTagOf(rhs)
+
+		if not comparableOperands(leftNumberTag, right: rightNumberTag) 'mismatch'
+			throw ParseError.comparisonTypeMismatch(typeTagName(leftNumberTag), right: typeTagName(rightNumberTag), line: opTok.line, column: opTok.column)
 		end 'mismatch'
 
+		let left = lhs if identityEquality else self.floatBehindEnumValue(lhs, anchor: opTok)
+		let right = rhs if identityEquality else self.floatBehindEnumValue(rhs, anchor: opTok)
+
 		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: left, rhs: right, op: op), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitCompare'
 
@@ -27166,8 +27302,10 @@ export type Parser
 
 	// A `{expr}` part. A String value (a literal or an interpolation result) is copied by its bytes exactly
 	// as a literal fragment is — `materializeStringRecordPart` reads `buffer@0`/`length@8` from either. An
-	// integer renders to decimal text via `__int_to_string` into a scratch buffer. bool/float/enum are the
-	// next waves; a Stringable struct is P1.7a.
+	// integer renders to decimal text via `__int_to_string` into a scratch buffer, a bool via
+	// `__bool_to_string`, a float via `__float_toString` and a user struct via its own `toString`. An enum
+	// renders its VALUE — the integer for an int backing, the decoded double for a float one; its case NAME
+	// is a later rung (`string-interpolation.md`'s two `disabled-test:` cases).
 	function materializeInterpExpr(exprVal ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
 		// ⚠ **THE RAW TAG IS CORRECT HERE, AND THAT WAS MEASURED RATHER THAN ASSUMED.** `tagIsIntegral`
 		// answers `true` for a `named` tag deliberately (its own header records the trade), so a float
@@ -27178,23 +27316,32 @@ export type Parser
 		// `Percent` parameter, a `Percent` field and a `Percent` return all print correctly with the raw
 		// tag (`specs-shv2/string-interpolation.md`'s `float-ranged-alias-positions`, which is the pin).
 		// Resolving again here would be a second answer to a question already answered upstream.
-		let tag = self.tagOf(exprVal)
+		//
+		// ⚠⚠ **AN ENUM IS THE ONE SHAPE THAT DOES ARRIVE `named` CARRYING AN f64, AND THAT REASONING NEVER
+		// COVERED IT (A4o).** A float-backed enum's value cannot be lifted at its producer the way an alias
+		// is — it must stay a GPR i64 for `match` — so it is DECODED here instead, and the `float` arm below
+		// then renders it through the one `__float_toString` every float in the language uses. MEASURED
+		// before this line: `enum Weight  light = 2.5` then `"{w}"` printed `4612811918334230528`. An
+		// int-backed enum passes through untouched and keeps the integral arm, which is what
+		// `constants/string-interpolation` and `string-interpolation/int-enum-interpolation` pin.
+		let value = self.floatBehindEnumValue(exprVal, anchor: exprTok)
+		let tag = self.tagOf(value)
 		// ⚠ `tagIsByteRecord`, NOT `tagIsText`: this asks whether `buffer@0`/`length@8` can be read off the
 		// value and blitted, which is a question about the RECORD. A Character carries the same record, so
 		// `"{c}"` is the identical two loads — and interpolation is how a Character reaches stdout at all,
 		// `print` itself taking a String and refusing one.
 		if tagIsByteRecord(tag) 'byteRecordPart'
-			self.materializeStringRecordPart(exprVal, partBufs: partBufs, partLens: partLens, range: range)
+			self.materializeStringRecordPart(value, partBufs: partBufs, partLens: partLens, range: range)
 			return
 		end 'byteRecordPart'
 
 		if tagIsIntegral(tag) 'intPart'
-			self.materializeScratchPart(exprVal, converter: IntToStringName, scratchBytes: IntToStringScratchBytes, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			self.materializeScratchPart(value, converter: IntToStringName, scratchBytes: IntToStringScratchBytes, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 			return
 		end 'intPart'
 
 		if tagIsBool(tag) 'boolPart'
-			self.materializeScratchPart(exprVal, converter: BoolToStringName, scratchBytes: BoolToStringScratchBytes, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			self.materializeScratchPart(value, converter: BoolToStringName, scratchBytes: BoolToStringScratchBytes, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 			return
 		end 'boolPart'
 
@@ -27212,7 +27359,7 @@ export type Parser
 		// `trackOwnedTemp`) and freed at statement end, its bytes spliced by
 		// `materializeStringRecordPart` exactly as any other String part's are.
 		if tagIsFloat(tag) 'floatPart'
-			try self.materializeFloatToStringPart(exprVal, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
+			try self.materializeFloatToStringPart(value, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
 			return
 		end 'floatPart'
 
@@ -27221,7 +27368,7 @@ export type Parser
 		// monomorphizing bootstrap emits). Witnesses are needed only for an UNKNOWN concrete type — a
 		// constrained type parameter — which is slice 2.
 		if tag == ValueTypeTag.structRef 'structPart'
-			try self.materializeStructToStringPart(exprVal, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
+			try self.materializeStructToStringPart(value, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
 			return
 		end 'structPart'
 

@@ -1007,6 +1007,115 @@ end 'main'
 Priorities: 1 and 3
 ```
 
+### Float-Backed Enum Interpolation
+
+A float-backed enum's tag IS the f64's IEEE-754 bit pattern (`Project.EnumLayout`), so the hole must
+DECODE it rather than hand the integer renderer an encoding. Before A4o this printed
+`4612811918334230528` — the bits of 2.5 read as a decimal integer — where the oracle printed `2.5`.
+
+<!-- test: float-enum-interpolation -->
+```maxon
+enum Weight
+	light = 2.5
+	heavy = 4.0
+end 'Weight'
+
+function main() returns ExitCode
+	let w = Weight.light
+	print("Weight: {w}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Weight: 2.5
+```
+
+### Float-Backed Enum Interpolation - Negative and Signed Zero
+
+The spellings where reading the encoding is most obviously wrong. Before A4o `down` printed
+`-4611235658464650854` — a NEGATIVE integer, because a negative double's sign bit is the i64's — and
+`zero` printed `0`, which is the one value the two readings agree on and therefore the one that could
+never have found this.
+
+<!-- test: float-enum-interpolation-extremes -->
+```maxon
+enum Scale
+	huge = 1.0e300
+	down = -2.2
+	zero = 0.0
+end 'Scale'
+
+function main() returns ExitCode
+	print("{Scale.down} {Scale.zero}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-2.2 0.0
+```
+
+### An Int-Backed and a Float-Backed Enum in One String
+
+⭐ THE NEGATIVE CONTROL for the decode above: the two backings must reach two DIFFERENT renderers in one
+interpolation. A fix that routed every enum to the float renderer would print `200.0` here, and a
+compiler that never decodes would print the bits of 2.5 — so neither reading passes this case.
+
+<!-- test: int-and-float-enum-interpolation -->
+```maxon
+enum Code
+	ok = 200
+	missing = 404
+end 'Code'
+
+enum Weight
+	light = 2.5
+end 'Weight'
+
+function main() returns ExitCode
+	print("{Code.ok} {Weight.light} {Code.missing}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+200 2.5 404
+```
+
+### Cross-File Float-Backed Enum Interpolation
+
+The backing is a fact about the DECLARATION, so a file that only USES the enum must reach the same
+renderer as the file that declares it — the whole-program enum registry is what carries it, and nothing
+local to the declaring parse survives to answer here.
+
+<!-- test: cross-file-float-enum-interpolation -->
+```maxon
+// --- file: weights.maxon
+export enum Weight
+	light = 2.5
+	heavy = 4.0
+end 'Weight'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{Weight.heavy}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4.0
+```
+
 ### Integer Format Specifier - Zero Padding
 
 <!-- disabled-test: int-format-zero-pad -->

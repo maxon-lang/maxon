@@ -90,6 +90,26 @@ let DeclShapeEnum = 20 as ContentHash
 let EnumKindEnum = 21 as ContentHash
 let EnumKindUnion = 22 as ContentHash
 
+// ⭐ **HOW A DECLARED ENUM'S TAGS ARE TO BE READ** (`EnumBacking`), mixed beside the case list for
+// `EnumKindEnum`'s reason one step sharper: the two backings can produce the SAME tag column
+// (`z = 0` and `z = 0.0` both fold to 0), so without a discriminator of its own the edit between them is
+// invisible to every reading file's parse memo — while it changes what those files compile `"{z}"` and
+// `z * 2.0` to. Three constants because there are three states and `unresolved` (an enum with no cases
+// yet) is one of them.
+let EnumBackingUnresolved = 67 as ContentHash
+let EnumBackingInteger = 68 as ContentHash
+let EnumBackingFloat = 69 as ContentHash
+
+// The discriminator for one backing. A `match` rather than a chained `if`, so a fourth backing (a String
+// one is a named later rung) cannot be added without being given a hash constant here.
+function enumBackingDiscriminator(backing EnumBacking) returns ContentHash
+	return match backing 'b'
+		unresolved gives EnumBackingUnresolved
+		integer gives EnumBackingInteger
+		float gives EnumBackingFloat
+	end 'b'
+end 'enumBackingDiscriminator'
+
 // One `implements <Interface>` name on an enum/union declaration (A1s wave 2), mixed per name so a
 // SECOND interface moves the hash rather than being absorbed by the first. Its own discriminator for
 // `DeclShapeStruct`'s reason: the list is a distinct fact from the case list beside it.
@@ -5087,10 +5107,16 @@ export type ProgramSignatures
 	// move. Only this hash can carry it. The `isUnion` bit rides too: `enum` → `union` changes the
 	// word a non-exhaustive-match diagnostic prints, and a reader that met that diagnostic must
 	// re-parse to reprint it.
+	//
+	// ⚠⚠ **AND THE BACKING RIDES, BECAUSE THE TAG COLUMN CANNOT CARRY IT (A4o).** `enum Z  z = 0` and
+	// `enum Z  z = 0.0` fold to the IDENTICAL name + tag (`floatLiteralBits(0.0)` is 0), and a reading file
+	// compiles `"{z}"` to `__int_to_string` for one and `__float_toString` for the other. Editing the `0`
+	// to `0.0` would otherwise leave every other file's parse memo valid and serve a stale answer, which is
+	// exactly the class of staleness this hash exists to prevent — see the rule at `recordStruct`.
 	function recordEnum(layout EnumLayout)
 		upsertDeclaredEnum(self.enumTypes, layout: layout)
 
-		var state = mix(mixBytes(mix(self.hash, value: DeclShapeEnum), bytes: layout.name), value: EnumKindUnion if layout.isUnion else EnumKindEnum)
+		var state = mix(mix(mixBytes(mix(self.hash, value: DeclShapeEnum), bytes: layout.name), value: EnumKindUnion if layout.isUnion else EnumKindEnum), value: enumBackingDiscriminator(layout.backing))
 		// The `implements` list rides for the field list's reason (A1s wave 2): whether `enum E implements
 		// Error` says so decides whether ANOTHER file's `type X implements Parsable` with `throws E` is
 		// ACCEPTED (`ConformanceCheck.requireImplErrorConformsToRequirement`) — so adding or removing the
@@ -10261,6 +10287,19 @@ export type ProgramSignatures
 	// PARSER asks every enum question through: is this scrutinee an enum? what tag is a case? which
 	// cases does a range arm cover? The layout it hands back carries plain NAMES and INTS (no ids),
 	// so every one of those questions is answered with no interner at all.
+	// ⭐ **IS `name` A FLOAT-BACKED ENUM — one whose i64 tag is an f64's IEEE-754 BIT PATTERN (A4o)?** THE
+	// question every site that consumes an enum value as a NUMBER asks, so it is stated here once rather
+	// than at each of them. A name nothing declares as an enum answers `false`: this is asked of every
+	// `named`-tagged value in the program, and "there is no such enum" is not this predicate's to report.
+	//
+	// ⚠ **ANSWERED OVER `enumTypes` DIRECTLY, NOT THROUGH `enumOf`, AND THAT IS `valueIsUnion`'s MEASURED
+	// REASON** — `enumOf` boxes a `DeclaredEnum`, a heap object even for `undeclared`, and this runs for
+	// BOTH operands of every binary operator and every comparison and for every interpolation hole.
+	export function enumIsFloatBacked(name ByteArray) returns bool
+		let layout = try self.enumTypes.get(name) otherwise return false
+		return layout.backing == EnumBacking.float
+	end 'enumIsFloatBacked'
+
 	export function enumOf(name ByteArray) returns DeclaredEnum
 		let layout = try self.enumTypes.get(name) otherwise return DeclaredEnum.undeclared
 		return DeclaredEnum.declared(layout)

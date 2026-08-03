@@ -2661,9 +2661,17 @@ end 'builtinErrorConformance'
 // **TAGS ARE UNIFORMLY `ParsedInt` (i64), for int AND float backing.** An int-backed case's tag is
 // its raw value; a FLOAT-backed case's tag is its IEEE-754 BIT PATTERN — the same representation
 // `FieldDefault.literal` stores a float default as. An enum value is therefore always an i64 (the
-// tag, or the float bits), matched by an i64 compare, so an enum needs no float register class and
-// no second code path. (`.rawValue` — the accessor that would decode the bits back to a float — is
-// a later rung.)
+// tag, or the float bits), living in a GENERAL-PURPOSE register and matched by an i64 compare, so a
+// `match` needs no float register class and no second dispatch path. (`.rawValue` — the accessor that
+// NAMES the decoded value — is a later rung.)
+//
+// ⚠⚠ **BUT A SITE THAT CONSUMES THE VALUE AS A *NUMBER* MUST DECODE IT, AND THE TAG COLUMN CANNOT TELL
+// IT TO (A4o).** The uniform i64 is a representation decision, not a claim that a float-backed enum IS an
+// integer: `"{w}"` printed `4612811918334230528` for `light = 2.5`, `Weight.light * scale` multiplied bit
+// patterns, and `below < mid` ordered two NEGATIVE cases backwards, all silently. What decides is
+// `backing` below, read at each such site and paid for with a `bitsToFloat` REINTERPRETATION — never a
+// `cvtsi2sd`, which would convert the encoding as if it were a magnitude.
+// See `Parser.floatBehindEnumValue` for the one door every one of those sites goes through.
 
 // ⭐ **THE ONE ENUM ACCESSOR shv2 READS — `s.ordinal`, a case's DECLARATION INDEX.** Spelled beside the
 // layout because the layout is what answers it (`tagsAreDeclarationIndices`), and named rather than
@@ -2674,6 +2682,20 @@ end 'builtinErrorConformance'
 // BACKING VALUE (a case's string/char/float), which is a different mechanism and the one
 // `specs-shv2/enum-full.md`'s two shelved cases are waiting on. `.ordinal` needs no backing at all.
 export let EnumOrdinalMemberName = b"ordinal"
+
+// ⭐⭐ **WHICH KIND OF NUMBER AN ENUM'S i64 TAG *IS*** — the fact `caseTags` structurally cannot carry,
+// because both backings store a `ParsedInt` and one bit pattern says nothing about how to read it.
+// `enum Z  z = 0` and `enum Z  z = 0.0` produce the IDENTICAL tag column (`floatLiteralBits(0.0)` is 0),
+// and every read site — the interpolation renderer, an arithmetic operand, a comparison's domain — must
+// answer them differently. So the backing rides the LAYOUT, which is what survives the declaration.
+//
+// ⚠ `unresolved` is a real state and not a filler: the backing is fixed by the FIRST case, so an enum
+// with no cases yet has none, and that is exactly what E3032 (raw-value type mismatch) tests against.
+export enum EnumBacking
+	unresolved
+	integer
+	float
+end 'EnumBacking'
 
 export type EnumLayout
 	export var name as ByteArray
@@ -2709,15 +2731,24 @@ export type EnumLayout
 	// layouts (`Ordering`, the builtin error enums), which no file declares and none may be refused.
 	export var visibility as Visibility
 	export var declFilePath as FilePath
+	// ⭐ **WHAT KIND OF NUMBER `caseTags` HOLDS** (see `EnumBacking`). Written by the case reader as each
+	// case fixes or re-confirms it (`Parser.requireIntBacking`/`requireFloatBacking`, which raise E3032 on a
+	// mismatch), and read at every site that consumes an enum VALUE as a number rather than as an identity.
+	export var backing as EnumBacking
 
-	export static function create(name ByteArray, isUnion bool, conformsTo ByteArrayArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath}
+	export static function create(name ByteArray, isUnion bool, conformsTo ByteArrayArray, visibility Visibility, declFilePath FilePath, backing EnumBacking) returns EnumLayout
+		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing}
 	end 'create'
 
 	// The `EnumLayout` twin of `StructLayout.createCompilerOwned`, for the same reason and with the same
 	// tier: a builtin enum is declared in no file, so no file may be refused it.
+	//
+	// ⚠ It states `integer` rather than `unresolved`, because a builtin's cases are appended through
+	// `addBuiltinEnumCase` — which bypasses the case READER that would otherwise fix the backing — and every
+	// one of them is a declaration-index tag. An `unresolved` builtin would be a layout whose tag column
+	// exists and whose reading rule does not.
 	export static function createCompilerOwned(name ByteArray, conformsTo ByteArrayArray) returns EnumLayout
-		return EnumLayout.create(name, isUnion: false, conformsTo: conformsTo, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath)
+		return EnumLayout.create(name, isUnion: false, conformsTo: conformsTo, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'createCompilerOwned'
 
 	// Does this enum/union declare `implements interfaceName`? Nominal and direct, matching
