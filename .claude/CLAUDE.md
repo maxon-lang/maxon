@@ -191,6 +191,23 @@ The self-hosted compiler binary is at `./maxon-selfhosted/.maxon/maxon-selfhoste
 - `--mm-trace` — trace memory management operations (useful for memory leak debugging)
 - `--target=ARCH-OS` — test a specific target (`x64-windows`, `arm64-macos`, `wasm32-wasi`). The bootstrap emits x64/arm64; the **shv2 binary** adds `wasm32-wasi` (a WASI Preview2 component — run the output under `vendor/wasmtime/wasmtime[.exe] -S cli-exit-with-code=y`). It is **not** a scalar-only lane — see the measured scope note above.
 
+### ⚠ NEVER `--workers=1`, and NEVER `fmt` with arguments
+
+Both of these lived in three agent definitions apiece and in the rung skill, which is four copies of
+one fact — the bug this file keeps naming. They belong here, once, because they are true of anyone
+driving these binaries:
+
+- **`--workers=1` is a DEBUGGING TOOL, not a gate.** There is no worker-count invariance step in any
+  process here, and it was deleted from the rung battery for a measured reason: `--workers=1` is the
+  same pool with one worker in it, not a separate serial branch, and the parent never prints a result
+  as it arrives — it buffers and reports in fixed order (`maxon-shv2/Testing/SpecWorkerPool.maxon:17-34`).
+  **Ordering cannot vary with pool size**, so the check re-derived a known answer at full suite cost.
+  Reach for it when chasing a suspected nondeterminism or reading a failure serially; never as a gate.
+  **The default pool is 12 and that is the only count these processes run the suite at.**
+- ⛔ **`./bin/maxon.exe fmt` with arguments IGNORES them and reformats the ENTIRE TREE in place.**
+  Multiple agents have destroyed unrelated files this way and had to revert. Use the
+  `mcp__maxon-dev__fmt` file form, and check `git status` immediately after.
+
 ### ⛔⛔ `git status specs-shv2/fragments/` CANNOT TELL YOU WHETHER CODEGEN MOVED. THE RUNNER CAN.
 
 **A clean `git status` over `specs-shv2/fragments/` is NOT evidence that the emitted code is unchanged**,

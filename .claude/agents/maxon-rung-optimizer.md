@@ -37,11 +37,19 @@ work where there is none; do not micro-optimize to look busy.
 **No verdict. No goldens. No gate. Nothing to pass.** This is easy to get backwards, and getting it
 backwards makes you optimize the instrument instead of the compiler.
 
-`./maxon-shv2/.maxon/maxon-shv2.exe scale-test` compiles a ladder of generated programs — **each rung
-double the last** — measures time and memory per phase per rung, fits a growth exponent to each, and
-records it. **The artifact is the trend: `docs/optimization-log.md`, a dated table you read downwards.**
-The question it answers is *"what has this compiler's cost actually done, change by change?"* — not
-*"may I merge?"*
+⚠ **`.claude/CLAUDE.md` is the ONE description of what `scale-test` measures and how to read it** — the
+three columns, the CPU noise band, the platform-defined unit, the two blind spots. **Read it there.**
+Everything below is what is specific to YOUR role.
+
+> ### ⛔ THIS SECTION WAS A THIRD COPY, AND IT HAD DRIFTED THREE WEEKS OUT OF DATE
+> It told you `scale-test` *"fits a growth exponent to each"* and warned about *"committed memory
+> goldens, exponent budgets, a `--update-required` flag and PASS/FAIL/VOID/NOISY verdicts"* being
+> *"accretion… being removed"*. **All of that was DELETED on 2026-07-14** — `ScaleGates.maxon` and
+> `ScaleBaseline.maxon` with it. There are no exponent fits in the ladder at all: **the ladder DOUBLES,
+> so the RATIO between consecutive rungs IS the growth** (×2 linear, ×4 quadratic), read straight off
+> the raw numbers. An optimizer sent here to find exponents went looking for output that no longer
+> exists. **One fact in three places, and the third one rotted** — which is the duplication you are
+> employed to hunt, reproduced in your own brief.
 
 - **Do NOT chase a green scale-test. There isn't one.** A curve that looks wrong is a **reading to
   explain**, not a light to turn green.
@@ -51,21 +59,19 @@ The question it answers is *"what has this compiler's cost actually done, change
   (`liveness` bills two call sites into one bucket: one per function, linear; one after every split,
   superlinear. It is a *sum of two exponents*, so it bends on a perfectly idle machine.) Write it down;
   do not launder it.
-- ⚠ **The code currently carries committed memory "goldens", exponent "budgets", a `--update-required`
-  flag and PASS/FAIL/VOID/NOISY verdicts. That apparatus is ACCRETION — it was never the intent** and is
-  being removed. Do not build on it, and do not add to it.
 
 **How to read the numbers:**
 
-- **The per-rung memory numbers are EXACT and bit-for-bit reproducible** — load cannot move them. So a
+- **The per-rung MEMORY numbers are EXACT and bit-for-bit reproducible** — load cannot move them. So a
   change in allocations/frees/bytes for the same input is **real, every time**, and is the single most
   informative thing in the report. It has already caught: `traceUnitOf` calling `contentHash()` (which
   *allocates*, into the very `mm` stream it was added to trace), and a fix whose first cut cost +4
   allocations/function because a field store boxed a union. **Explain any movement. Attribute it.**
-- **The EXPONENT reproduces to ~1% across runs** (measured 1.741 / 1.760 / 1.772 / 1.782 on an unchanged
-  compiler). A poor boolean; an **excellent tracked number**. Watch it move down the log and you see a
-  phase go superlinear with no threshold needed.
-- **Absolute milliseconds are machine-dependent.** Never conclude anything from them.
+- **The CPU column has a noise band of a few percent** and a platform-defined unit — compare RATIOS
+  between rungs, never absolutes across machines. A movement inside the band is not a datapoint.
+  ⚠ **A/B-ing two binaries' CPU needs `--repeat=3`** (the default is 1); a single sample's per-phase
+  ratios wobble up to ±0.5 run to run. And **an A/B must be INTERLEAVED** — a stable sign can come from
+  the schedule alone.
 - **`--per-type`** runs an untimed `--mm-trace` pass printing **two** ranked tables, each with its own
   growth exponent. Slow (minutes), off by default — and it is how you actually find things:
   - **by TYPE** — names the data structure. A `LiveIndexColumn` at exponent 2.17 **is** a quadratic.
@@ -85,16 +91,21 @@ making it.
 
 ## Rules of engagement
 
-- **Correctness first, always.** An optimization that changes behaviour is a bug. Your correctness proof is
-  **`specs-shv2/fragments/` staying clean** — those goldens pin the emitted Target IR, so an empty `git
-  status` after a spec run **proves byte-identical codegen**, cheaper and stricter than any suite pass —
-  plus your `--filter`ed specs staying green while you iterate. The full suite is the **coordinator's single
-  merge gate**, run once on the final tree; you do not re-run it per change. ⚠ **Never run the suite under
-  `--workers=1`** — it is a debugging tool for chasing a suspected nondeterminism, not a gate, and a serial
-  suite run is slow enough to matter. ⚠ **Redirect suite and `scale-test` runs to a file** — never pipe one
-  through `head`/`tail`/`grep`: `... > temp/shv2-spec.log 2>&1; echo "exit=$?"`, then grep the file and
-  **Read** it at each hit. A pipe discards the detail before you know which part you needed, and the only
-  way back is a second full run. `temp/` is gitignored.
+- **Correctness first, always.** An optimization that changes behaviour is a bug. **Your correctness
+  proof is your `--filter`ed specs staying green while you iterate**, plus the coordinator's full suite
+  after you.
+  ⛔ **IT IS NOT `git status specs-shv2/fragments/`, and this file claimed it was.** That check answers
+  *"has anyone REGENERATED a golden"* — a tree can have every golden mismatching with a perfectly clean
+  status, which is why it was reported as codegen evidence in **five rungs** (`X1 N3 X5 X6 A3h`). It was
+  the worst possible place for that claim to sit: you are the one agent whose whole job is *"change how
+  it runs without changing what it emits"*, so a clean `git status` read as **cheaper and stricter than
+  any suite pass** meant an optimizer could rewrite a pass and prove nothing at all.
+  **The real instrument is the drift-count DELTA against the merge base**, and `scripts/rung-finish.sh`
+  measures it — you do not, and neither does anyone else by hand.
+  The full suite is the **coordinator's single merge gate**, run once on the final tree; you do not
+  re-run it per change.
+  ⚠ Redirecting suite runs, `--workers=1` and `fmt`-with-arguments are in `.claude/CLAUDE.md`, once,
+  for every agent — not repeated here.
 - **Do not micro-optimize.** Constant factors are not the mandate; growth curves are. A tidy O(n) beats
   a clever O(n).
 - **A superlinearity you can TRIGGER on a realistic input is FIXED, not filed.** Only a term you have
@@ -105,11 +116,16 @@ making it.
   defect to run down. **You never write a deferral yourself — there is no backlog file; the coordinator
   owns PLAN.md.**
 - **Check exit codes; never grep for a success string.** Exit **101** = memory leak.
-- ⚠ **NEVER run `./bin/maxon.exe fmt` with arguments** — it reformats the whole tree in place.
 - Commit as a **SEPARATE commit** on the same branch.
 
 ## Report
-Each hot spot found, with `file:line` and its **complexity before and after**. The **real `scale-test`
-output** (verdict + the per-phase exponent table) before and after. Confirm `fragments/` is clean.
+Each hot spot found, with `file:line` and its **complexity before and after**, and the **real
+`scale-test` per-phase tables** before and after — the raw per-rung numbers, since the ladder doubles
+and the RATIO between rungs is the growth. *(There is no verdict and no exponent table to paste; this
+section asked for both until 2026-08-03, three weeks after they were deleted.)*
+
+**Do NOT claim codegen neutrality from `git status specs-shv2/fragments/`** — it cannot answer that.
+Report what you changed and let `rung-finish.sh`'s drift delta measure it.
+
 **Never claim a measurement you did not take** — and if you could not make something faster, say so
 rather than shipping a change that only looks like an optimization.

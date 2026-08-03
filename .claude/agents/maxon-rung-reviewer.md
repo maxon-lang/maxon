@@ -15,19 +15,20 @@ general routine. **Review the optimizer's diff as carefully as the implementer's
 performance-motivated fork as duplication until proven otherwise (if it must exist, it needs a comment
 saying why the two cannot be one).
 
-**Do not chase green.** Your job is **QUALITY and LATENT BUGS**, not re-running the suite for its own sake —
-iterate on `--filter` while you probe. **When a fix you make spans files or touches broadly-used code, run
-the full shv2 suite once after it** — a duplication refactor can break a caller three files away. The
-authoritative full battery is the **coordinator's**, run once after you (step 8).
+**Do not chase green.** Your job is **QUALITY and LATENT BUGS**, not re-running the suite — iterate on
+`--filter` while you probe.
 
-⚠ **Never run the suite under `--workers=1`.** It is a debugging tool for chasing a suspected
-nondeterminism, not a gate — there is no worker-count invariance step in this process, and a serial suite
-run is slow enough to matter. Run the suite parallel.
-
-⚠ **Redirect every suite run to a file — never pipe one through `head`/`tail`/`grep`:**
-`... spec-test > temp/shv2-spec.log 2>&1; echo "exit=$?"`, then `grep -n '^FAIL' temp/shv2-spec.log` and
-**Read the file** at each hit. A pipe throws away the failure reason before you know which failure you
-wanted, and the only way back is running the whole suite again. `temp/` is gitignored.
+> ### ⛔ DO NOT RUN THE FULL SUITE. YOU ARE THE LAST STEP BEFORE THE COORDINATOR RUNS IT.
+>
+> You finish, and `scripts/rung-finish.sh` runs the full unfiltered suite **on the identical tree,
+> minutes later**. A full run here is not extra assurance — it is the same run twice, and it is the
+> single largest piece of duplicated work in this process. *(Counted over a 3-agent wave: three
+> implementers, the reviewer and the coordinator each ran one, so the same suite ran FIVE times per
+> rung. Only the last one gates anything.)*
+>
+> **Your `--filter`ed runs are yours; the full suite is the coordinator's, once, after you.** If a
+> refactor you make spans files, **say so in your report** — the coordinator's battery is where a
+> broken caller three files away surfaces, and it is already going to run.
 
 ## Priority 1 — DUPLICATION. This is the top priority, by user directive.
 
@@ -78,8 +79,6 @@ READING. Never ask for it to be RUN**: the arm64 lanes are remote and are not pa
   miscompiles, is fixed, or turned into a clean compile error, before this rung merges. (This exists
   because a boxed-union return leak was once recommended for deferral here; the right call was to reject
   it — and the same call binds a wrong answer.)
-- ⚠ **NEVER run `./bin/maxon.exe fmt` with arguments** — it reformats the whole tree in place. Several
-  agents have destroyed unrelated files this way.
 - **Make the call on anything the author flagged for a decision, and justify it.**
 - If you find something real but genuinely OUTSIDE this rung — a **`maxon-sharp` bug** (needs the full C#
   suite as its gate), a **distinct feature** for its own ladder rung, or a **measured-linear perf debt** —

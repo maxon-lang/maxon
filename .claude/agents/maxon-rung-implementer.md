@@ -123,39 +123,17 @@ From your worktree root. `bin/` is gitignored, so it is copied in for you.
 | Build the bootstrap | `dotnet build maxon-sharp` (~60s — exceeds a 30s timeout; produces `./bin/maxon.exe`) |
 | C# suite | `./bin/maxon.exe spec-test` (~35s) |
 | Build shv2 | `./bin/maxon.exe build maxon-shv2` |
-| shv2 suite | `./maxon-shv2/.maxon/maxon-shv2.exe spec-test [--filter=P]` (the pool defaults to 12 workers — do not pass `--workers`) |
-| Scaling gate | `./maxon-shv2/.maxon/maxon-shv2.exe scale-test` |
+| shv2 suite | `./maxon-shv2/.maxon/maxon-shv2.exe spec-test [--filter=P]` |
 
-⚠ **REDIRECT EVERY SUITE RUN TO A FILE. NEVER PIPE ONE THROUGH `head`, `tail`, OR `grep`.**
+⚠ **Redirect every suite run to a file, and never pipe one through `head`/`tail`/`grep` — see
+`.claude/CLAUDE.md`**, which carries that rule, the `--workers=1` rule and the `fmt`-with-arguments rule
+for every agent in this repo. They are not repeated here; four copies of one fact is the bug this
+project keeps naming.
 
-```
-mkdir -p temp
-./maxon-shv2/.maxon/maxon-shv2.exe spec-test > temp/shv2-spec.log 2>&1; echo "exit=$?"
-grep -n '^FAIL' temp/shv2-spec.log          # shv2: which tests failed
-grep -n '\[FAIL\]' temp/csharp-spec.log     # bootstrap: same question, its own marker
-```
-
-Then **Read the file** at each hit for the whole reason. A failed compile embeds the compiler's entire
-stderr, so the grep gives you the headline and the file still holds the evidence.
-
-⚠ **Golden drift is NOT among the hits, by design.** A fragment mismatch is REFERENCE, not a gate (user
-ruling 2026-08-02) — it carries no `FAIL` marker, is not counted as a failure and does not affect the
-exit code. It prints as a `note:` block below the summary. **The gate is the spec tests passing**; if you
-want the drift, read the file for that note rather than grepping for a marker that is intentionally not
-there.
-
-**A pipe decides what to keep before you know what failed**, and a suite is 35s–several minutes, so the
-cost of that decision is a *second full run* to recover what the first one already printed. Redirecting
-costs nothing and the answer is on disk the moment the run ends — reread it as many times as you like,
-from any later step, without spending the suite again. The shv2 runner prints a line per test (~1,500 of
-them) and the failures sit wherever those tests fall in declaration order, so `tail` shows you PASS lines
-and a summary while the reason you need is thousands of lines up.
-
-`temp/` is gitignored — see the repo root `.gitignore`.
-
-⚠ **NEVER run `./bin/maxon.exe fmt` with arguments.** It ignores unknown args and reformats the entire
-tree in place. Multiple agents have destroyed unrelated files this way and had to revert. Format via
-the `mcp__maxon-dev__fmt` file form, and check `git status` immediately after.
+⚠ **Golden drift is NOT among the `^FAIL` hits, by design.** A fragment mismatch is REFERENCE, not a
+gate (user ruling 2026-08-02) — it carries no `FAIL` marker, is not counted as a failure and does not
+affect the exit code. It prints as a `note:` block below the summary, so read the file for it rather
+than grepping for a marker that is deliberately absent.
 
 ⚠ **`bin/maxon.exe` IS A BUILD OUTPUT, NOT A FIXTURE.** It is gitignored, so a worktree starts without
 one and it gets copied in — but a *copied* `maxon.exe` is frozen at whatever commit built it. **The
@@ -180,25 +158,32 @@ suite and the `scale-test` read are the **coordinator's single merge gate**, run
 after the reviewer — you do NOT re-run them on every build. Your job is to prove your own slice and hand up
 a clean tree.
 
-⚠ **Never run the suite under `--workers=1`.** It is a debugging tool for chasing a suspected
-nondeterminism, not a gate — there is no worker-count invariance step in this process, and a serial suite
-run is slow enough to matter. Run the suite parallel.
-
 Run every one of these that applies, and paste the real output:
 
 1. Build (bootstrap and/or shv2) → exit 0, **zero warnings**.
 2. **Your ported/enabled specs green** under `--filter`, and — **once, at your finish** — the **full shv2
    suite green**, including every pre-existing test. That single full run catches broad breakage while you
    still hold the context to fix it cheaply; the authoritative run is the coordinator's.
-3. **Fragments:** `git status --short specs-shv2/fragments/` shows **additions only**. An **`M`** on a
-   pre-existing golden is a **codegen change** — investigate and justify it, or fix it. Never blindly
-   regenerate. An empty diff after a spec run **proves byte-identical codegen** — cheaper than any suite pass.
-4. **If you touched a pass, the IR, or a data structure the compiler indexes by:** run `scale-test` once and
-   **read it** — it doubles the input per rung, so the ratio between consecutive rungs IS the growth (no
-   verdict, nothing to pass). Attribute anything that moved and hand the reading to the optimizer.
-5. **If you touched `maxon-sharp/`:** the C# suite must stay green (2883+), AND **codegen neutrality** —
-   `git status --short specs/ specs-shv2/` must be EMPTY, proving the emitted code is byte-identical.
-6. No run exits **101**.
+3. **Fragments:** `git status --short specs-shv2/fragments/` shows **additions only**, and you `git add`
+   every one of them — an untracked golden is invisible to every gate downstream.
+   ⛔ **That is a TRACKING check, NOT a codegen check, and this file said otherwise for months.** A
+   clean `git status` here **does not** prove byte-identical codegen: it answers *"has anyone
+   REGENERATED a golden"*, and a tree can have every golden mismatching with a perfectly clean status.
+   It was reported as codegen evidence in **five rungs** (`X1 N3 X5 X6 A3h`). **The real instrument is
+   the drift-count DELTA against the merge base, and `scripts/rung-finish.sh` measures it for you** —
+   do not attempt it by hand, and do not claim codegen neutrality in your report. Report an **`M`** on a
+   pre-existing golden as what it is: **a codegen change you must investigate and justify, or fix.**
+   Never blindly regenerate.
+4. **If you touched `maxon-sharp/`:** the C# suite must stay green (2883+), AND **codegen neutrality** —
+   `git status --short specs/ specs-shv2/` must be EMPTY. *(This one IS valid: the bootstrap MINTS those
+   goldens on every run, so the run that would have changed them has just happened.)*
+5. No run exits **101**.
+
+⛔ **Do NOT run `scale-test`.** The coordinator runs the ladder on every rung and the optimizer's
+before/after pair is its own instrument — a third reading, taken on a pre-review, pre-optimizer tree
+that is not the one that lands, attributes nothing and costs 17 s. **If you have a scaling SUSPICION,
+put it in your report in words** — that is what the coordinator's read and the optimizer trigger are
+for, and a sentence from you is worth more than a run nobody can attribute.
 
 ## Spec tests are ported ON DEMAND, from `/specs`
 
