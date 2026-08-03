@@ -23008,6 +23008,31 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     else
       return null;
 
+    var returnSourceStruct = _typeRegistry.TryGetValue(returnSourceName, out var returnSourceRegType)
+      ? returnSourceRegType as IrStructType
+      : null;
+
+    // Filter resolvedReturnParams to only the source type's associated type names (from uses clause).
+    // Conformance-bound params (e.g., Iter from Iterable with Element, ArrayIter) are internal
+    // bindings, not user-facing type params — they are not part of the INSTANCE's identity:
+    // `Array with DecimalDigit` is one instance whether or not `Iter` came along with it.
+    //
+    // ⚠ This has to run BEFORE the search below as well as before the mint, because the two must ask
+    // about the SAME instance. With `Iter` still in hand the search compared a 2-param key against
+    // every declared alias's 1-param key, so for `Array` it could never match anything; it then
+    // dropped `Iter` and minted `__Array_DecimalDigit` beside the `DigitString` it had just failed to
+    // recognise, giving one generic instance two names and two emitted method families.
+    if (returnSourceStruct != null
+        && returnSourceStruct.AssociatedTypeNames.Count > 0
+        && resolvedReturnParams.Count > returnSourceStruct.AssociatedTypeNames.Count) {
+      var filtered = new Dictionary<string, IrType>();
+      foreach (var atn in returnSourceStruct.AssociatedTypeNames) {
+        if (resolvedReturnParams.TryGetValue(atn, out var val))
+          filtered[atn] = val;
+      }
+      resolvedReturnParams = filtered;
+    }
+
     // Search for existing alias matching the resolved params
     foreach (var (aliasName, aliasSource) in _typeAliasSources) {
       if (aliasSource != returnSourceName) continue;
@@ -23022,29 +23047,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (match) return aliasName;
     }
 
-    // Filter resolvedReturnParams to only the source type's associated type names (from uses clause).
-    // Conformance-bound params (e.g., Iter from Iterable with Element, ArrayIter) should not be
-    // included when creating concrete aliases — they're internal bindings, not user-facing type params.
-    if (_typeRegistry.TryGetValue(returnSourceName, out var returnSourceCheck)
-        && returnSourceCheck is IrStructType returnSourceForFilter
-        && returnSourceForFilter.AssociatedTypeNames.Count > 0
-        && resolvedReturnParams.Count > returnSourceForFilter.AssociatedTypeNames.Count) {
-      var filtered = new Dictionary<string, IrType>();
-      foreach (var atn in returnSourceForFilter.AssociatedTypeNames) {
-        if (resolvedReturnParams.TryGetValue(atn, out var val))
-          filtered[atn] = val;
-      }
-      resolvedReturnParams = filtered;
-    }
-
     // No existing alias — auto-create one.
     // FindArrayTypeAliasForElement is specialized for the BuiltinArrayLiteral type — it searches
     // for existing user typealiases by element type. Only use it when the return source
     // implements BuiltinArrayLiteral; other generic types use the general path below.
     if (resolvedReturnParams.Count == 1 && resolvedReturnParams.TryGetValue("Element", out var elemType)
-        && _typeRegistry.TryGetValue(returnSourceName, out var returnSrcType)
-        && returnSrcType is IrStructType returnSrcStruct
-        && returnSrcStruct.ConformingInterfaces.Contains("BuiltinArrayLiteral")) {
+        && returnSourceStruct != null
+        && returnSourceStruct.ConformingInterfaces.Contains("BuiltinArrayLiteral")) {
       if (elemType is IrStructType elemStruct) {
         return FindArrayTypeAliasForElement(MaxonValueKind.Struct, elemStruct.Name);
       }
@@ -23072,8 +23081,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     // Auto-create concrete alias for multi-param generic types (e.g., EnumeratedIterator with Source, Element)
-    if (_typeRegistry.TryGetValue(returnSourceName, out var returnSourceReg)
-        && returnSourceReg is IrStructType returnSourceStruct) {
+    if (returnSourceStruct != null) {
       var mangledName = $"__{returnSourceName}_{string.Join("_", resolvedReturnParams.Values.Select(t => t.Name))}";
       if (!_typeRegistry.ContainsKey(mangledName)) {
         RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(resolvedReturnParams));
