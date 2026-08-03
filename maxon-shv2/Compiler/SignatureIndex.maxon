@@ -1102,7 +1102,19 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 	// FLOAT alias (a genuine f64). Re-entered rather than re-classified by hand: `denotedSlotType` never
 	// answers with a `named`, so the recursion is exactly one deep and the tag→class mapping above stays the
 	// only one there is.
+	//
+	// ⚠ **AND THAT TERMINATION FACT IS ASSERTED, NOT MERELY WRITTEN DOWN (A4k review).** It holds today by
+	// construction — every arm of that door answers `function`, `genericInstance`, `structRef` or `float`,
+	// and each is a RETURNING arm of the `match` above — but it is a property of the OTHER function's arms,
+	// and that door serves `declaredSlotType` too. An arm added for that caller which answered with the bare
+	// `named` it was handed (the int-alias shape its own header describes) would make this an UNBOUNDED
+	// recursion: a compiler that hangs, with nothing naming the edit that did it. A `named` here is loud
+	// instead — the same rule `resolveRecordedGenericAliasTypes` states for a spelling its pass cannot reach.
 	if let denoted = try signatures.denotedSlotType(name, into: typeNames, slotScopeFilePath: slotScopeFilePath) 'theNameDenotesAnotherType'
+		if maxonTypeTag(denoted) == ValueTypeTag.named 'wouldNotTerminate'
+			panic("classifyUnionPayload: `denotedSlotType('{String.from(name)}')` answered with a `named`, which this re-entry cannot make progress on — every arm of that door must answer with a type the tag match above RETURNS on")
+		end 'wouldNotTerminate'
+
 		return classifyUnionPayload(signatures, typeNames: typeNames, fieldType: denoted, slotScopeFilePath: slotScopeFilePath)
 	end 'theNameDenotesAnotherType'
 
@@ -10618,6 +10630,19 @@ export type ProgramSignatures
 	// own struct on both sides; a function alias, a float alias and a ranged int alias are all `false` here
 	// and all non-managed classes there), and that agreement is by INSPECTION rather than by construction:
 	// a new alias FORM must be taught to both, and the shared door is the one that will remember.
+	//
+	// ⭐ **HALF OF THAT *IS* BY CONSTRUCTION, AND KNOWING WHICH HALF IS WHAT MAKES THE RESIDUAL ACTIONABLE
+	// (A4k review).** The two cascades ask their registries in DIFFERENT ORDERS — that door is
+	// function→generic→tuple→float→struct, this one is tuple→struct→enum→generic — and an order can only
+	// decide anything for a name held by TWO registries at once, which no program can spell: a second
+	// declaration of one type name is refused **E3006**, and two `typealias` declarations of one name are
+	// refused **E3061** unless they are the SAME FORM (the registry's own doc states it; both were measured
+	// here, in-file and cross-file). ⇒ **the ORDERS cannot disagree, only the COVERAGE can**, and the
+	// coverage failure has a definite shape: a FORM taught to `denotedSlotType` and not to the arms below
+	// reads MANAGED at the payload classifier and `false` here, so the field is moved in and dropped by
+	// nobody — a LEAK, exit 101 — while the converse double-frees. The cure that would close it is a
+	// name→FORM enum both read (allocation-free, so this door keeps its `false` without boxing), which is a
+	// rung and not a review's to land.
 	//
 	// ⚠⚠ **`from` IS THE INTERNER `fieldType`'s `named` ID WAS MINTED AGAINST, AND IT IS A PARAMETER
 	// BECAUSE THE ANSWER IS OTHERWISE DECIDED BY INTERNING ORDER.** A `named` type is only a NUMBER; the

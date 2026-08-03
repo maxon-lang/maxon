@@ -34359,10 +34359,14 @@ export type Parser
 			return declared
 		end 'instance'
 		if tag == ValueTypeTag.named 'named'
+			// ⛔ **A FOURTH COPY OF THE GENERIC-ALIAS ARM STOOD HERE AND WAS PROVABLY DEAD (A4k review).** It read
+			// `isGenericAlias(name)` and re-tagged to the instance — but `declaredSlotType` one line up already
+			// asked that, over `denotedSlotType`, and its hit RETURNS a `genericInstance` the `instance` arm above
+			// takes. Reaching this line with tag `named` therefore MEANS the name is not a generic alias, and the
+			// two lookups cannot disagree: `adoptType` re-interns by the SAME name string, so the artifact table's
+			// spelling and the index's are one. A live-looking copy of an arm the shared door owns is what A4k was
+			// about; it may not survive one door down from the door that fixed it.
 			let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("containerSlotValueType: an adopted `named` slot type's id is not in this file's interner")
-			if self.signatures.isGenericAlias(name) 'genericAlias'
-				return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
-			end 'genericAlias'
 			// ⭐⭐ **A RANGED-ALIAS ELEMENT KEEPS ITS NAME, AND THAT IS A TYPE-IDENTITY FIX, NOT A REFINEMENT
 			// (P1.8 Slice E).** `classifyUnionPayload` below answers a STORAGE question — what width does this
 			// payload occupy — and its answer for a ranged int alias is the bare `integer` the alias erases
