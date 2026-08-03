@@ -7488,18 +7488,20 @@ export type ProgramSignatures
 	// doorways ask (`Parser.requireByteStringBlobFitsItsElement`), reported as E3005. The wide half of that
 	// same rule is still the E2015 the paragraph below describes; the two are one function, not two.
 	//
-	// ⚠ **BUT THIS DOOR IS STILL NOT THE CLASS'S ONLY ENTRANCE, AND ONE MORE IS OPEN AND MEASURED.**
-	// `String.toByteArray()` / `.bytes()` (`Parser.parseByteView`) fills a record it types with
-	// `internArrayByteInstance(<the reading file>)` — the USER's `Byte` — with the receiver's raw UTF-8, so
-	// it never mints `SynthesizedByteElementName` and this door never sees it. MEASURED 2026-08-03, three
-	// lines of ordinary source, on `origin/main` AND on the A3r branch: under `typealias Byte = int(0 to 100)`,
-	// `takes("ß".toByteArray())` into `takes(b Array with Byte)` reads back **195** — exit 195, no diagnostic.
-	// It is the SAME reading the BOUNDS bullet above records, at a producer R4.7's enumeration did not reach.
-	// ⇒ it is NOT a `b"…"` question and A3r's per-byte compile-time check cannot reach it (the bytes are
-	// runtime data). Its cure is this door's own mechanism — mint `__ManagedByte` at `parseByteView` and let
-	// the boundary decide, or refuse `.toByteArray()` outright in a file whose `Byte` fails
-	// `rosterElementHoldsEveryByte` — and either changes user-visible typing corpus-wide, so it is filed as
-	// its own rung rather than ridden along: **board row `A4a`**.
+	// ✅ **AND THE RAW-BYTE FILLS ARE CLOSED TOO (A4a), AT A RULE OF THEIR OWN RATHER THAN AT THIS DOOR.**
+	// `String.toByteArray()` / `.bytes()` (`Parser.parseByteView`), the buffer surface's `setByte` and
+	// `__ManagedFile.read` all write bytes that exist only at RUN TIME into a record typed
+	// `internArrayByteInstance(<the reading file>)` — the USER's `Byte` — so none of them mints
+	// `SynthesizedByteElementName` and this door never sees any of them. All three were silent wrong answers
+	// (195, 223, 223) under `typealias Byte = int(0 to 100)`.
+	// ⛔ **BUT THE CURE WAS *NOT* TO MINT `__ManagedByte` AT THOSE PRODUCERS, AND THAT IS MEASURED RATHER
+	// THAN PREFERRED.** A byte view is not a buffer of this element's kind: `emitArrayCreateOp` stamps its
+	// `element_size@24` from the very instance it is typed as, so a wide `Byte` gives it a genuinely stride-2
+	// record that `__str_to_bytes` fills at that stride — correct today, and the STRIDE bullet above is
+	// exactly what would refuse a retyped stride-1 view at every declared byte-array position. The element
+	// belongs to the program; only its BOUNDS were never asked. ⇒ `Parser.requireRawByteFillFitsItsElement`
+	// asks the same `rangeHoldsEveryByte` this door's BOUNDS bullet asks, one quantifier tighter (the reading
+	// file's own mint rather than every declaration of the name), and reports E3117.
 	//
 	// ⚠⚠ **THE ARRIVING SIDE IS AN IDENTITY TEST AND NOT A STRIDE TEST, AND THE DIFFERENCE IS A
 	// TYPE HOLE MEASURED BEFORE IT SHIPPED.** "Both sides byte-packed" reads as the symmetric rule and is

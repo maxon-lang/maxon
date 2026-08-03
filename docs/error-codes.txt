@@ -1428,6 +1428,39 @@ E3116 SemanticStaticRequirementNotDispatchable
 	doc "is this requirement the `Equatable`/`Comparable` protocol?", a static one is not, and the
 	doc author's cure is the sentence E3005 already prints for a throwing or wrong-arity look-alike.
 
+E3117 SemanticRawByteFillNarrowElement
+	shv2 rawByteFillNarrowElement
+	doc A construct that fills an `Array with Byte` with RAW BYTES is written in a file whose `Byte`
+	doc does not admit every byte value 0 through 255. Three constructs reach it, and all three write
+	doc bytes that exist only at RUN TIME: the byte view (`String.toByteArray()` / `.bytes()`, whose
+	doc runtime fill blits the receiver's UTF-8), the buffer surface's `setByte`, and
+	doc `__ManagedFile.read`, which blits a file's contents into a caller's buffer.
+	doc A raw byte is any of 256 values. An element declared `int(0 to 100)` promises every value of
+	doc every `Array with Byte` in the program is at most 100, and a raw fill breaks that promise with
+	doc no place to put a check: the fill is one runtime blit, not a run of stores the compiler can
+	doc narrow one at a time. MEASURED before the rule existed: `takes("ss".toByteArray())` into
+	doc `takes(b Array with Byte)` returned 195 out of an accessor declared `int(0 to 100)`, and
+	doc `setByte(0, 223)` on a `__ManagedMemory.create(8, 1)` returned 223. Both silent.
+	doc It is a PER-TYPE rule and its A3r sibling is PER-VALUE, which is why the two are separate rules
+	doc rather than one. E3005 checks each byte of a `b"..."` blob against the same bounds and must keep
+	doc accepting `b"abc"` under `int(0 to 100)`; there is nothing here to inspect, so the only honest
+	doc question is about the element.
+	doc Retyping the byte view onto the compiler's own `__ManagedByte` element instead was the obvious
+	doc cure and is WRONG: `emitArrayCreateOp` stamps the view's `element_size@24` from the very
+	doc instance it is typed as, so a wide `Byte` gives a genuinely stride-2 record the runtime fills at
+	doc that stride (MEASURED correct). A stride-1 `__ManagedByte` view would then be refused by
+	doc `byteBufferBoundaryAdmits`'s stride test at every declared byte-array position, turning a
+	doc program that answers correctly today into a compile error.
+	doc The raw byte READER is deliberately untouched. `byteAt` yields a plain unranged `int`, never the
+	doc element, so a byte read back is honest whatever `Byte` was declared to be. Unlike E3110's pair,
+	doc only the write puts a value into a slot the array surface reads through the element's range.
+	doc `setByte` -- and ONLY `setByte` -- carries a stride precondition, because it addresses a byte
+	doc OFFSET rather than an element: on a record that strides more than a byte it writes a FRAGMENT of
+	doc an element, which is the byte-level staging the buffer surface exists for and is exactly what
+	doc E3110 calls the load-bearing half of being a rule about the element. The byte view needs no such
+	doc precondition -- its fill is element-wise at whatever stride -- and `__ManagedFile.read` needs none
+	doc because its argument gate has already established that the buffer is byte-packed.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

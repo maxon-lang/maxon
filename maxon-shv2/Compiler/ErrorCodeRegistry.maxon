@@ -703,6 +703,37 @@ export enum ErrorCode
 	// "is this requirement the `Equatable`/`Comparable` protocol?", a static one is not, and the
 	// author's cure is the sentence E3005 already prints for a throwing or wrong-arity look-alike.
 	semanticStaticRequirementNotDispatchable = "E3116"
+	// A construct that fills an `Array with Byte` with RAW BYTES is written in a file whose `Byte`
+	// does not admit every byte value 0 through 255. Three constructs reach it, and all three write
+	// bytes that exist only at RUN TIME: the byte view (`String.toByteArray()` / `.bytes()`, whose
+	// runtime fill blits the receiver's UTF-8), the buffer surface's `setByte`, and
+	// `__ManagedFile.read`, which blits a file's contents into a caller's buffer.
+	// A raw byte is any of 256 values. An element declared `int(0 to 100)` promises every value of
+	// every `Array with Byte` in the program is at most 100, and a raw fill breaks that promise with
+	// no place to put a check: the fill is one runtime blit, not a run of stores the compiler can
+	// narrow one at a time. MEASURED before the rule existed: `takes("ss".toByteArray())` into
+	// `takes(b Array with Byte)` returned 195 out of an accessor declared `int(0 to 100)`, and
+	// `setByte(0, 223)` on a `__ManagedMemory.create(8, 1)` returned 223. Both silent.
+	// It is a PER-TYPE rule and its A3r sibling is PER-VALUE, which is why the two are separate rules
+	// rather than one. E3005 checks each byte of a `b"..."` blob against the same bounds and must keep
+	// accepting `b"abc"` under `int(0 to 100)`; there is nothing here to inspect, so the only honest
+	// question is about the element.
+	// Retyping the byte view onto the compiler's own `__ManagedByte` element instead was the obvious
+	// cure and is WRONG: `emitArrayCreateOp` stamps the view's `element_size@24` from the very
+	// instance it is typed as, so a wide `Byte` gives a genuinely stride-2 record the runtime fills at
+	// that stride (MEASURED correct). A stride-1 `__ManagedByte` view would then be refused by
+	// `byteBufferBoundaryAdmits`'s stride test at every declared byte-array position, turning a
+	// program that answers correctly today into a compile error.
+	// The raw byte READER is deliberately untouched. `byteAt` yields a plain unranged `int`, never the
+	// element, so a byte read back is honest whatever `Byte` was declared to be. Unlike E3110's pair,
+	// only the write puts a value into a slot the array surface reads through the element's range.
+	// `setByte` -- and ONLY `setByte` -- carries a stride precondition, because it addresses a byte
+	// OFFSET rather than an element: on a record that strides more than a byte it writes a FRAGMENT of
+	// an element, which is the byte-level staging the buffer surface exists for and is exactly what
+	// E3110 calls the load-bearing half of being a rule about the element. The byte view needs no such
+	// precondition -- its fill is element-wise at whatever stride -- and `__ManagedFile.read` needs none
+	// because its argument gate has already established that the buffer is byte-packed.
+	rawByteFillNarrowElement = "E3117"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

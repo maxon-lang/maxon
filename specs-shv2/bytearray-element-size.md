@@ -1129,3 +1129,280 @@ end 'main'
 ```exitcode
 37
 ```
+
+### ⛔ A `Byte` THAT CANNOT HOLD EVERY BYTE MAY NOT RECEIVE A RAW-BYTE FILL (A4a)
+
+Everything above this line is about a value the source SPELLS — a `b"…"` blob, whose every byte is
+checked against the element's declared bounds (A3r) — or about a buffer the COMPILER minted, which
+wears `__ManagedByte` and crosses the boundary door on its own terms (R4.7). **Neither reaches a
+producer that fills a `Array with Byte` with bytes that exist only at RUN TIME.**
+
+⛔ **MEASURED on `origin/main` WITH A3r's fix already in it**: `typealias Byte = int(0 to 100)`, and
+`takes("ß".toByteArray())` into `function takes(b Bytes)` returned **195** — a UTF-8 continuation byte
+read back through an accessor declared `int(0 to 100)`. Exit 195, no diagnostic. `.bytes()` is the same
+emitter and returned the same 195. Two more spellings reach the identical reading with no String in
+sight: `__ManagedMemory.create(8, 1)` then `setByte(0, 223)`, and `b"abc".managed.setByte(0, 223)` —
+both **223**, both silent.
+
+⇒ **THE RULE IS PER-TYPE, WHERE A3r's IS PER-VALUE, AND THE TWO MUST NOT BE MERGED.** There is no
+literal here to inspect: `__str_to_bytes` blits the receiver's UTF-8 and `__mf_read` blits a file's
+contents, so what has to be asked is a question about the ELEMENT — *can it hold every value a byte
+has?* — and it is asked at the RAW-BYTE WRITE. A3r must stay per-value for the reason its own section
+gives: `b"abc"` under `int(0 to 100)` is three bytes that all fit and must keep compiling.
+
+⛔ **AND THE ELEMENT MAY NOT BE MOVED TO `__ManagedByte` INSTEAD, WHICH IS THE OBVIOUS CURE AND IS
+WRONG.** A byte view is NOT a compiler-minted buffer of the `__ManagedByte` kind: `emitArrayCreateOp`
+stamps its `element_size@24` from the very instance it is typed as, so a wide `Byte` gives a genuinely
+stride-2 record and `__str_to_bytes` fills it at that stride — **MEASURED correct**, `b0=97 b1=98 b2=99`
+under `typealias Byte = int(0 to 1000)`. Retyping the view `Array with __ManagedByte` would make it
+stride 1 and `byteBufferBoundaryAdmits`'s stride test would then REFUSE it at every declared `Bytes`
+position — turning a program that answers correctly today into a compile error. The interning
+(`internArrayByteInstance`) is deliberate and it is right; only the BOUNDS were never asked.
+`a-wide-byte-still-materializes-a-byte-view` below is what holds that shut.
+
+⚠ **THE READER IS UNTOUCHED, AND UNLIKE E3110's PAIR THAT IS NOT AN OVERSIGHT.** `byteAt` yields
+`ValueTypeTag.integer` with no name — a plain unranged `int`, never the element — so a raw byte read
+back is honest whatever `Byte` was declared to be. Only the WRITE puts a value into a slot the array
+surface reads through the element's declared range. `raw-byte-reads-survive-a-narrow-byte` pins it.
+
+<!-- test: a-byte-view-is-refused-when-byte-cannot-hold-every-byte -->
+### `toByteArray()` is refused when this program's `Byte` cannot hold every byte
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	return takes("ß".toByteArray())
+end 'main'
+```
+```maxoncstderr
+error E3117: <fragment>:10:20: 'toByteArray' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+```
+
+<!-- test: the-bytes-spelling-is-refused-identically -->
+### `.bytes()` is the same emitter, so it is the same refusal
+`bytes` and `toByteArray` reach one emitter (`Parser.parseByteView`) precisely so the two spellings
+cannot come to disagree about what a byte view IS. A rule wired to one of them would be the
+one-fact-two-answers shape this file records four times already.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	return takes("ß".bytes())
+end 'main'
+```
+```maxoncstderr
+error E3117: <fragment>:10:20: 'bytes' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+```
+
+<!-- test: a-byte-view-is-accepted-at-the-canonical-byte -->
+### The canonical `Byte` holds every byte, so the view is untouched
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	return takes("abc".toByteArray())
+end 'main'
+```
+```exitcode
+97
+```
+
+<!-- test: a-wide-byte-still-materializes-a-byte-view -->
+### A WIDE `Byte` strides two and the view fills it correctly — this is what rules out `__ManagedByte`
+`int(0 to 1000)` HOLDS every byte, so the rule says nothing about it; the record strides two and
+`__str_to_bytes` writes at that stride. The three reads below are the measurement, and they are the
+reason the byte view keeps the program's own `Byte` as its element rather than the compiler's.
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	let first = try b.get(0) otherwise 0
+	let second = try b.get(1) otherwise 0
+	let third = try b.get(2) otherwise 0
+	return 0 if b.count() == 3 and first == 97 and second == 98 and third == 99 else 1
+end 'takes'
+
+function main() returns ExitCode
+	return takes("abc".toByteArray())
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-byte-view-round-trips-through-string-from -->
+### A program that declares no `Byte` round-trips a String through its bytes
+```maxon
+function main() returns ExitCode
+	print(String.from("hi".toByteArray()))
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+hi
+```
+```exitcode
+0
+```
+
+<!-- test: a-narrow-byte-refuses-a-raw-byte-write-through-the-buffer-surface -->
+### `setByte` is a raw-byte write, so a narrow `Byte` refuses it too
+No String anywhere: `__ManagedMemory` IS `Array with Byte`, so a buffer built in this file carries this
+file's element and `setByte` writes past its declared range.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	try buf.setLength(4) otherwise return 2
+	try buf.setByte(0, 223) otherwise return 3
+	return takes(buf)
+end 'main'
+```
+```maxoncstderr
+error E3117: <fragment>:12:10: 'setByte' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+```
+
+<!-- test: a-narrow-byte-refuses-a-raw-byte-write-into-a-literals-buffer -->
+### The buffer surface of a `b"…"` literal is the same write, and A3r could not reach it
+A3r checks the blob's own bytes and they all fit. `.managed` then hands the very same record a raw-byte
+writer, which puts 223 into an element declared `int(0 to 100)` after the literal has been approved.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var v = b"abc"
+	try v.managed.setByte(0, 223) otherwise return 3
+	return takes(v)
+end 'main'
+```
+```maxoncstderr
+error E3117: <fragment>:11:16: 'setByte' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+```
+
+<!-- test: a-wide-byte-still-writes-raw-bytes-through-the-buffer-surface -->
+### A `Byte` that holds every byte keeps its raw writer
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	try buf.setLength(4) otherwise return 2
+	try buf.setByte(0, 223) otherwise return 3
+	return takes(buf)
+end 'main'
+```
+```exitcode
+223
+```
+
+<!-- test: raw-byte-reads-survive-a-narrow-byte -->
+### `byteAt` yields a plain `int`, never the element, so a narrow `Byte` does not touch it
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	try buf.setLength(4) otherwise return 2
+	let raw = try buf.byteAt(0) otherwise return 3
+	return 0 if raw == 0 and takes(buf) as int == 0 else 4
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-narrow-byte-refuses-a-file-read-into-its-buffer -->
+### `__ManagedFile.read` blits a file's contents, so it answers to the element too
+The third raw-byte fill, and the one with no String and no literal in it: `__mf_read` writes whatever is
+in the file into the caller's buffer, and that buffer is `Array with Byte` over THIS file's element.
+`write` is deliberately not gated beside it — it reads the buffer OUT and stores nothing, which is the
+same reason `byteAt` is untouched.
+
+⚠ **NO `targets:` MARKER, AND THAT IS MEASURED RATHER THAN ASSUMED.** `__ManagedFile` is x64-windows-only
+at this rung, so an off-Windows compile of this program normally reports six `E3104`s. It reports NONE
+here: the refusal is a parse-time `ParseError`, which lands before the target-support pass runs, so this
+stderr is byte-identical on every target. The path literal is UPPERCASE for A3r's rule, not for style —
+`b"data.bin"` holds `t` (116), which this file's `Byte` does not.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	let f = try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3
+	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	_ = try f.read(buf, 4) otherwise return 4
+	f.close()
+	return takes(buf)
+end 'main'
+```
+```maxoncstderr
+error E3117: <fragment>:12:12: 'read' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+```
+
+<!-- test: a-raw-byte-write-answers-to-the-element-not-to-the-name-byte -->
+### The rule reads the element's RANGE, never the name `Byte`
+`isByteElementName`'s roster is a question about the NAME, and this rule is not: `Small` is byte-PACKED
+(`rangedAliasStorageBytes` gives every non-negative range fitting `u8.max` a one-byte slot), so one raw
+byte is one element here exactly as it is for a `Byte`, and 223 is exactly as far outside `int(0 to 100)`.
+The `Byte` spelling of this same write was MEASURED at **223** before the rule existed
+(`a-narrow-byte-refuses-a-raw-byte-write-through-the-buffer-surface`); this case differs from it only in
+the element's name, which the rule never reads.
+```maxon
+typealias Small = int(0 to 100)
+typealias Smalls = Array with Small
+
+function takes(b Smalls) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var a = Smalls.create()
+	a.push(1)
+	try a.managed.setByte(0, 223) otherwise return 3
+	return takes(a)
+end 'main'
+```
+```maxoncstderr
+error E3117: <fragment>:12:16: 'setByte' stores RAW bytes into an element declared 'Small' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+```

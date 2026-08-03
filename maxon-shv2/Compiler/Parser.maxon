@@ -578,6 +578,14 @@ export union ParseError implements Error
 	// `isFloat` ride along for the same reason they do above — the renderer cannot tell a float alias's bit
 	// patterns from an integer alias's numbers by looking at them.
 	byteStringByteOutOfRange(value ParsedInt, offset ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, line LineNumber, column ColumnNumber)
+	// ⭐ **A RAW-BYTE FILL OF AN ELEMENT THAT CANNOT HOLD EVERY BYTE (A4a).** Renders as **E3117** through
+	// `rawByteFillNarrowElementMessage`, positioned at the method token and naming the CONSTRUCT that fills.
+	//
+	// It is the PER-TYPE twin of `byteStringByteOutOfRange` above and carries no `value` or `offset`,
+	// because there is nothing to carry: the bytes are a runtime blit. `member` takes their place — three
+	// constructs reach this rule, so it must say which one was written. The remaining payload is the arm
+	// above's, and rides for the same reasons.
+	rawByteFillNarrowElement(member String, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, line LineNumber, column ColumnNumber)
 	// --- The struct arms (P1.0r) ---
 	//
 	// A struct literal (`Point{…}`) written outside the type's OWN methods. Renders as E3076,
@@ -28852,7 +28860,7 @@ export type Parser
 			return self.emitRuntimeCall(GraphemeCountName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
 		if methodTok.value.equals(ByteViewMethod) 'bytes'
-			return try self.parseByteView(recv.value, range: range)
+			return try self.parseByteView(recv.value, methodTok: methodTok, range: range)
 		end 'bytes'
 
 		// ⭐ P1.8 Slice E — the leftovers, every one of them READING the receiver and writing a fresh value,
@@ -28861,7 +28869,7 @@ export type Parser
 		// `toByteArray()` is `bytes()`'s emitter verbatim; see `StringToByteArrayMethod` for why they are one
 		// answer here and two in the reference.
 		if methodTok.value.equals(StringToByteArrayMethod) 'toByteArray'
-			return try self.parseByteView(recv.value, range: range)
+			return try self.parseByteView(recv.value, methodTok: methodTok, range: range)
 		end 'toByteArray'
 		if methodTok.value.equals(CodepointViewMethod) 'codepoints'
 			return try self.parseDecodedView(recv.value, callee: StrToCodepointsName, range: range)
@@ -29199,8 +29207,20 @@ export type Parser
 	// than v1's heap iterator — so `.bytes()` copies into the one collection shv2 has. `.count()` and
 	// `for b in x.bytes()` then work through machinery that already exists, at one allocation and one copy.
 	// The result is an OWNED temp whose `__arr_decref` frees the record and its buffer.
-	function parseByteView(record ValueId, range SourceRange) returns ValueId throws ParseError
-		return try self.parseMaterializedView(record, giid: self.signatures.internArrayByteInstance(self.filePath), callee: StrToBytesName, range: range)
+	//
+	// ⚠ **THE ELEMENT IS THE READING FILE'S OWN `Byte` ON PURPOSE, AND THAT IS WHY THE FILL HAS TO BE GATED
+	// (A4a).** `__str_to_bytes` writes the receiver's raw UTF-8 into the record — bytes that exist only at run
+	// time — so the element must admit every value a byte has. It is asked here rather than at the interning,
+	// because what is wrong is the FILL and not the type: `requireRawByteFillFitsItsElement` states the whole
+	// rule, and why the element may not simply be moved onto `__ManagedByte` to dodge it.
+	//
+	// The giid is read ONCE and threaded to both, so the instance the rule inspects is provably the instance
+	// the record is typed as — `requireByteStringBlobFitsItsElement`'s coupling, on the other producer of the
+	// same type.
+	function parseByteView(record ValueId, methodTok Token, range SourceRange) returns ValueId throws ParseError
+		let giid = self.signatures.internArrayByteInstance(self.filePath)
+		try self.requireRawByteFillFitsItsElement(giid, methodTok: methodTok)
+		return try self.parseMaterializedView(record, giid: giid, callee: StrToBytesName, range: range)
 	end 'parseByteView'
 
 	// ⭐ **`.codepoints()` AND `.utf16()` — the two DECODING views (P1.8 Slice E), `.bytes()`'s siblings.**
@@ -29248,7 +29268,7 @@ export type Parser
 		let roster = try self.requireSurfaceMember(MemberSurface.character, methodTok: methodTok)
 
 		if methodTok.value.equals(ByteViewMethod) 'bytes'
-			return try self.parseByteView(recv.value, range: range)
+			return try self.parseByteView(recv.value, methodTok: methodTok, range: range)
 		end 'bytes'
 		// `byteLength()` is `length@8` — the UTF-8 width of the whole cluster, which for an EGC is the sum
 		// of its codepoints' widths (a family emoji is 18). The same field load a String's `byteLength()`
@@ -30102,6 +30122,15 @@ export type Parser
 		if methodTok.value.equals(ManagedFileReadMethod) 'read'
 			try self.consume(TokenKind.leftParen)
 			let managed = try self.parseManagedMemoryArg(func, paramName: ManagedFileManagedParamName, methodTok: methodTok)
+			// ⭐ **THE THIRD RAW-BYTE FILL (A4a)** — `__mf_read` blits a file's contents into the caller's
+			// buffer, so the buffer's element has to admit every value a byte has, exactly as the byte view's
+			// and `setByte`'s do. `write` is NOT gated beside it: it READS the buffer out to the file and
+			// stores nothing, which is the same reason `byteAt` is untouched.
+			//
+			// The instance is the value's own name id: `parseManagedMemoryArg` has just proven through
+			// `requireManagedMemoryValue` that this value IS a byte-packed generic instance, so the tag is
+			// established before the id is read as one (`isArrayInstanceAt`'s trap, one call earlier).
+			try self.requireRawByteFillFitsItsElement(self.valueNameId(managed), methodTok: methodTok)
 			try self.consume(TokenKind.comma)
 			let size = try self.parseBuiltinIntegerArg(func, paramName: ManagedFileSizeParamName, methodTok: methodTok)
 			try self.consume(TokenKind.rightParen)
@@ -32044,6 +32073,26 @@ export type Parser
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.requireBufferBytesAreNotAPointer(giid, methodTok: methodTok)
+			// ⭐⭐ **THE RAW-BYTE WRITER ANSWERS TO THE ELEMENT'S DECLARED RANGE — BUT ONLY WHERE ONE BYTE IS
+			// ONE ELEMENT (A4a).** `setByte` addresses a byte OFFSET, so on a record that strides more than a
+			// byte it writes a FRAGMENT of an element: that is precisely the byte-level staging the buffer
+			// surface exists for, and E3110's own header names it as the load-bearing half of being a rule
+			// about the element. MEASURED by the suite when this clause was missing: three
+			// `managed-memory-methods` cases stopped compiling, all of them `arr.managed.setByte(…)` on an
+			// `Array with Int` — `IntArray.create()` staging a low byte, refused with a sentence about a
+			// range a machine word obviously holds.
+			// ⇒ the stride is the PRECONDITION here and nowhere else. `parseByteView` needs none (its fill is
+			// ELEMENT-wise at whatever stride — measured `b0=97 b1=98 b2=99` on a stride-2 record), and
+			// `__ManagedFile.read` needs none because `requireManagedMemoryValue` has already established it
+			// one line earlier.
+			//
+			// ⚠ Its `byteAt` dual two arms up is untouched whatever the stride — it yields a plain `int`,
+			// never the element — which is the one place this rule and E3110's pair part company; see
+			// `requireRawByteFillFitsItsElement`.
+			if self.valueIsByteArray(arr) 'oneRawByteIsOneElement'
+				try self.requireRawByteFillFitsItsElement(giid, methodTok: methodTok)
+			end 'oneRawByteIsOneElement'
+
 			// The RECEIVER is argument 0, so the two-int list's array is prepended to rather than rebuilt —
 			// the arg-list protocol stays in its one home and the receiver is added where it belongs.
 			var args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryOffsetParamName, secondParam: ManagedMemoryValueParamName, methodTok: methodTok)
@@ -32365,6 +32414,81 @@ export type Parser
 
 		throw ParseError.bufferByteAccessManagedElement(String.from(methodTok.value), elementType: self.signatures.arrayElementDisplayName(giid), line: methodTok.line, column: methodTok.column)
 	end 'requireBufferBytesAreNotAPointer'
+
+	// ⭐⭐ **A RAW-BYTE FILL NEEDS AN ELEMENT THAT ADMITS EVERY BYTE (E3117, A4a).** ⛔ Three constructs write
+	// bytes into an `Array with Byte` that exist only at RUN TIME, and every one of them was a silent wrong
+	// answer under a `Byte` too narrow to hold them:
+	//
+	//   • the BYTE VIEW (`parseByteView` — `String.toByteArray()`, `String.bytes()`, `Character.bytes()`),
+	//     whose `__str_to_bytes` blits the receiver's UTF-8. MEASURED on `origin/main` with A3r's fix already
+	//     in: `takes("ß".toByteArray())` into `takes(b Array with Byte)` under `typealias Byte = int(0 to 100)`
+	//     returned **195**, exit 195, no diagnostic. `.bytes()` returned the same 195 through the same emitter.
+	//   • the BUFFER SURFACE's `setByte` (`arr.managed.setByte(o, v)`), which stores a raw byte into the very
+	//     record the ARRAY surface reads through the element's declared range. MEASURED: **223** out of both
+	//     a `__ManagedMemory.create(8, 1)` buffer AND a `b"abc"` literal's `.managed` — the second reaching
+	//     A3r's own subject through a writer A3r structurally cannot see, since it runs after the blob has
+	//     been approved.
+	//   • `__ManagedFile.read(managed, size)`, which blits a file's contents into a caller's buffer.
+	//
+	// ⚠⚠ **IT IS PER-TYPE AND A3r's `requireByteStringBlobFitsItsElement` IS PER-VALUE, AND THEY MAY NOT BE
+	// MERGED.** A3r inspects the blob it holds, so it can accept `b"abc"` under `int(0 to 100)` — which it
+	// MUST, and its own header says why. There is nothing here to inspect: the fill is one runtime blit, not
+	// a run of stores that could be narrowed one at a time, so the only question left is about the ELEMENT.
+	// Asking A3r's question here would accept every one of the readings above; asking this one there would
+	// refuse `b"abc"` and re-break the rung this one follows.
+	//
+	// ⛔⛔ **THE OBVIOUS CURE — RETYPE THE BYTE VIEW ONTO `__ManagedByte` AND LET `byteBufferBoundaryAdmits`
+	// DECIDE — IS WRONG, AND IT WAS MEASURED RATHER THAN ARGUED.** A byte view is NOT a buffer of the
+	// `__ManagedByte` kind: `emitArrayCreateOp` stamps its `element_size@24` from the very instance it is
+	// typed as, so a wide `Byte` gives a genuinely stride-2 record and `__str_to_bytes` fills it at THAT
+	// stride — `b0=97 b1=98 b2=99` under `typealias Byte = int(0 to 1000)`, correct today. `__ManagedByte`
+	// strides 1 always (`undeclaredNamedElementStorageBytes`), so a retyped view would be refused by that
+	// door's STRIDE test at every declared byte-array position: measured on the tree as
+	// `E3005 … expected 'Array_Byte$0_1000', got 'Array___ManagedByte'` for the buffer that already wears the
+	// element. ⇒ the interning `parseByteView` does is deliberate and it is RIGHT; only the BOUNDS were never
+	// asked. `bytearray-element-size.a-wide-byte-still-materializes-a-byte-view` holds it shut.
+	//
+	// ⚠ **THE RAW-BYTE READER IS DELIBERATELY UNTOUCHED, AND UNLIKE E3110's PAIR THAT IS NOT THE HALF THAT
+	// STAYS GREEN FOREVER.** `byteAt` emits `resultTag: ValueTypeTag.integer` with `UnnamedTypeId` — a plain
+	// unranged `int`, never the element — so a byte read back is honest whatever `Byte` was declared to be.
+	// E3110 refuses its reader because a managed element's bytes are an ADDRESS at every offset, which is a
+	// fact about the REPRESENTATION and true in both directions; a declared RANGE constrains only what may be
+	// STORED. Refusing the read as well would cost a capability to close nothing.
+	//
+	// ⚠ **IT IS THE BOUNDS QUESTION AND NOTHING ELSE; A STRIDE PRECONDITION BELONGS TO THE SITE, NOT HERE.**
+	// Only `setByte` needs one, because only `setByte` addresses a byte OFFSET — its arm carries it and says
+	// why. Folding a stride test into this function would open the byte view's own negative-`low` case: a
+	// `Byte` whose bounds cannot be trusted takes the machine word (`rangedAliasStorageBytes`), so the view
+	// would stop being byte-packed and the rule would stop asking, on exactly the element it least trusts.
+	//
+	// ⚠ A raw-negative `low` is REFUSED here, and it is the same conservative direction
+	// `rangeHoldsEveryByte`'s header argues for: bounds ride as raw 64-bit patterns, so a negative `low` and
+	// a bound above `i64.max` are the same bits. This door ADMITS a run of raw bytes into a declared element,
+	// so the ambiguous answer has to be "no". `int(-5 to 300)` would in fact hold every byte and is refused
+	// with the rest; that is the price of the ambiguity, and it is paid in the direction that cannot produce
+	// a wrong answer.
+	//
+	// `undeclared` is the program that declares no `Byte` at all — the literal's own instance
+	// (`SignatureIndex.undeclaredNamedElementStorageBytes`), where no declared range exists for a byte to
+	// fall outside of.
+	function requireRawByteFillFitsItsElement(giid GenericInstanceId, methodTok Token) throws ParseError
+		match self.signatures.arrayElementAliasOf(giid, readerFilePath: self.filePath) 'element'
+			undeclared then return
+			declared(alias) then try self.requireElementAdmitsEveryByte(alias, methodTok: methodTok)
+		end 'element'
+	end 'requireRawByteFillFitsItsElement'
+
+	// The rule above's test, split out so the rule reads as its two cases — `requireEveryByteInRange`'s shape,
+	// for its reason. The predicate is `RangedAliasRegistry`'s own `rangeHoldsEveryByte`, which the boundary
+	// door already asks one quantifier up (`holdsEveryByteInEveryFile`), so a byte and a raw buffer cannot come
+	// to mean two different things at the two doors.
+	function requireElementAdmitsEveryByte(alias RangedTypeAlias, methodTok Token) throws ParseError
+		if rangeHoldsEveryByte(alias.low, high: alias.high) 'holdsEveryByte'
+			return
+		end 'holdsEveryByte'
+
+		throw ParseError.rawByteFillNarrowElement(String.from(methodTok.value), aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: aliasIsFloat(alias), line: methodTok.line, column: methodTok.column)
+	end 'requireElementAdmitsEveryByte'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append`, routed by element KIND (P1.7 slice 3b-vi-b).** An OPAQUE-`T`
 	// element (a generic body's shared `Array with <type parameter>`) copies through the descriptor's `copyFunc@32`

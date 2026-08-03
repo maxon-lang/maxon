@@ -1339,6 +1339,33 @@ export function byteStringByteOutOfRangeMessage(value ParsedInt, offset ParsedIn
 	return "byte {value} at offset {offset} of a `b\"…\"` byte-string literal is outside the range of '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
 end 'byteStringByteOutOfRangeMessage'
 
+// ⭐ **THE E3117 A RAW-BYTE FILL REPORTS (A4a)** — the fourth subject of the one range fact, and the only
+// one of the four that names NO value, because there is none to name: the bytes arrive at run time.
+//
+// ⚠ **IT IS A STATEMENT ABOUT THE ELEMENT, NOT ABOUT A VALUE, AND THAT IS WHAT SEPARATES IT FROM ITS
+// SIBLING ABOVE.** `byteStringByteOutOfRangeMessage` can say *"byte 223 at offset 0"* because the blob is in
+// the compiler's hand; here the fill is one runtime blit, so the only true sentence is that the element
+// cannot hold every value a byte has. Naming the CONSTRUCT is what replaces naming the value — three of them
+// reach this rule and an author needs to know which of their lines is the fill.
+//
+// ⚠ **IT NAMES THE ELEMENT AND NEVER THE ARRAY, AND THE FIRST DRAFT DID THE OPPOSITE AND WAS FALSE.** It
+// said *"fills an 'Array with Byte'"*, which is true only of the byte view's own instance: the suite caught
+// it printing that sentence about an `Array with Int` (`managed-memory-methods`). Every one of the three
+// sites is a store into an ELEMENT, and that is the one subject all of them share.
+//
+// The NAME spells through `quotedAliasName` and the BOUNDS through `formatRangeDisplay`, for its siblings'
+// reason: no site may print an alias or a range two ways. `isFloat` rides along for the reason it does on
+// every other member of this family — the payloads cannot say whether they are numbers or IEEE-754 bit
+// patterns.
+// ⚠ **IT NAMES THE CURE AND THE CURE IS THE SAME AT ALL THREE SITES**, which is what lets one sentence carry
+// it: widen the element. E3109 names a replacement SPELLING because its refusal has an exact one; this
+// refusal has none — there is no other way to ask for a String's bytes, or to read a file into a buffer —
+// so what the author has to change is the declaration, and the message says so rather than leaving it to be
+// inferred from a range.
+export function rawByteFillNarrowElementMessage(member String, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
+	return "'{member}' stores RAW bytes into an element declared '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)}), which does not hold every byte value 0 to {u8.max} — widen the element's declared range to store raw bytes through it"
+end 'rawByteFillNarrowElementMessage'
+
 // ⭐ **AN ALIAS NAME AS AN E3005 QUOTES IT** — `sourceSpelledAliasName` applied at the one tier a name
 // becomes text an author reads, so no renderer can quote the compiler's bookkeeping and no PRODUCER has to
 // remember to strip before filling in an error's payload.

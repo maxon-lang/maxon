@@ -64,6 +64,7 @@ end 'Visibility'
 // `.`-joined spelling the language shows a user is DERIVED from this one
 // (`namespaceForModuleDirectory`) and is never what a visibility question is asked on.
 let ModuleDirectorySeparator = "/"
+
 // The one spelling that has to be rewritten: `FilePath` normalizes to the PLATFORM separator on
 // construction, so a Windows host hands back `feature\sub` where a POSIX host hands back `feature/sub`,
 // and a spec fixture's `// --- file: feature/sub/deep.maxon` must derive the same module directory on
@@ -1488,6 +1489,13 @@ end 'holdsRange'
 // `holdsEveryByteInEveryFile`'s per-declaration test, spelled apart from it because it is a statement about
 // a RANGE and not about the registry.
 //
+// ⚠ **IT HAS TWO READERS AND THEY ASK IT AT DIFFERENT QUANTIFIERS, WHICH IS WHY THE TEST ITSELF IS THE ONE
+// EXPORTED THING (A4a).** `holdsEveryByteInEveryFile` above quantifies over every DECLARATION of a name,
+// because its reader (`byteBufferBoundaryAdmits`) has only a name and no file. `Parser.requireRawByteFillFitsItsElement`
+// holds a specific INSTANCE and therefore the reading file's own mint, so it asks about that one alias and
+// nothing else. Two quantifiers over one predicate is the honest shape; a second spelling of `low == 0 and
+// high >= u8.max` would be a second definition of what a byte is.
+//
 // ⚠⚠ **A NEGATIVE BOUND IS AMBIGUOUS AND IS ANSWERED NO — BOTH ENDS.** Bounds ride as the RAW 64-bit
 // pattern (`RangedTypeAlias`'s header), so `-1` and `u64.max` are the SAME BITS: a negative `low` is either
 // a genuine negative lower bound (which does contain 0) or a bound above `i64.max` (which does not), and
@@ -1500,7 +1508,7 @@ end 'holdsRange'
 // ⚠ Nothing is lost by that: an element with a negative lower bound is not byte-packed either
 // (`rangedAliasStorageBytes` gives it the machine word), so the boundary's stride test refuses it a second
 // time. The two clauses agree here rather than one leaning on the other.
-function rangeHoldsEveryByte(low ParsedInt, high ParsedInt) returns bool
+export function rangeHoldsEveryByte(low ParsedInt, high ParsedInt) returns bool
 	return low == 0 and high >= u8.max
 end 'rangeHoldsEveryByte'
 

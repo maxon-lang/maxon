@@ -1,0 +1,18 @@
+// Test: a-narrow-byte-refuses-a-file-read-into-its-buffer
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	let f = try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3
+	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	_ = try f.read(buf, 4) otherwise return 4
+	f.close()
+	return takes(buf)
+end 'main'
+---
+CompilerError:
+error E3117: <fragment>:12:12: 'read' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
