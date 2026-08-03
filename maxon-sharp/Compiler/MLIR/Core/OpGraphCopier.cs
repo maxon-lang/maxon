@@ -4,7 +4,8 @@ using MaxonSharp.Compiler.Ir.Dialects;
 namespace MaxonSharp.Compiler.Ir.Core;
 
 /// <summary>
-/// Copies Maxon ops and the SSA values they reference, so a cloned module owns them outright.
+/// Copies Maxon ops, the SSA values they reference, and the TYPES they reference, so a cloned module
+/// owns all three outright.
 ///
 /// It is the second half of the same fact <see cref="TypeGraphCopier"/> states about types: a compile
 /// WRITES to the IR it is handed, and the module it is handed comes from a cache that outlives it.
@@ -19,39 +20,32 @@ namespace MaxonSharp.Compiler.Ir.Core;
 /// ⚠ The value map is keyed by SSA ID, not by object, and that is the point: the copy of a value is
 /// the SAME SSA value in a different module, so every op that referenced id N must end up referencing
 /// the one copy of id N.
+///
+/// ⚠ TYPES are rebound through the module's ONE <see cref="TypeGraphCopier"/>, not a private one.
+/// An op's type reference is a reference into the type graph exactly as a TypeDef's is, and
+/// <see cref="TypeGraphCopier"/> already refuses to distinguish them: it copies a container type
+/// solely because "a reference into the ORIGINAL graph reached through one of these is exactly as
+/// contaminating as a direct one". <c>MaxonTryCallOp.ThrowsType</c> and <c>MaxonPromise.ErrorType</c>
+/// reach a MUTABLE <see cref="IrEnumType"/>, and thirteen more op fields reach the graph through an
+/// <see cref="IrFunctionType"/>. Sharing the ONE copier is also what keeps reference identity intact
+/// across the whole clone: an op's type and the TypeDef of the same name stay the same object, which
+/// is what <c>RefreshTypeAliasTypeParams</c>'s <c>currentType != paramType</c> test reads.
 /// </summary>
-sealed class OpGraphCopier {
+sealed class OpGraphCopier(TypeGraphCopier types) {
   private readonly Dictionary<int, MaxonValue> _values = [];
 
   /// <summary>
-  /// How one field of an op must be treated when the op is copied. Built once per op TYPE and cached:
-  /// the reflection cost is paid 112 times per process, not once per op.
+  /// How one field of an op or a value must be treated when it is copied. Built once per declaring
+  /// TYPE and cached: the reflection cost is paid once per op class per process, not once per op.
   /// </summary>
-  private enum FieldRebind { Value, ValueList, TupleList }
+  private enum FieldRebind { Scalar, RebindableList, TupleList }
 
   // Concurrent because the spec runner clones a stdlib module on each of its workers, and this is read
   // once per OP — a lock here would serialize every worker's clone on a table that only ever grows to
-  // the number of op classes.
+  // the number of op and value classes.
   private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, (FieldInfo Field, FieldRebind Rebind)[]> _plans = new();
 
-  public MaxonOp Copy(MaxonOp op) {
-    var copy = op.ShallowCopy();
-    foreach (var (field, rebind) in PlanFor(op.GetType())) {
-      switch (rebind) {
-        case FieldRebind.Value:
-          field.SetValue(copy, CopyValue((MaxonValue?)field.GetValue(copy)));
-          break;
-        case FieldRebind.ValueList:
-          field.SetValue(copy, CopyValueList((System.Collections.IList?)field.GetValue(copy), field.FieldType));
-          break;
-        case FieldRebind.TupleList:
-          field.SetValue(copy, CopyTupleList((System.Collections.IList?)field.GetValue(copy), field.FieldType));
-          break;
-        default: throw new InvalidOperationException($"unhandled field rebind '{rebind}'");
-      }
-    }
-    return copy;
-  }
+  public MaxonOp Copy(MaxonOp op) => RebindFields(op.ShallowCopy());
 
   private MaxonValue? CopyValue(MaxonValue? value) {
     if (value == null) return null;
@@ -63,82 +57,136 @@ sealed class OpGraphCopier {
       return existing;
     }
 
+    // Memoised BEFORE its own fields are rebound, so a value that reaches itself terminates.
     var copy = value.CopyKeepingId();
     _values[value.Id] = copy;
+    return RebindFields(copy);
+  }
+
+  private T RebindFields<T>(T copy) where T : notnull {
+    foreach (var (field, rebind) in PlanFor(copy.GetType())) {
+      switch (rebind) {
+        case FieldRebind.Scalar:
+          field.SetValue(copy, Rebind(field.GetValue(copy)));
+          break;
+        case FieldRebind.RebindableList:
+          field.SetValue(copy, CopyRebindableList((System.Collections.IList?)field.GetValue(copy), field.FieldType));
+          break;
+        case FieldRebind.TupleList:
+          field.SetValue(copy, CopyTupleList((System.Collections.IList?)field.GetValue(copy), field.FieldType));
+          break;
+        default: throw new InvalidOperationException($"unhandled field rebind '{rebind}'");
+      }
+    }
     return copy;
   }
 
-  private System.Collections.IList? CopyValueList(System.Collections.IList? source, Type listType) {
+  /// The one place that says what "rebind" MEANS, so the value path and the type path cannot drift:
+  /// a value becomes this module's copy of that SSA id, a type becomes this module's copy of that
+  /// type, and anything else is a shape <see cref="Classify"/> should never have admitted.
+  private object? Rebind(object? item) => item switch {
+    null => null,
+    MaxonValue value => CopyValue(value),
+    IrType type => types.Copy(type),
+    _ => throw new InvalidOperationException(
+      $"OpGraphCopier cannot rebind a '{item.GetType()}' — Classify admitted a shape Rebind does not know")
+  };
+
+  private System.Collections.IList? CopyRebindableList(System.Collections.IList? source, Type listType) {
     if (source == null) return null;
 
     var copy = (System.Collections.IList)Activator.CreateInstance(listType, source.Count)!;
-    foreach (var item in source) copy.Add(CopyValue((MaxonValue?)item));
+    foreach (var item in source) copy.Add(Rebind(item));
     return copy;
   }
 
   /// <summary>
-  /// A list of tuples with a value-typed slot (a struct literal's field list, an interpolation's
-  /// parts). ValueTuple's slots are public FIELDS, so a boxed element can be rebound in place and
-  /// re-added — which is why this needs no per-shape code and no knowledge of the tuple's arity.
+  /// A list of tuples with a rebindable slot (a struct literal's field list, an interpolation's
+  /// parts — whose slots hold a value AND a type). ValueTuple's slots are public FIELDS, so a boxed
+  /// element can be rebound in place and re-added — which is why this needs no per-shape code and no
+  /// knowledge of the tuple's arity. Enumerating a non-generic <c>IList</c> boxes each element
+  /// afresh, so writing to the box never reaches the source list.
   /// </summary>
   private System.Collections.IList? CopyTupleList(System.Collections.IList? source, Type listType) {
     if (source == null) return null;
 
-    var tupleType = listType.GetGenericArguments()[0];
-    var valueSlots = tupleType.GetFields().Where(f => typeof(MaxonValue).IsAssignableFrom(f.FieldType)).ToArray();
+    var slots = RebindableSlotsOf(listType.GetGenericArguments()[0]);
     var copy = (System.Collections.IList)Activator.CreateInstance(listType, source.Count)!;
     foreach (var item in source) {
       object boxed = item!;
-      foreach (var slot in valueSlots)
-        slot.SetValue(boxed, CopyValue((MaxonValue?)slot.GetValue(boxed)));
+      foreach (var slot in slots) slot.SetValue(boxed, Rebind(slot.GetValue(boxed)));
       copy.Add(boxed);
     }
     return copy;
   }
 
   /// <summary>
-  /// The fields of <paramref name="opType"/> that hold SSA values, in any shape this copier knows how
-  /// to rebind — and a THROW for any field that reaches a value in a shape it does not. Silence there
-  /// would be the original bug in miniature: one op's field left pointing into the template, with
-  /// nothing to say so.
+  /// The fields of <paramref name="declaringType"/> that hold an SSA value or a type, in any shape
+  /// this copier knows how to rebind — and a THROW for any field that reaches one in a shape it does
+  /// not. Silence there would be the original bug in miniature: one field left pointing into the
+  /// template, with nothing to say so.
   /// </summary>
-  private static (FieldInfo, FieldRebind)[] PlanFor(Type opType) => _plans.GetOrAdd(opType, static type => {
+  private static (FieldInfo, FieldRebind)[] PlanFor(Type declaringType) => _plans.GetOrAdd(declaringType, static type => {
     var plan = new List<(FieldInfo, FieldRebind)>();
     for (var declaring = type; declaring != null && declaring != typeof(object); declaring = declaring.BaseType) {
       foreach (var field in declaring.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)) {
-        if (Classify(field.FieldType) is { } rebind) plan.Add((field, rebind));
-        else if (ReachesValue(field.FieldType, []))
-          throw new InvalidOperationException(
-            $"{type.Name}.{field.Name} is a '{field.FieldType}', which holds SSA values in a shape " +
-            "OpGraphCopier cannot rebind — teach it that shape, or a cloned module would share that " +
-            "field with the module it was cloned from");
+        if (Classify(field) is { } rebind) plan.Add((field, rebind));
+        else if (ReachesRebindable(field.FieldType, [])) throw UnknownShape(type, field, field.FieldType);
       }
     }
     return [.. plan];
   });
 
-  private static FieldRebind? Classify(Type fieldType) {
-    if (typeof(MaxonValue).IsAssignableFrom(fieldType)) return FieldRebind.Value;
+  /// The ONE refusal, so the two shapes that can trigger it cannot describe themselves differently.
+  private static InvalidOperationException UnknownShape(Type declaringType, FieldInfo field, Type culprit) =>
+    new($"{declaringType.Name}.{field.Name} reaches an SSA value or a type through '{culprit}', a shape " +
+        "OpGraphCopier cannot rebind — teach it that shape, or a cloned module would share that field " +
+        "with the module it was cloned from");
+
+  private static bool IsRebindable(Type type) =>
+    typeof(MaxonValue).IsAssignableFrom(type) || typeof(IrType).IsAssignableFrom(type);
+
+  private static FieldRebind? Classify(FieldInfo field) {
+    var fieldType = field.FieldType;
+    if (IsRebindable(fieldType)) return FieldRebind.Scalar;
     if (!fieldType.IsGenericType || fieldType.GetGenericTypeDefinition() != typeof(List<>)) return null;
 
     var element = fieldType.GetGenericArguments()[0];
-    if (typeof(MaxonValue).IsAssignableFrom(element)) return FieldRebind.ValueList;
-    if (element.IsGenericType && element.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true
-        && element.GetGenericArguments().Any(a => typeof(MaxonValue).IsAssignableFrom(a)))
-      return FieldRebind.TupleList;
-    return null;
+    if (IsRebindable(element)) return FieldRebind.RebindableList;
+    if (!IsValueTuple(element) || RebindableSlotsOf(element).Length == 0) return null;
+
+    // An 8-or-more-ary ValueTuple hides its 8th slot onwards inside `Rest`, which RebindableSlotsOf
+    // cannot see through. Refusing beats rebinding the first seven and leaving the rest pointing at
+    // the template — which is the silence this whole guard exists to prevent, one slot deep.
+    foreach (var slot in element.GetFields())
+      if (!IsRebindable(slot.FieldType) && ReachesRebindable(slot.FieldType, []))
+        throw UnknownShape(field.DeclaringType!, field, slot.FieldType);
+
+    return FieldRebind.TupleList;
   }
 
-  /// Whether a value is reachable through <paramref name="type"/> at all — through its generic
-  /// arguments, or through the fields of a type this compiler itself declares. The visited set is what
-  /// makes a recursive type (a node holding a list of nodes) terminate.
-  private static bool ReachesValue(Type type, HashSet<Type> visited) {
-    if (typeof(MaxonValue).IsAssignableFrom(type)) return true;
+  private static bool IsValueTuple(Type type) =>
+    type.IsGenericType && type.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true;
+
+  private static FieldInfo[] RebindableSlotsOf(Type tupleType) =>
+    [.. tupleType.GetFields().Where(f => IsRebindable(f.FieldType))];
+
+  /// Whether a value or a type is reachable through <paramref name="type"/> at all — through an array
+  /// element, through its generic arguments, or through the fields of a type this compiler itself
+  /// declares. The visited set is what makes a recursive type (a node holding a list of nodes)
+  /// terminate.
+  private static bool ReachesRebindable(Type type, HashSet<Type> visited) {
+    if (IsRebindable(type)) return true;
     if (!visited.Add(type)) return false;
-    if (type.IsGenericType && type.GetGenericArguments().Any(a => ReachesValue(a, visited))) return true;
+
+    // An array is not IsGenericType and has no fields of its own, so without this it reads as
+    // reaching nothing at all — and a `MaxonValue[]` field would be shared in silence.
+    if (type.IsArray) return ReachesRebindable(type.GetElementType()!, visited);
+
+    if (type.IsGenericType && type.GetGenericArguments().Any(a => ReachesRebindable(a, visited))) return true;
     if (type.Assembly != typeof(MaxonValue).Assembly) return false;
 
     return type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-      .Any(f => ReachesValue(f.FieldType, visited));
+      .Any(f => ReachesRebindable(f.FieldType, visited));
   }
 }

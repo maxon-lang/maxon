@@ -11,6 +11,11 @@ public abstract class MaxonValue(int id) {
   /// A field-for-field copy KEEPING THE ID — the copy is the same SSA value, in a different module.
   /// Needed because <see cref="MaxonStruct.TypeName"/> is refined per compile, so two compiles that
   /// share a value object refine each other's (board row A4r).
+  ///
+  /// It is only half of a copy on its own: <see cref="Core.OpGraphCopier"/> then rebinds whatever
+  /// references the copied fields still hold into the new module's graph — <see
+  /// cref="MaxonPromise.ErrorType"/> is a reference to a mutable enum type, and MemberwiseClone
+  /// copies the reference, not the enum.
   internal MaxonValue CopyKeepingId() => (MaxonValue)MemberwiseClone();
 }
 

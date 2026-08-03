@@ -590,18 +590,29 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   }
 
   /// <summary>
-  /// A copy that shares no mutable object with the original — which is what its one caller, the
+  /// A copy that shares no object a compile WRITES TO — which is what its one caller, the
   /// process-wide parsed-stdlib cache, needs it to mean. A compile writes to the types it is handed
   /// (see <see cref="TypeGraphCopier"/>), so a clone that copied the function bodies but shared the
   /// TYPE GRAPH left every compile in a process editing the same stdlib. That is board row A4r: the
   /// emitted binary depended on whether another program had been compiled first.
+  ///
+  /// Four object families are therefore copied outright: FUNCTIONS, the TYPE GRAPH, the OPS, and the
+  /// SSA VALUES — and an op's or a value's reference INTO the type graph is rebound through the same
+  /// <see cref="TypeGraphCopier"/> as a TypeDef's, so the two stay one object exactly as they were
+  /// one object in the original.
+  ///
+  /// ⚠ What is deliberately still shared, and why it is not the same bug: <see cref="IrAttribute"/>
+  /// instances (a struct field's <c>DefaultValue</c>, a global's <c>InitValue</c>, a
+  /// <c>FunctionDefaults</c> entry). Every subclass is get-only and no pass writes through one, so an
+  /// attribute carries no per-compile conclusion for a later compile to inherit — which is precisely
+  /// what ops and types DID carry. If an attribute ever becomes settable, it joins the list above.
   /// </summary>
   public IrModule<TOp> Clone() {
     var clone = new IrModule<TOp> {
       EntryFunctionName = EntryFunctionName
     };
     var typeCopier = new TypeGraphCopier();
-    var copyOp = OpCopierForDialect();
+    var copyOp = OpCopierForDialect(typeCopier);
     foreach (var func in Functions)
       clone.AddFunction(func.DeepClone(typeCopier, copyOp));
     clone.RdataEntries.AddRange(RdataEntries);
@@ -642,13 +653,17 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   /// tier is ever cloned — the parsed-stdlib cache is a Maxon module. A Standard or target module
   /// reaching here would need its own copier, and getting the identity function instead would be a
   /// silent half-copy, so it is refused out loud.
+  ///
+  /// It is handed the CALLER's <paramref name="typeCopier"/> rather than making its own, so an op's
+  /// type reference and the TypeDef of the same name end up as one object in the clone, exactly as
+  /// they were one object in the original.
   /// </summary>
-  private static Func<TOp, TOp> OpCopierForDialect() {
+  private static Func<TOp, TOp> OpCopierForDialect(TypeGraphCopier typeCopier) {
     if (typeof(TOp) != typeof(MaxonOp))
       throw new InvalidOperationException(
         $"IrModule<{typeof(TOp).Name}>.Clone has no op copier for that dialect; only the Maxon tier is cloned");
 
-    var opCopier = new OpGraphCopier();
+    var opCopier = new OpGraphCopier(typeCopier);
     return op => (TOp)(object)opCopier.Copy((MaxonOp)(object)op!);
   }
 
