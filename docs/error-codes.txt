@@ -1456,10 +1456,17 @@ E3117 SemanticRawByteFillNarrowElement
 	doc only the write puts a value into a slot the array surface reads through the element's range.
 	doc `setByte` -- and ONLY `setByte` -- carries a stride precondition, because it addresses a byte
 	doc OFFSET rather than an element: on a record that strides more than a byte it writes a FRAGMENT of
-	doc an element, which is the byte-level staging the buffer surface exists for and is exactly what
-	doc E3110 calls the load-bearing half of being a rule about the element. The byte view needs no such
-	doc precondition -- its fill is element-wise at whatever stride -- and `__ManagedFile.read` needs none
-	doc because its argument gate has already established that the buffer is byte-packed.
+	doc an element, and a rule about whether a range holds every BYTE has nothing true to say about a
+	doc fragment. The byte view needs no such precondition -- its fill is element-wise at whatever stride
+	doc -- and `__ManagedFile.read` needs none because its argument gate has already established that the
+	doc buffer is byte-packed.
+	doc That precondition is a BOUNDARY, not a proof of safety, and the A4a review measured the three
+	doc silent wrong answers it still skips: `setByte(1, 223)` under `typealias Wide = int(0 to 1000)`
+	doc reads back 57089, `setByte(3, 223)` on an `ExitCode` element reads back 3741319169, and
+	doc `setByte(0, 223)` on a `bool` element makes a value for which both it and its negation are true.
+	doc Those ask a different question -- does the element admit every bit pattern of its SLOT? -- which
+	doc coincides with this code's question only at a one-byte slot. They are filed for their own row,
+	doc with the prerequisite named at the `setByte` arm.
 
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression

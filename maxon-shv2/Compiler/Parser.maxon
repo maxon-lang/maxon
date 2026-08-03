@@ -32075,16 +32075,35 @@ export type Parser
 			try self.requireBufferBytesAreNotAPointer(giid, methodTok: methodTok)
 			// ⭐⭐ **THE RAW-BYTE WRITER ANSWERS TO THE ELEMENT'S DECLARED RANGE — BUT ONLY WHERE ONE BYTE IS
 			// ONE ELEMENT (A4a).** `setByte` addresses a byte OFFSET, so on a record that strides more than a
-			// byte it writes a FRAGMENT of an element: that is precisely the byte-level staging the buffer
-			// surface exists for, and E3110's own header names it as the load-bearing half of being a rule
-			// about the element. MEASURED by the suite when this clause was missing: three
-			// `managed-memory-methods` cases stopped compiling, all of them `arr.managed.setByte(…)` on an
-			// `Array with Int` — `IntArray.create()` staging a low byte, refused with a sentence about a
+			// byte it writes a FRAGMENT of an element, and a rule that asks whether a range holds every BYTE
+			// has nothing true to say about a fragment. MEASURED by the suite when this clause was missing:
+			// three `managed-memory-methods` cases stopped compiling, all of them `arr.managed.setByte(…)` on
+			// an `Array with Int` — `IntArray.create()` staging a low byte, refused with a sentence about a
 			// range a machine word obviously holds.
 			// ⇒ the stride is the PRECONDITION here and nowhere else. `parseByteView` needs none (its fill is
-			// ELEMENT-wise at whatever stride — measured `b0=97 b1=98 b2=99` on a stride-2 record), and
-			// `__ManagedFile.read` needs none because `requireManagedMemoryValue` has already established it
-			// one line earlier.
+			// ELEMENT-wise at whatever stride — measured through `.managed.byteAt` on a stride-2 record as
+			// `raw0=97 raw1=0 raw2=98`, i.e. each byte in its own slot), and `__ManagedFile.read` needs none
+			// because `requireManagedMemoryValue` has already established it one line earlier.
+			//
+			// ⛔⛔ **WHAT THE PRECONDITION SKIPS IS NOT ALL "BYTE-LEVEL STAGING" — THIS HEADER CLAIMED IT WAS,
+			// AND THE A4a REVIEW MEASURED THE CLAIM FALSE.** Staging is honest only where every bit pattern of
+			// the SLOT is a value the element admits. That is true of `Array with Int` (a machine word, which
+			// is the case the three suite cases above pin) and FALSE of three shapes the skip lets through,
+			// each a silent wrong answer on this tree:
+			//   • a RANGED element wider than a byte — under `typealias Wide = int(0 to 1000)`,
+			//     `a.managed.setByte(1, 223)` reads back **57089** through an accessor declared `int(0 to 1000)`.
+			//   • a 4-byte `ExitCode` element — `setByte(3, 223)` reads back **3741319169**.
+			//   • a 1-byte `bool` element — `setByte(0, 223)` makes `v` and `not v` BOTH true while `v == true`
+			//     is FALSE, which is not a boolean.
+			// ⇒ the honest question for those is *"does the element admit every bit pattern of its SLOT?"*,
+			// which COINCIDES with this rule's question at a one-byte slot and is a different rule everywhere
+			// else. It is FILED for its own row rather than fixed here, because it cannot yet be asked
+			// honestly: the compiler and the runtime disagree about the slot width of one of these very
+			// records — `__ManagedMemory.create(n, 1)` written in a file whose `Byte` is two bytes is TYPED
+			// stride 2 over a record stamped stride 1, and `set(0, value: 300)` on it reads back **44** — while
+			// the same file's `b"…"` literal is already REFUSED for that identical incoherence
+			// (`byteStringBlobStrideMessage`). One producer refused and its twin accepted is the prerequisite,
+			// and settling it changes which programs compile.
 			//
 			// ⚠ Its `byteAt` dual two arms up is untouched whatever the stride — it yields a plain `int`,
 			// never the element — which is the one place this rule and E3110's pair part company; see
@@ -32456,8 +32475,12 @@ export type Parser
 	// STORED. Refusing the read as well would cost a capability to close nothing.
 	//
 	// ⚠ **IT IS THE BOUNDS QUESTION AND NOTHING ELSE; A STRIDE PRECONDITION BELONGS TO THE SITE, NOT HERE.**
-	// Only `setByte` needs one, because only `setByte` addresses a byte OFFSET — its arm carries it and says
-	// why. Folding a stride test into this function would open the byte view's own negative-`low` case: a
+	// Only `setByte` needs one, because only `setByte` addresses a byte OFFSET — its arm carries it, says why,
+	// and records the three MEASURED wrong answers its skip still lets through (a ranged element wider than a
+	// byte, an `ExitCode` element, a `bool` element). Those want *"does the element admit every bit pattern of
+	// its SLOT?"*, which is this question only at a one-byte slot; they are filed, not closed, and the arm
+	// names the prerequisite. Folding a stride test into this function would open the byte view's own
+	// negative-`low` case: a
 	// `Byte` whose bounds cannot be trusted takes the machine word (`rangedAliasStorageBytes`), so the view
 	// would stop being byte-packed and the rule would stop asking, on exactly the element it least trusts.
 	//

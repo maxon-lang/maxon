@@ -729,10 +729,17 @@ export enum ErrorCode
 	// only the write puts a value into a slot the array surface reads through the element's range.
 	// `setByte` -- and ONLY `setByte` -- carries a stride precondition, because it addresses a byte
 	// OFFSET rather than an element: on a record that strides more than a byte it writes a FRAGMENT of
-	// an element, which is the byte-level staging the buffer surface exists for and is exactly what
-	// E3110 calls the load-bearing half of being a rule about the element. The byte view needs no such
-	// precondition -- its fill is element-wise at whatever stride -- and `__ManagedFile.read` needs none
-	// because its argument gate has already established that the buffer is byte-packed.
+	// an element, and a rule about whether a range holds every BYTE has nothing true to say about a
+	// fragment. The byte view needs no such precondition -- its fill is element-wise at whatever stride
+	// -- and `__ManagedFile.read` needs none because its argument gate has already established that the
+	// buffer is byte-packed.
+	// That precondition is a BOUNDARY, not a proof of safety, and the A4a review measured the three
+	// silent wrong answers it still skips: `setByte(1, 223)` under `typealias Wide = int(0 to 1000)`
+	// reads back 57089, `setByte(3, 223)` on an `ExitCode` element reads back 3741319169, and
+	// `setByte(0, 223)` on a `bool` element makes a value for which both it and its negation are true.
+	// Those ask a different question -- does the element admit every bit pattern of its SLOT? -- which
+	// coincides with this code's question only at a one-byte slot. They are filed for their own row,
+	// with the prerequisite named at the `setByte` arm.
 	rawByteFillNarrowElement = "E3117"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
