@@ -522,10 +522,12 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames F
 	// exit code is routed through it before exit; a leaked program comes back as 101. `exit-with-code`
 	// takes an i32, so the resulting code — i64 after the gate, else main's own return width — is
 	// wrapped last. `main` returns `ExitCode` (i64 in the corpus); a narrower ExitCode is already i32.
+	// ⚠ Through `coerceOnStack` rather than a hand-rolled `i32WrapI64`, because "how does this backend
+	// change a value's width?" is ONE fact and this used to be a third spelling of it. The two answers
+	// happened to agree; nothing made them, and the hand-rolled one was the weaker of the two — it
+	// passed an f64 through UNTOUCHED where the shared door panics naming the lowering bug.
 	let exitCodeVt = appendLeakGate(runBody, exitCodeValType: afterCleanupVt, funcNames: funcNames, checkLeaks: checkLeaks)
-	if exitCodeVt == WasmValType.i64 'wrap'
-		runBody.i32WrapI64()
-	end 'wrap'
+	coerceOnStack(runBody, from: exitCodeVt, to: WasmValType.i32)
 	runBody.call(ExitImportFuncIdx)
 	runBody.i32Const(RunOkResult)
 
@@ -794,8 +796,10 @@ end 'isWideInt'
 //
 // It is the same sentence `emitDivMod` already writes for `div`/`mod` — computing at i64 is EXACT, not
 // merely wider, because every narrow value shv2 mints is UNSIGNED and sits zero-extended in its i32
-// (`coerceOnStack`'s header) — applied to the ops that HAVE an operand type instead of only to the two
-// that do not. X5 gave `binOpImm`/`cmpImm` their `operandType` so the width would stop being GUESSED
+// (`coerceOnStack`'s header, which is also where the LIMIT of that claim is recorded: it is exact for
+// every value INSIDE its declared type's range, and nothing enforces that range) — applied to the ops
+// that HAVE an operand type instead of only to the two that do not.
+// X5 gave `binOpImm`/`cmpImm` their `operandType` so the width would stop being GUESSED
 // from `lhs`; this is the other half, that the width so obtained is a STORAGE class and not an
 // arithmetic one. `wasmValTypeOf` still answers where a value LIVES; this answers where it is COMPUTED.
 //
@@ -904,6 +908,28 @@ end 'singletonValTypes'
 // exactly that reason. If P1.9 (narrow int widths) ever gives a VALUE a signed sub-64 Std type, this
 // function's `(from, to)` valtype pair stops carrying enough to decide — the source's signedness has to
 // reach it, and `getValtype`'s table (WasmValType, not StdType) is where that information is dropped today.
+//
+// ⛔⛔ **AND THE INVARIANT ABOVE IS ABOUT THE TYPE, NOT ABOUT THE VALUE — NOTHING RANGE-CHECKS AN
+// `ExitCode`, SO THE ZERO-EXTENSION IS ONLY EXACT INSIDE `[0, u32.max]` (X5 review, MEASURED).** No narrow
+// Std type is SIGNED, which is what the paragraph above establishes; it does not establish that the number
+// in a `u32` slot is inside a `u32`. It need not be — `return -1` from a `returns ExitCode` function is
+// accepted with no diagnostic on EVERY target, and six lines reproduce the divergence with no alias, no
+// loop and no phi:
+//
+//     function negOne() returns ExitCode
+//     	return -1
+//     end 'negOne'
+//     let v = negOne()   ⇒ host prints v=-1, plus10=9;   wasm prints v=4294967295, plus10=4294967305
+//
+// The `v=` reading is PRE-EXISTING and was measured on the pre-X5 binary too, so it is NOT the width work's
+// — the widen has always read a bit pattern the type could not hold. ⇒ **THE CURE IS NOT IN THIS FILE**: it
+// is the missing `InsertRangeChecks` obligation on a narrow declared type (or the ABI decision that a `u32`
+// is a machine word on wasm, one line in `wasmValTypeOf`). Until one lands, `opComputeValType`'s and
+// `emitDivMod`'s "computing at i64 is EXACT" is exact for every value INSIDE its declared type's range —
+// verified across `[0, u32.max]` including 2^31 and u32.max, host and wasm byte-identical on 14 readings —
+// and says nothing at all about a value outside it. ⚠ Do not read the pre-X5 compiler as better here: its
+// 32-bit arithmetic made a few of these readings AGREE with the host by coincidence (`v + 10` was `9` both
+// ways), which is a wrapped answer that happened to land, not a property.
 function coerceOnStack(body WasmBody, from WasmValType, to WasmValType)
 	if from == to 'same'
 		return
@@ -1857,8 +1883,10 @@ type WasmFuncEmitter
 	//
 	// ⭐ Computing at i64 is EXACT rather than merely wider, and that rests on a property this
 	// backend already states once: every narrow value shv2 mints is UNSIGNED and sits ZERO-EXTENDED
-	// in its i32 (`coerceOnStack`'s header). So widening recovers the number itself, and the signed
-	// 64-bit divide then answers what the native backends' 64-bit `idiv`/`sdiv` answer over the same
+	// in its i32 (`coerceOnStack`'s header — read it for the LIMIT of that claim too: it is exact for
+	// every value INSIDE its declared type's range, and nothing enforces that range). So widening
+	// recovers the number itself, and the signed 64-bit
+	// divide then answers what the native backends' 64-bit `idiv`/`sdiv` answer over the same
 	// two registers — the three targets agree by construction instead of by coincidence. A narrow
 	// CONSUMER of the quotient wraps it back at its own operand push, as any other i64 value would be.
 	//
@@ -2291,12 +2319,13 @@ type WasmFuncEmitter
 	// clobber the not-taken target's phi locals, v1's `String.trim` corruption), set the dispatch
 	// index, then `br` back to the loop after the `if`/`end`.
 	function emitDispatchCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, currentBlock IrBlock, loopDepth Wasm32Index)
-		self.body.localGet(condId as Wasm32Index)
-		// `if` consumes an i32; a bool is already i32, but a condition widened to i64 must be
-		// narrowed first.
-		if getValtype(self.valtypes, v: condId) == WasmValType.i64 'wideCond'
-			self.body.i32WrapI64()
-		end 'wideCond'
+		// `if` consumes an i32; a bool is already i32, but a condition widened to i64 must be narrowed
+		// first — and BOTH of those are `pushOperandAt`'s answer, not a second one. This read the valtype
+		// table for itself and wrapped by hand; the copy agreed with the door but nothing made it, and it
+		// was the weaker one (an f64 condition passed through UNTOUCHED where `coerceOnStack` panics
+		// naming the lowering bug). A condition CAN legitimately be i64 — an integer `binOp` over `i1`
+		// operands is computed at the machine word like every other integer op (`opComputeValType`).
+		self.pushOperandAt(condId, targetVt: WasmValType.i32)
 		self.body.beginIf()
 
 		self.emitEdgePhiCopies(currentBlock, targetBlockId: thenBlockId)
@@ -2339,21 +2368,24 @@ type WasmFuncEmitter
 			self.body.beginBlock()
 		end 'openLandings'
 
-		// ⭐ WHETHER THE SUBJECT IS A MACHINE WORD IS READ ONCE and handed to both users below. The guard and
-		// the index are two questions with one answer — "does this subject have a top half?" — and each used
-		// to read the table for itself, with opposite polarity. Nothing made the two agree; a divergence
-		// would be an i64 guard over an i32 index (a wasm validation failure rather than a wrong answer, but
-		// the fact still belongs in one place).
-		let subjectIsWide = getValtype(self.valtypes, v: subjectId) == WasmValType.i64
-
+		// ⭐ "DOES THIS SUBJECT HAVE A TOP HALF?" IS ASKED ONCE — because only ONE of the two emitters below
+		// needs to ask it at all. It used to be read twice with opposite polarity, then hoisted to here and
+		// handed to both; hoisting keeps two askers in step, but the INDEX does not need an answer — pushing
+		// the subject at i32 IS the question, and `pushOperandAt` already answers it. So the guard reads the
+		// table for itself and is the only reader; there is no second copy left to disagree with.
+		//
 		// The 64-bit UNSIGNED bounds check: a value outside `[0, span)` (a wrapped-negative index included)
 		// branches to the default landing (innermost, depth 0). Only reached with an i64 subject — a bias
 		// `subtract` mints an `integer`, and a zero-based match's enum/int subject is i64 too.
-		self.emitSwitchBoundsGuard(subjectId, span: caseTargets.count(), subjectIsWide: subjectIsWide)
+		self.emitSwitchBoundsGuard(subjectId, span: caseTargets.count())
 
-		// In range: the low 32 bits ARE the index (the guard proved `< span < 2^32`). `br_table` to each slot's
-		// landing depth; its own default is the default landing (unreachable after the guard, correct anyway).
-		self.emitSwitchIndex(subjectId, subjectIsWide: subjectIsWide)
+		// In range: the low 32 bits ARE the index (the guard proved `< span < 2^32`). An i64 subject is
+		// narrowed and an i32 one is already the index — exactly `pushOperandAt`'s contract, so it is ASKED
+		// rather than restated (the `emitSwitchIndex` helper this replaced hand-rolled `localGet` +
+		// `i32WrapI64`, a second spelling of the one coercion door and the weaker one: an f64 subject went
+		// through untouched). `br_table` to each slot's landing depth; its own default is the default
+		// landing (unreachable after the guard, correct anyway).
+		self.pushOperandAt(subjectId, targetVt: WasmValType.i32)
 		self.body.brTable(self.slotLandingDepths(caseTargets, distinct: distinct), defaultTarget: 0 as Wasm32Index)
 
 		// Close each landing and emit its target's dispatch. `end` #1 exposes the default landing; `end` #(k+1)
@@ -2372,8 +2404,8 @@ type WasmFuncEmitter
 	// The `i64.ge_u span` bounds guard `br_if`ing an out-of-range index to the default landing (depth 0). An
 	// i32 subject (never produced for a switch today — every biased index is i64) needs no i64 guard: its own
 	// value IS the index, so the `br_table`'s exact i32 bounds check suffices, and this emits nothing.
-	function emitSwitchBoundsGuard(subjectId ValueId, span ElementCount, subjectIsWide bool)
-		if not subjectIsWide 'notI64'
+	function emitSwitchBoundsGuard(subjectId ValueId, span ElementCount)
+		if getValtype(self.valtypes, v: subjectId) != WasmValType.i64 'notI64'
 			return
 		end 'notI64'
 		self.body.localGet(subjectId as Wasm32Index)
@@ -2381,15 +2413,6 @@ type WasmFuncEmitter
 		self.body.i64GeU()
 		self.body.brIf(0 as Wasm32Index)
 	end 'emitSwitchBoundsGuard'
-
-	// Push the biased subject as the i32 `br_table` index. An i64 subject is narrowed (the guard proved it
-	// fits 32 bits); an i32 subject is already the index.
-	function emitSwitchIndex(subjectId ValueId, subjectIsWide bool)
-		self.body.localGet(subjectId as Wasm32Index)
-		if subjectIsWide 'wide'
-			self.body.i32WrapI64()
-		end 'wide'
-	end 'emitSwitchIndex'
 
 	// The per-slot `br_table` landing depths for a dense switch: for each of the `span` slots, the landing
 	// depth of that slot's target — the default (and any hole slot) at depth 0, and `distinct[j]` at depth

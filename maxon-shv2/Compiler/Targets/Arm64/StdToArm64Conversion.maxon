@@ -453,10 +453,17 @@ type StdToArm64Lowering
 			unaryOp(resultId, operand, opcode, operandType) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, operandType: operandType, dstRef: dstRef)
 			cmp(resultId, lhs, rhs, pred, operandType) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstRef: dstRef)
 			// The immediate forms' `operandType` (X5) is a WIDTH, and every integer instruction this
-			// backend selects is the 64-bit `X`-register form whatever the Std type says — so it is
-			// dropped here for the reason the x64 arm states, not overlooked.
+			// backend selects is the 64-bit `X`-register form whatever the Std type says (`Arm64OpAddImm`
+			// 0x91…, `Arm64OpSubImm` 0xD1…, `Arm64OpCmpImm` 0xF1…, `Arm64OpMul` 0x9B…, `Arm64OpSdiv`
+			// 0x9AC…, every one with `sf` set) — so `binOpImm` drops it for the reason the x64 arm states,
+			// not overlooked.
+			//
+			// ⚠ `cmpImm` THREADS it, exactly as the x64 arm does and for the same reason: `lowerCmpImm`
+			// has to answer "is this a float compare?" for the condition code, and it answered with a
+			// hardcoded `isFloat: false` — the third spelling of a fact `foldConstOperands`'s float guard
+			// already owns and the op now carries.
 			binOpImm(resultId, lhs, imm, opcode, _) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstRef: dstRef)
-			cmpImm(resultId, lhs, imm, pred, _) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstRef: dstRef)
+			cmpImm(resultId, lhs, imm, pred, operandType) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, operandType: operandType, dstRef: dstRef)
 			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false, dstRef: dstRef)
 			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true, dstRef: dstRef)
 			param(resultId, index, paramType) then self.lowerParam(resultId, index: index, paramType: paramType, paramFloatMask: paramFloatMask, dstRef: dstRef)
@@ -832,10 +839,14 @@ type StdToArm64Lowering
 	end 'lowerCmp'
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, #imm` + `cset`. `cmpImm` is INTEGER by
-	// construction (no NEON form takes an immediate, so `foldConstOperands` refuses a float rhs).
-	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, dstRef BlockRef)
+	// construction (no NEON form takes an immediate, so `foldConstOperands` refuses a float rhs) — which
+	// is why the condition code is ASKED of the op's own `operandType` (X5 review) rather than told
+	// `isFloat: false`. The derived answer is that same `false`, by that same guard; what changes is that
+	// it can no longer be a stale copy of it. `lowerCmp` next door already reads its `operandType` this
+	// way, and the pair now spells the question once.
+	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.arm64CmpImm(TargetVReg.virtual(lhs), imm: imm))
-		self.emit(dstRef, op: TargetOp.arm64Cset(TargetVReg.virtual(resultId), cond: arm64CondForPred(pred, isFloat: false)))
+		self.emit(dstRef, op: TargetOp.arm64Cset(TargetVReg.virtual(resultId), cond: arm64CondForPred(pred, isFloat: stdTypeIsFloat(operandType))))
 	end 'lowerCmpImm'
 
 	// Lower a Std `condBranch` to `cbnz cond, <then>` + `b <else>`. The condition is always an ordinary

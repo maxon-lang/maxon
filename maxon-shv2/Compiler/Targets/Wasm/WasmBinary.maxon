@@ -19,7 +19,10 @@
 //     opcode, so a single instruction cannot express one anyway: A2 materializes `neg` as
 //     `i64Const(0)` BELOW the operand, then `i64Sub()`;
 //     `bitNot` as operand then `i64Const(-1)` then `i64Xor()` (xor is commutative, so operand
-//     order is free); `logicalNot` as `i32Eqz()`. Every primitive that composition needs is
+//     order is free); `logicalNot` as `i32Const(1)` then `i32Xor()` — a BIT FLIP, matching the
+//     native backends' `eor #1` / `xor reg, 1`, not the `i32Eqz()` this line used to name (X5
+//     review; the two agree only over a 0/1 operand, so it was a wrong description rather than a
+//     wrong answer). Every primitive that composition needs is
 //     already in the API, so no dedicated helper is warranted.
 //
 // DETERMINISM: everything here iterates ordered arrays (insertion order) and index ranges —
@@ -175,7 +178,6 @@ let opI64Const = 0x42
 // reachable at this width.
 let opI32Eqz = 0x45
 
-let opI64Eqz = 0x50
 let opI64Eq = 0x51
 let opI64Ne = 0x52
 let opI64LtS = 0x53
@@ -529,10 +531,12 @@ export type WasmBody
 		self.buf.push(opI64GeU)
 	end 'i64GeU'
 
-	// i64 unary: `== 0` (i64 → i32), for logicalNot and cond materialization on i64 values.
-	export function i64Eqz()
-		self.buf.push(opI64Eqz)
-	end 'i64Eqz'
+	// ⚠ NO `i64.eqz` EITHER, and it is the SAME rule as the i32 ALU note above — swept one encoder wider
+	// (X5 review). It was here claiming "for logicalNot and cond materialization on i64 values", and it had
+	// NEITHER consumer: `logicalNot` is an `i32.xor 1` (`StdToWasm.emitLogicalNotExpr`) and a wide condition
+	// reaches `if` through the one coercion door (`pushOperandAt` → `i32.wrap_i64`). An unemittable encoder
+	// whose comment names a caller that does not exist is worse than an absent one — the next reader takes
+	// it for the lowering that is actually used.
 
 	// Width conversions inserted only where wasm's type discipline forces an i64↔i32 boundary
 	// (notably the `$run` entry's `i32.wrap_i64` of main's result).

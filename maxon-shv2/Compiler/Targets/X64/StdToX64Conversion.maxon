@@ -1159,13 +1159,19 @@ type StdToX64Lowering
 			binOp(resultId, lhs, rhs, opcode, operandType) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstBlock: dstBlock)
 			unaryOp(resultId, operand, opcode, operandType) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, operandType: operandType, dstBlock: dstBlock)
 			cmp(resultId, lhs, rhs, pred, operandType) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstBlock: dstBlock)
-			// The immediate forms' `operandType` (X5) is a WIDTH, and every x64 integer op here is
-			// 64-bit whatever the Std type says — a narrow value arrives zero-extended in a full
-			// register — so it is dropped rather than threaded into a lowering that would ignore it.
-			// It is read by the wasm backend, whose locals are typed, and by `recordFusableCompare`,
-			// which used to assume it.
+			// `binOpImm`'s `operandType` (X5) is a WIDTH, and every x64 integer op `lowerBinOpImm`
+			// selects is 64-bit whatever the Std type says — `lea`, the 3-operand `imul`, the word ALU
+			// forms, an imm8 shift count — because a narrow value arrives zero-extended in a full
+			// register. Nothing in that lowering can read the field, so it is dropped rather than
+			// threaded into a body that would ignore it. It is read by the wasm backend, whose locals
+			// are typed.
+			//
+			// ⚠ `cmpImm`'s is THREADED, and the asymmetry is the point: `lowerCmpImm` reaches
+			// `materializeCompareIfRead`, which asks `stdTypeIsFloat` — the same question
+			// `recordFusableCompare` asks of the same field one screen up. A dropped field there meant a
+			// restated `StdType.i64` inside, i.e. the answer written twice.
 			binOpImm(resultId, lhs, imm, opcode, _) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstBlock: dstBlock)
-			cmpImm(resultId, lhs, imm, pred, _) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstBlock: dstBlock)
+			cmpImm(resultId, lhs, imm, pred, operandType) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, operandType: operandType, dstBlock: dstBlock)
 			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rax, dstBlock: dstBlock)
 			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rdx, dstBlock: dstBlock)
 			param(resultId, index, paramType) then self.lowerParam(resultId, index: index, paramType: paramType, paramFloatMask: paramFloatMask, dstBlock: dstBlock)
@@ -2636,12 +2642,18 @@ type StdToX64Lowering
 	// protocol `lowerCmp` uses, so the fold that moved the right operand into an immediate
 	// changes only the compare INSTRUCTION, never what the compare MEANS. The literal
 	// occupies no register.
-	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, dstBlock IrBlock)
+	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(TargetVReg.virtual(lhs), imm: imm))
-		// INTEGER by construction, and `i64` is not a guess: `cmpImm` carries no `operandType`
-		// because no SSE form takes an immediate, so `foldConstOperands` refuses a float rhs and a
-		// float compare can never reach this variant. See `recordFusableCompare`'s twin of this.
-		self.materializeCompareIfRead(resultId, pred: pred, operandType: StdType.i64, dstBlock: dstBlock)
+		// ⚠ THE OP'S OWN TYPE, NOT A RESTATED `StdType.i64` (X5 review). This read `operandType:
+		// StdType.i64` under a comment beginning "`cmpImm` carries no `operandType`" — true when it was
+		// written and made FALSE by X5, which gave the op the field and updated the SIBLING reader
+		// (`recordFusableCompare`) without updating this one. Both ask `materializeCompareIfRead` the same
+		// question and it reads the type for exactly one thing, `stdTypeIsFloat`; two spellings of one
+		// fact, and the stale one was the more inviting, because a later editor could read "i64" as a
+		// WIDTH. `foldConstOperands` refuses a float rhs (no SSE form takes an immediate), so the derived
+		// answer is `false` today for the same reason the constant was `i64` — derived rather than
+		// asserted is the only difference, and it is the difference that cannot go stale.
+		self.materializeCompareIfRead(resultId, pred: pred, operandType: operandType, dstBlock: dstBlock)
 	end 'lowerCmpImm'
 
 	// Lower a Std `cmp` to an x64 `cmp reg, reg`. A comparison's answer lives in the EFLAGS
