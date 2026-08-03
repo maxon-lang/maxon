@@ -1291,8 +1291,8 @@ end 'rangeCoversRange'
 // The E3005 a literal out-of-range NARROWING reports — `Value N is outside the range of 'Alias'
 // (int(lo to hi))` — worded ONCE, for BOTH the body-cast/return pass (`InsertRangeChecks`) and
 // the top-level const-cast path (`Parser.applyConstCast`, via the re-raised ParseError). The two
-// report the same defect from different tiers and must not phrase it two ways; the bounds spell
-// through `formatRangeDisplay`, the one place a range renders.
+// report the same defect from different tiers and must not phrase it two ways; the alias and its
+// bounds spell through `rangedAliasValueSetDisplay`, the one place that pair renders.
 //
 // ⚠ **THE ALIAS IS QUOTED AS *SOURCE* SPELLS IT (N2 review), because a RANGE-CONTESTED name reaches here
 // wearing the compiler's mint.** `sourceSpelledAliasName` is applied at this one site rather than at each
@@ -1300,13 +1300,14 @@ end 'rangeCoversRange'
 // `outside the range of 'Byte$0_1000' (int(0 to 1000))`, which names no line the author wrote and prints
 // the real bounds beside the suffix that was supposed to carry them.
 export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
-	return "Value {formatBound(value, isFloat: isFloat)} is outside the range of '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
+	return "Value {formatBound(value, isFloat: isFloat)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat)}"
 end 'literalOutOfRangeMessage'
 
 // The E3005 an out-of-range `otherwise` DEFAULT reports — the sentence above with its own subject, since
 // what is out of range is the handler's value and not a narrowing. Worded HERE, beside its twin, because
-// the two say one thing about one alias: the bounds spell through `formatRangeDisplay` and the NAME through
-// `quotedAliasName`, so neither half can be printed two ways depending on which E3005 a value meets.
+// the two say one thing about one alias: the name-plus-bounds pair spells through
+// `rangedAliasValueSetDisplay`, so neither half can be printed two ways depending on which E3005 a value
+// meets.
 //
 // ⛔ **THE MINT LEAKED THROUGH THIS ONE (found while landing N3).** `literalOutOfRangeMessage` had the strip
 // and this arm — rendered inline in `Queries.reportParseError` — did not, so a program declaring
@@ -1319,13 +1320,13 @@ end 'literalOutOfRangeMessage'
 // integer LITERAL the author wrote, never the wrapped `u64.max` sentinel that helper exists to un-wrap, and
 // the oracle prints it plainly too.
 export function otherwiseOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt) returns String
-	return "otherwise value {value} is outside the range of '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: false)})"
+	return "otherwise value {value} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: false)}"
 end 'otherwiseOutOfRangeMessage'
 
 // ⭐ **THE E3005 A `b"…"` BYTE-STRING LITERAL'S OWN BYTE REPORTS (A3r)** — the third subject of the one
-// range fact, worded here for the reason its `otherwise` sibling above is: the NAME spells through
-// `quotedAliasName` and the BOUNDS through `formatRangeDisplay`, so no site can print an alias or a range
-// two ways, while the subject stays the site's own.
+// range fact, worded here for the reason its `otherwise` sibling above is: the name-plus-bounds pair spells
+// through `rangedAliasValueSetDisplay`, so no site can print an alias or a range two ways, while the subject
+// stays the site's own.
 //
 // ⚠ **THE SUBJECT IS NOT A NARROWING, AND SAYING SO COSTS THE READER THE OFFSET.** A blob is a run of
 // values the source never wrote out one by one, so `literalOutOfRangeMessage`'s `Value 223` would leave the
@@ -1336,7 +1337,7 @@ end 'otherwiseOutOfRangeMessage'
 // exists to un-wrap. The RANGE is not: an element alias's bounds may be a float's bit patterns, so it keeps
 // the alias's own domain rather than assuming the byte's.
 export function byteStringByteOutOfRangeMessage(value ParsedInt, offset ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
-	return "byte {value} at offset {offset} of a `b\"…\"` byte-string literal is outside the range of '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
+	return "byte {value} at offset {offset} of a `b\"…\"` byte-string literal is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat)}"
 end 'byteStringByteOutOfRangeMessage'
 
 // ⭐ **THE E3117 A RAW-BYTE FILL REPORTS (A4a)** — the fourth subject of the one range fact, and the only
@@ -1353,17 +1354,19 @@ end 'byteStringByteOutOfRangeMessage'
 // it printing that sentence about an `Array with Int` (`managed-memory-methods`). Every one of the three
 // sites is a store into an ELEMENT, and that is the one subject all of them share.
 //
-// The NAME spells through `quotedAliasName` and the BOUNDS through `formatRangeDisplay`, for its siblings'
-// reason: no site may print an alias or a range two ways. `isFloat` rides along for the reason it does on
-// every other member of this family — the payloads cannot say whether they are numbers or IEEE-754 bit
-// patterns.
+// The name-plus-bounds pair spells through `rangedAliasValueSetDisplay`, for its siblings' reason: no site
+// may print an alias or a range two ways. `isFloat` rides along for the reason it does on every other member
+// of this family — the payloads cannot say whether they are numbers or IEEE-754 bit patterns. **A BYTE'S OWN
+// value set is `Project.ByteValueSetLow`/`High`** and not a hand-spelled `0 to 255`, for the identical
+// reason one door up: `rangeHoldsEveryByte` is the predicate this sentence reports, and a message that
+// stated the bounds itself would be a second definition of what a byte is (A4c review).
 // ⚠ **IT NAMES THE CURE AND THE CURE IS THE SAME AT ALL THREE SITES**, which is what lets one sentence carry
 // it: widen the element. E3109 names a replacement SPELLING because its refusal has an exact one; this
 // refusal has none — there is no other way to ask for a String's bytes, or to read a file into a buffer —
 // so what the author has to change is the declaration, and the message says so rather than leaving it to be
 // inferred from a range.
 export function rawByteFillNarrowElementMessage(member String, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
-	return "'{member}' stores RAW bytes into an element declared '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)}), which does not hold every byte value 0 to {u8.max} — widen the element's declared range to store raw bytes through it"
+	return "'{member}' stores RAW bytes into an element declared {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat)}, which does not hold every byte value {ByteValueSetLow} to {ByteValueSetHigh} — widen the element's declared range to store raw bytes through it"
 end 'rawByteFillNarrowElementMessage'
 
 // ⭐⭐ **E3118 — A RAW-BYTE WRITE INTO A SLOT ITS ELEMENT DOES NOT FILL (A4c).** The sibling above's neighbour,
@@ -1392,15 +1395,22 @@ export function rawByteWriteSlotDomainMessage(member String, elementDisplay Stri
 	return "'{member}' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its {slotBytes}-byte slot — every value of {slotValueSet}. The element {elementDisplay} does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element"
 end 'rawByteWriteSlotDomainMessage'
 
-// An array ELEMENT plus its DECLARED value set, as the refusal above names it — `'Wide' (int(0 to 1000))`.
-// It is `constantCastOutOfRangeMessage`'s two halves without the sentence around them, because E3118's
-// subject is not always a ranged alias and so cannot carry the bounds in its payload: the parser picks the
-// shape and this renders the one shape that has bounds. Both halves spell through the same `quotedAliasName`
-// and `formatRangeDisplay` every other member of this family uses, so no site prints an alias or a range two
-// ways.
-export function rangedElementValueSetDisplay(aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
+// ⭐⭐ **A RANGED ALIAS PLUS ITS DECLARED VALUE SET — `'Wide' (int(0 to 1000))` — AND EVERY SENTENCE IN THIS
+// FAMILY IS BUILT ON IT (A4c review).** Five diagnostics say *"this alias, whose range is this"* and each of
+// them used to compose the pair itself out of `quotedAliasName` and `formatRangeDisplay`. Their headers all
+// argued that *no site may print an alias or a range two ways* — and then wrote the composition down five
+// times, so nothing but that argument kept the quoting, the spacing and the parentheses in step. A4c added
+// the fifth copy while introducing this function for E3118 alone; it is now the one spelling, and a change
+// to how an element's value set reads moves all five together or none.
+//
+// ⚠ It stays a NAME plus BOUNDS and nothing more, because the five subjects differ in everything else — a
+// narrowing's value, an `otherwise` default, a blob byte's offset, the construct that fills, E3118's slot.
+// The sentence around the pair is each site's own; only the pair is shared. And E3118 cannot pass a
+// `low`/`high` at all for a `bool` or an enum ordinal, which is why its parser picks the shape and calls
+// this for the one shape that has bounds (`Parser.slotElementDisplay`).
+export function rangedAliasValueSetDisplay(aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
 	return "'{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
-end 'rangedElementValueSetDisplay'
+end 'rangedAliasValueSetDisplay'
 
 // ⭐ **AN ALIAS NAME AS AN E3005 QUOTES IT** — `sourceSpelledAliasName` applied at the one tier a name
 // becomes text an author reads, so no renderer can quote the compiler's bookkeeping and no PRODUCER has to

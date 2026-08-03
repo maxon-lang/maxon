@@ -1314,7 +1314,14 @@ producer this file's `create`/literal section now refuses, and its `setByte` the
 the element does not fill. Both refusals are pinned below in their own cases. What the case was FOR — that
 a range wider than a byte is not by itself a reason to refuse a raw write, which is the over-refusal A4a
 had to be pulled back from — survives unchanged here: `int(0 to u16.max)` is wider than a byte, is refused
-by E3117's every-byte question, and admits every value of the two-byte slot it was given.
+ACCEPTED by E3117's every-byte question, and admits every value of the two-byte slot it was given.
+
+⚠ **THIS CASE IS NOT THE CONTROL AGAINST A WIDENED E3117, AND AN EARLIER DRAFT OF THIS PARAGRAPH SAID IT
+WAS — MEASURED FALSE (A4c review).** `rangeHoldsEveryByte(0, 65535)` is TRUE, so a naively widened E3117
+would accept this program exactly as E3118 does; the case that separates the two rules is
+`a-raw-byte-write-still-stages-a-machine-word-element` below, whose `int(i64.min to i64.max)` fails the
+every-byte question and passes the slot question. E3117's own live site agrees: under this same
+`typealias Byte = int(0 to u16.max)`, `"abc".toByteArray()` compiles and reads back `97 98 99`.
 ```maxon
 typealias Byte = int(0 to u16.max)
 typealias Bytes = Array with Byte
@@ -1759,9 +1766,14 @@ error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so w
 
 <!-- test: a-raw-byte-write-is-accepted-when-the-element-fills-its-two-byte-slot -->
 ### An element that DOES fill its two-byte slot keeps its raw writer
-⭐ **THE ACCEPTANCE CASE THAT RULES OUT A WIDENED E3117.** `int(0 to u16.max)` does NOT hold every byte in
-the sense E3117 means — it is not a byte element at all — and it admits every value of the two-byte slot it
-was given, so a raw byte at either offset is honest. This program answers **57089** before and after.
+`int(0 to u16.max)` admits every value of the two-byte slot it was given, so a raw byte at either offset is
+honest. This program answers **57089** before and after.
+
+⚠ **IT IS NOT THE CONTROL AGAINST A WIDENED E3117 EITHER, AND ITS FIRST DRAFT CLAIMED TO BE (A4c review).**
+This element DOES hold every byte — `rangeHoldsEveryByte(0, 65535)` is true — so a widened E3117 would
+accept it too. The control is `a-raw-byte-write-still-stages-a-machine-word-element` below. What this case
+pins is the OFFSET-1 half: a raw byte written at the slot's HIGH byte is honest here and is the very write
+`error.a-raw-byte-write-is-refused-at-a-slot-the-element-does-not-fill` refuses one range narrower.
 ```maxon
 typealias Byte = int(0 to u16.max)
 typealias Bytes = Array with Byte
@@ -1805,6 +1817,34 @@ function main() returns ExitCode
 	var v = b"abc"
 	try v.managed.setByte(0, 223) otherwise return 3
 	return 0 if (try v.managed.byteAt(0) otherwise 0) == 223 else 4
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-byte-packed-buffer-under-the-canonical-byte-still-takes-a-raw-byte-write -->
+### The two rungs COMPOSED: a byte-packed `create` buffer under the canonical `Byte`, written raw
+⭐ **THE ONE CASE THAT CROSSES BOTH RULES, added by A4c's review because the rewrite above removed the
+only case that did.** `a-wide-byte-still-writes-raw-bytes-through-the-buffer-surface` used to build its
+receiver with `__ManagedMemory.create(8, 1)` and then `setByte` it; rewriting it onto `Bytes.create()` +
+`push` was right for its own purpose and left NOTHING exercising the composition. Here the stride rule
+accepts the producer (this file's `Byte` strides one byte) and the slot rule then accepts the write (a
+one-byte slot whose element admits every byte), which is the whole of what a byte buffer is for — and a
+regression in either rung alone reddens it.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	try buf.setLength(4) otherwise return 2
+	try buf.setByte(0, 223) otherwise return 3
+	return 0 if takes(buf) as int == 223 else 4
 end 'main'
 ```
 ```exitcode

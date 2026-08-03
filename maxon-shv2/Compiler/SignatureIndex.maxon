@@ -1965,16 +1965,22 @@ end 'inclusiveRangeContains'
 // ⚠ Below the word both bounds are honest small non-negative numbers, exactly BECAUSE the ladder gave the
 // range a narrow slot at all — a raw-negative bound would have taken the word — so ordering is safe there,
 // and the `>=` is the same shape (and, at one byte, literally the same call) `rangeHoldsEveryByte` uses.
+//
+// ⚠ The LOW end is `SlotUnsignedMin` and NOT `Project.ByteValueSetLow`, which this first read (A4c review):
+// the two are the same zero for different reasons, and the reason a SLOT's is zero is the zero-extending
+// loader's, not a byte's declared domain. `rawByteWriteSlotDomainMessage` already renders the slot's value
+// set from `SlotUnsignedMin`, so with the byte's constant here the PREDICATE and the SENTENCE describing it
+// were two facts that happened to agree — the exact shape this rung exists to remove.
 function rangeHoldsEverySlotValue(low ParsedInt, high ParsedInt, slotBytes ByteOffset) returns bool
 	if slotBytes == (ByteStringElementSize as ByteOffset) 'aByteSlot'
 		return rangeHoldsEveryByte(low, high: high)
 	end 'aByteSlot'
 
 	if slotBytes == MachineWordBytes 'theWholeWord'
-		return (low == BareIntegerElementLow and high == BareIntegerElementHigh) or (low == ByteValueSetLow and high == slotUnsignedMax(slotBytes))
+		return (low == BareIntegerElementLow and high == BareIntegerElementHigh) or (low == SlotUnsignedMin and high == slotUnsignedMax(slotBytes))
 	end 'theWholeWord'
 
-	return low == ByteValueSetLow and high >= slotUnsignedMax(slotBytes)
+	return low == SlotUnsignedMin and high >= slotUnsignedMax(slotBytes)
 end 'rangeHoldsEverySlotValue'
 
 // ⭐⭐ **THE ELEMENT OF EVERY COMPILER-SYNTHESIZED BYTE BUFFER — AND WHY IT IS NOT `Byte`.**

@@ -121,11 +121,19 @@ export function rangedAliasStorageBytes(low ParsedInt, high ParsedInt) returns B
 	return MachineWordBytes
 end 'rangedAliasStorageBytes'
 
+// The smallest value ANY slot holds, whatever its width: zero, because the shared element load
+// ZERO-EXTENDS (`ArrayRuntime.emitLoadElem` — one compiled byte loop with no signedness in the record to
+// consult). Named beside the maximum below so a reader stating a slot's value set states both ends from one
+// place. It is deliberately NOT `Project.ByteValueSetLow`, which is the low bound of a BYTE's declared value
+// set: the two are the same number for different reasons, and a slot's reason is the loader's.
+export let SlotUnsignedMin = 0 as ParsedInt
+
 // ⭐⭐ **THE LARGEST UNSIGNED VALUE A `slotBytes`-WIDE SLOT HOLDS — the LADDER ABOVE READ BACKWARDS (A4c).**
-// That function picks the SMALLEST slot whose unsigned value set contains a range; this one names the value
-// set it picked, which is what a rule asking *"does the element admit every bit pattern of its slot?"* has
-// to compare against (`ProgramSignatures.elementAdmitsEverySlotValue`) and what that rule's diagnostic has
-// to print. The two live together so the rungs cannot come to disagree about which widths exist.
+// `rangedAliasStorageBytes` picks the SMALLEST slot whose unsigned value set contains a range; this one
+// names the value set it picked, which is what a rule asking *"does the element admit every bit pattern of
+// its slot?"* has to compare against (`ProgramSignatures.elementAdmitsEverySlotValue`) and what that rule's
+// diagnostic has to print. The three live together so the rungs cannot come to disagree about which widths
+// exist.
 //
 // ⚠ **THE WORD RUNG COMES BACK AS A RAW NEGATIVE, AND THAT IS THE HONEST ANSWER RATHER THAN AN OVERFLOW.**
 // `u64.max` does not fit a signed `ParsedInt`, so it rides as the same bits an `int(0 to u64.max)` alias's
@@ -134,15 +142,8 @@ end 'rangedAliasStorageBytes'
 // `rangeHoldsEveryByte` both spell out at length.
 //
 // It PANICS on a width no slot has, for `primitiveTypeByteSize`'s reason: reaching one means a caller sized
-// a slot from something other than the ladder above, and inventing a value set for it would be exactly the
+// a slot from something other than that ladder, and inventing a value set for it would be exactly the
 // silent wrong answer this pair exists to prevent.
-// The smallest value ANY slot holds, whatever its width: zero, because the shared element load
-// ZERO-EXTENDS (`ArrayRuntime.emitLoadElem` — one compiled byte loop with no signedness in the record to
-// consult). Named beside the maximum below so a reader stating a slot's value set states both ends from one
-// place. It is deliberately NOT `Project.ByteValueSetLow`, which is the low bound of a BYTE's declared value
-// set: the two are the same number for different reasons, and a slot's reason is the loader's.
-export let SlotUnsignedMin = 0 as ParsedInt
-
 export function slotUnsignedMax(slotBytes ByteOffset) returns ParsedInt
 	if slotBytes == 1 'oneByte'
 		return u8.max as ParsedInt
