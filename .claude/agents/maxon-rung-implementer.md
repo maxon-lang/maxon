@@ -135,9 +135,14 @@ grep -n '^FAIL' temp/shv2-spec.log          # shv2: which tests failed
 grep -n '\[FAIL\]' temp/csharp-spec.log     # bootstrap: same question, its own marker
 ```
 
-Then **Read the file** at each hit for the whole reason. A golden mismatch renders a multi-line diff and
-a failed compile embeds the compiler's entire stderr, so the grep gives you the headline and the file
-still holds the evidence.
+Then **Read the file** at each hit for the whole reason. A failed compile embeds the compiler's entire
+stderr, so the grep gives you the headline and the file still holds the evidence.
+
+⚠ **Golden drift is NOT among the hits, by design.** A fragment mismatch is REFERENCE, not a gate (user
+ruling 2026-08-02) — it carries no `FAIL` marker, is not counted as a failure and does not affect the
+exit code. It prints as a `note:` block below the summary. **The gate is the spec tests passing**; if you
+want the drift, read the file for that note rather than grepping for a marker that is intentionally not
+there.
 
 **A pipe decides what to keep before you know what failed**, and a suite is 35s–several minutes, so the
 cost of that decision is a *second full run* to recover what the first one already printed. Redirecting

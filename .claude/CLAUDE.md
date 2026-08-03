@@ -226,8 +226,11 @@ Then **read the file** at each hit for the full reason. **A pipe decides what to
 what failed**, so when the run goes red the detail is already gone and the only way back is *running the
 whole suite again* — which is how a red suite routinely costs two runs instead of one. Redirected, the
 run is on disk the instant it ends and can be reread from any later step for free. Grep alone is not
-enough either: a golden mismatch is a multi-line diff and a failed compile embeds the compiler's entire
-stderr, so the marker line is a headline, not the evidence.
+enough either: a failed compile embeds the compiler's entire stderr, so the marker line is a headline,
+not the evidence. **And grepping `^FAIL` no longer finds golden drift at all** — a fragment mismatch is
+REFERENCE, not a gate (user ruling 2026-08-02): it never carries a `FAIL` marker, never counts as a
+failure and never touches the exit code. It prints as a separate `note:` block below the summary, so
+read the file for it rather than grepping for a marker that is deliberately absent.
 
 Do not assume the console is small: **shv2's runner prints one line per test (~1,500) and only then the
 summary**, with failures wherever those tests fall in declaration order — `tail` shows PASS lines while
