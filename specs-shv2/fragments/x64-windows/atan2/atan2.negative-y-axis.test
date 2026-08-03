@@ -1,8 +1,15 @@
-// Test: fractional-exponent
+// Test: atan2.negative-y-axis
 function main() returns ExitCode
-	let result = Math.pow(4.0, exponent: 0.5)  // Square root
-	print("{result}\n")
-	return 0
+	// -π/2 ≈ -1.5708
+	let angle = Math.atan2(-1.0, x: 0.0)
+	print("{angle}\n")
+	// Should be approximately -π/2
+	if angle < -1.57 'check1'
+		if angle > -1.58 'check2'
+			return 0
+		end 'check2'
+	end 'check1'
+	return 1
 end 'main'
 ---
 ExitCode: 0
@@ -22,10 +29,13 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 56
-    x64.movsdRegRip xmm0, [rip + __fconst_193]
-    x64.movsdRegRip xmm1, [rip + __fconst_194]
-    x64.callDirect Math.pow
+    x64.prologue 72
+    x64.storeSlotReg slot3, xmm6
+    x64.movsdRegRip xmm0, [rip + __fconst_191]
+    x64.movsdRegRip xmm1, [rip + __str_blob_44]
+    x64.callDirect Math.atan2
+    x64.movRegReg xmm6, xmm0
+    x64.movRegReg xmm0, xmm6
     x64.callDirect __float_toString
     x64.storeSlotReg slot0, r8
     x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
@@ -64,8 +74,32 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot0
     x64.callDirect __str_decref
+    x64.movsdRegRip xmm0, [rip + __fconst_192]
+    x64.ucomisdRegReg xmm0, xmm6
+    x64.jcc above, check1
+    x64.jmp ifcont
+  check1:
+    x64.movsdRegRip xmm0, [rip + __fconst_193]
+    x64.ucomisdRegReg xmm6, xmm0
+    x64.jcc above, check2
+    x64.jmp ifcont
+  check2:
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.loadRegSlot xmm6, slot3
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.loadRegSlot xmm6, slot3
+    x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -1735,7 +1769,7 @@ func @__singleDigit {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_185]
+    x64.leaRegRdata rcx, [rip + __str_blob_184]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -1756,7 +1790,7 @@ func @__singleDigit {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_186]
+    x64.leaRegRdata rcx, [rip + __str_blob_185]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -2221,7 +2255,7 @@ func @__appendDecimalGroup {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_187]
+    x64.leaRegRdata rcx, [rip + __str_blob_186]
     x64.callDirect mrt_panic
     x64.epilogue 104
     x64.popReg r15
@@ -2352,7 +2386,7 @@ func @__appendDecimalGroup {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_188]
+    x64.leaRegRdata rcx, [rip + __str_blob_187]
     x64.callDirect mrt_panic
     x64.epilogue 104
     x64.popReg r15
@@ -3162,7 +3196,7 @@ func @__bigCompare {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_189]
+    x64.leaRegRdata rcx, [rip + __str_blob_188]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -3399,7 +3433,7 @@ func @__bigCompare {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_190]
+    x64.leaRegRdata rcx, [rip + __str_blob_189]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -4518,7 +4552,7 @@ func @__roundedToLength {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_191]
+    x64.leaRegRdata rcx, [rip + __str_blob_190]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 296
@@ -6133,11 +6167,12 @@ func @__float_fixedText {
     x64.ret
 }
 
-func @Math.exp {
+func @Math.atan {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.prologue 48
+    x64.storeSlotReg slot0, xmm6
     x64.movsdRegRip xmm1, [rip + __str_blob_44]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc parity, ifcont
@@ -6146,145 +6181,73 @@ func @Math.exp {
     x64.jcc equal, zero
     x64.jmp ifcont
   zero:
-    x64.movsdRegRip xmm0, [rip + __fconst_195]
-    x64.epilogue 32
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movsdRegRip xmm1, [rip + __str_blob_44]
     x64.ucomisdRegReg xmm1, xmm0
-    x64.setccReg above, rax
-    x64.jcc above, neg
-    x64.jmp critsplit
-  neg:
+    x64.jcc above, negative
+    x64.jmp ifcont
+  negative:
     x64.movsdRegRip xmm1, [rip + __str_blob_44]
     x64.subsdRegReg xmm1, xmm1, xmm0
-    x64.jmp ifcont
-  critsplit:
-    x64.movRegReg xmm1, xmm0
-    x64.jmp ifcont
+    x64.movRegReg xmm0, xmm1
+    x64.callDirect Math.atan
+    x64.movsdRegRip xmm1, [rip + __str_blob_44]
+    x64.subsdRegReg xmm1, xmm1, xmm0
+    x64.movRegReg xmm0, xmm1
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
   ifcont:
-    x64.movRegImm32 rsi, 0
-    x64.jmp whilehdr
-  whilehdr:
-    x64.movsdRegRip xmm0, [rip + __fconst_195]
-    x64.ucomisdRegReg xmm1, xmm0
-    x64.jcc above, reduce
-    x64.jmp whileexit
-  reduce:
-    x64.movsdRegRip xmm0, [rip + __fconst_196]
-    x64.divsdRegReg xmm1, xmm1, xmm0
-    x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp whilehdr
-  whileexit:
-    x64.movsdRegRip xmm0, [rip + __fconst_195]
-    x64.movsdRegRip xmm2, [rip + __fconst_195]
-    x64.movsdRegRip xmm3, [rip + __fconst_195]
-    x64.movsdRegRip xmm4, [rip + __fconst_197]
-    x64.jmp whilehdr
-  whilehdr:
-    x64.ucomisdRegReg xmm4, xmm3
-    x64.jcc above, series
-    x64.jmp whileexit
-  series:
-    x64.mulsdRegReg xmm0, xmm0, xmm1
-    x64.movsdRegRip xmm5, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm3, xmm5
+    x64.movsdRegRip xmm1, [rip + __fconst_194]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, reciprocal
+    x64.jmp ifcont
+  reciprocal:
+    x64.movsdRegRip xmm6, [rip + __fconst_195]
+    x64.movsdRegRip xmm1, [rip + __fconst_194]
+    x64.movsdRegRip xmm2, [rip + __str_blob_44]
+    x64.ucomisdRegReg xmm0, xmm2
     x64.setccReg notEqual, rcx
     x64.setccReg parity, rdx
     x64.leaRegRegReg rcx, rcx, rdx
     x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rcx
-    x64.divsdRegReg xmm0, xmm0, xmm3
-    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rax
+    x64.divsdRegReg xmm1, xmm1, xmm0
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_180]
     x64.callDirect mrt_panic
     x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.epilogue 32
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.addsdRegReg xmm2, xmm2, xmm0
-    x64.movRegImm32 rcx, 1
-    x64.cvtsi2sdRegReg xmm5, rcx
-    x64.addsdRegReg xmm3, xmm3, xmm5
-    x64.jmp whilehdr
-  whileexit:
-    x64.movRegImm32 rcx, 0
-    x64.jmp forhdr
-  forhdr:
-    x64.cmpRegReg rcx, rsi
-    x64.jcc less, square
-    x64.jmp forexit
-  square:
-    x64.mulsdRegReg xmm2, xmm2, xmm2
-    x64.jmp forstep
-  forstep:
-    x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp forhdr
-  forexit:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, invert
-    x64.jmp critsplit
-  invert:
-    x64.movsdRegRip xmm0, [rip + __fconst_195]
-    x64.movsdRegRip xmm1, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm2, xmm1
-    x64.setccReg notEqual, rcx
-    x64.setccReg parity, rdx
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rax
-    x64.divsdRegReg xmm0, xmm0, xmm2
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_181]
-    x64.callDirect mrt_panic
-    x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.epilogue 32
+    x64.movRegReg xmm0, xmm1
+    x64.callDirect Math.atan
+    x64.subsdRegReg xmm6, xmm6, xmm0
+    x64.movRegReg xmm0, xmm6
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.jmp ifcont
-  critsplit:
-    x64.movRegReg xmm0, xmm2
-    x64.jmp ifcont
   ifcont:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Math.lnBySeries {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegReg rax, rcx
-    x64.cmpRegImm32 rax, 2
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rax, 64
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_192]
-    x64.callDirect mrt_panic
-    x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movsdRegRip xmm1, [rip + __fconst_195]
+    x64.movsdRegRip xmm1, [rip + __fconst_196]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, half_angle
+    x64.jmp ifcont
+  half_angle:
+    x64.movsdRegRip xmm1, [rip + __fconst_194]
     x64.movRegReg xmm2, xmm0
     x64.subsdRegReg xmm2, xmm0, xmm1
-    x64.movsdRegRip xmm1, [rip + __fconst_195]
+    x64.movsdRegRip xmm1, [rip + __fconst_194]
     x64.addsdRegReg xmm0, xmm0, xmm1
     x64.movsdRegRip xmm1, [rip + __str_blob_44]
     x64.ucomisdRegReg xmm0, xmm1
@@ -6292,283 +6255,13 @@ func @Math.lnBySeries {
     x64.setccReg parity, rdx
     x64.leaRegRegReg rcx, rcx, rdx
     x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rcx
-    x64.divsdRegReg xmm2, xmm2, xmm0
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_182]
-    x64.callDirect mrt_panic
-    x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegReg xmm0, xmm2
-    x64.mulsdRegReg xmm0, xmm2, xmm2
-    x64.movRegImm32 rsi, 1
-    x64.movRegReg xmm1, xmm2
-    x64.jmp forhdr
-  forhdr:
-    x64.cmpRegReg rsi, rax
-    x64.jcc less, series
-    x64.jmp forexit
-  series:
-    x64.mulsdRegReg xmm2, xmm2, xmm0
-    x64.movsdRegRip xmm3, [rip + __fconst_196]
-    x64.cvtsi2sdRegReg xmm4, rsi
-    x64.mulsdRegReg xmm3, xmm3, xmm4
-    x64.movsdRegRip xmm4, [rip + __fconst_195]
-    x64.addsdRegReg xmm3, xmm3, xmm4
-    x64.movsdRegRip xmm4, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm3, xmm4
-    x64.setccReg notEqual, rcx
-    x64.setccReg parity, rdx
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rcx
-    x64.movRegReg xmm4, xmm2
-    x64.divsdRegReg xmm4, xmm2, xmm3
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_183]
-    x64.callDirect mrt_panic
-    x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.addsdRegReg xmm1, xmm1, xmm4
-    x64.jmp forstep
-  forstep:
-    x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp forhdr
-  forexit:
-    x64.movsdRegRip xmm0, [rip + __fconst_196]
-    x64.mulsdRegReg xmm0, xmm0, xmm1
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Math.log {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movsdRegRip xmm1, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm1, xmm0
-    x64.jcc aboveEqual, invalid
-    x64.jmp ifcont
-  invalid:
-    x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movsdRegRip xmm1, [rip + __fconst_195]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, ifcont
-    x64.jmp fordered
-  fordered:
-    x64.jcc equal, one
-    x64.jmp ifcont
-  one:
-    x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 rax, 0
-    x64.jmp whilehdr
-  whilehdr:
-    x64.movsdRegRip xmm1, [rip + __fconst_195]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc aboveEqual, normalize_down
-    x64.jmp whileexit
-  normalize_down:
-    x64.movsdRegRip xmm1, [rip + __fconst_196]
-    x64.divsdRegReg xmm0, xmm0, xmm1
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp whilehdr
-  whileexit:
-    x64.movRegReg rbx, rax
-    x64.jmp whilehdr
-  whilehdr:
-    x64.movsdRegRip xmm1, [rip + __fconst_194]
-    x64.ucomisdRegReg xmm1, xmm0
-    x64.jcc above, normalize_up
-    x64.jmp whileexit
-  normalize_up:
-    x64.movsdRegRip xmm1, [rip + __fconst_196]
-    x64.mulsdRegReg xmm0, xmm0, xmm1
-    x64.leaRegRegImm32 rbx, rbx, -1
-    x64.jmp whilehdr
-  whileexit:
-    x64.movRegImm32 rcx, 20
-    x64.callDirect Math.lnBySeries
-    x64.movsdRegRip xmm1, [rip + __fconst_198]
-    x64.cvtsi2sdRegReg xmm2, rbx
-    x64.mulsdRegReg xmm2, xmm2, xmm1
-    x64.addsdRegReg xmm0, xmm0, xmm2
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Math.pow {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 48
-    x64.storeSlotReg slot0, xmm6
-    x64.movRegReg xmm6, xmm1
-    x64.movsdRegRip xmm1, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm6, xmm1
-    x64.jcc parity, ifcont
-    x64.jmp fordered
-  fordered:
-    x64.jcc equal, exp_zero
-    x64.jmp ifcont
-  exp_zero:
-    x64.movsdRegRip xmm0, [rip + __fconst_195]
-    x64.loadRegSlot xmm6, slot0
-    x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movsdRegRip xmm1, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, ifcont
-    x64.jmp fordered
-  fordered:
-    x64.jcc equal, base_zero
-    x64.jmp ifcont
-  base_zero:
-    x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm6, xmm0
-    x64.jcc above, exp_positive
-    x64.jmp ifcont
-  exp_positive:
-    x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.loadRegSlot xmm6, slot0
-    x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.loadRegSlot xmm6, slot0
-    x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movsdRegRip xmm1, [rip + __fconst_195]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, ifcont
-    x64.jmp fordered
-  fordered:
-    x64.jcc equal, base_one
-    x64.jmp ifcont
-  base_one:
-    x64.movsdRegRip xmm0, [rip + __fconst_195]
-    x64.loadRegSlot xmm6, slot0
-    x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movsdRegRip xmm1, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm1, xmm0
-    x64.jcc above, negative_base
-    x64.jmp ifcont
-  negative_base:
-    x64.movsdRegRip xmm0, [rip + __str_blob_44]
-    x64.loadRegSlot xmm6, slot0
-    x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.roundsdRegReg.towardNegative xmm1, xmm6
-    x64.movRegReg xmm2, xmm6
-    x64.subsdRegReg xmm2, xmm6, xmm1
-    x64.movsdRegRip xmm1, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm2, xmm1
-    x64.jcc parity, ifcont
-    x64.jmp fordered
-  fordered:
-    x64.jcc equal, is_int
-    x64.jmp ifcont
-  is_int:
-    x64.movsdRegRip xmm1, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm6, xmm1
-    x64.jcc above, positive_int
-    x64.jmp ifcont
-  positive_int:
-    x64.movsdRegRip xmm1, [rip + __fconst_197]
-    x64.ucomisdRegReg xmm1, xmm6
-    x64.jcc aboveEqual, small_int
-    x64.jmp ifcont
-  small_int:
-    x64.movsdRegRip xmm1, [rip + __fconst_195]
-    x64.movsdRegRip xmm2, [rip + __str_blob_44]
-    x64.jmp whilehdr
-  whilehdr:
-    x64.ucomisdRegReg xmm6, xmm2
-    x64.jcc above, mult_loop
-    x64.jmp whileexit
-  mult_loop:
-    x64.mulsdRegReg xmm1, xmm1, xmm0
-    x64.movsdRegRip xmm3, [rip + __fconst_195]
-    x64.addsdRegReg xmm2, xmm2, xmm3
-    x64.jmp whilehdr
-  whileexit:
-    x64.movRegReg xmm0, xmm1
-    x64.loadRegSlot xmm6, slot0
-    x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.jmp ifcont
-  ifcont:
-    x64.movsdRegRip xmm1, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm1, xmm6
-    x64.jcc above, negative_int
-    x64.jmp ifcont
-  negative_int:
-    x64.movsdRegRip xmm1, [rip + __str_blob_44]
-    x64.subsdRegReg xmm1, xmm1, xmm6
-    x64.movsdRegRip xmm2, [rip + __fconst_197]
-    x64.ucomisdRegReg xmm2, xmm1
-    x64.jcc aboveEqual, small_neg
-    x64.jmp ifcont
-  small_neg:
-    x64.movsdRegRip xmm2, [rip + __fconst_195]
-    x64.movsdRegRip xmm3, [rip + __str_blob_44]
-    x64.jmp whilehdr
-  whilehdr:
-    x64.ucomisdRegReg xmm1, xmm3
-    x64.jcc above, div_loop
-    x64.jmp whileexit
-  div_loop:
-    x64.movsdRegRip xmm4, [rip + __str_blob_44]
-    x64.ucomisdRegReg xmm0, xmm4
-    x64.setccReg notEqual, rcx
-    x64.setccReg parity, rdx
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.cmpRegImm32 rcx, 0
     x64.setccReg equal, rax
     x64.divsdRegReg xmm2, xmm2, xmm0
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_184]
+    x64.leaRegRdata rcx, [rip + __str_blob_181]
     x64.callDirect mrt_panic
     x64.movsdRegRip xmm0, [rip + __str_blob_44]
     x64.loadRegSlot xmm6, slot0
@@ -6576,26 +6269,223 @@ func @Math.pow {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movsdRegRip xmm4, [rip + __fconst_195]
-    x64.addsdRegReg xmm3, xmm3, xmm4
-    x64.jmp whilehdr
-  whileexit:
+    x64.movsdRegRip xmm6, [rip + __fconst_197]
     x64.movRegReg xmm0, xmm2
+    x64.callDirect Math.atan
+    x64.addsdRegReg xmm6, xmm6, xmm0
+    x64.movRegReg xmm0, xmm6
     x64.loadRegSlot xmm6, slot0
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.jmp ifcont
-  ifcont:
-    x64.jmp ifcont
-  ifcont:
-    x64.callDirect Math.log
-    x64.mulsdRegReg xmm6, xmm6, xmm0
-    x64.movRegReg xmm0, xmm6
-    x64.callDirect Math.exp
+    x64.movsdRegRip xmm1, [rip + __fconst_198]
+    x64.movRegReg xmm2, xmm0
+    x64.mulsdRegReg xmm2, xmm0, xmm0
+    x64.movsdRegRip xmm3, [rip + __fconst_194]
+    x64.movRegReg xmm4, xmm3
+    x64.movRegReg xmm3, xmm0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.ucomisdRegReg xmm1, xmm4
+    x64.jcc above, series
+    x64.jmp whileexit
+  series:
+    x64.movsdRegRip xmm5, [rip + __str_blob_44]
+    x64.subsdRegReg xmm5, xmm5, xmm2
+    x64.mulsdRegReg xmm0, xmm0, xmm5
+    x64.movsdRegRip xmm5, [rip + __fconst_199]
+    x64.mulsdRegReg xmm5, xmm5, xmm4
+    x64.movsdRegRip xmm6, [rip + __fconst_194]
+    x64.addsdRegReg xmm5, xmm5, xmm6
+    x64.movsdRegRip xmm6, [rip + __str_blob_44]
+    x64.ucomisdRegReg xmm5, xmm6
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rax
+    x64.movRegReg xmm6, xmm0
+    x64.divsdRegReg xmm6, xmm0, xmm5
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_182]
+    x64.callDirect mrt_panic
+    x64.movsdRegRip xmm0, [rip + __str_blob_44]
     x64.loadRegSlot xmm6, slot0
     x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.addsdRegReg xmm3, xmm3, xmm6
+    x64.movsdRegRip xmm5, [rip + __fconst_194]
+    x64.addsdRegReg xmm4, xmm4, xmm5
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg xmm0, xmm3
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Math.hasNegativeSignBit {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movqGprXmm rax, xmm0
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg less, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Math.atan2 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 56
+    x64.storeSlotReg slot0, xmm6
+    x64.storeSlotReg slot1, xmm7
+    x64.movRegReg xmm6, xmm0
+    x64.movRegReg xmm7, xmm1
+    x64.movRegReg xmm0, xmm6
+    x64.callDirect Math.hasNegativeSignBit
+    x64.movRegReg rbx, r8
+    x64.movsdRegRip xmm0, [rip + __str_blob_44]
+    x64.ucomisdRegReg xmm7, xmm0
+    x64.jcc parity, ifcont
+    x64.jmp fordered
+  fordered:
+    x64.jcc equal, x_zero
+    x64.jmp ifcont
+  x_zero:
+    x64.movsdRegRip xmm0, [rip + __str_blob_44]
+    x64.ucomisdRegReg xmm6, xmm0
+    x64.jcc parity, ifcont
+    x64.jmp fordered
+  fordered:
+    x64.jcc equal, both_zero
+    x64.jmp ifcont
+  both_zero:
+    x64.movRegReg xmm0, xmm7
+    x64.callDirect Math.hasNegativeSignBit
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, x_negative_zero
+    x64.jmp ifcont
+  x_negative_zero:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc notEqual, negative_half_turn
+    x64.jmp ifcont
+  negative_half_turn:
+    x64.movsdRegRip xmm0, [rip + __fconst_200]
+    x64.movsdRegRip xmm1, [rip + __str_blob_44]
+    x64.subsdRegReg xmm1, xmm1, xmm0
+    x64.movRegReg xmm0, xmm1
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_200]
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg xmm0, xmm6
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc notEqual, y_neg
+    x64.jmp ifcont
+  y_neg:
+    x64.movsdRegRip xmm0, [rip + __fconst_195]
+    x64.movsdRegRip xmm1, [rip + __str_blob_44]
+    x64.subsdRegReg xmm1, xmm1, xmm0
+    x64.movRegReg xmm0, xmm1
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_195]
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __str_blob_44]
+    x64.ucomisdRegReg xmm7, xmm0
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rax
+    x64.movRegReg xmm0, xmm6
+    x64.divsdRegReg xmm0, xmm6, xmm7
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_183]
+    x64.callDirect mrt_panic
+    x64.movsdRegRip xmm0, [rip + __str_blob_44]
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.callDirect Math.atan
+    x64.movsdRegRip xmm1, [rip + __str_blob_44]
+    x64.ucomisdRegReg xmm7, xmm1
+    x64.jcc above, x_pos
+    x64.jmp ifcont
+  x_pos:
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc notEqual, y_negative
+    x64.jmp ifcont
+  y_negative:
+    x64.movsdRegRip xmm1, [rip + __fconst_200]
+    x64.subsdRegReg xmm0, xmm0, xmm1
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm1, [rip + __fconst_200]
+    x64.addsdRegReg xmm0, xmm0, xmm1
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

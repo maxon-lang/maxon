@@ -2,29 +2,70 @@
 /// @category Math
 export typealias Real = float(f64.min to f64.max)
 
+/// How far a series in this module is pushed. Every series here converges geometrically, so the
+/// limit is small; the upper bound is generous enough for any of them and narrow enough that a
+/// nonsense value cannot reach a loop.
+typealias SeriesTermLimit = int(2 to 64)
+
+// ⭐ EVERY mathematical constant this module uses is declared HERE, exactly once.
+//
+// This is not tidiness. Two spellings of ln 2 used to live in `log` (0.693147180559945) and `log2`
+// (0.6931471805599453), nothing forced them to agree, and they had already drifted: the first is
+// ~2.7 ULP low, and `log` MULTIPLIES it by the binary exponent — up to about a thousand — so the
+// error was amplified straight into the answer. One definition is what makes that impossible
+// rather than merely unlikely.
+//
+// All are written to 17 significant digits, which is exactly what IEEE 754 double precision
+// resolves: more digits are silently dropped, fewer can leave the nearest double unreached.
+//
+// The `math` prefix is for the reader, not for the name space. MEASURED on both compilers: a
+// module-scope `let` in this file is FILE-LOCAL — a user program declaring its own `let pi`
+// compiles fine alongside, and one referring to `mathPi` is refused with E2004 — so these reserve
+// nothing from anyone. The prefix is here because at a use site several hundred lines below,
+// `mathPi` reads as the module constant it is and a bare `pi` would read as a local.
+let mathPi = 3.141592653589793
+let mathTwoPi = 6.283185307179586
+let mathPiHalf = 1.5707963267948966
+let mathPiQuarter = 0.7853981633974483
+let mathLn2 = 0.6931471805599453
+let mathLn10 = 2.302585092994046
+
+// tan(π/8) = √2 - 1 — the argument threshold of the fold in `atan`, where its exact value is
+// load-bearing rather than a tuning choice. Read that function before touching this line.
+//
+// ⚠ It is NOT `sqrt(2.0) - 1.0`: computed that way it double-rounds to 0.41421356237309515, 2 ULP
+// HIGH, which lands on the wrong side of the bound `atan` depends on. The literal below is the
+// correctly-rounded √2 - 1.
+let mathTanPiEighth = 0.41421356237309503
+
 export type Math
+	/// Bring an angle into [-π, π] by whole turns, which is where both trigonometric series below
+	/// converge fast enough for their term counts. Shared by `sin` and `cos`: the loop pair was
+	/// written out twice, and a reduction is exactly the kind of code where one copy gets fixed.
+	static function reduceToPiRange(x Real) returns Real
+		var angle = x
+
+		while angle > mathPi 'reduce_pos'
+			angle = angle - mathTwoPi
+		end 'reduce_pos'
+
+		while angle < -mathPi 'reduce_neg'
+			angle = angle + mathTwoPi
+		end 'reduce_neg'
+
+		return angle
+	end 'reduceToPiRange'
+
 	/// Calculate the sine of an angle (in radians)
 	/// Uses Taylor series: sin(x) = x - x^3/3! + x^5/5! - x^7/7! + ...
 	export static function sin(x Real) returns Real
-		// Handle zero case
+		// Returning `x` rather than the literal 0.0 is what makes sin(-0.0) == -0.0, as IEEE 754
+		// requires of every odd function. (cos needs no such care: it is even, and cos(-0.0) is 1.0.)
 		if x == 0.0 'zero'
-			return 0.0
+			return x
 		end 'zero'
 
-		// Reduce x to range [-π, π] for better convergence. 17 significant
-		// digits matches IEEE 754 double precision exactly — extra digits
-		// in the literal would be silently dropped.
-		let pi = 3.141592653589793
-		let two_pi = 6.283185307179586
-
-		// Normalize to [-π, π] using local variable
-		var angle = x
-		while angle > pi 'reduce_pos'
-			angle = angle - two_pi
-		end 'reduce_pos'
-		while angle < -pi 'reduce_neg'
-			angle = angle + two_pi
-		end 'reduce_neg'
+		let angle = Math.reduceToPiRange(x)
 
 		// Taylor series for sin(x):
 		// sin(x) = x - x^3/3! + x^5/5! - x^7/7! + ...
@@ -35,8 +76,13 @@ export type Math
 		var sum = angle
 		var n = 1.0
 
-		// Compute terms until convergence (about 12 terms is enough for double precision)
-		while n < 12.0 'series'
+		// Exclusive bound: `n` runs 1…11, so 11 correction terms follow the leading `angle`. Term n
+		// is x^(2n+1)/(2n+1)!, so at the worst reduced argument |x| = π the first omitted term is
+		// π^25/25! ≈ 1.7e-13. Here the SERIES, not rounding, sets the accuracy — raising this bound
+		// would tighten sin, and would move every committed result that depends on it.
+		let sin_series_term_limit = 12.0
+
+		while n < sin_series_term_limit 'series'
 			// Next term: multiply by -x^2 / ((2n)(2n+1))
 			let two_n = 2.0 * n
 			// `n >= 1`, so `two_n >= 2` and the divisor `(2n)(2n+1) >= 6`. Float `/` is fallible at
@@ -58,19 +104,7 @@ export type Math
 			return 1.0
 		end 'zero'
 
-		// Reduce x to range [-π, π] for better convergence. 17 significant
-		// digits matches IEEE 754 double precision exactly.
-		let pi = 3.141592653589793
-		let two_pi = 6.283185307179586
-
-		// Normalize to [-π, π] using local variable
-		var angle = x
-		while angle > pi 'reduce_pos'
-			angle = angle - two_pi
-		end 'reduce_pos'
-		while angle < -pi 'reduce_neg'
-			angle = angle + two_pi
-		end 'reduce_neg'
+		let angle = Math.reduceToPiRange(x)
 
 		// Taylor series for cos(x):
 		// cos(x) = 1 - x^2/2! + x^4/4! - x^6/6! + ...
@@ -81,8 +115,12 @@ export type Math
 		var sum = 1.0
 		var n = 1.0
 
-		// Compute terms until convergence (about 12 terms is enough for double precision)
-		while n < 12.0 'series'
+		// Exclusive bound: `n` runs 1…11, so 11 correction terms follow the leading 1. Term n is
+		// x^(2n)/(2n)!, so at the worst reduced argument |x| = π the first omitted term is
+		// π^24/24! ≈ 1.3e-12 — as in `sin`, the series is the accuracy limit, not rounding.
+		let cos_series_term_limit = 12.0
+
+		while n < cos_series_term_limit 'series'
 			// Next term: multiply by -x^2 / ((2n-1)(2n))
 			let two_n = 2.0 * n
 			// `n >= 1`, so `two_n >= 2` and the divisor `(2n-1)(2n) >= 2`. Guaranteed-safe divide with
@@ -123,8 +161,12 @@ export type Math
 		var sum = 1.0
 		var k = 1.0
 
-		// Compute first 20 terms
-		while k < 20.0 'series'
+		// Exclusive bound: `k` runs 1…19, so 19 terms follow the leading 1. The halving loop above
+		// leaves `val` in (0, 1], where the first omitted term is at most 1/20! ≈ 4.1e-19 — two
+		// orders under a double's 1.1e-16 resolution, so this series is rounding-limited.
+		let exp_series_term_limit = 20.0
+
+		while k < exp_series_term_limit 'series'
 			term = term * val
 			let k_float = k
 			// `k` starts at 1.0 and only increments, so `k_float >= 1`. Safe divide, no ranged type to
@@ -149,6 +191,33 @@ export type Math
 
 		return result
 	end 'exp'
+
+	/// ln(y) for y > 0, by the atanh series ln(y) = 2 * Σ z^(2k+1)/(2k+1) with z = (y-1)/(y+1),
+	/// which converges for every positive y and fastest near y = 1.
+	///
+	/// Shared by `log` and `log2`. They differ only in how far they push the sum, so the term
+	/// limit is the caller's to state — two written-out copies of this loop is how the two ln 2
+	/// literals at the top of this file came to disagree, and this is the same shape.
+	static function lnBySeries(y Real, termLimit SeriesTermLimit) returns Real
+		let num = y - 1.0
+		let den = y + 1.0
+		// Both callers normalize `y` into a positive range before calling, so `den > 1`. Safe
+		// divide, no ranged type to prove it — rides `try`, `otherwise` unreachable.
+		let z = try (num / den) otherwise panic("log series divisor y+1 is > 1")
+		let z_squared = z * z
+		var term = z
+		var sum = z
+
+		for k in 1 upto termLimit 'series'
+			term = term * z_squared
+			let divisor = 2.0 * k + 1.0
+			// `k >= 1`, so `divisor = 2k+1 >= 3`. Safe divide, no ranged type to prove it — rides
+			// `try`, `otherwise` unreachable.
+			sum = sum + (try (term / divisor) otherwise panic("series divisor 2k+1 is >= 3"))
+		end 'series'
+
+		return 2.0 * sum
+	end 'lnBySeries'
 
 	/// Calculate natural logarithm (ln) of x
 	/// Uses Taylor series approximation around x=1
@@ -178,34 +247,16 @@ export type Math
 			n = n - 1
 		end 'normalize_up'
 
-		// Now compute log(y) using Taylor series: log(y) = 2 * sum((z^(2k+1))/(2k+1))
-		// where z = (y-1)/(y+1), converges for all y > 0
-		let num = y - 1.0
-		let den = y + 1.0
-		// `den = y + 1.0` with `y > 0`, so `den > 1`. Safe divide, no ranged type to prove it —
-		// rides `try`, `otherwise` unreachable.
-		let z = try (num / den) otherwise panic("log series divisor y+1 is > 1")
-		let z_squared = z * z
-		var term = try (num / den) otherwise panic("log series divisor y+1 is > 1")
-		var sum = term
+		// `upto` is exclusive, so `k` runs 1…19: 19 correction terms past the leading z. The
+		// normalization above leaves y in [0.5, 1), i.e. |z| <= 1/3, where the first omitted term
+		// 2·(1/3)^41/41 ≈ 1.4e-21 is far under the rounding floor.
+		let log_series_term_limit = 20
+		let ln_y = Math.lnBySeries(y, termLimit: log_series_term_limit)
 
-		// Compute first 20 terms for good precision
-		for k in 1 upto 20 'series'
-			term = term * z_squared
-			let divisor = 2.0 * k + 1.0
-			// `k >= 1`, so `divisor = 2k+1 >= 3`. Safe divide, no ranged type to prove it — rides
-			// `try`, `otherwise` unreachable.
-			sum = sum + (try (term / divisor) otherwise panic("series divisor 2k+1 is >= 3"))
-		end 'series'
-
-		var result = 2.0 * sum
-
-		// Add back the normalization: log(x) = log(y) + n*log(2)
-		// log(2) ≈ 0.693147180559945
-		let log2 = 0.693147180559945
-		result = result + n * log2
-
-		return result
+		// Add back the normalization: log(x) = log(y) + n*ln(2). `n` reaches into the hundreds for
+		// arguments near the ends of the double range, so it multiplies whatever error this
+		// constant carries — which is why it is the shared, correctly-rounded one.
+		return ln_y + n * mathLn2
 	end 'log'
 
 	/// Calculate base-10 logarithm of x
@@ -220,12 +271,9 @@ export type Math
 			return 0.0
 		end 'one'
 
-		// log10(x) = log(x) / log(10)
-		// log(10) is approximately 2.302585092994046
+		// log10(x) = ln(x) / ln(10)
 		let ln_x = Math.log(x)
-		let ln_10 = 2.302585092994046
-		let result = ln_x / ln_10
-		return result
+		return ln_x / mathLn10
 	end 'log10'
 
 	/// Calculate base-2 logarithm of x
@@ -255,30 +303,16 @@ export type Math
 			n = n - 1
 		end 'normalize_up'
 
-		// Now y is in [1.0, 2.0), compute log2(y) = ln(y) / ln(2)
-		// For y=1.0 (powers of 2), z=0 and the series gives exactly 0.0
-		// ln(y) via series: ln(y) = 2 * sum(z^(2k+1)/(2k+1)) where z = (y-1)/(y+1)
-		let num = y - 1.0
-		let den = y + 1.0
-		// `den = y + 1.0` with `y > 0`, so `den > 1`. Safe divide, no ranged type to prove it —
-		// rides `try`, `otherwise` unreachable.
-		let z = try (num / den) otherwise panic("log series divisor y+1 is > 1")
-		let z_squared = z * z
-		var term = try (num / den) otherwise panic("log series divisor y+1 is > 1")
-		var sum = term
-
-		for k in 1 upto 30 'series'
-			term = term * z_squared
-			let divisor = 2.0 * k + 1.0
-			// `k >= 1`, so `divisor = 2k+1 >= 3`. Safe divide, no ranged type to prove it — rides
-			// `try`, `otherwise` unreachable.
-			sum = sum + (try (term / divisor) otherwise panic("series divisor 2k+1 is >= 3"))
-		end 'series'
-
-		let ln_y = 2.0 * sum
-		// log2(y) = ln(y) / ln(2). 17 significant digits matches f64 precision.
-		let ln_2 = 0.6931471805599453
-		let frac = ln_y / ln_2
+		// Now y is in [1.0, 2.0), so log2(y) = ln(y) / ln(2).
+		// For y=1.0 (powers of 2), z=0 and the series gives exactly 0.0.
+		//
+		// `upto` is exclusive, so `k` runs 1…29. That is ten terms past what `log` uses over an
+		// argument range with the same |z| <= 1/3 bound, so the extra terms are all below the
+		// rounding floor; they are kept because dropping them would perturb the last bits of every
+		// log2 result already committed to a golden.
+		let log2_series_term_limit = 30
+		let ln_y = Math.lnBySeries(y, termLimit: log2_series_term_limit)
+		let frac = ln_y / mathLn2
 		// n is exact integer, frac is the small fractional correction
 		let result = n + frac
 		return result
@@ -287,9 +321,11 @@ export type Math
 	/// Calculate the tangent of an angle (in radians)
 	/// Uses the identity: tan(x) = sin(x) / cos(x)
 	export static function tan(x Real) returns Real
-		// Handle zero case
+		// Returning `x` rather than the literal 0.0 keeps tan(-0.0) == -0.0, as IEEE 754 requires.
+		// The general path would preserve it anyway — sin(-0.0)/cos(-0.0) is -0.0/1.0 — so this is
+		// the shortcut being made to agree with the arithmetic it stands in for.
 		if x == 0.0 'zero'
-			return 0.0
+			return x
 		end 'zero'
 
 		// tan(x) = sin(x) / cos(x)
@@ -377,30 +413,72 @@ export type Math
 	end 'pow'
 
 	/// Calculate the arc tangent of z
-	/// Uses Taylor series for |z| <= 1, identity for |z| > 1
+	/// Odd symmetry and two range reductions bring every argument down to |z| <= tan(π/8), where
+	/// the series below is exhausted well before a double can resolve its next term.
 	export static function atan(z Real) returns Real
+		// Returning `z` rather than the literal 0.0 is what makes atan(-0.0) == -0.0, as IEEE 754
+		// requires and as the oddness fold below claims.
 		if z == 0.0 'zero'
-			return 0.0
+			return z
 		end 'zero'
 
-		let pi_half = 1.5707963267948966
+		// atan is odd, so the negative half of the domain is the positive half mirrored. Folding it
+		// here rather than mirroring every reduction below keeps the identity atan(-z) == -atan(z)
+		// exact to the last bit: every operation the series performs is sign-symmetric, so the
+		// mirrored computation is bit-identical, which a separately-written negative path could
+		// only approximate.
+		if z < 0.0 'negative'
+			return -Math.atan(-z)
+		end 'negative'
 
-		// For |z| > 1, use atan(z) = sign(z) * π/2 - atan(1/z). In each branch `|z| > 1`, so the
+		// For z > 1, atan(z) = π/2 - atan(1/z) lands the reciprocal in (0, 1). `z > 1` here, so the
 		// divide is safe; no float ranged type expresses "magnitude > 1", so it rides `try`.
-		if z > 1.0 'large_pos'
-			return pi_half - Math.atan(try (1.0 / z) otherwise panic("atan: z > 1 in this branch"))
-		end 'large_pos'
-		if z < -1.0 'large_neg'
-			return -pi_half - Math.atan(try (1.0 / z) otherwise panic("atan: z < -1 in this branch"))
-		end 'large_neg'
+		if z > 1.0 'reciprocal'
+			return mathPiHalf - Math.atan(try (1.0 / z) otherwise panic("atan: z > 1 in this branch"))
+		end 'reciprocal'
 
-		// Taylor series for |z| <= 1: atan(z) = z - z^3/3 + z^5/5 - z^7/7 + ...
+		// For tan(π/8) < z <= 1, the angle-difference identity
+		//     atan(z) = π/4 + atan((z - 1) / (z + 1))
+		// maps the argument onto [-tan(π/8), 0]. Without it the series is handed arguments near 1,
+		// where it degenerates into the Leibniz series and converges like 1/n: the terms below then
+		// leave an error of order 1e-2, which is what made atan(1.0) wrong in its third digit and,
+		// through the reciprocal identity above, every z just outside 1 as well.
+		//
+		// ⚠⚠ `mathTanPiEighth` IS NOT A TUNING KNOB, AND LOWERING IT DOES NOT TRADE ACCURACY FOR
+		// SPEED — IT HANGS. The map g(z) = (z-1)/(z+1) is an INVOLUTION: g(g(z)) = z. Its fixed
+		// point is exactly √2 - 1 = tan(π/8). So if this branch ever handed the series' guard a
+		// value that re-entered this same branch, g would map it straight back and the recursion
+		// would never terminate. What rules that out is the threshold being the correctly-rounded
+		// √2 - 1, which sits 0.14 ULP BELOW the true fixed point: no double lies in that gap, so
+		// |g(z)| < threshold strictly for every representable z above it. ⇒ any threshold at or
+		// above this constant is safe; ANY LOWER ONE IS NOT. (MEASURED: with the threshold set to
+		// 0.3, atan(0.35) recurses until the process dies of stack exhaustion, exit 0xC00000FD.)
+		if z > mathTanPiEighth 'half_angle'
+			// `z > 0` in this branch, so the divisor `z + 1` exceeds 1; the divide rides `try` for
+			// want of a float ranged type that could prove it.
+			let reduced = try ((z - 1.0) / (z + 1.0)) otherwise panic("atan: z + 1 exceeds 1 in this branch")
+			return mathPiQuarter + Math.atan(reduced)
+		end 'half_angle'
+
+		// Taylor series for 0 < z <= tan(π/8): atan(z) = z - z^3/3 + z^5/5 - z^7/7 + ...
+		//
+		// Exclusive bound: `k` runs 1…24, so 24 correction terms follow the leading z, the last of
+		// them z^49/49. The alternating series truncates below its FIRST OMITTED term, z^51/51,
+		// which at the largest argument that can reach here is tan(π/8)^51/51 ≈ 6e-22 — six orders
+		// under a double's 1.1e-16 resolution.
+		//
+		// That bounds the TRUNCATION only. What the composed function actually delivers is a few
+		// ULP (measured to ~4.6 at worst against a 60-digit reference), from summing largest term
+		// first and from the cancellation in `π/4 + atan(reduced)` above. That is ordinary for a
+		// stdlib series and is not what this fix was about: the error it replaced was ~4.5e13 ULP.
+		let atan_series_term_limit = 25.0
+
 		let z_squared = z * z
 		var term = z
 		var sum = z
 		var k = 1.0
 
-		while k < 25.0 'series'
+		while k < atan_series_term_limit 'series'
 			term = term * (-z_squared)
 			let divisor = 2.0 * k + 1.0
 			// `k >= 1`, so `divisor = 2k+1 >= 3`. Safe divide, no ranged type to prove it — rides
@@ -412,33 +490,68 @@ export type Math
 		return sum
 	end 'atan'
 
+	/// True when `z`'s IEEE 754 sign bit is set — which includes -0.0, the one thing no COMPARISON
+	/// can report: -0.0 == 0.0, so `z < 0.0` and `z >= 0.0` both answer as though every zero were
+	/// positive. Reading the bit pattern is the only way to ask, and `__Builtins.floatToBits` is
+	/// the only way to see it (`stdlib/Builtins.maxon`'s `__float_toString` asks the same question
+	/// the same way, which is why an interpolated -0.0 prints with its sign).
+	static function hasNegativeSignBit(z Real) returns bool
+		return __Builtins.floatToBits(z) < 0
+	end 'hasNegativeSignBit'
+
 	/// Calculate the two-argument arc tangent
 	/// Returns the angle in radians between [-π, π]
 	export static function atan2(y Real, x Real) returns Real
-		// 17 significant digits matches IEEE 754 double precision exactly.
-		let pi = 3.141592653589793
-		let pi_half = 1.5707963267948966
+		// ⭐ EVERY branch below turns on the SIGN OF y, and where y is a zero, a comparison cannot
+		// supply it. IEEE 754 defines atan2 to carry y's sign through all of the zero cases —
+		// atan2(-0.0, x: -1.0) is -π, not +π — so the sign is read once, from the bits, and every
+		// branch asks this one question rather than two questions that disagree about -0.0.
+		let y_is_negative = Math.hasNegativeSignBit(y)
+
+		// The x == 0 axis is settled FIRST because it is the one case with no ratio to take. With
+		// it out of the way the guarded divide below is written once instead of once per quadrant,
+		// which is how it was: three copies of the same expression and the same panic string.
+		if x == 0.0 'x_zero'
+			if y == 0.0 'both_zero'
+				// Both coordinates are zero, so the angle is a matter of definition — and IEEE 754
+				// defines it from the two SIGNS rather than leaving it undefined: ±π when x is
+				// negative zero, ±0 when x is positive zero, taking the sign from y either way.
+				if Math.hasNegativeSignBit(x) 'x_negative_zero'
+					if y_is_negative 'negative_half_turn'
+						return -mathPi
+					end 'negative_half_turn'
+
+					return mathPi
+				end 'x_negative_zero'
+
+				// Returning `y` rather than a literal is what carries y's own zero sign out.
+				return y
+			end 'both_zero'
+
+			if y_is_negative 'y_neg'
+				return -mathPiHalf
+			end 'y_neg'
+
+			return mathPiHalf
+		end 'x_zero'
+
+		// `x` is guarded non-zero above. Its SIGN is still unknown, so no single float ranged type
+		// expresses the guarantee; the safe divide rides `try` and the `otherwise` is unreachable.
+		let principal = Math.atan(try (y / x) otherwise panic("atan2: x is guarded non-zero above"))
 
 		if x > 0.0 'x_pos'
-			return Math.atan(try (y / x) otherwise panic("atan2: x is guarded non-zero in this branch"))
+			// A zero y needs no special case here: the ratio keeps its sign and `atan` returns it.
+			return principal
 		end 'x_pos'
 
-		if x < 0.0 'x_neg'
-			if y >= 0.0 'y_nonneg'
-				return Math.atan(try (y / x) otherwise panic("atan2: x is guarded non-zero in this branch")) + pi
-			end 'y_nonneg'
-			return Math.atan(try (y / x) otherwise panic("atan2: x is guarded non-zero in this branch")) - pi
-		end 'x_neg'
+		// x < 0: the ratio lost the quadrant, so reflect by a half turn, choosing the direction
+		// that keeps the result inside [-π, π]. The choice is y's SIGN BIT and not `y >= 0.0`,
+		// which would route a -0.0 y to +π — the ratio it produces is +0.0, indistinguishable by
+		// comparison from the -0.0 that a +0.0 y produces, and the two want opposite half turns.
+		if y_is_negative 'y_negative'
+			return principal - mathPi
+		end 'y_negative'
 
-		// x == 0
-		if y > 0.0 'y_pos'
-			return pi_half
-		end 'y_pos'
-		if y < 0.0 'y_neg'
-			return -pi_half
-		end 'y_neg'
-
-		// x == 0 and y == 0
-		return 0.0
+		return principal + mathPi
 	end 'atan2'
 end 'Math'

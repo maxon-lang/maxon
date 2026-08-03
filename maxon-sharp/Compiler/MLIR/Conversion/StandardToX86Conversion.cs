@@ -1,4 +1,3 @@
-using System.Globalization;
 using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
 
@@ -24,9 +23,14 @@ public static class StandardToX86Conversion {
 
   // The single module-scoped rdata label: GetOrCreateAbsMask dedups it across
   // the whole module. Every other rdata label is content-addressed
-  // (__float_<value>, __abs_mask_f32) or function-unique (__jt_<func>_<n>), so
-  // the deterministic merge below dedups only this one to reproduce the exact
-  // sequential rdata layout.
+  // (__float_<value>, __float_-0, __float_nan_<bits>, __abs_mask_f32) or
+  // function-unique (__jt_<func>_<n>), so the deterministic merge below dedups
+  // only this one to reproduce the exact sequential rdata layout.
+  //
+  // Content-addressing is what makes that merge sound, and FloatConstantPool is
+  // what makes it TRUE: it keys on the IEEE bit pattern, so two labels agree
+  // only when their bytes do. It did not always hold — a value-keyed pool gave
+  // -0.0 and +0.0 one slot, which is why the two zeros are spelled apart above.
   private const string AbsMaskLabel = "__abs_mask";
 
   public static IrModule<X86Op> Run(IrModule<StandardOp> module) {
@@ -220,8 +224,10 @@ public static class StandardToX86Conversion {
     }
 
     // Track float constants for rdata deduplication
-    var floatConstants = new Dictionary<double, string>();
-    var float32Constants = new Dictionary<float, string>();
+    // Keyed on the IEEE bit pattern, not the value — see FloatConstantPool for why that is the
+    // difference between -0.0 surviving to the rdata slot and being silently replaced by +0.0.
+    var floatConstants = new Dictionary<long, string>();
+    var float32Constants = new Dictionary<int, string>();
 
     // F32 abs mask (created on demand when StdAbsF32Op is present)
     var absF32MaskLabel = "__abs_mask_f32";
@@ -785,13 +791,15 @@ public static class StandardToX86Conversion {
             break;
 
           case StdConstF64Op floatOp: {
-            var label = GetOrCreateFloatLabel(floatOp.Value, rdataEntries, floatConstants);
+            var label = FloatConstantPool.GetOrCreateFloat64Label(floatOp.Value, floatConstants,
+              (l, bytes) => rdataEntries.Add((l, bytes, 1)));
             regManager.EmitXmmLoadFromRipRelative(floatOp.Result, label, x86Block);
             break;
           }
 
           case StdConstF32Op floatF32Op: {
-            var label = GetOrCreateFloat32Label(floatF32Op.Value, rdataEntries, float32Constants);
+            var label = FloatConstantPool.GetOrCreateFloat32Label(floatF32Op.Value, float32Constants,
+              (l, bytes) => rdataEntries.Add((l, bytes, 1)));
             regManager.EmitXmmLoadFromRipRelativeF32(floatF32Op.Result, label, x86Block);
             break;
           }
@@ -1352,15 +1360,6 @@ public static class StandardToX86Conversion {
     }
   }
 
-  private static string GetOrCreateFloatLabel(double value, List<(string label, byte[] bytes, int alignment)> rdataEntries, Dictionary<double, string> floatConstants) {
-    if (!floatConstants.TryGetValue(value, out var label)) {
-      label = $"__float_{value.ToString(CultureInfo.InvariantCulture)}";
-      floatConstants[value] = label;
-      rdataEntries.Add((label, BitConverter.GetBytes(value), 1));
-    }
-    return label;
-  }
-
   /// <summary>
   /// Find the stack offset of the first field slot of a struct variable.
   /// The sret convention passes this address as the pointer to the struct's storage.
@@ -1384,15 +1383,6 @@ public static class StandardToX86Conversion {
       throw new InvalidOperationException($"No field offsets found for struct variable '{structVarName}'");
     }
     return lowestOffset.Value;
-  }
-
-  private static string GetOrCreateFloat32Label(float value, List<(string label, byte[] bytes, int alignment)> rdataEntries, Dictionary<float, string> float32Constants) {
-    if (!float32Constants.TryGetValue(value, out var label)) {
-      label = $"__float32_{value.ToString(CultureInfo.InvariantCulture)}";
-      float32Constants[value] = label;
-      rdataEntries.Add((label, BitConverter.GetBytes(value), 1));
-    }
-    return label;
   }
 
   private static string GetOrCreateAbsMask(List<(string label, byte[] bytes, int alignment)> rdataEntries) {

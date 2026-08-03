@@ -40,8 +40,15 @@ the divide fallible.
 
 ⚠ **The FILE's subject survives intact and every other case in it stays green.** What is lost
 is only the RECIPROCAL as the instrument: `-0.0`'s sign bit is still pinned by the negated-literal,
-field-default, range-bound and interpolation cases below. Observing the sign of a zero DIRECTLY
-needs `print` of a signed infinity, or a `floatToBits` builtin shv2 does not expose to user code.
+field-default, range-bound and interpolation cases below. Observing the sign of a zero DIRECTLY is
+done with `__Builtins.floatToBits`, which user code MAY call — see `specs-shv2/atan2.md`'s
+`atan2.signed-zero`, which pins seven signed-zero argument combinations, the three with a zero RESULT
+through that builtin. (An earlier revision of this
+paragraph said shv2 does not expose that builtin to user code. It was wrong, and it is corrected
+here rather than deleted because it is the sentence a reader reaches for when deciding whether a
+sign of zero is observable at all.) **The verdict above is untouched by that correction**: the case
+below is invalidated because E3057 makes `1.0 / x` a throwing operation, not because its result
+could not be observed — so no new instrument re-enables it.
 
 <!-- disabled-test: negative-zero-literal-keeps-its-sign -->
 <!-- ⚠ RE-SHELVED WITH ITS REAL REASON. It was filed as blocked on float interpolation; that landed,

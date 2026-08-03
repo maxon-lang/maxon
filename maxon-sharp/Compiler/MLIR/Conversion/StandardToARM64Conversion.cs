@@ -1,4 +1,3 @@
-using System.Globalization;
 using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
 
@@ -110,9 +109,11 @@ public static class StandardToARM64Conversion {
     }
     sinkOnlyValues.ExceptWith(usedByNonSink);
 
-    // Track float constants for rdata deduplication
-    var floatConstants = new Dictionary<double, string>();
-    var float32Constants = new Dictionary<float, string>();
+    // Track float constants for rdata deduplication, keyed on the IEEE bit pattern rather than
+    // the value — see FloatConstantPool for why that is the difference between -0.0 reaching its
+    // rdata slot and being silently replaced by +0.0.
+    var floatConstants = new Dictionary<long, string>();
+    var float32Constants = new Dictionary<int, string>();
 
     var regManager = new ARM64RegisterManager {
       DeferredValues = sinkOnlyValues,
@@ -239,8 +240,8 @@ public static class StandardToARM64Conversion {
       Dictionary<string, int> varOffsets,
       ARM64RegisterManager regManager,
       IrModule<ARM64Op> outputModule,
-      Dictionary<double, string> floatConstants,
-      Dictionary<float, string> float32Constants,
+      Dictionary<long, string> floatConstants,
+      Dictionary<int, string> float32Constants,
       string funcName,
       Dictionary<StdValue, int> lastUseOfValue,
       int currentOpIndex,
@@ -261,13 +262,15 @@ public static class StandardToARM64Conversion {
 
       // === Float Constants ===
       case StdConstF64Op constF64: {
-        var label = GetOrCreateFloatLabel(constF64.Value, outputModule, floatConstants);
+        var label = FloatConstantPool.GetOrCreateFloat64Label(constF64.Value, floatConstants,
+          (l, bytes) => outputModule.RdataEntries.Add((l, bytes, 8)));
         regManager.EmitFpLoadFromRdata(constF64.Result, label, FloatPrecision.F64, block);
         break;
       }
 
       case StdConstF32Op constF32: {
-        var label = GetOrCreateFloat32Label(constF32.Value, outputModule, float32Constants);
+        var label = FloatConstantPool.GetOrCreateFloat32Label(constF32.Value, float32Constants,
+          (l, bytes) => outputModule.RdataEntries.Add((l, bytes, 4)));
         regManager.EmitFpLoadFromRdata(constF32.Result, label, FloatPrecision.F32, block);
         break;
       }
@@ -979,24 +982,6 @@ public static class StandardToARM64Conversion {
         regManager.NoteValueDead(val);
       }
     }
-  }
-
-  private static string GetOrCreateFloatLabel(double value, IrModule<ARM64Op> module, Dictionary<double, string> floatConstants) {
-    if (!floatConstants.TryGetValue(value, out var label)) {
-      label = $"__float_{value.ToString(CultureInfo.InvariantCulture)}";
-      floatConstants[value] = label;
-      module.RdataEntries.Add((label, BitConverter.GetBytes(value), 8));
-    }
-    return label;
-  }
-
-  private static string GetOrCreateFloat32Label(float value, IrModule<ARM64Op> module, Dictionary<float, string> float32Constants) {
-    if (!float32Constants.TryGetValue(value, out var label)) {
-      label = $"__float32_{value.ToString(CultureInfo.InvariantCulture)}";
-      float32Constants[value] = label;
-      module.RdataEntries.Add((label, BitConverter.GetBytes(value), 4));
-    }
-    return label;
   }
 
   private static int AlignUp(int value, int alignment) {
