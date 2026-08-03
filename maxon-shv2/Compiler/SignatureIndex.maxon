@@ -7549,6 +7549,27 @@ export type ProgramSignatures
 		return self.arrayByteInstance
 	end 'bareArrayByteInstance'
 
+	// ⭐⭐ **DOES ANY NAME IN THIS PROGRAM HAVE DECLARATIONS THAT DISAGREE — ABOUT A RANGE *OR* ABOUT AN
+	// INSTANCE? (N3 review)** The one bool `fileScopedInstance` and `rekeyScopedGenericAliases` both
+	// short-circuit on, and it is written ONCE because the two SPELLINGS of it had already cost this rung a
+	// wrong answer: `settleGenericAliasContest`'s ⛔ paragraph records `rekeyScopedGenericAliases` gated on
+	// the GENERIC half alone, which skipped N2's RANGE re-key and made
+	// `bytearray-element-size/a-byte-two-files-disagree-about-is-two-types` stop refusing — invisible to a
+	// filtered run, caught only by the full suite. Two spellings of one predicate is this project's signature
+	// bug, and here it had already fired once.
+	//
+	// ⚠ **THE NEXT CONTEST GOES HERE AND NOWHERE ELSE.** A FUNCTION typealias has the identical whole-program
+	// defect (`Parser.readTypeAliasDeclaration` names it), so a third disjunct is expected; spelled twice,
+	// teaching one copy and not the other is a wrong answer at whichever door was missed, with no compile
+	// error at either.
+	//
+	// ⚠ It is deliberately NOT the gate on `settleRangeScopedInstances`, whose own early return stays
+	// range-only: that pass mints RANGE variants and has nothing to do for a generic contest. Its gate
+	// answers a different question that happens to mention the same map.
+	function anythingContested() returns bool
+		return self.typeAliases.anyRangeContest() or self.contestedGenericAliases.count() > 0
+	end 'anythingContested'
+
 	// ⭐⭐ **THE SAME INSTANCE, WITH EVERY CONTESTED NAME IN IT SPELLED THE WAY `filePath` MEANS IT (N2 + N3)**
 	// — the ONE place a generic instance becomes a particular file's instance, so no door grows a qualifier
 	// step of its own. `mangleGenericInstance` and `canonicalInstanceName` are structural over the args, so
@@ -7577,7 +7598,7 @@ export type ProgramSignatures
 	// at the settle it is the file that WROTE the declaration, and a parameter name true at some call sites
 	// and false at others is the contract `declaredSlotType`'s header refuses for the same reason.
 	export function fileScopedInstance(id GenericInstanceId, filePath FilePath) returns GenericInstanceId
-		if not self.typeAliases.anyRangeContest() and self.contestedGenericAliases.count() == 0 'nothingInThisProgramIsContested'
+		if not self.anythingContested() 'nothingInThisProgramIsContested'
 			return id
 		end 'nothingInThisProgramIsContested'
 
@@ -7840,7 +7861,7 @@ export type ProgramSignatures
 	// bare entry and the file it is scoped by name one declaration. The E3017 instantiation SITES are rebuilt
 	// on the rule they already had — each carries its own file, so they need no last-wins rule at all.
 	function rekeyScopedGenericAliases()
-		if not self.typeAliases.anyRangeContest() and self.contestedGenericAliases.count() == 0 'nothingInThisProgramIsContested'
+		if not self.anythingContested() 'nothingInThisProgramIsContested'
 			return
 		end 'nothingInThisProgramIsContested'
 

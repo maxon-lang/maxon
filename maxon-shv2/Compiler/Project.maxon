@@ -1144,6 +1144,23 @@ export type RangedAliasRegistry
 	// ⚠ The extra probe is paid ONLY by a contested name whose reader declares none of it. An uncontested
 	// name — nearly every name in any program — short-circuits on the `multiplyDeclared` miss exactly as
 	// it did, so the hot path is unchanged.
+	//
+	// ⛔⛔ **THIS THREE-TIER RULE IS SPELLED TWICE, AND THE OTHER COPY IS
+	// `ProgramSignatures.scopedGenericAliasInstance` (N3 review).** That one resolves a GENERIC-INSTANCE
+	// alias — own file, then a declaration the reader may NAME, then bare last-wins — over
+	// `contestedGenericAliases`/`nameableGenericAliases` instead of `multiplyDeclared`/`nameable`. The two
+	// cannot be merged today: the tiers are identical but the VALUES are not (a `RangedTypeAlias` against a
+	// `GenericInstanceId`) and this compiler's source has no generic FUNCTION to abstract over that, so what
+	// stands in for one spelling is this pointer — and it must be read as an INSTRUCTION, not a note: **edit
+	// this rule and you must edit that one.**
+	//
+	// ⚠ It is stated on BOTH sides deliberately. The generic copy already named this one; this one named
+	// nothing, so an editor arriving at the older and more prominent door — which is where the next change
+	// lands — had no reason to know a second copy existed. **And the next change is already known to be
+	// coming to both**: the E3063 boundary each header stops at (choosing between two LEGAL candidates by
+	// module-directory precedence) is owed by the ranged form and the generic form alike, and the failure
+	// mode of teaching only one is a generic alias resolving last-wins where a ranged one resolves by
+	// precedence — a wrong answer at one door, with no compile error at either.
 	export function lookup(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
 		if let byFile = try self.multiplyDeclared.get(name) 'contested'
 			if let own = try byFile.get(readerFilePath.toString()) 'readersOwnFile'
