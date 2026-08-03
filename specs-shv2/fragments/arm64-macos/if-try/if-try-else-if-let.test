@@ -1,0 +1,77 @@
+// Test: if-try-else-if-let
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryA() returns Integer throws MyError
+	throw MyError.failed
+end 'tryA'
+
+function tryB() returns Integer throws MyError
+	return 42
+end 'tryB'
+
+function main() returns ExitCode
+	var result = 0
+	if let a = try tryA() 'a'
+		result = a
+	end 'a' else if let b = try tryB() 'b'
+		result = b
+	end 'b'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+func @tryA {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @tryB {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.bl tryA
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, a
+    arm64.b ifelse
+  a:
+    arm64.b ifcont
+  ifelse:
+    arm64.bl tryB
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, b
+    arm64.b ifelse
+  b:
+    arm64.b ifcont
+  ifelse:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

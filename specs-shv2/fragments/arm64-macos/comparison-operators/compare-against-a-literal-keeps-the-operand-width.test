@@ -1,0 +1,81 @@
+// Test: compare-against-a-literal-keeps-the-operand-width
+function big() returns ExitCode
+	return 4000000000
+end 'big'
+
+function hundred() returns ExitCode
+	return 100
+end 'hundred'
+
+function main() returns ExitCode
+	let e = big()
+	if e > 100 'literalForm'
+		print("literal=gt\n")
+	end 'literalForm' else 'literalNot'
+		print("literal=le\n")
+	end 'literalNot'
+
+	if e > hundred() 'valueForm'
+		print("value=gt\n")
+	end 'valueForm' else 'valueNot'
+		print("value=le\n")
+	end 'valueNot'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @big {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 4000000000
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @hundred {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 100
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl big
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 100
+    arm64.cset x0, gt
+    arm64.cbnz x0, literalForm
+    arm64.b ifelse
+  literalForm:
+    arm64.leaRdata x0, __str_rec_1
+    arm64.bl __print_string
+    arm64.b ifcont
+  ifelse:
+    arm64.leaRdata x0, __str_rec_3
+    arm64.bl __print_string
+    arm64.b ifcont
+  ifcont:
+    arm64.bl hundred
+    arm64.cmp x19, x0
+    arm64.cset x0, gt
+    arm64.cbnz x0, valueForm
+    arm64.b ifelse
+  valueForm:
+    arm64.leaRdata x0, __str_rec_5
+    arm64.bl __print_string
+    arm64.b ifcont
+  ifelse:
+    arm64.leaRdata x0, __str_rec_7
+    arm64.bl __print_string
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
