@@ -1894,6 +1894,59 @@ function isByteElementName(name ByteArray) returns bool
 	return base.equals(ByteElementTypeName) or base.equals(SynthesizedByteElementName)
 end 'isByteElementName'
 
+// ⭐ **THE INCLUSIVE INTEGER VALUE SET A TRIVIAL ARRAY ELEMENT ADMITS, WHEN IT HAS ONE** — the answer
+// `ProgramSignatures.elementIntegerValueRange` gives, and a UNION because *"this element has no integer
+// value set"* is an ANSWER and not a failure: a `bool`, an enum and an `ExitCode` are perfectly good
+// elements, they simply cannot be compared to another element by RANGE. `DeclaredAlias`'s shape, for
+// `DeclaredAlias`'s reason.
+union ElementIntegerRange
+	notIntegerValued
+	inclusive(low ParsedInt, high ParsedInt)
+end 'ElementIntegerRange'
+
+// The value set a BARE `int` element admits — the machine word's whole signed range, which is EXACTLY what
+// `typealias Integer = int(i64.min to i64.max)` spells. Named because that identity is load-bearing rather
+// than incidental: `[1, 2, 3]` mints `Array with int` and `IntArray.create()` mints `Array with Integer`,
+// two instances over one value set, and `arrayAppendArgAdmits` joins them on these two numbers alone.
+let BareIntegerElementLow = i64.min as ParsedInt
+let BareIntegerElementHigh = i64.max as ParsedInt
+
+// A ranged alias's declared bounds as a value set — `notIntegerValued` for a FLOAT alias, whose `low`/`high`
+// are IEEE-754 bit patterns and order nothing like integers (`floatBoundOrderKey` is where that is spelled
+// out). shv2 has no float array element to reach it with today (`E2062` refuses a float type argument),
+// which is why this arm returns the honest answer rather than inventing a comparison.
+function integerAliasValueRange(alias RangedTypeAlias) returns ElementIntegerRange
+	if aliasIsFloat(alias) 'aFloatAliasHasNoIntegerValueSet'
+		return ElementIntegerRange.notIntegerValued
+	end 'aFloatAliasHasNoIntegerValueSet'
+
+	return ElementIntegerRange.inclusive(alias.low, high: alias.high)
+end 'integerAliasValueRange'
+
+// ⭐ **DOES `[destLow, destHigh]` CONTAIN EVERY VALUE OF `[sourceLow, sourceHigh]`?**
+//
+// ⚠⚠ **A RAW-NEGATIVE BOUND IS AMBIGUOUS AND IS ANSWERED NO — the same conservative direction
+// `rangeHoldsEveryByte` argues for at length, for the same reason.** Bounds ride as the RAW 64-bit pattern
+// `ParsedInt` holds, so `-1` and `u64.max` are the SAME BITS: `int(0 to u64.max)`'s `high` reads as `-1`,
+// and a signed `>=` would cheerfully declare `int(0 to 100)` wide enough to hold it. This door ADMITS a run
+// of values into a declared element, so the ambiguous answer has to be refusal.
+//
+// ⭐ **THE BIT-EQUALITY ARM RUNS FIRST, AND IT IS WHAT MAKES THE FULL-WIDTH CASE WORK AT ALL.** `int` and
+// `int(i64.min to i64.max)` are one value set whose `low` IS raw-negative, so the ordered comparison could
+// never reach it. Two identical bound pairs are one value set whatever the bits mean, which needs no
+// interpretation of them.
+function inclusiveRangeContains(destLow ParsedInt, destHigh ParsedInt, sourceLow ParsedInt, sourceHigh ParsedInt) returns bool
+	if destLow == sourceLow and destHigh == sourceHigh 'oneValueSetSpelledTwice'
+		return true
+	end 'oneValueSetSpelledTwice'
+
+	if destLow < 0 or destHigh < 0 or sourceLow < 0 or sourceHigh < 0 'aRawNegativeBoundIsAmbiguous'
+		return false
+	end 'aRawNegativeBoundIsAmbiguous'
+
+	return destLow <= sourceLow and destHigh >= sourceHigh
+end 'inclusiveRangeContains'
+
 // ⭐⭐ **THE ELEMENT OF EVERY COMPILER-SYNTHESIZED BYTE BUFFER — AND WHY IT IS NOT `Byte`.**
 // A buffer the COMPILER mints is byte-packed by construction: `__str_bytes_view` publishes a record over a
 // String's own buffer, whose `element_size@24` is 1 always, and the `__ManagedMemory` an OS runtime entry
@@ -7652,6 +7705,126 @@ export type ProgramSignatures
 	function rosterElementHoldsEveryByte(element ByteArray) returns bool
 		return try self.typeAliases.holdsEveryByteInEveryFile(element) otherwise true
 	end 'rosterElementHoldsEveryByte'
+
+	// ⭐⭐ **MAY `append` COPY FROM THIS ARRAY INTO A RECEIVER OF `receiverGiid`? — THE NINTH COERCION SITE,
+	// ASKED IN ONE PLACE FOR BOTH SURFACES OF THE RECORD (A4b).** `Array.append` and the buffer surface's
+	// `append` are one operation with one precondition and two diagnostics (`Parser.requireArrayAppendArg`
+	// and `requireManagedMemoryAppendArg`, which differ only in the type each one's SIGNATURE names).
+	//
+	// ⭐ **IT IS NOT THE WHOLE-ARRAY COERCION A DECLARED PARAMETER ASKS, AND THAT IS THE WHOLE SEPARATION.**
+	// A parameter HANDS THE CONTAINER OVER — the callee may push into it, and what it pushes is read back
+	// through the caller's element — so there the identity of the array is the question, and
+	// `aggregatesConflict` refuses `Array_Small` at an `Array_Byte` parameter even though every `Small`
+	// value fits a byte. `append` hands nothing over: the argument is BORROWED, its element VALUES are
+	// copied into the receiver's own storage, and the receiver stays its own type. So the honest question
+	// is the one a `push` of each element would ask — *may this value be stored in that element?* — asked
+	// once for the whole run, because a bulk byte copy has nowhere to put the runtime range check a `push`
+	// gets (`InsertRangeChecks`). MEASURED: `b.push(<a Small value>)` panics `Range check failed: value
+	// outside typealias 'Byte'`, while `b.append(<the Smalls>)` copied the same 150 in silently.
+	//
+	// ⇒ **TWO QUESTIONS, BOTH ASKED, NEITHER STANDING IN FOR THE OTHER:**
+	//
+	//   • **REPRESENTATION** (`sameTrivialArrayShape`) — same managedness, same `element_size@24`. This is
+	//     what makes `__arr_append`'s byte copy legal at all, and it is the test that was here ALONE. A
+	//     width is not a type: it admits EVERY one-byte trivial element in the program, which is exactly
+	//     how a `Small` (and a `bool`) walked into a `Bytes` and how two enums walked into each other.
+	//   • **VALUE DOMAIN** (`trivialElementAdmitsEveryValueOf`) — every value the argument's element can
+	//     hold must be a value the receiver's element admits. Asymmetric on purpose: a `Byte`
+	//     (`int(0 to 100)`) source into a `Small` (`int(0 to 200)`) destination cannot produce an
+	//     out-of-range read and stays legal, and refusing both directions would be over-refusal.
+	//
+	// ⛔ **REPLACING THE FIRST WITH INSTANCE IDENTITY WOULD REFUSE A CORRECT PROGRAM.** `[1, 2, 3]` mints
+	// `Array with int` (`internBuiltinIntegerInstance`) and `IntArray.create()` an `Array with Integer` —
+	// two instances over ONE value set — and `arrays.md`'s `append-empty-to-nonempty` /
+	// `append-nonempty-to-empty` join them. The domain test is what admits that pair without admitting the
+	// pairs above; the giids genuinely differ and always will, because an instance interns on the element's
+	// NAME.
+	//
+	// ⭐ **AND THE BYTE BOUNDARY IS ASKED HERE LIKE IT IS AT THE OTHER EIGHT SITES (R4.7).** A
+	// compiler-synthesized buffer wears `__ManagedByte`, which is not a ranged alias and therefore has no
+	// declared domain to compare — so without `byteBufferBoundaryAdmits` a `currentPath()` buffer appended
+	// to an `Array with Byte` would stop compiling, which is the correct program R4.7 exists to keep. It is
+	// asked SECOND, after the domain test has already answered no, so an ordinary append pays nothing for it.
+	export function arrayAppendArgAdmits(receiverGiid GenericInstanceId, argTag ValueTypeTag, argNameId TypeNameId, readerFilePath FilePath) returns bool
+		if not self.isArrayInstanceAt(argTag, nameId: argNameId) 'notAnArrayAtAll'
+			return false
+		end 'notAnArrayAtAll'
+
+		// A MANAGED receiver deep-clones each element through the RECEIVER's own `funcAddr(__clone_<E>)`
+		// stamp and an OPAQUE one through the receiver's descriptor `copyFunc@32`; both are
+		// receiver-specific, so nothing but the receiver's own instance fits. There is no representation to
+		// share and no range to widen — the instance IS the question, which is why the two arms are one.
+		// ⚠ `main` grew a SEPARATELY-SPELLED opaque arm in `requireArrayAppendArg` while this rung was in
+		// flight (the `list-custom-types` port, citing P1.7 slice 3b-vi-b-β). It states the SAME rule —
+		// identical giid — and was subsumed here at the merge rather than kept beside this one, because two
+		// spellings of one rule is precisely what this rung exists to remove.
+		if self.arrayElementIsManaged(receiverGiid) or self.arrayElementIsOpaque(receiverGiid) 'receiverCopiesThroughItsOwnElement'
+			return argNameId == receiverGiid
+		end 'receiverCopiesThroughItsOwnElement'
+
+		if not self.sameTrivialArrayShape(receiverGiid, otherGiid: argNameId) 'noSharedRepresentation'
+			return false
+		end 'noSharedRepresentation'
+
+		if self.trivialElementAdmitsEveryValueOf(receiverGiid, sourceGiid: argNameId, readerFilePath: readerFilePath) 'theReceiverAdmitsEveryValue'
+			return true
+		end 'theReceiverAdmitsEveryValue'
+
+		return self.byteBufferBoundaryAdmits(ValueTypeTag.genericInstance, declaredNameId: receiverGiid, gotTag: argTag, gotNameId: argNameId)
+	end 'arrayAppendArgAdmits'
+
+	// Do two array instances hold TRIVIAL elements of the same storage width — the REPRESENTATION half of
+	// the rule above, and the whole of what the byte copy itself requires. Kept as its own function because
+	// it is the half that is NOT a statement about types, and the rule's header turns on saying so.
+	function sameTrivialArrayShape(giid GenericInstanceId, otherGiid GenericInstanceId) returns bool
+		return not self.arrayElementIsManaged(otherGiid) and self.arrayElementSize(otherGiid) == self.arrayElementSize(giid)
+	end 'sameTrivialArrayShape'
+
+	// The VALUE-DOMAIN half. Two spellings of one element are one element, which the INSTANCE already
+	// answers for — an `Array` instance interns on its element type, so equal giids are equal elements and
+	// no bounds need be read at all. Everything else has to compare the two value sets.
+	function trivialElementAdmitsEveryValueOf(destGiid GenericInstanceId, sourceGiid GenericInstanceId, readerFilePath FilePath) returns bool
+		if destGiid == sourceGiid 'oneInstanceIsOneElement'
+			return true
+		end 'oneInstanceIsOneElement'
+
+		return match self.elementIntegerValueRange(destGiid, readerFilePath: readerFilePath) 'destination'
+			notIntegerValued gives false
+			inclusive(low, high) gives self.elementValuesFitWithin(sourceGiid, destLow: low, destHigh: high, readerFilePath: readerFilePath)
+		end 'destination'
+	end 'trivialElementAdmitsEveryValueOf'
+
+	// The SOURCE side of that comparison, split out because one `match` can read only one side and a nested
+	// pair would hide which side each arm speaks for — `requireRawByteFillFitsItsElement`'s shape, for its
+	// reason.
+	function elementValuesFitWithin(sourceGiid GenericInstanceId, destLow ParsedInt, destHigh ParsedInt, readerFilePath FilePath) returns bool
+		return match self.elementIntegerValueRange(sourceGiid, readerFilePath: readerFilePath) 'source'
+			notIntegerValued gives false
+			inclusive(low, high) gives inclusiveRangeContains(destLow, destHigh: destHigh, sourceLow: low, sourceHigh: high)
+		end 'source'
+	end 'elementValuesFitWithin'
+
+	// ⭐ **THE INCLUSIVE INTEGER VALUE SET AN ARRAY'S ELEMENT ADMITS, AS `readerFilePath` RESOLVES IT.**
+	// Only two element kinds have one: a bare `int` (the machine word's whole signed range) and a ranged
+	// INT alias (its declared bounds). A `bool`, an `ExitCode`, an enum, a function type, an opaque `T` and
+	// a float alias each have `notIntegerValued` — not because they are exotic, but because there is no
+	// value set for a range test to compare and their only honest admission is the instance identity the
+	// caller has already tried.
+	//
+	// ⚠ The reader's own file is the right quantifier, and it is the one A4a chose for the same registry:
+	// a range-CONTESTED name is qualified per claimant by the time it is an instance's type argument
+	// (`RangedAliasRegistry.settleRangeContests`), so both sides of one `append` resolve the same way and
+	// an uncontested name answers identically from every file.
+	function elementIntegerValueRange(giid GenericInstanceId, readerFilePath FilePath) returns ElementIntegerRange
+		if maxonTypeTag(self.arrayElementType(giid)) == ValueTypeTag.integer 'aBareMachineWordInt'
+			return ElementIntegerRange.inclusive(BareIntegerElementLow, high: BareIntegerElementHigh)
+		end 'aBareMachineWordInt'
+
+		return match self.arrayElementAliasOf(giid, readerFilePath: readerFilePath) 'element'
+			undeclared gives ElementIntegerRange.notIntegerValued
+			declared(alias) gives integerAliasValueRange(alias)
+		end 'element'
+	end 'elementIntegerValueRange'
 
 	// ⭐ **THE ONE PLACE A RANGED ALIAS'S DECLARED BOUNDS BECOME A STORAGE WIDTH.** A trivial element is
 	// stored INLINE, so its slot is as wide as its values need and no wider: a `named` element is a ranged-

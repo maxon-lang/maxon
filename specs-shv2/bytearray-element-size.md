@@ -1406,3 +1406,60 @@ end 'main'
 ```maxoncstderr
 error E3117: <fragment>:12:16: 'setByte' stores RAW bytes into an element declared 'Small' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
 ```
+
+### `append`'s argument is a coercion site, and a synthesized buffer crosses it like any other
+
+A compiler-synthesized buffer wears `__ManagedByte` (`SynthesizedByteElementName`) and a declared
+`Array with Byte` wears the program's own element, so the two meet at the boundary door — the same
+`byteBufferBoundaryAdmits` the eight other coercion sites ask. `append` is the ninth, and it asked a
+bare STRIDE test instead: `__ManagedByte` strides one byte, so it walked into a `Byte` declared
+`int(0 to 100)` and a raw path byte read back out of that element with no diagnostic.
+
+<!-- test: a-narrow-byte-refuses-a-synthesized-buffer-appended-to-it -->
+### A narrow `Byte` refuses a synthesized buffer appended into its array
+⚠ **NO `targets:` MARKER**, for `a-narrow-byte-refuses-a-file-read-into-its-buffer`'s measured reason:
+`__ManagedDirectory.currentPath` is x64-windows-only at this rung, but the refusal is a parse-time
+`ParseError` and lands before the target-support pass runs, so this stderr is byte-identical on every
+target.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(1)
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	b.append(cwd)
+	return takes(b)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:13:11: argument type mismatch for 'other': expected 'Array_Byte$0_100', got 'Array___ManagedByte'
+```
+
+<!-- test: a-byte-that-holds-every-byte-still-appends-a-synthesized-buffer -->
+<!-- targets: x64-windows -->
+### A `Byte` that holds every byte still takes one
+The other half of the boundary, and the case that keeps the door LIVE: refusing this would convert a
+correct program into a compile error. x64-windows only for
+`a-synthesized-buffer-crosses-every-declared-byte-buffer-door`'s reason — `currentPath` lowers to
+`GetCurrentDirectoryA`, and the cwd differs per machine, so the assertion is on a LENGTH.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(65)
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	b.append(cwd)
+	return 0 if b.count() > 1 else 2
+end 'main'
+```
+```exitcode
+0
+```

@@ -1801,3 +1801,224 @@ end 'main'
 ```maxoncstderr
 error E3009: <fragment>:8:10: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
+
+### `append` checks its ARGUMENT's element type too
+
+`append` is the one `Array` member whose argument is a whole other `Array`, so it is a COERCION
+site like a declared parameter — and its argument is not merely handed over, it is COPIED
+element-wise into the receiver's own storage. That makes it a bulk `push`, and it owes exactly
+what a `push` owes: **every value the argument's element can hold must be a value the receiver's
+element admits.** A `push` gets a runtime range check where the answer is not static; a bulk byte
+copy cannot have one, so the question is settled at compile time or the append is refused.
+
+The REPRESENTATION question (same managedness, same element width — what makes the byte copy
+legal at all) and the VALUE-DOMAIN question are separate, and both are asked. Keeping only the
+first is how a `Small` walked into a `Bytes`; replacing it with instance identity would refuse
+`[1, 2, 3]` appended to an `Array with Integer`, which the four cases above require.
+
+<!-- test: error.append-narrower-element-array -->
+### An array of a WIDER element is refused where a narrower one is declared
+`Small` and `Byte` are both byte-packed, so the shape test alone admitted this — and a `150`
+pushed as a `Small` then read back through an accessor typed `int(0 to 100)` was a silent wrong
+answer with no diagnostic anywhere.
+
+The element reads `Byte$0_100` and not `Byte` because `stdlib/` declares `Byte` over a different
+range, which makes the name range-CONTESTED and gives each distinct range its own mint
+(`RangedAliasRegistry.settleRangeContests`); it is the same `Byte` this file declares.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Small = int(0 to 200)
+typealias Bytes = Array with Byte
+typealias Smalls = Array with Small
+
+function main() returns ExitCode
+	var s = Smalls.create()
+	s.push(150)
+	var b = Bytes.create()
+	b.append(s)
+	return try b.get(0) otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:11: argument type mismatch for 'other': expected 'Array_Byte$0_100', got 'Array_Small'
+```
+
+<!-- test: error.append-narrower-element-array-through-the-buffer-surface -->
+### The BUFFER surface's `append` is the same door and answers the same way
+One record, two surfaces: `b.managed.append(s)` reaches `__ManagedMemory`'s `append`, whose rule
+used to be a second spelling of the `Array` one. It returned the identical `150`.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Small = int(0 to 200)
+typealias Bytes = Array with Byte
+typealias Smalls = Array with Small
+
+function main() returns ExitCode
+	var s = Smalls.create()
+	s.push(150)
+	var b = Bytes.create()
+	try b.managed.append(s) otherwise panic("test invariant: append")
+	return try b.get(0) otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:16: argument type mismatch for 'other': expected '__ManagedMemory', got 'Array_Small'
+```
+
+<!-- test: error.append-bool-array-into-a-byte-array -->
+### A `bool` element is one byte and is still not a `Byte`
+The shape test admits ANY one-byte trivial element, and a `bool` is one. It has no integer value
+range to compare, so only its own identity can admit it.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+typealias Bools = Array with bool
+
+function main() returns ExitCode
+	var f = Bools.create()
+	f.push(true)
+	var b = Bytes.create()
+	b.append(f)
+	return b.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:11: argument type mismatch for 'other': expected 'Array_Byte$0_100', got 'Array_bool'
+```
+
+<!-- test: error.append-enum-array-into-a-different-enum-array -->
+### Two enums are two machine-word elements and two types
+```maxon
+enum Colour
+	red
+	green
+end 'Colour'
+
+enum Shape
+	circle
+	square
+end 'Shape'
+
+typealias Colours = Array with Colour
+typealias Shapes = Array with Shape
+
+function main() returns ExitCode
+	var sh = Shapes.create()
+	sh.push(Shape.square)
+	var c = Colours.create()
+	c.append(sh)
+	return c.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:19:11: argument type mismatch for 'other': expected 'Array_Colour', got 'Array_Shape'
+```
+
+<!-- test: error.append-a-non-array -->
+### A value that is not an `Array` at all names both types, like every other argument door
+```maxon
+function main() returns ExitCode
+	var a = [1, 2, 3]
+	a.append(42)
+	return a.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:11: argument type mismatch for 'other': expected 'Array_int', got 'int'
+```
+
+<!-- test: append-wider-element-array-takes-a-narrower-one -->
+### The WIDENING direction is safe and stays legal
+Every `Byte` value is a `Small` value, so nothing can be read back out of range. A rule that
+refused both directions would be over-refusal.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Small = int(0 to 200)
+typealias Bytes = Array with Byte
+typealias Smalls = Array with Small
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(99)
+	var s = Smalls.create()
+	s.push(150)
+	s.append(b)
+	let first = try s.get(0) otherwise 0
+	let second = try s.get(1) otherwise 0
+	return first + second
+end 'main'
+```
+```exitcode
+249
+```
+
+<!-- test: append-same-alias-arrays -->
+### Two arrays of the same alias are one instance and append freely
+```maxon
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var a = Bytes.create()
+	a.push(7)
+	var b = Bytes.create()
+	b.push(9)
+	a.append(b)
+	let first = try a.get(0) otherwise 0
+	let second = try a.get(1) otherwise 0
+	return first + second
+end 'main'
+```
+```exitcode
+16
+```
+
+<!-- test: error.append-across-two-element-widths -->
+### The REPRESENTATION half is live on its own
+Every `Byte` value is a `Wide` value, so the value-domain half says yes — and the two records stride
+1 and 4, so `__arr_append`'s byte copy would read the source at the wrong width. The two halves are
+INDEPENDENT: this one is refused by the shape test with the domain test agreeing, and
+`error.append-narrower-element-array` above is refused by the domain test with the shape test agreeing.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Wide = int(0 to 100000)
+typealias Bytes = Array with Byte
+typealias Wides = Array with Wide
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(9)
+	var w = Wides.create()
+	w.push(5)
+	w.append(b)
+	return w.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:11: argument type mismatch for 'other': expected 'Array_Wide', got 'Array_Byte$0_100'
+```
+
+<!-- test: append-reads-the-value-set-never-the-alias-name -->
+### The rule reads the VALUE SET, never the element's name
+`A` and `B` are two names for one value set, which is what `RangedTypeAlias`'s own header means by
+*"two aliases over the same range are the same type"* — so nothing can be read back out of range and
+the append stands. It is the same admission that lets `[1, 2, 3]` (`Array with int`) into an
+`Array with Integer`; only there the two spellings are a primitive and an alias.
+```maxon
+typealias A = int(0 to 100)
+typealias B = int(0 to 100)
+typealias As = Array with A
+typealias Bs = Array with B
+
+function main() returns ExitCode
+	var a = As.create()
+	a.push(7)
+	var b = Bs.create()
+	b.push(9)
+	a.append(b)
+	return (try a.get(0) otherwise 0) + (try a.get(1) otherwise 0)
+end 'main'
+```
+```exitcode
+16
+```

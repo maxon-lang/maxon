@@ -32323,8 +32323,8 @@ export type Parser
 		//
 		// ⚠ Its argument rule is the buffer's too, and that is what `builtin-type-checking`'s
 		// `error-managed-memory-append-int` pins: `E3005 argument type mismatch for 'other': expected
-		// '__ManagedMemory'`, naming the type the SIGNATURE declares, where `Array.append`'s refusal talks about
-		// element types. One shape test (`requireArrayAppendArg`), two verdicts — the split
+		// '__ManagedMemory'`, naming the type the SIGNATURE declares, where `Array.append`'s refusal names the
+		// receiver's own instance. One rule (`ProgramSignatures.arrayAppendArgAdmits`), two sentences — the split
 		// `requireByteArrayValue`/`requireManagedMemoryValue` already draws for a `ByteArray` parameter.
 		if isManagedMemory and methodTok.value.equals(AppendMethod) 'bufferAppend'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
@@ -33055,8 +33055,9 @@ export type Parser
 	end 'emitArraySliceCall'
 
 	// `append(other)` — append `other`'s elements to `self`. `other` is BORROWED (read-only, not moved) and
-	// PRESERVED (`append-preserves-originals`). Its element type must match the receiver's, which
-	// `requireArrayAppendArg` enforces. A TRIVIAL receiver block-copies `other`'s bytes (`__arr_append`); a
+	// PRESERVED (`append-preserves-originals`). Its element must be one the receiver's admits every value of,
+	// which `requireArrayAppendArg` enforces through the rule both surfaces share
+	// (`ProgramSignatures.arrayAppendArgAdmits`). A TRIVIAL receiver block-copies `other`'s bytes (`__arr_append`); a
 	// CONCRETE MANAGED receiver (P1.7 slice 3b-vi-b) DEEP-CLONES each `other` element into `self` via
 	// `__arr_append_managed`, stamped with the element's `funcAddr(__clone_<E>)`, so both arrays end up sole
 	// owners of independent elements. Returns the receiver (what the statement still denotes).
@@ -33064,7 +33065,7 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		let otherTok = self.current()
 		let other = try self.parseExpression(func, block: self.currentBlock)
-		try self.requireArrayAppendArg(other, giid: giid, otherTok: otherTok)
+		try self.requireArrayAppendArg(other, arr: arr, giid: giid, otherTok: otherTok)
 		try self.consume(TokenKind.rightParen)
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueAppend'
 			return self.emitArrayVoidCall(ArrAppendOpaqueName, args: pairArgs(arr, second: other), receiver: arr, range: range)
@@ -33075,55 +33076,44 @@ export type Parser
 		return self.emitArrayVoidCall(ArrAppendName, args: pairArgs(arr, second: other), receiver: arr, range: range)
 	end 'parseArrayAppend'
 
-	// The argument to `append` must be an `Array` instance of the SAME element type as the receiver. A TRIVIAL
-	// receiver copies raw bytes sized by its `element_size`, so same-managedness + same element size is the honest
-	// "same array shape" (`[1,2,3]` and an `Array with Integer` binding share it even when their giids differ by
-	// how the element interned). A MANAGED receiver deep-clones each element through the RECEIVER's own element
-	// cloner, which only fits `other`'s elements when `other` IS the same array instance — so a managed receiver
-	// requires `other` to be the identical giid (strict, since the element cloner is receiver-specific).
-	// ⭐ **THE BUFFER SURFACE'S `append` ARGUMENT RULE (R4.4)** — the same SHAPE test the trivial-receiver arm of
-	// `requireArrayAppendArg` makes (`sameTrivialArrayShape`, shared), under the diagnostic the buffer's SIGNATURE
-	// earns: its parameter is declared `__ManagedMemory`, so a mismatch names that type and its `other` label
-	// (`builtin-type-checking.error-managed-memory-append-int` pins the wording). A buffer's element is always
-	// trivial — byte-packed or a machine word (`managedMemoryInstanceForElementSize`) — so the managed and
-	// opaque arms of the `Array` rule cannot be reached from here.
+	// ⭐ **THE BUFFER SURFACE'S `append` ARGUMENT RULE (R4.4)** — the same rule the `Array` surface's makes
+	// (`ProgramSignatures.arrayAppendArgAdmits`, shared: one record, one operation, one precondition), under the
+	// diagnostic the buffer's SIGNATURE earns. Its parameter is declared `__ManagedMemory`, so a mismatch names
+	// that type and its `other` label (`builtin-type-checking.error-managed-memory-append-int` pins the wording)
+	// where the `Array` twin below names the receiver's own instance. The split
+	// `requireByteArrayValue`/`requireManagedMemoryValue` already draws for a `ByteArray` parameter, for this
+	// reason.
 	function requireManagedMemoryAppendArg(other ValueId, giid GenericInstanceId, methodTok Token) throws ParseError
-		if not self.signatures.isArrayInstanceAt(self.tagOf(other), nameId: self.valueNameId(other)) or not self.sameTrivialArrayShape(giid, otherGiid: self.valueNameId(other)) 'notABuffer'
-			throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
-		end 'notABuffer'
+		if self.appendArgAdmitted(other, giid: giid) 'admitted'
+			return
+		end 'admitted'
+
+		throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
 	end 'requireManagedMemoryAppendArg'
 
-	// Do two array instances hold TRIVIAL elements of the same storage width — the honest "same array shape" for
-	// an operation that copies raw bytes sized by `element_size`? Read by both `append` argument rules, because
-	// the byte copy they authorize is one operation with one precondition; only the diagnostic differs.
-	function sameTrivialArrayShape(giid GenericInstanceId, otherGiid GenericInstanceId) returns bool
-		return not self.signatures.containerElementIsManaged(otherGiid) and self.signatures.arrayElementSize(otherGiid) == self.signatures.arrayElementSize(giid)
-	end 'sameTrivialArrayShape'
+	// ⭐ **THE `Array` SURFACE'S HALF OF THE SAME RULE.** The whole verdict is
+	// `ProgramSignatures.arrayAppendArgAdmits`, which states it; what lives here is the sentence.
+	//
+	// ⚠ **IT REPORTS E3005 AND USED TO REPORT E2015, AND THE OLD CODE WAS A FALSE CLAIM** — A3r's argument,
+	// applied to a fourth site. E2015 reads *"a language construct this compiler does not implement yet"*, and
+	// `append` is implemented: the PROGRAM is wrong, exactly as it is at the declared parameter this argument
+	// position is the ninth sibling of. Reporting what the other eight report (`argTypeMismatchSentence`,
+	// naming both types) is also what lets the receiver's element be READ OFF the message — the three
+	// hand-written sentences it replaces named neither type, so `expected 'Array_Byte', got 'Array_Small'`
+	// could not be said at all.
+	function requireArrayAppendArg(other ValueId, arr ValueId, giid GenericInstanceId, otherTok Token) throws ParseError
+		if self.appendArgAdmitted(other, giid: giid) 'admitted'
+			return
+		end 'admitted'
 
-	function requireArrayAppendArg(other ValueId, giid GenericInstanceId, otherTok Token) throws ParseError
-		if not self.signatures.isArrayInstanceAt(self.tagOf(other), nameId: self.valueNameId(other)) 'notArray'
-			throw ParseError.unsupported("`append` takes another `Array` of the same element type — got '{typeTagName(self.tagOf(other))}'", line: otherTok.line, column: otherTok.column)
-		end 'notArray'
-		let otherGiid = self.valueNameId(other)
-		// An OPAQUE receiver (`self.items.append(other)` in a generic body) deep-clones `other`'s elements through
-		// the RECEIVER's descriptor `copyFunc@32` (P1.7 slice 3b-vi-b-β), which is correct only when `other` shares
-		// the receiver's opaque element type — so, like the managed receiver, `other` must be the IDENTICAL giid.
-		if self.signatures.containerElementIsOpaque(giid) 'opaqueReceiver'
-			if not self.signatures.containerElementIsOpaque(otherGiid) or otherGiid != giid 'opaqueMismatch'
-				throw ParseError.unsupported("`append` on an opaque `Array with <type parameter>` field requires an `Array` of the same type-parameter element as the receiver", line: otherTok.line, column: otherTok.column)
-			end 'opaqueMismatch'
-			return
-		end 'opaqueReceiver'
-		if self.signatures.containerElementIsManaged(giid) 'managedReceiver'
-			if not self.signatures.containerElementIsManaged(otherGiid) or otherGiid != giid 'managedMismatch'
-				throw ParseError.unsupported("`append` requires an `Array` with the same MANAGED element type as the receiver", line: otherTok.line, column: otherTok.column)
-			end 'managedMismatch'
-			return
-		end 'managedReceiver'
-		if not self.sameTrivialArrayShape(giid, otherGiid: otherGiid) 'mismatch'
-			throw ParseError.unsupported("`append` requires an `Array` with the same element type as the receiver", line: otherTok.line, column: otherTok.column)
-		end 'mismatch'
+		throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: otherTok.line, column: otherTok.column)
 	end 'requireArrayAppendArg'
+
+	// The shared adapter putting a `ValueId`'s two type columns in front of the index's rule — `valueIsByteArray`'s
+	// shape, for its reason: the RULE belongs where the element types live, and neither door may respell it.
+	function appendArgAdmitted(other ValueId, giid GenericInstanceId) returns bool
+		return self.signatures.arrayAppendArgAdmits(giid, argTag: self.tagOf(other), argNameId: self.valueNameId(other), readerFilePath: self.filePath)
+	end 'appendArgAdmitted'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append` on a CONCRETE-element array (P1.7 slice 3b-vi-b).** A
 	// TRIVIAL element passes (its copy is a correct byte blit / COW view). A CONCRETE MANAGED element (String /

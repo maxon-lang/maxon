@@ -57,8 +57,9 @@ compares the two records' `element_size@24` at RUN time and aborts
 (`RuntimeAbort.arrayAppendElementSizeMismatch`) when they disagree — so appending a byte-string into
 an `Array with Byte` succeeds at a 1-byte stride and aborts at any other.
 
-The front-end guard cannot stand in for it: `Parser.requireArrayAppendArg` compares
-`arrayElementSize(receiver)` against `arrayElementSize(argument)`, and for these two the *instance is
+The front-end guard cannot stand in for it: `ProgramSignatures.arrayAppendArgAdmits`'s
+REPRESENTATION half compares `arrayElementSize(receiver)` against `arrayElementSize(argument)` —
+still, unchanged, after A4b gave that rule a value-domain half beside it — and for these two the *instance is
 the same*, so both sides re-derive the same number through the same function and the check passes
 whatever that number is. A check that re-derives both of its sides through one function cannot catch
 that function being wrong. Only the run can.
