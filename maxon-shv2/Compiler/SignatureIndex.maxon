@@ -9901,18 +9901,55 @@ export type ProgramSignatures
 		// said of a box that owns a String. The answer is the INSTANCE's, which is exactly what the
 		// `genericInstance`-tagged spelling above already returns, so `Box with N0` and
 		// `Box with (Box with S0)` now classify alike rather than by which spelling reached the argument.
-		if self.isGenericAlias(name) 'genericAlias'
+		//
+		// ⭐⭐ **THE FORM COMES FROM `declaredFormOf`, THE ONE name→FORM ANSWER — AND THIS IS THE DOOR WITH
+		// THE STRONGEST CLAIM ON IT, BECAUSE ITS DIVERGENCE FROM `typeIsManaged` HAS ALREADY COST TWICE
+		// (A4n review).** The two paragraphs above are both records of the SAME failure: a declaration form
+		// that `typeIsManaged` had an arm for and this cascade did not (a TUPLE alias at A3e, a
+		// GENERIC-INSTANCE alias at A3k). That is not a coincidence of two rungs — it is what a second,
+		// shorter copy of one classification does, and the pair is read as
+		// `typeArgIsCoOwnedTrivial = typeIsManaged(t) and not typeArgIsOwned(t)`, so a form only one of them
+		// knows does not merely coarsen an answer, it MANUFACTURES A KIND THE TYPE DOES NOT HAVE — an
+		// `__mm_incref` plus a destructor where a MOVE was owed, or that false E2015.
+		//
+		// A4n gave `typeIsManaged` (through `declaredNameIsManaged`) an exhaustive `match` over
+		// `TypeDeclKind`, so a NINTH form is a compile error there. Left as an `if` cascade this door would
+		// have gone on answering `false` for it in silence, which is the divergence's third instance waiting
+		// to be written. The VERDICTS still differ per form — that is the whole point of this boundary being
+		// narrower than the drop one, and every arm below says which way it goes and why; what may not differ
+		// is which forms the two doors have HEARD OF.
+		//
+		// ⚠ The declared TYPES are now asked ahead of the alias registries, where this cascade asked
+		// `isGenericAlias` first. That is `declaredFormOf`'s order and it is deliberate: it is the order
+		// `typeIsManaged` takes, so an ILL-FORMED program (one name in two registries, E3006/E3061, which are
+		// reported by a whole-program check that runs AFTER this classifier has answered) now reaches the two
+		// boundaries on ONE path instead of two — which is the agreement this function's header demands.
+		let form = try self.declaredFormOf(name) otherwise return false
+		match form 'form'
+			// NARROWER than the drop boundary on purpose: an all-scalar struct (`Point`) is co-owned by
+			// RETAIN and not moved, so only a struct that owns managed heap is consumed.
+			structType then return self.structHasManagedField(name)
+			// A payload-free enum's value is its i64 tag — nothing to move. `isBoxed` is the same bit the
+			// drop side routes on, through the same reader.
+			enumType then return self.declaredEnumIsBoxed(name)
+			unionType then return self.declaredEnumIsBoxed(name)
+			// An interface-typed slot is `E3011 Unknown type` before anything classifies it — existentials
+			// are unbuilt. The rung that lands a fat-pointer slot owes this arm its consume answer, which is
+			// why it is written out rather than ranged in with a neighbour.
+			interfaceType then return false
+			// A ranged alias IS its primitive and a function value is a bare code pointer; neither owns a
+			// record, so neither is ever moved into a box.
+			rangedAlias then return false
+			functionAlias then return false
 			// A SUPERSEDED spelling consumes nothing — no call site can name it. See
 			// `genericAliasSpellingIsSuperseded`, which records the two walks that reach this arm with one.
-			return not self.genericAliasSpellingIsSuperseded(name) and self.genericInstanceHasManagedField(self.genericAliasInstance(name))
-		end 'genericAlias'
-		if self.structTypes.contains(name) 'struct'
-			return self.structHasManagedField(name)
-		end 'struct'
-		if not self.enumTypes.contains(name) 'notEnum'
-			return false
-		end 'notEnum'
-		return (try self.enumTypes.get(name) otherwise panic("ProgramSignatures.typeArgIsOwned: enumTypes.contains({String.from(name)}) is true but get failed")).isBoxed()
+			genericAlias then return not self.genericAliasSpellingIsSuperseded(name) and self.genericInstanceHasManagedField(self.genericAliasInstance(name))
+			// A tuple IS a struct box, and `denotedSlotAggregateName` above has already resolved the alias to
+			// the tuple's own canonical name — so this arm is reached only if that resolution is ever
+			// narrowed, and it must then answer exactly as the struct arm does. A3e's measured wrong answer
+			// is what happens when it does not.
+			tupleAlias then return self.structHasManagedField(self.tupleAliasTarget(name))
+		end 'form'
 	end 'typeArgIsOwned'
 
 	// Does ANY interned instance of generic type `baseName` classify its type argument at `position` as
@@ -10791,23 +10828,25 @@ export type ProgramSignatures
 	// cascade had no generic-alias arm while the cascade below does, so a `Holder with IntBox` field was
 	// MANAGED here and `undeclaredName` there. That half is fixed at the source (`denotedSlotType`), and
 	// what remains written twice is the name cascade's *projection* — this one to a `bool`, that one through
-	// the shared door to a type. The two agree case for case today (a tuple alias resolves to the tuple's
-	// own struct on both sides; a function alias, a float alias and a ranged int alias are all `false` here
-	// and all non-managed classes there), and that agreement is by INSPECTION rather than by construction:
-	// a new alias FORM must be taught to both, and the shared door is the one that will remember.
+	// the shared door to a type.
 	//
-	// ⭐ **HALF OF THAT *IS* BY CONSTRUCTION, AND KNOWING WHICH HALF IS WHAT MAKES THE RESIDUAL ACTIONABLE
-	// (A4k review).** The two cascades ask their registries in DIFFERENT ORDERS — that door is
-	// function→generic→tuple→float→struct, this one is tuple→struct→enum→generic — and an order can only
-	// decide anything for a name held by TWO registries at once, which no program can spell: a second
-	// declaration of one type name is refused **E3006**, and two `typealias` declarations of one name are
-	// refused **E3061** unless they are the SAME FORM (the registry's own doc states it; both were measured
-	// here, in-file and cross-file). ⇒ **the ORDERS cannot disagree, only the COVERAGE can**, and the
-	// coverage failure has a definite shape: a FORM taught to `denotedSlotType` and not to the arms below
-	// reads MANAGED at the payload classifier and `false` here, so the field is moved in and dropped by
-	// nobody — a LEAK, exit 101 — while the converse double-frees. The cure that would close it is a
-	// name→FORM enum both read (allocation-free, so this door keeps its `false` without boxing), which is a
-	// rung and not a review's to land.
+	// ⭐⭐ **AND THE COVERAGE IS NOW BY CONSTRUCTION: BOTH PROJECTIONS READ ONE `declaredFormOf` (A4n).**
+	// The name half of this door is `declaredNameIsManaged`, an EXHAUSTIVE `match` over `TypeDeclKind`, and
+	// so is `denotedSlotType`'s. Neither has a cascade of its own left to fall out of step, and a ninth
+	// declaration form is a COMPILE ERROR at both rather than the failure this paragraph used to describe as
+	// a residual: a FORM taught to one and not the other reads MANAGED there and `false` here, so the field
+	// is moved in and dropped by NOBODY — a leak, exit 101 — while the converse double-frees.
+	//
+	// ⛔⛔ **WHAT THIS HEADER USED TO CLAIM ABOUT THE *ORDERS* WAS FALSE, AND A4n MEASURED IT.** The
+	// inherited argument (A4k review) was that the cascades' differing registry orders were safe by
+	// construction, because an order decides something only for a name held by TWO registries at once, which
+	// **E3006** and **E3061** refuse. Both codes do fire — but they are reported by a whole-program CHECK
+	// that runs *after* these classifiers have already answered during the parse, so an ILL-FORMED program
+	// DOES put one name in two registries here. Measured: with the alias registries asked first,
+	// `type Box … end` + `typealias Box = int(0 to 10)` reached `Parser.decrefCalleeFor` for the struct box
+	// it had just built and PANICKED before E3006 could print. That is why `declaredFormOf` asks declared
+	// TYPES before aliases, and why the order is not a cost choice. **Do not re-derive the old argument from
+	// the codes' existence: the codes are late.**
 	//
 	// ⚠⚠ **`from` IS THE INTERNER `fieldType`'s `named` ID WAS MINTED AGAINST, AND IT IS A PARAMETER
 	// BECAUSE THE ANSWER IS OTHERWISE DECIDED BY INTERNING ORDER.** A `named` type is only a NUMBER; the
@@ -10829,9 +10868,11 @@ export type ProgramSignatures
 	//     flipped at the FOURTH unrelated `typealias` in the reading file.
 	// Both are pinned by `specs-shv2/cross-file-field-classification.md`.
 	//
-	// It is answered allocation-free for the overwhelming scalar-field majority (a tag test, then a
-	// `Map.contains`), exactly as the code it replaced was — which matters because a scalar field must reach
-	// the `false` return without boxing a `DeclaredStruct`/`DeclaredEnum`.
+	// It is answered allocation-free for the overwhelming scalar-field majority — a tag test, then
+	// `declaredFormOf`'s `Map.contains`/`Map.get` probes over a payload-free enum, which is a scalar — which
+	// matters because a scalar field must reach the `false` return without boxing a
+	// `DeclaredStruct`/`DeclaredEnum`. That is why the form answer is an enum and not a `DeclaredEnum`-shaped
+	// union, and why `declaredEnumIsBoxed` reads `enumTypes` directly rather than through `enumOf`.
 	export function typeIsManaged(fieldType MaxonType, from TypeNameInterner) returns bool
 		let tag = maxonTypeTag(fieldType)
 		// `tagIsByteRecord`: "does this own heap?" is a question about the REPRESENTATION, and a Character

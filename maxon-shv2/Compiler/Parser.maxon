@@ -12766,9 +12766,11 @@ export type Parser
 		self.artifact.emitTerminator(bodyEnd, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
 	end 'closeFunctionBody'
 
-	// ⭐⭐ **E3012 — THE FIRST PARAMETER THIS FUNCTION DECLARED AND NEVER MENTIONED.** Called at the `end` of
+	// ⭐⭐ **E3012 — THE FIRST BINDING THIS FUNCTION DECLARED AND NEVER MENTIONED.** Called at the `end` of
 	// a function, once the whole body has been seen, because "never mentioned" is a fact about the WHOLE
-	// body and about no smaller part of it.
+	// body and about no smaller part of it. A candidate is a PARAMETER or a `for` binding (A4g), which is
+	// why the list is walked with a `continue` and its kind is asked at the waiver below rather than once
+	// before the loop.
 	//
 	// ⚠ **PARAMETERS AND `for` BINDINGS — a body `let`/`var` is still NOT checked, and that is a scope line
 	// drawn at the spec boundary rather than a gap.** The local rule is not separable from two refusals shv2
@@ -12786,7 +12788,8 @@ export type Parser
 	// `specs-shv2/unused-variable-name-scope.md`, which pins it.
 	//
 	// ⭐ **ONE DIAGNOSTIC PER FUNCTION, AND IT IS THE EARLIEST DECLARATION.** `unusedCandidates` is in
-	// declaration order, so a forward scan reports the leftmost unused parameter — which is what both
+	// declaration order — parameters as `bindParameters` mints them, then each `for` binding as the body
+	// reaches it — so a forward scan reports the leftmost unused one, which is what both
 	// reference compilers produce, because both THROW on the first one they find. The scan stops for the
 	// same reason they do: the rest are the same fact about the same edit, and `multiple-unused` (two unused
 	// parameters) pins exactly one line.
@@ -12865,8 +12868,15 @@ export type Parser
 	//
 	// ⭐ **THE WAIVER IS PER METHOD, NOT PER TYPE.** A sibling `function helper(unused Integer)` on the same
 	// conforming type is nobody's requirement and is still checked — the two cases sit one beside the other
-	// in `specs-shv2/interface-conformance.md`. And it waives the PARAMETERS only: a `let` inside an
-	// interface method is the author's own, so it stays checked (the loop above never asks for a local).
+	// in `specs-shv2/interface-conformance.md`. And it waives the PARAMETERS only: a `for` binding inside an
+	// interface method is the author's own, so it stays checked.
+	//
+	// ⚠ **THAT USED TO BE STRUCTURAL AND IS NOW A CONDITION SOMETHING HAS TO ASK (A4g).** While a parameter
+	// was the only candidate kind, "waives the parameters only" needed no code — the drain never saw
+	// anything else, and it could `return` on the first waived one. `unusedCandidates` now carries two kinds,
+	// so the caller tests `candidate.kind` and `continue`s: a waived parameter must not end the scan before a
+	// loop binding the contract has no say over. `interface-conformance.md`'s
+	// `interface-method-loop-variable-still-errors` is red both ways round.
 	//
 	// ⭐ **IT IS ANSWERED AT PARSE TIME, AND THAT IS A DEPARTURE FROM v1 WITH A REASON.** v1 has to
 	// RE-evaluate its parser's flag whole-program (`checkPendingUnusedVars`), because its parse-time answer
