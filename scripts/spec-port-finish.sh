@@ -326,7 +326,13 @@ if [ -n "$COST_NOTE_FILE" ]; then
   fi
   [ -n "$INSERT_AFTER" ] || die "cannot locate a table row in $COST_LOG — add the row by hand"
 
-  awk -v n="$INSERT_AFTER" -v row="$COST_ROW" 'NR==n{print; print row; next} {print}' "$COST_LOG" > "$COST_LOG.tmp" \
+  # ⚠ THE ROW ARRIVES VIA `ENVIRON`, NOT `awk -v`. `-v` runs ESCAPE PROCESSING over the value it
+  # assigns, so a note mentioning `\xNN` or `\uNNNN` lands in the log as `xNN` / `uNNNN` — the
+  # backslash silently eaten, with only an `awk: warning:` on stderr to say so. `ENVIRON` does no
+  # such processing. (Caught 2026-08-02 by the `lexer-parser-robustness` tick, whose note is ABOUT
+  # hex escapes: `docs/spec-port-log.md` got the backslashes because `$SPEC_ROW` is written with
+  # `printf '%s\n'`, and the cost row lost them. One fact, two mechanisms, one of them lossy.)
+  COST_ROW="$COST_ROW" awk -v n="$INSERT_AFTER" 'NR==n{print; print ENVIRON["COST_ROW"]; next} {print}' "$COST_LOG" > "$COST_LOG.tmp" \
     && mv "$COST_LOG.tmp" "$COST_LOG" || die "failed to write $COST_LOG"
   ok "inserted a row into maxon-shv2/build-cost-log.md after line $INSERT_AFTER"
 fi
