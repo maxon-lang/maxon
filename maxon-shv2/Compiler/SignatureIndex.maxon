@@ -1538,13 +1538,6 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 	// today only because a tuple alias is never also a generic alias — an agreement nothing enforces. A value
 	// cloned by one strategy is dropped by the callee the other returns, so the two must resolve at ONE tier.
 	let name = signatures.denotedAggregateName(try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldDropCallee: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in"))
-	// A GENERIC-INSTANCE-alias field (an `Array`, a `Box`) arrives as a `named` (the sweep recorded the
-	// layout before the alias interned) — route it to the instance box drop callee (`__arr_decref` for an
-	// `Array`, `__mm_decref`/`__destruct_<T>` for a struct box), exactly as a re-tagged `genericInstance`
-	// field would. The gid is `signatures`' own, needing no interner.
-	if signatures.isGenericAlias(name) 'genericAlias'
-		return signatures.genericInstanceBoxDropCallee(signatures.genericAliasInstance(name))
-	end 'genericAlias'
 	return managedNameDropCallee(signatures, declaredName: name)
 end 'managedFieldDropCallee'
 
@@ -1566,63 +1559,80 @@ end 'managedFieldDropCallee'
 // and leaving the drop router unresolved turned that leak into the `undeclared` PANIC at the bottom of this
 // function, on a program the other walk order compiled and ran.
 function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteArray) returns ByteArray
-	// ⭐ **A `CharacterSet` IS A COMPILER-OWNED AGGREGATE AND TAKES A COMPILER-OWNED DROP** (P1.8 Slice D),
-	// exactly as an `Array` takes `__arr_decref` and a `Set` takes `__set_decref`. Asked BEFORE the
-	// declared-struct lookup: its layout IS registered (it needs a nominal identity) and it DOES own a
-	// managed field, so the generic route below would answer `__destruct___CharacterSet` — a symbol
-	// `installStructDestructors` never builds, because it walks `project.structTypes` and a synthesized type
-	// is in no file's declarations. A link failure rather than a wrong answer, but the honest fix is to say
-	// which drop this type takes.
-	if declaredName.equals(CharacterSetTypeName) 'characterSet'
-		return CharSetDecrefName
-	end 'characterSet'
-	// ⭐⭐ **A `__ManagedFile` OWNS AN OS HANDLE, WHICH IS NOT MEMORY — SO ITS DROP MUST CLOSE, NOT JUST
-	// FREE (R4.2, and this line IS the RAII destructor).** Asked here, beside `CharacterSet`, because the
-	// shape is identical: a compiler-owned aggregate whose drop is a compiler-owned entry point rather
-	// than a synthesized `__destruct_<T>` cascade.
+	// ⭐⭐ **A COMPILER-OWNED AGGREGATE TAKES A COMPILER-OWNED DROP, AND IS ASKED BEFORE THE DECLARED-STRUCT
+	// LOOKUP.** All three have a REGISTERED layout — they need a nominal identity — so the generic route below
+	// would answer `__destruct_<T>`, a symbol `installStructDestructors` never builds, because it walks
+	// `project.structTypes` and a synthesized type is in no file's declarations. A link failure rather than a
+	// wrong answer, but the honest fix is to say which drop each type takes:
 	//
-	// ⚠ **IT COULD NOT BE THE CASCADE, and that was measured rather than assumed.** `_handle` is a scalar
-	// `int` field, so `structFieldIsManaged` is false and `installStructDestructors` skips the type
-	// outright — nothing is synthesized. Widening "managed field" to cover it would be a lie every other
-	// reader of that predicate would then act on, and `emitNullGuardedDrop`'s shape is wrong for it anyway:
-	// it loads the FIELD and calls `callee(field)`, while a close needs the BOX (it zeroes `_handle` to stay
-	// idempotent). `__mf_destruct(box)` is the refcount-checked teardown that does both.
+	//   • **`CharacterSet`** (P1.8 Slice D) — `__cs_decref`, exactly as an `Array` takes `__arr_decref` and a
+	//     `Set` takes `__set_decref`.
+	//   • **`__ManagedFile` OWNS AN OS HANDLE, WHICH IS NOT MEMORY — SO ITS DROP MUST CLOSE, NOT JUST FREE**
+	//     (R4.2, and this arm IS the RAII destructor). It could not be the cascade, and that was measured
+	//     rather than assumed: `_handle` is a scalar `int` field, so `structFieldIsManaged` is false and
+	//     `installStructDestructors` skips the type outright. Widening "managed field" to cover it would be a
+	//     lie every other reader of that predicate would act on, and `emitNullGuardedDrop`'s shape is wrong for
+	//     it anyway — it loads the FIELD and calls `callee(field)`, while a close needs the BOX (it zeroes
+	//     `_handle` to stay idempotent). `__mf_destruct(box)` is the refcount-checked teardown that does both.
+	//     ⇒ Answering `MmDecrefName` — which is what R4.1 did — frees the eight bytes and leaks the OS handle
+	//     for the process lifetime, invisibly to the exit-101 gate, because a handle is not memory. ONE arm
+	//     covers both doors: a `var f as __ManagedFile` FIELD through the struct cascade, and a top-level
+	//     `let f = __ManagedFile.openRead(…)` through `Parser.decrefCalleeFor`'s `structRef` arm.
+	//   • **`__ManagedDirectory` OWNS A SEARCH HANDLE *AND* A SECOND ALLOCATION** (R4.3), so its drop must
+	//     close the search and free the find block. Every argument the file bullet makes applies unchanged, and
+	//     `MmDecrefName` here would free eight bytes and leak BOTH the 336-byte block and the OS search handle
+	//     — the second of which the exit-101 gate cannot see at all.
 	//
-	// ⇒ Answering `MmDecrefName` here — which is what R4.1 did — frees the eight bytes and leaks the OS
-	// handle for the process lifetime, invisibly to the exit-101 gate, because a handle is not memory.
-	// ONE line covers both doors: a `var f as __ManagedFile` FIELD through the struct cascade, and a
-	// top-level `let f = __ManagedFile.openRead(…)` through `Parser.decrefCalleeFor`'s `structRef` arm.
-	if declaredName.equals(ManagedFileTypeName) 'managedFile'
-		return ManagedFileDestructName
-	end 'managedFile'
-	// ⭐ **A `__ManagedDirectory` OWNS A SEARCH HANDLE *AND* A SECOND ALLOCATION (R4.3)** — so its drop must
-	// close the search and free the find block, neither of which the generic `__mm_decref` of an 8-byte box
-	// would do. Every argument the file line above makes applies unchanged: `_block` is a scalar `int` field,
-	// so `structFieldIsManaged` is false and `installStructDestructors` synthesizes nothing; and
-	// `emitNullGuardedDrop`'s "load the FIELD, call `callee(field)`" shape is wrong for a close that must
-	// zero the handle to stay idempotent. `__md_destruct(box)` is the refcount-checked teardown that does
-	// all three. Answering `MmDecrefName` here would free eight bytes and leak BOTH the 336-byte block and
-	// the OS search handle — the second of which the exit-101 gate cannot see at all.
-	if declaredName.equals(ManagedDirectoryTypeName) 'managedDirectory'
-		return ManagedDirectoryDestructName
-	end 'managedDirectory'
-	if signatures.containsStruct(declaredName) 'struct'
-		if signatures.structHasManagedField(declaredName) 'managedStruct'
-			return destructorSymbol(declaredName)
-		end 'managedStruct'
-		return MmDecrefName
-	end 'struct'
-	// ⭐ **BY NAME, exactly as the struct arm above is** — and through the SAME `unionBoxDropCallee` a boxed
-	// union's scope-exit drop takes, so a union FIELD and a union BINDING cannot be dropped through
-	// different callees. See `unionHasManagedPayload` for the reachable compiler panic the layout-and-
-	// foreign-interner spelling this replaces produced.
-	match signatures.enumOf(declaredName) 'union'
-		declared then return signatures.unionBoxDropCallee(declaredName)
-		// A managed field that is neither struct nor enum cannot occur: `structFieldIsManaged` classified it
-		// managed, and its only managed non-String forms are a declared struct and a boxed union.
-		undeclared then panic("managedNameDropCallee: managed field '{String.from(declaredName)}' is neither a declared struct nor a declared enum/union — the caller classified it managed")
-	end 'union'
+	// ⚠ **THE THREE NAMES ARE `compilerOwnedAggregateOf`'s, NOT THIS FUNCTION'S** (A4n). They used to be
+	// spelled here and nowhere else, and the CLONE twin — which owes the identical question — did not have
+	// them: it answered `__clone___ManagedFile`, a symbol nothing builds, and the backend panicked on a
+	// compilable program. One list, three doors.
+	match compilerOwnedAggregateOf(declaredName) 'compilerOwned'
+		characterSet then return CharSetDecrefName
+		managedFile then return ManagedFileDestructName
+		managedDirectory then return ManagedDirectoryDestructName
+		userDeclared then break 'compilerOwned'
+	end 'compilerOwned'
+
+	let form = try signatures.declaredFormOf(declaredName) otherwise panic("managedNameDropCallee: managed field '{String.from(declaredName)}' is declared by no registry — the caller classified it managed, and every managed non-String form is a declared struct, a boxed union or a generic-alias instance")
+	match form 'form'
+		structType then return structBoxDropCallee(signatures, structName: declaredName)
+		// ⭐ **BY NAME, exactly as the struct arm is** — and through the SAME `unionBoxDropCallee` a boxed
+		// union's scope-exit drop takes, so a union FIELD and a union BINDING cannot be dropped through
+		// different callees. See `unionHasManagedPayload` for the reachable compiler panic the
+		// layout-and-foreign-interner spelling this replaces produced.
+		enumType then return signatures.unionBoxDropCallee(declaredName)
+		unionType then return signatures.unionBoxDropCallee(declaredName)
+		// An interface-typed slot is `E3011 Unknown type` before anything classifies it — existentials are
+		// unbuilt. Written out rather than ranged in with a neighbour so the rung that lands a fat-pointer
+		// slot has to state its drop here.
+		interfaceType then panic("managedNameDropCallee: '{String.from(declaredName)}' is an interface, which no slot can be declared with today (E3011) — the rung that lands existential slots owes this arm a drop")
+		// A ranged alias IS its primitive and a function value is a bare code pointer; neither owns a record,
+		// so neither can have been classified managed. `declaredNameIsManaged` answers `false` for both.
+		rangedAlias then panic("managedNameDropCallee: '{String.from(declaredName)}' is a ranged typealias — a scalar, which `typeIsManaged` never classifies managed")
+		functionAlias then panic("managedNameDropCallee: '{String.from(declaredName)}' is a function typealias — a bare code pointer, which `typeIsManaged` never classifies managed")
+		// ⭐ A GENERIC-INSTANCE-alias field (an `Array`, a `Box`) arrives as a `named` — the sweep recorded
+		// the layout before the alias interned — and takes the instance box drop callee (`__arr_decref` for
+		// an `Array`, `__mm_decref`/`__destruct_<T>` for a struct box), exactly as a re-tagged
+		// `genericInstance` field does. The gid is `signatures`' own, needing no interner.
+		genericAlias then return signatures.genericInstanceBoxDropCallee(signatures.genericAliasInstance(declaredName))
+		// A tuple alias names the tuple's own struct and nothing else, and `denotedAggregateName` has already
+		// resolved it to that name upstream — so this arm is reached only if that resolution is narrowed, and
+		// a tuple box drops exactly as any other struct box does.
+		tupleAlias then return structBoxDropCallee(signatures, structName: signatures.tupleAliasTarget(declaredName))
+	end 'form'
 end 'managedNameDropCallee'
+
+// Which entry drops an owned box of the declared STRUCT `structName`: its `__destruct_<T>` cascade when it
+// owns managed heap, the trivial `__mm_decref` when its box is all it owns. Split out so the struct arm and
+// the tuple arm of the cascade above cannot come to answer it differently — a tuple IS a struct box.
+function structBoxDropCallee(signatures ProgramSignatures, structName ByteArray) returns ByteArray
+	if signatures.structHasManagedField(structName) 'managedStruct'
+		return destructorSymbol(structName)
+	end 'managedStruct'
+
+	return MmDecrefName
+end 'structBoxDropCallee'
 
 // ⭐ **HOW A MANAGED FIELD OF DECLARED TYPE `fieldType` IS DEEP-CLONED (P1.7 slice 3b-vi-b).** The exact
 // STRUCTURAL DUAL of `managedFieldDropCallee`: a value cloned through the strategy this returns is dropped
@@ -1668,9 +1678,6 @@ export function managedFieldCloneStrategy(signatures ProgramSignatures, typeName
 	// resolution: a value cloned by this strategy is dropped by the callee that one returns, so a name the two
 	// resolved differently would clone one type and drop another.
 	let name = signatures.denotedAggregateName(try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldCloneStrategy: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in"))
-	if signatures.isGenericAlias(name) 'genericAlias'
-		return instanceCloneStrategy(signatures, id: signatures.genericAliasInstance(name))
-	end 'genericAlias'
 	return managedNameCloneStrategy(signatures, declaredName: name)
 end 'managedFieldCloneStrategy'
 
@@ -1680,15 +1687,81 @@ end 'managedFieldCloneStrategy'
 //
 // ⚠ **THE NAME IS ALREADY DENOTED**, exactly as `managedNameDropCallee`'s is — the two duals resolve a tuple
 // typealias at ONE tier, in the `-Field` function above each of them.
+// ⛔⛔ **AND IT MUST ASK THE COMPILER-OWNED QUESTION ITS DROP TWIN ASKS — IT DID NOT, AND THAT WAS A COMPILER
+// PANIC ON A COMPILABLE PROGRAM (A4n).** `managedNameDropCallee` opens with three name tests; this function
+// had none, so a `CharacterSet` / `__ManagedFile` / `__ManagedDirectory` field fell to the struct arm — their
+// layouts ARE registered, they need a nominal identity — and it handed back `__clone___ManagedFile`, a symbol
+// `installStructCloners` never builds, because that pass walks the PROJECT's declarations and a synthesized
+// type is in no file's. MEASURED on this branch, before the fix: `type Holder { export var f as
+// __ManagedFile }` + `Array with Holder` + `a.clone()` died with
+// `panic at X64Backend.maxon:1905: resolveCallFixups: call to unknown function '__clone___ManagedFile'`.
+//
+// ⇒ All three answer `unsupported`, which is the honest verdict and not a placeholder: there is no
+// `__cs_clone` (the character-set runtime has a decref and nothing else), and an OS HANDLE cannot be
+// deep-copied at all — duplicating one would hand two owners a descriptor whose `__mf_destruct` closes it
+// once. `typeSupportsDeepClone` refuses the same three names at the same tier, so the GATE and the STRATEGY
+// agree by construction and the front end reports a positioned E2015 where the backend used to panic — which
+// is what that gate's own header says it exists for: *"a name the gate and the strategy disagreed about would
+// admit a clone nobody can emit."*
 function managedNameCloneStrategy(signatures ProgramSignatures, declaredName ByteArray) returns ManagedCloneStrategy
-	if signatures.containsStruct(declaredName) 'struct'
-		return ManagedCloneStrategy.direct(clonerSymbol(declaredName))
-	end 'struct'
-	match signatures.enumOf(declaredName) 'union'
-		declared then return ManagedCloneStrategy.direct(clonerSymbol(declaredName))
-		undeclared then panic("managedNameCloneStrategy: managed field '{String.from(declaredName)}' is neither a declared struct nor a declared enum/union — the caller classified it managed")
-	end 'union'
+	match compilerOwnedAggregateOf(declaredName) 'compilerOwned'
+		characterSet then return ManagedCloneStrategy.unsupported
+		managedFile then return ManagedCloneStrategy.unsupported
+		managedDirectory then return ManagedCloneStrategy.unsupported
+		userDeclared then break 'compilerOwned'
+	end 'compilerOwned'
+
+	let form = try signatures.declaredFormOf(declaredName) otherwise panic("managedNameCloneStrategy: managed field '{String.from(declaredName)}' is declared by no registry — the caller classified it managed, and every managed non-String form is a declared struct, a boxed union or a generic-alias instance")
+	match form 'form'
+		// A scalar-only box still takes `__clone_<T>` (not the drop side's `__mm_decref`): the clone MUST
+		// allocate a fresh independent box, which only a synthesized cloner does.
+		structType then return ManagedCloneStrategy.direct(clonerSymbol(declaredName))
+		enumType then return ManagedCloneStrategy.direct(clonerSymbol(declaredName))
+		unionType then return ManagedCloneStrategy.direct(clonerSymbol(declaredName))
+		// The three arms below mirror `managedNameDropCallee`'s exactly — an interface slot is E3011 today,
+		// and a ranged alias and a function value are scalars `typeIsManaged` never calls managed.
+		interfaceType then panic("managedNameCloneStrategy: '{String.from(declaredName)}' is an interface, which no slot can be declared with today (E3011) — the rung that lands existential slots owes this arm a clone")
+		rangedAlias then panic("managedNameCloneStrategy: '{String.from(declaredName)}' is a ranged typealias — a scalar, which `typeIsManaged` never classifies managed")
+		functionAlias then panic("managedNameCloneStrategy: '{String.from(declaredName)}' is a function typealias — a bare code pointer, which `typeIsManaged` never classifies managed")
+		genericAlias then return instanceCloneStrategy(signatures, id: signatures.genericAliasInstance(declaredName))
+		// The drop twin's tuple arm, one register over: `denotedAggregateName` has already resolved a tuple
+		// alias to the tuple's own struct name upstream, and a tuple box clones exactly as any struct box does.
+		tupleAlias then return ManagedCloneStrategy.direct(clonerSymbol(signatures.tupleAliasTarget(declaredName)))
+	end 'form'
 end 'managedNameCloneStrategy'
+
+// ⭐⭐ **WHICH COMPILER-OWNED AGGREGATE `name` IS — the ONE home of a fact three doors need and two of them
+// used to spell for themselves.** These types have a REGISTERED layout (they need a nominal identity, so
+// `containsStruct` says yes and `declaredFormOf` answers `structType`) but they are declared in no FILE, so
+// `installStructDestructors` / `installStructCloners` — which walk the project's own declarations —
+// synthesize neither a `__destruct_<T>` nor a `__clone_<T>` for them. Every question of the shape *"what does
+// the generic per-type machinery do with this?"* therefore has to answer for them FIRST, before the form.
+//
+// It is asked by `managedNameDropCallee` (each takes its own compiler-owned entry), by
+// `managedNameCloneStrategy` (none is deep-cloneable) and by `ProgramSignatures.typeSupportsDeepClone` (the
+// gate in front of that strategy). The drop door had the list; the other two did not, and the missing copy
+// was a backend panic.
+export enum CompilerOwnedAggregate
+	characterSet
+	managedFile
+	managedDirectory
+	// An ordinary declaration, whose drop and clone are the synthesized per-type entries.
+	userDeclared
+end 'CompilerOwnedAggregate'
+
+export function compilerOwnedAggregateOf(name ByteArray) returns CompilerOwnedAggregate
+	if name.equals(CharacterSetTypeName) 'characterSet'
+		return CompilerOwnedAggregate.characterSet
+	end 'characterSet'
+	if name.equals(ManagedFileTypeName) 'managedFile'
+		return CompilerOwnedAggregate.managedFile
+	end 'managedFile'
+	if name.equals(ManagedDirectoryTypeName) 'managedDirectory'
+		return CompilerOwnedAggregate.managedDirectory
+	end 'managedDirectory'
+
+	return CompilerOwnedAggregate.userDeclared
+end 'compilerOwnedAggregateOf'
 
 // The clone strategy for a generic-INSTANCE field — an `Array` (`__arr_clone` for a trivial element,
 // `__arr_clone_managed` for a managed one) or, for any other instance (`Box with String`), `unsupported` (its
@@ -10156,6 +10229,79 @@ export type ProgramSignatures
 		return DeclaredEnum.declared(layout)
 	end 'enumOf'
 
+	// ⭐⭐ **WHICH DECLARATION FORM MINTED `name` — the ONE name→FORM answer, so a new form is a COMPILE ERROR
+	// at every door that classifies a name instead of a coverage gap nothing reports (A4n).**
+	//
+	// Four doors used to carry their own cascade over these registries — `denotedSlotType`, `typeIsManaged`,
+	// `managedNameDropCallee` and `managedNameCloneStrategy`. They asked their registries in DIFFERENT ORDERS,
+	// and half of that residue was safe by construction while half was not, which is the whole reason this
+	// exists:
+	//
+	//   • **The COVERAGE could disagree, and the failure had a definite shape.** A form taught to one door and
+	//     not another reads MANAGED there and `false` here, so the field is moved in and **dropped by
+	//     NOBODY** — a leak, exit 101 — while the converse double-frees. That is what this function closes.
+	//   • **The ORDERS were held to be safe by construction, and MEASURING IT SHOWED THEY ARE NOT.** The
+	//     argument was that an order decides something only for a name held by TWO registries at once, and no
+	//     legal program can spell one: a second declaration of a type name is **E3006** and two `typealias`
+	//     declarations of one name are **E3061**. Both codes exist and both fire — but they are reported by a
+	//     whole-program CHECK that runs *after* these classifiers have already answered during the parse. So
+	//     an ILL-FORMED program does put one name in two registries here, and the order picks between them.
+	//
+	// ⚠⚠ **THAT IS WHY DECLARED TYPES ARE ASKED BEFORE ALIASES, AND THE ORDER IS NOT A COST CHOICE.**
+	// MEASURED on this branch, with the aliases asked first: `type Box … end` + `typealias Box = int(0 to 10)`
+	// — `specs-shv2/type-name-collision.md`'s `error.type-then-typealias`, whose whole subject is that E3006
+	// catches it — reached `Parser.decrefCalleeFor` for the STRUCT box it had just built, was told `Box` is a
+	// ranged typealias, and **PANICKED inside `managedNameDropCallee` before E3006 could be printed**. Every
+	// door's previous cascade asked `structTypes` ahead of every alias registry, so type-first is also the
+	// order that leaves an ill-formed program on exactly the path it was already on until its diagnostic
+	// lands. Within each group the order IS free, and is by expected frequency.
+	//
+	// ⚠⚠ **THIS IS THE ONE PLACE A NEW REGISTRY MUST BE TAUGHT, AND `TypeDeclKind` IS THE ONE PLACE A NEW
+	// FORM MUST BE.** The guarantee the doors get is over `TypeDeclKind`'s CASES: add a case and every `match`
+	// below fails to compile until it is handled. It is NOT over registries — a form recorded in a registry
+	// this function never asks would answer `undeclared` at every door, silently. So a rung that adds a
+	// registry adds its arm HERE, in the same edit.
+	//
+	// ⚠ **NO RANGE ARMS OVER `TypeDeclKind` AT ANY DOOR, and that is a rule with teeth rather than taste.**
+	// `typeDeclKeyword` and `isTypeAliasDecl` (`Project.maxon`) both use `rangedAlias to tupleAlias`, which
+	// silently swallows a case inserted between the endpoints — the invariant `TypeDeclKind`'s own comment
+	// records. A door that spelled a range would give up exactly the guarantee this function exists to
+	// provide, so every arm below and at every reader is written out, including the ones that agree.
+	//
+	// ⚠ **IT IS ANSWERED ALLOCATION-FREE** — a payload-free enum is a scalar and every probe is a
+	// `Map.contains` — because `typeIsManaged` reads it and must reach its `false` for a scalar field without
+	// boxing (see that function's header, which prices the alternative).
+	//
+	// It THROWS for a name no registry holds rather than carrying an `undeclared` case, because that is not a
+	// declaration FORM and `TypeDeclKind` may not gain one: `denotedSlotType` already answers exactly this way
+	// (`MapError.keyNotFound`), and each door's fallthrough — an `adoptType` there, an enum lookup at the
+	// payload classifier, `false` here — is the rest of the answer rather than a recovery path.
+	export function declaredFormOf(name ByteArray) returns TypeDeclKind throws MapError
+		if self.structTypes.contains(name) 'structType'
+			return TypeDeclKind.structType
+		end 'structType'
+		if let enumLayout = try self.enumTypes.get(name) 'enumOrUnion'
+			return TypeDeclKind.unionType if enumLayout.isUnion else TypeDeclKind.enumType
+		end 'enumOrUnion'
+		if self.interfaces.contains(name) 'interfaceType'
+			return TypeDeclKind.interfaceType
+		end 'interfaceType'
+		if self.typeAliases.containsInAnyFile(name) 'rangedAlias'
+			return TypeDeclKind.rangedAlias
+		end 'rangedAlias'
+		if self.genericAliases.contains(name) 'genericAlias'
+			return TypeDeclKind.genericAlias
+		end 'genericAlias'
+		if self.tupleAliases.contains(name) 'tupleAlias'
+			return TypeDeclKind.tupleAlias
+		end 'tupleAlias'
+		if self.functionTypeAliases.contains(name) 'functionAlias'
+			return TypeDeclKind.functionAlias
+		end 'functionAlias'
+
+		throw MapError.keyNotFound
+	end 'declaredFormOf'
+
 	// Is `name` a declared enum/union — the `bool` half of `enumOf`, and a HOT-PATH allocation guard.
 	// `enumOf` returns a `DeclaredEnum`, a Maxon union VALUE that allocates a heap box on its
 	// `undeclared` case as much as any other, so a caller that only needs "is it an enum?" for the
@@ -10360,76 +10506,92 @@ export type ProgramSignatures
 	// `adoptType` here, an enum lookup at the payload classifier — is the rest of the answer and not a
 	// recovery path.
 	function denotedSlotType(name ByteArray, into TypeNameInterner, slotScopeFilePath FilePath) returns MaxonType throws MapError
-		// A FUNCTION-typed slot (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
-		// recorded its declaration ran before the function alias was known — so it is re-tagged `function`
-		// HERE, over this index's own function-alias registry (P1.5-A1). One place, so every reader (a
-		// field READ, a `Self{op: op}` construction check, the store-width query, a union PAYLOAD's class)
-		// sees a function VALUE and not an int. Re-interned into `into` by NAME exactly as `adoptType`'s
-		// `named` arm is.
-		if self.isFunctionAlias(name) 'functionAlias'
-			return MaxonType.function(into.intern(name))
-		end 'functionAlias'
-		// A GENERIC-INSTANCE-typed slot (`export var ops as IntArray`, an `Array` instance) arrives as a
-		// `named` for the same reason a function alias does — the SWEEP recorded the declaration before the
-		// generic alias was interned — so it is re-tagged `genericInstance` here, over this index's own
-		// generic-alias registry (P1.7). One place, so every reader (a field READ, a `Self{ops: ops}`
-		// construction check, the array method dispatch, the drop cascade) sees the instance and not an
-		// `int`. The gid is this index's own, needing no interner remap.
-		if self.isGenericAlias(name) 'genericAlias'
-			return MaxonType.genericInstance(self.genericAliasInstanceFrom(name, readerFilePath: slotScopeFilePath))
-		end 'genericAlias'
-		// ⭐ A TUPLE-ALIAS-typed slot (`export var p as Pair`, `typealias Pair = (Int, Int)`) arrives as a
-		// `named` for the reason the arms around it do, and is re-tagged to the tuple's own `structRef`
-		// here — the read-side twin of `parseTypeReference`'s tuple-alias arm. A tuple alias mints NO
-		// identity of its own, so the tag carries the CANONICAL tuple name and a `Pair`-typed slot and a
-		// `(Int, Int)`-typed one are ONE type, which is the whole rule the alias form has.
-		//
-		// ⚠ **MEASURED, A3e** — without it, three of this door's readers answered by the filesystem's walk
-		// order: `var p as Pair` was `E3005 cannot assign 'struct' to variable 'p' of type 'int'`, a tuple
-		// SLOT spelled `(Pair, Int)` canonicalized to `__Tuple2.Pair.int` and read its own element as an
-		// int, and `Array with Pair` refused the `push` of a matching literal — each on a program the other
-		// walk order compiled and ran. It is also what retired `classifyUnionPayload`'s own
-		// `denotedAggregateName` step: a tuple-alias payload is answered by THIS arm now, so the payload
-		// door no longer pre-resolves a name the shared cascade resolves.
-		if self.isTupleAlias(name) 'tupleAlias'
-			return MaxonType.structRef(into.intern(self.tupleAliasTarget(name)))
-		end 'tupleAlias'
-		// ⭐ A RANGED FLOAT-ALIAS-typed slot (`export var mass as Weight`) arrives as a `named` for the
-		// same reason the two above do — the SWEEP recorded the declaration before any alias was known — and
-		// it is the one `named` whose VALUE is a genuine f64. Left overloaded it reads as an INTEGER
-		// (`tagIsIntegral`), which made `Self{mass: 2.5}` a false E3009 on legal code while `Self{mass: 3}`
-		// was admitted unconverted into a slot the store then wrote as an i64. Re-tagged here, in the ONE
-		// door a field's type comes out of, so the construction check, the field READ, the field WRITE and
-		// the store-width query all see the float and cannot disagree about it.
-		//
-		// It returns the bare primitive and interns nothing: a `float` carries no name (`typeNameIdOf` is
-		// `UnnamedTypeId`), so there is nothing for `into` to adopt. The RANGE is dropped exactly as
-		// `TypeResolution.resolveNamedType` drops it — a float alias has no range check today.
-		if self.isFloatAlias(name) 'floatAlias'
-			return MaxonType.float
-		end 'floatAlias'
-		// ⭐⭐ **A STRUCT-TYPED SLOT (`export var leaf as Leaf`) arrives as a `named` for the reason the
-		// three above do** — the SWEEP recorded the declaration before anything could say what the name
-		// denoted — and it is the re-tag that was MISSING, with exactly the consequence this cascade's
-		// header warns of: `named` reads as an INTEGER. MEASURED before this line, against the runnable
-		// oracle:
-		//   • `return self.leaf` from a `returns Leaf` method was `E3005 Cannot return 'int' from function
-		//     declared to return 'struct'` — a false reject of a program the oracle runs;
-		//   • `fieldStorageType` fell through to its undeclared-name recovery and typed the field's
-		//     `loadIndirect` `integer` (the same machine word, so no emitted byte moved — which is why it
-		//     went unnoticed);
-		//   • `emitFieldLoad` recorded the read as a BOXED-UNION candidate, a slot its own header says a
-		//     struct field never touches.
-		// It is the arm the payload cascade DID have, which is exactly why the split hid for as long as it
-		// did: a struct-typed payload was answered correctly by both, so only the arms the copy lacked —
-		// the generic-instance one and the function one — ever showed the disagreement. Re-interned into
-		// `into` by NAME exactly as the function-alias arm is.
-		if self.structTypes.contains(name) 'structType'
-			return MaxonType.structRef(into.intern(name))
-		end 'structType'
-
-		throw MapError.keyNotFound
+		let form = try self.declaredFormOf(name)
+		match form 'form'
+			// ⭐⭐ **A STRUCT-TYPED SLOT (`export var leaf as Leaf`) arrives as a `named` for the reason the
+			// alias arms below do** — the SWEEP recorded the declaration before anything could say what the
+			// name denoted — and it is the re-tag that was MISSING, with exactly the consequence this
+			// cascade's header warns of: `named` reads as an INTEGER. MEASURED before this arm, against the
+			// runnable oracle:
+			//   • `return self.leaf` from a `returns Leaf` method was `E3005 Cannot return 'int' from
+			//     function declared to return 'struct'` — a false reject of a program the oracle runs;
+			//   • `fieldStorageType` fell through to its undeclared-name recovery and typed the field's
+			//     `loadIndirect` `integer` (the same machine word, so no emitted byte moved — which is why
+			//     it went unnoticed);
+			//   • `emitFieldLoad` recorded the read as a BOXED-UNION candidate, a slot its own header says a
+			//     struct field never touches.
+			// It is the arm the payload cascade DID have, which is exactly why the split hid for as long as
+			// it did: a struct-typed payload was answered correctly by both, so only the arms the copy
+			// lacked — the generic-instance one and the function one — ever showed the disagreement.
+			// Re-interned into `into` by NAME exactly as `adoptType`'s `named` arm is.
+			structType then return MaxonType.structRef(into.intern(name))
+			// An enum/union name denotes nothing this door can re-tag, and that is an ANSWER: a `named` IS
+			// its type — a payload-free enum's value is its i64 tag and a boxed one's is its box — so the
+			// caller's fallthrough (an `adoptType` at `declaredSlotType`, an enum lookup at the payload
+			// classifier) is the rest of the answer rather than a recovery path.
+			enumType then throw MapError.keyNotFound
+			unionType then throw MapError.keyNotFound
+			// An interface name cannot reach a SLOT today — `export var g as Greeter` is
+			// `E3011 Unknown type 'Greeter'` before this door is asked, because existentials are unbuilt.
+			// The arm is written rather than ranged in with its neighbours so that the rung that lands a
+			// fat-pointer slot type has to come here and say what one denotes.
+			interfaceType then throw MapError.keyNotFound
+			// ⭐ A RANGED alias splits, and it is the ONLY arm that does: the FORM is one declaration
+			// (`typealias X = <primitive>(range)`, which is why `TypeDeclKind` holds one case for both,
+			// exactly as `typeDeclKeyword` gives all three alias forms one keyword), while what the slot
+			// DENOTES differs by the underlying primitive. See `rangedAliasSlotType`.
+			rangedAlias then return try self.rangedAliasSlotType(name)
+			// A FUNCTION-typed slot (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
+			// recorded its declaration ran before the function alias was known — so it is re-tagged
+			// `function` HERE (P1.5-A1). One place, so every reader (a field READ, a `Self{op: op}`
+			// construction check, the store-width query, a union PAYLOAD's class) sees a function VALUE and
+			// not an int.
+			functionAlias then return MaxonType.function(into.intern(name))
+			// A GENERIC-INSTANCE-typed slot (`export var ops as IntArray`, an `Array` instance) arrives as a
+			// `named` for the same reason a function alias does, and is re-tagged `genericInstance` here
+			// (P1.7). One place, so every reader (a field READ, a `Self{ops: ops}` construction check, the
+			// array method dispatch, the drop cascade) sees the instance and not an `int`. The gid is this
+			// index's own, needing no interner remap.
+			genericAlias then return MaxonType.genericInstance(self.genericAliasInstanceFrom(name, readerFilePath: slotScopeFilePath))
+			// ⭐ A TUPLE-ALIAS-typed slot (`export var p as Pair`, `typealias Pair = (Int, Int)`) is
+			// re-tagged to the tuple's own `structRef` — the read-side twin of `parseTypeReference`'s
+			// tuple-alias arm. A tuple alias mints NO identity of its own, so the tag carries the CANONICAL
+			// tuple name and a `Pair`-typed slot and a `(Int, Int)`-typed one are ONE type, which is the
+			// whole rule the alias form has.
+			//
+			// ⚠ **MEASURED, A3e** — without it, three of this door's readers answered by the filesystem's
+			// walk order: `var p as Pair` was `E3005 cannot assign 'struct' to variable 'p' of type 'int'`,
+			// a tuple SLOT spelled `(Pair, Int)` canonicalized to `__Tuple2.Pair.int` and read its own
+			// element as an int, and `Array with Pair` refused the `push` of a matching literal — each on a
+			// program the other walk order compiled and ran. It is also what retired
+			// `classifyUnionPayload`'s own `denotedAggregateName` step: a tuple-alias payload is answered by
+			// THIS arm now, so the payload door no longer pre-resolves a name the shared cascade resolves.
+			tupleAlias then return MaxonType.structRef(into.intern(self.tupleAliasTarget(name)))
+		end 'form'
 	end 'denotedSlotType'
+
+	// ⭐ What a slot declared with the RANGED alias `name` denotes — the one form whose declaration and whose
+	// meaning part company.
+	//
+	// A ranged FLOAT alias (`export var mass as Weight`) is the one `named` whose VALUE is a genuine f64.
+	// Left overloaded it reads as an INTEGER (`tagIsIntegral`), which made `Self{mass: 2.5}` a false E3009 on
+	// legal code while `Self{mass: 3}` was admitted unconverted into a slot the store then wrote as an i64.
+	// Re-tagged in the ONE door a field's type comes out of, so the construction check, the field READ, the
+	// field WRITE and the store-width query all see the float and cannot disagree about it. It returns the
+	// bare primitive and interns nothing: a `float` carries no name (`typeNameIdOf` is `UnnamedTypeId`), so
+	// there is nothing to adopt. The RANGE is dropped exactly as `TypeResolution.resolveNamedType` drops it —
+	// a float alias has no range check today.
+	//
+	// ⚠ An INT alias is deliberately NOT re-tagged: `named` already reads as an integer everywhere, and its
+	// NAME is what carries the range and the signedness that `valueIsUnsigned` and the range checks read off
+	// it. So it throws, exactly as the enum/union arms do, and for the same reason — it is an ANSWER.
+	function rangedAliasSlotType(name ByteArray) returns MaxonType throws MapError
+		if not self.isFloatAlias(name) 'integerAlias'
+			throw MapError.keyNotFound
+		end 'integerAlias'
+
+		return MaxonType.float
+	end 'rangedAliasSlotType'
 
 	// Does field `index` of struct `structName` own DROPPABLE HEAP — a String, a struct, or a
 	// payload-bearing (boxed) union? Drives the struct's `__destruct_<T>` drop CASCADE: every field this
@@ -10682,26 +10844,56 @@ export type ProgramSignatures
 			return false
 		end 'notNamed'
 
-		// The three lookups below are keyed by the NAME, so they are interner-independent once it is in hand
-		// — `classifyUnionPayload`'s arrangement, for its reason.
+		// The lookup below is keyed by the NAME, so it is interner-independent once the name is in hand —
+		// `classifyUnionPayload`'s arrangement, for its reason.
 		// ⭐ A TUPLE-ALIAS field (`export var p as Pair`, A3e) resolves to the tuple's own name here, so the
-		// struct arm below answers it — a tuple IS a struct box, and left unresolved it read as a scalar, the
+		// struct arm answers it — a tuple IS a struct box, and left unresolved it read as a scalar, the
 		// field was dropped by nobody and the program exited 101 on the leak gate. See `denotedAggregateName`.
-		let name = self.denotedAggregateName(foreignNameOf(from, id: typeNameIdOf(fieldType)))
-		if self.structTypes.contains(name) 'namedStruct'
-			return true
-		end 'namedStruct'
-		if not self.enumTypes.contains(name) 'notEnum'
-			// A GENERIC-INSTANCE-alias field arrives as a `named` (the SWEEP recorded the layout before the
-			// alias was interned) — a generic instance is a heap box (an `Array`'s record + buffer, a `Box`'s
-			// box), so it is managed and dropped by the struct's cascade. Any other `named` (a ranged int/float
-			// alias) is a scalar and not managed.
-			return self.isGenericAlias(name)
-		end 'notEnum'
-
-		let enumLayout = try self.enumTypes.get(name) otherwise panic("ProgramSignatures.typeIsManaged: enumTypes.contains({String.from(name)}) is true but get failed")
-		return enumLayout.isBoxed()
+		return self.declaredNameIsManaged(self.denotedAggregateName(foreignNameOf(from, id: typeNameIdOf(fieldType))))
 	end 'typeIsManaged'
+
+	// Does a slot declared with the bare NAME `name` own droppable heap — the name half of `typeIsManaged`,
+	// over the ONE name→FORM answer (`declaredFormOf`) so a new form cannot read managed at one door and
+	// scalar here.
+	//
+	// A name no registry holds is not managed: it is E3011's subject, and a slot the front end refuses owns
+	// nothing to drop. Allocation-free throughout, which is `typeIsManaged`'s standing obligation.
+	function declaredNameIsManaged(name ByteArray) returns bool
+		let form = try self.declaredFormOf(name) otherwise return false
+		match form 'form'
+			structType then return true
+			// A payload-free enum's value IS its i64 tag — a scalar; a boxed one's is a heap box. `isBoxed`
+			// is the same bit `unionBoxDropCallee` routes on, so what is called managed here is exactly what
+			// gets a drop there.
+			enumType then return self.declaredEnumIsBoxed(name)
+			unionType then return self.declaredEnumIsBoxed(name)
+			// An interface-typed slot is `E3011 Unknown type` before it reaches here — existentials are
+			// unbuilt. When they land, a fat pointer's ownership is that rung's answer to give, and this arm
+			// is where it says it.
+			interfaceType then return false
+			// A ranged int or float alias IS its primitive — a scalar either way.
+			rangedAlias then return false
+			// A function value is a bare code pointer; it owns no record. (A CLOSURE's environment is owned
+			// by the closure VALUE, not by the alias that names its signature.)
+			functionAlias then return false
+			// A generic instance is a heap box — an `Array`'s record + buffer, a `Box`'s box — so it is
+			// managed and dropped by the owning struct's cascade.
+			genericAlias then return true
+			// A tuple IS a struct box. `denotedAggregateName` above resolves a tuple alias to the tuple's own
+			// canonical name before this is asked, so this arm is reached only if that resolution is ever
+			// narrowed — and it must then still answer `true`, for A3e's measured exit-101 reason.
+			tupleAlias then return true
+		end 'form'
+	end 'declaredNameIsManaged'
+
+	// Is the declared enum/union `name` BOXED (some case carries a payload)? The layout lookup split out so
+	// the two `declaredFormOf` arms that need it share one spelling, and answered over `enumTypes` directly
+	// rather than through `enumOf`, which boxes a `DeclaredEnum` — `typeIsManaged` must not allocate.
+	// The declaration is a precondition: only a `declaredFormOf` that answered `enumType`/`unionType` gets here.
+	function declaredEnumIsBoxed(name ByteArray) returns bool
+		let layout = try self.enumTypes.get(name) otherwise panic("ProgramSignatures.declaredEnumIsBoxed: `declaredFormOf({String.from(name)})` answered enum/union but `enumTypes.get` failed — the form is derived from that very table")
+		return layout.isBoxed()
+	end 'declaredEnumIsBoxed'
 
 	// Does struct `structName` own droppable heap in ANY field — the union-side `unionHasManagedField`
 	// generalised to a struct, and the gate that decides whether the struct needs a `__destruct_<Struct>`
@@ -10800,6 +10992,26 @@ export type ProgramSignatures
 
 			return self.instanceSupportsDeepClone(self.genericAliasInstance(name), asElement: asElement, visited: visited)
 		end 'genericAlias'
+		// ⛔ **A COMPILER-OWNED AGGREGATE IS NOT DEEP-CLONEABLE, AND THE GATE HAS TO SAY SO — its layout is
+		// REGISTERED, so `containsStruct` below says yes and the walk would happily report its scalar-only
+		// field list as clonable (A4n).** MEASURED before this arm: `type Holder { export var f as
+		// __ManagedFile }` + `Array with Holder` + `a.clone()` reached the backend and panicked
+		// `resolveCallFixups: call to unknown function '__clone___ManagedFile'`, because nothing synthesizes a
+		// `__clone_<T>` for a type declared in no file. `managedNameCloneStrategy` answers `unsupported` for
+		// exactly these three names, and this is the arm that makes the two agree — which is what this
+		// function's own header calls for: a name the gate and the strategy disagreed about would admit a
+		// clone nobody can emit. The refusal the front end then reports is `requireArrayElementCopyable`'s
+		// positioned E2015.
+		//
+		// It is a REFUSAL and not a gap: there is no `__cs_clone` (the character-set runtime has a decref and
+		// nothing else), and an OS handle cannot be deep-copied at all — duplicating one hands two owners a
+		// descriptor whose `__mf_destruct` closes it once.
+		match compilerOwnedAggregateOf(name) 'compilerOwned'
+			characterSet then return false
+			managedFile then return false
+			managedDirectory then return false
+			userDeclared then break 'compilerOwned'
+		end 'compilerOwned'
 		if visited.contains(name) 'cycle'
 			return true
 		end 'cycle'

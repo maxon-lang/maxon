@@ -1367,6 +1367,19 @@ export type RangedAliasRegistry
 		return any.underlying
 	end 'underlyingInAnyFile'
 
+	// Does SOME file declare `name` as a ranged typealias — the membership half of `underlyingInAnyFile`,
+	// over the identical table, so the two cannot come to disagree about what this registry holds. It is the
+	// FORM question (`ProgramSignatures.declaredFormOf`) and deliberately not the bounds one: which file's
+	// bounds a reader gets is `lookup`'s answer and needs a reader file, while "is this name a ranged alias
+	// at all" is the same for every reader.
+	//
+	// ⚠ It does NOT answer for the builtin `ExitCode`, exactly as `underlyingInAnyFile` does not: the
+	// builtin range is `lookup`'s LAST fallback, supplied for the name no file declares. A form derived
+	// from it would report a `typealias` no program contains.
+	export function containsInAnyFile(name ByteArray) returns bool
+		return self.byName.contains(name)
+	end 'containsInAnyFile'
+
 	// ⭐ **THE STORAGE WIDTH THAT HOLDS EVERY FILE'S DECLARATION OF `name` — the other file-less door, and
 	// the one range question a file-less reader IS allowed to ask.**
 	//

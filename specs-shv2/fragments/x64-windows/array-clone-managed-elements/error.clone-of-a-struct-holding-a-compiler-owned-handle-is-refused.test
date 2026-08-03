@@ -1,0 +1,17 @@
+// Test: error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused
+type Holder
+	export var f as __ManagedFile
+	export static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+end 'Holder'
+typealias Holders = Array with Holder
+function main() returns ExitCode
+	var a = Holders.create()
+	a.push(Holder.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
+	let b = a.clone()
+	return b.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:12:12: Unsupported: `clone` on an array whose managed element has a nested type this rung cannot deep-clone yet — a `Box with T` generic-instance field/element (its per-instance cloner is a later slice) or an array-of-managed-arrays. String / struct / boxed-union elements, including nested String, struct, union and Array fields, ARE supported.

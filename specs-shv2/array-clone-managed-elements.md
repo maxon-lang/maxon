@@ -115,3 +115,43 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused -->
+⛔⛔ **THE DEEP-CLONE GATE AND THE CLONE STRATEGY HAD TO AGREE ABOUT THE COMPILER'S OWN AGGREGATES, AND THEY
+DID NOT (A4n).** `CharacterSet`, `__ManagedFile` and `__ManagedDirectory` have a REGISTERED layout — they need
+a nominal identity — but they are declared in no FILE, so `installStructCloners` (which walks the project's
+own declarations) synthesizes no `__clone_<T>` for them. `managedNameDropCallee` has always tested the three
+names and routed each to its compiler-owned destructor; its clone twin tested none, fell through to the
+struct arm, and handed back `__clone___ManagedFile`.
+
+MEASURED on the parent commit's binary, on exactly this program — a compiler PANIC, after the front end had
+accepted it:
+
+```
+panic at X64Backend.maxon:1905: resolveCallFixups: call to unknown function '__clone___ManagedFile'
+```
+
+⇒ The verdict is a REFUSAL and not a gap. There is no `__cs_clone` (the character-set runtime has a decref
+and nothing else), and an OS HANDLE cannot be deep-copied at all: duplicating one would hand two owners a
+descriptor whose `__mf_destruct` closes once. Both `typeSupportsDeepClone` and `managedNameCloneStrategy` now
+ask one `compilerOwnedAggregateOf`, so the gate refuses exactly what the strategy cannot emit — which is what
+the gate's own header exists to say — and the front end reports a positioned E2015 where the backend used to
+die.
+```maxon
+type Holder
+	export var f as __ManagedFile
+	export static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+end 'Holder'
+typealias Holders = Array with Holder
+function main() returns ExitCode
+	var a = Holders.create()
+	a.push(Holder.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
+	let b = a.clone()
+	return b.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:12: Unsupported: `clone` on an array whose managed element has a nested type this rung cannot deep-clone yet — a `Box with T` generic-instance field/element (its per-instance cloner is a later slice) or an array-of-managed-arrays. String / struct / boxed-union elements, including nested String, struct, union and Array fields, ARE supported.
+```
