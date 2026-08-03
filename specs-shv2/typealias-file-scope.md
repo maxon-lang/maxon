@@ -879,3 +879,121 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:17:34: Unsupported: `clone` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
 ```
+
+<!-- test: contested-generic-alias-argument-that-owns-heap-is-not-co-owned-trivial -->
+⛔⛔ **A SUPERSEDED SPELLING MUST CLASSIFY NOTHING AT *EVERY* ARGUMENT DOOR, AND THE THIRD DOOR'S
+"NOTHING" IS NOT ITS OWN (A3k review).** `typeArgIsCoOwnedTrivial` is `typeIsManaged and not
+typeArgIsOwned`; guarding only the OWNED half left the pre-settle `Box with named("N0")` orphan voting
+MANAGED-AND-NOT-OWNED, i.e. CO-OWNED TRIVIAL — the manufactured kind this rung exists to abolish,
+re-made one spelling over. Every LIVE instantiation of `Box` here OWNS a String, so every scoped
+sibling in the by-base bucket votes not-co-owned; the orphan alone carried the refusal, and
+`anyInstanceTypeArgHasKind` is an OR. ⛔ MEASURED: `v1.swap(…)` was refused **E2015** "a
+trivial-struct instantiation co-owns the field", said of a box that owns a String, while the
+byte-identical program whose second file spells its aliases `M0`/`M1` — nothing contested — runs to
+exit 0, and so does the INLINE `Box with (Box with S0)` spelling of this very program. Two spellings
+disagreeing again, in the direction this rung's thesis forbids.
+```maxon
+// --- file: adef.maxon
+export type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+
+export type S1
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S1'
+
+export type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function swap(v T)
+		self.value = v
+	end 'swap'
+end 'Box'
+
+// --- file: bother.maxon
+typealias N0 = Box with S1
+typealias N1 = Box with N0
+
+export function useOther() returns int
+	var w1 = N1.create(N0.create(S1.make("other")))
+	w1.swap(N0.create(S1.make("other2")))
+	return 1
+end 'useOther'
+
+// --- file: cmain.maxon
+typealias N0 = Box with S0
+typealias N1 = Box with N0
+
+function main() returns ExitCode
+	var v0 = N0.create(S0.make("x"))
+	var v1 = N1.create(v0)
+	v1.swap(N0.create(S0.make("y")))
+	return useOther() - 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: contested-generic-alias-argument-that-owns-heap-agrees-with-the-inline-spelling -->
+The control that makes the case above a statement about AGREEMENT rather than about one spelling: the
+same three files with the outer box spelled INLINE, so no `Box with named("N0")` is ever interned and
+no orphan exists. It has always compiled — which is exactly why the alias spelling refusing was a
+disagreement and not a policy.
+```maxon
+// --- file: adef.maxon
+export type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+
+export type S1
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S1'
+
+export type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function swap(v T)
+		self.value = v
+	end 'swap'
+end 'Box'
+
+// --- file: bother.maxon
+typealias N0 = Box with S1
+typealias N1 = Box with (Box with S1)
+
+export function useOther() returns int
+	var w1 = N1.create(N0.create(S1.make("other")))
+	w1.swap(N0.create(S1.make("other2")))
+	return 1
+end 'useOther'
+
+// --- file: cmain.maxon
+typealias N0 = Box with S0
+typealias N1 = Box with (Box with S0)
+
+function main() returns ExitCode
+	var v1 = N1.create(N0.create(S0.make("x")))
+	v1.swap(N0.create(S0.make("y")))
+	return useOther() - 1
+end 'main'
+```
+```exitcode
+0
+```

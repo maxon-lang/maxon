@@ -7354,11 +7354,18 @@ export type ProgramSignatures
 	// `IrModule.ops`' orphans under `liveOpIndices` are the same shape and the same rule.
 	//
 	// ⚠ **A CLASSIFIER THAT MEETS ONE MUST CONTRIBUTE NOTHING, NOT GUESS.** The two declarations of `Bag`
-	// genuinely differ, and the reader-free classifiers (`typeArgIsOwned`, `typeSupportsDeepClone`) are read by
-	// disjunctions over instantiations, where the scoped siblings in the same bucket already carry the real
-	// answers. Each therefore returns ITS OWN identity for "classifies nothing" — `false` for "nothing is
-	// consumed through a spelling no call site can name", `true` for "nothing is refused for a spelling no copy
-	// site can name" — which is the answer the same program written in ONE file gives, verified both ways.
+	// genuinely differ, and the reader-free classifiers (`typeArgIsOwned`, `typeSupportsDeepClone`,
+	// `typeArgIsCoOwnedTrivial`) are read by disjunctions over instantiations, where the scoped siblings in the
+	// same bucket already carry the real answers. Each therefore returns ITS OWN identity for "classifies
+	// nothing" — `false` for "nothing is consumed through a spelling no call site can name", `true` for
+	// "nothing is refused for a spelling no copy site can name" — which is the answer the same program written
+	// in ONE file gives, verified both ways.
+	//
+	// ⛔ **THREE DOORS, AND THE THIRD WAS MISSED BECAUSE ITS IDENTITY IS NOT ITS OWN (A3k review).**
+	// `typeArgIsCoOwnedTrivial` is `typeIsManaged and not typeArgIsOwned`, so guarding only the OWNED half left
+	// it voting `true` — the manufactured CO-OWNED TRIVIAL kind, off a spelling no call site can name. The
+	// identity a caller needs is a property of the FOLD (`anyInstanceTypeArgHasKind` is an OR, so it is
+	// `false`), never of the door's own polarity; see there for the program it wrongly refused.
 	//
 	// ⚠ **MEASURED (A3k), and it is not hypothetical**: two files declaring `typealias Bag = Array with
 	// <different element>` plus a `typealias BB = Box with Bag` reached `genericAliasInstance`'s refusal from
@@ -7368,6 +7375,21 @@ export type ProgramSignatures
 	function genericAliasSpellingIsSuperseded(name ByteArray) returns bool
 		return self.contestedGenericAliases.contains(name)
 	end 'genericAliasSpellingIsSuperseded'
+
+	// ⭐⭐ **THE SAME QUESTION ASKED OF A TYPE RATHER THAN A NAME (A3k review)** — for the one classifier door
+	// that has no `name` in hand because it is a COMPOSITION of two others, `typeArgIsCoOwnedTrivial`. It is
+	// the SAME fact and not a second one: it bottoms out in `genericAliasSpellingIsSuperseded` above, which is
+	// the only reader of `contestedGenericAliases` for this purpose, so a change to what "superseded" means
+	// cannot reach one door and miss the other. A tag that cannot name an alias at all answers `false` without
+	// touching the interner, exactly as `typeArgIsOwned`'s own `tagMayNameAggregate` early-out does.
+	function typeArgSpellingIsSuperseded(t MaxonType) returns bool
+		if not tagMayNameAggregate(maxonTypeTag(t)) 'cannotNameAGenericAlias'
+			return false
+		end 'cannotNameAGenericAlias'
+
+		let name = self.denotedSlotAggregateName(t)
+		return self.isGenericAlias(name) and self.genericAliasSpellingIsSuperseded(name)
+	end 'typeArgSpellingIsSuperseded'
 
 	// The raw map read, with no contest test — the tier `scopedGenericAliasInstance` falls through to, and
 	// the one `genericAliasInstance` guards. Split so the guard has exactly one bypass and it is named.
@@ -9806,8 +9828,37 @@ export type ProgramSignatures
 	// gates read: the constructor-feed retain fires for exactly this class of argument (a trivial struct or
 	// trivial instance), and the reassign reject refuses it. A String/owning aggregate (`typeArgIsOwned` true)
 	// is consumed, not co-owned-by-retain, and a scalar owns no heap — both answer false.
+	//
+	// ⛔⛔ **AND IT IS THE ONE DOOR WHERE "CLASSIFIES NOTHING" INVERTS, WHICH IS WHY THE SUPERSEDED GUARD HAS TO
+	// BE WRITTEN HERE TOO (A3k review).** The other two argument classifiers state their own identity directly
+	// — `typeArgIsOwned` answers `false`, `typeSupportsDeepClone` answers `true` so that
+	// `uncopyableElement`'s `not` makes it `false` — and every kind is folded by OR in
+	// `anyInstanceTypeArgHasKind`, so `false` is what "contributes nothing" means for all three. This one is a
+	// COMPOSITION of a GUARDED door and an UNGUARDED one: `typeIsManaged`'s `named` arm ends in
+	// `isGenericAlias(name)` and says MANAGED of a superseded spelling, while `typeArgIsOwned` now says NOT
+	// OWNED of it — and `managed and not owned` is `true`. A pre-settle orphan would therefore vote CO-OWNED
+	// TRIVIAL all by itself, which is precisely the manufactured kind this rung exists to abolish, re-made one
+	// spelling over.
+	//
+	// ⚠ **MEASURED (A3k review), and it is a WRONG ANSWER rather than a coarse one**: two files declaring
+	// `typealias N0 = Box with S0` / `= Box with S1` over String-owning structs, plus a
+	// `typealias N1 = Box with N0` in each, put the pre-settle `Box with named("N0")` in `Box`'s by-base
+	// bucket. Every LIVE instantiation there answers `typeArgIsOwned` TRUE (so co-owned-trivial FALSE), yet
+	// `v1.swap(…)` was refused **E2015** "a trivial-struct instantiation co-owns the field" off the orphan's
+	// vote alone — while the byte-identical program whose second file spells the same aliases `M0`/`M1`
+	// (nothing contested) compiles and runs to exit 0, and so does the INLINE
+	// `typealias N1 = Box with (Box with S0)` spelling of the contested one. That is the two spellings
+	// disagreeing again, in the direction the rung's own thesis forbids.
 	export function typeArgIsCoOwnedTrivial(t MaxonType) returns bool
-		return self.typeIsManaged(t, from: self.typeNames) and not self.typeArgIsOwned(t)
+		if not self.typeIsManaged(t, from: self.typeNames) 'ownsNoDroppableHeap'
+			return false
+		end 'ownsNoDroppableHeap'
+
+		if self.typeArgSpellingIsSuperseded(t) 'theContestReplacedThisOne'
+			return false
+		end 'theContestReplacedThisOne'
+
+		return not self.typeArgIsOwned(t)
 	end 'typeArgIsCoOwnedTrivial'
 
 	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS OPAQUE ARRAY ELEMENT AT `position`
