@@ -8906,11 +8906,14 @@ export type ProgramSignatures
 			throw MapError.keyNotFound
 		end 'namesNoInterface'
 
+		// `isInterfaceName` for `Parser.parseTypeReference`'s reason: this walks every field of every declared
+		// struct and every return type, and only needs the answer.
 		let id = typeNameIdOf(declared)
-		match lookupInterface(self.interfaces, name: self.nameOfId(id)) 'isInterface'
-			found then return MaxonType.interfaceRef(id)
-			notFound then throw MapError.keyNotFound
-		end 'isInterface'
+		if not isInterfaceName(self.interfaces, name: self.nameOfId(id)) 'namesNoInterface'
+			throw MapError.keyNotFound
+		end 'namesNoInterface'
+
+		return MaxonType.interfaceRef(id)
 	end 'sweptInterfaceTypeOf'
 
 	// The return-type wrapper of the test above: a `void` return names no type to re-tag.

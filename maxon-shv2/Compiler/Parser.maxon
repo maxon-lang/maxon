@@ -13834,11 +13834,12 @@ export type Parser
 			// the SYNTHESIZED protocol interfaces (`Stringable`, `Hashable`, …) on the same footing as the
 			// user-declared ones — a `function show(s Stringable)` is an existential exactly as a
 			// `function run(b Backend)` is.
-			if self.signatures.allFilesFolded 'wholeProgramInterfaceRegistry'
-				match lookupInterface(self.signatures.interfaceMap(), name: tok.value) 'interfaceName'
-					found then return MaxonType.interfaceRef(self.artifact.typeNames.intern(tok.value))
-					notFound then break 'interfaceName'
-				end 'interfaceName'
+			// ⚠ `isInterfaceName`, NOT `lookupInterface`: this runs on EVERY type annotation in the program and
+			// only needs the ANSWER, and a union return is heap-boxed even for its `notFound` case — measured
+			// at +24,396 allocations in `phase:parse` at the ladder's rung 5, doubling per rung, on a corpus
+			// with no interface in it. See `builtinInterfaceKind`.
+			if self.signatures.allFilesFolded and isInterfaceName(self.signatures.interfaceMap(), name: tok.value) 'wholeProgramInterfaceRegistry'
+				return MaxonType.interfaceRef(self.artifact.typeNames.intern(tok.value))
 			end 'wholeProgramInterfaceRegistry'
 
 			if self.signatures.allFilesFolded 'wholeProgramAliasRegistries'

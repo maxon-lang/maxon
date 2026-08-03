@@ -944,36 +944,74 @@ end 'builtinProtocolResultStdType'
 // leaving the user-declared registry as the only other source. `Iterator`/`Iterable`
 // (associated types) are slice-2 territory and are deliberately not synthesized here.
 export function builtinInterface(name ByteArray) returns InterfaceLookup
-	if name.equals(StringableInterfaceName) 'stringable'
-		return InterfaceLookup.found(singleMethodInterface(StringableInterfaceName, method: nullaryInterfaceMethod(ToStringMethodName, returnTypeName: StringConformerName)))
-	end 'stringable'
-
-	if name.equals(FormattedStringableInterfaceName) 'formatted'
-		return InterfaceLookup.found(singleMethodInterface(FormattedStringableInterfaceName, method: unaryInterfaceMethod(ToStringMethodName, paramName: FormatParamName, paramTypeName: StringConformerName, returnTypeName: StringConformerName)))
-	end 'formatted'
-
-	if name.equals(HashableInterfaceName) 'hashable'
-		return InterfaceLookup.found(singleMethodInterface(HashableInterfaceName, method: nullaryInterfaceMethod(HashMethodName, returnTypeName: HashValueTypeName)))
-	end 'hashable'
-
-	if name.equals(EquatableInterfaceName) 'equatable'
-		return InterfaceLookup.found(singleMethodInterface(EquatableInterfaceName, method: unaryInterfaceMethod(EqualsMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: BoolConformerName)))
-	end 'equatable'
-
-	if name.equals(ComparableInterfaceName) 'comparable'
-		return InterfaceLookup.found(singleMethodInterface(ComparableInterfaceName, method: unaryInterfaceMethod(CompareMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: OrderingTypeName)))
-	end 'comparable'
-
-	if name.equals(CloneableInterfaceName) 'cloneable'
-		return InterfaceLookup.found(singleMethodInterface(CloneableInterfaceName, method: nullaryInterfaceMethod(CloneMethodName, returnTypeName: InterfaceSelfTypeName)))
-	end 'cloneable'
-
-	if name.equals(ErrorInterfaceName) 'error'
-		return InterfaceLookup.found(markerInterface(ErrorInterfaceName))
-	end 'error'
-
-	return InterfaceLookup.notFound
+	match builtinInterfaceKind(name) 'which'
+		notABuiltin then return InterfaceLookup.notFound
+		stringable then return InterfaceLookup.found(singleMethodInterface(StringableInterfaceName, method: nullaryInterfaceMethod(ToStringMethodName, returnTypeName: StringConformerName)))
+		formattedStringable then return InterfaceLookup.found(singleMethodInterface(FormattedStringableInterfaceName, method: unaryInterfaceMethod(ToStringMethodName, paramName: FormatParamName, paramTypeName: StringConformerName, returnTypeName: StringConformerName)))
+		hashable then return InterfaceLookup.found(singleMethodInterface(HashableInterfaceName, method: nullaryInterfaceMethod(HashMethodName, returnTypeName: HashValueTypeName)))
+		equatable then return InterfaceLookup.found(singleMethodInterface(EquatableInterfaceName, method: unaryInterfaceMethod(EqualsMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: BoolConformerName)))
+		comparable then return InterfaceLookup.found(singleMethodInterface(ComparableInterfaceName, method: unaryInterfaceMethod(CompareMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: OrderingTypeName)))
+		cloneable then return InterfaceLookup.found(singleMethodInterface(CloneableInterfaceName, method: nullaryInterfaceMethod(CloneMethodName, returnTypeName: InterfaceSelfTypeName)))
+		error then return InterfaceLookup.found(markerInterface(ErrorInterfaceName))
+	end 'which'
 end 'builtinInterface'
+
+// ⭐⭐ **WHICH SYNTHESIZED PROTOCOL A NAME IS, AS A SCALAR — the CLASSIFICATION half of `builtinInterface`
+// (P1.7a-existentials slice 1).**
+//
+// ⚠ **PAYLOAD-FREE ON PURPOSE, AND THE REASON IS MEASURED — it is `BuiltinConformer`'s reason, on a hotter
+// path.** A Maxon union value is HEAP-BOXED in every case, `notFound` included, so asking `builtinInterface`
+// merely to learn whether a name IS one costs an allocation per ask — and this rung put that ask on
+// `Parser.parseTypeReference`, i.e. on EVERY type annotation in the program. MEASURED on the scale ladder
+// (same binary path, same corpus, A/B against the branch base): **+24,396 allocations in `phase:parse` at
+// rung 5, doubling per rung** — one box per type reference, in a corpus that declares no interface at all.
+// Split this way the classification is a scalar and only a name that IS a protocol pays for a declaration.
+export function builtinInterfaceKind(name ByteArray) returns BuiltinInterfaceKind
+	if name.equals(StringableInterfaceName) 'stringable'
+		return BuiltinInterfaceKind.stringable
+	end 'stringable'
+	if name.equals(FormattedStringableInterfaceName) 'formatted'
+		return BuiltinInterfaceKind.formattedStringable
+	end 'formatted'
+	if name.equals(HashableInterfaceName) 'hashable'
+		return BuiltinInterfaceKind.hashable
+	end 'hashable'
+	if name.equals(EquatableInterfaceName) 'equatable'
+		return BuiltinInterfaceKind.equatable
+	end 'equatable'
+	if name.equals(ComparableInterfaceName) 'comparable'
+		return BuiltinInterfaceKind.comparable
+	end 'comparable'
+	if name.equals(CloneableInterfaceName) 'cloneable'
+		return BuiltinInterfaceKind.cloneable
+	end 'cloneable'
+	if name.equals(ErrorInterfaceName) 'error'
+		return BuiltinInterfaceKind.error
+	end 'error'
+	return BuiltinInterfaceKind.notABuiltin
+end 'builtinInterfaceKind'
+
+// ⭐ **DOES THIS NAME DENOTE AN INTERFACE AT ALL? — the ALLOCATION-FREE half of `lookupInterface`.** Same
+// rule, same two sources in the same order (a synthesized protocol first, then the user registry), stated
+// once by DERIVING from the classifier above rather than by listing the names a second time. Every caller
+// that only needs the ANSWER — the parser's type reference, the swept-type normalization — asks this; a
+// caller that needs the DECLARATION asks `lookupInterface`.
+export function isInterfaceName(interfaces IrInterfaceMap, name ByteArray) returns bool
+	return builtinInterfaceKind(name) != BuiltinInterfaceKind.notABuiltin or interfaces.contains(name)
+end 'isInterfaceName'
+
+// The synthesized protocol a name denotes, or `notABuiltin`. A payload-free ENUM, so a classification is a
+// scalar — see `builtinInterfaceKind` for the measurement that made it one.
+export enum BuiltinInterfaceKind
+	notABuiltin
+	stringable
+	formattedStringable
+	hashable
+	equatable
+	comparable
+	cloneable
+	error
+end 'BuiltinInterfaceKind'
 
 // ⭐ **WHICH INTERFACE DOES THIS NAME DENOTE, ASKED OF THE MERGED REGISTRY — ONE RULE, ONE HOME (R9).**
 // A synthesized builtin FIRST, then the user-declared registry, else `notFound`. Builtins win so a user
