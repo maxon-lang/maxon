@@ -47,11 +47,21 @@
 //       WORKER_SINGLE_RESULT:<spec>:<test>            that test PASSED
 //       WORKER_SINGLE_FAIL:<spec>:<test>:<payload>    that test FAILED; <payload> is its reason,
 //                                                     escaped onto this one line
+//       WORKER_SINGLE_DRIFT:<spec>:<test>:<payload>   that test PASSED and its committed golden no
+//                                                     longer matches; <payload> is the difference,
+//                                                     escaped the same way. NOT A FAILURE — see
+//                                                     SpecTestRunner's `GoldenDrift`
 //       WORKER_JOB_CPU:<ticks>:<reported>:<unreported>
 //                                                     exactly once per job, immediately BEFORE that
 //                                                     job's WORKER_READY: what compiling this spec's
 //                                                     tests cost (see SpecTestRunner's
 //                                                     cumulative-CPU indicator)
+//
+// ⚠ DRIFT RIDES THE RESULT RECORD RATHER THAN ADDING A LINE, and the count check below is why: the
+// parent matches a job's records against its plan ONE PER TEST, and an extra line per drifted golden
+// would have to weaken that into "one or two". Three kinds over two independent facts costs nothing
+// because the fourth combination cannot occur — a FAILING test never reaches the golden step at all
+// (`runStagedTest`) — so every record still names exactly one test, exactly once.
 //
 // ⚠ THE CPU RECORD IS ITS OWN LINE KIND, not a field bolted onto a result record, and it is the LAST
 // line of a job. The parent's drain checks a job's result records against its plan NAME FOR NAME and
@@ -60,8 +70,8 @@
 // the end as a distinct kind, the check is untouched: the CPU line is removed first and the records
 // are still counted and named exactly as before.
 //
-// INVARIANT, and the drain leans on it: a worker NEVER writes an empty line to stdout. The four
-// lines above are the only ones it can write and all four are non-empty — so an empty line back
+// INVARIANT, and the drain leans on it: a worker NEVER writes an empty line to stdout. The five
+// lines above are the only ones it can write and all five are non-empty — so an empty line back
 // from `readStdoutLine()` is unambiguously EOF, i.e. the worker died. Keeping stdout clean takes
 // no effort here: the compiles and the compiled test programs a worker spawns all run under
 // `Subprocess.run` with COLLECTED output, so their streams are captured, never inherited.
@@ -97,6 +107,7 @@
 let WorkerReadyMarker = "WORKER_READY"
 let WorkerPassMarker = "WORKER_SINGLE_RESULT:"
 let WorkerFailMarker = "WORKER_SINGLE_FAIL:"
+let WorkerDriftMarker = "WORKER_SINGLE_DRIFT:"
 let WorkerJobCpuMarker = "WORKER_JOB_CPU:"
 let JobSinglesPrefix = "JOB:singles:"
 let ExitCommand = "EXIT"
@@ -202,7 +213,7 @@ let WorkerShutdownTimeoutMs = 30 * MillisPerSecond
 // suite failure even if every test it ran passed.
 let LeakCheckExitCode = 101
 
-// The bytes `encodeFailPayload` escapes and `decodeFailPayload` puts back. Named rather than
+// The bytes `encodeRecordPayload` escapes and `decodeRecordPayload` puts back. Named rather than
 // written as character literals so the escape table reads as one table.
 let AsciiBackslash = 0x5C
 let AsciiLowerN = 0x6E
@@ -463,10 +474,7 @@ function runSinglesJob(compilerExe FilePath, specDir FilePath, specName String, 
 	end 'specFailed'
 
 	for result in run.results 'eachResult'
-		match result.outcome 'verdict'
-			pass then print("{WorkerPassMarker}{specName}{ProtocolFieldSep}{result.testName}\n")
-			fail(reason) then print("{WorkerFailMarker}{specName}{ProtocolFieldSep}{result.testName}{ProtocolFieldSep}{encodeFailPayload(reason)}\n")
-		end 'verdict'
+		print("{recordLine(specName, result: result)}\n")
 	end 'eachResult'
 
 	// LAST, after every record — the parent takes it off the end of the drained lines before it
@@ -474,41 +482,73 @@ function runSinglesJob(compilerExe FilePath, specDir FilePath, specName String, 
 	print("{WorkerJobCpuMarker}{run.cpu.ticks}{ProtocolFieldSep}{run.cpu.reported}{ProtocolFieldSep}{run.cpu.unreported}\n")
 end 'runSinglesJob'
 
+// The wire line for ONE result — the one place the three record kinds are chosen between.
+//
+// ⚠ TWO INDEPENDENT FACTS, THREE KINDS. The verdict and the golden are separate axes
+// (`TestOutcome` / `GoldenDrift`), which is four combinations on paper — but a FAILING test never
+// reaches the golden step (`runStagedTest` skips it, because a failing test's IR is noise), so
+// `fail` always carries `GoldenDrift.none` and the fourth kind would be a record nothing can emit.
+// That is why the fail arm may read the verdict alone without dropping anything.
+function recordLine(specName String, result SpecTestResult) returns String
+	return match result.outcome 'verdict'
+		pass gives passOrDriftLine(specName, result: result)
+		fail(reason) gives payloadRecordLine(WorkerFailMarker, specName: specName, testName: result.testName, payload: reason)
+	end 'verdict'
+end 'recordLine'
+
+// A passing test's record: plain when its golden still matches, DRIFT when it does not. The drift
+// payload travels to the parent rather than being printed here because the parent is the only party
+// that can print in a deterministic order — see this file's header.
+function passOrDriftLine(specName String, result SpecTestResult) returns String
+	return match result.golden 'reference'
+		none gives "{WorkerPassMarker}{specName}{ProtocolFieldSep}{result.testName}"
+		drifted(detail) gives payloadRecordLine(WorkerDriftMarker, specName: specName, testName: result.testName, payload: detail)
+	end 'reference'
+end 'passOrDriftLine'
+
+// The wire form of a payload-carrying record — the exact mirror of `PayloadRecordSplit.of`, which
+// takes one apart. Both kinds are assembled here so the field order and the escaping cannot come to
+// be spelled two ways on the writing side while the reading side has only one.
+function payloadRecordLine(marker String, specName String, testName String, payload String) returns String
+	return "{marker}{specName}{ProtocolFieldSep}{testName}{ProtocolFieldSep}{encodeRecordPayload(payload)}"
+end 'payloadRecordLine'
+
 // ============================================================================================
-// THE FAIL PAYLOAD — a multi-line reason on a line-based wire
+// THE RECORD PAYLOAD — a multi-line message on a line-based wire
 // ============================================================================================
 
-// Escape a failure reason onto ONE line. A golden-mismatch reason is genuinely multi-line (see
-// `checkTestFragment`), and an un-escaped newline in it would not corrupt one record — it would
+// Escape a record's message onto ONE line. Both payload-carrying kinds need it: a failure reason and
+// a golden-drift report are each genuinely multi-line (see `checkCompilerError` and
+// `checkTestFragment`), and an un-escaped newline in one would not corrupt a single record — it would
 // desynchronise the parent's reader for the rest of the job.
 //
 // Backslash FIRST, so the newline and CR rules that follow cannot double-escape the backslashes
 // this rule just inserted.
-function encodeFailPayload(reason String) returns String
-	var escaped = reason.replace("\\", with: "\\\\")
+function encodeRecordPayload(message String) returns String
+	var escaped = message.replace("\\", with: "\\\\")
 	escaped = escaped.replace("\n", with: "\\n")
 	escaped = escaped.replace("\r", with: "\\r")
 	return escaped
-end 'encodeFailPayload'
+end 'encodeRecordPayload'
 
 // The inverse. Walks the bytes ONCE rather than running three `replace`s, because a replace-based
 // decode re-expands what it just produced: `\\n` (an escaped backslash followed by an `n`) would
 // come back as a newline instead of the two characters it started as.
-function decodeFailPayload(payload String) returns String
+function decodeRecordPayload(payload String) returns String
 	let bytes = payload.toByteArray()
 	let n = bytes.count()
 	var decoded = ByteArray.create()
 	var i = 0
 
 	while i < n 'walk'
-		let b = try bytes.get(i) otherwise panic("decodeFailPayload: bytes.get({i}) is in bounds by construction")
+		let b = try bytes.get(i) otherwise panic("decodeRecordPayload: bytes.get({i}) is in bounds by construction")
 		if b != AsciiBackslash or i + 1 >= n 'literalByte'
 			decoded.push(b)
 			i = i + 1
 			continue
 		end 'literalByte'
 
-		let escaped = try bytes.get(i + 1) otherwise panic("decodeFailPayload: bytes.get({i} + 1) is in bounds by the guard above")
+		let escaped = try bytes.get(i + 1) otherwise panic("decodeRecordPayload: bytes.get({i} + 1) is in bounds by the guard above")
 		if escaped == AsciiLowerN 'newline'
 			decoded.push(AsciiLineFeed as Byte)
 			i = i + 2
@@ -534,7 +574,7 @@ function decodeFailPayload(payload String) returns String
 	end 'walk'
 
 	return String.from(decoded)
-end 'decodeFailPayload'
+end 'decodeRecordPayload'
 
 // The remainder of `line` after a literal ASCII `prefix` the caller has already matched with
 // `startsWith`. Byte position equals character position for every marker in this protocol, so
@@ -554,12 +594,16 @@ end 'sliceAfterPrefix'
 // DECODING A WORKER'S RECORDS
 // ============================================================================================
 
-// One decoded result record. TWO cases, because the worker emits exactly two kinds — a line that
-// is neither is a protocol break between two halves of this same file, so `decodeWorkerLine`
-// panics on it rather than modelling it as a third case a future arm could forget.
+// One decoded result record. THREE cases, because the worker emits exactly three kinds — a line that
+// is none of them is a protocol break between two halves of this same file, so `decodeWorkerLine`
+// panics on it rather than modelling it as a fourth case a future arm could forget.
 union WorkerRecord
 	pass(specName String, testName String)
 	fail(specName String, testName String, reason String)
+	// PASSED, and its committed golden no longer matches. A record of its own rather than a field on
+	// `pass` so the two facts stay separable all the way to the report (see `SpecTestRunner
+	// .GoldenDrift`); `detail` is the rendered difference.
+	drift(specName String, testName String, detail String)
 
 	// The spec and the test this record is ABOUT, whatever its verdict — the two fields the
 	// dispatcher checks against its plan before it trusts anything else in the record.
@@ -567,6 +611,7 @@ union WorkerRecord
 		return match self 's'
 			pass(s, _) gives s
 			fail(s, _, _) gives s
+			drift(s, _, _) gives s
 		end 's'
 	end 'spec'
 
@@ -574,6 +619,7 @@ union WorkerRecord
 		return match self 't'
 			pass(_, t) gives t
 			fail(_, t, _) gives t
+			drift(_, t, _) gives t
 		end 't'
 	end 'test'
 end 'WorkerRecord'
@@ -583,11 +629,15 @@ function decodeWorkerLine(line String) returns WorkerRecord
 		return decodeFailRecord(line)
 	end 'isFail'
 
+	if line.startsWith(WorkerDriftMarker) 'isDrift'
+		return decodeDriftRecord(line)
+	end 'isDrift'
+
 	if line.startsWith(WorkerPassMarker) 'isPass'
 		return decodePassRecord(line)
 	end 'isPass'
 
-	panic("spec worker pool: a worker emitted a line that is neither a PASS nor a FAIL record: '{line}'")
+	panic("spec worker pool: a worker emitted a line that is none of the PASS, FAIL or DRIFT records: '{line}'")
 end 'decodeWorkerLine'
 
 // One structural separator consumed: the field in front of it, and everything behind it.
@@ -628,11 +678,34 @@ end 'decodePassRecord'
 // `WORKER_SINGLE_FAIL:<spec>:<test>:<payload>`. Only the FIRST TWO separators are structural; the
 // payload keeps every colon it contains.
 function decodeFailRecord(line String) returns WorkerRecord
-	let spec = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerFailMarker), expected: "test", line: line)
-	let test = splitAtFieldSep(spec.rest, expected: "reason", line: line)
-
-	return WorkerRecord.fail(spec.field, testName: test.field, reason: decodeFailPayload(test.rest))
+	let split = PayloadRecordSplit.of(line, marker: WorkerFailMarker, payloadName: "reason")
+	return WorkerRecord.fail(split.specName, testName: split.testName, reason: split.payload)
 end 'decodeFailRecord'
+
+// `WORKER_SINGLE_DRIFT:<spec>:<test>:<payload>` — the same three fields as a FAIL, carrying the
+// golden difference instead of a failure reason.
+function decodeDriftRecord(line String) returns WorkerRecord
+	let split = PayloadRecordSplit.of(line, marker: WorkerDriftMarker, payloadName: "detail")
+	return WorkerRecord.drift(split.specName, testName: split.testName, detail: split.payload)
+end 'decodeDriftRecord'
+
+// The three fields of a payload-carrying record, already decoded. Its own type so the two kinds that
+// share the shape share the PARSE of it too — a second copy of the two structural cuts is a second
+// place the wire format could be got wrong.
+type PayloadRecordSplit
+	export let specName as String
+	export let testName as String
+	export let payload as String
+
+	// The two structural cuts and the unescape, in the one place both payload-carrying kinds reach
+	// them. `payloadName` is only what a malformed record is reported as missing.
+	export static function of(line String, marker String, payloadName String) returns PayloadRecordSplit
+		let spec = splitAtFieldSep(sliceAfterPrefix(line, prefix: marker), expected: "test", line: line)
+		let test = splitAtFieldSep(spec.rest, expected: payloadName, line: line)
+
+		return Self{specName: spec.field, testName: test.field, payload: decodeRecordPayload(test.rest)}
+	end 'of'
+end 'PayloadRecordSplit'
 
 // Take the job's CPU record OFF THE END of its drained lines, leaving only the result records.
 //
@@ -694,18 +767,29 @@ function resultsFromLines(lines StringArray, plan SpecPlan) returns SpecTestResu
 		// Built from the PARENT's own names, which the check above has just proved equal to the
 		// worker's. The report is therefore assembled entirely from the parent's plan; nothing
 		// that crossed a pipe reaches the printed line but the failure reason.
-		results.push(SpecTestResult.create(plan.specName, testName: expectedTest, outcome: outcomeOf(record)))
+		results.push(SpecTestResult.create(plan.specName, testName: expectedTest, outcome: outcomeOf(record), golden: goldenOf(record)))
 	end 'eachRecord'
 
 	return results
 end 'resultsFromLines'
 
+// ⚖ A DRIFT RECORD IS A PASS. The golden it names is reference material, so it decides nothing about
+// the verdict — the difference it carries comes back out of `goldenOf` instead.
 function outcomeOf(record WorkerRecord) returns TestOutcome
 	return match record 'verdict'
 		pass gives TestOutcome.pass
 		fail(_, _, reason) gives TestOutcome.fail(reason)
+		drift gives TestOutcome.pass
 	end 'verdict'
 end 'outcomeOf'
+
+function goldenOf(record WorkerRecord) returns GoldenDrift
+	return match record 'reference'
+		pass gives GoldenDrift.none
+		fail gives GoldenDrift.none
+		drift(_, _, detail) gives GoldenDrift.drifted(detail)
+	end 'reference'
+end 'goldenOf'
 
 // ============================================================================================
 // THE DRAIN — the one green thread in the design

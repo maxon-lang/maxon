@@ -38,6 +38,20 @@
 # A target that RUNS and FAILS is a red gate — that is a rung-halting condition (see the rung
 # skill's HALT list), and no flag softens it.
 #
+# ⚖ AND SINCE 2026-08-02, A RED LANE IS A REAL FAILURE AND CANNOT BE ANYTHING ELSE.
+#
+# A suite run exits non-zero ONLY for a wrong exit code, wrong stdout, a diagnostic that did not match,
+# a compile that should have succeeded, or a leak (101). A committed golden that no longer matches what
+# the compiler emits is REPORTED by the run and contributes nothing to its exit code or its failed
+# count (user ruling: "the goldens are NOT supposed to be a gate, they are just for reference" — see
+# maxon-shv2/Testing/GoldenTracking.maxon).
+#
+# ⛔ THIS SCRIPT'S RED WAS ONCE READ AS BOOKKEEPING, AND THAT IS THE REASON FOR THE RULING. An
+# x64-linux red here was filed as "10 stale golden mismatches + 9 others"; the 9 were nine float
+# programs exiting 1 on that target (PLAN row X5), and they went unlooked-at for a day because ten
+# pieces of golden bookkeeping in the same list looked exactly as red as they did. ⇒ A FAIL row below
+# now means a program did the wrong thing. Read the log; there is nothing in it to regenerate away.
+#
 # ⭐ THE RUNG PATH DOES NOT REDO WHAT STEP 8 JUST DID (2026-07-27).
 #
 # Run straight, this script rebuilds both compilers and runs the HOST suite — all three of which the
@@ -325,6 +339,9 @@ done
 echo
 if [ "$FAILED" -gt 0 ]; then
 	echo "RED — $FAILED target(s) ran and FAILED. This is a rung-halting gate: stop and report."
+	echo "Every failure counted here is a REAL one — a wrong exit code, wrong stdout, a failed compile or"
+	echo "a leak. Goldens are reference and cannot redden a lane, so there is nothing here to regenerate"
+	echo "away: read the suite output above and find out what the program did wrong."
 	exit 1
 fi
 

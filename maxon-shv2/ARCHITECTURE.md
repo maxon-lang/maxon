@@ -94,7 +94,7 @@ strings/arrays/maps, floats in codegen, error handling, the runtime shv2 must
 | Gate | What it proves |
 |---|---|
 | `maxon-shv2 spec-test` — the RUN | **314 passing / 0 failing** over `specs-shv2/*.md`. Each test compiles a program, **runs** it, and asserts its exit code — so an allocation that leaves a value in the wrong register computes the wrong answer and FAILS. This is the correctness gate on the register allocator. |
-| `specs-shv2/fragments/x64-windows/**` — the GOLDENS | Committed Target-IR goldens, **compared** by the same `spec-test` run (`SpecTestRunner.checkTestFragment`): a mismatch FAILS the test with `codegen changed`. This is the *quality* gate — an extra spill, a lost coalesce, a needlessly widened live range all still return the right answer, so only the pinned IR sees them. They also reach where the run cannot: one execution takes ONE path, the golden pins EVERY block. `--update-required` regenerates them, and that diff is the review. |
+| `specs-shv2/fragments/x64-windows/**` — the GOLDENS | Committed Target-IR goldens, **compared** by the same `spec-test` run (`SpecTestRunner.checkTestFragment`) and **REPORTED, NEVER FAILED**: a difference prints as reference drift and contributes nothing to the failed count or the exit code (⚖ user ruling 2026-08-02 — *"the goldens are NOT supposed to be a gate, they are just for reference"*; the gate it used to be hid nine real x64-linux failures inside a wall of bookkeeping, PLAN row `X5`). They remain the only record of whether codegen got *worse* — an extra spill, a lost coalesce, a needlessly widened live range all still return the right answer — and they reach where the run cannot: one execution takes ONE path, the golden records EVERY block. `--update-required` regenerates them, and that diff is the review. |
 | `maxon-shv2 verify-warm-rebuild <file\|dir>` | Compile determinism (byte-identical) + query-spine incrementality (content-hash cache hit) + **invalidation** (four probes: a bytes-only edit re-parses 1 file; a declaration edit re-parses all; a `let`'s VALUE edit re-parses all; a `var`'s value edit re-parses **1**) |
 | ```RequiredData``` blocks — the **BINARY** | The `.data` section read back OUT of the linked PE and byte-compared (`Testing/PeSectionReader.maxon`, a port of the C# runner's `CheckRequiredData`). The only gate that looks at what was actually LINKED rather than at what the compiler meant: it catches a section header with a wrong RVA or a raw pointer off by an alignment, which no exit code and no IR dump can see. ⚠ It was **silently ignored** until P1.0d.5b — six `static-variables` cases carried one and would have passed on their exit code alone while claiming to check their layout. |
 
@@ -164,9 +164,10 @@ is the index.
   compacted instead would invalidate every reference in the function.
   *(→ Register allocator)*
 - **The allocator is gated by the SUITE, not by a pass inside the compiler** — running a
-  spec test proves the allocation is CORRECT (a wrong register → a wrong exit code), and
-  the committed `.test` goldens prove it did not get WORSE (they are *compared*, and pin
-  every block of every function). There is deliberately no in-compiler allocation
+  spec test proves the allocation is CORRECT (a wrong register → a wrong exit code). That
+  run **is** the gate; the committed `.test` goldens are the *reference* that shows whether
+  it got WORSE (they are *compared* and *reported*, they record every block of every
+  function, and they fail nothing). There is deliberately no in-compiler allocation
   verifier. *(→ Register allocator)*
 - **Ownership-kind lattice** — `trivial · owned · borrow · shared`, with three
   first-class homes and zero sidetables. Declared, inert until the ownership stage.
@@ -181,7 +182,7 @@ is the index.
 | Command | Purpose |
 |---|---|
 | `maxon-shv2 build <file\|dir> [-o out] [--emit-ir]` | Compile to a PE. A single-file build writes next to the source (`basic.maxon` → `basic.exe`). `--emit-ir` also prints the Target module to `<output>.ir`. |
-| `maxon-shv2 spec-test [dir] [--update-required]` | Run the spec suite (default `specs-shv2`): compile each test, run it, check its exit code, and compare its Target IR against the committed golden. `--update-required` rewrites the goldens instead of checking them. |
+| `maxon-shv2 spec-test [dir] [--update-required]` | Run the spec suite (default `specs-shv2`): compile each test, run it, and check its exit code — **that** is what decides the exit code. It also compares the Target IR against the committed golden and *reports* any drift, which fails nothing. `--update-required` rewrites the goldens instead of comparing them. |
 | `maxon-shv2 verify-warm-rebuild <file>` | The determinism + incrementality gate. |
 
 `--log=<category>:<level>` enables the `Logger` categories (`codegen` carries the
@@ -1841,19 +1842,26 @@ so a move never runs on a sibling edge.
 **There is no in-compiler allocation verifier, and none is needed.** Two things gate the
 allocator, and both live in the suite:
 
-| Gate | Question it answers | Why the other one cannot |
+| Instrument | Question it answers | Why the other one cannot |
 |---|---|---|
-| **The RUN** (`spec-test` compiles each test, executes it, asserts its exit code) | *Is the allocation CORRECT?* A value left in the wrong register — an aliased colour, a mis-ordered edge copy, a reload from the wrong slot, a clobbered parameter — computes the wrong answer, and the exit-code assertion catches it end-to-end. | A golden cannot say whether the answer is *right*; it only says the code is what it was. |
-| **The GOLDENS** (`specs-shv2/fragments/**.test`, **compared** by `SpecTestRunner.checkTestFragment`) | *Did the code get WORSE?* An extra spill, a lost coalesce, a needlessly widened live range: each still returns the right answer, so a suite that only *runs* the program stays green while codegen quietly rots. The goldens also reach where the run cannot — one execution takes ONE path, but the golden pins **every block** of the function, including blocks that path never enters. | The run cannot see quality, and cannot see unexecuted blocks. |
+| **The RUN — the GATE** (`spec-test` compiles each test, executes it, asserts its exit code) | *Is the allocation CORRECT?* A value left in the wrong register — an aliased colour, a mis-ordered edge copy, a reload from the wrong slot, a clobbered parameter — computes the wrong answer, and the exit-code assertion catches it end-to-end. | A golden cannot say whether the answer is *right*; it only says the code is what it was. |
+| **The GOLDENS — the REFERENCE** (`specs-shv2/fragments/**.test`, **compared and reported** by `SpecTestRunner.checkTestFragment`) | *Did the code get WORSE?* An extra spill, a lost coalesce, a needlessly widened live range: each still returns the right answer, so a run alone sees nothing while codegen quietly rots. The goldens also reach where the run cannot — one execution takes ONE path, but the golden records **every block** of the function, including blocks that path never enters. | The run cannot see quality, and cannot see unexecuted blocks. |
 
-A golden mismatch FAILS the test (`codegen changed — golden fragment mismatch`); `--update-required`
-regenerates them, and **that diff is the review**.
+⚖ **ONLY THE FIRST ROW IS A GATE** (user, 2026-08-02: *"the gate is the spec tests passing"* /
+*"the goldens are NOT supposed to be a gate, they are just for reference"*). A golden difference is
+printed as **reference drift** on stderr and contributes nothing to the failed count or the exit
+code; `--update-required` regenerates the files, and **that diff is the review**. The gate role was
+removed because it was actively harmful: a cross-target red read as *"10 stale golden mismatches +
+9 others"* and the 9 were nine float programs exiting 1 on x64-linux (PLAN row `X5`), unlooked-at
+for a day because ten pieces of bookkeeping in the same list were exactly as red as they were.
 
-**This pairing is teeth-tested.** Disable the copy hint in `chooseRegister`
-(`if false and hints.hasCopy(v)`) — a change that produces *correct but worse* code — and the
-suite goes **72 passed, 12 failed**: all twelve are `codegen changed`, **zero** are behavioural.
-That is exactly the split the two gates are supposed to produce, and it is what says the quality
-gate is armed.
+**The pairing is teeth-tested.** Disable the copy hint in `chooseRegister`
+(`if false and hints.hasCopy(v)`) — a change that produces *correct but worse* code — and the suite
+reported **72 passed, 12 failed**, all twelve `codegen changed` and **zero** behavioural. That split
+is what says the reference is armed, and it is unchanged; only its rendering is. The same experiment
+now reads **84 passed, 0 failed** with **12 golden fragment(s) drifted** reported beneath it —
+*(derived from the measured split, not re-measured)* — which is the point: correct-but-worse code is
+not a broken program, and the two now read differently at a glance.
 
 > **HISTORY.** M5 carried a third gate, an `AllocChecker`: a symbolic verifier that abstractly
 > interpreted the allocated function and asserted every use read the register holding its value.
@@ -2724,15 +2732,18 @@ generated **Target IR** (via `IR/Target/TargetPrinter.maxon` — an exhaustive `
 `TargetOp`, so a new op is a compile error, never a silent `??`), captured through `build --emit-ir`;
 or the normalized diagnostic for an error test. They are byte-deterministic and committed.
 
-**Fragments are GATES, not outputs.** `checkTestFragment` **compares** the emitted IR against the
-committed golden and FAILS the test on a mismatch (`codegen changed — golden fragment mismatch`).
-`--update-required` rewrites them instead of checking, and that diff is the review. The golden check
-runs only *after* the behaviour check has passed — a failing test's IR is noise, and reporting a
-golden mismatch on top of it would bury the real failure.
+**Fragments are COMPARED REFERENCE, not gates and not outputs.** `checkTestFragment` **compares** the
+emitted IR against the committed golden and, on a difference, hands the parent a `GoldenDrift.drifted`
+that `Main` prints beneath the summary on stderr — it never touches the failed count or the exit code
+(⚖ user ruling 2026-08-02; see `Testing/GoldenTracking.maxon` for what the gate role cost).
+`--update-required` rewrites them instead of comparing, and that diff is the review. The comparison
+runs only *after* the behaviour check has passed — a failing test's IR is noise — which is also what
+makes drift reachable only alongside a PASS, and what lets the worker wire carry both facts in one
+record per test (`WORKER_SINGLE_DRIFT`).
 
-Together with the run, this is what gates the register allocator (see *What gates the allocator*):
-the run proves the allocation is **correct**, the golden proves it did not get **worse** — including
-in blocks the test's single execution path never enters.
+Together with the run, this is what watches the register allocator (see *What gates the allocator*):
+the run **gates** correctness, the golden **records** whether it got worse — including in blocks the
+test's single execution path never enters.
 
 ## Coverage scaffold
 
