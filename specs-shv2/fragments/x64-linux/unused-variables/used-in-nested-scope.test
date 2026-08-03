@@ -1,0 +1,28 @@
+// Test: used-in-nested-scope
+
+function main() returns ExitCode
+	let x = 42
+	if x > 0 'check'
+		return x
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 42
+    x64.cmpRegImm32 r8, 0
+    x64.jcc greater, check
+    x64.jmp ifcont
+  check:
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
