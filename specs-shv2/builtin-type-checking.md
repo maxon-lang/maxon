@@ -61,8 +61,7 @@ end 'main'
 error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-file-write-int.test:19:27: argument type mismatch for 'managed': expected '__ManagedMemory', got 'int'
 ```
 
-<!-- disabled-test: builtin-type-checking.error-managed-directory-open-search-int -->
-<!-- R4.3 — `__ManagedDirectory` is not a type shv2 has; R4.2 delivers the `__ManagedFile` surface only. -->
+<!-- test: builtin-type-checking.error-managed-directory-open-search-int -->
 ```maxon
 function main() returns ExitCode
 	let result = __ManagedDirectory.openSearch(0)
