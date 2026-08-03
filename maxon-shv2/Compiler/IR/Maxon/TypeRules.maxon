@@ -1245,11 +1245,19 @@ export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt, i
 	return value >= low and value <= high
 end 'literalInRange'
 
-// ⭐⭐ **DOES THE TARGET ALIAS ADMIT EVERY VALUE THE SOURCE ALIAS DOES? — the whole content of E3010.**
-// A cast that cannot lose a value contributes nothing (`Parser.reportUnneededCastBetween`): the language
-// already widens into the target implicitly, so writing the `as` says something that was true anyway.
-// Both ends are DECLARED ranged aliases by the time this is asked — a source with no alias name is not an
-// unneeded cast but an ordinary one, which is what keeps `let x = 42` + `x as Float` legal.
+// ⭐⭐ **DOES THE TARGET ALIAS ADMIT EVERY VALUE THE SOURCE ALIAS DOES? — the whole content of E3010,
+// AND the whole content of the range guard's elision (A4f).** A cast that cannot lose a value contributes
+// nothing (`Parser.reportUnneededCastBetween`): the language already widens into the target implicitly, so
+// writing the `as` says something that was true anyway. Both ends are DECLARED ranged aliases by the time
+// this is asked — a source with no alias name is not an unneeded cast but an ordinary one, which is what
+// keeps `let x = 42` + `x as Float` legal.
+//
+// ⚠⚠ **THE DIAGNOSTIC AND THE EMITTER MUST NOT ANSWER THIS TWICE.** E3010 saying *"'Byte' already fits in
+// 'ExitCode'"* is a PROOF that the source range is inside the destination; a runtime `0 ≤ x ≤ 4294967295`
+// cascade emitted behind that same proof tests a value that cannot fail it. Before A4f the two halves were
+// decided in different places from different facts — `InsertRangeChecks.needsRuntimeGuard` never saw a
+// source range at all — so removing an unneeded cast ADDED a provably-dead guard.
+// `rangeCoversDenotedRange` below is the spelling the guard doors ask, and it ends here.
 //
 // CROSS-DOMAIN: only `int → float` covers, and it covers ALWAYS — an f64 spans every i64 the corpus can
 // write, and the declared float alias is the full `float(f64.min to f64.max)` in every use. The reverse
@@ -1267,26 +1275,53 @@ end 'literalInRange'
 // (their union is unrepresentable in 64 bits, and over-reporting coverage is a FALSE REJECTION of a valid
 // program). When BOTH carry it the uppers are equal by construction and both lows are non-negative
 // (`rangeIsUnsigned` holds inside the shape), so the lows decide under an ordinary signed compare.
-export function rangeCoversRange(targetLow ParsedInt, targetHigh ParsedInt, targetIsFloat bool, sourceLow ParsedInt, sourceHigh ParsedInt, sourceIsFloat bool) returns bool
-	if targetIsFloat != sourceIsFloat 'crossDomain'
+export function rangeCoversRange(target RangedTypeAlias, source RangedTypeAlias) returns bool
+	let targetIsFloat = aliasIsFloat(target)
+	if targetIsFloat != aliasIsFloat(source) 'crossDomain'
 		return targetIsFloat
 	end 'crossDomain'
 
 	if targetIsFloat 'float'
-		return floatOrderKey(targetLow) <= floatOrderKey(sourceLow) and floatOrderKey(targetHigh) >= floatOrderKey(sourceHigh)
+		return floatOrderKey(target.low) <= floatOrderKey(source.low) and floatOrderKey(target.high) >= floatOrderKey(source.high)
 	end 'float'
 
-	let targetIsUnsignedMaxUpper = rangeIsUnsignedMaxUpper(targetLow, high: targetHigh)
-	if targetIsUnsignedMaxUpper != rangeIsUnsignedMaxUpper(sourceLow, high: sourceHigh) 'mixedRepresentation'
+	let targetIsUnsignedMaxUpper = rangeIsUnsignedMaxUpper(target.low, high: target.high)
+	if targetIsUnsignedMaxUpper != rangeIsUnsignedMaxUpper(source.low, high: source.high) 'mixedRepresentation'
 		return false
 	end 'mixedRepresentation'
 
 	if targetIsUnsignedMaxUpper 'bothUnbounded'
-		return targetLow <= sourceLow
+		return target.low <= source.low
 	end 'bothUnbounded'
 
-	return targetLow <= sourceLow and targetHigh >= sourceHigh
+	return target.low <= source.low and target.high >= source.high
 end 'rangeCoversRange'
+
+// ⭐⭐ **THE SAME CONTAINMENT, ASKED WHERE THE SOURCE MAY NAME NO ALIAS AT ALL — what a range-check DOOR
+// holds, and the one thing that decides whether its runtime guard is provably dead (A4f).** Every door
+// that records a site has already resolved its DESTINATION alias (it needs the name for the site), and
+// faces a SOURCE expression that may or may not denote one — which is exactly the pair E3010 is reported
+// from, one end already unwrapped. This adds that one unwrap and nothing else, so a door reaches no
+// verdict of its own and the emitter cannot come to disagree with the diagnostic.
+//
+// ⚠ **AN `undeclared` SOURCE PROVES NOTHING, AND THAT IS THE DIRECTION THAT KEEPS THE GUARD.** A bare
+// `int` local, a folded literal, a freshly minted `trunc` result: none states any bounds, so nothing
+// about it is inside anything. `false` records the site and leaves the check exactly where it was.
+//
+// ⚠ **WHAT THE `true` ANSWER RESTS ON: that a value denoting alias `A` is IN `A`'s range.** That is the
+// induction every door in this family maintains — a cast site guards its result, a parameter is guarded
+// at the callee's entry, a `return` before its `ret`, a field or element at its store — so a value handed
+// on under `A` has already passed `A`'s cascade or been refused by E3005. The one producer that breaks it
+// is `Array.resize`, which EXPOSES zero-initialized slots crossing no door at all (`specs-shv2/safety.md`'s
+// `divide-by-zero-fault-through-a-resized-array-slot`); a wider door downstream used to catch such a slot
+// BY COINCIDENCE — it fires only where the exposed `0` also falls outside the SECOND range — and a
+// coincidence is not a guarantee this elision may be written against. That hole is `resize`'s to close.
+export function rangeCoversDenotedRange(target RangedTypeAlias, source DeclaredAlias) returns bool
+	return match source 'source'
+		undeclared gives false
+		declared(sourceAlias) gives rangeCoversRange(target, source: sourceAlias)
+	end 'source'
+end 'rangeCoversDenotedRange'
 
 // The E3005 a literal out-of-range NARROWING reports — `Value N is outside the range of 'Alias'
 // (int(lo to hi))` — worded ONCE, for BOTH the body-cast/return pass (`InsertRangeChecks`) and

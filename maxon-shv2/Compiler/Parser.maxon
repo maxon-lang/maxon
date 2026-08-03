@@ -15084,7 +15084,7 @@ export type Parser
 	// ⭐ **RECORD THE RANGED TYPEALIAS A VALUE'S DECLARED TYPE NAMES** (see `ValueDeclaredAliasMap` for what
 	// this map is for and why it exists beside the two type columns). An `undeclared` alias records nothing:
 	// a cast to `ExitCode`, to a bare primitive or to a struct names no ranged alias, and a value with no
-	// entry simply falls back to its own `named` tag (`castSourceAlias`).
+	// entry simply falls back to its own `named` tag (`valueDenotedAlias`).
 	//
 	// ⚠ **THE CALLER OWNS THE ALIASING QUESTION.** This writes the value it is given, so a caller holding a
 	// value that another BINDING also names must not call it — see `ValueDeclaredAliasMap`'s gate and
@@ -15107,15 +15107,18 @@ export type Parser
 		self.valueDeclaredAlias.upsert(value, value: self.artifact.typeNames.intern(aliasName))
 	end 'recordValueDeclaredAliasName'
 
-	// ⭐ **THE RANGED TYPEALIAS A CAST'S SOURCE EXPRESSION DENOTES** — the half of E3010 that is about the
-	// value rather than about the written target. The recorded entry WINS over the value's own `named` tag,
-	// because it is the LATER and more specific statement about the same value: `identity(42) as Byte` hands
-	// back the call result untouched, and that result's type column still says `Integer` while the
-	// expression now denotes a `Byte`.
-	function castSourceAlias(value ValueId) returns DeclaredAlias
+	// ⭐ **THE RANGED TYPEALIAS AN EXPRESSION'S VALUE DENOTES** — the SOURCE half of every containment
+	// question in this file: E3010's *"is the written cast unneeded?"*, and (A4f) every range-check door's
+	// *"is the runtime guard provably dead?"*. They are one question with two consumers, so the value's
+	// answer is read in one place; it was named for the cast when the cast was its only caller.
+	//
+	// The recorded entry WINS over the value's own `named` tag, because it is the LATER and more specific
+	// statement about the same value: `identity(42) as Byte` hands back the call result untouched, and that
+	// result's type column still says `Integer` while the expression now denotes a `Byte`.
+	function valueDenotedAlias(value ValueId) returns DeclaredAlias
 		let aliasId = try self.valueDeclaredAlias.get(value) otherwise return self.declaredAliasOfValue(value)
 		return self.declaredAliasOfNameId(aliasId)
-	end 'castSourceAlias'
+	end 'valueDenotedAlias'
 
 	// The instance alias NAME `value` came from (`WrapperA`), or `EmptySourceText` when it has none — a
 	// `self` receiver, a value merged across branches, or any non-instance value (P1.6-C).
@@ -15577,10 +15580,31 @@ export type Parser
 		// block that terminator went into is `currentBlock` as `emitOwnedValueReturn` left it. The
 		// hand-off's scope drops run first and may branch, so the block the `return` keyword was parsed
 		// in is not reliably the one holding the `ret`.
-		if not self.rangeCheckReturnAlias.isEmpty() 'rangedReturn'
+		//
+		// ⭐⭐ **AND A `return` WHOSE VALUE THE DECLARED TYPE PROVABLY ADMITS IS NOT A SITE (A4f) — THE
+		// DOOR THIS DEFECT WAS FOUND AT.** `return b` from a `returns ExitCode` function, `b` a
+		// `Byte = int(0 to u8.max)`, emitted a `0 ≤ x ≤ 4294967295` cascade with an `mrt_panic` arm on a
+		// value that cannot fail it — while the SAME compile reported `b as ExitCode` as E3010 *"'Byte'
+		// already fits in 'ExitCode'"*, which is that cascade's own impossibility, proved. The alias-named
+		// doors ask this inside `recordRangeCheckSite`; a `return` asks it through `returnGuardIsDead`
+		// because its destination is the FUNCTION's declared type rather than one written at the site.
+		if not self.rangeCheckReturnAlias.isEmpty() and not self.returnGuardIsDead(returned, declaredNameId: declaredNameId) 'rangedReturn'
 			self.rangeCheckReturnSites.push(RangeCheckReturnSite.create(returned, block: self.currentBlock.id, line: anchor.line, column: anchor.column))
 		end 'rangedReturn'
 	end 'parseCheckedValueReturn'
+
+	// ⭐ **IS THE `return` DOOR'S GUARD PROVABLY DEAD? — the destination unwrapped, then the one shared
+	// containment (A4f).** It is reached only behind `rangeCheckReturnAlias` being non-empty, which is the
+	// tag-checked answer to *"does the declared return type name a ranged alias?"* (`rangedAliasNameOfType`)
+	// — so `undeclared` here is the SAME name failing to resolve twice and cannot mean the return type is
+	// unranged. It answers `false` for it all the same, because a destination with no bounds proves nothing
+	// and the safe direction is to keep the check.
+	function returnGuardIsDead(returned ValueId, declaredNameId TypeNameId) returns bool
+		return match self.declaredAliasOfNameId(declaredNameId) 'returnAlias'
+			undeclared gives false
+			declared(alias) gives rangeCoversDenotedRange(alias, source: self.valueDenotedAlias(returned))
+		end 'returnAlias'
+	end 'returnGuardIsDead'
 
 	// ⭐ **EMIT A VALUE `ret` THAT HANDS ITS VALUE TO THE CALLER AS AN OWNED ONE** — the shared tail of a
 	// value `return` and a non-capturing closure body's `gives <expr>` (P1.5-A2a). A closure body IS a
@@ -24850,7 +24874,14 @@ export type Parser
 		// unneeded cast in the file is reported by ONE compile — which is exactly what
 		// `error.unneeded.multiple-in-one-function` (three of them) and `.multiple-across-functions` (two,
 		// in two functions) pin, and what type-casting.md's prose calls a recoverable diagnostic.
-		self.reportUnneededCast(self.castSourceAlias(value), target: targetAlias, asTok: asTok)
+		//
+		// ⭐ **AND IT IS THE SAME CONTAINMENT THE RANGE-CHECK SITE BELOW ASKS (A4f)** — `rangeCoversRange`,
+		// through the two doors' two spellings of the unwrap. That is why a cast reported here NEVER reaches
+		// the site record's own elision in a program that builds: containment at an `as` IS this diagnostic,
+		// and this diagnostic is an error. The door asks anyway, because the redundancy belongs to E3010
+		// rather than to the emitter — and because a compiler that emitted a check it had just proved
+		// impossible is the defect A4f exists to delete.
+		self.reportUnneededCast(self.valueDenotedAlias(value), target: targetAlias, asTok: asTok)
 
 		// `sourceTag` rather than a second `tagOf(value)`: nothing between its binding and here re-tags
 		// `value` — every statement above reads or records — so a re-read is the same answer twice.
@@ -24867,6 +24898,11 @@ export type Parser
 			// The trunc RESULT is the narrowed integer, so it — not the float source — is what a ranged INT
 			// target checks (`500.7 as Byte` guards `500`). The result has its own Std op, but the guard still
 			// anchors at the cast's BLOCK (below) for the same reason an int->int cast does.
+			//
+			// ⚠ **AND THE SOURCE RANGE A4f'S ELISION READS IS THE `trunc` RESULT'S, WHICH IS NONE — NOT the
+			// float operand's.** `trunc` changes the number, so the operand's alias describes a value this
+			// door is no longer checking; anchoring on the result is what stops a `float(0.0 to 1.0)` operand
+			// vouching for an integer, and a freshly minted result denotes no alias at all.
 			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(asTok))
 			self.recordRangeCheckSite(narrowed, targetAlias: targetAlias, line: asTok.line, column: asTok.column)
 			return self.finishCast(narrowed, source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
@@ -24959,7 +24995,7 @@ export type Parser
 	// twice. MEASURED before the fix, from `bytearray-element-size`'s narrow `Byte`: **`unneeded cast:
 	// 'Byte$0_200' already fits in 'ExitCode'`**, which names no line the author wrote.
 	function reportUnneededCastBetween(source RangedTypeAlias, target RangedTypeAlias, asTok Token)
-		if not rangeCoversRange(target.low, targetHigh: target.high, targetIsFloat: aliasIsFloat(target), sourceLow: source.low, sourceHigh: source.high, sourceIsFloat: aliasIsFloat(source)) 'narrowing'
+		if not rangeCoversRange(target, source: source) 'narrowing'
 			return
 		end 'narrowing'
 
@@ -25263,12 +25299,39 @@ export type Parser
 	// The anchor arrives as line/column rather than a `Token` because the field-DEFAULT door has no token
 	// of its own: the default is a literal from a declaration that may live in another file, so its
 	// diagnostic is anchored on the struct literal that took it, which that door holds as a `SourceRange`.
+	//
+	// ⭐⭐ **A SITE THE DESTINATION PROVABLY ADMITS IS NOT A SITE AT ALL (A4f), AND IT IS DECIDED BELOW
+	// BECAUSE THIS IS WHERE ALL FIVE ALIAS-NAMED DOORS MEET.** The rule is `rangeCoversDenotedRange`, which
+	// is the containment E3010 reports, asked of the pair every door already holds — so *"unneeded cast:
+	// 'Byte' already fits in 'ExitCode'"* and the `0 ≤ x ≤ 4294967295` cascade behind it can no longer be
+	// two answers to one question. Removing the redundant cast used to ADD that cascade, on a value whose
+	// declared type cannot fail it.
+	//
+	// ⚠ **IT SKIPS THE COMPILE-TIME HALF TOO, AND THAT COSTS NO DIAGNOSTIC.** `InsertRangeChecks` reports
+	// E3005 only for a value it can FOLD, and a folded literal denotes no alias (`valueDenotedAlias` falls
+	// through to its `integer` tag) — so containment cannot hold for one, and every literal door still
+	// records. Where a folded constant DOES carry an alias it got it from a cast, whose own site reported
+	// the E3005 already; a range inside the destination cannot then put it outside the destination.
 	function recordRangeCheckSite(value ValueId, targetAlias DeclaredAlias, line LineNumber, column ColumnNumber)
 		match targetAlias 'a'
-			declared(alias) then self.rangeCheckSites.push(RangeCheckSite.create(value, aliasName: alias.name, block: self.currentBlock.id, maxonOpPos: self.currentBlock.opRefs.count(), line: line, column: column))
+			declared(alias) then self.recordRangedTargetSite(value, target: alias, line: line, column: column)
 			undeclared then break 'a'
 		end 'a'
 	end 'recordRangeCheckSite'
+
+	// ⚠ **THE SOURCE RANGE IS RESOLVED HERE AND NOT ONE FRAME UP, BECAUSE A DESTINATION THAT NAMES NO
+	// RANGED ALIAS MUST NOT PAY FOR IT.** `valueDenotedAlias` CONSTRUCTS a `DeclaredAlias`, and the doors
+	// above it are the ordinary field store and array-element store — almost every one of which writes an
+	// `int` slot and has nothing to prove. MEASURED on the scale ladder: asking unconditionally read
+	// **+3,848 `phase:parse` allocations at rung 5, doubling per rung**, for a question whose answer was
+	// `undeclared` at every one of those sites.
+	function recordRangedTargetSite(value ValueId, target RangedTypeAlias, line LineNumber, column ColumnNumber)
+		if rangeCoversDenotedRange(target, source: self.valueDenotedAlias(value)) 'provablyInRange'
+			return
+		end 'provablyInRange'
+
+		self.rangeCheckSites.push(RangeCheckSite.create(value, aliasName: target.name, block: self.currentBlock.id, maxonOpPos: self.currentBlock.opRefs.count(), line: line, column: column))
+	end 'recordRangedTargetSite'
 
 	// Is `t` in the FLOAT domain — the bare `float` keyword, or a `named` type that denotes a ranged
 	// float alias? Everything else (bare int, an int alias, `ExitCode`, a struct/String/function) is
@@ -27653,6 +27716,10 @@ export type Parser
 		// gets. It is always a LITERAL, so `InsertRangeChecks` settles it entirely at compile time and the
 		// runtime half it is nominally owed is never emitted; it is recorded exactly as the WRITTEN field
 		// store is (`requireFieldType`), so the two doors say one thing rather than two.
+		//
+		// ⚠ **A4f'S CONTAINMENT ELISION CANNOT FIRE HERE**: `emitLiteral` mints the value two lines up, and a
+		// freshly minted literal denotes no ranged alias — so the compile-time half this door exists for is
+		// untouched.
 		self.recordRangeCheckSite(value, targetAlias: self.declaredAliasOfType(declared), line: range.line, column: range.column)
 
 		try fieldValues.set(index, value: value) otherwise panic("fillFieldDefault: fieldValues.set OOB at {index} — the column is sized to the layout's field count")

@@ -114,6 +114,47 @@ Break any of 1, 2 or 4 and the return guard is emitted exactly as before. That i
 and `entry-guard-covers-a-return-inside-a-branch` pin the elision itself, the first by keying on the
 VALUE (not on "is there a ranged parameter") and the second on clause 3.
 
+### ⭐⭐ A value the destination PROVABLY ADMITS gets no check — the same containment E3010 reports (A4f)
+
+A `Byte = int(0 to u8.max)` returned from a `returns ExitCode` function cannot be outside
+`int(0 to 4294967295)`. **No range check is emitted there**, and the reason is not an optimization: the
+compiler *already says so out loud* at the neighbouring door. Write the cast and it refuses the program —
+
+```text
+error E3010: unneeded cast: 'Byte' already fits in 'ExitCode'
+```
+
+— which is a **proof** that the source range lies inside the destination. A runtime `0 ≤ x ≤ 4294967295`
+cascade behind that proof tests a value that cannot fail it, so **deleting the redundant cast used to ADD
+a dead guard**: with the `as` the site recorded nothing, without it the implicit conversion guarded. The
+diagnostic and the emitter were answering one question from two places, and only one of them was reading
+the ranges.
+
+**The rule is the containment relation and nothing else** — *emit nothing when the source's declared range
+is inside the destination's* — asked through the one predicate E3010 asks (`TypeRules.rangeCoversRange`).
+It is not a rule about `ExitCode`, about builtins, or about which alias is "wide":
+
+- **Every door asks it**, because every door holds both ends: a `return`, an explicit `as`, a
+  struct-literal field, a field store, a field's declared default, an array element. (At an `as` the
+  answer is unobservable *by construction* — containment there IS E3010, so such a program does not
+  build. The door asks anyway; the redundancy belongs to the diagnostic, not to the emitter.)
+- **A source that names no alias proves nothing**, and that is the direction that keeps the check: a bare
+  `int` local, a folded literal, a `trunc` result. So the **compile-time E3005 half is untouched** —
+  `InsertRangeChecks` reports it only for a value it can fold, and a folded literal denotes no alias.
+- **Equal ranges are contained.** `returns ExitCode` returning an `ExitCode` call result emits nothing.
+- **Anything else still guards, and still panics** — that is `A1f`'s whole mechanism, and this elision
+  removes none of it.
+
+⚠ **WHAT THE ELISION RESTS ON, stated rather than assumed** (the same discipline the four clauses above
+are written in): *a value denoting alias `A` is in `A`'s range*. Every door in this spec maintains it — a
+cast guards its result, a parameter is guarded at the callee's entry, a `return` before its `ret`, a field
+or element at its store. The one producer that does not is **`Array.resize`**, which *exposes*
+zero-initialized slots crossing no door at all (see the array-element section above, and `safety.md`'s
+`divide-by-zero-fault-through-a-resized-array-slot`). A wider door downstream used to catch such a slot
+**by coincidence** — it fires only when the exposed `0` happens to fall outside the *second* range too —
+and a coincidence is not a guarantee an elision may be written against. **That hole is `resize`'s to
+close, and closing it is what makes this premise total.**
+
 ## Tests
 
 <!-- test: range-check-panic.upper-bound -->
@@ -617,6 +658,247 @@ end 'main'
 panic at range-check-panic.entry-guard-covers-a-return-inside-a-branch.test:9: Range check failed: value outside typealias 'SmallInt'
 Stack trace:
   in pick
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.a-contained-return-emits-no-guard -->
+⭐ **THE A4f REPRODUCER.** `pick` returns a `Byte`, `main` returns an `ExitCode`, and `int(0 to 255)` is
+inside `int(0 to 4294967295)` — so `main`'s `return` gets nothing. Its FRAGMENT is the evidence: `pick`
+keeps its own cascade (the `Integer` it computes from is NOT inside `Byte`, so that one is earned), and
+`main` is a `bl` and a `ret`. Writing `pick() as ExitCode` instead is E3010, which is the same fact said
+in words.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function pick() returns Byte
+  return opaque(7)
+end 'pick'
+
+function main() returns ExitCode
+  return pick()
+end 'main'
+```
+```exitcode
+7
+```
+
+
+<!-- test: range-check-panic.an-identical-range-return-emits-no-guard -->
+The boundary of the rule: the two ranges are the SAME range, which is contained in itself. Every `main`
+in the corpus that returns an `ExitCode`-returning call is this program, and every one of them used to
+carry a full `0 ≤ x ≤ 4294967295` cascade against a value that had just passed the identical cascade one
+frame down.
+```maxon
+function code() returns ExitCode
+  return 7
+end 'code'
+
+function main() returns ExitCode
+  return code()
+end 'main'
+```
+```exitcode
+7
+```
+
+
+<!-- test: range-check-panic.an-uncontained-return-is-still-guarded -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+⚠ **THE NEGATIVE CONTROL, and the one that matters most.** `Wide` is not inside `Narrow`, so nothing is
+proved and the guard stands exactly where A1f put it. Off by one at the top: `101` is a legal `Wide` and
+not a legal `Narrow`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Wide = int(0 to 1000)
+typealias Narrow = int(0 to 100)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function widen() returns Wide
+  return opaque(101)
+end 'widen'
+
+function narrow() returns Narrow
+  return widen()
+end 'narrow'
+
+function main() returns ExitCode
+  return narrow()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.an-uncontained-return-is-still-guarded.test:15: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in narrow
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.the-source-alias-keeps-its-own-guard -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+⚠ **THE ELISION MOVES NOTHING UPSTREAM.** It is the DOWNSTREAM door that proves nothing to check; the
+door the value actually entered through is untouched, and it is the one that fires. `300` is outside
+`Byte`, so `pick` panics naming `Byte` — `main`'s elided `ExitCode` check never gets a value at all.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function pick() returns Byte
+  return opaque(300)
+end 'pick'
+
+function main() returns ExitCode
+  return pick()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.the-source-alias-keeps-its-own-guard.test:10: Range check failed: value outside typealias 'Byte'
+Stack trace:
+  in pick
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.a-contained-field-store-and-element-store-emit-no-guard -->
+⭐ **THE OTHER DOORS ASK THE SAME QUESTION, and here the answer IS observable** — a field store and an
+array-element store take no `as`, so E3010 never stands in front of them. `Small` is inside `Wide` at
+both, and the two `return`s that hand a `Wide` back through a `returns Wide` are contained as well: the
+fragment holds no `__rc_panic` block anywhere.
+```maxon
+typealias Small = int(0 to 100)
+typealias Wide = int(0 to 1000)
+typealias Wides = Array with Wide
+
+type Box
+  export var v as Wide
+
+  static function create() returns Box
+    return Self{v: 1}
+  end 'create'
+end 'Box'
+
+function small() returns Small
+  return 5
+end 'small'
+
+function fieldStore() returns Wide
+  var b = Box.create()
+  b.v = small()
+  return b.v
+end 'fieldStore'
+
+function elementStore() returns Wide
+  var a = Wides.create()
+  a.push(small())
+  return try a.get(0) otherwise panic("no slot")
+end 'elementStore'
+
+function main() returns ExitCode
+  print("f={fieldStore()} e={elementStore()}\n")
+  return 0
+end 'main'
+```
+```stdout
+f=5 e=5
+```
+
+
+<!-- test: range-check-panic.an-uncontained-field-store-is-still-guarded -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+⚠ The negative control for the field door, one value past the bound the elision would need. `Loose` is
+not inside `Wide`, so the store guards, and `1001` is what the guard is for.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Loose = int(0 to 2000)
+typealias Wide = int(0 to 1000)
+
+type Box
+  export var v as Wide
+
+  static function create() returns Box
+    return Self{v: 1}
+  end 'create'
+end 'Box'
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function loose() returns Loose
+  return opaque(1001)
+end 'loose'
+
+function main() returns ExitCode
+  var b = Box.create()
+  b.v = loose()
+  print("v={b.v}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.an-uncontained-field-store-is-still-guarded.test:24: Range check failed: value outside typealias 'Wide'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.an-uncontained-element-store-is-still-guarded -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+⚠ The negative control for the array-element door, which A1f-arrayelem put at the STORE rather than at
+the callee's entry — so the elision has to leave that one standing too.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Loose = int(0 to 2000)
+typealias Wide = int(0 to 1000)
+typealias Wides = Array with Wide
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function loose() returns Loose
+  return opaque(1001)
+end 'loose'
+
+function main() returns ExitCode
+  var a = Wides.create()
+  a.push(loose())
+  let v = try a.get(0) otherwise panic("no slot")
+  print("v={v}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.an-uncontained-element-store-is-still-guarded.test:17: Range check failed: value outside typealias 'Wide'
+Stack trace:
   in main
   in mrt_start
 ```

@@ -726,7 +726,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5:13: Value -5 is outside the range of 'Positive' (int(1 to 100))
-error E3005: <fragment>:6:2: Value -5 is outside the range of 'ExitCode' (int(0 to 4294967295))
 ```
 
 ### Type-qualified bound: u32.max

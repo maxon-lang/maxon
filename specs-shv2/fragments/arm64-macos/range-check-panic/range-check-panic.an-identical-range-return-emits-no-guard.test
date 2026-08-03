@@ -1,0 +1,26 @@
+// Test: range-check-panic.an-identical-range-return-emits-no-guard
+function code() returns ExitCode
+  return 7
+end 'code'
+
+function main() returns ExitCode
+  return code()
+end 'main'
+---
+ExitCode: 7
+---
+func @code {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl code
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -109,12 +109,14 @@ error E3005: <fragment>:7:10: Value -3 is outside the range of 'ExitCode' (int(0
 The negative control for every case above: an in-range literal is not a violation, and `7` still comes
 out of the process.
 
-⚠ **AND ITS FRAGMENT RECORDS THE PRICE, which is not zero and is not the literal's.** `code`'s
-`return 7` is folded and needs no runtime check at all — but `main`'s `return code()` returns a CALL
-RESULT, which no constant fold can see, so `main` gets a guard exactly as it would returning through any
-other ranged alias. Every `main` in the corpus that returns a computed value pays that, and the reason it
-is right is the one this spec opens with: `ExitCode` being a builtin is not a distinction the range rule
-may see.
+⚠ **AND ITS FRAGMENT RECORDS THE PRICE, WHICH SINCE A4f IS ZERO — for a reason that is still the one this
+spec opens with.** `code`'s `return 7` is folded and needs no runtime check at all; `main`'s `return
+code()` returns a CALL RESULT, which no constant fold can see, so it is decided by the ordinary rule
+every ranged alias gets — and that rule (`range-check-panic.md`, *"a value the destination PROVABLY
+admits"*) answers **contained**, because the source is an `ExitCode` and the destination is an `ExitCode`.
+Between X6 and A4f this fragment carried a full `0 ≤ x ≤ 4294967295` cascade over a value that had just
+passed the identical cascade one frame down. `ExitCode` being a builtin is not a distinction the range
+rule may see — in EITHER direction.
 ```maxon
 function code() returns ExitCode
   return 7
