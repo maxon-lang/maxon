@@ -1512,3 +1512,306 @@ end 'main'
 error E3016: specs/fragments/associated-types/error.inherited-uses-name-unparenthesized-is-still-a-signature-error.test:13:6: Partial interface implementation: type 'Impl' has 1 method(s) with wrong signature:
   - get() returns Integer (expected get() returns Element)
 ```
+
+<!-- test: associated-types.uses-name-shadowing-a-builtin -->
+⭐⭐ **A `uses` PARAMETER IS AN IDENTIFIER, AND IDENTIFIERS CAN SPELL BUILTINS.** `float`, `bool` and
+`int` are KEYWORDS a `uses` list cannot hold (E2010), but `ExitCode` and `String` are not — so
+`interface Taker uses ExitCode` is a legal program in which `ExitCode` is a TYPE PARAMETER denoting
+whatever each conformer binds, here `Integer`. A witness call's argument ABI must therefore ask
+"is this an associated type?" BEFORE it asks "is this a builtin type name?".
+**MEASURED RED: asking the builtin table first read the formal as the `u32` builtin and declared the
+argument a wasm i32 against an i64 callee — x64 answered 31 and wasm trapped `indirect call type
+mismatch`.** `TypeResolution.builtinTypeNameTag`'s own header states the rule that violated: it is
+valid only at a door holding a RENDERED type name, never at one asking what a `named` reference
+DENOTES. Returns `31`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses ExitCode
+	function take(e ExitCode) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function useIt(x Taker) returns Integer
+	return x.take(11)
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(Runner.create(20)) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: associated-types.assoc-bound-to-exitcode-through-type-parameter -->
+An associated type bound to `ExitCode` — the one narrow (`u32`) type a Maxon signature can name — as a
+requirement's PARAMETER, dispatched through a constrained type parameter. The formal's own spelling
+(`Element`) says nothing about its width; `implements Taker with ExitCode` is what makes the argument a
+wasm `i32`, so the call site has to resolve the BINDING to declare the same functype the impl does.
+**MEASURED RED: `wasm trap: indirect call type mismatch`, x64 `31`.** Returns `31`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with ExitCode
+	let base as Integer
+
+	function take(e ExitCode) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T where T is Taker
+	let item as T
+
+	export function run(c ExitCode) returns Integer
+		return self.item.take(c)
+	end 'run'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias RunnerBox = Box with Runner
+
+function main() returns ExitCode
+	return RunnerBox.create(Runner.create(20)).run(11 as ExitCode) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: associated-types.assoc-bound-to-exitcode-through-existential -->
+The EXISTENTIAL twin of the case above: one dispatch mechanism, two receiver kinds, and the binding has
+to be resolved on both. **MEASURED RED: wasm trapped, x64 `31`.** Returns `31`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with ExitCode
+	let base as Integer
+
+	function take(e ExitCode) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function useIt(t Taker, c ExitCode) returns Integer
+	return t.take(c)
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(Runner.create(20), c: 11 as ExitCode) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: associated-types.assoc-bound-to-float-takes-an-int-actual -->
+An associated type bound to `float`, given an INTEGER actual. The requirement spells `Element`, so the
+parser's own float widening — which keys on a formal SPELLED `float` — cannot see that this argument
+must become an f64; the lowering resolves the binding and widens there, through the same
+`widenIntArgsToFloatParams` a function-value call uses. **MEASURED RED, and note WHICH half was worse:
+x64-windows compiled clean and answered `20` where the program computes `40` — a SILENT WRONG ANSWER,
+the integer `20` handed to a callee that compares `e > 19.0` — while wasm trapped.** Returns `40`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with float
+	let base as Integer
+
+	function take(e float) returns Integer
+		return base + (20 if e > 19.0 else 0)
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T where T is Taker
+	let item as T
+
+	export function run() returns Integer
+		return self.item.take(20)
+	end 'run'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias RunnerBox = Box with Runner
+
+function main() returns ExitCode
+	return RunnerBox.create(Runner.create(20)).run() as ExitCode
+end 'main'
+```
+```exitcode
+40
+```
+
+<!-- test: associated-types.assoc-bound-to-float-takes-a-float-actual -->
+The FALSE-REJECT CONTROL for the two refusals below, and for the widening above: an associated type
+bound to `float` in a PARAMETER position, given a float actual, is a correct program and must keep
+compiling. A rule that refused associated types in ABI positions outright would take this with it.
+Returns `40`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with float
+	let base as Integer
+
+	function take(e float) returns Integer
+		return base + (20 if e > 19.0 else 0)
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T where T is Taker
+	let item as T
+
+	export function run() returns Integer
+		return self.item.take(20.0)
+	end 'run'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias RunnerBox = Box with Runner
+
+function main() returns ExitCode
+	return RunnerBox.create(Runner.create(20)).run() as ExitCode
+end 'main'
+```
+```exitcode
+40
+```
+
+<!-- test: associated-types.two-conformers-agreeing-on-the-abi-class-still-compile -->
+The other FALSE-REJECT CONTROL, for E3119 specifically: TWO conformers binding one associated type, to
+DIFFERENT types that travel the SAME way. `Integer` and `Score` are different ranged aliases and both
+are the machine word, so there is one calling convention and the program compiles. What E3119 compares
+is the ABI CLASS, never the spelling — a refusal keyed on "the bindings differ" would reject this.
+`(5 + 10) + (6 + 10)`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Score = int(0 to 1000)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type A implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'A'
+
+type B implements Taker with Score
+	let base as Integer
+
+	function take(e Score) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'B'
+
+function useIt(t Taker) returns Integer
+	return t.take(10)
+end 'useIt'
+
+function main() returns ExitCode
+	return (useIt(A.create(5)) + useIt(B.create(6))) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: associated-types.assoc-return-bound-to-a-machine-word-still-compiles -->
+The FALSE-REJECT CONTROL for E3120: an associated type in a RETURN position bound to a ranged alias is
+a machine word, so the front end's `named` reading of `Element` and the impl's own return agree, and
+the program compiles and answers correctly. Refusing associated returns outright would take this with
+it. `20 + 11`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker uses Element
+	function make() returns Element
+end 'Maker'
+
+type Runner implements Maker with Integer
+	let base as Integer
+
+	function make() returns Integer
+		return base
+	end 'make'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function useIt(m Maker) returns Integer
+	return m.make() + 11
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(Runner.create(20)) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```

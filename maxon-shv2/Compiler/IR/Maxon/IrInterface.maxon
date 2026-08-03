@@ -447,17 +447,107 @@ export function associatedTypePositionOf(associatedTypeNames ByteArrayArray, nam
 	throw MapError.keyNotFound
 end 'associatedTypePositionOf'
 
-// Whether `name` names one of `iface`'s OWN `uses` parameters — the MEMBERSHIP shape of the scan above, for
-// the caller that needs only that a conformer binds this position and can never know to what
-// (`LowerMaxonToStd.witnessFormalType`). It is not a second scan: it is the same one, asked without its
-// answer, and keeping it here is what stops a second `.equals` walk of `associatedTypeNames` from appearing
-// in a third file.
-export function namesAssociatedType(iface IrInterface, name ByteArray) returns bool
-	if let position = try associatedTypePositionOf(iface.associatedTypeNames, name: name) 'aConformerBindsIt'
-		return true
-	end 'aConformerBindsIt'
-	return false
-end 'namesAssociatedType'
+// ⭐⭐ **WHAT EVERY CONFORMER BINDS ONE ASSOCIATED TYPE TO, REDUCED TO AN ABI CLASS**
+// (P1.7a-existentials slice 1, second review round). An associated type's width and register file are a
+// fact about the CONFORMER: `interface Taker uses Element` says nothing about `Element`, and
+// `implements Taker with float` is what makes the formal an f64. Neither the formal's SPELLING (the
+// interface does not name a type) nor the ACTUAL's parser tag (an unresolved column — the very thing this
+// slice exists to stop reading) can supply it.
+//
+// ⚠ **AND UNDER DICTIONARY PASSING THE ANSWER MUST BE ONE ANSWER.** An interface's method bodies are
+// compiled ONCE for every conformer, so a witness dispatch has exactly one calling convention. Two
+// conformers of different ABI class therefore have no single functype, and this reports that rather than
+// picking — see `E3119`, and `ConformanceCheck.checkAssociatedTypeAbiAgreement` for where it is diagnosed.
+export union AssociatedAbiBinding
+	// Every conformer agrees; `declaredType` is the resolved formal type, ready for the same
+	// `paramFloatMask` / `paramNarrowMask` collapse a function value's declared parameters go through.
+	agreed(declaredType MaxonType)
+	// Two conformers disagree. BOTH claimants ride, so the diagnostic can name them; the FIRST is the one
+	// that settled the class in source order, exactly as `checkTypeSymbolNamespace` reports a contested name.
+	disagreed(firstConformer ByteArray, firstBinding ByteArray, secondConformer ByteArray, secondBinding ByteArray)
+	// No type in the program conforms at all, so no dispatch through this requirement can ever be made and
+	// nothing constrains the class. A body that mentions it still has to lower, so the caller supplies the
+	// machine word and says why.
+	unconformed
+end 'AssociatedAbiBinding'
+
+// The ABI class of `interfaceName`'s associated type at `position`, folded over every conformance in the
+// program — the ONE derivation of that fact, asked by the whole-program CHECK that refuses a disagreement
+// and by the LOWERING that needs the class. Two folds would be a check that passes and a lowering that
+// emits something else.
+//
+// A binding is a RENDERED type name (`InterfaceConformance.withArgs`), so its class comes from
+// `builtinTypeNameTag` — which is exactly that table's valid door: a `with` argument is a type reference
+// the user wrote, not a `uses` PARAMETER that may shadow a builtin's spelling (see
+// `LowerMaxonToStd.witnessFormalType` for the regression that distinction cost). Anything the table does
+// not name is a machine word, which is what a struct, a ranged alias and a generic instance all are.
+export function associatedAbiBindingOf(conformances ConformanceDeclArray, interfaceName ByteArray, position ElementCount) returns AssociatedAbiBinding
+	var seenConformer = EmptySourceText
+	var seenBinding = EmptySourceText
+	var seenType = MaxonType.integer
+	var sawOne = false
+
+	for decl in conformances 'eachDeclaringType'
+		for entry in decl.interfaces 'eachInterface'
+			if not entry.interfaceName.equals(interfaceName) 'otherInterface'
+				continue
+			end 'otherInterface'
+
+			// A conformance that bound FEWER arguments than the interface declares is already E3016's to
+			// report; it constrains nothing here and is passed over rather than read out of bounds.
+			if position >= entry.withArgs.count() 'boundNothingAtThisPosition'
+				continue
+			end 'boundNothingAtThisPosition'
+
+			let binding = try entry.withArgs.get(position) otherwise panic("associatedAbiBindingOf: withArgs.get OOB at {position}, which the guard above excludes")
+			let declaredType = renderedTypeNameAbiType(binding)
+
+			if not sawOne 'firstConformer'
+				seenConformer = decl.typeName
+				seenBinding = binding
+				seenType = declaredType
+				sawOne = true
+				continue
+			end 'firstConformer'
+
+			if not sameAbiClass(seenType, other: declaredType) 'classesDisagree'
+				return AssociatedAbiBinding.disagreed(seenConformer, firstBinding: seenBinding, secondConformer: decl.typeName, secondBinding: binding)
+			end 'classesDisagree'
+		end 'eachInterface'
+	end 'eachDeclaringType'
+
+	if not sawOne 'nothingConforms'
+		return AssociatedAbiBinding.unconformed
+	end 'nothingConforms'
+
+	return AssociatedAbiBinding.agreed(seenType)
+end 'associatedAbiBindingOf'
+
+// ⭐⭐ **THE ABI-BEARING TYPE A RENDERED TYPE NAME DENOTES — the one collapse for every place a type is
+// held only as the bytes the source wrote.** `builtinTypeNameTag` answers for the five builtins whose tag
+// carries a width; EVERYTHING else it calls `named`, and a `named` here is not a residue to panic on — it
+// is a struct, a ranged alias, a generic instance or a type parameter, every one of which travels as the
+// MACHINE WORD. So `named` is reduced to `integer` at this one door.
+//
+// ⚠ **THE REDUCTION IS THE WHOLE POINT, AND OMITTING IT PANICS.** `maxonTypeToStdType` refuses a `named`
+// outright (it is a resolution residue THERE, where TypeResolution was required to have eliminated it),
+// so handing it a `maxonTypeOfTag(builtinTypeNameTag(name))` crashes the compiler on `with Integer` —
+// MEASURED, twice in one afternoon, at both sites that forgot it. `valueTagToStdType` makes the identical
+// reduction for the identical reason one column over; this is that rule for a NAME rather than a tag.
+export function renderedTypeNameAbiType(name ByteArray) returns MaxonType
+	let tag = builtinTypeNameTag(name)
+	return MaxonType.integer if tag == ValueTypeTag.named else maxonTypeOfTag(tag, nameId: UnnamedTypeId)
+end 'renderedTypeNameAbiType'
+
+// Do two resolved formal types travel the same way? The comparison is deliberately over the ABI CLASS and
+// not over the type: `Integer` and `Score` are different ranged aliases and the same machine word, and
+// refusing that pair would refuse programs that compile correctly today. The class is exactly what the two
+// per-argument masks carry, so this asks the two predicates they are built from and nothing else.
+function sameAbiClass(t MaxonType, other MaxonType) returns bool
+	let a = maxonTypeToStdType(t)
+	let b = maxonTypeToStdType(other)
+	return stdTypeIsFloat(a) == stdTypeIsFloat(b) and stdTypeIsNarrow(a) == stdTypeIsNarrow(b)
+end 'sameAbiClass'
 
 export typealias IrInterfaceMap = Map with (ByteArray, IrInterface)
 
@@ -829,6 +919,17 @@ function appendInterfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterfac
 		end 'parent'
 	end 'eachParent'
 end 'appendInterfaceWitnessSlots'
+
+// The slot-count agreement between the two stores that hold one interface declaration — the signature
+// index a witness dispatch is NUMBERED against and the merged registry it is RESOLVED against. It lives
+// here, beside the walk that produces both counts, so the one property `WitnessMethodIndex` rests on is
+// stated where the numbering is. See `LowerMaxonToStd.interfaceAtDeclIndex` for why two writers of one
+// declaration are a wrong-answer hazard rather than a tidiness one.
+export function requireSameSlotCount(interfaceName ByteArray, parserSlots CollectedInterfaceMethodArray, mergedSlots CollectedInterfaceMethodArray)
+	if parserSlots.count() != mergedSlots.count() 'storesDisagree'
+		panic("requireSameSlotCount: interface '{String.from(interfaceName)}' has {parserSlots.count()} witness slots in the signature index a dispatch was numbered against and {mergedSlots.count()} in the merged registry it resolves through — `methodIndex` would recover a different requirement and set the wrong calling convention for the call, on every target and with no diagnostic")
+	end 'storesDisagree'
+end 'requireSameSlotCount'
 
 // ⭐⭐ **DOES A CONFORMANCE TO `declaredName` SATISFY A REQUIREMENT FOR `wanted`? — CONFORMANCE IS
 // TRANSITIVE THROUGH `extends` (P1.7a-existentials slice 1).** `type Impl implements Derived` with

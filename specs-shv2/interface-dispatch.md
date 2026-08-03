@@ -1192,3 +1192,32 @@ end 'main'
 ```exitcode
 31
 ```
+
+<!-- test: error.float-cannot-be-held-at-an-interface -->
+⭐⭐ **A `float` HAS NO WAY INTO AN EXISTENTIAL, AND IT CONFORMS — WHICH IS WHY THE REFUSAL IS ITS OWN
+RULE.** `float` declares the intrinsic `Comparable`/`Equatable`/`Hashable` conformances, so every
+type-system question about this program answers YES. What stops it is REPRESENTATION: a value held at
+an interface travels as a fat pointer whose value half is a general-purpose machine word — that word is
+what a dispatch hands the impl as its receiver, read out of an integer register by every conformer —
+and a float lives in a floating-point register. Widening one is a cross-register-file move, which no
+`TargetOp` performs: a move's two ends are colored into one file by construction, and the two converts
+and the `movqGprXmm` bitcast are each their own op.
+**MEASURED before the rule: this program compiled all the way to the x64 emitter and PANICKED there —
+`a register-to-register move from xmm0 to rcx crosses register files` — with no source position and
+nothing an author could act on.** It is E2062's fact one widening position over: dictionary passing
+gives a type parameter and an existential the SAME opaque slot, so it gives them the same limit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function use(c Comparable, other Comparable) returns Integer
+	return 11 if c < other else 20
+end 'use'
+
+function main() returns ExitCode
+	return use(2.5, other: 9.5) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3121: specs/fragments/interface-dispatch/error.float-cannot-be-held-at-an-interface.test:9:9: Cannot pass a `float` as 'c', which is declared at the interface type 'Comparable': a value held at an interface travels as a fat pointer whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`
+error E3121: specs/fragments/interface-dispatch/error.float-cannot-be-held-at-an-interface.test:9:9: Cannot pass a `float` as 'other', which is declared at the interface type 'Comparable': a value held at an interface travels as a fat pointer whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`
+```

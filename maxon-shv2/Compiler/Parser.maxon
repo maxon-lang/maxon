@@ -33621,10 +33621,17 @@ export type Parser
 	// guard could not see while it existed: it refused a narrow (i32) parameter, but an f64 one is legal and
 	// only DIVERGES when the actual is in the wrong register file — which is precisely what this widening fixes.
 	//
-	// ⚠ **AND IT IS MORE LOAD-BEARING NOW, NOT LESS.** `LowerMaxonToStd.witnessFormalTypes` derives the masks
-	// from the INTERFACE's declared formals, so a `float` formal declares XMM whatever the actual is — which
-	// means an unwidened `int` actual would be a raw integer bit pattern moved into a float register rather than
-	// a mask disagreement. Making the VALUE an f64 is this function's job and nothing downstream can do it.
+	// ⚠ **IT IS NOT THE ONLY WIDENING ANY MORE, AND THE SPLIT IS BY WHAT EACH END CAN SEE.**
+	// `LowerMaxonToStd.witnessFormalTypes` derives the masks from the INTERFACE's declared formals, so a formal
+	// that resolves to `float` declares XMM whatever the actual is — and an unwidened `int` actual is then a raw
+	// integer bit pattern moved into a float register, which x64 refuses outright (MEASURED: `a
+	// register-to-register move from rax to xmm0 crosses register files`). So the lowering widens too, through
+	// the same `widenIntArgsToFloatParams` a function-value call uses.
+	// What THIS one still owns is the formal spelled `float` in the interface: it makes the VALUE an f64 at
+	// PARSE time, which is what types the expression around it, and nothing downstream can do that. The
+	// lowering's covers the formal the interface does NOT spell — an ASSOCIATED type, whose `float` is a
+	// conformer's `with float` and is invisible here. The two compose: an actual this widened is already an f64,
+	// so the lowering's fast path returns the argument list verbatim.
 	//
 	// It runs in `emitWitnessDispatch` because that is the ONE door both dispatch forms come through, so the
 	// `.method()` and comparison-OPERATOR forms cannot acquire different argument placement. `promoteToFloat`

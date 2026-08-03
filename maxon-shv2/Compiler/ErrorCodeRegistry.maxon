@@ -785,6 +785,62 @@ export enum ErrorCode
 	// outside of, which is exactly the case E3117 returns on.
 	// `byteAt` is untouched for E3117's reason: it yields a plain unranged `int`, never the element.
 	rawByteWriteSlotDomain = "E3118"
+	// Two conformers of one interface bind an associated type to types of DIFFERENT ABI CLASS, and that
+	// associated type is written as a requirement's PARAMETER or RETURN type.
+	// Under dictionary passing an interface's method bodies are compiled ONCE for every conformer, so a
+	// dispatch through the witness table has exactly one calling convention: one register file per
+	// argument and one width. `implements Taker with float` wants that argument in a float register and
+	// `implements Taker with Integer` wants it in a general-purpose one, and no single emitted call can
+	// be both -- so there is no honest answer to give and the program is refused rather than compiled to
+	// one of the two.
+	// MEASURED before the rule existed, on one call site reached with both conformers: x64-windows
+	// compiled clean and answered 1 where the program computes 51 -- a SILENT WRONG ANSWER, the float
+	// conformer's argument read out of the wrong register file -- while wasm32-wasi trapped
+	// `indirect call type mismatch`. It is refused on EVERY target for that reason: the register targets
+	// are the half that fails quietly.
+	// It fires only on a genuine DISAGREEMENT. One conformer, or several that agree on the ABI class,
+	// compile exactly as before -- `implements Taker with float` alongside `implements Taker with float`
+	// is fine, and so is `with Integer` alongside `with Score`, because a ranged alias and an `int` are
+	// the same machine word. What is compared is the ABI CLASS, not the spelling.
+	// It is also scoped to associated types that REACH the ABI: one written only in a field type, or in
+	// a requirement the program never dispatches, constrains no call and is not refused.
+	associatedTypeAbiDisagreement = "E3119"
+	// An associated type is written as a requirement's RETURN type and its conformers bind it to something
+	// that does not travel as a machine word -- a `float` today, and a `bool` or an `ExitCode` if a
+	// conformance could bind one.
+	// A dispatch's ARGUMENT types are settled where the call is emitted, so an associated PARAMETER is fine:
+	// the lowering resolves the binding and coerces the actual to it. A RESULT is not. Its type flows on into
+	// the program -- `m.make() > 19.0` picks a float or an integer compare, `m.make() + 11` picks an
+	// instruction -- and that is decided by the PARSER, from the interface's own rendered spelling, which
+	// names the associated type and can never name what a conformer bound it to. There is no whole-program
+	// conformance registry mid-parse (`project.conformances` is filled at merge, after every file has
+	// parsed), so the front end has nothing to ask.
+	// MEASURED before the rule existed, on `make() returns Element` with `implements Maker with float`:
+	// x64-windows compiled clean and answered 35 where the program computes 31 -- the f64 result read out of
+	// the integer return register -- while wasm32-wasi trapped `indirect call type mismatch`. Refused on
+	// every target for that reason: the register target is the half that fails quietly.
+	// It is deliberately NARROW. An associated return bound to a MACHINE WORD is untouched, which is every
+	// struct, every ranged alias, every generic instance and `int` itself -- so the shapes that compile today
+	// keep compiling. Closing the refusal needs the binding to reach the PARSER, which is a whole-program
+	// conformance sweep in the declaration index (`interfaceDeclSites`' shape, one declaration kind over).
+	associatedTypeReturnNotMachineWord = "E3120"
+	// A `float` value is passed where an INTERFACE type is declared, so it would have to be boxed into an
+	// existential's fat pointer.
+	// That pointer's value half is a general-purpose MACHINE WORD -- it is what a dispatch hands the impl as
+	// its receiver, and every conformer's `self` is read out of an integer register. A float lives in a
+	// floating-point register, so widening one means a cross-register-file move that no `TargetOp` performs:
+	// a move's two ends are colored into one file by construction, and the two converts and the `movqGprXmm`
+	// bitcast are each their own op.
+	// MEASURED before the rule: `use(c Comparable, other Comparable)` called with `2.5` compiled all the way
+	// to the x64 emitter and PANICKED there -- `a register-to-register move from xmm0 to rcx crosses register
+	// files` -- with no source position and no way for the author to see what in the program caused it.
+	// It is the same fact E2062 states for a type ARGUMENT (`a type parameter is an opaque 8-byte
+	// general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point
+	// register, so it has no way through`), one widening position over: dictionary passing gives a type
+	// parameter and an existential the same opaque slot, so it gives them the same limit. Closing it needs the
+	// value half to carry a float's bit pattern -- a bitcast at the widening and at every use -- which is a
+	// representation change and not a check.
+	floatWidenedToExistential = "E3121"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

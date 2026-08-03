@@ -1,0 +1,14 @@
+// Test: error.float-cannot-be-held-at-an-interface
+typealias Integer = int(i64.min to i64.max)
+
+function use(c Comparable, other Comparable) returns Integer
+	return 11 if c < other else 20
+end 'use'
+
+function main() returns ExitCode
+	return use(2.5, other: 9.5) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3121: <fragment>:9:9: Cannot pass a `float` as 'c', which is declared at the interface type 'Comparable': a value held at an interface travels as a fat pointer whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`
+error E3121: <fragment>:9:9: Cannot pass a `float` as 'other', which is declared at the interface type 'Comparable': a value held at an interface travels as a fat pointer whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`

@@ -602,6 +602,11 @@ type MaxonToStdLowering
 	// the synthesized builtins) to read an interface's method LIST when building a witness table blob (one slot
 	// per method, in decl order). Fully merged by lowering time, so a cross-file interface resolves here.
 	var interfaces as IrInterfaceMap
+	// Every `implements` clause in the program, from `project.conformances` — fully merged by lowering time,
+	// which is what lets an associated formal resolve to the type its CONFORMERS bind (see `witnessFormalType`).
+	// It is the same store `ConformanceCheck` refuses an ABI disagreement from, so the check and the emission
+	// cannot come to describe one argument differently.
+	var conformances as ConformanceDeclArray
 	// The transitive witness-slot list of each interface a dispatch in this module goes through, built on
 	// first use — see `witnessSlotsOf` for why it is memoized rather than re-walked per dispatch op.
 	var witnessSlotMemo as WitnessSlotListMemo
@@ -710,7 +715,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1919,10 +1924,12 @@ type MaxonToStdLowering
 	// argument an i32 against an i64 callee — x64 answered 21 and wasm trapped. The interface DOES name that
 	// type; only an associated type leaves it unnamed.
 	//
-	// (⚠ Two conformers binding one associated type to types of DIFFERENT ABI class would make the shared
-	// body's single `call_indirect` type wrong for one of them whichever source is asked — a hole in associated
-	// types under the uniform witness ABI, not in this derivation, and neither opened nor closed by it.)
-	function witnessFormalTypes(args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns MaxonTypeArray
+	// (⚠ Two conformers binding one associated type to types of DIFFERENT ABI class have NO single answer at
+	// all — the shared body is compiled once, so one `call_indirect` type is wrong for one of them whichever
+	// source is asked. That is not a nuance: MEASURED, x64-windows answered 1 where the program computes 51,
+	// SILENTLY, while wasm trapped. It is refused whole-program by E3119 rather than resolved here, and it is
+	// refused on every target because the register targets are the half that fails quietly.)
+	function witnessFormalTypes(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns MaxonTypeArray
 		let slot = self.witnessRequirementSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		let formals = slot.method.paramTypeNames
 
@@ -1931,40 +1938,62 @@ type MaxonToStdLowering
 
 		for j in 0 upto formals.count() 'eachFormal'
 			let formalName = try formals.get(j) otherwise panic("witnessFormalTypes: formals.get OOB at {j} below count {formals.count()}")
-			let actual = try args.get(j + 1) otherwise panic("witnessFormalTypes: formal {j} has no actual — `Parser.slottedWitnessArgs` supplies one actual per formal plus the receiver at 0, so `args` holding {args.count()} for {formals.count()} formals means the arity check did not run")
-			types.push(self.witnessFormalType(formalName, slot: slot, actual: actual))
+			types.push(self.witnessFormalType(formalName, slot: slot))
 		end 'eachFormal'
 
 		return types
 	end 'witnessFormalTypes'
 
-	// The declared type of ONE witness formal — the per-position half of the rule its caller's header states, so
-	// the precedence (a builtin NAME, then an associated type, then a machine word) is written down once.
-	function witnessFormalType(formalName ByteArray, slot CollectedInterfaceMethod, actual ValueId) returns MaxonType
-		let declaredTag = builtinTypeNameTag(formalName)
-		if declaredTag != ValueTypeTag.named 'theInterfaceNamesABuiltinType'
-			return maxonTypeOfTag(declaredTag, nameId: UnnamedTypeId)
-		end 'theInterfaceNamesABuiltinType'
-
-		if self.isAssociatedTypeOf(formalName, interfaceName: slot.sourceInterfaceName) 'aConformerBindsIt'
-			return maxonTypeOfTag(self.valueTagOf(actual), nameId: UnnamedTypeId)
+	// ⭐⭐ **THE DECLARED TYPE OF ONE WITNESS FORMAL, AND THE ORDER OF THE TWO TESTS IS LOAD-BEARING.** An
+	// ASSOCIATED TYPE is asked about FIRST and a builtin NAME second, because a `uses` parameter is an
+	// IDENTIFIER and identifiers can spell builtins: `float`/`bool`/`int` are keywords a `uses` list cannot
+	// hold (E2010), but `ExitCode` and `String` are not. `interface Taker uses ExitCode` is a legal program
+	// whose `ExitCode` is a TYPE PARAMETER denoting whatever each conformer binds — and asking
+	// `builtinTypeNameTag` first read it as the u32 builtin and declared the argument an i32 against an i64
+	// callee. MEASURED: x64 answered 31 and wasm TRAPPED, on a program that was green before this order
+	// existed. `builtinTypeNameTag`'s own header states the rule that violated — it is valid only at a door
+	// holding a RENDERED type name, never at one asking what a `named` reference DENOTES.
+	//
+	// ⭐ **AND AN ASSOCIATED TYPE RESOLVES TO ITS BINDING, NEVER TO THE ACTUAL.** The class is a fact about the
+	// CONFORMER (`implements Taker with float` is what makes the formal an f64), so it comes from
+	// `associatedAbiBindingOf` — the same whole-program fold the E3119 check refuses a disagreement from, so a
+	// program that passes the check and a call this emits cannot describe one argument two ways. Reading the
+	// ACTUAL's tag instead was this slice's own defect one level down: it is the unresolved `valueTags`
+	// column, it PANICKED `maxonTypeToStdType` outright on a `named` actual, and it cannot see a binding the
+	// actual does not happen to match.
+	function witnessFormalType(formalName ByteArray, slot CollectedInterfaceMethod) returns MaxonType
+		if let position = try self.associatedPositionOf(formalName, interfaceName: slot.sourceInterfaceName) 'aConformerBindsIt'
+			return self.associatedFormalType(slot.sourceInterfaceName, position: position, formalName: formalName)
 		end 'aConformerBindsIt'
 
-		return MaxonType.integer
+		return renderedTypeNameAbiType(formalName)
 	end 'witnessFormalType'
 
-	// Is `name` one of `interfaceName`'s OWN `uses` parameters? Asked of the interface that DECLARED the
-	// requirement rather than of the one whose table is being indexed: under `extends`, a projected requirement
-	// spells its PARENT's associated types, which the child's `uses` list does not contain.
-	function isAssociatedTypeOf(name ByteArray, interfaceName ByteArray) returns bool
+	// Which `uses` parameter of the DECLARING interface `name` is, if any — asked of the interface that
+	// declared the requirement rather than of the one whose table is being indexed, because under `extends` a
+	// projected requirement spells its PARENT's associated types and the child's `uses` list does not hold
+	// them. A miss PANICS rather than answering "not associated", for `interfaceAtDeclIndex`'s reason: a
+	// requirement whose declaring interface does not resolve could not have been projected into the slot list
+	// this came out of, so it is an invariant break and not a shape to absorb.
+	function associatedPositionOf(name ByteArray, interfaceName ByteArray) returns ElementCount throws MapError
 		match lookupInterface(self.interfaces, name: interfaceName) 'declaringInterface'
-			// A requirement whose declaring interface does not resolve could not have been projected into a slot
-			// list at all, so this arm is unreachable for a slot that came out of that walk — and it names no
-			// associated type either way.
-			notFound then return false
-			found(iface) then return namesAssociatedType(iface, name: name)
+			notFound then panic("associatedPositionOf: the requirement being lowered was declared by interface '{String.from(interfaceName)}', which resolves to nothing in the merged registry — `interfaceWitnessSlots` could not have projected it, so the slot list and the registry disagree")
+			found(iface) then return try associatedTypePositionOf(iface.associatedTypeNames, name: name)
 		end 'declaringInterface'
-	end 'isAssociatedTypeOf'
+	end 'associatedPositionOf'
+
+	// The resolved type of an associated formal — `associatedAbiBindingOf`'s answer, with the two arms this
+	// pass cannot act on turned into the one thing it can. `unconformed` means no type in the program conforms,
+	// so no dispatch through this requirement is reachable and the machine word constrains nothing;
+	// `disagreed` is E3119's, reported with a position by `ConformanceCheck` before lowering ever runs, so
+	// reaching it here means the error gate did not fire.
+	function associatedFormalType(interfaceName ByteArray, position ElementCount, formalName ByteArray) returns MaxonType
+		match associatedAbiBindingOf(self.conformances, interfaceName: interfaceName, position: position) 'binding'
+			agreed(declaredType) then return declaredType
+			unconformed then return MaxonType.integer
+			disagreed(firstConformer, firstBinding, secondConformer, secondBinding) then panic("associatedFormalType: '{String.from(interfaceName)}' binds `{String.from(formalName)}` to `{String.from(firstBinding)}` in '{String.from(firstConformer)}' and to `{String.from(secondBinding)}` in '{String.from(secondConformer)}' — different ABI classes, which `ConformanceCheck.checkAssociatedTypeAbiAgreement` reports as E3119 and the pipeline's error gate must stop before lowering")
+		end 'binding'
+	end 'associatedFormalType'
 
 	// Witness slot `methodIndex` of the interface `interfaceDeclIndex` names — the same `(interface, slot)` pair
 	// `Parser.appendInterfaceDispatchCandidates` numbered the dispatch by, so the requirement this recovers is
@@ -1974,17 +2003,21 @@ type MaxonToStdLowering
 		return try slots.get(methodIndex) otherwise panic("witnessRequirementSlot: slot {methodIndex} is outside the {slots.count()} witness slots of interface {interfaceDeclIndex} — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")
 	end 'witnessRequirementSlot'
 
-	// `interfaceDeclIndex`'s transitive witness slot list, built on the FIRST dispatch through that interface
-	// and held after — the lowering's twin of `Parser.witnessSlotsOf`, memoized for the reason stated there.
+	// ⭐ **THE INTERFACE A DISPATCH'S HANDLE NAMES, RESOLVED THROUGH THE ONE RULE** — `lookupInterface`, over
+	// the merged registry this pass holds, so a synthesized protocol answers before any user declaration
+	// exactly as it does at every other reader. `ProgramSignatures` stores the NAME rather than the
+	// declaration precisely so this resolution happens here (see `interfaceNamesInDeclOrder`).
 	//
-	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION.** `interfaceWitnessSlots` walks the `extends` graph and builds a
-	// fresh array plus a visited set on every call; asked once per dispatch OP that is the measured quadratic
-	// the parser's memo exists to remove, ported into a second pass. Keyed the same way, on the same property:
-	// the list is a pure function of the interface, which is fixed before any body is parsed.
-	// The interface a dispatch's handle names, resolved through the ONE rule — `lookupInterface`, over the
-	// merged registry this pass holds, so a synthesized protocol answers before any user declaration exactly as
-	// it does at every other reader. `ProgramSignatures` stores the NAME rather than the declaration precisely
-	// so this resolution happens here (see `interfaceNamesInDeclOrder`).
+	// ⚠⚠ **THE HANDLE IS MINTED AGAINST ONE STORE AND RESOLVED AGAINST ANOTHER, AND THAT SEAM IS ASSERTED.**
+	// `Parser.appendInterfaceDispatchCandidates` numbers the dispatch against `ProgramSignatures`, whose
+	// interfaces `foldInterfaceDeclarations` writes; this resolves against `project.interfaces`, which
+	// `ParseStaging.mergeArtifact` writes. Two writers of what must be one declaration. If they ever
+	// disagreed about `methods` or `extendsInterfaces`, `methodIndex` would recover a DIFFERENT requirement
+	// and set a wrong ABI for the call — a wrong answer, not a compile error, on every target. The slot COUNT
+	// is the cheap witness of that agreement (it is exactly what `methodIndex` is an index into), so it is
+	// compared here rather than hoped for: one `interfaceWitnessSlots` walk of the signature-index
+	// declaration against the memoized walk of the merged one, on the FIRST dispatch through each interface
+	// and never again.
 	function interfaceAtDeclIndex(interfaceDeclIndex InterfaceDeclIndex) returns IrInterface
 		let name = self.signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
 		match lookupInterface(self.interfaces, name: name) 'resolve'
@@ -1993,12 +2026,35 @@ type MaxonToStdLowering
 		end 'resolve'
 	end 'interfaceAtDeclIndex'
 
+	// The slot-count agreement `interfaceAtDeclIndex`'s header states, asked once per interface at the moment
+	// its slot list is first built. It walks the SIGNATURE-INDEX declaration — the one the parser numbered
+	// against — and compares its slot count with the merged one's, which is the only property `methodIndex`
+	// rests on.
+	function requireSlotNumberingAgrees(interfaceDeclIndex InterfaceDeclIndex, mergedSlots CollectedInterfaceMethodArray)
+		let name = self.signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
+		match lookupInterface(self.signatures.interfaceMap(), name: name) 'asTheParserSawIt'
+			// A synthesized protocol is in NEITHER map — `lookupInterface` builds it fresh from the same
+			// constants on both sides, so there is no second writer to disagree with and nothing to compare.
+			notFound then return
+			found(parserIface) then requireSameSlotCount(name, parserSlots: interfaceWitnessSlots(self.signatures.interfaceMap(), iface: parserIface), mergedSlots: mergedSlots)
+		end 'asTheParserSawIt'
+	end 'requireSlotNumberingAgrees'
+
+	// `interfaceDeclIndex`'s transitive witness slot list, built on the FIRST dispatch through that interface
+	// and held after — the lowering's twin of `Parser.witnessSlotsOf`, memoized for the reason stated there.
+	//
+	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION.** `interfaceWitnessSlots` walks the `extends` graph and builds a
+	// fresh array plus a visited set on every call; asked once per dispatch OP that is the measured quadratic
+	// the parser's memo exists to remove, ported into a second pass. Keyed the same way, on the same property:
+	// the list is a pure function of the interface, which is fixed before any body is parsed. The two-store
+	// agreement check rides the same first walk, so it costs one extra walk per INTERFACE, not per dispatch.
 	function witnessSlotsOf(interfaceDeclIndex InterfaceDeclIndex) returns CollectedInterfaceMethodArray
 		if let memoized = try self.witnessSlotMemo.get(interfaceDeclIndex) 'alreadyWalked'
 			return memoized
 		end 'alreadyWalked'
 
 		let slots = interfaceWitnessSlots(self.interfaces, iface: self.interfaceAtDeclIndex(interfaceDeclIndex))
+		self.requireSlotNumberingAgrees(interfaceDeclIndex, mergedSlots: slots)
 		self.witnessSlotMemo.upsert(interfaceDeclIndex, value: slots)
 		return slots
 	end 'witnessSlotsOf'
@@ -2042,8 +2098,8 @@ type MaxonToStdLowering
 	// pointing at a value and this is the single Std emission for them.
 	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
-		let declaredParams = self.witnessFormalTypes(args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: args))
+		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.widenIntArgsToFloatParams(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendWitnessCall'
 
 	// The throwing twin of `appendWitnessCall`, sharing its result typing (`witnessCallResultType`) verbatim —
@@ -2052,22 +2108,29 @@ type MaxonToStdLowering
 	// function and touch it no other way.
 	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
-		let declaredParams = self.witnessFormalTypes(args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: args))
+		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.widenIntArgsToFloatParams(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendWitnessTryCall'
 
 	// The Std return type a witness call CAPTURES its result in — the result value's own type, or `void` for
 	// an `isVoid` method (no result register to capture). Shared by both witness lowerings so the throwing and
 	// non-throwing forms cannot drift on how a result is typed.
 	//
-	// ⚠ **IT READS THE VALUE COLUMN WHERE `witnessFormalTypes` MAY NOT, AND THE ASYMMETRY IS EARNED.** A
-	// witness call's ARGUMENT widths cannot come from `stdTypeOf` — the parser tags an `ExitCode` ANNOTATION
-	// as a bare `named` and that collapses to the wrong width (see there). The RESULT is the opposite case:
-	// its value was minted by `Parser.interfaceReturnMaxonType`, which asks `TypeResolution.builtinTypeNameTag`
-	// about the requirement's rendered return type, so the tag on it IS the interface's own answer already —
-	// this is the formals rule arriving by a shorter road, not a second source. That is the W1 fix, and
-	// `where-clauses.witness-exitcode-return-high` pins it. If that door ever stops asking the table, this
-	// reads the wrong width and the fix belongs THERE, not here.
+	// ⚠ **IT READS THE VALUE COLUMN WHERE `witnessFormalTypes` MAY NOT, AND THE ASYMMETRY IS EARNED — BUT
+	// ONLY BECAUSE THE ONE CASE IT COULD NOT COVER IS NOW REFUSED.** A witness call's ARGUMENT widths cannot
+	// come from `stdTypeOf`: the parser tags an `ExitCode` ANNOTATION as a bare `named` and that collapses to
+	// the wrong width (see there). The RESULT is the opposite case for a requirement whose return type the
+	// interface SPELLS — `Parser.interfaceReturnMaxonType` asks `TypeResolution.builtinTypeNameTag` about that
+	// spelling, so the tag on the value IS the interface's own answer already, the formals rule arriving by a
+	// shorter road rather than a second source. That is the W1 fix, and
+	// `where-clauses.witness-exitcode-return-high` pins it.
+	//
+	// ⚠ The road does NOT reach a return the interface leaves to a conformer. An ASSOCIATED return type
+	// spells only the `uses` name, so that door answers `named` → `int` while the impl returns whatever was
+	// bound — MEASURED at 35 on x64 where the program computes 31, and a trap on wasm. Fixing it needs the
+	// binding at PARSE time, which no store holds mid-parse, so it is REFUSED instead: E3120, in
+	// `ConformanceCheck.checkAssociatedReturnIsMachineWord`. Every return that reaches here is therefore one
+	// the interface itself names, and this reads the right width for all of them.
 	function witnessCallResultType(result ValueId, isVoid bool) returns StdReturnType
 		return StdReturnType.void if isVoid else StdReturnType.value(self.stdTypeOf(result))
 	end 'witnessCallResultType'

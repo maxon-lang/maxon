@@ -2976,6 +2976,22 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	// It returns rather than falling through: the aggregate-identity rule below compares two NOMINAL names and
 	// would call every conformer a mismatch with its interface.
 	if paramTag == ValueTypeTag.interfaceRef 'existentialParam'
+		// ⭐⭐ **A FLOAT CANNOT BE WIDENED, AND IT CONFORMS — WHICH IS WHY THE REFUSAL IS HERE AND NOT IN THE
+		// WIDENING DOOR'S VERDICT.** `float` declares the intrinsic `Comparable`/`Equatable`/`Hashable`
+		// conformances, so `valueWidensToInterface` answers TRUE and the program is well-typed by every rule
+		// this pass otherwise applies. What stops it is REPRESENTATION: the fat pointer's value half is a
+		// general-purpose machine word (it is what a dispatch hands the impl as its receiver, read out of an
+		// integer register by every conformer), and a float lives in a floating-point register — so the widening
+		// is a cross-register-file move that no `TargetOp` performs.
+		// MEASURED: `use(c Comparable, other Comparable)` called with `2.5` reached the x64 emitter and PANICKED
+		// there — `a register-to-register move from xmm0 to rcx crosses register files` — with no position and
+		// nothing in the message an author could act on. It is E2062's fact one widening position over:
+		// dictionary passing gives a type parameter and an existential the SAME opaque slot, so the same limit.
+		if argTag == ValueTypeTag.float 'floatHasNoWayIntoTheFatPointer'
+			reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(paramName, position: position)}, which is declared at the interface type '{String.from(interfaceNameOfType(paramType, typeNames: project.typeNames))}': a value held at an interface travels as a fat pointer whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements '{String.from(interfaceNameOfType(paramType, typeNames: project.typeNames))}', or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
+			return
+		end 'floatHasNoWayIntoTheFatPointer'
+
 		if not valueWidensToInterface(project, signatures: programSignaturesIn(project, asker: "checkOneArgType"), valueType: maxonTypeOfTag(argTag, nameId: argNameId), interfaceName: interfaceNameOfType(paramType, typeNames: project.typeNames)) 'doesNotConform'
 			reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingArgMessage(argParamLabel(paramName, position: position), conformer: aggregateArgDisplay(aggregateNameFor(project, tag: argTag, nameId: argNameId), tag: argTag), interfaceName: String.from(interfaceNameOfType(paramType, typeNames: project.typeNames))), line: callRange.line, column: callRange.column, filePath: filePath)
 		end 'doesNotConform'
