@@ -32,7 +32,7 @@ ExitCode: 9
 func @scalar {
   entry:
     arm64.prologue 16
-    arm64.jumpTable x0, default=matchdefault [[0]=matcharm, [1]=matcharm, [2..4]=matcharm, [5]=matcharm, [6]=matchdefault, [7]=matcharm] @__jumptable_0
+    arm64.jumpTable x0, default=matchdefault [[0]=matcharm, [1]=matcharm, [2..4]=matcharm, [5]=matcharm, [6]=matchdefault, [7]=matcharm] @__jumptable_1
   matchdefault:
     arm64.movImm x0, 999
     arm64.b matchcont
@@ -170,6 +170,42 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.b ifcont
   ifcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

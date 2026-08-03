@@ -9,9 +9,26 @@ ExitCode: 0
 func @main {
   entry:
     arm64.prologue 16
-    arm64.fpLoadRdata d0, [rdata + __fconst_3]
+    arm64.fpLoadRdata d0, [rdata + __fconst_4]
     arm64.bl Math.log
     arm64.fcvtzs x0, d0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
     arm64.epilogue 16
     arm64.ret
 }
@@ -29,17 +46,17 @@ func @Math.lnBySeries {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2
+    arm64.leaRdata x0, __str_blob_3
     arm64.bl mrt_panic
-    arm64.fpLoadRdata d0, [rdata + __fconst_4]
+    arm64.fpLoadRdata d0, [rdata + __fconst_5]
     arm64.epilogue 16
     arm64.ret
   __rc_ok:
-    arm64.fpLoadRdata d1, [rdata + __fconst_3]
+    arm64.fpLoadRdata d1, [rdata + __fconst_4]
     arm64.fsub d1, d0, d1
-    arm64.fpLoadRdata d2, [rdata + __fconst_3]
-    arm64.fadd d0, d0, d2
     arm64.fpLoadRdata d2, [rdata + __fconst_4]
+    arm64.fadd d0, d0, d2
+    arm64.fpLoadRdata d2, [rdata + __fconst_5]
     arm64.fcmp d0, d2
     arm64.cset x1, eq
     arm64.fdiv d0, d1, d0
@@ -50,7 +67,7 @@ func @Math.lnBySeries {
   tryerr:
     arm64.leaRdata x0, __str_blob_0
     arm64.bl mrt_panic
-    arm64.fpLoadRdata d0, [rdata + __fconst_4]
+    arm64.fpLoadRdata d0, [rdata + __fconst_5]
     arm64.epilogue 16
     arm64.ret
   tryok:
@@ -65,12 +82,12 @@ func @Math.lnBySeries {
     arm64.b forexit
   series:
     arm64.fmul d0, d0, d1
-    arm64.fpLoadRdata d3, [rdata + __fconst_5]
+    arm64.fpLoadRdata d3, [rdata + __fconst_6]
     arm64.scvtf d4, x1
     arm64.fmul d3, d3, d4
-    arm64.fpLoadRdata d4, [rdata + __fconst_3]
-    arm64.fadd d3, d3, d4
     arm64.fpLoadRdata d4, [rdata + __fconst_4]
+    arm64.fadd d3, d3, d4
+    arm64.fpLoadRdata d4, [rdata + __fconst_5]
     arm64.fcmp d3, d4
     arm64.cset x2, eq
     arm64.fdiv d3, d0, d3
@@ -81,7 +98,7 @@ func @Math.lnBySeries {
   tryerr:
     arm64.leaRdata x0, __str_blob_1
     arm64.bl mrt_panic
-    arm64.fpLoadRdata d0, [rdata + __fconst_4]
+    arm64.fpLoadRdata d0, [rdata + __fconst_5]
     arm64.epilogue 16
     arm64.ret
   tryok:
@@ -91,7 +108,7 @@ func @Math.lnBySeries {
     arm64.add x1, x1, 1
     arm64.b forhdr
   forexit:
-    arm64.fpLoadRdata d0, [rdata + __fconst_5]
+    arm64.fpLoadRdata d0, [rdata + __fconst_6]
     arm64.fmul d0, d0, d2
     arm64.epilogue 16
     arm64.ret
@@ -129,7 +146,7 @@ func @Math.isPositiveInfinity {
 func @Math.nonPositiveLogResult {
   entry:
     arm64.prologue 16
-    arm64.fpLoadRdata d1, [rdata + __fconst_4]
+    arm64.fpLoadRdata d1, [rdata + __fconst_5]
     arm64.fcmp d0, d1
     arm64.cset x0, eq
     arm64.cbnz x0, zero
@@ -150,7 +167,7 @@ func @Math.log {
     arm64.storeSlotReg slot1, d8
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg d8, d0
-    arm64.fpLoadRdata d0, [rdata + __fconst_4]
+    arm64.fpLoadRdata d0, [rdata + __fconst_5]
     arm64.fcmp d8, d0
     arm64.cset x0, ls
     arm64.cbnz x0, nonPositive
@@ -174,13 +191,13 @@ func @Math.log {
     arm64.epilogue 32
     arm64.ret
   ifcont:
-    arm64.fpLoadRdata d0, [rdata + __fconst_3]
+    arm64.fpLoadRdata d0, [rdata + __fconst_4]
     arm64.fcmp d8, d0
     arm64.cset x0, eq
     arm64.cbnz x0, one
     arm64.b ifcont
   one:
-    arm64.fpLoadRdata d0, [rdata + __fconst_4]
+    arm64.fpLoadRdata d0, [rdata + __fconst_5]
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot d8, slot1
     arm64.epilogue 32
@@ -189,13 +206,13 @@ func @Math.log {
     arm64.movImm x0, 0
     arm64.b whilehdr
   whilehdr:
-    arm64.fpLoadRdata d0, [rdata + __fconst_3]
+    arm64.fpLoadRdata d0, [rdata + __fconst_4]
     arm64.fcmp d8, d0
     arm64.cset x1, ge
     arm64.cbnz x1, normalize_down
     arm64.b whileexit
   normalize_down:
-    arm64.fpLoadRdata d0, [rdata + __fconst_5]
+    arm64.fpLoadRdata d0, [rdata + __fconst_6]
     arm64.fdiv d8, d8, d0
     arm64.add x0, x0, 1
     arm64.b whilehdr
@@ -204,20 +221,20 @@ func @Math.log {
     arm64.movRegReg d0, d8
     arm64.b whilehdr
   whilehdr:
-    arm64.fpLoadRdata d1, [rdata + __fconst_6]
+    arm64.fpLoadRdata d1, [rdata + __fconst_7]
     arm64.fcmp d0, d1
     arm64.cset x0, mi
     arm64.cbnz x0, normalize_up
     arm64.b whileexit
   normalize_up:
-    arm64.fpLoadRdata d1, [rdata + __fconst_5]
+    arm64.fpLoadRdata d1, [rdata + __fconst_6]
     arm64.fmul d0, d0, d1
     arm64.sub x19, x19, 1
     arm64.b whilehdr
   whileexit:
     arm64.movImm x0, 20
     arm64.bl Math.lnBySeries
-    arm64.fpLoadRdata d1, [rdata + __fconst_7]
+    arm64.fpLoadRdata d1, [rdata + __fconst_8]
     arm64.scvtf d2, x19
     arm64.fmul d1, d2, d1
     arm64.fadd d0, d0, d1

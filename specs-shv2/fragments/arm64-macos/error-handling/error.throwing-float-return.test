@@ -30,11 +30,11 @@ func @safeRoot {
   neg:
     arm64.movImm x0, 0
     arm64.add x9, x0, 1
-    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
     arm64.epilogue 16
     arm64.ret
   ifcont:
-    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.fpLoadRdata d0, [rdata + __fconst_2]
     arm64.movImm x9, 0
     arm64.epilogue 16
     arm64.ret
@@ -51,7 +51,7 @@ func @main {
     arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
-    arm64.fpLoadRdata d8, [rdata + __fconst_0]
+    arm64.fpLoadRdata d8, [rdata + __fconst_1]
     arm64.b trycont
   tryok:
     arm64.movRegReg d8, d0
@@ -64,7 +64,7 @@ func @main {
     arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
-    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
     arm64.b trycont
   tryok:
     arm64.b trycont
@@ -72,6 +72,24 @@ func @main {
     arm64.fcvtzs x0, d8
     arm64.fcvtzs x1, d0
     arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot d8, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
     arm64.loadRegSlot d8, slot0
     arm64.epilogue 32
     arm64.ret
