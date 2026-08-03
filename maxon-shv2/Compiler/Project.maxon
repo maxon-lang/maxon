@@ -893,8 +893,15 @@ end 'builtinStdlibAlias'
 // this?" is false for a subtree-scoped declaration. Membership of `nameable` is unchanged for every
 // program that existed before the `module` modifier — an `export`ed alias is now `global` and still in,
 // a plain one is still out — so this is a widening of the QUESTION, not a change of the answer.
-export function nameableFromAnywhere(alias RangedTypeAlias) returns bool
-	return alias.visibility == Visibility.global
+//
+// ⚠ **IT TAKES A `Visibility`, NOT A DECLARATION, AND N3 IS WHY.** The generic-instance alias registry needs
+// the identical tier-2 question (`ProgramSignatures.settleGenericAliasContest`, deciding which declaration a
+// file that declares none of a contested name may mean), over a DIFFERENT record. Written as a second
+// one-line predicate over `GenericAliasEntry` it was the third copy of the rule this header exists to keep
+// at one — and the fourth `Visibility` case would now hand a file an INSTANCE it may not name, not merely a
+// wrong diagnostic. The rule is about a tier; the record it was read off was never part of it.
+export function nameableFromAnywhere(visibility Visibility) returns bool
+	return visibility == Visibility.global
 end 'nameableFromAnywhere'
 
 export type RangedAliasRegistry
@@ -979,7 +986,7 @@ export type RangedAliasRegistry
 
 		// Recorded here, ABOVE the first-declaration early return below, so every declaration passes
 		// through it exactly once whatever else the name goes on to do.
-		if nameableFromAnywhere(alias) 'nameableAnywhere'
+		if nameableFromAnywhere(alias.visibility) 'nameableAnywhere'
 			self.nameable.upsert(alias.name, value: alias)
 		end 'nameableAnywhere'
 
@@ -1327,7 +1334,7 @@ export type RangedAliasRegistry
 	// pass allocates per name is not the cost, the iteration is. It is left as a single readable structure
 	// rather than split into a write-side flag and a read-side answer.
 	// ⚠⚠ **THE CONTEST MAP IS PUBLISHED LAST, AFTER THE MINTS IT GUARDS ARE IN THE REGISTRY (N2 review).**
-	// `anyRangeContest()` — hence `rangeScopedInstance`, hence every qualified element name in the compiler —
+	// `anyRangeContest()` — hence `fileScopedInstance`, hence every qualified element name in the compiler —
 	// is exactly the test `self.rangeContested.count() > 0`. The moment that answers true, a reader may ask
 	// for `Byte$0_1000`, and a `Byte$0_1000` the registry does not hold answers the WIDTH FALLBACK
 	// (`undeclaredNamedElementStorageBytes`), which — since `isByteElementName` asks about the BASE name —
@@ -1441,7 +1448,7 @@ end 'RangedAliasRegistry'
 // this range `settleRangeContests` reached first, which is a map's iteration order; carrying its tier would
 // make an unobservable field depend on that order. `global` is also the honest answer — a mint is
 // compiler-supplied, exactly like the seeds `builtinStdlibAlias` builds, and its NAME is unspellable in
-// source (`RangeQualifiedAliasSeparator`), so no reader can be admitted or refused by the tier anyway.
+// source (`CompilerQualifiedAliasSeparator`), so no reader can be admitted or refused by the tier anyway.
 function rangeQualifiedMint(claimant RangedTypeAlias, spelling ByteArray) returns RangedTypeAlias
 	return RangedTypeAlias.create(spelling, underlying: claimant.underlying, low: claimant.low, high: claimant.high, visibility: Visibility.global, declFilePath: claimant.declFilePath, nameLine: claimant.nameLine, nameColumn: claimant.nameColumn)
 end 'rangeQualifiedMint'
@@ -2231,6 +2238,19 @@ export type StructLayout
 		self.fieldDeclaredSurfaces.push(declaredSurface)
 	end 'addField'
 
+	// ⭐ **REPLACE FIELD `index`'s DECLARED TYPE — the ONE write that is not an append (N3).** The declaration
+	// SWEEP records a field's type before any generic alias is interned, so a field declared with an alias two
+	// files declare differently carries a name that cannot be resolved until every file has folded. That
+	// resolution happens once, at `ProgramSignatures.resolveRecordedGenericAliasTypes`, and lands here.
+	//
+	// ⚠ It rewrites ONE column, which is why it is not a violation of `addField`'s "one writer" rule: the
+	// columns stay in lockstep because no length changes. It is deliberately not general — there is exactly
+	// one caller, it is named above, and a second reason to retype a recorded field would be a second reason
+	// for two passes to disagree about what a declaration says.
+	export function retypeField(index FieldIndex, declaredType MaxonType)
+		try self.fieldTypes.set(index, value: declaredType) otherwise panic("StructLayout.retypeField: fieldTypes.set OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — the caller walks `0 upto fieldCount()`")
+	end 'retypeField'
+
 	// ⚠ **THE OOB PANIC SENTENCE BELOW IS REPEATED PER COLUMN, AND THE COPY IS FORCED BY THE
 	// LANGUAGE, NOT CHOSEN.** `panic` takes a string LITERAL — `panic(msg)` for any String value,
 	// even a `let`-bound one, is rejected outright ("panic requires a string argument", measured
@@ -2452,6 +2472,14 @@ export type EnumLayout
 		self.caseTags.push(tag)
 		self.casePayloads.push(payloads)
 	end 'addCase'
+
+	// ⭐ **REPLACE CASE `index`'s PAYLOAD SLOTS — `StructLayout.retypeField`'s twin (N3)**, for the same one
+	// caller and the same one reason: a payload declared with a generic alias two files declare differently
+	// cannot be resolved until every file has folded. Whole-array, where the struct side sets one cell,
+	// because a `PayloadField`'s columns are `let`.
+	export function retypeCasePayloads(index CaseIndex, payloads PayloadFieldArray)
+		try self.casePayloads.set(index, value: payloads) otherwise panic("EnumLayout.retypeCasePayloads: casePayloads.set OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
+	end 'retypeCasePayloads'
 
 	// The payload fields of case `index`, in slot order — empty for a payload-free case.
 	export function payloadsAt(index CaseIndex) returns PayloadFieldArray

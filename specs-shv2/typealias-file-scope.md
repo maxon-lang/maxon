@@ -79,6 +79,45 @@ under its bare name) and **E3063** ambiguity between two *nameable* aliases of o
 files — which is still last-wins, on the strictly smaller set of declarations the reader may name.
 Both need cross-file name resolution; this rung is the file-scoped half only.
 
+## A GENERIC-INSTANCE typealias is file-local too — `typealias Slots = Array with Big`
+
+Everything above is about the RANGED form. A **generic-instance** typealias (`typealias Slots = Array
+with Big`) is a `typealias` like any other: not exported, it is file-local, and two files may each
+declare `Slots` over a different instance without disturbing each other.
+
+It was resolved through a second whole-program map keyed by the bare name, so it had the *original*
+defect the ranged form was cured of — **the last file folded won, and every other file silently got
+its instance.** The two forms this takes are both wrong answers and neither mentions the file that
+caused it:
+
+- a **compile-time refusal quoting a type the blamed file cannot name.** `main.maxon` declares
+  `Slots = Array with Small` (`int(0 to 100)`) and `wide.maxon` declares `Slots = Array with Big`
+  (`int(0 to 60000)`); `wide.maxon`'s own `push(50000)` was rejected as
+  `E3005 wide.maxon:6:4: Value 50000 is outside the range of 'Small' (int(0 to 100))` — a range from a
+  declaration `wide.maxon` does not contain and may not write down;
+- a **runtime wrong answer**, which is the more dangerous shape and reaches a program that compiled
+  clean. Where the two `Slots` differ only through a `Byte` the two files declare differently, the
+  element identity is already correct (`bytearray-element-size.md`) and only the alias is shared, so
+  the wide file's `push` of its own in-range `900` reaches the narrow file's element and panics
+  `Range check failed: value outside typealias 'Byte'` — quoting the name of a declaration whose
+  bounds permit the value.
+
+⚠ **RESOLVING THE NAME IS NOT ENOUGH ON ITS OWN, AND THE MISSING HALF IS THE DROP ROUTER.** A struct
+FIELD declared with a generic alias is recorded by the declaration sweep as a bare `named("Slots")` —
+the alias is not interned yet — and the drop/clone cascade resolves that name with **no reader file to
+ask from** (`managedFieldDropCallee`, `managedFieldCloneStrategy`, `fieldTypeIsArray`). While the
+parser was last-wins too, those agreed with it and the program was merely refused. Scoping only the
+parser makes them **disagree**: a field whose element is an `int` would be routed to the destructor of
+an `Array with String` and its integers freed as pointers. So the field's recorded type is resolved
+ONCE, against the file that declared it, at the moment the contest is known — and the file-less door
+**refuses a contested name outright** rather than answering it arbitrarily, so a recorded spelling
+that was missed is a loud compiler panic and never a wild free.
+
+⚠ **AN AGREEING NAME IS NOT CONTESTED, AND THAT IS THE LOAD-BEARING HALF**, exactly as it is for a
+contested `Byte`. Two files that both declare `typealias Counts = Array with Count` over one `Count`
+name one instance between them: the name is not contested, every scoping door returns on its first
+line, and no interned instance, mangled symbol or committed golden moves.
+
 ## Tests
 
 <!-- test: user-alias-wins-over-stdlib -->
@@ -328,4 +367,405 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:18:25: Value 150 is outside the range of 'Codepoint' (int(0 to 100))
+```
+
+
+<!-- test: generic-alias-resolves-in-its-own-file -->
+Each file declares `Slots` over its own element and pushes a value its own element permits. Under one
+whole-program map the file folded second lost its declaration outright and its `push` was checked
+against the other file's range: `E3005 … Value 50000 is outside the range of 'Small' (int(0 to 100))`,
+reported inside `wide.maxon`, against a name that file never writes. The C# bootstrap answers 55.
+
+⚠ **THE TWO RANGES ARE DISJOINT, AND THAT IS WHAT MAKES THIS A TEST.** Written with a NARROW and a
+WIDE range it passed against the broken compiler for half the possible fold orders — whichever file
+wins, the wide element accepts the narrow file's value too, so only one of the two directions is
+observable and the directory walk decides which. `int(0 to 100)` and `int(1000 to 2000)` admit none of
+each other's values, so a name resolved to the wrong file is refused whichever file won.
+```maxon
+// --- file: high.maxon
+typealias High = int(1000 to 2000)
+typealias Slots = Array with High
+
+export function fromHigh() returns High
+	var w = Slots.create()
+	w.push(1500)
+	return try w.get(0) otherwise 1000
+end 'fromHigh'
+
+// --- file: main.maxon
+typealias Low = int(0 to 100)
+typealias Slots = Array with Low
+
+function main() returns ExitCode
+	var w = Slots.create()
+	w.push(40)
+	return (fromHigh() / 100) + (try w.get(0) otherwise 0)
+end 'main'
+```
+```exitcode
+55
+```
+
+
+<!-- test: generic-alias-runtime-guard-uses-its-own-files-element -->
+The RUNTIME half, and the dangerous one: this program COMPILED and then gave a wrong answer. The two
+`Bytes` differ only through `Byte`, whose two declarations are already two element types
+(`bytearray-element-size.md`), so the instances were distinct all along — only the alias name was
+shared, and `wide.maxon` got `main.maxon`'s. Its own in-range `900` then met a guard for
+`int(0 to u8.max)` and panicked `Range check failed: value outside typealias 'Byte'`, naming a
+declaration whose bounds allow it. The C# bootstrap answers 209.
+
+The two ranges are disjoint for the reason the case above states. The value reaching `push` here is a
+PARAMETER and not a literal, so the guard it meets is the runtime one — which is what makes this the
+form that compiles and then answers wrongly.
+```maxon
+// --- file: wide.maxon
+typealias Byte = int(300 to 1000)
+typealias Bytes = Array with Byte
+
+export function wide(v Byte) returns Byte
+	var b = Bytes.create()
+	b.push(v)
+	return try b.get(0) otherwise 300
+end 'wide'
+
+// --- file: main.maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	let two = 200 as Byte
+	b.push(two)
+	return (try b.get(0) otherwise 0) + (wide(900) / 100)
+end 'main'
+```
+```exitcode
+209
+```
+
+
+<!-- test: generic-alias-field-drops-through-its-own-files-element -->
+The half a scoped parser alone does not buy: `Bag` names an `Array with String` in one file and an
+`Array with Num` in the other, and each is a struct FIELD. A field's declared type is recorded by the
+sweep as a bare `named("Bag")`, and the drop and clone cascades resolve that name with no reader file,
+so a parser scoped on its own would route `Nums.items` — a buffer of integers — to the destructor of
+an array of Strings and free each element as a pointer. Both halves have to land together, and the
+leak gate plus the exit code are what say they did.
+```maxon
+// --- file: words.maxon
+typealias Bag = Array with String
+
+type Words
+	export var items as Bag
+
+	export static function create() returns Words
+		var b = Bag.create()
+		b.push("hi")
+		return Words{items: b}
+	end 'create'
+end 'Words'
+
+export function wordCount() returns ElementCount
+	let w = Words.create()
+	return w.items.count()
+end 'wordCount'
+
+// --- file: main.maxon
+typealias Num = int(0 to 1000)
+typealias Bag = Array with Num
+
+type Nums
+	export var items as Bag
+
+	export static function create() returns Nums
+		var b = Bag.create()
+		b.push(7)
+		return Nums{items: b}
+	end 'create'
+end 'Nums'
+
+function main() returns ExitCode
+	let n = Nums.create()
+	return (try n.items.get(0) otherwise 0) + wordCount()
+end 'main'
+```
+```exitcode
+8
+```
+
+
+<!-- test: agreeing-generic-alias-is-not-contested -->
+The load-bearing negative, and it passes both before and after: two files declare `Counts` over one
+`Count`, so both fold to ONE interned instance and the name is not contested at all. Nothing is
+scoped, nothing is re-keyed, and the answer is the same answer the whole-program map already gave —
+which is why the entire existing corpus, whose generic aliases are of exactly this shape, keeps every
+instance and every emitted symbol it had.
+```maxon
+// --- file: a.maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+export function fromA() returns Count
+	var c = Counts.create()
+	c.push(40)
+	return try c.get(0) otherwise 0
+end 'fromA'
+
+// --- file: main.maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+function main() returns ExitCode
+	var c = Counts.create()
+	c.push(2)
+	return fromA() + (try c.get(0) otherwise 0)
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: generic-alias-nested-inside-another-generic-alias -->
+An alias whose ARGUMENT is a contested alias. `Grid` is spelled identically in both files, so both
+declarations interned to the one instance `Array with <the bare name "Slots">` and `Grid` looked like a
+name they AGREE about — while its element denoted two different arrays. ⛔ MEASURED: the compiler
+PANICKED, out of the element's drop-callee router (`arrayElementDropCallee` → the file-less door's
+refusal), on a program both files' own declarations describe perfectly. Resolving a declaration's
+arguments against its own file splits `Grid` in two, which is what makes `Grid` contested in turn — so
+the contest is a fixpoint and not a single walk.
+```maxon
+// --- file: high.maxon
+typealias High = int(1000 to 2000)
+typealias Slots = Array with High
+typealias Grid = Array with Slots
+
+export function fromHigh() returns High
+	var g = Grid.create()
+	var row = Slots.create()
+	row.push(1500)
+	g.push(row)
+	let back = try g.get(0) otherwise Slots.create()
+	return try back.get(0) otherwise 1000
+end 'fromHigh'
+
+// --- file: main.maxon
+typealias Low = int(0 to 100)
+typealias Slots = Array with Low
+typealias Grid = Array with Slots
+
+function main() returns ExitCode
+	var g = Grid.create()
+	var row = Slots.create()
+	row.push(40)
+	g.push(row)
+	let back = try g.get(0) otherwise Slots.create()
+	return (fromHigh() / 100) + (try back.get(0) otherwise 0)
+end 'main'
+```
+```exitcode
+55
+```
+
+
+<!-- test: error.a-contested-alias-is-quoted-as-source-spells-it -->
+A diagnostic names a declaration back at the author, and the compiler's contest mint (`Byte$300_1000`)
+is a name NO SOURCE LINE HOLDS. ⛔ MEASURED while landing the generic form above: the narrowing E3005
+stripped the mint and the `otherwise` E3005 did not, so one alias printed two ways depending only on
+which of the two an out-of-range value happened to meet — with the real bounds spelled beside the
+suffix that was supposed to carry them. Both sentences are now worded in one place and share the strip.
+```maxon
+// --- file: narrow.maxon
+typealias Byte = int(0 to 255)
+
+export function narrowByte(v Byte) returns Byte
+	return v
+end 'narrowByte'
+
+// --- file: main.maxon
+typealias Byte = int(300 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	let v = 500 as Byte
+	b.push(v)
+	return ((try b.get(0) otherwise 0) / 100) + narrowByte(5)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:17:11: otherwise value 0 is outside the range of 'Byte' (int(300 to 1000))
+```
+
+
+<!-- test: generic-alias-union-payload-drops-through-its-own-files-element -->
+The union-payload twin of the field case: `Bag` names an `Array with String` in one file and an
+`Array with Num` in the other, and each is a boxed union's PAYLOAD. A payload's declared type is
+recorded by the same sweep, read by the same file-less drop and deep-clone walks
+(`unionPayloadsSupportDeepClone`), and so needs the same one-time resolution against its declaring
+file. The payload is deliberately not BOUND — a `match` arm that binds a generic-alias payload is
+refused for an unrelated, pre-existing reason (`E3011 Unknown type 'Bag'`, single-file, and the C#
+bootstrap answers it), and what this case is about is the DROP.
+```maxon
+// --- file: words.maxon
+typealias Bag = Array with String
+
+union WordBox
+	empty
+	filled(items Bag)
+end 'WordBox'
+
+export function words() returns ExitCode
+	var b = Bag.create()
+	b.push("hi")
+	let w = WordBox.filled(b)
+	return match w 'm'
+		empty gives 0
+		filled gives 1
+	end 'm'
+end 'words'
+
+// --- file: main.maxon
+typealias Num = int(0 to 1000)
+typealias Bag = Array with Num
+
+union NumBox
+	empty
+	filled(items Bag)
+end 'NumBox'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.push(7)
+	let n = NumBox.filled(b)
+	let mine = match n 'm'
+		empty gives 0
+		filled gives 7
+	end 'm'
+	return mine + words()
+end 'main'
+```
+```exitcode
+8
+```
+
+
+<!-- test: third-file-resolves-a-contested-generic-alias-to-the-nameable-one -->
+The generic twin of `third-file-resolves-to-the-nameable-declaration`, and the case that pins the whole
+visibility tier: `main.maxon` declares no `Slots`, so it may not mean `priv.maxon`'s file-private one and
+must resolve to the `export`ed declaration — which is the only one it is allowed to write down. Under the
+bare last-wins fallback alone, `main.maxon`'s `push(1500)` would meet `priv.maxon`'s `int(0 to 100)`,
+which is the same "a declaration the reader is forbidden to name decided what the reader meant" wrong
+answer the ranged form was cured of.
+```maxon
+// --- file: shared.maxon
+export typealias Elem = int(1000 to 2000)
+export typealias Slots = Array with Elem
+
+// --- file: priv.maxon
+typealias Elem = int(0 to 100)
+typealias Slots = Array with Elem
+
+export function fromPriv() returns Elem
+	var w = Slots.create()
+	w.push(40)
+	return try w.get(0) otherwise 0
+end 'fromPriv'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var w = Slots.create()
+	w.push(1500)
+	return ((try w.get(0) otherwise 1000) / 100) + fromPriv()
+end 'main'
+```
+```exitcode
+55
+```
+
+
+<!-- test: error.cross-file-generic-alias-cycle-is-a-type-cycle -->
+⛔ **A COMPILER PANIC, MEASURED WHILE LANDING THIS RUNG.** The mint a contested argument gets is derived
+from that argument's instance, so each pass of the contest adds one nesting level — bounded on an acyclic
+declaration graph by its depth, and unbounded on a cyclic one. `a.maxon` closes a cycle between its own
+`P` and `Q`; the compiler aborted with `7 rounds over 6 declaration(s)`.
+
+⚠ **AND THE CYCLE WALK COULD NOT HAVE CAUGHT IT EITHER.** `buildInstanceArgGraph` resolves a `named`
+argument through the bare LAST-WINS map, where `Q` means `main.maxon`'s `Array with P` and `P` means its
+`Array with High` — an ACYCLIC view of a program that cycles as soon as each file's declarations are read
+as that file's own. So E3091 was owed and unreachable, by a walk that predates this rung. The
+non-convergence IS the detection.
+```maxon
+// --- file: a.maxon
+typealias P = Array with Q
+typealias Q = Array with P
+
+export function fromA() returns ExitCode
+	return 1
+end 'fromA'
+
+// --- file: main.maxon
+typealias High = int(1000 to 2000)
+typealias P = Array with High
+typealias Q = Array with P
+
+function main() returns ExitCode
+	var q = Q.create()
+	return fromA() + q.count()
+end 'main'
+```
+```maxoncstderr
+error E3091: <fragment>:3:11: typealias 'P' forms a type cycle: its type arguments refer back to 'P'
+```
+
+
+<!-- test: per-instance-alias-on-a-contested-generic-alias -->
+`W.Idx` is a PER-INSTANCE alias, whose identity is keyed on the instance-alias NAME — so on a `W` two
+files declare differently it asks the very question the file-less door refuses. ⛔ MEASURED: the compiler
+PANICKED out of `Parser.aggregateNameOf`, on a program each file's own declarations describe completely.
+The prefix is a source spelling and every caller resolving one has a reading file, so it is resolved as
+that file means it; the two callers that structurally cannot (the coercion authority, which is handed two
+names, and the file-less type erasure) resolve as a stranger would.
+```maxon
+// --- file: wrap.maxon
+export type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T) returns Self
+		return Self{value: value, tag: 0}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+end 'Wrapper'
+
+// --- file: a.maxon
+typealias Elem = int(0 to 100)
+typealias W = Wrapper with Elem
+
+export function fromA() returns W.Idx
+	let w = W.create(5)
+	return w.getTag()
+end 'fromA'
+
+// --- file: main.maxon
+typealias Elem = int(1000 to 2000)
+typealias W = Wrapper with Elem
+
+function takes(i W.Idx) returns ExitCode
+	return i as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	let w = W.create(1500)
+	return takes(w.getTag()) + (fromA() as ExitCode)
+end 'main'
+```
+```exitcode
+0
 ```

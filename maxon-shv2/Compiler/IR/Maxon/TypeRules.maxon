@@ -1300,9 +1300,34 @@ end 'rangeCoversRange'
 // `outside the range of 'Byte$0_1000' (int(0 to 1000))`, which names no line the author wrote and prints
 // the real bounds beside the suffix that was supposed to carry them.
 export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
-	let spelled = String.from(sourceSpelledAliasName(aliasName.toByteArray()))
-	return "Value {formatBound(value, isFloat: isFloat)} is outside the range of '{spelled}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
+	return "Value {formatBound(value, isFloat: isFloat)} is outside the range of '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
 end 'literalOutOfRangeMessage'
+
+// The E3005 an out-of-range `otherwise` DEFAULT reports — the sentence above with its own subject, since
+// what is out of range is the handler's value and not a narrowing. Worded HERE, beside its twin, because
+// the two say one thing about one alias: the bounds spell through `formatRangeDisplay` and the NAME through
+// `quotedAliasName`, so neither half can be printed two ways depending on which E3005 a value meets.
+//
+// ⛔ **THE MINT LEAKED THROUGH THIS ONE (found while landing N3).** `literalOutOfRangeMessage` had the strip
+// and this arm — rendered inline in `Queries.reportParseError` — did not, so a program declaring
+// `typealias Byte = int(300 to 1000)` beside another file's `Byte` was told `otherwise value 0 is outside
+// the range of 'Byte$300_1000' (int(300 to 1000))`: a declaration the program does not contain, with the
+// real bounds printed in the same sentence. One alias, two spellings, decided by which of two E3005s the
+// value happened to meet.
+//
+// ⚠ The VALUE is spelled plainly and deliberately NOT through `formatBound`: an `otherwise` default is an
+// integer LITERAL the author wrote, never the wrapped `u64.max` sentinel that helper exists to un-wrap, and
+// the oracle prints it plainly too.
+export function otherwiseOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt) returns String
+	return "otherwise value {value} is outside the range of '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: false)})"
+end 'otherwiseOutOfRangeMessage'
+
+// ⭐ **AN ALIAS NAME AS AN E3005 QUOTES IT** — `sourceSpelledAliasName` applied at the one tier a name
+// becomes text an author reads, so no renderer can quote the compiler's bookkeeping and no PRODUCER has to
+// remember to strip before filling in an error's payload.
+function quotedAliasName(aliasName String) returns String
+	return String.from(sourceSpelledAliasName(aliasName.toByteArray()))
+end 'quotedAliasName'
 
 // A single range bound (or the offending value) as source text — the SIGNED spelling.
 //

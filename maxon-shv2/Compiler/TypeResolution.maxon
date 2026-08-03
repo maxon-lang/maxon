@@ -916,7 +916,9 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// VALUE column, where the front-end identity checks read it; a signature carries no identity. Reached only
 	// for a name that is NEITHER a plain alias nor an aggregate — a rare, dotted name — so the qualified-name
 	// split never touches the plain-alias hot path.
-	match signatures.qualifiedAliasOf(name) 'qualified'
+	// `CompilerOwnedDeclFilePath` (N3): this arm wants only `underlying`, and the door above it is the FILE-LESS
+	// erasure whose own header says why — a `StructLayout`'s field types arrive here with no declaring file.
+	match signatures.qualifiedAliasOf(name, readerFilePath: CompilerOwnedDeclFilePath) 'qualified'
 		declared(alias) then return alias.underlying
 		undeclared then break 'qualified'
 	end 'qualified'

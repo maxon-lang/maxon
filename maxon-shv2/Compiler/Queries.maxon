@@ -257,6 +257,12 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// distinct problems it settles, and for why an uncontested program — the whole corpus — leaves it after
 	// one walk of an empty map.
 	signatures.settleRangeScopedInstances()
+	// ⭐ **AND WHICH GENERIC-ALIAS NAMES TWO FILES DISAGREE ABOUT (N3)** — the same question one layer up, for
+	// the other alias registry a cross-file reference is resolved through. STRICTLY AFTER the range settle
+	// above: a `Bytes` whose `Byte` two files declare differently is two instances only once N2 has split the
+	// element, so reversing the two would make every such pair look like agreement. See
+	// `settleGenericAliasContest`, which likewise leaves an uncontested program after one walk.
+	signatures.settleGenericAliasContest()
 	// ⭐ And the `Array with <every declared struct/union>` over-interning a `[<identifier>…]` array literal
 	// needs (P1.7 slice 3) — HERE, for the same "the whole program is known now" reason, and because doing it
 	// at each such file re-walked tables that were still growing: O(files × types), measured at ×3.03
@@ -1233,12 +1239,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		bareSizedTypeAlias(typeName, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: "Bare sized type '{typeName}' is not allowed. Use explicit range syntax, e.g. 'int({typeName}.min to {typeName}.max)'", line: line, column: column, filePath: path)
 		mismatchedRangeBoundTypes(low, high, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Mismatched type bounds: '{low}' and '{high}' must reference the same type", line: line, column: column, filePath: path)
 		unrepresentableIntegerRange(low, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Integer range cannot span both negative values and above i64.max: 'int({low} to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead", line: line, column: column, filePath: path)
-		// The RANGE spells through `formatRangeDisplay`, the one place a range renders, so this and the
-		// cast/return E3005s cannot come to print one alias's bounds two ways. The VALUE is spelled
-		// plainly and deliberately NOT through that file's `formatBound`: an `otherwise` default is an
-		// integer LITERAL the author wrote, never the wrapped `u64.max` sentinel that helper exists to
-		// un-wrap, and the oracle prints it plainly too.
-		otherwiseOutsideRangedReturn(value, aliasName, low, high, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "otherwise value {value} is outside the range of '{aliasName}' ({formatRangeDisplay(low, high: high, isFloat: false)})", line: line, column: column, filePath: path)
+		// Worded beside its narrowing twin (`otherwiseOutOfRangeMessage`, next to `literalOutOfRangeMessage`)
+		// rather than inline here, so the two E3005s that quote one alias's bounds share the range renderer AND
+		// the name strip. Inline, this arm was the one that leaked the compiler's mint at the author.
+		otherwiseOutsideRangedReturn(value, aliasName, low, high, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: otherwiseOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high), line: line, column: column, filePath: path)
 		hiddenCastTargetType(line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'

@@ -1,0 +1,193 @@
+// Test: generic-alias-nested-inside-another-generic-alias
+// --- file: high.maxon
+typealias High = int(1000 to 2000)
+typealias Slots = Array with High
+typealias Grid = Array with Slots
+
+export function fromHigh() returns High
+	var g = Grid.create()
+	var row = Slots.create()
+	row.push(1500)
+	g.push(row)
+	let back = try g.get(0) otherwise Slots.create()
+	return try back.get(0) otherwise 1000
+end 'fromHigh'
+
+// --- file: main.maxon
+typealias Low = int(0 to 100)
+typealias Slots = Array with Low
+typealias Grid = Array with Slots
+
+function main() returns ExitCode
+	var g = Grid.create()
+	var row = Slots.create()
+	row.push(40)
+	g.push(row)
+	let back = try g.get(0) otherwise Slots.create()
+	return (fromHigh() / 100) + (try back.get(0) otherwise 0)
+end 'main'
+---
+ExitCode: 55
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @fromHigh {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __arr_decref]
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 1500
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r13, 1000
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r13, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r13, 2000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __arr_decref]
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 40
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.jmp trycont
+  trycont:
+    x64.callDirect fromHigh
+    x64.movRegImm32 rcx, 100
+    x64.movRegReg rax, r8
+    x64.cqo
+    x64.idivReg rcx
+    x64.movRegReg r13, rax
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.leaRegRegReg r13, r13, rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

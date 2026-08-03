@@ -3125,7 +3125,9 @@ function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId) 
 	// plain named argument (`Score`) — the overwhelming case — pays only a byte scan, not the index fetch.
 	if containsQualifier(name) 'maybePerInstance'
 		let signatures = programSignaturesIn(project, asker: "aggregateNameFor")
-		if signatures.isPerInstanceAlias(name) 'perInstanceAlias'
+		// `CompilerOwnedDeclFilePath` for `aggregatesConflict`'s reason (N3): this twin is handed a NAME out of a
+		// whole-program signature and has no reading file to scope a contested prefix by.
+		if signatures.isPerInstanceAlias(name, readerFilePath: CompilerOwnedDeclFilePath) 'perInstanceAlias'
 			return name
 		end 'perInstanceAlias'
 	end 'maybePerInstance'

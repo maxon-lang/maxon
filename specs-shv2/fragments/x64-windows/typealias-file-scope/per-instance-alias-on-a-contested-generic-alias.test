@@ -1,0 +1,136 @@
+// Test: per-instance-alias-on-a-contested-generic-alias
+// --- file: wrap.maxon
+export type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T) returns Self
+		return Self{value: value, tag: 0}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+end 'Wrapper'
+
+// --- file: a.maxon
+typealias Elem = int(0 to 100)
+typealias W = Wrapper with Elem
+
+export function fromA() returns W.Idx
+	let w = W.create(5)
+	return w.getTag()
+end 'fromA'
+
+// --- file: main.maxon
+typealias Elem = int(1000 to 2000)
+typealias W = Wrapper with Elem
+
+function takes(i W.Idx) returns ExitCode
+	return i as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	let w = W.create(1500)
+	return takes(w.getTag()) + (fromA() as ExitCode)
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @fromA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect Wrapper.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Wrapper.getTag
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @takes {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1500
+    x64.callDirect Wrapper.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Wrapper.getTag
+    x64.movRegReg rcx, r8
+    x64.callDirect takes
+    x64.movRegReg r12, r8
+    x64.callDirect fromA
+    x64.leaRegRegImm32 rax, r8, 0
+    x64.leaRegRegReg r12, r12, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Wrapper.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Wrapper.getTag {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.popReg rbp
+    x64.ret
+}

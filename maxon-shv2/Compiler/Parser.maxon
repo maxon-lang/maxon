@@ -9957,11 +9957,14 @@ export type Parser
 	// rule has to tell them apart (`TypeNameRegistry`). The alternative — the caller inferring the
 	// form from which array grew, or re-deciding it off the tokens — would be a second copy of the
 	// discrimination this function already makes, which is this project's signature bug.
-	// `visibility` reaches only the RANGED form's registry entry, because that is the only alias
-	// registry a cross-file reference is resolved through today (`RangedAliasRegistry.lookup`). A
-	// function or generic-instance alias mints a nominal identity in its own whole-program registry and
-	// has no visibility reader yet; giving it a field nothing consults would be the very thing the
-	// ranged form's used to be.
+	// `visibility` reaches the RANGED form's registry entry and — since N3 — the GENERIC-INSTANCE form's,
+	// because those are the two alias registries a cross-file reference is resolved through
+	// (`RangedAliasRegistry.lookup`, `ProgramSignatures.scopedGenericAliasInstance`). Both apply it at the
+	// READ and not as a key, for the reason `RangedAliasRegistry`'s header gives. A FUNCTION alias still
+	// mints its nominal identity in a whole-program registry with no visibility reader — and that registry
+	// has the defect N3 cured here, but curing it needs more than a scoped lookup: a function alias resolves
+	// to `MaxonType.function(<the alias NAME>)`, so two files' declarations stay ONE type however the lookup
+	// is scoped. See `ProgramSignatures.contestedGenericAliases`.
 	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, recordFunctionSignature bool, visibility Visibility) returns TypeDeclKind throws ParseError
 		try self.consume(TokenKind.typealias)
 		let nameTok = try self.consume(TokenKind.identifier)
@@ -9990,7 +9993,7 @@ export type Parser
 			// A generic-instance alias mints a NOMINAL identity (`resolveNamedAlias` re-tags a `named` reference
 			// to `genericInstance`, an owned heap box), the function alias's case exactly.
 			try self.requireTypeNameNotCompilerOwned(nameTok)
-			try self.readGenericInstanceAlias(nameTok, genericOut: genericOut)
+			try self.readGenericInstanceAlias(nameTok, genericOut: genericOut, visibility: self.typeAliasVisibility(visibility))
 			return TypeDeclKind.genericAlias
 		end 'genericAlias'
 
@@ -10225,7 +10228,7 @@ export type Parser
 	// String-carrying arms — a 65th overflows the C# runtime's u64 droppable-case bitmask and corrupts the
 	// synthesized `__destruct_ParseError`). A diagnostic carries its message on a `Diagnostic` record, not
 	// a new `ParseError` arm, so it adds no managed union case. (See the rung report / DEVLOG.)
-	function readGenericInstanceAlias(aliasTok Token, genericOut GenericAliasEntryArray) throws ParseError
+	function readGenericInstanceAlias(aliasTok Token, genericOut GenericAliasEntryArray, visibility Visibility) throws ParseError
 		let baseTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.with)
 		// ⭐ **ARGUMENT 0's PRE-ERASURE SPELLING (A2m)**, read with the cursor still on it — `parseGenericArgNodes`
@@ -10236,7 +10239,7 @@ export type Parser
 		let elementIsBuffer = self.firstGenericArgSpellingDenotesBuffer()
 		var args = GenericArgNodeArray.create()
 		let argCount = try self.parseGenericArgNodes(args)
-		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath))
+		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility))
 		self.checkGenericInstance(baseTok, argCount: argCount)
 	end 'readGenericInstanceAlias'
 
@@ -14668,7 +14671,7 @@ export type Parser
 		// `named` value carrying one has an IDENTITY the tag check cannot see (two per-instance aliases share
 		// the `named` tag and the `integer` width). A BASE-TEMPLATE inner alias ("Wrapper.Idx") and a plain
 		// ranged alias are NOT nominal — `isPerInstanceAlias` answers false for both — so they stay structural.
-		if self.signatures.isPerInstanceAlias(name) 'perInstanceAlias'
+		if self.signatures.isPerInstanceAlias(name, readerFilePath: self.filePath) 'perInstanceAlias'
 			return name
 		end 'perInstanceAlias'
 
@@ -23775,10 +23778,10 @@ export type Parser
 	// onto the result (`x as StrWrapper.Idx`) or STRIPPING a per-instance source into a plain target
 	// (`idx as ExitCode`)? Only then does the cast mint a distinct value; a plain-to-plain `as` stays a no-op.
 	function castConvertsPerInstance(value ValueId, targetType MaxonType) returns bool
-		if maxonTypeTag(targetType) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(typeNameIdOf(targetType))) 'stampTarget'
+		if maxonTypeTag(targetType) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(typeNameIdOf(targetType)), readerFilePath: self.filePath) 'stampTarget'
 			return true
 		end 'stampTarget'
-		return self.tagOf(value) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(self.valueNameId(value)))
+		return self.tagOf(value) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(self.valueNameId(value)), readerFilePath: self.filePath)
 	end 'castConvertsPerInstance'
 
 	// ⭐ **DOES THIS int→int `as` CHANGE HOW A RIGHT SHIFT OF THE VALUE FILLS?** The shift rule reads the
