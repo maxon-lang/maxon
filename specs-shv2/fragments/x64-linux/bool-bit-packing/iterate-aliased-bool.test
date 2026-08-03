@@ -1,0 +1,180 @@
+// Test: iterate-aliased-bool
+// Regression: iterating an Array<bool> via for-in loads each element from the
+// bit-packed buffer and branches on it. The get path has to return a real bool
+// (i1), not a raw i64 {0,1} value, or cond_br fails to lower (StdI64→StdBool cast).
+// Also exercises the ForLoopIteratorElisionPass bool path: the optimized loop
+// reads directly from __ManagedMemory with EmitBitGetAsBool.
+typealias BoolArray = Array with bool
+
+function main() returns ExitCode
+	var arr = BoolArray.create()
+	arr.push(true)
+	arr.push(false)
+	arr.push(true)
+	arr.push(false)
+	arr.push(true)
+	arr.push(true)
+	arr.push(false)
+	arr.push(true)
+	arr.push(true)
+	// Iterate and count trues via boolean composition, not just `if v`.
+	// The `not v` path stresses the StdBool typing — `not` is defined on i1.
+	var trueCount = 0
+	var consecutiveTrue = 0
+	var maxRun = 0
+	for v in arr 'scan'
+		if v 'hit'
+			trueCount = trueCount + 1
+			consecutiveTrue = consecutiveTrue + 1
+			if consecutiveTrue > maxRun 'grow'
+				maxRun = consecutiveTrue
+			end 'grow'
+		end 'hit'
+		if not v 'miss'
+			consecutiveTrue = 0
+		end 'miss'
+	end 'scan'
+	// Expect 6 trues, longest run of 2.
+	return trueCount * 10 + maxRun
+end 'main'
+---
+ExitCode: 62
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_count
+    x64.cmpRegReg r15, r8
+    x64.jcc less, scan
+    x64.jmp forexit
+  scan:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __arr_get_unchecked
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, hit
+    x64.jmp critsplit
+  hit:
+    x64.leaRegRegImm32 rax, r12, 1
+    x64.leaRegRegImm32 rcx, r13, 1
+    x64.cmpRegReg rcx, r14
+    x64.jcc greater, grow
+    x64.jmp critsplit
+  grow:
+    x64.movRegReg rdx, rcx
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rdx, r14
+    x64.jmp ifcont
+  ifcont:
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, r12
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.jmp ifcont
+  ifcont:
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, miss
+    x64.jmp critsplit
+  miss:
+    x64.movRegImm32 rcx, 0
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 r15, r15, 1
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, rcx
+    x64.movRegReg r14, rdx
+    x64.jmp forhdr
+  forexit:
+    x64.imulRegRegImm32 rax, r12, 10
+    x64.leaRegRegReg r12, rax, r14
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
