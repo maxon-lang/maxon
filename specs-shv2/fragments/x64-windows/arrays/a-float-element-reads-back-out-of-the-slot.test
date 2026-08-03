@@ -1,0 +1,80 @@
+// Test: a-float-element-reads-back-out-of-the-slot
+function main() returns ExitCode
+	var a = [1.5, 2.5]
+	let v = try a.get(0) otherwise 0.0
+	return trunc(v + 1.0)
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 48
+    x64.storeSlotReg slot0, xmm6
+    x64.movsdRegRip xmm6, [rip + __fconst_1]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movqGprXmm rdx, xmm6
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.movqGprXmm rdx, xmm0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.movqXmmGpr xmm0, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.movsdRegRip xmm1, [rip + __fconst_4]
+    x64.addsdRegReg xmm0, xmm0, xmm1
+    x64.cvttsd2siRegReg r12, xmm0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
