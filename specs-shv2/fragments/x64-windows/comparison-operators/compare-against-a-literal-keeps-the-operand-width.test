@@ -1,0 +1,84 @@
+// Test: compare-against-a-literal-keeps-the-operand-width
+function big() returns ExitCode
+	return 4000000000
+end 'big'
+
+function hundred() returns ExitCode
+	return 100
+end 'hundred'
+
+function main() returns ExitCode
+	let e = big()
+	if e > 100 'literalForm'
+		print("literal=gt\n")
+	end 'literalForm' else 'literalNot'
+		print("literal=le\n")
+	end 'literalNot'
+
+	if e > hundred() 'valueForm'
+		print("value=gt\n")
+	end 'valueForm' else 'valueNot'
+		print("value=le\n")
+	end 'valueNot'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @big {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 4000000000
+    x64.popReg rbp
+    x64.ret
+}
+
+func @hundred {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 100
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect big
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 rbx, 100
+    x64.jcc greater, literalForm
+    x64.jmp ifelse
+  literalForm:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifelse:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.callDirect hundred
+    x64.cmpRegReg rbx, r8
+    x64.jcc greater, valueForm
+    x64.jmp ifelse
+  valueForm:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifelse:
+    x64.leaRegRdata rcx, [rip + __str_rec_7]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

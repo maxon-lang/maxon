@@ -159,6 +159,52 @@ end 'main'
 7
 ```
 
+<!-- test: compare-against-a-literal-keeps-the-operand-width -->
+⭐⭐ **A COMPARE AGAINST A LITERAL IS A DIFFERENT INSTRUCTION, AND IT MUST NOT BE A DIFFERENT
+QUESTION (X5).** `foldConstOperands` rewrites `e > 100` into the immediate form, and the immediate
+form used to carry no operand TYPE — so a backend that does not keep every value in a 64-bit register
+had to re-derive the compare's width from the left operand. `ExitCode` is a **u32**
+(`valueTagToStdType`), so on `wasm32-wasi` it lives in an `i32`, and the re-derived width made this a
+32-bit SIGNED compare of a number whose top bit is set. MEASURED, before the fix: x64 printed `gt` and
+wasm printed `le` — the same source, the same value, opposite answers.
+
+The companion is the SAME comparison against a non-constant, which never folded and was right all
+along: printing both is the assertion, because a fix that widened only one of the two forms leaves the
+pair disagreeing, and a case with a single reading cannot see that. `4000000000` exceeds `i32.max` and
+fits `u32.max` — exactly the band where a signed and an unsigned reading disagree.
+```maxon
+function big() returns ExitCode
+	return 4000000000
+end 'big'
+
+function hundred() returns ExitCode
+	return 100
+end 'hundred'
+
+function main() returns ExitCode
+	let e = big()
+	if e > 100 'literalForm'
+		print("literal=gt\n")
+	end 'literalForm' else 'literalNot'
+		print("literal=le\n")
+	end 'literalNot'
+
+	if e > hundred() 'valueForm'
+		print("value=gt\n")
+	end 'valueForm' else 'valueNot'
+		print("value=le\n")
+	end 'valueNot'
+	return 0
+end 'main'
+```
+```stdout
+literal=gt
+value=gt
+```
+```exitcode
+0
+```
+
 ## Deferred
 
 Tests recorded for re-enablement at the milestone that unblocks them. They live

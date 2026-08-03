@@ -471,9 +471,12 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// ⚠ AN i1, NEVER THE OPERAND TYPE. A float compare's answer is a bool in a GPR.
 		cmp(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		// The immediate forms are INTEGER by construction — no float op takes an immediate, so
-		// `foldConstOperands` cannot produce a float one.
-		binOpImm(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		cmpImm(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// `foldConstOperands` cannot produce a float one. Their `operandType` is read for the
+		// WIDTH (X5) and never for the class, which is why it is `_` here and a GPR outright:
+		// answering `regClassForStdType(operandType)` would be the same answer by a route that
+		// stops being obviously true the day a float immediate exists.
+		binOpImm(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		cmpImm(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		// The TRAPPING integer division; float division is `binOp(div)` above.
 		div(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		mod(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)

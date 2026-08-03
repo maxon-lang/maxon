@@ -190,8 +190,11 @@ let opI64GeS = 0x59
 let opI32Add = 0x6A
 let opI32Sub = 0x6B
 let opI32Mul = 0x6C
-let opI32DivS = 0x6D
-let opI32RemS = 0x6F
+// ⚠ NO `i32.div_s`/`i32.rem_s`, and the absence is DELIBERATE (X5): `div`/`mod` are the two Std ops
+// with no operand type, and this backend computes them at MACHINE WIDTH rather than at the left
+// operand's storage width (see `emitDivMod`) — so a 32-bit divide is never emitted. The file's rule is
+// that an opcode is here because the slice needs it; these two stopped being needed when the width
+// stopped being guessed.
 let opI32And = 0x71
 let opI32Or = 0x72
 let opI32Xor = 0x73
@@ -564,14 +567,6 @@ export type WasmBody
 	export function i32Mul()
 		self.buf.push(opI32Mul)
 	end 'i32Mul'
-
-	export function i32DivS()
-		self.buf.push(opI32DivS)
-	end 'i32DivS'
-
-	export function i32RemS()
-		self.buf.push(opI32RemS)
-	end 'i32RemS'
 
 	export function i32And()
 		self.buf.push(opI32And)

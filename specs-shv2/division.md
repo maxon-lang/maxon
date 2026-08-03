@@ -395,3 +395,45 @@ end 'main'
 ```exitcode
 21
 ```
+
+<!-- test: divide-a-value-whose-declared-type-is-narrower-than-a-machine-word -->
+⭐⭐ **THE OPERANDS' STORAGE WIDTH IS NOT THE DIVISION'S WIDTH (X5).** `div`/`mod` are the two Std ops
+that carry no operand type, so a backend has to take the width from somewhere — and taking it from the
+LEFT OPERAND is what this case refuses. An `ExitCode` is a **u32** (`valueTagToStdType`), an int→int
+promotion emits NO conversion op (the value keeps the width its DEFINING op gave it while its consumer
+treats it as a machine word), and on a target whose locals are typed the two disagree: `wasm32-wasi`
+divided at 32 bits and SIGNED, so `4000000000 / 7` answered `4252829111` where x64 — which divides in
+64-bit registers whatever the Std type says — answered `571428571`. Every narrow value shv2 mints is
+UNSIGNED and zero-extended (see `coerceOnStack`), so the machine-word answer is the language's one.
+
+⚠ **THE REMAINDER WAS ALREADY RIGHT, AND FOR A REASON WORTH KEEPING IN THE CASE.** Measured before the
+fix: `q=4252829111` (wrong) beside `r=3` (right). The `mod` reads the OVERFLOW GUARD's `safe = dividend
+and mask` (A1x), a `binOp` that carries its own i64 operand type — so the guard hands the `mod` a
+full-width value and the width was never taken from the u32. The `/` has no such op in front of it and
+read the u32 directly. Both are asserted because that asymmetry is the whole shape of the defect: a fix
+keyed on the `mod` path would have changed nothing, and one that only widened the operands of ops that
+happen to sit behind a guard would leave `q` red.
+```maxon
+function big() returns ExitCode
+	return 4000000000
+end 'big'
+
+function seven() returns ExitCode
+	return 7
+end 'seven'
+
+function main() returns ExitCode
+	let e = big()
+	let d = seven()
+	print("q={try (e / d) otherwise 0}\n")
+	print("r={try (e mod d) otherwise 0}\n")
+	return 0
+end 'main'
+```
+```stdout
+q=571428571
+r=3
+```
+```exitcode
+0
+```

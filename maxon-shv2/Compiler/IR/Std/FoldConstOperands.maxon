@@ -230,19 +230,26 @@ end 'tryFold'
 // with a const lhs and non-const rhs (`5 - a`, `1 shl n`… where `n` is not const) is
 // left alone — it is not `a - 5` / `n shl 1`.
 //
-// ⚠ A FLOAT NEVER FOLDS, and this guard is why `binOpImm` carries no operand type:
-// there is no SSE instruction that takes an immediate operand, so there is no float
-// form to fold INTO. Without the guard the operands' IEEE bit patterns would ride an
-// INTEGER `add reg, imm32` / `imul` — a silent wrong answer.
+// ⚠ A FLOAT NEVER FOLDS: there is no SSE instruction that takes an immediate operand,
+// so there is no float form to fold INTO. Without the guard the operands' IEEE bit
+// patterns would ride an INTEGER `add reg, imm32` / `imul` — a silent wrong answer.
+//
+// ⭐⭐ **THE OPERAND TYPE TRAVELS WITH THE FOLD (X5).** It used to be dropped here, on the
+// reading that "no float can reach the immediate form" was the whole of what the type
+// said. It is not: the type also says how WIDE the operation is, and a target without
+// 64-bit registers everywhere had to re-derive that from `lhs` — which a fold does not
+// promise agrees (`a mod b`'s overflow mask adds `-1` to an i1 at i64 width). A rewrite
+// that changes the INSTRUCTION must not change the QUESTION; carrying the type is how it
+// does not.
 function tryFoldBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, constMap ConstValueMap) returns FoldResult
 	if stdTypeIsFloat(operandType) 'float'
 		return FoldResult.unchanged
 	end 'float'
 	if foldableBinOpImm(constMap, id: rhs, opcode: opcode) 'rhsConst'
-		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), opcode: opcode))
+		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), opcode: opcode, operandType: operandType))
 	end 'rhsConst'
 	if binOpcodeIsCommutative(opcode) and foldableBinOpImm(constMap, id: lhs, opcode: opcode) 'lhsConst'
-		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), opcode: opcode))
+		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), opcode: opcode, operandType: operandType))
 	end 'lhsConst'
 	return FoldResult.unchanged
 end 'tryFoldBinOp'
@@ -265,10 +272,10 @@ function tryFoldCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred,
 		return FoldResult.unchanged
 	end 'float'
 	if foldableCmpImm(constMap, id: rhs) 'rhsConst'
-		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), pred: pred))
+		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), pred: pred, operandType: operandType))
 	end 'rhsConst'
 	if foldableCmpImm(constMap, id: lhs) 'lhsConst'
-		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), pred: flipCmpPred(pred)))
+		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), pred: flipCmpPred(pred), operandType: operandType))
 	end 'lhsConst'
 	return FoldResult.unchanged
 end 'tryFoldCmp'

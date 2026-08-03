@@ -452,8 +452,11 @@ type StdToArm64Lowering
 			binOp(resultId, lhs, rhs, opcode, operandType) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstRef: dstRef)
 			unaryOp(resultId, operand, opcode, operandType) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, operandType: operandType, dstRef: dstRef)
 			cmp(resultId, lhs, rhs, pred, operandType) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstRef: dstRef)
-			binOpImm(resultId, lhs, imm, opcode) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstRef: dstRef)
-			cmpImm(resultId, lhs, imm, pred) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstRef: dstRef)
+			// The immediate forms' `operandType` (X5) is a WIDTH, and every integer instruction this
+			// backend selects is the 64-bit `X`-register form whatever the Std type says — so it is
+			// dropped here for the reason the x64 arm states, not overlooked.
+			binOpImm(resultId, lhs, imm, opcode, _) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstRef: dstRef)
+			cmpImm(resultId, lhs, imm, pred, _) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstRef: dstRef)
 			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false, dstRef: dstRef)
 			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true, dstRef: dstRef)
 			param(resultId, index, paramType) then self.lowerParam(resultId, index: index, paramType: paramType, paramFloatMask: paramFloatMask, dstRef: dstRef)

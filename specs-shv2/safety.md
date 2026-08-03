@@ -622,6 +622,44 @@ a=0 b=0 c=0
 0
 ```
 
+<!-- test: mod-guard-passes-a-wide-dividend-through-untouched -->
+#### ⭐⭐ The mask is `-1` AT ITS FULL WIDTH — the half every case above is blind to (X5)
+Every case above answers `0`, and `0` is what a BROKEN mask produces too: the guard's `mask =
+(d == -1) - 1` is `and`ed into the dividend, so a mask that is short, truncated or zero-extended still
+lands on `0` for the very divisor these cases pin. The mask's `-1` arm — the one that must leave the
+dividend ALONE — is only observable when the divisor is ordinary and the dividend has bits the mask
+could drop. `4198346131161219195` has 31 significant bits above the low 32, so a mask of
+`0x00000000FFFFFFFF` answers `123` (the low limb alone) where the language answers `161219195`.
+
+MEASURED, before the fix, on `wasm32-wasi`: `r=123`, while x64 answered `161219195` — the mask's `add`
+had been folded to an immediate that dropped the operand WIDTH, and the i1 compare result it reads made
+the backend re-derive that width as 32 bits. x64 could not see it: its registers are 64-bit whatever the
+Std type says. This is the case that makes the mask's width the LANGUAGE's rather than one backend's,
+which is also why the dividend is a `mod` a real program performs — the shortest-round-trip float
+printer divides exactly this way (`__bigDivModSmall`), and it is what went wrong there.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let n = ident(4198346131161219195)
+	let d = ident(1000000000)
+	let q = try (n / d) otherwise 77
+	let r = try (n mod d) otherwise 77
+	print("q={q} r={r}\n")
+	return 0
+end 'main'
+```
+```stdout
+q=4198346131 r=161219195
+```
+```exitcode
+0
+```
+
 <!-- test: error.try-over-a-total-mod-names-the-operator -->
 #### A `try` over a guarded `mod` is refused — and answers as a `mod`, not as a "builtin call"
 The overflow guard makes this `mod` a compiler-expanded CALL where it used to be a bare `binOp`, so the
