@@ -1,0 +1,35 @@
+// Test: float-backed
+enum Threshold
+	low = 0.1
+	medium = 0.5
+	high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+	let t = Threshold.medium
+	if t == Threshold.medium 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 4602678819172646912
+    arm64.movImm x1, 4602678819172646912
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
