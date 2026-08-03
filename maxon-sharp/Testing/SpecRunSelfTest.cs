@@ -43,7 +43,18 @@ public static class SpecRunSelfTest {
     var failures = 0;
 
     foreach (var (target, _) in CompileTarget.Supported) {
-      var expected = host.Os == target.Os ? SpecTestOutcome.Failed : SpecTestOutcome.NotRunHere;
+      // ASKED, NOT RESTATED. Spelled here as its own `host.Os == target.Os`, this line was a second
+      // copy of the rule <see cref="TargetRunHost.WhyCannotRun"/> states — and the copies were only
+      // in agreement because the rule happens to be OS equality TODAY. That function's own docstring
+      // promises the opposite: "should this compiler ever learn to reach a runner, the table goes
+      // HERE, in this one function, and every consequence below follows without being told."
+      // MEASURED, by making exactly that change: teaching `WhyCannotRun` a runner for windows
+      // targets left the RUNNER following correctly and this guard failing — and failing with the
+      // sentence "This host CANNOT run that target", which the rule no longer said. A guard that
+      // contradicts the rule it guards is a guard somebody deletes.
+      var expected = TargetRunHost.WhyCannotRun(target) == null
+        ? SpecTestOutcome.Failed
+        : SpecTestOutcome.NotRunHere;
       failures += CheckLaunchFailureVerdict(target, host, expected);
     }
 
