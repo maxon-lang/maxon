@@ -35,6 +35,19 @@ operations it lowers are `CreateDirectoryA`, `GetFileAttributesA`, `FindFirstFil
 `GetCurrentDirectoryA` and `DeleteFileA`, and `DeleteFileA` refuses a directory. So a case can delete every
 FILE it wrote and cannot delete the directory that held them: whatever it makes outlives the suite run.
 
+⚠⚠ **UPDATED BY `R4.8` (2026-08-03): THE PREFIX BELOW IS NOW REDUNDANT, AND THE REASON IT WAS ADDED IS
+NOW THE HARNESS'S JOB.** `R4.8` found that this runner spawned every test binary with **no working
+directory at all**, so a case inherited the SUITE's cwd — the checkout root — which is exactly why
+these six had to spell `temp/` themselves to stay out of it. The runner now spawns every test binary in
+**`<checkoutRoot>/temp/`** (`SpecTestRunner.RunWorkingSubdirName`), matching the bootstrap's
+long-standing contract, so a bare relative path already lands under `temp/`. ⇒ **These six now resolve
+to `temp/temp/…`** — still gitignored, still passing, and harmless, but it is a second mechanism doing
+one job. Dropping the prefix is safe once someone re-runs this file; it was left in place by `R4.8`
+deliberately, because churning six PASSING cases buys no coverage and this file already diverges from
+`/specs` by design (it carries nine shv2-authored cases beyond the canonical ten). **The paragraph
+below is kept for its reasoning, which is still correct about WHY the root must stay clean — only its
+claim that this prefix is what keeps it clean is now stale.**
+
 ⇒ Every one of them makes it under **`temp/`, which is gitignored**, rather than at the repo ROOT. That is
 not cosmetic: the project-root resolver walks UP, so a stray directory at the root is inside the project
 every later build resolves, and six of them were being left there on every suite run. Adding a
