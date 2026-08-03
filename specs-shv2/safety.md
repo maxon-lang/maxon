@@ -628,7 +628,8 @@ Every case above answers `0`, and `0` is what a BROKEN mask produces too: the gu
 (d == -1) - 1` is `and`ed into the dividend, so a mask that is short, truncated or zero-extended still
 lands on `0` for the very divisor these cases pin. The mask's `-1` arm — the one that must leave the
 dividend ALONE — is only observable when the divisor is ordinary and the dividend has bits the mask
-could drop. `4198346131161219195` has 31 significant bits above the low 32, so a mask of
+could drop. `4198346131161219195` is a 62-bit number, so it has 30 significant bits above the low 32
+and a mask of
 `0x00000000FFFFFFFF` answers `123` (the low limb alone) where the language answers `161219195`.
 
 MEASURED, before the fix, on `wasm32-wasi`: `r=123`, while x64 answered `161219195` — the mask's `add`

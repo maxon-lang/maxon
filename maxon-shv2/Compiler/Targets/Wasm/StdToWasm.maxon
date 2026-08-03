@@ -768,9 +768,11 @@ function wasmValTypeOf(t StdType) returns WasmValType
 	end 'w'
 end 'wasmValTypeOf'
 
-// True when an integer op of type `t` selects the i64.* instruction family rather than i32.*.
-// A float `t` reaching here means an integer-op emitter did not take its float path first — a
-// lowering bug, not an out-of-slice case — so it panics naming `what`.
+// True when a value of type `t` OCCUPIES a full machine word rather than an i32 local. A STORAGE
+// question, and no longer an arithmetic one: which instruction family an integer OPERATION selects is
+// `opComputeValType`'s answer and is always i64. The two callers left are the ones genuinely asking
+// about storage — a `const`'s encoded width, and `bitcastI64ToF64`'s refusal of a source that has no
+// top half to reinterpret. A float `t` reaching here is a lowering bug, so it panics naming `what`.
 function isWideInt(t StdType, what String) returns bool
 	match wasmValTypeOf(t) 'w'
 		i32 then return false
@@ -780,12 +782,41 @@ function isWideInt(t StdType, what String) returns bool
 	end 'w'
 end 'isWideInt'
 
-// The valtype an integer op of the given width pops and pushes. ONE spelling of what `isWideInt`'s
-// answer MEANS on the stack, because all four integer emitters (`binOp`, `binOpImm`, `cmp`,
-// `cmpImm`) need both halves and each used to write the conditional out for itself.
-function intValTypeFor(wide bool) returns WasmValType
-	return WasmValType.i64 if wide else WasmValType.i32
-end 'intValTypeFor'
+// ⭐⭐ **AN INTEGER OPERATION IS COMPUTED AT THE MACHINE WORD, WHATEVER ITS OPERANDS' Std TYPE SAYS
+// (X5 review).** The Std `operandType` is the operands' DECLARED type; it is not the width the
+// language performs the arithmetic at. The native backends make that distinction invisible — every
+// integer op is a 64-bit register form whatever the Std type says — so `ExitCode * 2` answers
+// 8,000,000,000 there and nothing narrows. wasm's typed stack made the same field select the i32
+// family, and every operation over a `u32` came out at 32 bits: MEASURED against x64 through a
+// function-typealias call (the entrance W1 opened, which mints a genuinely `exitCode`-tagged value),
+// `v * 2` answered 3,705,032,704 for 8,000,000,000, `not v` 294,967,295 for -4,000,000,001, `v shl 1`
+// 3,705,032,704 for 8,000,000,000 and `v > 100` **le** for **gt**.
+//
+// It is the same sentence `emitDivMod` already writes for `div`/`mod` — computing at i64 is EXACT, not
+// merely wider, because every narrow value shv2 mints is UNSIGNED and sits zero-extended in its i32
+// (`coerceOnStack`'s header) — applied to the ops that HAVE an operand type instead of only to the two
+// that do not. X5 gave `binOpImm`/`cmpImm` their `operandType` so the width would stop being GUESSED
+// from `lhs`; this is the other half, that the width so obtained is a STORAGE class and not an
+// arithmetic one. `wasmValTypeOf` still answers where a value LIVES; this answers where it is COMPUTED.
+//
+// ⭐ ONE DOOR FOR BOTH HALVES OF THE ANSWER: the valtype an ALU op COMPUTES in is also the valtype of
+// the local it DEFINES, so `recordDefValtype` and the emitters ask the same function and cannot
+// disagree about a value's width (a disagreement is a `local.set` of an i64 into an i32 local, which
+// is a wasm VALIDATION failure rather than a wrong answer — but the point is that neither can drift).
+// A FLOAT op keeps its own valtype: the float path is already exact at its declared width.
+function opComputeValType(operandType StdType) returns WasmValType
+	return wasmValTypeOf(operandType) if stdTypeIsFloat(operandType) else WasmValType.i64
+end 'opComputeValType'
+
+// Refuse a FLOAT operand type reaching an INTEGER-op emitter — a lowering bug (the float emitters are
+// dispatched before this point, or, for the immediate forms, `foldConstOperands` never builds one),
+// not an out-of-slice case. The twin of `requireF64` for the other domain, and what `isWideInt` used
+// to say on the side while it was also being asked for a width the integer emitters no longer want.
+function requireIntegerOperand(t StdType, what String)
+	if stdTypeIsFloat(t) 'float'
+		panic("wasm: {what} on {t.name} — this integer-op emitter should have taken the float path first; no float value reaches the integer ALU")
+	end 'float'
+end 'requireIntegerOperand'
 
 // shv2's `float` is f64 THROUGHOUT — the wasm float path, like the native backends
 // (arm64RequireScalarDouble / its x64 twin), is scalar-double only. Nothing in the frontend
@@ -919,14 +950,19 @@ end 'setValtype'
 // class (an f64 result recorded i64, or the reverse) — see StdUnaryOpcode's header.
 function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns WasmValType
 	return match opcode 'k'
-		// ⚠ MEASURED AND KEPT: collapsing these three identical arms into a range costs the bootstrap's
-		// jump table (it forms one only from 4+ INDIVIDUALLY-NAMED arms dense from ordinal 0, so a
-		// leading range demotes this to a ≤4-compare chain). Kept anyway, and the reason is not
-		// "the cost is small" — it is that `StdLoweringShared.unaryResultClass` is this table's twin,
-		// answers the same question for the native targets, and already reads `neg to logicalNot`.
-		// Leaving one collapsed and the other not is one fact written down twice in two shapes, which
-		// is the divergence a later editor trips on. Compile-time only, wasm-lowering only.
-		neg to logicalNot gives wasmValTypeOf(operandType)
+		// ⚠ MEASURED AND KEPT: naming these arms individually rather than collapsing them into a range
+		// costs nothing and buys the bootstrap's jump table (it forms one only from 4+
+		// INDIVIDUALLY-NAMED arms dense from ordinal 0, so a leading range would demote this to a
+		// ≤4-compare chain). Compile-time only, wasm-lowering only.
+		//
+		// ⚠ `logicalNot` PARTS COMPANY WITH THE OTHER TWO, and asking `wasmValTypeOf(operandType)` for
+		// it was a latent trap rather than a shorter spelling: `emitLogicalNotExpr` emits an `i32.xor`
+		// and so ALWAYS defines an i32, while its `operandType` is the bool's — and a bool-returning
+		// function lowers to an i64 return in this tier, so an `operandType` that is not `i1` would
+		// declare the local i64 and fail wasm validation. `neg`/`bitNot` compute what they consume, at
+		// the machine word (`opComputeValType`, which keeps a float `neg`'s f64 unchanged).
+		neg to bitNot gives opComputeValType(operandType)
+		logicalNot gives WasmValType.i32
 		siToFp gives WasmValType.f64
 		fpToSi gives WasmValType.i64
 		// ⚠ The MATH INTRINSICS need their OWN arm even though `wasmValTypeOf(operandType)` would give
@@ -968,9 +1004,9 @@ end 'callResultValType'
 // keeps the width its DEFINING op gave it while a consumer may treat it as a machine word — an
 // int→int promotion emits no conversion op — so a `u32` `ExitCode` feeding a divide, or an `i1`
 // compare result feeding the `mod` overflow guard's `add`, made the operation narrow. The two
-// immediate forms now CARRY `operandType` (see StdDialect), and `div`/`mod` — the only Std ops with
-// no width of their own — are computed at MACHINE WIDTH, which is what the native backends do with
-// their 64-bit registers and what `emitDivMod` states in full.
+// immediate forms now CARRY `operandType` (see StdDialect), and every integer op — `div`/`mod`
+// included, which have no operand type at all — is computed at MACHINE WIDTH, which is what the
+// native backends do with their 64-bit registers and what `opComputeValType` states in full.
 function buildValtypeTable(module StdModule, func IrFunction, funcNames FunctionNameIndex) returns WasmValTypeArray
 	var valtypes = WasmValTypeArray.create()
 
@@ -1006,13 +1042,13 @@ end 'buildValtypeTable'
 function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames FunctionNameIndex)
 	match op 'def'
 		const(resultId, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
-		binOp(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(operandType))
+		binOp(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: opComputeValType(operandType))
 		unaryOp(resultId, _, opcode, operandType) then setValtype(valtypes, v: resultId, vt: unaryResultValType(opcode, operandType: operandType))
 		cmp(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		// ⭐ The immediate forms carry their own width (X5), so a fold cannot change a value's
-		// class: `binOpImm`'s result is its `operandType`, exactly as `binOp`'s is, and it is NOT
-		// dependent on `lhs` — which a fold does not promise agrees (see `emitBinOpImm`).
-		binOpImm(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(operandType))
+		// class: `binOpImm`'s result is `opComputeValType(operandType)`, exactly as `binOp`'s is, and
+		// it is NOT dependent on `lhs` — which a fold does not promise agrees (see `emitBinOpImm`).
+		binOpImm(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: opComputeValType(operandType))
 		cmpImm(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		// ⚠ The two ops with NO width of their own. They are computed at machine width and so define
 		// an i64, whatever their operands' storage widths are — `emitDivMod` holds the argument.
@@ -1482,9 +1518,10 @@ type WasmFuncEmitter
 
 	// Push both operands of a binary op (binOp/cmp/div/mod, integer AND float) at the op's chosen
 	// width, in lhs-then-rhs order — the shape every wasm binary ALU/compare op wants on the stack.
-	// The width choice is the caller's (i32/i64 by `isWideInt`, f64 for the float path, `lhs`'s width
-	// for div/mod); this only guarantees BOTH operands are coerced to the SAME `opVt` the opcode pops,
-	// so a new binary emitter cannot forget to coerce one side (the gap `pushOperandAt`'s header names).
+	// The width choice is the caller's (`opComputeValType` for the ALU and compare ops, f64 for the
+	// float path, the machine word for div/mod); this only guarantees BOTH operands are coerced to the
+	// SAME `opVt` the opcode pops, so a new binary emitter cannot forget to coerce one side (the gap
+	// `pushOperandAt`'s header names).
 	function pushBinaryOperands(lhs ValueId, rhs ValueId, opVt WasmValType)
 		self.pushOperandAt(lhs, targetVt: opVt)
 		self.pushOperandAt(rhs, targetVt: opVt)
@@ -1496,9 +1533,8 @@ type WasmFuncEmitter
 			return
 		end 'float'
 
-		let wide = isWideInt(operandType, what: "binOp")
-		self.pushBinaryOperands(lhs, rhs: rhs, opVt: intValTypeFor(wide))
-		self.emitBinOpcode(opcode, wide: wide)
+		self.pushBinaryOperands(lhs, rhs: rhs, opVt: opComputeValType(operandType))
+		self.emitBinOpcode(opcode)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitBinOp'
 
@@ -1571,62 +1607,50 @@ type WasmFuncEmitter
 		end 'op'
 	end 'emitFloatAluOp'
 
-	// ⭐⭐ **THE WIDTH IS THE OP'S, NOT `lhs`'s (X5).** It used to be `lhs`'s, on the reading that a
-	// folded `binOp` computes at the width of the value it reads. That is what the fold DELETED
-	// rather than what it meant: `mod`'s overflow mask is `add`ed onto an **i1** compare result at
-	// i64 width, so re-deriving gave a 32-bit `add`, a mask recorded i32, and — through
-	// `coerceOnStack`'s zero-extend — an `and` that cleared the top half of every dividend. `lhs` is
-	// now COERCED to the op's width like any other binary operand, which is exactly what the
-	// unfolded `binOp` next door already did.
+	// ⭐⭐ **THE WIDTH IS NEITHER `lhs`'s NOR THE OPERAND TYPE'S — IT IS THE MACHINE WORD (X5, and its
+	// review).** It used to be `lhs`'s, on the reading that a folded `binOp` computes at the width of
+	// the value it reads. That is what the fold DELETED rather than what it meant: `mod`'s overflow
+	// mask is `add`ed onto an **i1** compare result at i64 width, so re-deriving gave a 32-bit `add`,
+	// a mask recorded i32, and — through `coerceOnStack`'s zero-extend — an `and` that cleared the top
+	// half of every dividend. X5 made the op CARRY `operandType` so the width would stop being guessed;
+	// the review found the other half, that a narrow `operandType` is a STORAGE class and not an
+	// arithmetic one, and `opComputeValType` is where that is now decided. `lhs` is COERCED like any
+	// other binary operand, which is exactly what the unfolded `binOp` next door already did.
 	function emitBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, operandType StdType)
 		// The immediate is pushed as a same-width const so wasm's typed ALU op is balanced
-		// (e.g. `i64.shl` pops two i64s). A float `binOpImm` cannot exist — no SSE form takes an
-		// immediate, so `foldConstOperands` never makes one — and `isWideInt` says so rather than
-		// letting an f64 operand type read as "narrow".
-		let wide = isWideInt(operandType, what: "binOpImm")
-		self.pushOperandAt(lhs, targetVt: intValTypeFor(wide))
-		self.emitIntConst(wide, value: imm)
-		self.emitBinOpcode(opcode, wide: wide)
+		// (`i64.shl` pops two i64s). A float `binOpImm` cannot exist — no SSE form takes an immediate,
+		// so `foldConstOperands` never makes one — and the guard says so rather than letting an f64
+		// operand type ride the integer ALU.
+		requireIntegerOperand(operandType, what: "binOpImm")
+		self.pushOperandAt(lhs, targetVt: opComputeValType(operandType))
+		self.body.i64Const(imm)
+		self.emitBinOpcode(opcode)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitBinOpImm'
 
-	// The integer ALU opcode of the selected width. `div` (StdBinOpcode) is FLOAT division and
-	// out of the scalar slice; integer division is the separate `StdOp.div`, so a `binOp(div)`
-	// here is a lowering bug.
-	function emitBinOpcode(opcode StdBinOpcode, wide bool)
-		if wide 'i64'
-			match opcode 'w'
-				add then self.body.i64Add()
-				sub then self.body.i64Sub()
-				mul then self.body.i64Mul()
-				bitAnd then self.body.i64And()
-				bitOr then self.body.i64Or()
-				bitXor then self.body.i64Xor()
-				shl then self.body.i64Shl()
-				shr then self.body.i64ShrS()
-				shrLogical then self.body.i64ShrU()
-				div to max then panic("wasm: `binOp({opcode.name})` is FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`) and cannot reach the integer ALU; integer division is `StdOp.div` and there is no integer `min`/`max`")
-			end 'w'
-		end 'i64' else 'i32'
-			match opcode 'n'
-				add then self.body.i32Add()
-				sub then self.body.i32Sub()
-				mul then self.body.i32Mul()
-				bitAnd then self.body.i32And()
-				bitOr then self.body.i32Or()
-				bitXor then self.body.i32Xor()
-				shl then self.body.i32Shl()
-				shr then self.body.i32ShrS()
-				shrLogical then self.body.i32ShrU()
-				div to max then panic("wasm: `binOp({opcode.name})` is FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`) and cannot reach the integer ALU; integer division is `StdOp.div` and there is no integer `min`/`max`")
-			end 'n'
-		end 'i32'
+	// The integer ALU opcode. ONE family, because an integer op is computed at the machine word
+	// (`opComputeValType`) — there is no width left to select on. `div` (StdBinOpcode) is FLOAT
+	// division and out of the scalar slice; integer division is the separate `StdOp.div`, so a
+	// `binOp(div)` here is a lowering bug.
+	function emitBinOpcode(opcode StdBinOpcode)
+		match opcode 'w'
+			add then self.body.i64Add()
+			sub then self.body.i64Sub()
+			mul then self.body.i64Mul()
+			bitAnd then self.body.i64And()
+			bitOr then self.body.i64Or()
+			bitXor then self.body.i64Xor()
+			shl then self.body.i64Shl()
+			shr then self.body.i64ShrS()
+			shrLogical then self.body.i64ShrU()
+			div to max then panic("wasm: `binOp({opcode.name})` is FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`) and cannot reach the integer ALU; integer division is `StdOp.div` and there is no integer `min`/`max`")
+		end 'w'
 	end 'emitBinOpcode'
 
 	function emitUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType)
 		match opcode 'op'
-			neg then self.emitNegExpr(operand, wide: isWideInt(operandType, what: "neg"))
-			bitNot then self.emitBitNotExpr(operand, wide: isWideInt(operandType, what: "bitNot"))
+			neg then self.emitNegExpr(operand, operandType: operandType)
+			bitNot then self.emitBitNotExpr(operand, operandType: operandType)
 			logicalNot then self.emitLogicalNotExpr(operand)
 			siToFp then self.emitSiToFp(operand, operandType: operandType)
 			fpToSi then self.emitFpToSi(operand, operandType: operandType)
@@ -1716,32 +1740,26 @@ type WasmFuncEmitter
 		self.body.f64ReinterpretI64()
 	end 'emitBitcastI64ToF64'
 
-	// Integer negate as `0 - operand` (wasm has no unary negate). The operand is coerced to the op's
-	// width (from `operandType`, which the result also carries): the frontend can leave it a different
-	// width — e.g. `-r` on an ExitCode (i32) whose neg is typed int (i64) — same gap as a mixed-width
-	// binOp, and it faults the same way (`i64.sub` over an i32) without the coercion.
-	function emitNegExpr(operand ValueId, wide bool)
-		let opVt = WasmValType.i64 if wide else WasmValType.i32
-		self.emitIntConst(wide, value: 0)
-		self.pushOperandAt(operand, targetVt: opVt)
-		if wide 'i64'
-			self.body.i64Sub()
-		end 'i64' else 'i32'
-			self.body.i32Sub()
-		end 'i32'
+	// Integer negate as `0 - operand` (wasm has no unary negate), at the MACHINE WORD like every other
+	// integer op. The operand is coerced rather than pushed bare: the frontend can leave it a
+	// different width — `-r` on an `ExitCode` lives in an i32 — same gap as a mixed-width binOp, and
+	// it faults the same way (`i64.sub` over an i32) without the coercion.
+	function emitNegExpr(operand ValueId, operandType StdType)
+		requireIntegerOperand(operandType, what: "neg")
+		self.body.i64Const(0)
+		self.pushOperandAt(operand, targetVt: opComputeValType(operandType))
+		self.body.i64Sub()
 	end 'emitNegExpr'
 
-	// Bitwise complement as `operand xor -1` (all-ones flips every bit). The operand is coerced to the
-	// op's width for the same reason as `emitNegExpr`.
-	function emitBitNotExpr(operand ValueId, wide bool)
-		let opVt = WasmValType.i64 if wide else WasmValType.i32
-		self.pushOperandAt(operand, targetVt: opVt)
-		self.emitIntConst(wide, value: -1)
-		if wide 'i64'
-			self.body.i64Xor()
-		end 'i64' else 'i32'
-			self.body.i32Xor()
-		end 'i32'
+	// Bitwise complement as `operand xor -1` (all-ones flips every bit), at the machine word for
+	// `emitNegExpr`'s reason — and with a sharper one of its own: an `xor -1` at 32 bits answers
+	// 294,967,295 where the language answers -4,000,000,001, because the top half of the complement is
+	// exactly what a narrow op drops.
+	function emitBitNotExpr(operand ValueId, operandType StdType)
+		requireIntegerOperand(operandType, what: "bitNot")
+		self.pushOperandAt(operand, targetVt: opComputeValType(operandType))
+		self.body.i64Const(-1)
+		self.body.i64Xor()
 	end 'emitBitNotExpr'
 
 	// Logical NOT of a 0/1 bool as `operand xor 1` (flip bit 0), matching the native backends'
@@ -1763,9 +1781,8 @@ type WasmFuncEmitter
 			return
 		end 'float'
 
-		let wide = isWideInt(operandType, what: "cmp")
-		self.pushBinaryOperands(lhs, rhs: rhs, opVt: intValTypeFor(wide))
-		self.emitCmpPred(pred, wide: wide)
+		self.pushBinaryOperands(lhs, rhs: rhs, opVt: opComputeValType(operandType))
+		self.emitCmpPred(pred)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCmp'
 
@@ -1795,41 +1812,34 @@ type WasmFuncEmitter
 		end 'p'
 	end 'emitFloatCmpPred'
 
-	// The compare width is the OP's, for `emitBinOpImm`'s reason and with its own worst case: a
-	// `u32` value (an `ExitCode`) above `i32.max` sits in an i32 with its top bit set, so a compare
-	// re-derived to 32 bits reads it as NEGATIVE — `e > 100` answered `le` here while x64 answered
-	// `gt` (X5). Coercing `lhs` to the op's width restores the number before it is compared.
+	// The compare is at the MACHINE WORD, for `emitBinOpImm`'s reason and with its own worst case: a
+	// `u32` value (an `ExitCode`) above `i32.max` sits in an i32 with its top bit set, so a compare at
+	// 32 bits reads it as NEGATIVE — `e > 100` answered `le` here while x64 answered `gt`. X5 read that
+	// width off `lhs`, its review off `operandType`; BOTH say 32 for an `ExitCode`, and the native
+	// backends' 64-bit `cmp` over the same zero-extended register says `gt`. Widening `lhs` first is
+	// what makes the three targets answer one question.
 	function emitCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType)
-		let wide = isWideInt(operandType, what: "cmpImm")
-		self.pushOperandAt(lhs, targetVt: intValTypeFor(wide))
-		self.emitIntConst(wide, value: imm)
-		self.emitCmpPred(pred, wide: wide)
+		requireIntegerOperand(operandType, what: "cmpImm")
+		self.pushOperandAt(lhs, targetVt: opComputeValType(operandType))
+		self.body.i64Const(imm)
+		self.emitCmpPred(pred)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCmpImm'
 
 	// A wasm compare pops two operands and pushes an i32 (0/1) — exactly the i1→i32 bool the Std
 	// `cmp`/`cmpImm` result is typed as, so no extension is needed. Std compares are SIGNED (the
-	// native backends treat every Std integer as signed), so the signed families are used.
-	function emitCmpPred(pred StdCmpPred, wide bool)
-		if wide 'i64'
-			match pred 'w'
-				eq then self.body.i64Eq()
-				ne then self.body.i64Ne()
-				lt then self.body.i64LtS()
-				gt then self.body.i64GtS()
-				le then self.body.i64LeS()
-				ge then self.body.i64GeS()
-			end 'w'
-		end 'i64' else 'i32'
-			match pred 'n'
-				eq then self.body.i32Eq()
-				ne then self.body.i32Ne()
-				lt then self.body.i32LtS()
-				gt then self.body.i32GtS()
-				le then self.body.i32LeS()
-				ge then self.body.i32GeS()
-			end 'n'
-		end 'i32'
+	// native backends treat every Std integer as signed), so the signed family is used — over
+	// MACHINE-WORD operands, which is what makes the signed reading right for a `u32` too: it arrives
+	// zero-extended, so its top bit is a value bit at 64 and only a sign bit at 32.
+	function emitCmpPred(pred StdCmpPred)
+		match pred 'w'
+			eq then self.body.i64Eq()
+			ne then self.body.i64Ne()
+			lt then self.body.i64LtS()
+			gt then self.body.i64GtS()
+			le then self.body.i64LeS()
+			ge then self.body.i64GeS()
+		end 'w'
 	end 'emitCmpPred'
 
 	// Signed integer division / remainder, AT MACHINE WIDTH. wasm traps natively on a zero divisor
@@ -1851,6 +1861,10 @@ type WasmFuncEmitter
 	// 64-bit divide then answers what the native backends' 64-bit `idiv`/`sdiv` answer over the same
 	// two registers — the three targets agree by construction instead of by coincidence. A narrow
 	// CONSUMER of the quotient wraps it back at its own operand push, as any other i64 value would be.
+	//
+	// ⭐ THAT ARGUMENT IS NO LONGER THIS PAIR'S ALONE (X5 review): it is `opComputeValType`, and every
+	// integer op obeys it. `div`/`mod` were merely the two that could not have done otherwise, having
+	// no operand type to be misled by — the ops that HAVE one were being misled by it.
 	function emitDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool)
 		self.pushBinaryOperands(lhs, rhs: rhs, opVt: WasmValType.i64)
 		if isRemainder 'rem'
@@ -2325,14 +2339,21 @@ type WasmFuncEmitter
 			self.body.beginBlock()
 		end 'openLandings'
 
+		// ⭐ WHETHER THE SUBJECT IS A MACHINE WORD IS READ ONCE and handed to both users below. The guard and
+		// the index are two questions with one answer — "does this subject have a top half?" — and each used
+		// to read the table for itself, with opposite polarity. Nothing made the two agree; a divergence
+		// would be an i64 guard over an i32 index (a wasm validation failure rather than a wrong answer, but
+		// the fact still belongs in one place).
+		let subjectIsWide = getValtype(self.valtypes, v: subjectId) == WasmValType.i64
+
 		// The 64-bit UNSIGNED bounds check: a value outside `[0, span)` (a wrapped-negative index included)
 		// branches to the default landing (innermost, depth 0). Only reached with an i64 subject — a bias
 		// `subtract` mints an `integer`, and a zero-based match's enum/int subject is i64 too.
-		self.emitSwitchBoundsGuard(subjectId, span: caseTargets.count())
+		self.emitSwitchBoundsGuard(subjectId, span: caseTargets.count(), subjectIsWide: subjectIsWide)
 
 		// In range: the low 32 bits ARE the index (the guard proved `< span < 2^32`). `br_table` to each slot's
 		// landing depth; its own default is the default landing (unreachable after the guard, correct anyway).
-		self.emitSwitchIndex(subjectId)
+		self.emitSwitchIndex(subjectId, subjectIsWide: subjectIsWide)
 		self.body.brTable(self.slotLandingDepths(caseTargets, distinct: distinct), defaultTarget: 0 as Wasm32Index)
 
 		// Close each landing and emit its target's dispatch. `end` #1 exposes the default landing; `end` #(k+1)
@@ -2351,8 +2372,8 @@ type WasmFuncEmitter
 	// The `i64.ge_u span` bounds guard `br_if`ing an out-of-range index to the default landing (depth 0). An
 	// i32 subject (never produced for a switch today — every biased index is i64) needs no i64 guard: its own
 	// value IS the index, so the `br_table`'s exact i32 bounds check suffices, and this emits nothing.
-	function emitSwitchBoundsGuard(subjectId ValueId, span ElementCount)
-		if getValtype(self.valtypes, v: subjectId) != WasmValType.i64 'notI64'
+	function emitSwitchBoundsGuard(subjectId ValueId, span ElementCount, subjectIsWide bool)
+		if not subjectIsWide 'notI64'
 			return
 		end 'notI64'
 		self.body.localGet(subjectId as Wasm32Index)
@@ -2363,9 +2384,9 @@ type WasmFuncEmitter
 
 	// Push the biased subject as the i32 `br_table` index. An i64 subject is narrowed (the guard proved it
 	// fits 32 bits); an i32 subject is already the index.
-	function emitSwitchIndex(subjectId ValueId)
+	function emitSwitchIndex(subjectId ValueId, subjectIsWide bool)
 		self.body.localGet(subjectId as Wasm32Index)
-		if getValtype(self.valtypes, v: subjectId) == WasmValType.i64 'wide'
+		if subjectIsWide 'wide'
 			self.body.i32WrapI64()
 		end 'wide'
 	end 'emitSwitchIndex'

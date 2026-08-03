@@ -17,7 +17,7 @@
 //   • `i64Sub_wrapNeg()` is OMITTED. Its name carries an underscore (forbidden), and it is
 //     explicitly optional in the contract ("or A2 does (0 - x)"). wasm has no integer negate
 //     opcode, so a single instruction cannot express one anyway: A2 materializes `neg` as
-//     `i64Const(0)` (or `i32Const(0)`) BELOW the operand, then `i64Sub()` (`i32Sub()`);
+//     `i64Const(0)` BELOW the operand, then `i64Sub()`;
 //     `bitNot` as operand then `i64Const(-1)` then `i64Xor()` (xor is commutative, so operand
 //     order is free); `logicalNot` as `i32Eqz()`. Every primitive that composition needs is
 //     already in the API, so no dedicated helper is warranted.
@@ -170,13 +170,10 @@ let opLocalTee = 0x22
 let opI32Const = 0x41
 let opI64Const = 0x42
 
+// ⚠ NO i32 COMPARE FAMILY: an integer comparison is emitted at the machine word (X5 review — see the
+// i32 ALU note below `i64ExtendI32U`), so only `i32.eqz` — which tests a 0/1 bool, not a number — is
+// reachable at this width.
 let opI32Eqz = 0x45
-let opI32Eq = 0x46
-let opI32Ne = 0x47
-let opI32LtS = 0x48
-let opI32GtS = 0x4A
-let opI32LeS = 0x4C
-let opI32GeS = 0x4E
 
 let opI64Eqz = 0x50
 let opI64Eq = 0x51
@@ -187,20 +184,16 @@ let opI64GeU = 0x5A  // i64.ge_u — the jump table's UNSIGNED 64-bit bounds che
 let opI64LeS = 0x57
 let opI64GeS = 0x59
 
+// ⚠ NO `i32.div_s`/`i32.rem_s`, and no i32 multiply, bitwise-and/or or shift either — the absence is
+// DELIBERATE (X5 and its review). `div`/`mod` are the two Std ops with no operand type, and the rest
+// were selected by an operand type whose narrowness describes STORAGE, not arithmetic; this backend
+// computes every integer op at MACHINE WIDTH (`StdToWasm.opComputeValType`), so no 32-bit arithmetic
+// is ever emitted. The file's rule is that an opcode is here because the slice needs it; these
+// stopped being needed when the width stopped being guessed. What is left is address arithmetic
+// (`add`/`sub` over an i32 linear-memory address) and `logicalNot`'s bit flip (`xor`).
 let opI32Add = 0x6A
 let opI32Sub = 0x6B
-let opI32Mul = 0x6C
-// ⚠ NO `i32.div_s`/`i32.rem_s`, and the absence is DELIBERATE (X5): `div`/`mod` are the two Std ops
-// with no operand type, and this backend computes them at MACHINE WIDTH rather than at the left
-// operand's storage width (see `emitDivMod`) — so a 32-bit divide is never emitted. The file's rule is
-// that an opcode is here because the slice needs it; these two stopped being needed when the width
-// stopped being guessed.
-let opI32And = 0x71
-let opI32Or = 0x72
 let opI32Xor = 0x73
-let opI32Shl = 0x74
-let opI32ShrS = 0x75
-let opI32ShrU = 0x76
 
 let opI64Add = 0x7C
 let opI64Sub = 0x7D
@@ -555,7 +548,15 @@ export type WasmBody
 		self.buf.push(opI64ExtendI32U)
 	end 'i64ExtendI32U'
 
-	// i32 twins of the i64 ALU/compare/eqz set. A2 picks i32.* vs i64.* by the op's width.
+	// ⚠ **THE i32 SET IS NOT THE i64 SET'S TWIN — it is only what LINEAR-MEMORY ADDRESS arithmetic and
+	// the 0/1 bool need** (X5 review). An integer OPERATION is emitted at the machine word whatever its
+	// Std operand type says (`StdToWasm.opComputeValType`), so there is no width to pick between: the
+	// i32 ALU that remains is `add`/`sub` for an address computed from a base, `xor` for `logicalNot`'s
+	// bit flip, and `eqz`. The multiply, the bitwise pair, the three shifts and the six compares were
+	// selectable only by a NARROW operand type, and a narrow operand type is a storage class rather
+	// than an arithmetic one — selecting on it truncated `ExitCode * 2` to 32 bits and read an
+	// `ExitCode > 100` as SIGNED. Same rule as the `i32.div_s`/`i32.rem_s` note above: an opcode is
+	// here because the slice needs it.
 	export function i32Add()
 		self.buf.push(opI32Add)
 	end 'i32Add'
@@ -564,57 +565,9 @@ export type WasmBody
 		self.buf.push(opI32Sub)
 	end 'i32Sub'
 
-	export function i32Mul()
-		self.buf.push(opI32Mul)
-	end 'i32Mul'
-
-	export function i32And()
-		self.buf.push(opI32And)
-	end 'i32And'
-
-	export function i32Or()
-		self.buf.push(opI32Or)
-	end 'i32Or'
-
 	export function i32Xor()
 		self.buf.push(opI32Xor)
 	end 'i32Xor'
-
-	export function i32Shl()
-		self.buf.push(opI32Shl)
-	end 'i32Shl'
-
-	export function i32ShrS()
-		self.buf.push(opI32ShrS)
-	end 'i32ShrS'
-
-	export function i32ShrU()
-		self.buf.push(opI32ShrU)
-	end 'i32ShrU'
-
-	export function i32Eq()
-		self.buf.push(opI32Eq)
-	end 'i32Eq'
-
-	export function i32Ne()
-		self.buf.push(opI32Ne)
-	end 'i32Ne'
-
-	export function i32LtS()
-		self.buf.push(opI32LtS)
-	end 'i32LtS'
-
-	export function i32GtS()
-		self.buf.push(opI32GtS)
-	end 'i32GtS'
-
-	export function i32LeS()
-		self.buf.push(opI32LeS)
-	end 'i32LeS'
-
-	export function i32GeS()
-		self.buf.push(opI32GeS)
-	end 'i32GeS'
 
 	export function i32Eqz()
 		self.buf.push(opI32Eqz)

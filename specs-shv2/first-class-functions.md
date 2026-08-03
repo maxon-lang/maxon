@@ -3188,6 +3188,66 @@ direct=4000000000
 alias=4000000000
 ```
 
+<!-- test: first-class-function.exitcode-through-alias-computes-at-machine-width -->
+⭐⭐ **AN OPERAND'S DECLARED TYPE IS NOT THE WIDTH THE OPERATION IS PERFORMED AT (X5 review).** The case
+above proves an `ExitCode` READ back through a function typealias is the right value. This one asks what
+happens when that value is then USED, and the answer had been: on `wasm32-wasi`, at 32 bits. `ExitCode`
+is a **u32** (`valueTagToStdType`), the Std `binOp`/`cmp` carry their left operand's type as
+`operandType`, and a backend whose locals are typed read that as the arithmetic's width — while the
+native backends compute every integer op in a 64-bit register whatever the Std type says. MEASURED
+against x64, all four on the same value: `v * 2` answered **3705032704** for 8000000000, `not v`
+answered **294967295** for -4000000001, `v shl 1` answered **3705032704** for 8000000000, and
+`v > 100` answered **le** for **gt**.
+
+⚠ **THE ALIAS IS LOAD-BEARING, WHICH IS WHY THIS CASE LIVES HERE AND NOT IN `division.md`.** A DIRECT
+call to the same function does not reproduce any of it: only the entrances W1 opened — a function
+typealias, and an interface method — mint a genuinely `exitCode`-TAGGED SSA value, and the tag is what
+puts `u32` on the op. A case written against `big()` directly passes with the defect present, which is
+how X5's own `comparison-operators/compare-against-a-literal-keeps-the-operand-width` stayed green over
+this half.
+
+Each reading is paired with its non-folded twin (`* 2` beside `* d`, `> 100` beside `> d`) because the
+immediate and register forms are different emitters: a fix to one leaves the other red, and a single
+reading cannot see that.
+```maxon
+typealias Thunk = function() returns ExitCode
+
+function big() returns ExitCode
+	return 4000000000
+end 'big'
+
+function two() returns ExitCode
+	return 2
+end 'two'
+
+function viaAlias(t Thunk, s Thunk) returns ExitCode
+	let v = t()
+	let d = s()
+	print("literalMul={v * 2}\n")
+	print("valueMul={v * d}\n")
+	print("bitNot={not v}\n")
+	print("shl={v shl 1}\n")
+	print("literalCmp={1 if v > 100 else 0}\n")
+	print("valueCmp={1 if v > d else 0}\n")
+	return 0
+end 'viaAlias'
+
+function main() returns ExitCode
+	return viaAlias(big, s: two)
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+literalMul=8000000000
+valueMul=8000000000
+bitNot=-4000000001
+shl=8000000000
+literalCmp=1
+valueCmp=1
+```
+
 <!-- test: first-class-function.character-return-through-alias -->
 `Character` is DELIBERATELY absent from `TypeResolution.builtinTypeNameTag`, and this is the case that
 turns the reason into a measurement rather than an argument (W1 review). `parseTypeReference` settles
