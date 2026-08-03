@@ -624,3 +624,49 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:7:23: operator 'shl' requires integer operands, but this one is float
 ```
+
+<!-- test: float-backed-negation -->
+⭐ THE SIXTH READ SITE. A prefix `-` is arithmetic, so it is a question about the NUMBER — but `parseUnary`
+reads the operand's raw tag rather than the number's, and a float-backed enum's `named` tag is not
+`tagIsFloat`, so before this case `-Weight.light` emitted an INTEGER negate over the IEEE-754 bits and
+printed `-4612811918334230528`. The int-backed arm beside it is the negative control: its `-` must stay
+the integer negate it always was.
+```maxon
+enum Weight
+	light = 2.5
+end 'Weight'
+
+enum Level
+	high = 200
+end 'Level'
+
+function main() returns ExitCode
+	print("{-Weight.light} {-Level.high}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-2.5 -200
+```
+
+<!-- test: error.float-backed-enum-not -->
+`not` is the shift's twin — a bitwise operator with no reading of a sign/exponent/mantissa triple — so it
+is refused in its own words, exactly as `error.float-backed-enum-shift` is. Before this case `parseUnary`
+complemented the encoding and printed `-4612811918334230529`; the oracle refuses.
+```maxon
+enum Weight
+	light = 2.5
+end 'Weight'
+
+function main() returns ExitCode
+	let x = not Weight.light
+	print("{x}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:10: operator 'not' requires integer operands, but this one is float
+```

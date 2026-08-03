@@ -10287,23 +10287,23 @@ export type ProgramSignatures
 	// PARSER asks every enum question through: is this scrutinee an enum? what tag is a case? which
 	// cases does a range arm cover? The layout it hands back carries plain NAMES and INTS (no ids),
 	// so every one of those questions is answered with no interner at all.
+	export function enumOf(name ByteArray) returns DeclaredEnum
+		let layout = try self.enumTypes.get(name) otherwise return DeclaredEnum.undeclared
+		return DeclaredEnum.declared(layout)
+	end 'enumOf'
+
 	// ⭐ **IS `name` A FLOAT-BACKED ENUM — one whose i64 tag is an f64's IEEE-754 BIT PATTERN (A4o)?** THE
 	// question every site that consumes an enum value as a NUMBER asks, so it is stated here once rather
 	// than at each of them. A name nothing declares as an enum answers `false`: this is asked of every
 	// `named`-tagged value in the program, and "there is no such enum" is not this predicate's to report.
 	//
-	// ⚠ **ANSWERED OVER `enumTypes` DIRECTLY, NOT THROUGH `enumOf`, AND THAT IS `valueIsUnion`'s MEASURED
-	// REASON** — `enumOf` boxes a `DeclaredEnum`, a heap object even for `undeclared`, and this runs for
-	// BOTH operands of every binary operator and every comparison and for every interpolation hole.
+	// ⚠ **ANSWERED OVER `enumTypes` DIRECTLY, NOT THROUGH `enumOf` ABOVE, AND THAT IS `valueIsUnion`'s
+	// MEASURED REASON** — `enumOf` boxes a `DeclaredEnum`, a heap object even for `undeclared`, and this
+	// runs for BOTH operands of every binary operator and every comparison and for every interpolation hole.
 	export function enumIsFloatBacked(name ByteArray) returns bool
 		let layout = try self.enumTypes.get(name) otherwise return false
 		return layout.backing == EnumBacking.float
 	end 'enumIsFloatBacked'
-
-	export function enumOf(name ByteArray) returns DeclaredEnum
-		let layout = try self.enumTypes.get(name) otherwise return DeclaredEnum.undeclared
-		return DeclaredEnum.declared(layout)
-	end 'enumOf'
 
 	// ⭐⭐ **WHICH DECLARATION FORM MINTED `name` — the ONE name→FORM answer, so a new form is a COMPILE ERROR
 	// at every door that classifies a name instead of a coverage gap nothing reports (A4n).**

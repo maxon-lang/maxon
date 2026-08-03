@@ -22826,13 +22826,18 @@ export type Parser
 	// uniformly for a parameter (`c Code`), a local (`let c = Color.red`) and a returned enum. The
 	// enum's own name is on the value even after TypeResolution collapses the SIGNATURE type to
 	// `integer`, because a value's tag is set by the parser and never rewritten.
+	//
+	// ⚠ The value→NAME projection is `valueNameId` + `internedName`, the two named helpers, and NOT a
+	// second hand-inlined copy of the same two column reads — which is what stood here. `valueIsUnion`
+	// below and `valueIsFloatBackedEnum` (A4o) ask the SAME projection of the same value; a fallback
+	// added to one spelling and not the other would answer "not an enum" at one door and "enum" at the
+	// next, which is a wrong answer at a use site rather than an error anywhere.
 	function enumMatchFor(scrut ValueId) returns DeclaredEnum
 		if self.tagOf(scrut) != ValueTypeTag.named 'notNamed'
 			return DeclaredEnum.undeclared
 		end 'notNamed'
-		let nameId = try self.valueNameIds.get(scrut) otherwise panic("enumMatchFor: value v{scrut} has no recorded type name — the two type columns fell out of lockstep")
-		let name = try self.artifact.typeNames.nameOf(nameId) otherwise panic("enumMatchFor: type-name id {nameId} is not in this file's interner — every `named` tag is minted with an id from it")
-		return self.signatures.enumOf(name)
+
+		return self.signatures.enumOf(self.internedName(self.valueNameId(scrut)))
 	end 'enumMatchFor'
 
 	// Is `value` a `union` value — a `named(X)` whose type is a declared `union`? The E3066 gate
@@ -24832,13 +24837,22 @@ export type Parser
 			end 'negatedLiteral'
 
 			let operand = try self.parsePostfix(func, value: try self.parsePrimary(func), resultUsed: true)
-			let operandTag = self.tagOf(operand)
+
+			// ⭐ **A PREFIX `-` IS A QUESTION ABOUT THE NUMBER, SO IT ASKS `numberTagOf` (A4o).** Both
+			// PREFIX operators are emitted here rather than through `emitBinOp`/`emitShift`, and reading
+			// `tagOf` was therefore a SECOND answer to the operand-domain question those two ask through
+			// the door: a float-backed enum's `named` tag is not `tagIsFloat`, so `-Weight.light` took the
+			// integer arm and printed `-4612811918334230528` — the negated IEEE-754 bits.
+			let operandTag = self.numberTagOf(operand)
 			if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
 				throw ParseError.nonNumericNegation(typeTagName(operandTag), line: opTok.line, column: opTok.column)
 			end 'notANumber'
 
+			// The DECODE is paid only past that refusal, for `emitBinOp`'s stated reason: a rejected
+			// program must leave no ops behind. Every non-enum value passes through untouched, so the
+			// integer arm below negates exactly what it negated before.
 			if tagIsFloat(operandTag) 'float'
-				return try self.emitFloatNegation(operand, opTok: opTok)
+				return try self.emitFloatNegation(self.floatBehindEnumValue(operand, anchor: opTok), opTok: opTok)
 			end 'float'
 
 			return self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: operandTag, range: SourceRange.ofToken(opTok))
@@ -24847,7 +24861,12 @@ export type Parser
 		if self.at(TokenKind.not) 'not'
 			let opTok = try self.consume(TokenKind.not)
 			let operand = try self.parseUnary(func)
-			let operandTag = self.tagOf(operand)
+
+			// `numberTagOf` for the `-` arm's reason, and it decides the same thing `emitShift` decides
+			// with it: `not` is a bitwise operator, a double's bits are a sign/exponent/mantissa triple,
+			// so a float-backed enum is REFUSED here in `not`'s own words rather than complementing an
+			// encoding. Nothing is emitted on this path for a float, so there is no decode to place.
+			let operandTag = self.numberTagOf(operand)
 			match notOperatorFor(operandTag) 'which'
 				op(kind, resultTag) then return self.emitUnaryOp(operand, op: kind, resultTag: resultTag, range: SourceRange.ofToken(opTok))
 				unknownOperandType then throw ParseError.notOnUnknownType(opTok.line, column: opTok.column)
