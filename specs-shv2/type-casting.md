@@ -458,6 +458,36 @@ end 'main'
 error E3010: specs/fragments/type-casting/error.unneeded.widening-byte-to-integer.test:12:12: unneeded cast: 'Byte' already fits in 'Integer'
 ```
 
+### A RANGE-CONTESTED alias is quoted as SOURCE spells it, here as everywhere
+
+`typealias Byte = int(0 to 200)` beside an `Array with Byte` CONTESTS the stdlib's own `Byte`, and a
+contested name is stored under the compiler's mint (`Byte$0_200`) so the two declarations can occupy one
+registry. That spelling names no line the author wrote, and E3005 has said so since N2 —
+`literalOutOfRangeMessage` routes every alias name it prints through `sourceSpelledAliasName` precisely
+because "quoted as source spells it" is a property of the diagnostic VOCABULARY and not of one E-code.
+E3010 did not, and printed **`unneeded cast: 'Byte$0_200' already fits in 'Wide'`** (X6 review, measured).
+
+<!-- test: error.unneeded.contested-alias-quoted-as-source-spells-it -->
+```maxon
+
+typealias Byte = int(0 to 200)
+typealias Bytes = Array with Byte
+typealias Wide = int(0 to 1000)
+
+function takes(b Bytes) returns Wide
+	return (try b.get(0) otherwise 0) as Wide
+end 'takes'
+
+function main() returns ExitCode
+	var a = Bytes.create()
+	a.push(7)
+	return takes(a)
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.contested-alias-quoted-as-source-spells-it.test:8:36: unneeded cast: 'Byte' already fits in 'Wide'
+```
+
 <!-- test: error.unneeded.widening-int-to-float -->
 ```maxon
 

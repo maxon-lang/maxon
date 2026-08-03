@@ -148,6 +148,30 @@ export function stdReturnTypeIsFloat(rt StdReturnType) returns bool
 	end 'check'
 end 'stdReturnTypeIsFloat'
 
+// ⭐⭐ **THE Std TYPE A SYNTHESIZED ZERO PRIMARY RETURN VALUE IS BORN IN — spelled ONCE (X6 review).**
+// Two passes mint such a value and neither can read the other's bits: `LowerMaxonToStd`'s THROW edge
+// (`emitZeroConstOfReturnType` — the primary a caller ignores once the error flag is set) and
+// `InsertRangeChecks`'s DEAD return after `mrt_panic` (`emitDeadReturn` — a block that never runs but
+// must still leave the function the way the ABI says).
+//
+// ⛔ **THEY HAD TWO DIFFERENT RULES FOR IT, AND THAT IS THE DIVERGENCE THIS FUNCTION ENDS.** Lowering
+// coarsened the answer to `f64`-or-`i64` because all it believed it owed was the REGISTER FILE; the
+// range-check pass read the declared type straight off `returnType`. Both satisfy the register-file
+// obligation, so nothing ever failed — which is exactly the shape that makes the next clause added to
+// one of them a wrong answer at the other with no compile error at either. The DECLARED type is the
+// stricter of the two and is right wherever the coarse one was: it is the same register file by
+// construction, and on wasm it is the function's own result valtype instead of one needing a coercion.
+//
+// A VOID function still has an answer, and it is not vacuous: a void THROWING function returns through
+// `errorReturn` and so writes a primary register its caller reads only for its shape. The machine word
+// is the family default there.
+export function stdDefaultPrimaryReturnType(rt StdReturnType) returns StdType
+	return match rt 'check'
+		void gives StdType.i64
+		value(inner) gives inner
+	end 'check'
+end 'stdDefaultPrimaryReturnType'
+
 // --- StdOpCategory: coarse op family, recovered without nesting ---
 // Replaces v1's outer-union arms (`StdOp.arith(...)`, `StdOp.call(...)`, …) with
 // a metadata field, so membership tests stay cheap while `StdOp` stays flat.

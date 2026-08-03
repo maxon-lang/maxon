@@ -842,12 +842,12 @@ type RangeCheckEmitter
 	// verifying backend until `ExitCode` gained a range. Pinned by `try-otherwise-value-flow`'s five
 	// `returns ExitCode throws E` cases on the wasm lane, which were RED against the first X6 build.
 	//
-	// ⭐ The zero's TYPE is likewise READ off `returnType` rather than classified from it. Lowering's
-	// `emitZeroConstOfReturnType` picks `f64`-or-`i64` because all it owes is the REGISTER FILE; taking
-	// the declared type itself owes nothing extra and cannot be wrong for a narrow one.
+	// ⭐ The zero's TYPE is `stdDefaultPrimaryReturnType`'s, which is also lowering's THROW-edge answer —
+	// one rule for one fact, in the dialect both passes already read (X6 review). It used to be spelled
+	// here, differently from lowering's, and that header carries the divergence.
 	function emitDeadReturn(block IrBlock)
 		if throwsClauseIsThrowing(self.func.throwsTypeName) 'throwing'
-			let dead = self.emitZeroConstOf(block, valueType: self.deadReturnValueType())
+			let dead = self.emitZeroConstOf(block, valueType: stdDefaultPrimaryReturnType(self.func.returnType))
 			let flag = self.emitZeroConstOf(block, valueType: StdType.i64)
 			self.module.setTerminator(block, op: StdOp.errorReturn(dead, errorFlagId: flag))
 			return
@@ -858,16 +858,6 @@ type RangeCheckEmitter
 			value(inner) then self.module.setTerminator(block, op: StdOp.ret(self.emitZeroConstOf(block, valueType: inner)))
 		end 'rt'
 	end 'emitDeadReturn'
-
-	// The Std type the dead PRIMARY value is born in. A void THROWING function still writes the primary
-	// register — its caller reads the flag beside a value it ignores — and a machine word is the family
-	// default there, exactly as `LowerMaxonToStd.emitRetVoidOrErrorReturn` gives it.
-	function deadReturnValueType() returns StdType
-		return match self.func.returnType 'rt'
-			void gives StdType.i64
-			value(inner) gives inner
-		end 'rt'
-	end 'deadReturnValueType'
 
 	// A zero `const` of an EXPLICIT type, appended to `block` — the one place this pass mints one, so the
 	// throwing and non-throwing dead returns cannot come to disagree about how a zero is made.

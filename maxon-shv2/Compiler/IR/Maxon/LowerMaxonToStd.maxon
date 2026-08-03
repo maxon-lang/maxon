@@ -2527,17 +2527,17 @@ type MaxonToStdLowering
 	// its bits (once the error flag is set the value is dead). It must be born in the file the return type
 	// occupies, or the backend's `errorReturn` move crosses register files and the x64 emitter panics
 	// (`move from rax to xmm0 crosses register files`). A FLOAT return needs an XMM-classed zero — an f64
-	// `const 0`, which `buildValueClassColumns` classes XMM from its Std type (the f64 bits of 0.0 are 0);
-	// every other return type, and a void one, keeps the i64 GPR zero. Both branches mint EXACTLY ONE
-	// ValueId, so the id numbering — and hence every non-float golden — is byte-for-byte unchanged.
+	// `const 0`, which `buildValueClassColumns` classes XMM from its Std type (the f64 bits of 0.0 are 0).
+	// It mints EXACTLY ONE ValueId whatever the return type, so the id numbering is unchanged.
+	//
+	// ⚠ **THE TYPE IS `stdDefaultPrimaryReturnType`'S AND NOT THIS FUNCTION'S (X6 review)** — the same
+	// answer `InsertRangeChecks.emitDeadReturn` mints its dead primary from, which used to be a second and
+	// STRICTER rule spelled in that pass. See that function for the divergence and why the declared type
+	// is the right single answer.
 	function emitZeroConstOfReturnType(dstBlock IrBlock) returns ValueId
-		if stdReturnTypeIsFloat(self.currentReturnType) 'float'
-			let zero = self.mintStdValueId()
-			self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: 0, valueType: StdType.f64))
-			return zero
-		end 'float'
-
-		return self.emitZeroConst(dstBlock)
+		let zero = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: 0, valueType: stdDefaultPrimaryReturnType(self.currentReturnType)))
+		return zero
 	end 'emitZeroConstOfReturnType'
 
 	// A fresh ValueId for the current function, past the parser's dense id space — a plain counter bump,

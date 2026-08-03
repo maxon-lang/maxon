@@ -842,15 +842,27 @@ function seedDeclFile(pathText String) returns FilePath
 	return try FilePath.from(pathText) otherwise panic("seedDeclFile: '{pathText}' is a literal relative path with no invalid character in it")
 end 'seedDeclFile'
 
-// One seed. Positions are 0: there is no source line in THIS program to blame, and the only diagnostics
-// that read them (E3061 same-file redeclaration, E3105 cross-file primitive conflict) cannot fire against
-// one — a user redeclaring the name is in a different file, and over `int`, which is a seed's primitive too.
+// ⭐ **A RANGED INT ALIAS THE COMPILER SUPPLIES RATHER THAN A FILE — built HERE for every one of them
+// (X6 review).** The two callers differ in exactly one thing, the DECLARING FILE (a seed names a stdlib
+// path it stands in for; the `ExitCode` builtin names its READER's own — see each for why), and agree on
+// everything else: `integer`, `global`, and positions 0.
+//
+// Positions are 0 because there is no source line in THIS program to blame, and the only diagnostics that
+// read them (E3061 same-file redeclaration, E3105 cross-file primitive conflict) cannot fire against one —
+// a user redeclaring the name is in a different file, and over `int`, which is a compiler-supplied alias's
+// primitive too. That argument covers BOTH callers, which is why it is stated once, here.
+function compilerSuppliedIntAlias(name ByteArray, low ParsedInt, high ParsedInt, declFilePath FilePath) returns RangedTypeAlias
+	return RangedTypeAlias.create(name, underlying: MaxonType.integer, low: low, high: high, visibility: Visibility.global, declFilePath: declFilePath, nameLine: 0, nameColumn: 0)
+end 'compilerSuppliedIntAlias'
+
+// One stdlib seed — an alias the compiler supplies ON A STDLIB FILE'S BEHALF, so it carries that file's
+// path (`seededStdlibAliasDeclFiles` patches the sweep for exactly these).
 function builtinStdlibAlias(name ByteArray, low ParsedInt, high ParsedInt, declPathText String) returns RangedTypeAlias
 	// Bound to a local rather than written inline as the argument: the bootstrap mislowers a
 	// `try … otherwise panic(…)` in argument position (E9001, "not in valueMap" against the pin temp).
 	let declPath = seedDeclFile(declPathText)
 
-	return RangedTypeAlias.create(name, underlying: MaxonType.integer, low: low, high: high, visibility: Visibility.global, declFilePath: declPath, nameLine: 0, nameColumn: 0)
+	return compilerSuppliedIntAlias(name, low: low, high: high, declFilePath: declPath)
 end 'builtinStdlibAlias'
 
 // ⭐⭐ **THE BUILTIN `ExitCode`'S RANGE, WRITTEN AS DATA (X6).** `ExitCode` is a NARROW DECLARED TYPE —
@@ -904,7 +916,7 @@ end 'requireExitCodeRangeMatchesItsWidth'
 // `seededStdlibAliasDeclFiles` exists to patch for the two aliases the compiler supplies on the
 // STDLIB's behalf, and which a builtin therefore never opens.
 function builtinExitCodeAlias(name ByteArray, readerFilePath FilePath) returns RangedTypeAlias
-	return RangedTypeAlias.create(name, underlying: MaxonType.integer, low: ExitCodeAliasLow, high: ExitCodeAliasHigh, visibility: Visibility.global, declFilePath: readerFilePath, nameLine: 0, nameColumn: 0)
+	return compilerSuppliedIntAlias(name, low: ExitCodeAliasLow, high: ExitCodeAliasHigh, declFilePath: readerFilePath)
 end 'builtinExitCodeAlias'
 
 // ⭐ **MAY `readerFilePath` NAME THIS DECLARATION (P1.9)?** Three tiers, no exceptions:
@@ -1218,22 +1230,6 @@ export type RangedAliasRegistry
 	// mode of teaching only one is a generic alias resolving last-wins where a ranged one resolves by
 	// precedence — a wrong answer at one door, with no compile error at either.
 	export function lookup(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
-		// ⭐⭐ **THE BUILTIN FIRST, AND THE ORDER IS THE WHOLE ANSWER TO "WHOSE `ExitCode`?" (X6).**
-		// `TypeResolution.denotedNamedType` erases the name to `MaxonType.exitCode` from its OWN builtin arm,
-		// which precedes its alias-registry arm — so the TYPE is the builtin's whatever any file declares.
-		// A range resolved the other way round would be a SECOND authority over one name: a program that
-		// writes `typealias ExitCode = int(0 to 125)` — legal, and `specs-shv2/generic-type-nested-array-
-		// typealias.md` does it in all 27 of its cases — would be guarded against 125 while its `main`
-		// returns through a slot that holds u32. Same order here, same answer, one authority.
-		//
-		// ⚠ It asks the TABLE (`builtinTypeNameTag`) rather than comparing bytes, for the reason
-		// `ExitCodeBuiltinName`'s file-private header gives. The cost is that table's compares on every
-		// lookup — a name-length mismatch for all but a handful of names — against a probe of up to three
-		// maps; the alias itself is CONSTRUCTED only on the builtin's own path.
-		if builtinTypeNameTag(name) == ValueTypeTag.exitCode 'theBuiltin'
-			return DeclaredAlias.declared(builtinExitCodeAlias(name, readerFilePath: readerFilePath))
-		end 'theBuiltin'
-
 		if let byFile = try self.multiplyDeclared.get(name) 'contested'
 			if let own = try byFile.get(readerFilePath.toString()) 'readersOwnFile'
 				return DeclaredAlias.declared(own)
@@ -1247,6 +1243,40 @@ export type RangedAliasRegistry
 		if let any = try self.byName.get(name) 'declaredSomewhere'
 			return DeclaredAlias.declared(any)
 		end 'declaredSomewhere'
+
+		// ⭐⭐ **THE BUILTIN `ExitCode` — LAST, AS A FALLBACK, AND THE POSITION IS THE WHOLE ANSWER TO
+		// "WHOSE `ExitCode`?" (X6 review).** It supplies a range for the name NO file declares, which is
+		// every program in the corpus but twenty-nine; where a file DOES declare it, that declaration
+		// answers, exactly as it answers for every other alias name.
+		//
+		// ⛔⛔ **IT WAS WRITTEN FIRST, AND FIRST WAS A MISCOMPILE — the rung's own signature bug, one name
+		// with two authorities.** The registry does not hold the range alone: `storageBytesInEveryFile`
+		// holds the SLOT WIDTH a declaration implies, it is fed by the same `record`, and nothing was going
+		// to short-circuit IT. So `typealias ExitCode = int(0 to 125)` + `Array with ExitCode` had its
+		// guard answered by the builtin (`0 to u32.max`, so `300` passed) and its stride answered by the
+		// user (one byte, so `300` was stored as `44`). **MEASURED: it compiled clean and printed `44`;
+		// with the bound `0 to 300` a `70000` printed `4464`.** Both compilers refuse the program — the
+		// bootstrap oracle with `E3005 … outside the range of 'ExitCode' (int(0 to 125))`, and shv2 itself
+		// before this rung. A silent wrong answer, on every target, in exchange for an ordering nothing
+		// needed.
+		//
+		// ⚠ **AND THE ARGUMENT FOR PUTTING IT FIRST DOES NOT SURVIVE BEING WRITTEN OUT.** It ran: the TYPE
+		// is the builtin's (`TypeResolution.denotedNamedType` erases the name from its own builtin arm
+		// ahead of its registry arm), so the RANGE must be too, or a `main` declared `int(0 to 125)` would
+		// be guarded against 125 while returning through a slot that holds u32. But a guard NARROWER than
+		// the slot is what every ranged alias in the language is — `int(0 to 100)` rides an i64 — so the
+		// pair is not a disagreement at all. The genuine coupling runs the other way: RANGE and WIDTH must
+		// name one declaration, and only the fallback keeps them together for BOTH shapes (a declared
+		// `ExitCode` ⇒ the user's range and the user's width; an undeclared one ⇒ `0 to u32.max` and the
+		// machine word `undeclaredNamedElementStorageBytes` gives).
+		//
+		// ⚠ It asks the TABLE (`builtinTypeNameTag`) rather than comparing bytes, for the reason
+		// `ExitCodeBuiltinName`'s file-private header gives. Being last, that table's compares are paid
+		// only on a lookup that was about to answer `undeclared` and never on the hot path — where, first,
+		// they were paid on every named type reference in the program.
+		if builtinTypeNameTag(name) == ValueTypeTag.exitCode 'theBuiltin'
+			return DeclaredAlias.declared(builtinExitCodeAlias(name, readerFilePath: readerFilePath))
+		end 'theBuiltin'
 
 		return DeclaredAlias.undeclared
 	end 'lookup'

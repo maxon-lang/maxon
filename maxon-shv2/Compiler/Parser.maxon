@@ -24456,12 +24456,19 @@ export type Parser
 	// that earns its keep and is left alone. The message names the ALIASES the program wrote — not the
 	// erased primitives `typeTagName` prints for E3009 — because "already fits in" is a statement about the
 	// two ranges, and both spell `int` once erased.
+	//
+	// ⚠ **BOTH NAMES SPELL THROUGH `sourceSpelledAliasName`, for the reason `literalOutOfRangeMessage`
+	// states and this site did not (X6 review).** A RANGE-CONTESTED name reaches here wearing the
+	// compiler's mint, and "the alias is quoted as SOURCE spells it" is a property of the DIAGNOSTIC
+	// vocabulary, not of one diagnostic — two E-codes naming one alias two ways is the same fact written
+	// twice. MEASURED before the fix, from `bytearray-element-size`'s narrow `Byte`: **`unneeded cast:
+	// 'Byte$0_200' already fits in 'ExitCode'`**, which names no line the author wrote.
 	function reportUnneededCastBetween(source RangedTypeAlias, target RangedTypeAlias, asTok Token)
 		if not rangeCoversRange(target.low, targetHigh: target.high, targetIsFloat: aliasIsFloat(target), sourceLow: source.low, sourceHigh: source.high, sourceIsFloat: aliasIsFloat(source)) 'narrowing'
 			return
 		end 'narrowing'
 
-		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: "unneeded cast: '{String.from(source.name)}' already fits in '{String.from(target.name)}'", range: SourceRange.ofToken(asTok))
+		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: "unneeded cast: '{String.from(sourceSpelledAliasName(source.name))}' already fits in '{String.from(sourceSpelledAliasName(target.name))}'", range: SourceRange.ofToken(asTok))
 	end 'reportUnneededCastBetween'
 
 	// ⭐ **THE CAST TARGET'S KIND AS THE AUTHORITY DENOTES IT — not as `maxonTypeTag` reads the
@@ -24570,8 +24577,10 @@ export type Parser
 	function castChangesTheShiftFill(value ValueId, targetAlias DeclaredAlias) returns bool
 		return match targetAlias 'a'
 			declared(alias) gives self.aliasChangesTheShiftFill(value, alias: alias)
-			// Not a declared ranged alias — `ExitCode`, a bare primitive, a struct, a name nothing
-			// declares. Nothing the tag column would read differently, so the cast stays the no-op.
+			// Not a declared ranged alias — a bare primitive, a struct, a name nothing declares. Nothing
+			// the tag column would read differently, so the cast stays the no-op. (⚠ `ExitCode` was on this
+			// list until X6 gave it a range; it now arrives as a DECLARED alias and is answered above —
+			// unsigned, and not the `u64.max`-upper shape, so `aliasChangesTheShiftFill` still says no.)
 			undeclared gives false
 		end 'a'
 	end 'castChangesTheShiftFill'
@@ -24688,7 +24697,9 @@ export type Parser
 	// already holds — an `as` cast, a struct-literal field, a field store, a self-field store, a field's
 	// declared default, an array element. Each caller decides exactly ONE thing: which alias (through
 	// `declaredAliasOfType`, the one asker, so every door resolves the question the same way).
-	// `undeclared` — `ExitCode`, a bare primitive, a struct, a name nothing declares — records nothing.
+	// `undeclared` — a bare primitive, a struct, a name nothing declares — records nothing. (⚠ `ExitCode`
+	// was in that list until X6 gave it a range; every door below now records a site for it, which is the
+	// whole of what that rung closed.)
 	//
 	// ⚠ **IT USED TO DECIDE A SECOND THING — WHICH HALVES THE SITE OWES — AND SINCE `A1f-arrayelem` THERE
 	// IS NOTHING LEFT TO DECIDE.** Every door that reaches here owes BOTH halves; the array element was the
