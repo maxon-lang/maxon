@@ -7483,15 +7483,23 @@ export type ProgramSignatures
 	// ⇒ the three are INDEPENDENT: `int(0 to 200)` clears name and stride but not bounds; `int(0 to 1000)`
 	// clears name and bounds but not stride; `Small = int(0 to 255)` clears bounds and stride but not name.
 	//
-	// ⚠ **WHAT IS STILL *NOT* CLOSED, because this door was never its only entrance.** A program declaring
-	// `typealias Byte = int(0 to 100)` no longer admits a raw byte THROUGH THIS DOOR — that is exactly what
-	// the BOUNDS test above ends — but it admits one through `b"\xdf"` just as readily, with no door in the
-	// picture (MEASURED: a `b"\xdf"` passed to a parameter declared `Array with Byte` reads back **223** from
-	// an element typed `int(0 to 100)`, on a compiler built WITHOUT this door at all). The `b"…"` gate
-	// refuses a byte-string literal whose element is too WIDE (`requireByteStringBlobStridesLikeItsType`,
-	// E2015) and has no twin for one too NARROW to hold the blob's own bytes; that missing twin is the
-	// entrance, it is a `b"…"` question and not a boundary one, and it is filed with its reproduction as its
-	// own rung.
+	// ✅ **THE `b"…"` ENTRANCE THIS PARAGRAPH USED TO NAME IS CLOSED (A3r).** A literal's every byte is now
+	// range-checked against its element's DECLARED bounds at the one rule function both of the literal's
+	// doorways ask (`Parser.requireByteStringBlobFitsItsElement`), reported as E3005. The wide half of that
+	// same rule is still the E2015 the paragraph below describes; the two are one function, not two.
+	//
+	// ⚠ **BUT THIS DOOR IS STILL NOT THE CLASS'S ONLY ENTRANCE, AND ONE MORE IS OPEN AND MEASURED.**
+	// `String.toByteArray()` / `.bytes()` (`Parser.parseByteView`) fills a record it types with
+	// `internArrayByteInstance(<the reading file>)` — the USER's `Byte` — with the receiver's raw UTF-8, so
+	// it never mints `SynthesizedByteElementName` and this door never sees it. MEASURED 2026-08-03, three
+	// lines of ordinary source, on `origin/main` AND on the A3r branch: under `typealias Byte = int(0 to 100)`,
+	// `takes("ß".toByteArray())` into `takes(b Array with Byte)` reads back **195** — exit 195, no diagnostic.
+	// It is the SAME reading the BOUNDS bullet above records, at a producer R4.7's enumeration did not reach.
+	// ⇒ it is NOT a `b"…"` question and A3r's per-byte compile-time check cannot reach it (the bytes are
+	// runtime data). Its cure is this door's own mechanism — mint `__ManagedByte` at `parseByteView` and let
+	// the boundary decide, or refuse `.toByteArray()` outright in a file whose `Byte` fails
+	// `rosterElementHoldsEveryByte` — and either changes user-visible typing corpus-wide, so it is filed as
+	// its own rung rather than ridden along.
 	//
 	// ⚠⚠ **THE ARRIVING SIDE IS AN IDENTITY TEST AND NOT A STRIDE TEST, AND THE DIFFERENCE IS A
 	// TYPE HOLE MEASURED BEFORE IT SHIPPED.** "Both sides byte-packed" reads as the symmetric rule and is
@@ -7655,9 +7663,11 @@ export type ProgramSignatures
 	// program may declare, so "the `Array with Byte` instance" is not one thing in a program whose
 	// declarations of `Byte` disagree about the range: `stdlib/File.maxon`'s byte buffer must stride 1 while
 	// the reader that declared `int(0 to 1000)` must still meet the wall its own declaration builds. Pointing
-	// this at a stride-1 compiler byte instead would make `Parser.byteElementDeclaredStride` — which IS this
-	// function, one call away — answer 1 in every program, and `bytearray-element-size.md`'s two wide-`Byte`
-	// refusals would go green by losing their premise rather than by being fixed.
+	// this at a stride-1 compiler byte instead would make `Parser.requireByteStringBlobFitsItsElement`'s
+	// stride clause — which reads this function's answer through `arrayElementSize`, one call away — see 1 in
+	// every program, and `bytearray-element-size.md`'s two wide-`Byte` refusals would go green by losing their
+	// premise rather than by being fixed. **Its BOUNDS clause (A3r) rides the same instance and would lose the
+	// same premise**, since `arrayElementAliasOf` reads the element off exactly this id.
 	export function internArrayByteInstance(readerFilePath FilePath) returns GenericInstanceId
 		return self.fileScopedInstance(self.bareArrayByteInstance(), filePath: readerFilePath)
 	end 'internArrayByteInstance'
