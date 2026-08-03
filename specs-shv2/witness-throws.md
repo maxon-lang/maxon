@@ -80,7 +80,7 @@ function main() returns ExitCode
 	let p = Point.create(3)
 	let b = PointBox.create(p)
 	let v = try b.itemDigest() otherwise 55
-	return v as ExitCode
+	return v
 end 'main'
 ```
 ```exitcode
@@ -130,7 +130,7 @@ function main() returns ExitCode
 	let p = Point.create(42)
 	let b = PointBox.create(p)
 	let v = try b.itemDigest() otherwise 55
-	return v as ExitCode
+	return v
 end 'main'
 ```
 ```exitcode
@@ -340,7 +340,7 @@ typealias PointBox = Box with Point
 
 function main() returns ExitCode
 	let b = PointBox.create(Point.create(3))
-	return b.itemCheck() as ExitCode
+	return b.itemCheck()
 end 'main'
 ```
 ```exitcode
@@ -545,7 +545,7 @@ typealias PointBox = Box with Point
 
 function main() returns ExitCode
 	let b = PointBox.create(Point.create(3))
-	return (try b.itemDigest() otherwise 55) as ExitCode
+	return (try b.itemDigest() otherwise 55)
 end 'main'
 ```
 ```maxoncstderr

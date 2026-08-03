@@ -184,7 +184,7 @@ function main() returns ExitCode
 	return match t 'blanked'
 		ok gives 1
 		none gives match s 'bumped'
-			ok(v) gives v as ExitCode
+			ok(v) gives v
 			none gives 2
 		end 'bumped'
 	end 'blanked'
@@ -559,7 +559,7 @@ function main() returns ExitCode
 	let y = x.norm()
 	return match y 'k'
 		a gives 1
-		b(v) gives v as ExitCode
+		b(v) gives v
 		c gives 2
 	end 'k'
 end 'main'

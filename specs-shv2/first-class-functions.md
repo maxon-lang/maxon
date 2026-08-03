@@ -3086,7 +3086,7 @@ function callThunk(t CodeThunk) returns Code
 end 'callThunk'
 
 function main() returns ExitCode
-	return callThunk(nine) as ExitCode
+	return callThunk(nine)
 end 'main'
 ```
 ```exitcode
@@ -3141,7 +3141,7 @@ function applyIt(f Bump, c ExitCode) returns Outcome
 end 'applyIt'
 
 function main() returns ExitCode
-	return applyIt(bump, c: 8) as ExitCode
+	return applyIt(bump, c: 8)
 end 'main'
 ```
 ```exitcode

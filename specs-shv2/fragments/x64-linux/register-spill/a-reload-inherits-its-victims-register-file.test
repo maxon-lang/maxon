@@ -112,19 +112,19 @@ func @pressure {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movsdRegRip xmm6, [rip + __fconst_4]
-    x64.movsdRegRip xmm7, [rip + __fconst_5]
-    x64.movsdRegRip xmm8, [rip + __fconst_6]
-    x64.movsdRegRip xmm9, [rip + __fconst_7]
-    x64.movsdRegRip xmm10, [rip + __fconst_8]
-    x64.movsdRegRip xmm11, [rip + __fconst_9]
-    x64.movsdRegRip xmm12, [rip + __fconst_10]
-    x64.movsdRegRip xmm13, [rip + __fconst_11]
-    x64.movsdRegRip xmm14, [rip + __fconst_12]
-    x64.movsdRegRip xmm15, [rip + __fconst_13]
-    x64.movsdRegRip xmm0, [rip + __fconst_14]
-    x64.storeSlotReg slot1, xmm0
+    x64.movsdRegRip xmm6, [rip + __fconst_5]
+    x64.movsdRegRip xmm7, [rip + __fconst_6]
+    x64.movsdRegRip xmm8, [rip + __fconst_7]
+    x64.movsdRegRip xmm9, [rip + __fconst_8]
+    x64.movsdRegRip xmm10, [rip + __fconst_9]
+    x64.movsdRegRip xmm11, [rip + __fconst_10]
+    x64.movsdRegRip xmm12, [rip + __fconst_11]
+    x64.movsdRegRip xmm13, [rip + __fconst_12]
+    x64.movsdRegRip xmm14, [rip + __fconst_13]
+    x64.movsdRegRip xmm15, [rip + __fconst_14]
     x64.movsdRegRip xmm0, [rip + __fconst_15]
+    x64.storeSlotReg slot1, xmm0
+    x64.movsdRegRip xmm0, [rip + __fconst_16]
     x64.storeSlotReg slot0, xmm0
     x64.callDirect bump
     x64.cvttsd2siRegReg rax, xmm6
@@ -200,6 +200,38 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rcx, 0
     x64.callDirect pressure
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

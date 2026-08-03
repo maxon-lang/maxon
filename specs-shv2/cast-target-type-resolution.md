@@ -130,7 +130,7 @@ ordinary one. A file-local check would reject this program, which is why the che
 ```maxon
 function main() returns ExitCode
 	let n = 7 as Later
-	return n as ExitCode
+	return n
 end 'main'
 
 typealias Later = int(0 to 100)

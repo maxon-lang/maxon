@@ -726,6 +726,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5:13: Value -5 is outside the range of 'Positive' (int(1 to 100))
+error E3005: <fragment>:6:2: Value -5 is outside the range of 'ExitCode' (int(0 to 4294967295))
 ```
 
 ### Type-qualified bound: u32.max
@@ -1386,11 +1387,12 @@ typealias BelowMinusOne = int(i64.min to -2)
 
 function main() returns ExitCode
 	let a = -1 as BelowMinusOne
-	return a as ExitCode
+	return a
 end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:5:13: Value -1 is outside the range of 'BelowMinusOne' (int(-9223372036854775808 to -2))
+error E3005: <fragment>:6:2: Value -1 is outside the range of 'ExitCode' (int(0 to 4294967295))
 ```
 
 ### Error: top-level let cast out of range

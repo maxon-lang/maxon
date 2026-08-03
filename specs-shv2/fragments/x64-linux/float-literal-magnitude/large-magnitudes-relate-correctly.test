@@ -22,9 +22,10 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rax, 0
-    x64.movsdRegRip xmm0, [rip + __fconst_0]
-    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc above, positiveBig
     x64.jmp critsplit
@@ -34,8 +35,8 @@ func @main {
   critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.movsdRegRip xmm0, [rip + __fconst_2]
-    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc above, positiveSmall
     x64.jmp critsplit
@@ -45,11 +46,11 @@ func @main {
   critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.movsdRegRip xmm0, [rip + __fconst_3]
-    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.movsdRegRip xmm0, [rip + __fconst_4]
+    x64.movsdRegRip xmm1, [rip + __fconst_4]
     x64.mulsdRegReg xmm0, xmm0, xmm1
-    x64.movsdRegRip xmm1, [rip + __fconst_0]
-    x64.movsdRegRip xmm2, [rip + __fconst_4]
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.movsdRegRip xmm2, [rip + __fconst_5]
     x64.divsdRegReg xmm1, xmm1, xmm2
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc above, squareIsSameDecade
@@ -60,10 +61,10 @@ func @main {
   critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.movsdRegRip xmm0, [rip + __fconst_0]
-    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
     x64.mulsdRegReg xmm0, xmm0, xmm1
-    x64.movsdRegRip xmm1, [rip + __fconst_5]
+    x64.movsdRegRip xmm1, [rip + __fconst_6]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc above, reciprocalIsOne
     x64.jmp critsplit
@@ -74,6 +75,23 @@ func @main {
     x64.movRegReg r8, rax
     x64.jmp ifcont
   ifcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

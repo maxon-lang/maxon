@@ -825,20 +825,57 @@ type RangeCheckEmitter
 		return panicBlock
 	end 'emitPanicBlock'
 
-	// The unreachable terminator after `mrt_panic`: a `retVoid` for a void function, else a `ret` of a
-	// zero constant in the return type's register file (an f64 zero for a float return, an i64 zero
-	// otherwise — the same class rule `emitZeroConstOfReturnType` follows so the backend's return move
-	// never crosses register files). Mirrors the parser's `emitDeadReturn` after `panicAbort`.
+	// The unreachable terminator after `mrt_panic`. `mrt_panic` never returns, so none of these bits is
+	// ever read — but the block still has to LEAVE the function the way the function's ABI says, because a
+	// verifying backend reads the shape whether or not the path runs.
+	//
+	// ⛔⛔ **IT WROTE ONE REGISTER IN A FUNCTION WHOSE ABI RETURNS TWO, AND wasm REFUSED THE MODULE (X6).**
+	// A THROWING function returns through `errorReturn` — the primary value AND the error flag — which
+	// `LowerMaxonToStd.emitRetOrErrorReturn` calls *"the ONE place the ABI decides ret-vs-errorReturn"*.
+	// It was not: this pass appends its blocks AFTER lowering has run, so it is a second decider, and it
+	// answered `ret` for every function. On x64 the missing flag register is invisible (the path aborts);
+	// on wasm the functype is multi-value and `wasm-tools component new` rejected the whole component with
+	// `type mismatch: expected i64, found i32`.
+	//
+	// ⚠ **PRE-EXISTING, and it stayed unreachable for a precise reason**: it needs a throwing function
+	// that also carries a guard, i.e. one with a ranged parameter or a ranged return. Nothing had one on a
+	// verifying backend until `ExitCode` gained a range. Pinned by `try-otherwise-value-flow`'s five
+	// `returns ExitCode throws E` cases on the wasm lane, which were RED against the first X6 build.
+	//
+	// ⭐ The zero's TYPE is likewise READ off `returnType` rather than classified from it. Lowering's
+	// `emitZeroConstOfReturnType` picks `f64`-or-`i64` because all it owes is the REGISTER FILE; taking
+	// the declared type itself owes nothing extra and cannot be wrong for a narrow one.
 	function emitDeadReturn(block IrBlock)
-		if stdReturnTypeIsVoid(self.func.returnType) 'void'
-			self.module.setTerminator(block, op: StdOp.retVoid)
+		if throwsClauseIsThrowing(self.func.throwsTypeName) 'throwing'
+			let dead = self.emitZeroConstOf(block, valueType: self.deadReturnValueType())
+			let flag = self.emitZeroConstOf(block, valueType: StdType.i64)
+			self.module.setTerminator(block, op: StdOp.errorReturn(dead, errorFlagId: flag))
 			return
-		end 'void'
-		let zero = self.mintId()
-		let zeroType = StdType.f64 if stdReturnTypeIsFloat(self.func.returnType) else StdType.i64
-		self.module.appendOp(block, op: StdOp.const(zero, value: 0, valueType: zeroType))
-		self.module.setTerminator(block, op: StdOp.ret(zero))
+		end 'throwing'
+
+		match self.func.returnType 'rt'
+			void then self.module.setTerminator(block, op: StdOp.retVoid)
+			value(inner) then self.module.setTerminator(block, op: StdOp.ret(self.emitZeroConstOf(block, valueType: inner)))
+		end 'rt'
 	end 'emitDeadReturn'
+
+	// The Std type the dead PRIMARY value is born in. A void THROWING function still writes the primary
+	// register — its caller reads the flag beside a value it ignores — and a machine word is the family
+	// default there, exactly as `LowerMaxonToStd.emitRetVoidOrErrorReturn` gives it.
+	function deadReturnValueType() returns StdType
+		return match self.func.returnType 'rt'
+			void gives StdType.i64
+			value(inner) gives inner
+		end 'rt'
+	end 'deadReturnValueType'
+
+	// A zero `const` of an EXPLICIT type, appended to `block` — the one place this pass mints one, so the
+	// throwing and non-throwing dead returns cannot come to disagree about how a zero is made.
+	function emitZeroConstOf(block IrBlock, valueType StdType) returns ValueId
+		let zero = self.mintId()
+		self.module.appendOp(block, op: StdOp.const(zero, value: 0, valueType: valueType))
+		return zero
+	end 'emitZeroConstOf'
 
 	// Emit the compare cascade, `head` first: each check is `const bound; cmp value <pred> bound;
 	// condBranch (predicate TRUE) -> trueTarget, (FALSE) -> next`. The TRUE target is `panicId` for an

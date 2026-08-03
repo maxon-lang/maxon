@@ -45,7 +45,7 @@ end 'Pair'
 typealias WidgetPair = Pair with Widget
 
 function main() returns ExitCode
-	return WidgetPair.create(Widget.create(3), b: Widget.create(3)).go() as ExitCode
+	return WidgetPair.create(Widget.create(3), b: Widget.create(3)).go()
 end 'main'
 ---
 ExitCode: 112
@@ -254,6 +254,26 @@ func @main {
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r14, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.movRegReg r8, r14
     x64.epilogue 32
     x64.popReg r14

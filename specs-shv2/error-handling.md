@@ -2124,7 +2124,7 @@ function firstSpace(s String) returns Num throws StringError
 end 'firstSpace'
 
 function main() returns ExitCode
-	return (try firstSpace("ab cd") otherwise 99) as ExitCode
+	return (try firstSpace("ab cd") otherwise 99)
 end 'main'
 ```
 ```exitcode
@@ -2148,7 +2148,7 @@ function firstSpace(s String) returns Num throws SearchFailed
 end 'firstSpace'
 
 function main() returns ExitCode
-	return (try firstSpace("ab cd") otherwise 99) as ExitCode
+	return (try firstSpace("ab cd") otherwise 99)
 end 'main'
 ```
 ```exitcode

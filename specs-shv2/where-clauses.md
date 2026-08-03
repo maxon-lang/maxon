@@ -1585,7 +1585,7 @@ typealias WidgetBox = Box with Widget
 
 function main() returns ExitCode
 	let b = WidgetBox.create(Widget.create(0))
-	return b.digits() as ExitCode
+	return b.digits()
 end 'main'
 ```
 ```exitcode
@@ -1660,7 +1660,7 @@ end 'Box'
 typealias WidgetBox = Box with Widget
 
 function main() returns ExitCode
-	return WidgetBox.create(Widget.create(0)).go() as ExitCode
+	return WidgetBox.create(Widget.create(0)).go()
 end 'main'
 ```
 ```exitcode
@@ -1724,7 +1724,7 @@ end 'Pair'
 typealias WidgetPair = Pair with Widget
 
 function main() returns ExitCode
-	return WidgetPair.create(Widget.create(3), b: Widget.create(3)).go() as ExitCode
+	return WidgetPair.create(Widget.create(3), b: Widget.create(3)).go()
 end 'main'
 ```
 ```exitcode
@@ -2062,7 +2062,7 @@ end 'Box'
 typealias WidgetBox = Box with Widget
 
 function main() returns ExitCode
-	return WidgetBox.create(Widget.create(2)).go() as ExitCode
+	return WidgetBox.create(Widget.create(2)).go()
 end 'main'
 ```
 ```exitcode

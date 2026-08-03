@@ -122,7 +122,7 @@ typealias DurationMs = int(0 to 10)
 
 function main() returns ExitCode
 	let d = 50 as DurationMs
-	return d as ExitCode
+	return d
 end 'main'
 ```
 ```maxoncstderr
@@ -137,7 +137,7 @@ typealias DurationMs = int(0 to 10)
 
 function main() returns ExitCode
 	let d = 5 as DurationMs
-	return d as ExitCode
+	return d
 end 'main'
 ```
 ```exitcode

@@ -1692,9 +1692,14 @@ end 'FieldChainStep'
 // has at runtime, so a future range check compares against it directly.
 let U8MaxBound = u8.max as ParsedInt
 let U16MaxBound = u16.max as ParsedInt
-let U32MaxBound = u32.max as ParsedInt
 
-// EXPORTED, alone among the four: `Project`'s seeded `stdlib/Array.maxon` alias declares
+// EXPORTED, with `U64MaxBound` below and for its reason: `Project`'s BUILTIN `ExitCode` alias is
+// `int(0 to u32.max)` (X6), and its upper bound must be the very number a PARSED `u32.max` bound
+// gives, so that a program spelling `typealias Handle = int(0 to u32.max)` and the builtin agree by
+// construction rather than by two literals that happen to match.
+export let U32MaxBound = u32.max as ParsedInt
+
+// EXPORTED, for the reason above: `Project`'s seeded `stdlib/Array.maxon` alias declares
 // `int(0 to u64.max)` and must spell that upper bound the same way a PARSED `u64.max` bound does —
 // the wrapped -1 the registry stores. A second literal there would be the same number written twice,
 // in the one place a divergence would be silent (both spellings compile; only one matches).

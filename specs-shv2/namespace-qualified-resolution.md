@@ -56,7 +56,7 @@ end 'twice'
 function main() returns ExitCode
 	lib.inner.shout()
 	let v = lib.inner.bump(20)
-	return lib.twice(v) as ExitCode
+	return lib.twice(v)
 end 'main'
 ```
 ```exitcode
@@ -105,7 +105,7 @@ export typealias Score = int(0 to 10)
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let b = 50 as legacy.Score
-	return b as ExitCode
+	return b
 end 'main'
 ```
 ```maxoncstderr
@@ -137,7 +137,7 @@ end 'take'
 
 function main() returns ExitCode
 	let a = take(41 as api.Score)
-	return lib.inner.from(a) as ExitCode
+	return lib.inner.from(a)
 end 'main'
 ```
 ```exitcode
@@ -169,7 +169,7 @@ export type Point
 end 'Point'
 
 function main() returns ExitCode
-	return Point.make() as ExitCode
+	return Point.make()
 end 'main'
 ```
 ```exitcode
@@ -223,7 +223,7 @@ end 'seen'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return utils.hiddenHelper() as ExitCode
+	return utils.hiddenHelper()
 end 'main'
 ```
 ```maxoncstderr
@@ -248,7 +248,7 @@ end 'seen'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return lib.inner.scopedHelper() as ExitCode
+	return lib.inner.scopedHelper()
 end 'main'
 ```
 ```maxoncstderr
@@ -271,7 +271,7 @@ end 'seed'
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let x = 21 as feature.Level
-	return x as ExitCode
+	return x
 end 'main'
 ```
 ```maxoncstderr
@@ -396,7 +396,7 @@ end 'pick'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return dir.pick() as ExitCode
+	return dir.pick()
 end 'main'
 ```
 ```maxoncstderr
@@ -427,7 +427,7 @@ end 'pick'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	return pick() as ExitCode
+	return pick()
 end 'main'
 ```
 ```maxoncstderr
@@ -477,7 +477,7 @@ export typealias Score = int(0 to 200)
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let x = 120 as Score
-	return x as ExitCode
+	return x
 end 'main'
 ```
 ```exitcode
@@ -700,7 +700,7 @@ end 'helper'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return helper() as ExitCode
+	return helper()
 end 'main'
 ```
 ```maxoncstderr
@@ -752,7 +752,7 @@ end 'Point'
 
 function main() returns ExitCode
 	let p = Point.create()
-	return p.x as ExitCode
+	return p.x
 end 'main'
 ```
 ```maxoncstderr
@@ -794,7 +794,7 @@ export type Point
 end 'Point'
 
 function main() returns ExitCode
-	return Point.create() as ExitCode
+	return Point.create()
 end 'main'
 ```
 ```maxoncstderr
@@ -906,7 +906,7 @@ end 'pick'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return pick() as ExitCode
+	return pick()
 end 'main'
 ```
 ```maxoncstderr

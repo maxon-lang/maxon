@@ -1076,7 +1076,7 @@ typealias Byte = int(0 to 200)
 typealias Bytes = Array with Byte
 
 function takes(b Bytes) returns ExitCode
-	return (try b.get(0) otherwise 0) as ExitCode
+	return (try b.get(0) otherwise 0)
 end 'takes'
 
 function main() returns ExitCode

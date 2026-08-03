@@ -268,21 +268,63 @@ func @main {
     x64.callDirect __print_string
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.loadRegSlot rbx, slot3
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.loadRegSlot r12, slot2
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.loadRegSlot rax, slot3
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.leaRegRegReg rax, rax, rcx
-    x64.leaRegRegImm32 r13, rax, 7
+    x64.leaRegRegImm32 rbx, rax, 7
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 232
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __destruct___Tuple2.String.int
-    x64.movRegReg rcx, r12
+    x64.loadRegSlot rcx, slot2
     x64.callDirect __destruct___Tuple2.String.int
     x64.loadRegSlot rcx, slot0
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rcx, slot3
     x64.callDirect __mm_decref
-    x64.movRegReg r8, r13
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 232
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rbx
     x64.epilogue 232
     x64.popReg r15
     x64.popReg r14
