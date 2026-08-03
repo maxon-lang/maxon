@@ -2555,8 +2555,17 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(defaultConst);
     StdI64 result = defaultConst.Result;
 
-    bool isWindows = (_currentTarget?.Os ?? "windows").Equals("windows", StringComparison.InvariantCultureIgnoreCase);
-    var entries = isWindows ? _win32IoErrorTags : _posixIoErrorTags;
+    // THROW rather than default to Windows. `Convert` sets `_currentTarget` unconditionally before
+    // anything reaches here, so a null is a pass reaching this emitter from outside conversion — and
+    // the old `?? "windows"` answered that by silently emitting the Win32 errno table into a macOS or
+    // Linux binary, which is a WRONG ANSWER at run time and nothing anywhere would have reported it.
+    // The comparison is against the roster's own spelling, not a bare literal with a culture-sensitive
+    // compare: `CompileTarget.Os` only ever holds one of those constants.
+    var target = _currentTarget
+      ?? throw new InvalidOperationException(
+        "SelectIoErrorOrdinal: no active CompileTarget — the io-error mapping table is chosen by the "
+        + "target's OS, and there is no honest default for it");
+    var entries = target.Os == CompileTarget.WindowsOs ? _win32IoErrorTags : _posixIoErrorTags;
 
     foreach (var (code, flagValue) in entries) {
       var codeConst = new StdConstI64Op(code);

@@ -134,7 +134,7 @@ public class IrPipeline {
 
     TreeLock.Touch();
 
-    if (target.Arch == "arm64") {
+    if (target.Arch == CompileTarget.Arm64Arch) {
       IrModule<ARM64Op> arm64Module;
       if (timings != null) {
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -161,7 +161,7 @@ public class IrPipeline {
       if (timings != null)
         Console.Error.WriteLine("Pipeline:" + StageTimer.Format(timings));
       return new IrPipelineResult { ARM64Module = arm64Module, AllStagesIr = irBuilder?.ToString().TrimEnd() };
-    } else if (target.Arch == "x64") {
+    } else if (target.Arch == CompileTarget.X64Arch) {
       IrModule<X86Op> x86Module;
       if (timings != null) {
         var sw = new System.Diagnostics.Stopwatch();

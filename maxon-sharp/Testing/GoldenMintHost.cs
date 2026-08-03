@@ -16,11 +16,18 @@ namespace MaxonSharp.Testing;
 /// compiler exactly one thing does: the test RAN and produced the expected answer. `maxon-sharp`
 /// launches every test binary with <c>Process.Start</c> and has no runner, no emulator and no VM — so
 /// a foreign-OS binary cannot be executed here at all, and every golden a cross-OS run could write
-/// would be minted from a compile nobody ever ran. (Measured on an arm64-macOS host, before this rule
-/// existed: <c>spec-test --target=x64-windows --update-required</c> rewrote spec blocks for six specs
-/// and then ABORTED — an unhandled <c>Win32Exception (13) Permission denied</c>, exit 134 — at the
-/// first block whose regeneration has to run the program. A stack trace, and six specs' worth of
-/// unvalidated goldens already written.)</para>
+/// would be minted from a compile nobody ever ran.</para>
+///
+/// <para>MEASURED on an arm64-macOS host at <c>70861315c</c>, before this rule existed, and stated as
+/// what it actually was — twice, on a clean tree: <c>spec-test --target=x64-windows --update-required</c>
+/// regenerated every <c>RequiredIR</c>/<c>maxoncstderr</c> block whose regeneration needs only a
+/// COMPILE, then ABORTED with an unhandled <c>Win32Exception (13) Permission denied</c> — exit 134, a
+/// stack trace where a diagnostic belongs — at the first block whose regeneration has to RUN the
+/// program. ⚠ Nothing was committed by that run, and the reason matters: <c>UpdateRequiredInSpecFiles</c>
+/// writes a spec file only when the regenerated block DIFFERS, and none did, because the frontend
+/// really does follow <c>--target</c> since <c>bc21be3e1</c>. So the measured damage is not bytes on
+/// disk — it is that the compare which decided "no change" was made against output nobody could run,
+/// and would have written had it differed. That is the whole of what this rule refuses.</para>
 ///
 /// <para>⚠ ARCHITECTURE IS DELIBERATELY NOT PART OF THIS RULE, and it is not an oversight. A host
 /// commonly runs a foreign architecture's binaries for its own OS — Windows-on-ARM runs x64 under

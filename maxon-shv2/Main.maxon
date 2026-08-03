@@ -291,6 +291,16 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// protocol on stdin/stdout instead of running a suite and reporting on it. It must be checked
 	// before anything is printed — a worker's stdout is a wire, not a report.
 	if args.workerPersistent 'isPoolWorker'
+		// ⚖ THE ONE QUESTION A WORKER MUST STILL ASK: can this host execute what it is about to build?
+		// Everything below this branch is deliberately the parent's — but the worker is a SECOND DOOR
+		// onto the golden writer and it needs no flag to mint, and a `maxoncstderr` case reaches that
+		// writer without ever launching a binary, so nothing downstream refuses it. `probeInstalled:
+		// false` takes the classification and leaves the spawned probe to the parent, which is what
+		// makes this affordable per worker; see `requireRunnerAvailable`. It prints nothing on the
+		// success path, so the wire below stays untouched, and a refusal panics to stderr — which the
+		// parent drains and reports.
+		requireRunnerAvailable(effectiveTarget, probeInstalled: false)
+
 		return runPersistentWorker(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, effectiveTarget: effectiveTarget)
 	end 'isPoolWorker'
 
@@ -309,7 +319,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// cross-target run whose runner is missing fails identically for every test, so discovering it
 	// per test turns one fact into hundreds of failures — and inside a worker, into a dead pipe whose
 	// real message is in another process's stderr. The workers inherit the answer by never starting.
-	requireRunnerAvailable(effectiveTarget)
+	requireRunnerAvailable(effectiveTarget, probeInstalled: true)
 
 	// The hand-built ladders' index against the ladders themselves, asked once and by the PARENT for
 	// `requireRunnerAvailable`'s reason. It rides the suite because the suite is the thing that already

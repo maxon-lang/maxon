@@ -1026,28 +1026,20 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         }
       }
 
-      // Check Required Rdata (PE-only)
-      if (successExpectation.RequiredRdata != null && _target.Os == "windows") {
-        var (rdataPassed, rdataMessage) = CheckRequiredRdata(successExpectation.RequiredRdata, exePath);
-        if (!rdataPassed) {
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = false,
-            ErrorMessage = $"Required Rdata mismatch: {rdataMessage}",
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
-        }
-      }
+      // The section pins read PE SECTION HEADERS (`ParsePeSections`), so they are asked of a PE and
+      // of nothing else. ASKED of the roster — `ObjectFormat` is where "which targets are a PE" is
+      // decided — rather than spelled here as `Os == "windows"`, which was a second, independent
+      // statement of the same fact: add a writer for another PE-hosted OS and the roster would know
+      // while this line would silently stop checking.
+      if (_target.ObjectFormat == Compiler.ObjectFormat.Pe) {
+        foreach (var (sectionName, required) in RequiredSectionPins(successExpectation)) {
+          var (sectionPassed, sectionMessage) = CheckRequiredSection(required, exePath, sectionName);
+          if (sectionPassed) continue;
 
-      // Check Required Data (.data section, PE-only)
-      if (successExpectation.RequiredData != null && _target.Os == "windows") {
-        var (dataPassed, dataMessage) = CheckRequiredData(successExpectation.RequiredData, exePath);
-        if (!dataPassed) {
           return new TestResult {
             TestName = fragment.TestName,
             Passed = false,
-            ErrorMessage = $"Required Data mismatch: {dataMessage}",
+            ErrorMessage = $"Required {sectionName} mismatch: {sectionMessage}",
             Duration = sw.Elapsed,
             FilePath = fragment.FilePath
           };
@@ -1537,7 +1529,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var requiredSections = ParseIrSections(required);
     var actualSections = ParseIrSections(actual);
 
-    var otherBackend = target.Arch == "arm64" ? "x86" : "arm64";
+    // The ARCH vocabulary decides, the STAGE vocabulary is produced, and they are two
+    // vocabularies that happen to spell `arm64` the same way — as `x64` vs `x86` proves. Spelled
+    // as bare literals, renaming a stage name would leave this line comparing the wrong one.
+    var otherBackend = target.Arch == Compiler.CompileTarget.Arm64Arch
+      ? Compiler.PipelineStages.X86
+      : Compiler.PipelineStages.ARM64;
 
     // Compare only sections that are relevant: skip the other backend's section
     foreach (var (name, requiredContent) in requiredSections) {
@@ -1679,7 +1676,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// Replace CWD with placeholder and unify path separators to native format.
   private string NormalizePathsForComparison(string s) {
     var cwd = Directory.GetCurrentDirectory();
-    if (_target.Os == "windows") {
+    if (_target.Os == Compiler.CompileTarget.WindowsOs) {
       s = s.Replace(cwd.Replace('/', '\\'), "{CWD}");
       s = s.Replace('/', '\\');
     } else {
@@ -1719,11 +1716,18 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   // PE section content verification
   // ============================================================================
 
-  private static (bool Passed, string? Message) CheckRequiredRdata(string requiredRdata, string exePath) =>
-    CheckRequiredSection(requiredRdata, exePath, ".rdata");
+  /// The PE sections a spec case can pin, paired with the block that pins each — the ONE place the two
+  /// pins are enumerated, so a third one is added by adding a row rather than by copying a twelve-line
+  /// check that already existed twice. Absent blocks are dropped here, so the caller has nothing to
+  /// skip.
+  private static IEnumerable<(string SectionName, string Required)> RequiredSectionPins(
+      SuccessExpectation expectation) {
+    if (expectation.RequiredRdata is { } rdata) yield return (RdataSectionName, rdata);
+    if (expectation.RequiredData is { } data) yield return (DataSectionName, data);
+  }
 
-  private static (bool Passed, string? Message) CheckRequiredData(string requiredData, string exePath) =>
-    CheckRequiredSection(requiredData, exePath, ".data");
+  private const string RdataSectionName = ".rdata";
+  private const string DataSectionName = ".data";
 
   private static (bool Passed, string? Message) CheckRequiredSection(string requiredContent, string exePath, string sectionName) {
     var expectedBytes = ParseTypedSectionValues(requiredContent);

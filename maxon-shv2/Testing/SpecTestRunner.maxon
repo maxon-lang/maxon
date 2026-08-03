@@ -1566,12 +1566,37 @@ end 'buildWslRunCommand'
 // and `findWasmtimePath` already panics with its own fix when it cannot. The linux arm has to
 // actually ASK, because it is checking two things PATH cannot answer on its own: that OrbStack is
 // installed, and that the machine the run names exists and can execute something.
-export function requireRunnerAvailable(effectiveTarget Target)
+// ⚖ `probeInstalled` SPLITS THE TWO HALVES, AND BOTH DOORS ASK THIS ONE FUNCTION. The classification —
+// "is there a runner for this target on this host AT ALL" — is `externalRunnerFor`, is pure, and costs
+// nothing; the PROBE that follows spawns a process to ask whether that runner is installed and its
+// machine reachable. Only the parent can afford the second, for the reason above. A worker asks with
+// `probeInstalled: false` and inherits the rest by never having started otherwise.
+//
+// ⚠ WHY A WORKER HAS TO ASK AT ALL — IT IS A SECOND DOOR ONTO THE GOLDEN WRITER, AND IT NEEDS NO FLAG.
+// `--worker-persistent` returns from `runSpecTest` before this preflight, deliberately (a worker's
+// stdout is a wire, not a report), and from there `runSinglesJob` reaches `checkTestFragment`, which
+// MINTS a golden for any test that has none. A run-expectation case is still refused per-test, because
+// `buildRunCommand` has to spawn something. A `maxoncstderr` CASE IS REFUSED BY NOTHING:
+// `checkCompilerError` compares the compiler's own stderr and never launches a binary, so it PASSES
+// and its golden is written. MEASURED on an arm64-macOS host before this parameter existed: deleting
+// `specs-shv2/fragments/x64-windows/expected-expression-error/let-rhs-missing.test` and feeding one
+// `JOB:singles:` line to `spec-test --worker-persistent --target=x64-windows` re-minted it — no flag,
+// no tree lock, no runner — from a compile nothing on this machine can execute.
+export function requireRunnerAvailable(effectiveTarget Target, probeInstalled bool)
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
 		return
 	end 'hostSpawn'
 
-	match externalRunnerFor(effectiveTarget) 'runner'
+	// THE REFUSAL ITSELF: this is the one table, and it panics naming both targets for exactly the OS
+	// pairings this harness has no runner for. Read before the probe question so that half is asked on
+	// every path through here.
+	let runner = externalRunnerFor(effectiveTarget)
+
+	if not probeInstalled 'classifyOnly'
+		return
+	end 'classifyOnly'
+
+	match runner 'runner'
 		wasmtime then _ = findWasmtimePath()
 		orbstack then requireOrbMachineReachable(effectiveTarget)
 		wsl then requireWslAvailable(effectiveTarget)
