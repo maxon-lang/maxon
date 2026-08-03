@@ -1556,6 +1556,102 @@ end 'main'
 -00042
 ```
 
+### Integer Format Specifier - A Field Wider Than Any Buffer
+
+⭐ **A WIDTH IS A NUMBER THE PROGRAM ASKED FOR, NOT A BUDGET THE RUNTIME SET.** The formatted
+integer converter used to write into a fixed 72-byte scratch and take the field width from the
+spec with nothing checking it against that size, so `"{n:200}"` wrote 200 bytes into 72. It
+neither crashed nor reported anything: the NEXT part's block was carved inside the overrun and
+the first part then read those bytes back as its own padding, so `"A<{a:200}>B<{b:X}>"` printed
+`DEADBEEF` in the middle of the spaces and lost every character after it. A field is built in
+`stdlib` over a String that grows, so a width has no ceiling left to breach.
+
+<!-- test: int-format-wide-field -->
+```maxon
+function main() returns ExitCode
+	let a = 7
+	let b = 3735928559
+	print("A<{a:200}>B<{b:X}>\n")
+	print("{a:120}|\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+A<                                                                                                                                                                                                       7>B<DEADBEEF>
+                                                                                                                       7|
+```
+
+### Integer Format Specifier - Int-Backed Enum
+
+A bare `"{e}"` on an enum with explicit integer backing values renders that value, so a format
+specifier on one has exactly the meaning it has on any other integer. It used to be dropped in
+silence — `"{code:08}"` printed `404` rather than `00000404`, and `"{code:x}"` printed `404`
+rather than `194` — because the enum arm of interpolation took no format specifier at all.
+
+<!-- test: int-format-enum-backing -->
+```maxon
+enum ErrorCode
+	ok = 0
+	notFound = 404
+end 'ErrorCode'
+
+function main() returns ExitCode
+	let code = ErrorCode.notFound
+	print("[{code}]\n")
+	print("[{code:08}]\n")
+	print("[{code:x}]\n")
+	print("[{code:6}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[404]
+[00000404]
+[194]
+[   404]
+```
+
+### Integer Format Specifier - Unsigned Decimal
+
+⭐ **A FORMAT SPECIFIER NEVER CHANGES WHICH NUMBER IS BEING PRINTED.** An `int(0 to u64.max)`
+value with bit 63 set is a large positive number, and `"{u}"`, `"{u:d}"` and `"{u:25}"` must all
+say so. The formatted converter used to re-derive signedness from the sign BIT instead of taking
+it from the type the compiler already knew, so `"{u:d}"` read `u64.max` as `-1` — the same value
+the unformatted spelling printed as `18446744073709551615`. Signedness is decided once, by the
+compiler, and handed to the renderer.
+
+<!-- test: int-format-unsigned-decimal -->
+```maxon
+typealias Wide = int(0 to u64.max)
+
+function show(u Wide)
+	print("[{u}] [{u:d}] [{u:25}] [{u:x}]\n")
+end 'show'
+
+function main() returns ExitCode
+	show(u64.max)
+	// Bit 63 alone — the value a SIGNED reading calls i64.min. Written as a shift because a bare
+	// literal is an `int`, and 9223372036854775808 is past the end of one (E2011).
+	show(1 shl 63)
+	show(42)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[18446744073709551615] [18446744073709551615] [     18446744073709551615] [ffffffffffffffff]
+[9223372036854775808] [9223372036854775808] [      9223372036854775808] [8000000000000000]
+[42] [42] [                       42] [2a]
+```
+
 ### Float Format Specifier - Precision
 
 <!-- test: float-format-precision -->

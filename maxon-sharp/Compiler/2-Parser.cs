@@ -18518,12 +18518,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private const string FloatToStringPaddedStdlibFunction = "__float_toStringPadded";
   private const string FloatToStringFixedStdlibFunction = "__float_toStringFixed";
 
+  /// `stdlib/Builtins.maxon`'s integer renderer — the ONE spelling of a FORMATTED integer, for the
+  /// same reason and by the same route as the float ones above.
+  private const string IntToStringFormattedStdlibFunction = "__int_toStringFormatted";
+
   /// The widest field and the deepest precision `stdlib/Builtins.maxon`'s `PadWidth` and
   /// `DecimalPrecision` accept. The spec is parsed HERE and the bounds are held THERE, so a spec past
   /// one is refused with a diagnostic instead of reaching a converter that cannot hold it. (The
-  /// hand-emitted routine this replaces had no bound at all: `"{f:200}"` wrote 200 bytes into a
-  /// 72-byte scratch buffer.)
-  private const long MaxFloatFormatField = uint.MaxValue;
+  /// hand-emitted routines this replaces had no bound at all: `"{f:200}"` and `"{n:200}"` each wrote
+  /// 200 bytes into a 72-byte scratch buffer.)
+  private const long MaxFormatFieldWidth = uint.MaxValue;
+
+  /// HALF of each base an integer format specifier can select, which is the form `stdlib`'s
+  /// `__unsignedDigitStep` takes. Every base here is EVEN, and halving the 64-bit pattern before
+  /// dividing is what lets ONE ordinary signed division serve all four — see that function for why
+  /// that is what makes a value with bit 63 set convert correctly.
+  private const long DecimalHalfRadix = 5;
+  private const long HexHalfRadix = 8;
+  private const long OctalHalfRadix = 4;
+  private const long BinaryHalfRadix = 1;
 
   private MaxonStruct EmitStringLiteralWithInterpolation(Token token) {
     var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
@@ -18615,9 +18628,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
         var (exprValue, _exprKind) = ParseInterpolationExpressionWithKind(exprText, token.Line, token.Column + 1 + exprStart);
 
-        exprValue = RewriteFloatPartAsStdlibText(exprValue, ref formatSpec, stringTypeName, token);
-
+        // Read BEFORE the rewrites: it is the compiler's answer to "is this value signed?", and both
+        // the integer rewrite and the lowering's unformatted arm need it off the ORIGINAL value —
+        // once a part has become a String there is no ranged type left to ask about.
         var exprOptimalType = GetOptimalType(exprValue);
+
+        exprValue = RewriteFloatPartAsStdlibText(exprValue, ref formatSpec, stringTypeName, token);
+        exprValue = RewriteIntegerPartAsStdlibText(exprValue, ref formatSpec, exprOptimalType, stringTypeName, token);
 
         // Non-String structs need a toString call
         if (exprValue is MaxonStruct structVal && structVal.TypeName != stringTypeName) {
@@ -18742,6 +18759,106 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// Rewrites a FORMATTED integer interpolation part into a call to `stdlib/Builtins.maxon`'s
+  /// `__int_toStringFormatted`.
+  ///
+  /// ⭐ A FIELD WIDTH IS UNBOUNDED, SO IT CANNOT BE WRITTEN INTO A FIXED SCRATCH. The hand-emitted
+  /// `maxon_i64_to_string_fmt` this replaces converted into a 72-byte buffer and took the width from
+  /// the specifier with nothing checking it against that size, so `"{n:200}"` wrote 200 bytes into 72
+  /// — no diagnostic and no crash at the write, with the next part's block carved inside the overrun.
+  /// A stdlib String grows, so the ceiling is gone rather than raised.
+  ///
+  /// ⚠ ONLY the formatted spelling moves. `"{n}"` keeps `maxon_i64_to_string`, whose 21-byte budget is
+  /// bounded BY CONSTRUCTION (an i64 has at most 20 digits and a sign), which is the whole reason the
+  /// defect cannot exist there — and it is the hot path the byte-fusion single-allocation case rests
+  /// on. The two cannot drift apart the way the float pair did: decimal conversion of a magnitude has
+  /// exactly one answer, and the one thing that DID differ — signedness — is now decided here, once,
+  /// and handed over as an argument rather than re-derived from bit 63 at the far end.
+  ///
+  /// The rewrite has to happen in the PARSER for the same reason the float one does — see
+  /// `RewriteFloatPartAsStdlibText`.
+  /// </summary>
+  private MaxonValue RewriteIntegerPartAsStdlibText(
+      MaxonValue exprValue, ref string? formatSpec, IrType? optimalType, string stringTypeName, Token token) {
+    if (formatSpec == null) return exprValue;
+
+    MaxonValue intValue;
+    bool backingIsUnsigned;
+    if (exprValue is MaxonInteger or MaxonByte or MaxonShort) {
+      intValue = exprValue;
+      backingIsUnsigned = optimalType?.IsUnsigned ?? false;
+    } else if (exprValue is MaxonEnum enumValue
+               && _typeRegistry.TryGetValue(enumValue.TypeName, out var enumTypeDef)
+               && enumTypeDef is IrEnumType enumType
+               && enumType.HasExplicitBackingValues && !enumType.HasAssociatedValues
+               && (enumType.BackingType == null || enumType.BackingType == IrType.I64)) {
+      // An enum with explicit integer backing values interpolates AS that value, so a specifier on one
+      // has the meaning it has on any other integer. It used to be dropped in silence — the enum arm of
+      // the lowering takes no format spec at all, so `"{code:08}"` printed `404`, not `00000404`.
+      var rawValueOp = new MaxonEnumRawValueOp(exprValue, enumValue.TypeName, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(rawValueOp);
+      intValue = rawValueOp.Result;
+      backingIsUnsigned = false;
+    } else {
+      return exprValue;
+    }
+
+    var (width, zeroFill, halfRadix, uppercase, spellsASign) = ParseIntegerFormatSpec(formatSpec, token);
+
+    var callArgs = new List<MaxonValue> {
+      intValue,
+      EmitInterpolationLiteral(new MaxonLiteralOp(spellsASign && !backingIsUnsigned)),
+      EmitInterpolationLiteral(new MaxonLiteralOp(halfRadix)),
+      EmitInterpolationLiteral(new MaxonLiteralOp(uppercase)),
+      EmitInterpolationLiteral(new MaxonLiteralOp(width)),
+      EmitInterpolationLiteral(new MaxonLiteralOp(zeroFill)),
+    };
+    formatSpec = null;
+
+    var callee = ResolveFunctionOverloads(IntToStringFormattedStdlibFunction).SingleOrDefault()
+      ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+          $"String interpolation of a formatted integer needs '{IntToStringFormattedStdlibFunction}' from stdlib/Builtins.maxon",
+          token.Line, token.Column);
+
+    var callOp = new MaxonCallOp(callee.Name, callArgs, MaxonValueKind.Struct, stringTypeName);
+    _currentBlock!.AddOp(callOp);
+    InvalidateCachedSelfFields();
+    DeclareInterpolationToStringTemp(callOp.Result!, MaxonValueKind.Struct, stringTypeName);
+
+    return callOp.Result!;
+  }
+
+  /// <summary>
+  /// Splits an integer format spec into the constants `__int_toStringFormatted` takes.
+  ///
+  /// The grammar is `[0][width][base]`, read exactly as the hand-emitted runtime routine read it: a
+  /// leading `0` selects a zero fill, digits give the field width, and the first non-digit selects the
+  /// base. A character that names no base means decimal — that is the existing contract, and turning it
+  /// into a diagnostic would reject programs that compile today.
+  ///
+  /// ⚠ `x`, `X`, `o` and `b` SPELL THE BIT PATTERN AND NEVER A SIGN, which is why the base decides
+  /// whether signedness is even consulted. `specs/string-interpolation.md`'s `int-format-high-bit-unsigned`
+  /// pins it: `"{allBits:x}"` on `0 - 1` is `ffffffffffffffff`, not `-1`.
+  /// </summary>
+  private (long Width, bool ZeroFill, long HalfRadix, bool Uppercase, bool SpellsASign) ParseIntegerFormatSpec(
+      string formatSpec, Token token) {
+    var pos = 0;
+    var zeroFill = formatSpec.Length > 0 && formatSpec[0] == '0';
+    if (zeroFill) pos = 1;
+
+    var width = ReadFormatFieldNumber(formatSpec, ref pos, token);
+    var baseChar = pos < formatSpec.Length ? formatSpec[pos] : 'd';
+
+    return baseChar switch {
+      'x' => (width, zeroFill, HexHalfRadix, false, false),
+      'X' => (width, zeroFill, HexHalfRadix, true, false),
+      'o' => (width, zeroFill, OctalHalfRadix, false, false),
+      'b' => (width, zeroFill, BinaryHalfRadix, false, false),
+      _ => (width, zeroFill, DecimalHalfRadix, false, true),
+    };
+  }
+
+  /// <summary>
   /// Splits a float format spec into the three constants the stdlib renderers take.
   ///
   /// The grammar is `[0][width][.precision]` — a leading `0` selects a zero fill, and anything past
@@ -18757,20 +18874,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var zeroFill = formatSpec.Length > 1 && formatSpec[0] == '0' && formatSpec[1] != '.';
     if (zeroFill) pos = 1;
 
-    var width = ReadFloatFormatNumber(formatSpec, ref pos, token);
+    var width = ReadFormatFieldNumber(formatSpec, ref pos, token);
     if (pos >= formatSpec.Length || formatSpec[pos] != '.') return (width, zeroFill, null);
 
     pos++;
-    return (width, zeroFill, ReadFloatFormatNumber(formatSpec, ref pos, token));
+    return (width, zeroFill, ReadFormatFieldNumber(formatSpec, ref pos, token));
   }
 
-  private long ReadFloatFormatNumber(string formatSpec, ref int pos, Token token) {
+  private long ReadFormatFieldNumber(string formatSpec, ref int pos, Token token) {
     long value = 0;
     for (; pos < formatSpec.Length && char.IsAsciiDigit(formatSpec[pos]); pos++) {
       value = value * 10 + (formatSpec[pos] - '0');
-      if (value > MaxFloatFormatField)
+      if (value > MaxFormatFieldWidth)
         throw new CompileError(ErrorCode.ParserLiteralOverflow,
-            $"A width or precision in format specifier '{formatSpec}' is larger than {MaxFloatFormatField}",
+            $"A width or precision in format specifier '{formatSpec}' is larger than {MaxFormatFieldWidth}",
             token.Line, token.Column);
     }
 

@@ -529,8 +529,8 @@ public partial class ARM64CodeEmitter {
     EmitMaxonFaultBacktrace();
     EmitMaxonPanicPrintFrame();
     EmitMaxonBoundsCheck();
-    EmitMaxonI64ToString();
-    EmitMaxonU64ToString();
+    EmitMaxonIntegerToString("maxon_i64_to_string", signed: true);
+    EmitMaxonIntegerToString("maxon_u64_to_string", signed: false);
     EmitMaxonMemcpy();
     EmitMaxonMemcmp();
     EmitMaxonStrlen();
@@ -565,7 +565,6 @@ public partial class ARM64CodeEmitter {
 
     // Additional runtime functions
     EmitMaxonBoolToString();
-    EmitMaxonI64ToStringFmt();
     EmitNetTcpConnect();
     EmitManagedFileOpenRead();
     EmitManagedFileOpenWrite();
@@ -579,7 +578,6 @@ public partial class ARM64CodeEmitter {
     EmitDestructManagedDirectory();
     EmitMaxonFileExists();
     new Runtime.RuntimeEmitter(CreateBackend()).EmitMmRawAlloc260(Compiler.MmTrace);
-    EmitMaxonU64ToStringFmt();
     EmitMaxonSleep();
 
     // Green thread runtime for async/await
@@ -1258,10 +1256,21 @@ public partial class ARM64CodeEmitter {
     EmitWord(0xD65F03C0);
   }
 
-  // --- maxon_i64_to_string(value, buf) -> len ---
-  // Converts i64 to decimal string in buffer, returns length
-  private void EmitMaxonI64ToString() {
-    EmitRuntimeFunctionStart("maxon_i64_to_string", 2, 0x50);
+  /// <summary>
+  /// maxon_i64_to_string / maxon_u64_to_string (value, buf) -> len. Decimal, into a caller-owned
+  /// buffer of at least 21 bytes, which is the whole i64/u64 range plus a sign — so this conversion
+  /// is bounded BY CONSTRUCTION and no input can overrun it.
+  ///
+  /// ⚠ ONE C# METHOD EMITS BOTH, because the two differ ONLY in whether the sign is peeled off, and
+  /// spelling them separately is what let them drift: `maxon_u64_to_string` used to be a bare
+  /// `B maxon_i64_to_string`, so an `int(0 to u64.max)` with bit 63 set printed `18446744073709551615`
+  /// on x64 and `-1` here — one program, two answers, decided by the target.
+  ///
+  /// The digit loop is UDIV either way. Negating i64.min leaves i64.min, and reading THAT as unsigned
+  /// is exactly 2^63 = |i64.min|, so the signed path needs no special case for it.
+  /// </summary>
+  private void EmitMaxonIntegerToString(string name, bool signed) {
+    EmitRuntimeFunctionStart(name, 2, 0x50);
 
     EmitReloadArg(0); // value
     EmitReloadArg(1); // buf
@@ -1281,19 +1290,22 @@ public partial class ARM64CodeEmitter {
     // Save original buf as start position [x29, #40]
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X3, ARM64Register.X29, 40, 8);
 
-    // Check if negative
-    EmitWord(0xF100001F | (Reg(ARM64Register.X0) << 5)); // CMP X0, #0
-    _condBranchFixups.Add((_code.Count, positiveLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE positive
+    // An unsigned reading has no sign to peel: bit 63 is a VALUE bit, not a minus.
+    if (signed) {
+      // Check if negative
+      EmitWord(0xF100001F | (Reg(ARM64Register.X0) << 5)); // CMP X0, #0
+      _condBranchFixups.Add((_code.Count, positiveLabel));
+      EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE positive
 
-    // Negative: write '-'
-    EmitMovRegImm(ARM64Register.X4, (long)'-');
-    EmitWord(0x39000000 | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X4)); // STRB W4, [X3]
-    EmitAddSubImm(ARM64Register.X3, ARM64Register.X3, 1, isAdd: true);
-    // Save updated position
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X3, ARM64Register.X29, 40, 8);
-    // Negate value
-    EmitWord(0xCB000000 | (Reg(ARM64Register.X0) << 16) | (31u << 5) | Reg(ARM64Register.X0)); // NEG X0, X0
+      // Negative: write '-'
+      EmitMovRegImm(ARM64Register.X4, (long)'-');
+      EmitWord(0x39000000 | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X4)); // STRB W4, [X3]
+      EmitAddSubImm(ARM64Register.X3, ARM64Register.X3, 1, isAdd: true);
+      // Save updated position
+      EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X3, ARM64Register.X29, 40, 8);
+      // Negate value
+      EmitWord(0xCB000000 | (Reg(ARM64Register.X0) << 16) | (31u << 5) | Reg(ARM64Register.X0)); // NEG X0, X0
+    }
 
     DefineLabel(positiveLabel);
     // X0 = absolute value, X3 = write position
@@ -1352,12 +1364,6 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  private void EmitMaxonU64ToString() {
-    // For now, redirect to i64 version (handles positive numbers the same way)
-    DefineLabel("maxon_u64_to_string");
-    EmitBranch("maxon_i64_to_string");
-  }
-
   /// <summary>
   /// maxon_bool_to_string(value, buffer) -> length
   /// X0 = value (0=false, nonzero=true), X1 = buffer (>= 6 bytes)
@@ -1408,334 +1414,6 @@ public partial class ARM64CodeEmitter {
 
     DefineLabel(epilogueLabel);
     EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// maxon_i64_to_string_fmt(value, buffer, fmt_ptr, fmt_len) -> length
-  /// X0 = value, X1 = buffer (>= 72 bytes), X2 = fmt_ptr, X3 = fmt_len
-  /// Format: [0][width][type] where type = d/x/X/b/o
-  /// Stack layout (positive offsets from x29):
-  ///   [+16] = value, [+24] = buffer, [+32] = fmt_ptr, [+40] = fmt_len
-  ///   [+48] = fill_char, [+56] = min_width, [+64] = type_char
-  ///   [+72] = digit_start, [+80] = write_pos/end, [+88] = is_negative
-  ///
-  /// x/X/b/o all share one unsigned power-of-two-base loop, parameterized by a
-  /// shift (4/1/3) and mask held in registers across it. The alpha arm is only
-  /// reachable for hex: base 2 and base 8 cannot produce a digit >= 10.
-  /// </summary>
-  private void EmitMaxonI64ToStringFmt() {
-    var noFmtLabel = $"__i64fmt_nofmt_{_uniqueLabelCounter}";
-    var parseWidthLabel = $"__i64fmt_parsewidth_{_uniqueLabelCounter}";
-    var parseTypeLabel = $"__i64fmt_parsetype_{_uniqueLabelCounter}";
-    var positiveLabel = $"__i64fmt_positive_{_uniqueLabelCounter}";
-    var hexLowerLabel = $"__i64fmt_hexlower_{_uniqueLabelCounter}";
-    var hexUpperLabel = $"__i64fmt_hexupper_{_uniqueLabelCounter}";
-    var binaryLabel = $"__i64fmt_binary_{_uniqueLabelCounter}";
-    var octalLabel = $"__i64fmt_octal_{_uniqueLabelCounter}";
-    var decimalLabel = $"__i64fmt_decimal_{_uniqueLabelCounter}";
-    var unsignedConvertLabel = $"__i64fmt_unsignedconv_{_uniqueLabelCounter}";
-    var decConvertLabel = $"__i64fmt_decconv_{_uniqueLabelCounter}";
-    var reverseLabel = $"__i64fmt_reverse_{_uniqueLabelCounter}";
-    var reverseDoneLabel = $"__i64fmt_revdone_{_uniqueLabelCounter}";
-    var padLabel = $"__i64fmt_pad_{_uniqueLabelCounter}";
-    var doneLabel = $"__i64fmt_done_{_uniqueLabelCounter}";
-    _uniqueLabelCounter++;
-
-    EmitRuntimeFunctionStart("maxon_i64_to_string_fmt", 4, 0x70);
-
-    // Default: fill=' ', width=0, type=0(decimal)
-    EmitMovRegImm(ARM64Register.X4, (long)' ');
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X29, 48, 8); // fill
-    EmitMovRegImm(ARM64Register.X4, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X29, 56, 8); // width
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X29, 64, 8); // type
-
-    // If fmt_len == 0, skip parsing
-    EmitReloadArg(3); // fmt_len -> X3
-    _condBranchFixups.Add((_code.Count, noFmtLabel));
-    EmitWord(0xB4000000 | Reg(ARM64Register.X3)); // CBZ X3, noFmtLabel
-
-    // Parse format string
-    EmitReloadArg(2); // fmt_ptr -> X2
-    EmitReloadArg(3); // fmt_len -> X3
-    // X4 = current position in fmt string
-    EmitMovRegImm(ARM64Register.X4, 0);
-
-    // Check for '0' fill
-    EmitWord(0x39400000 | (Reg(ARM64Register.X2) << 5) | Reg(ARM64Register.X5)); // LDRB W5, [X2]
-    EmitMovRegImm(ARM64Register.X6, (long)'0');
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X5) << 5)); // CMP X5, X6
-    _condBranchFixups.Add((_code.Count, parseWidthLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ne)); // B.NE parseWidth
-    // fill = '0'
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X6, ARM64Register.X29, 48, 8);
-    EmitAddSubImm(ARM64Register.X4, ARM64Register.X4, 1, isAdd: true);
-
-    // Parse width digits
-    DefineLabel(parseWidthLabel);
-    // While pos < len and char is digit
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X3) << 16) | (Reg(ARM64Register.X4) << 5)); // CMP X4, X3
-    _condBranchFixups.Add((_code.Count, parseTypeLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE parseType
-    // Load char
-    EmitWord(0x38606800 | (Reg(ARM64Register.X4) << 16) | (Reg(ARM64Register.X2) << 5) | Reg(ARM64Register.X5)); // LDRB W5, [X2, X4]
-    // Check if digit: char >= '0' && char <= '9'
-    EmitMovRegImm(ARM64Register.X6, (long)'0');
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X5) << 5)); // CMP X5, '0'
-    _condBranchFixups.Add((_code.Count, parseTypeLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Lt)); // B.LT parseType
-    EmitMovRegImm(ARM64Register.X6, (long)'9');
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X5) << 5)); // CMP X5, '9'
-    _condBranchFixups.Add((_code.Count, parseTypeLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Gt)); // B.GT parseType
-    // width = width * 10 + (char - '0')
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X6, ARM64Register.X29, 56, 8); // load width
-    EmitMovRegImm(ARM64Register.X7, 10);
-    EmitWord(0x9B007C00 | (Reg(ARM64Register.X7) << 16) | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X6)); // MUL X6, X6, X7
-    EmitAddSubImm(ARM64Register.X5, ARM64Register.X5, (long)'0', isAdd: false); // char - '0'
-    EmitWord(0x8B000000 | (Reg(ARM64Register.X5) << 16) | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X6)); // ADD X6, X6, X5
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X6, ARM64Register.X29, 56, 8); // store width
-    EmitAddSubImm(ARM64Register.X4, ARM64Register.X4, 1, isAdd: true);
-    EmitBranch(parseWidthLabel);
-
-    // Parse type character
-    DefineLabel(parseTypeLabel);
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X3) << 16) | (Reg(ARM64Register.X4) << 5)); // CMP X4, X3
-    _condBranchFixups.Add((_code.Count, noFmtLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE noFmt (no type char)
-    EmitWord(0x38606800 | (Reg(ARM64Register.X4) << 16) | (Reg(ARM64Register.X2) << 5) | Reg(ARM64Register.X5)); // LDRB W5, [X2, X4]
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X29, 64, 8); // store type
-
-    DefineLabel(noFmtLabel);
-    // Now convert the value based on type
-    EmitReloadArg(0); // value -> X0
-    EmitReloadArg(1); // buf -> X1
-    // Save buf start
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 24, 8);
-    EmitMovRegReg(ARM64Register.X3, ARM64Register.X1); // X3 = write position
-
-    // Dispatch on the type char: 'x'/'X' hex, 'b' binary, 'o' octal, else decimal.
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X29, 64, 8);
-    foreach (var (typeChar, target) in new[] {
-      ('x', hexLowerLabel), ('X', hexUpperLabel), ('b', binaryLabel), ('o', octalLabel),
-    }) {
-      EmitMovRegImm(ARM64Register.X6, (long)typeChar);
-      EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X5) << 5)); // CMP X5, X6
-      _condBranchFixups.Add((_code.Count, target));
-      EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq));
-    }
-    EmitBranch(decimalLabel);
-
-    // --- Unsigned base setup: X9 = alpha base, X7 = shift, X8 = digit mask ---
-    // The convert loop below clobbers only X0/X3/X4/X6, so these three survive it.
-    DefineLabel(hexLowerLabel);
-    EmitUnsignedBaseSetup('a', shift: 4);
-    EmitBranch(unsignedConvertLabel);
-
-    DefineLabel(hexUpperLabel);
-    EmitUnsignedBaseSetup('A', shift: 4);
-    EmitBranch(unsignedConvertLabel);
-
-    DefineLabel(binaryLabel);
-    EmitUnsignedBaseSetup('a', shift: 1);
-    EmitBranch(unsignedConvertLabel);
-
-    DefineLabel(octalLabel);
-    EmitUnsignedBaseSetup('a', shift: 3);
-
-    // --- Unsigned conversion (hex/octal/binary) ---
-    DefineLabel(unsignedConvertLabel);
-    // An unsigned base never writes a '-', and the padding code reads [+88] to
-    // decide whether zero-fill starts after a sign. Say so explicitly: leaving it
-    // unset made zero-padded hex fill from index 1 and corrupt its own digits.
-    EmitMovRegImm(ARM64Register.X5, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X29, 88, 8); // is_negative = 0
-    // Save digit start
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X3, ARM64Register.X29, 72, 8);
-    // X0 = value (treat as unsigned)
-    // Convert loop: extract low digit, write it, shift the value down
-    var unsignedLoopLabel = $"__i64fmt_unsignedloop_{_uniqueLabelCounter - 1}";
-    DefineLabel(unsignedLoopLabel);
-    // digit = X0 & mask
-    EmitWord(0x8A000000 | (Reg(ARM64Register.X8) << 16) | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X4)); // AND X4, X0, X8
-    // X0 = X0 >> shift (logical: the value is unsigned, so the high bit shifts in as 0)
-    EmitWord(0x9AC02400 | (Reg(ARM64Register.X7) << 16) | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X0)); // LSRV X0, X0, X7
-    // if digit < 10: char = digit + '0', else char = digit - 10 + alpha_base
-    EmitMovRegImm(ARM64Register.X6, 10);
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X4) << 5)); // CMP X4, 10
-    var alphaLabel = $"__i64fmt_alpha_{_uniqueLabelCounter - 1}";
-    var writeLabel = $"__i64fmt_write_{_uniqueLabelCounter - 1}";
-    _condBranchFixups.Add((_code.Count, alphaLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE alpha
-    // Digit 0-9
-    EmitAddSubImm(ARM64Register.X4, ARM64Register.X4, (long)'0', isAdd: true);
-    EmitBranch(writeLabel);
-    DefineLabel(alphaLabel);
-    // Digit A-F — hex only; base 2 and base 8 never reach here.
-    EmitAddSubImm(ARM64Register.X4, ARM64Register.X4, 10, isAdd: false);
-    EmitWord(0x8B000000 | (Reg(ARM64Register.X9) << 16) | (Reg(ARM64Register.X4) << 5) | Reg(ARM64Register.X4)); // ADD X4, X4, X9
-    DefineLabel(writeLabel);
-    // STRB W4, [X3]
-    EmitWord(0x39000000 | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X4));
-    EmitAddSubImm(ARM64Register.X3, ARM64Register.X3, 1, isAdd: true);
-    // Continue if X0 != 0
-    _condBranchFixups.Add((_code.Count, unsignedLoopLabel));
-    EmitWord(0xB5000000 | Reg(ARM64Register.X0)); // CBNZ X0, unsignedLoop
-    EmitBranch(reverseLabel);
-
-    // --- Decimal conversion ---
-    DefineLabel(decimalLabel);
-    // Mark not negative
-    EmitMovRegImm(ARM64Register.X5, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X29, 88, 8); // is_negative = 0
-
-    // Check negative
-    EmitWord(0xF100001F | (Reg(ARM64Register.X0) << 5)); // CMP X0, #0
-    _condBranchFixups.Add((_code.Count, positiveLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE positive
-
-    // Write '-'
-    EmitMovRegImm(ARM64Register.X4, (long)'-');
-    EmitWord(0x39000000 | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X4)); // STRB '-'
-    EmitAddSubImm(ARM64Register.X3, ARM64Register.X3, 1, isAdd: true);
-    // Negate
-    EmitWord(0xCB000000 | (Reg(ARM64Register.X0) << 16) | (31u << 5) | Reg(ARM64Register.X0)); // NEG X0, X0
-    EmitMovRegImm(ARM64Register.X5, 1);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X29, 88, 8); // is_negative = 1
-
-    DefineLabel(positiveLabel);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X3, ARM64Register.X29, 72, 8); // digit start
-
-    // Decimal convert loop
-    DefineLabel(decConvertLabel);
-    EmitMovRegImm(ARM64Register.X1, 10);
-    EmitWord(0x9AC00800 | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X2)); // UDIV X2, X0, X1
-    EmitWord(0x9B008000 | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X0) << 10) | (Reg(ARM64Register.X2) << 5) | Reg(ARM64Register.X4)); // MSUB X4, X2, X1, X0
-    EmitAddSubImm(ARM64Register.X4, ARM64Register.X4, (long)'0', isAdd: true);
-    EmitWord(0x39000000 | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X4)); // STRB digit
-    EmitAddSubImm(ARM64Register.X3, ARM64Register.X3, 1, isAdd: true);
-    EmitMovRegReg(ARM64Register.X0, ARM64Register.X2);
-    _condBranchFixups.Add((_code.Count, decConvertLabel));
-    EmitWord(0xB5000000 | Reg(ARM64Register.X0)); // CBNZ X0, decConvert
-
-    // --- Reverse digits ---
-    DefineLabel(reverseLabel);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X3, ARM64Register.X29, 80, 8); // save end pos
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X29, 72, 8); // start
-    EmitAddSubImm(ARM64Register.X6, ARM64Register.X3, 1, isAdd: false); // end - 1
-
-    DefineLabel(reverseLabel + "_loop");
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X5) << 5)); // CMP X5, X6
-    _condBranchFixups.Add((_code.Count, reverseDoneLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Hs)); // B.HS done
-
-    EmitWord(0x39400000 | (Reg(ARM64Register.X5) << 5) | Reg(ARM64Register.X7)); // LDRB W7, [X5]
-    EmitWord(0x39400000 | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X8)); // LDRB W8, [X6]
-    EmitWord(0x39000000 | (Reg(ARM64Register.X5) << 5) | Reg(ARM64Register.X8)); // STRB W8, [X5]
-    EmitWord(0x39000000 | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X7)); // STRB W7, [X6]
-    EmitAddSubImm(ARM64Register.X5, ARM64Register.X5, 1, isAdd: true);
-    EmitAddSubImm(ARM64Register.X6, ARM64Register.X6, 1, isAdd: false);
-    EmitBranch(reverseLabel + "_loop");
-
-    DefineLabel(reverseDoneLabel);
-    // --- Padding ---
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X3, ARM64Register.X29, 80, 8); // end
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // buf start
-    EmitWord(0xCB000000 | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X4)); // X4 = end - start = current length
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X29, 56, 8); // min_width
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X5) << 16) | (Reg(ARM64Register.X4) << 5)); // CMP X4, X5
-    _condBranchFixups.Add((_code.Count, doneLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE done (already wide enough)
-
-    // Need to pad. For zero-padding, shift digits right and insert fill chars.
-    // For space-padding, also shift right and insert.
-    // pad_count = min_width - current_length
-    EmitWord(0xCB000000 | (Reg(ARM64Register.X4) << 16) | (Reg(ARM64Register.X5) << 5) | Reg(ARM64Register.X6)); // X6 = pad_count = width - len
-
-    // Check if fill is '0' and is_negative — if so, shift after the '-'
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X7, ARM64Register.X29, 48, 8); // fill char
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X8, ARM64Register.X29, 88, 8); // is_negative
-
-    // Shift existing content right by pad_count bytes (from end-1 down to start)
-    // memmove: for i = len-1 down to 0: buf[i+pad_count] = buf[i]
-    // Use X9 = src index (from len-1 down to 0)
-    EmitAddSubImm(ARM64Register.X9, ARM64Register.X4, 1, isAdd: false); // X9 = len - 1
-    var shiftLoopLabel = $"__i64fmt_shift_{_uniqueLabelCounter - 1}";
-    var shiftDoneLabel = $"__i64fmt_shiftdone_{_uniqueLabelCounter - 1}";
-    DefineLabel(shiftLoopLabel);
-    // if X9 < 0, done shifting
-    EmitWord(0xF100001F | (Reg(ARM64Register.X9) << 5)); // CMP X9, #0
-    _condBranchFixups.Add((_code.Count, shiftDoneLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Lt)); // B.LT shiftDone
-    // Load byte at buf[X9]
-    EmitWord(0x38696800 | (Reg(ARM64Register.X9) << 16) | (Reg(ARM64Register.X1) << 5) | Reg(ARM64Register.X10)); // LDRB W10, [X1, X9]
-    // dst = X9 + pad_count
-    EmitWord(0x8B000000 | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X9) << 5) | Reg(ARM64Register.X11)); // ADD X11, X9, X6
-    // Store byte at buf[X11]
-    EmitWord(0x382B6800 | (Reg(ARM64Register.X11) << 16) | (Reg(ARM64Register.X1) << 5) | Reg(ARM64Register.X10)); // STRB W10, [X1, X11]
-    EmitAddSubImm(ARM64Register.X9, ARM64Register.X9, 1, isAdd: false);
-    EmitBranch(shiftLoopLabel);
-
-    DefineLabel(shiftDoneLabel);
-    // Fill the gap with fill char
-    // Determine fill start: if zero-pad and negative, start at 1 (after '-'), else 0
-    EmitMovRegImm(ARM64Register.X9, 0); // fill start index
-    EmitMovRegImm(ARM64Register.X10, (long)'0');
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X10) << 16) | (Reg(ARM64Register.X7) << 5)); // CMP fill, '0'
-    var fillStartLabel = $"__i64fmt_fillstart_{_uniqueLabelCounter - 1}";
-    _condBranchFixups.Add((_code.Count, fillStartLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ne)); // B.NE fillStart (not zero-pad)
-    // Zero pad: if negative, start fill at index 1
-    _condBranchFixups.Add((_code.Count, fillStartLabel));
-    EmitWord(0xB4000000 | Reg(ARM64Register.X8)); // CBZ X8, fillStart (not negative)
-    EmitMovRegImm(ARM64Register.X9, 1);
-
-    DefineLabel(fillStartLabel);
-    // X9 = fill index, fill until X9 == X6 + fill_start
-    EmitWord(0x8B000000 | (Reg(ARM64Register.X9) << 16) | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X10)); // X10 = pad_count + fill_start_offset...
-    // Actually just fill from X9 to X9+pad_count
-    EmitWord(0x8B000000 | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X9) << 5) | Reg(ARM64Register.X10)); // X10 = end = start + pad_count
-    var fillLoopLabel = $"__i64fmt_fillloop_{_uniqueLabelCounter - 1}";
-    DefineLabel(fillLoopLabel);
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X10) << 16) | (Reg(ARM64Register.X9) << 5)); // CMP X9, X10
-    _condBranchFixups.Add((_code.Count, padLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE padDone
-    // Store fill char
-    EmitWord(0x38296800 | (Reg(ARM64Register.X9) << 16) | (Reg(ARM64Register.X1) << 5) | Reg(ARM64Register.X7)); // STRB W7, [X1, X9]
-    EmitAddSubImm(ARM64Register.X9, ARM64Register.X9, 1, isAdd: true);
-    EmitBranch(fillLoopLabel);
-
-    DefineLabel(padLabel);
-    // Update length and null-terminate
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X29, 56, 8); // width (= new length)
-    EmitMovRegReg(ARM64Register.X3, ARM64Register.X5);
-    EmitWord(0x8B000000 | (Reg(ARM64Register.X3) << 16) | (Reg(ARM64Register.X1) << 5) | Reg(ARM64Register.X4)); // X4 = buf + length
-    EmitMovRegImm(ARM64Register.X7, 0);
-    EmitWord(0x39000000 | (Reg(ARM64Register.X4) << 5) | Reg(ARM64Register.X7)); // STRB 0, [X4]
-    EmitMovRegReg(ARM64Register.X0, ARM64Register.X3);
-    EmitRuntimeFunctionEnd();
-
-    DefineLabel(doneLabel);
-    // No padding needed, just null-terminate and return length
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X3, ARM64Register.X29, 80, 8); // end
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // buf start
-    EmitWord(0xCB000000 | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X0)); // X0 = end - start
-    // Null terminate
-    EmitMovRegImm(ARM64Register.X4, 0);
-    EmitWord(0x39000000 | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X4)); // STRB 0, [end]
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// Load the per-base constants the shared unsigned convert loop reads:
-  /// X9 = the letter digits start from ('a'/'A', hex only), X7 = bits consumed per
-  /// digit, X8 = the mask selecting one digit. Base is a power of two, so the mask
-  /// is exactly the low `shift` bits.
-  /// </summary>
-  private void EmitUnsignedBaseSetup(char alphaBase, int shift) {
-    EmitMovRegImm(ARM64Register.X9, (long)alphaBase);
-    EmitMovRegImm(ARM64Register.X7, shift);
-    EmitMovRegImm(ARM64Register.X8, (1L << shift) - 1);
   }
 
 
@@ -5975,15 +5653,6 @@ public partial class ARM64CodeEmitter {
   // ===========================================================================================
 
   // mm_raw_alloc_260: now emitted by RuntimeEmitter.MemoryManager.cs (unified x86/ARM64)
-
-  /// <summary>
-  /// maxon_u64_to_string_fmt: redirect to maxon_i64_to_string_fmt
-  /// (unsigned values with sign bit clear are handled correctly).
-  /// </summary>
-  private void EmitMaxonU64ToStringFmt() {
-    DefineLabel("maxon_u64_to_string_fmt");
-    EmitBranch("maxon_i64_to_string_fmt");
-  }
 
   /// <summary>
   /// __gt_panic_io(): Panic with IO error message.

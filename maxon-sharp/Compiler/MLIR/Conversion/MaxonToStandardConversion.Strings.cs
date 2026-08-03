@@ -503,7 +503,7 @@ public static partial class MaxonToStandardConversion {
 		// text STRAIGHT into the String record's inline buffer — one allocation, no digit scratch.
 		if (op.Parts.Count == 1) {
 			var (singleIsLit, _, singleExpr, singleFmt, singleOpt) = op.Parts[0];
-			var maxBytes = SingleNumericToStringMaxBytes(singleExpr, singleIsLit, singleFmt, valueMap);
+			var maxBytes = SingleNumericToStringMaxBytes(singleExpr, singleIsLit, valueMap);
 			if (maxBytes != null) {
 				var toStrTemp = inlineTarget
 					?? temps.CreateTemp("interptmp", op.Result.Id, "String", OwnershipFlags.None);
@@ -511,7 +511,7 @@ public static partial class MaxonToStandardConversion {
 				var toStrSelf = (StdHeapPtr)EmitAlloc(block, StringStructSize + maxBytes.Value + 1, "String", scopeName: _currentFuncName);
 				EmitStore(block, toStrSelf, toStrTemp, varTypes);
 				var toStrBuf = EmitInlineBufferPtr(block, toStrTemp, StringStructSize, varTypes);
-				var toStrLen = EmitSingleNumericToStringInto(singleExpr!, singleFmt, singleOpt, toStrBuf, block, valueMap, varTypes, result);
+				var toStrLen = EmitSingleNumericToStringInto(singleExpr!, singleFmt, singleOpt, toStrBuf, block, valueMap, varTypes);
 				// The runtime call clobbers registers, so recompute buffer = self + StringStructSize.
 				var toStrBufR = EmitInlineBufferPtr(block, toStrTemp, StringStructSize, varTypes);
 				// NUL terminator at buffer[len]
@@ -694,21 +694,7 @@ public static partial class MaxonToStandardConversion {
 				} else if (valueMap.TryGetValue(exprValue, out var exprStdVal) && exprStdVal is StdHeapPtr hp) {
 					partInfos.Add(EmitStructInterpolation(hp.VarName!, block, varTypes));
 				} else if (exprValue is MaxonInteger or MaxonByte or MaxonShort) {
-					var stdVal = valueMap[exprValue];
-					// Widen narrower integer types to i64 for the runtime toString call
-					if (stdVal is StdU32 u32) {
-						stdVal = EnsureI64(new StdI32(u32.Id), block, signExtend: false);
-					} else if (stdVal is StdI32) {
-						stdVal = EnsureI64(stdVal, block, signExtend: true);
-					}
-					bool isUnsigned = (OptimalType?.IsUnsigned ?? false) || stdVal is StdU64;
-					if (FormatSpec != null) {
-						if (isUnsigned) AddToStringResult(EmitU64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
-						else AddToStringResult(EmitI64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
-					} else {
-						if (isUnsigned) AddToStringResult(EmitU64ToString(stdVal, block, varTypes));
-						else AddToStringResult(EmitI64ToString(stdVal, block, varTypes));
-					}
+					AddToStringResult(EmitIntegerToString(exprValue, FormatSpec, OptimalType, valueMap, block, varTypes));
 				} else if (exprValue is MaxonBool) {
 					AddToStringResult(EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes));
 				} else {
@@ -729,12 +715,12 @@ public static partial class MaxonToStandardConversion {
 	/// (StdHeapPtr) or an enum goes through the general record-fusing path instead. Mirrors the byte
 	/// budgets the corresponding EmitRuntimeToString call would have allocated for its scratch.
 	private static int? SingleNumericToStringMaxBytes(
-	  MaxonValue? exprValue, bool isLiteral, string? formatSpec,
+	  MaxonValue? exprValue, bool isLiteral,
 	  Dictionary<MaxonValue, StdValue> valueMap) {
 		if (isLiteral || exprValue == null) return null;
+		// A FORMATTED integer is already a String by now (the parser rewrote it), so it is a
+		// StdHeapPtr and the line above has declined it — no formatted budget is reachable here.
 		if (valueMap.TryGetValue(exprValue, out var v) && v is StdHeapPtr) return null;
-		if (formatSpec != null && exprValue is MaxonInteger or MaxonByte or MaxonShort)
-			return ToStringFormattedMaxBytes;
 		return exprValue switch {
 			MaxonInteger or MaxonByte or MaxonShort => I64ToStringMaxBytes,
 			MaxonBool => BoolToStringMaxBytes,
@@ -749,17 +735,9 @@ public static partial class MaxonToStandardConversion {
 	private static StdI64 EmitSingleNumericToStringInto(
 	  MaxonValue exprValue, string? formatSpec, IrType? optimalType, StdI64 destBuffer,
 	  IrBlock<StandardOp> block, Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes, IrModule<StandardOp> result) {
+	  Dictionary<string, string> varTypes) {
 		if (exprValue is MaxonInteger or MaxonByte or MaxonShort) {
-			var stdVal = valueMap[exprValue];
-			if (stdVal is StdU32 u32) stdVal = EnsureI64(new StdI32(u32.Id), block, signExtend: false);
-			else if (stdVal is StdI32) stdVal = EnsureI64(stdVal, block, signExtend: true);
-			bool isUnsigned = (optimalType?.IsUnsigned ?? false) || stdVal is StdU64;
-			if (formatSpec != null)
-				return isUnsigned ? EmitU64ToStringFormatted(stdVal, formatSpec, block, varTypes, result, destBuffer).Length
-								  : EmitI64ToStringFormatted(stdVal, formatSpec, block, varTypes, result, destBuffer).Length;
-			return isUnsigned ? EmitU64ToString(stdVal, block, varTypes, destBuffer).Length
-							  : EmitI64ToString(stdVal, block, varTypes, destBuffer).Length;
+			return EmitIntegerToString(exprValue, formatSpec, optimalType, valueMap, block, varTypes, destBuffer).Length;
 		}
 		return EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes, destBuffer).Length;
 	}
@@ -807,7 +785,33 @@ public static partial class MaxonToStandardConversion {
 	private const int I64ToStringMaxBytes = 21;   // "-9223372036854775808"
 	private const int U64ToStringMaxBytes = 21;   // "18446744073709551615"
 	private const int BoolToStringMaxBytes = 6;   // "false"
-	private const int ToStringFormattedMaxBytes = 72;
+
+	/// The ONE lowering of an UNFORMATTED integer part: widen to i64, then the signed or the unsigned
+	/// runtime conversion. The general interpolation path and the byte-fusion one used to carry a copy
+	/// of the widening and the signedness test each, free to disagree.
+	///
+	/// A FORMATTED integer never arrives: `Parser.RewriteIntegerPartAsStdlibText` turned every part
+	/// carrying a specifier into an `__int_toStringFormatted` call while the Maxon IR was still being
+	/// built, so it reaches interpolation as the StdHeapPtr of a String. See that method for why the
+	/// rewrite cannot live at this level, and why only the FORMATTED spelling moved.
+	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitIntegerToString(
+	  MaxonValue exprValue, string? formatSpec, IrType? optimalType,
+	  Dictionary<MaxonValue, StdValue> valueMap, IrBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes, StdI64? destBuffer = null) {
+
+		if (formatSpec != null)
+			throw new InvalidOperationException(
+			  $"String interpolation: integer %{exprValue.Id} still carries format spec '{formatSpec}' — the parser should have rewritten it to an __int_toStringFormatted call");
+
+		var stdVal = valueMap[exprValue];
+		// Widen narrower integer types to i64 for the runtime toString call.
+		if (stdVal is StdU32 u32) stdVal = EnsureI64(new StdI32(u32.Id), block, signExtend: false);
+		else if (stdVal is StdI32) stdVal = EnsureI64(stdVal, block, signExtend: true);
+
+		return (optimalType?.IsUnsigned ?? false)
+		  ? EmitU64ToString(stdVal, block, varTypes, destBuffer)
+		  : EmitI64ToString(stdVal, block, varTypes, destBuffer);
+	}
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitI64ToString(
 	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, StdI64? destBuffer = null) =>
@@ -816,68 +820,6 @@ public static partial class MaxonToStandardConversion {
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitU64ToString(
 	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, StdI64? destBuffer = null) =>
 	  EmitRuntimeToString(intValue, "maxon_u64_to_string", U64ToStringMaxBytes, block, varTypes, destBuffer);
-
-	/// <summary>
-	/// Allocates a buffer, emits the format spec as rdata, calls a formatted runtime conversion function,
-	/// and returns (buffer, length). Used for format-specifier string interpolation on built-in types.
-	/// </summary>
-	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitRuntimeToStringFormatted(
-	  StdValue value,
-	  string runtimeFuncName,
-	  int bufferSize,
-	  string formatSpec,
-	  IrBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes,
-	  IrModule<StandardOp> result,
-	  StdI64? destBuffer = null) {
-
-		// Emit format spec as rdata literal
-		var fmtId = NextRdataId();
-		var fmtLabel = $"__fmt_spec_{fmtId}";
-		var fmtUtf8 = System.Text.Encoding.UTF8.GetBytes(formatSpec);
-		var fmtNull = new byte[fmtUtf8.Length + 1];
-		Array.Copy(fmtUtf8, fmtNull, fmtUtf8.Length);
-		result.RdataEntries.Add((fmtLabel, fmtNull, 1));
-
-		StdI64 bufResult;
-		string bufVarName;
-		if (destBuffer != null) {
-			// Byte-fusion: write formatted digits straight into the caller's inline buffer, no scratch.
-			bufResult = destBuffer;
-			bufVarName = "";
-		} else {
-			var fmtSizeOp = new StdConstI64Op(bufferSize);
-			block.AddOp(fmtSizeOp);
-			bufResult = EmitRawAlloc(block, fmtSizeOp.Result, label: "fmt.buf", scopeName: _currentFuncName);
-			// Store buffer pointer so it survives the runtime call
-			bufVarName = $"__tostr_buf_{bufResult.Id}";
-			EmitStore(block, bufResult, bufVarName, varTypes);
-		}
-
-		var fmtLea = new StdLeaRdataOp(fmtLabel);
-		block.AddOp(fmtLea);
-		var fmtPtr = new StdPtrToI64Op(fmtLea.Result);
-		block.AddOp(fmtPtr);
-		var fmtLen = new StdConstI64Op(fmtUtf8.Length);
-		block.AddOp(fmtLen);
-
-		var lenResult = new StdI64(IrContext.Current.NextStdId());
-		block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, bufResult, fmtPtr.Result, fmtLen.Result], lenResult));
-
-		if (destBuffer != null) return (destBuffer, lenResult, "");
-		var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
-		return (finalBuf, lenResult, bufVarName);
-	}
-
-	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitI64ToStringFormatted(
-	  StdValue intValue, string formatSpec, IrBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes, IrModule<StandardOp> result, StdI64? destBuffer = null) =>
-	  EmitRuntimeToStringFormatted(intValue, "maxon_i64_to_string_fmt", ToStringFormattedMaxBytes, formatSpec, block, varTypes, result, destBuffer);
-
-	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitU64ToStringFormatted(
-	  StdValue intValue, string formatSpec, IrBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes, IrModule<StandardOp> result, StdI64? destBuffer = null) =>
-	  EmitRuntimeToStringFormatted(intValue, "maxon_u64_to_string_fmt", ToStringFormattedMaxBytes, formatSpec, block, varTypes, result, destBuffer);
 
 	/// <summary>
 	/// Handles interpolation of struct values. For String/Character types (which have buffer/length
