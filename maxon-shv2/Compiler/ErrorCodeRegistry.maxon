@@ -703,17 +703,20 @@ export enum ErrorCode
 	// "is this requirement the `Equatable`/`Comparable` protocol?", a static one is not, and the
 	// author's cure is the sentence E3005 already prints for a throwing or wrong-arity look-alike.
 	semanticStaticRequirementNotDispatchable = "E3116"
-	// A construct that fills an `Array with Byte` with RAW BYTES is written in a file whose `Byte`
-	// does not admit every byte value 0 through 255. Three constructs reach it, and all three write
-	// bytes that exist only at RUN TIME: the byte view (`String.toByteArray()` / `.bytes()`, whose
-	// runtime fill blits the receiver's UTF-8), the buffer surface's `setByte`, and
-	// `__ManagedFile.read`, which blits a file's contents into a caller's buffer.
+	// A construct that fills an `Array with Byte` with RAW BYTES, one byte per ELEMENT, is written in
+	// a file whose `Byte` does not admit every byte value 0 through 255. Two constructs reach it, and
+	// both write bytes that exist only at RUN TIME: the byte view (`String.toByteArray()` /
+	// `.bytes()`, whose runtime fill blits the receiver's UTF-8) and `__ManagedFile.read`, which blits
+	// a file's contents into a caller's buffer.
 	// A raw byte is any of 256 values. An element declared `int(0 to 100)` promises every value of
 	// every `Array with Byte` in the program is at most 100, and a raw fill breaks that promise with
 	// no place to put a check: the fill is one runtime blit, not a run of stores the compiler can
 	// narrow one at a time. MEASURED before the rule existed: `takes("ss".toByteArray())` into
-	// `takes(b Array with Byte)` returned 195 out of an accessor declared `int(0 to 100)`, and
-	// `setByte(0, 223)` on a `__ManagedMemory.create(8, 1)` returned 223. Both silent.
+	// `takes(b Array with Byte)` returned 195 out of an accessor declared `int(0 to 100)`. Silent.
+	// A THIRD construct reached this code at A4a and no longer does: the buffer surface's `setByte`,
+	// which addresses a byte OFFSET rather than an element and therefore asks E3118's slot question at
+	// every stride. "Admits every byte" is that question's ONE-BYTE instance and nothing more general,
+	// which is why the two are separate codes rather than one widened rule -- see E3118.
 	// It is a PER-TYPE rule and its A3r sibling is PER-VALUE, which is why the two are separate rules
 	// rather than one. E3005 checks each byte of a `b"..."` blob against the same bounds and must keep
 	// accepting `b"abc"` under `int(0 to 100)`; there is nothing here to inspect, so the only honest
@@ -727,20 +730,49 @@ export enum ErrorCode
 	// The raw byte READER is deliberately untouched. `byteAt` yields a plain unranged `int`, never the
 	// element, so a byte read back is honest whatever `Byte` was declared to be. Unlike E3110's pair,
 	// only the write puts a value into a slot the array surface reads through the element's range.
-	// `setByte` -- and ONLY `setByte` -- carries a stride precondition, because it addresses a byte
-	// OFFSET rather than an element: on a record that strides more than a byte it writes a FRAGMENT of
-	// an element, and a rule about whether a range holds every BYTE has nothing true to say about a
-	// fragment. The byte view needs no such precondition -- its fill is element-wise at whatever stride
-	// -- and `__ManagedFile.read` needs none because its argument gate has already established that the
-	// buffer is byte-packed.
-	// That precondition is a BOUNDARY, not a proof of safety, and the A4a review measured the three
-	// silent wrong answers it still skips: `setByte(1, 223)` under `typealias Wide = int(0 to 1000)`
-	// reads back 57089, `setByte(3, 223)` on an `ExitCode` element reads back 3741319169, and
-	// `setByte(0, 223)` on a `bool` element makes a value for which both it and its negation are true.
-	// Those ask a different question -- does the element admit every bit pattern of its SLOT? -- which
-	// coincides with this code's question only at a one-byte slot. They are filed for their own row,
-	// with the prerequisite named at the `setByte` arm.
+	// Neither of the two remaining sites needs a STRIDE precondition, and that is what makes them the
+	// right two for this question: the byte view's fill is element-wise at whatever stride the element
+	// declares, and `__ManagedFile.read`'s argument gate has already established that its buffer is
+	// byte-packed. A rule that grew a stride test here would stop asking on exactly the element it
+	// least trusts -- a `Byte` whose bounds cannot be read takes the MACHINE WORD
+	// (`rangedAliasStorageBytes`), so the byte view would stop looking byte-packed and slip the rule.
 	rawByteFillNarrowElement = "E3117"
+	// The buffer surface's raw-byte writer (`arr.managed.setByte(offset, value)`) is written on an
+	// array whose ELEMENT does not admit every bit pattern of its own storage SLOT.
+	// `setByte` addresses a byte OFFSET, so on a record that strides more than one byte it writes a
+	// FRAGMENT of an element -- and what the ARRAY surface reads back afterwards is an arbitrary
+	// unsigned value of the element's whole slot, because the shared element load zero-extends
+	// (`ArrayRuntime.emitLoadElem`). The only honest question is therefore whether the element admits
+	// every one of those, and it is the SAME question at every stride.
+	// MEASURED before the rule existed, each a value read back through an accessor whose declared type
+	// cannot hold it: `setByte(1, 223)` under `typealias Wide = int(0 to 1000)` -- a TWO-byte slot --
+	// read back 57089; `setByte(0, 223)` under `int(-5 to 5)`, which keeps the machine word because
+	// `rangedAliasStorageBytes` is the unsigned ladder, read back 223; `setByte(0, 223)` on a `bool`
+	// element made a value for which both it and its negation were true while `v == true` was false;
+	// and on an ENUM element -- an ordinal in a machine word -- the program compiled and then HUNG,
+	// matching an ordinal no arm names.
+	// It is deliberately NOT a widening of E3117. That code asks whether the element admits every
+	// BYTE, which is this question's answer at a ONE-byte slot and at no other width: asked at a wider
+	// slot it refuses a correct `Array with Int` (MEASURED at A4a, which had to be pulled back), and
+	// asked here at a one-byte slot it would give the identical verdict this code already gives. So
+	// `setByte` moved wholly to this rule and E3117 kept the two fills that are byte-per-element by
+	// contract. Its one-byte arm ASKS `rangeHoldsEveryByte` rather than re-spelling it, so what a byte
+	// is stays written down once.
+	// The ADMITTING direction must be a proof, which is why an element with no value set the compiler
+	// can compare -- a `bool`, an `ExitCode`, an enum's ordinal, a float alias, an opaque `T`, a
+	// function pointer -- is refused rather than guessed at. That is `rangeHoldsEveryByte`'s own
+	// conservative argument, one quantifier out.
+	// `ExitCode` looked like the closest call and is not: it reaches an `Array` instance as a NAMED
+	// leaf, so `undeclaredNamedElementStorageBytes` gives it the MACHINE WORD, and a domain of at
+	// widest 0 to u32.max (PLATFORM-DEPENDENT below that -- 0 to 255 on Linux, macOS and WASI)
+	// cannot cover an eight-byte slot on any reading. The measured 3741319169 is 223 at byte 3 of
+	// that word.
+	// The one element with NO value set that is still admitted is the `Byte` a `b"..."` literal mints
+	// for itself in a program declaring no such alias: its slot is one byte by construction
+	// (`undeclaredNamedElementStorageBytes`) and there is no declared range for a raw byte to fall
+	// outside of, which is exactly the case E3117 returns on.
+	// `byteAt` is untouched for E3117's reason: it yields a plain unranged `int`, never the element.
+	rawByteWriteSlotDomain = "E3118"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

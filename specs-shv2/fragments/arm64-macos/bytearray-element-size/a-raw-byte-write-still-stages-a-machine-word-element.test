@@ -1,19 +1,15 @@
-// Test: a-wide-byte-still-writes-raw-bytes-through-the-buffer-surface
-typealias Byte = int(0 to u16.max)
-typealias Bytes = Array with Byte
-
-function takes(b Bytes) returns ExitCode
-	return ((try b.get(0) otherwise 0) and u8.max) as ExitCode
-end 'takes'
+// Test: a-raw-byte-write-still-stages-a-machine-word-element
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var buf = Bytes.create()
-	buf.push(0)
-	try buf.managed.setByte(0, 223) otherwise return 3
-	return takes(buf)
+	var xs = IntArray.create()
+	xs.push(7)
+	try xs.managed.setByte(0, 3) otherwise return 1
+	return 0 if (try xs.get(0) otherwise 0) == 3 else 2
 end 'main'
 ---
-ExitCode: 223
+ExitCode: 0
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -21,10 +17,38 @@ data {
   __mm_alloc_count@16 = i64 0
 }
 
-func @takes {
+func @main {
   entry:
-    arm64.prologue 16
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
     arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 0
+    arm64.movImm x2, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_set_byte
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
     arm64.bl __arr_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
@@ -36,44 +60,17 @@ func @takes {
   tryok:
     arm64.b trycont
   trycont:
-    arm64.and x0, x0, 255
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 2
-    arm64.movImm x1, 0
-    arm64.bl __arr_create
-    arm64.movRegReg x19, x0
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __arr_push
-    arm64.movImm x1, 0
-    arm64.movImm x2, 223
-    arm64.movRegReg x0, x19
-    arm64.bl __arr_set_byte
-    arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.movImm x20, 3
-    arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  tryok:
-    arm64.movRegReg x0, x19
-    arm64.bl takes
-    arm64.movRegReg x20, x0
+    arm64.cmp x0, 3
+    arm64.cset x0, eq
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x20, 0
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x20, 2
+    arm64.b matchcont
+  matchcont:
     arm64.movRegReg x0, x19
     arm64.bl __arr_decref
     arm64.movRegReg x0, x20

@@ -1281,7 +1281,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3117: <fragment>:12:10: 'setByte' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+error E3118: <fragment>:12:10: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 1-byte slot — every value of int(0 to 255). The element 'Byte' (int(0 to 100)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
 ```
 
 <!-- test: a-narrow-byte-refuses-a-raw-byte-write-into-a-literals-buffer -->
@@ -1303,23 +1303,30 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3117: <fragment>:11:16: 'setByte' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+error E3118: <fragment>:11:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 1-byte slot — every value of int(0 to 255). The element 'Byte' (int(0 to 100)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
 ```
 
 <!-- test: a-wide-byte-still-writes-raw-bytes-through-the-buffer-surface -->
-### A `Byte` that holds every byte keeps its raw writer
+### A `Byte` WIDER than a byte keeps its raw writer, as long as it fills its slot
+⚠ **THE PROGRAM THIS CASE PINNED AT A4a IS NOW REFUSED, TWICE OVER, AND DELIBERATELY** — it declared
+`int(0 to 1000)` and built its buffer with `__ManagedMemory.create(8, 1)`, which is the byte-PACKED
+producer this file's `create`/literal section now refuses, and its `setByte` then wrote into a 2-byte slot
+the element does not fill. Both refusals are pinned below in their own cases. What the case was FOR — that
+a range wider than a byte is not by itself a reason to refuse a raw write, which is the over-refusal A4a
+had to be pulled back from — survives unchanged here: `int(0 to u16.max)` is wider than a byte, is refused
+by E3117's every-byte question, and admits every value of the two-byte slot it was given.
 ```maxon
-typealias Byte = int(0 to 1000)
+typealias Byte = int(0 to u16.max)
 typealias Bytes = Array with Byte
 
 function takes(b Bytes) returns ExitCode
-	return (try b.get(0) otherwise 0)
+	return ((try b.get(0) otherwise 0) and u8.max) as ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
-	try buf.setLength(4) otherwise return 2
-	try buf.setByte(0, 223) otherwise return 3
+	var buf = Bytes.create()
+	buf.push(0)
+	try buf.managed.setByte(0, 223) otherwise return 3
 	return takes(buf)
 end 'main'
 ```
@@ -1404,7 +1411,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3117: <fragment>:12:16: 'setByte' stores RAW bytes into an element declared 'Small' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 1-byte slot — every value of int(0 to 255). The element 'Small' (int(0 to 100)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
 ```
 
 ### `append`'s argument is a coercion site, and a synthesized buffer crosses it like any other
@@ -1518,6 +1525,286 @@ function main() returns ExitCode
 	let before = cwd.length()
 	try cwd.append(b) otherwise panic("test invariant: append")
 	return 0 if cwd.length() == before + 1 else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+### ⚠ THE `b"…"` LITERAL AND `__ManagedMemory.create(n, 1)` ARE ONE INCOHERENCE, AND ONLY ONE WAS REFUSED
+
+The stride section at the top of this file refuses a `b"…"` literal in a program whose `Byte` does not
+stride one byte, because the blob is byte-PACKED by construction and would give a record striding 1 under a
+static type striding N. **`__ManagedMemory.create(count, elementSize: 1)` builds the identical record for
+the identical reason** — the runtime stamps `element_size@24` from the ARGUMENT while the front end types
+the result as this file's `Array with Byte` (`managedMemoryInstanceForElementSize`) — and it was accepted.
+
+⛔ **MEASURED on the tree this rung starts from** (`typealias Byte = int(0 to 1000)`,
+`__ManagedMemory.create(8, 1)`, `set(0, value: 300)`): the store type-checks against `int(0 to 1000)`, the
+runtime strides the record's stamped 1, and `get(0)` reads back **44**. The same file's `b"CD"` is refused.
+**One producer refused and its twin accepted is the defect**, and it is settled the way the literal already
+was: a byte-PACKED record is a value of `Array with Byte` only where this file's `Byte` strides one byte.
+
+⚠ **THE READER'S OWN `Byte` IS WHAT DECIDES IT (N2), WHICH IS WHY `stdlib/File.maxon` IS UNAFFECTED.** That
+module writes `__ManagedMemory.create(size + extraBytes, 1)` and is parsed by every program;
+`wide-byte-program-still-round-trips-a-file` below is what holds that shut.
+
+<!-- test: error.a-byte-packed-buffer-is-refused-when-byte-is-wider-than-one-byte -->
+### `__ManagedMemory.create(n, 1)` is refused where the `b"…"` literal already was
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	try buf.setLength(4) otherwise return 2
+	try buf.set(0, value: 300) otherwise return 3
+	return takes(buf)
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:38: Unsupported: `__ManagedMemory.create(count, elementSize: 1)` in a program whose `Byte` is a 2-byte range: the buffer it asks for is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 2 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
+```
+
+<!-- test: a-byte-packed-buffer-is-accepted-at-the-canonical-byte -->
+### The canonical `Byte` keeps the two producers agreeing, so the buffer is built and read normally
+The acceptance half, and it must pass both before and after the rule exists: the refusal is about the
+DISAGREEMENT and not about `elementSize: 1`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	try buf.setLength(4) otherwise return 2
+	try buf.set(0, value: 200) otherwise return 3
+	return 0 if takes(buf) as int == 200 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-word-buffer-is-untouched-by-a-wide-byte -->
+### A MACHINE-WORD buffer in the same wide-`Byte` program is untouched
+Only the byte arm can disagree: `create(n, 8)` takes the bare-`int` instance, whose stride is the machine
+word by construction whatever `Byte` was declared to be. A rule that read the `elementSize` alone rather
+than the instance it picks would refuse this program too.
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var buf = try __ManagedMemory.create(2, 8) otherwise return 1
+	try buf.setLength(1) otherwise return 2
+	try buf.set(0, value: 300) otherwise return 3
+	var made = Bytes.create()
+	made.push(300)
+	return 0 if (try buf.get(0) otherwise 0) == 300 and (try made.get(0) otherwise 0) == 300 else 4
+end 'main'
+```
+```exitcode
+0
+```
+
+### ⚠ THE RAW-BYTE WRITER ANSWERS TO ITS **SLOT**, AND A BYTE IS ONLY THE ONE-BYTE CASE OF THAT
+
+`setByte` addresses a byte OFFSET, so on a record that strides more than a byte it writes a FRAGMENT of an
+element — and what the ARRAY surface reads back afterwards is an arbitrary bit pattern of that element's
+whole SLOT. A4a gave the writer a stride PRECONDITION so its every-byte rule (E3117) fired only where one
+byte is one element; above that slot the surface was assumed to be byte-level staging, which is true of an
+`Array with Int` and false of everything whose element does not fill its slot.
+
+⛔ **FOUR SILENT WRONG ANSWERS MEASURED on the tree this rung starts from**, each a value read back through
+an accessor whose declared type cannot hold it:
+
+| program | reads back |
+|---|---|
+| `typealias Wide = int(0 to 1000)`, `a.managed.setByte(1, 223)` | **57089** |
+| `typealias Small = int(-5 to 5)`, `a.managed.setByte(0, 223)` | **223** |
+| `Array with bool`, `setByte(0, 223)` | `v` **and** `not v` both true, `v == true` false |
+| `Array with <an enum>`, `setByte(0, 223)` | the program **HANGS** — the ordinal matches no case |
+
+⇒ the writer asks ONE question at every stride — *does the element admit every bit pattern of its slot?* —
+under its own code (**E3118**), and A4a's stride precondition is gone because the general rule subsumes it.
+**E3117 is NOT widened**: it keeps the two fills that are byte-per-element by contract (the byte view and
+`__ManagedFile.read`) and loses only this site, where "every byte" was the one-byte instance of a question
+the construct asks at every width. Asking "every byte" at a wide slot is what would refuse a correct
+`Array with Int`, which A4a measured once already.
+
+⚠ **AN `ExitCode` ELEMENT IS REFUSED, AND THE ROW FILED IT AS A 4-BYTE SLOT — MEASURED, IT IS EIGHT.**
+`ExitCode` reaches an `Array` instance as a NAMED leaf, so `trivialElementStorageBytes` misses the ranged
+registry and `undeclaredNamedElementStorageBytes` hands it the machine WORD; the measured `3741319169` is
+`223` at byte 3 of an EIGHT-byte slot, not of a four-byte one. Its domain is at widest `0 to u32.max`
+(and is PLATFORM-DEPENDENT below that — `0 to 255` on Linux, macOS and WASI), so it cannot hold every
+value of the slot it actually occupies whichever reading you take, and shv2's own value-set door answers
+`notIntegerValued` for it besides. A door that ADMITS raw bytes into a declared element settles an
+ambiguity by refusing — `rangeHoldsEveryByte`'s argument, one quantifier out.
+
+<!-- test: error.a-raw-byte-write-is-refused-at-a-slot-the-element-does-not-fill -->
+### A ranged element WIDER than a byte that does not fill its slot
+`rangedAliasStorageBytes` gives `int(0 to 1000)` a TWO-byte slot, so a raw byte at offset 1 is the slot's
+HIGH byte and the element reads back 57089 — outside its own declared range, with no diagnostic before.
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Wides = Array with Wide
+
+function takes(b Wides) returns ExitCode
+	return ((try b.get(0) otherwise 0) and u8.max) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var a = Wides.create()
+	a.push(1)
+	try a.managed.setByte(1, 223) otherwise return 3
+	return takes(a)
+end 'main'
+```
+```maxoncstderr
+error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 2-byte slot — every value of int(0 to 65535). The element 'Wide' (int(0 to 1000)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+```
+
+<!-- test: error.a-raw-byte-write-is-refused-on-a-negative-lower-bound-element -->
+### An element with a NEGATIVE lower bound keeps the machine word and does not fill it
+`rangedAliasStorageBytes` is the UNSIGNED ladder, so `int(-5 to 5)` takes the whole word — and one raw byte
+put **223** into an element declared `int(-5 to 5)`.
+```maxon
+typealias Small = int(-5 to 5)
+typealias Smalls = Array with Small
+
+function takes(b Smalls) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var a = Smalls.create()
+	a.push(1)
+	try a.managed.setByte(0, 223) otherwise return 3
+	return takes(a)
+end 'main'
+```
+```maxoncstderr
+error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'Small' (int(-5 to 5)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+```
+
+<!-- test: error.a-raw-byte-write-is-refused-on-a-bool-element -->
+### A `bool` element is a ONE-byte slot holding exactly two values
+The slot is one byte and the element admits `0` and `1`, so this is the case that separates *"admits every
+value of its slot"* from *"strides one byte"*. Measured before the rule: `v` and `not v` were BOTH true
+while `v == true` was false, which is not a boolean.
+```maxon
+typealias Flags = Array with bool
+
+function main() returns ExitCode
+	var a = Flags.create()
+	a.push(false)
+	try a.managed.setByte(0, 223) otherwise return 3
+	return 0 if (try a.get(0) otherwise false) else 1
+end 'main'
+```
+```maxoncstderr
+error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 1-byte slot — every value of int(0 to 255). The element 'bool' does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+```
+
+<!-- test: error.a-raw-byte-write-is-refused-on-an-enum-element -->
+### An ENUM element stores an ORDINAL, and a raw byte is not one
+`array-enum-element-size.md` pins an enum element at the machine word, and its value set is the ordinals the
+declaration lists. Measured before the rule: the program compiled and then **hung**, matching an ordinal no
+arm names.
+```maxon
+enum Color
+	red
+	green
+end 'Color'
+
+typealias Colors = Array with Color
+
+function main() returns ExitCode
+	var a = Colors.create()
+	a.push(Color.red)
+	try a.managed.setByte(0, 223) otherwise return 3
+	return match (try a.get(0) otherwise Color.red) 'v'
+		red gives 0
+		green gives 1
+	end 'v'
+end 'main'
+```
+```maxoncstderr
+error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'Color' does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+```
+
+<!-- test: error.a-raw-byte-write-is-refused-on-an-exit-code-element -->
+### An `ExitCode` element has no value set this compiler can compare a slot against
+```maxon
+typealias Codes = Array with ExitCode
+
+function main() returns ExitCode
+	var a = Codes.create()
+	a.push(1)
+	try a.managed.setByte(3, 223) otherwise return 3
+	return try a.get(0) otherwise 4
+end 'main'
+```
+```maxoncstderr
+error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'ExitCode' does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+```
+
+<!-- test: a-raw-byte-write-is-accepted-when-the-element-fills-its-two-byte-slot -->
+### An element that DOES fill its two-byte slot keeps its raw writer
+⭐ **THE ACCEPTANCE CASE THAT RULES OUT A WIDENED E3117.** `int(0 to u16.max)` does NOT hold every byte in
+the sense E3117 means — it is not a byte element at all — and it admits every value of the two-byte slot it
+was given, so a raw byte at either offset is honest. This program answers **57089** before and after.
+```maxon
+typealias Byte = int(0 to u16.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var a = Bytes.create()
+	a.push(1)
+	try a.managed.setByte(1, 223) otherwise return 3
+	return 0 if (try a.get(0) otherwise 0) == 57089 else 4
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-raw-byte-write-still-stages-a-machine-word-element -->
+### A machine-word `int` element admits every bit pattern of its slot, so staging still works
+The case A4a's first cut broke and had to be pulled back from. It is the reason the rule may not be *"does
+the element hold every BYTE"*: `int(i64.min to i64.max)` does not, and it holds every value of its slot.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var xs = IntArray.create()
+	xs.push(7)
+	try xs.managed.setByte(0, 3) otherwise return 1
+	return 0 if (try xs.get(0) otherwise 0) == 3 else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-raw-byte-write-into-a-byte-no-file-declares-is-still-accepted -->
+### A program that declares no `Byte` at all keeps its raw writer
+The literal mints its own `Array with Byte` (`undeclaredNamedElementStorageBytes`'s byte arm), which strides
+one byte and has no declared range for a raw byte to fall outside of — exactly the case E3117 returns on.
+```maxon
+function main() returns ExitCode
+	var v = b"abc"
+	try v.managed.setByte(0, 223) otherwise return 3
+	return 0 if (try v.managed.byteAt(0) otherwise 0) == 223 else 4
 end 'main'
 ```
 ```exitcode

@@ -1357,6 +1357,17 @@ export type RangedAliasRegistry
 		return try self.storageBytes.get(name)
 	end 'storageBytesInEveryFile'
 
+	// ⭐ **DOES ANY FILE DECLARE `name` AS A RANGED ALIAS AT ALL? (A4c)** The door above's `throws` channel as
+	// a plain bool, for the one reader that wants whether a declaration EXISTS and never what it says:
+	// `ProgramSignatures.elementIsAByteNoFileDeclares` is asking whether an element's slot comes from
+	// `undeclaredNamedElementStorageBytes` — the miss arm — and therefore has no declared range for a raw byte
+	// to fall outside of. It reads the SAME index for the same reason `storageBytesInEveryFile` does:
+	// `widenStorageBytesFor` is that index's only writer and runs on every declaration before any branching,
+	// so "present here" and "some file declares it" are one fact.
+	export function anyFileDeclares(name ByteArray) returns bool
+		return self.storageBytes.contains(name)
+	end 'anyFileDeclares'
+
 	// Fold one declaration's width into the running max for its name. The ONLY writer of `storageBytes`,
 	// called by `record` before any of its own branching, so the index covers every declaration whatever
 	// that branching concludes about contest or conflict.

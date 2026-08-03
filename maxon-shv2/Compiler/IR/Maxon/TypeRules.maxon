@@ -1366,6 +1366,42 @@ export function rawByteFillNarrowElementMessage(member String, aliasName String,
 	return "'{member}' stores RAW bytes into an element declared '{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)}), which does not hold every byte value 0 to {u8.max} — widen the element's declared range to store raw bytes through it"
 end 'rawByteFillNarrowElementMessage'
 
+// ⭐⭐ **E3118 — A RAW-BYTE WRITE INTO A SLOT ITS ELEMENT DOES NOT FILL (A4c).** The sibling above's neighbour,
+// and the wording is what keeps the two rules from reading as one: this one is about the SLOT, so it states
+// the slot's width AND the value set that width has, and only then says the element does not cover it. A
+// reader who sees `1-byte slot — every value 0 to 255` beside an element declared `int(0 to 100)` has the
+// whole argument in front of them.
+//
+// ⚠ **THE ELEMENT ARRIVES ALREADY RENDERED, which the sibling's structured payload does not need and this one
+// cannot do without.** `bool`, an enum's ordinal and an opaque `T` are refused here as readily as a ranged
+// alias, so there is no `low`/`high` pair every subject has — see `ParseError.rawByteWriteSlotDomain`.
+//
+// ⚠ **IT NAMES TWO CURES AND THE SECOND IS THE ONE MOST AUTHORS WANT**: `set` is the ARRAY surface's writer
+// and range-checks the value against the element, so a program staging bytes into a container that is not a
+// byte buffer has somewhere to go. E3117's refusal has no such alternative — there is no other way to ask for
+// a String's bytes — which is why that message names only the declaration.
+//
+// ⚠ **THE SLOT'S VALUE SET IS DERIVED FROM THE WIDTH RATHER THAN CARRIED BESIDE IT**, so the two halves of
+// the comparison this sentence makes cannot come to disagree — and it renders through the very
+// `formatRangeDisplay` the element's own half uses, which is what makes `int(0 to 65535)` beside
+// `int(0 to 1000)` the whole argument. That renderer is also the ONE party that knows a raw `-1` upper means
+// `u64.max`, which the machine-word rung is: printed straight it read *"every value 0 to -1"*.
+export function rawByteWriteSlotDomainMessage(member String, elementDisplay String, slotBytes ByteOffset) returns String
+	let slotValueSet = formatRangeDisplay(SlotUnsignedMin, high: slotUnsignedMax(slotBytes), isFloat: false)
+
+	return "'{member}' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its {slotBytes}-byte slot — every value of {slotValueSet}. The element {elementDisplay} does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element"
+end 'rawByteWriteSlotDomainMessage'
+
+// An array ELEMENT plus its DECLARED value set, as the refusal above names it — `'Wide' (int(0 to 1000))`.
+// It is `constantCastOutOfRangeMessage`'s two halves without the sentence around them, because E3118's
+// subject is not always a ranged alias and so cannot carry the bounds in its payload: the parser picks the
+// shape and this renders the one shape that has bounds. Both halves spell through the same `quotedAliasName`
+// and `formatRangeDisplay` every other member of this family uses, so no site prints an alias or a range two
+// ways.
+export function rangedElementValueSetDisplay(aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
+	return "'{quotedAliasName(aliasName)}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
+end 'rangedElementValueSetDisplay'
+
 // ⭐ **AN ALIAS NAME AS AN E3005 QUOTES IT** — `sourceSpelledAliasName` applied at the one tier a name
 // becomes text an author reads, so no renderer can quote the compiler's bookkeeping and no PRODUCER has to
 // remember to strip before filling in an error's payload.

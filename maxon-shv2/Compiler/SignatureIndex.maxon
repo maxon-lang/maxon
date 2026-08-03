@@ -1947,6 +1947,36 @@ function inclusiveRangeContains(destLow ParsedInt, destHigh ParsedInt, sourceLow
 	return destLow <= sourceLow and destHigh >= sourceHigh
 end 'inclusiveRangeContains'
 
+// ⭐⭐ **DOES `low to high` CONTAIN EVERY UNSIGNED VALUE OF A `slotBytes`-WIDE SLOT? (A4c)** The range half of
+// `ProgramSignatures.elementAdmitsEverySlotValue`, spelled apart from it because it is a statement about a
+// RANGE and not about an instance — `Project.rangeHoldsEveryByte`'s own arrangement, which this is the
+// general form of, and whose ONE-BYTE rung it therefore asks rather than re-spelling. The slot's value set
+// is UNSIGNED because the shared element load zero-extends (`ArrayRuntime.emitLoadElem`).
+//
+// ⚠⚠ **THE WHOLE MACHINE WORD IS THE ONE SLOT TWO DIFFERENT DECLARATIONS FILL, AND NEITHER CAN BE ORDERED
+// AGAINST IT.** `int(i64.min to i64.max)` fills it from the signed side and `int(0 to u64.max)` from the
+// unsigned side; both carry a RAW-NEGATIVE bound (`RangedTypeAlias`'s header), so an ordered `>=` would read
+// `int(0 to 100)` as wide enough for either. It is a bit EQUALITY against each spelling — the reason
+// `inclusiveRangeContains` above opens with `oneValueSetSpelledTwice` — and every OTHER range at this width
+// is refused, which is correct rather than conservative: `rangedAliasStorageBytes` is the UNSIGNED ladder, so
+// `int(-5 to 5)` keeps the word without filling it, and MEASURED before this rule one raw byte read back
+// **223** out of an element declared `int(-5 to 5)`.
+//
+// ⚠ Below the word both bounds are honest small non-negative numbers, exactly BECAUSE the ladder gave the
+// range a narrow slot at all — a raw-negative bound would have taken the word — so ordering is safe there,
+// and the `>=` is the same shape (and, at one byte, literally the same call) `rangeHoldsEveryByte` uses.
+function rangeHoldsEverySlotValue(low ParsedInt, high ParsedInt, slotBytes ByteOffset) returns bool
+	if slotBytes == (ByteStringElementSize as ByteOffset) 'aByteSlot'
+		return rangeHoldsEveryByte(low, high: high)
+	end 'aByteSlot'
+
+	if slotBytes == MachineWordBytes 'theWholeWord'
+		return (low == BareIntegerElementLow and high == BareIntegerElementHigh) or (low == ByteValueSetLow and high == slotUnsignedMax(slotBytes))
+	end 'theWholeWord'
+
+	return low == ByteValueSetLow and high >= slotUnsignedMax(slotBytes)
+end 'rangeHoldsEverySlotValue'
+
 // ⭐⭐ **THE ELEMENT OF EVERY COMPILER-SYNTHESIZED BYTE BUFFER — AND WHY IT IS NOT `Byte`.**
 // A buffer the COMPILER mints is byte-packed by construction: `__str_bytes_view` publishes a record over a
 // String's own buffer, whose `element_size@24` is 1 always, and the `__ManagedMemory` an OS runtime entry
@@ -1973,6 +2003,13 @@ end 'inclusiveRangeContains'
 // (`managedMemoryInstanceForElementSize`, pinned by `array-init.md`). The split is SYNTHESIZED vs WRITTEN,
 // not string vs buffer: code the user did not write cannot be refused, so it takes an element the user
 // cannot reach instead.
+//
+// ⚠⚠ **THAT SECOND SENTENCE WAS FALSE WHEN IT WAS WRITTEN AND IS TRUE AS OF A4c.** `create(n, 1)` kept
+// `Byte` and was NOT refused for the wall, so a wide-`Byte` file got a record stamped stride 1 under a type
+// striding 2 and `set(0, value: 300)` read back **44** — the literal's own incoherence through the twin
+// producer, with the comment that would have caught it already on the page. Both producers now ask
+// `Parser.requireBytePackedRecordStridesLikeThisFilesByte`, so the split above is what the code does rather
+// than what it intended.
 //
 // It is `__`-RESERVED, so no program can declare it and `undeclaredNamedElementStorageBytes` is the only
 // answer for its width — the same reason `StringIndexTypeName` wears one. This is `parseDecodedView`'s rule
@@ -7854,6 +7891,57 @@ export type ProgramSignatures
 		end 'element'
 	end 'elementIntegerValueRange'
 
+	// ⭐⭐ **DOES THIS INSTANCE'S ELEMENT ADMIT EVERY BIT PATTERN OF ITS OWN SLOT? (E3118, A4c.)** The
+	// question the buffer surface's RAW-BYTE WRITER has to ask, and it is one question at every stride:
+	// `setByte` addresses a byte OFFSET, so on a record striding more than a byte it writes a FRAGMENT of an
+	// element, and what the ARRAY surface reads back afterwards is an arbitrary UNSIGNED value of the whole
+	// slot — the shared element load zero-extends (`ArrayRuntime.emitLoadElem`), which is what makes the
+	// slot's value set unsigned and makes this comparable at all.
+	//
+	// ⚠⚠ **IT IS NOT `rangeHoldsEveryByte` WIDENED, AND THE DIFFERENCE IS A MEASURED WRONG ANSWER IN EACH
+	// DIRECTION.** "Admits every BYTE" is this answer at a ONE-byte slot and nothing more general: asked at a
+	// wider slot it refuses a correct `Array with Int` (A4a measured that and had to pull it back), and asked
+	// only at a one-byte slot it lets `typealias Wide = int(0 to 1000)` read back **57089** through an
+	// accessor declared `int(0 to 1000)`. So the one-byte rung ASKS that predicate rather than re-spelling
+	// it, and every wider rung asks the slot.
+	//
+	// ⭐ **THE ADMITTING DIRECTION MUST BE A PROOF.** This door lets RAW BYTES into a declared element, so an
+	// element whose value set the compiler cannot compare — a `bool` (two values in a one-byte slot), an
+	// `ExitCode` (a PLATFORM-DEPENDENT domain), an enum's ordinal, a float alias whose bounds are IEEE-754
+	// bit patterns, an opaque `T`, a function pointer — is REFUSED rather than guessed at. That is
+	// `rangeHoldsEveryByte`'s own conservative argument one quantifier out. A MANAGED element never reaches
+	// here at all: `Parser.requireBufferBytesAreNotAPointer` (E3110) has refused it a line earlier, because
+	// its bytes are an ADDRESS at every offset.
+	export function elementAdmitsEverySlotValue(giid GenericInstanceId, readerFilePath FilePath) returns bool
+		match self.elementIntegerValueRange(giid, readerFilePath: readerFilePath) 'valueSet'
+			inclusive(low, high) then return rangeHoldsEverySlotValue(low, high: high, slotBytes: self.arrayElementSize(giid))
+			notIntegerValued then return self.elementIsAByteNoFileDeclares(giid)
+		end 'valueSet'
+	end 'elementAdmitsEverySlotValue'
+
+	// The ONE element with no value set that still admits every pattern of its slot: the `Byte` a `b"…"`
+	// literal MINTS FOR ITSELF in a program that declares no such alias. `undeclaredNamedElementStorageBytes`
+	// gives it a one-byte slot by construction and there is no declared range for a raw byte to fall outside
+	// of — exactly the case `Parser.requireRawByteFillFitsItsElement` returns on, asked here of the slot
+	// instead of the byte.
+	//
+	// ⚠ **THE DECLARATION IS ASKED AS WELL AS THE NAME, and dropping either half is a wrong acceptance.**
+	// `isByteElementName` is a ROSTER over the two names shv2 gives a byte, so a `typealias Byte = float(…)`
+	// is byte-NAMED and declared, and its bounds are IEEE-754 bit patterns no slot test can read; and a name
+	// that is NOT on the roster and that no file declares is an ENUM or a boxed union's ordinal, which keeps
+	// the machine word and admits only the ordinals its declaration lists. `__ManagedByte` cannot reach here
+	// at all — `elementIntegerValueRange` hands it a byte's value set one arm up — so this is the literal's
+	// own `Byte` alone.
+	//
+	// ⚠ The declaration is asked WHOLE-PROGRAM rather than of a reading file, and that is the quantifier the
+	// SLOT has: `undeclaredNamedElementStorageBytes` is reached exactly when `storageBytesInEveryFile` misses,
+	// and it is the only thing that makes this element's slot one byte. Asking a file instead would accept a
+	// name some OTHER file declares wide, whose slot is then that file's width and not a byte.
+	function elementIsAByteNoFileDeclares(giid GenericInstanceId) returns bool
+		let name = self.arrayNamedElementName(ValueTypeTag.genericInstance, nameId: giid)
+		return isByteElementName(name) and not self.typeAliases.anyFileDeclares(name)
+	end 'elementIsAByteNoFileDeclares'
+
 	// ⭐ **THE ONE PLACE A RANGED ALIAS'S DECLARED BOUNDS BECOME A STORAGE WIDTH.** A trivial element is
 	// stored INLINE, so its slot is as wide as its values need and no wider: a `named` element is a ranged-
 	// int alias sized by the width that holds every file's declaration of the name
@@ -8456,6 +8544,13 @@ export type ProgramSignatures
 	// buffer in a program whose own `Byte` is two bytes wide. Before it, the whole-program width made that
 	// buffer stride 2 and `file.read(managed, …)` three lines later refused it — in a program that never
 	// mentions `File`.
+	//
+	// ⚠⚠ **AND WHERE THE SCOPING CANNOT SAVE IT, THE CALLER NOW REFUSES (A4c).** A file that declares its own
+	// wide `Byte` AND writes `create(n, 1)` asks for a byte-PACKED record — `__arr_mem_create` stamps
+	// `element_size@24` from that argument — under the `Array with Byte` this arm hands back, which strides
+	// what that same file declared. The two disagreed silently: `set(0, value: 300)` read back **44**. This
+	// arm still answers, because the refusal is about the DISAGREEMENT and must name the instance it is
+	// about; `Parser.requireManagedMemoryElementSize` is where it is raised, beside its two siblings.
 	export function managedMemoryInstanceForElementSize(elementSize ParsedInt, readerFilePath FilePath) returns GenericInstanceId
 		if elementSize == ByteStringElementSize 'bytePacked'
 			return self.internArrayByteInstance(readerFilePath)

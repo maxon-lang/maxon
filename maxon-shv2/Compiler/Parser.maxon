@@ -586,6 +586,16 @@ export union ParseError implements Error
 	// constructs reach this rule, so it must say which one was written. The remaining payload is the arm
 	// above's, and rides for the same reasons.
 	rawByteFillNarrowElement(member String, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, line LineNumber, column ColumnNumber)
+	// ⭐ **A RAW-BYTE WRITE INTO A SLOT ITS ELEMENT DOES NOT FILL (A4c).** Renders as **E3118** through
+	// `rawByteWriteSlotDomainMessage`, positioned at the method token like its `rawByteFillNarrowElement`
+	// sibling above.
+	//
+	// ⚠ **THE ELEMENT ARRIVES PRE-RENDERED WHERE THE SIBLING CARRIES BOUNDS, AND THAT IS THE PAYLOAD THE
+	// SUBJECT ALLOWS.** This rule refuses `bool`, an enum's ordinal and an opaque `T` as readily as a ranged
+	// alias, so there is no `low`/`high` pair every subject has — only a NAME, which for a ranged element
+	// carries its declared range beside it. The renderer cannot choose between those two shapes, because the
+	// choice needs the signatures; `builtinArgumentType`'s `got:` is the same split for the same reason.
+	rawByteWriteSlotDomain(member String, elementDisplay String, slotBytes ByteOffset, line LineNumber, column ColumnNumber)
 	// --- The struct arms (P1.0r) ---
 	//
 	// A struct literal (`Point{…}`) written outside the type's OWN methods. Renders as E3076,
@@ -4499,10 +4509,19 @@ function requireByteCodepoint(codepoint ParsedInt) throws ParseError
 	end 'tooBig'
 end 'requireByteCodepoint'
 
-// ⭐ **A `b"…"` BLOB IS BYTE-PACKED BY CONSTRUCTION, so the literal is a value of `Array with Byte` only
-// while THIS program's `Byte` is one byte wide** — the E2015 that rule emits from its ONE rule function
-// (`Parser.requireByteStringBlobFitsItsElement`, which both of the literal's doorways ask), so no doorway
+// ⭐⭐ **A BYTE-PACKED RECORD IS A VALUE OF `Array with Byte` ONLY WHILE THIS FILE'S `Byte` STRIDES ONE
+// BYTE** — the E2015 both byte-packed PRODUCERS emit, from the one rule function
+// (`Parser.requireBytePackedRecordStridesLikeThisFilesByte`) all three of their doorways ask, so no doorway
 // can come to describe the defect differently.
+//
+// ⚠⚠ **THERE ARE TWO PRODUCERS AND FOR ONE ROW ONLY ONE OF THEM WAS REFUSED (A4c).** A `b"…"` blob is
+// byte-packed by CONSTRUCTION; `__ManagedMemory.create(count, elementSize: 1)` is byte-packed by its own
+// ARGUMENT — `__arr_mem_create` stamps `element_size@24` from it while the front end types the result as
+// this file's `Array with Byte` (`managedMemoryInstanceForElementSize`). The record and the incoherence are
+// identical, and the second was accepted: MEASURED under `typealias Byte = int(0 to 1000)`,
+// `create(8, 1)` then `set(0, value: 300)` type-checks against `int(0 to 1000)`, strides the stamped 1 and
+// reads back **44**. One producer refused and its twin accepted was the defect; the message is shared so
+// that stays impossible to re-create.
 //
 // `LowerMaxonToStd.lowerByteStringLiteral` lays the blob out one byte per element and stamps
 // `element_size@24 = ByteStringElementSize` to match it; every OTHER `Array with Byte` record — `.create()`,
@@ -4518,11 +4537,38 @@ end 'requireByteCodepoint'
 // the bootstrap mis-answers the same program its own way, packing the blob and then TYPING the array u16, so
 // `b"CD".get(0)` reads **17475**. Emitting the blob WIDE is an element-wise widening emission — a real
 // mechanism and its own rung, exactly as the widening `__arr_append` across differing strides is — so until
-// that exists this is E2015 at the literal rather than a record that behaves unlike every other value of its
-// own type.
-function byteStringBlobStrideMessage(declaredStride ParsedInt) returns String
-	return "a `b\"…\"` byte-string literal in a program whose `Byte` is a {declaredStride}-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides {declaredStride} — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`"
-end 'byteStringBlobStrideMessage'
+// that exists this is E2015 at the producer rather than a record that behaves unlike every other value of its
+// own type. The same holds of a byte-packed `create`: the alternative there is an element TYPE one byte wide
+// that THIS file can name, which is precisely what its `Byte` declaration says it does not have.
+//
+// ⚠ Two slots and not one, so the literal's sentence stays BYTE-IDENTICAL to what it has always been while
+// the buffer's names itself: the PRODUCER is what the author wrote, and the PACKED SUBJECT is the thing
+// inside it that is byte-packed — the blob for one, the requested buffer for the other.
+function bytePackedRecordStrideMessage(producer BytePackedProducer, declaredStride ParsedInt) returns String
+	let named = match producer 'producer'
+		byteStringLiteral gives "a `b\"…\"` byte-string literal"
+		managedMemoryCreate gives "`{String.from(ManagedMemoryTypeName)}.{String.from(ManagedMemoryCreateMethod)}({String.from(ManagedMemoryCountParamName)}, {String.from(ManagedMemoryElementSizeParamName)}: {ByteStringElementSize})`"
+	end 'producer'
+	let packedSubject = match producer 'packedSubject'
+		byteStringLiteral gives "the literal's blob"
+		managedMemoryCreate gives "the buffer it asks for"
+	end 'packedSubject'
+
+	return "{named} in a program whose `Byte` is a {declaredStride}-byte range: {packedSubject} is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides {declaredStride} — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`"
+end 'bytePackedRecordStrideMessage'
+
+// ⭐⭐ **WHICH BYTE-PACKED PRODUCER A STRIDE REFUSAL IS ABOUT — AN ENUM, NOT TWO STRINGS, AND THAT IS
+// MEASURED (A4c).** Two reasons, pointing the same way. The producer and the byte-packed thing inside it are
+// ONE PAIRING: a producer printed beside the other's subject would state a true rule about the wrong
+// construct, and an enum makes that pairing the message renderer's to make once rather than each caller's to
+// get right. And a rendered STRING argument is built on every call, ACCEPTED ones included — the A3g
+// measurement `requireByteArrayValue`'s header records, and it was measured again right here: passing the
+// buffer producer's name as text cost **+55 allocations at scale rung 0 rising to +1543 at rung 5**, ~6 per
+// accepted `__ManagedMemory.create`, for a sentence no compiling program ever reads.
+enum BytePackedProducer
+	byteStringLiteral
+	managedMemoryCreate
+end 'BytePackedProducer'
 
 // The exact E1004 text v1 emits (`reportByteStringCodepointRange`), including the literal `\xNN` guidance.
 function byteStringCodepointRangeMessage(codepoint ParsedInt) returns String
@@ -26306,10 +26352,9 @@ export type Parser
 		// stopped resolving through `ProgramSignatures.internArrayByteInstance(readerFilePath)`.
 		let giid = self.signatures.internArrayByteInstance(self.filePath)
 
-		let declaredStride = self.signatures.arrayElementSize(giid) as ParsedInt
-		if declaredStride != ByteStringElementSize 'blobStrideDisagreesWithTheElement'
-			throw ParseError.unsupported(byteStringBlobStrideMessage(declaredStride), line: line, column: column)
-		end 'blobStrideDisagreesWithTheElement'
+		// Rule 1 is the shared byte-packed producers' rule (`bytePackedRecordStrideMessage`), asked of the
+		// instance already in hand rather than of a second mint of it — which is the coupling above.
+		try self.requireBytePackedRecordStridesLikeThisFilesByte(giid, producer: BytePackedProducer.byteStringLiteral, line: line, column: column)
 
 		match self.signatures.arrayElementAliasOf(giid, readerFilePath: self.filePath) 'element'
 			// No declared range constrains the element, so no byte can be outside one. It is the program
@@ -26319,6 +26364,26 @@ export type Parser
 			declared(alias) then try self.requireEveryByteInRange(bytes, alias: alias, line: line, column: column)
 		end 'element'
 	end 'requireByteStringBlobFitsItsElement'
+
+	// ⭐⭐ **THE RULE BOTH BYTE-PACKED PRODUCERS ASK (A4c)** — the `b"…"` literal above, whose blob is packed
+	// by CONSTRUCTION, and `__ManagedMemory.create(count, elementSize: 1)`, whose buffer is packed by its own
+	// ARGUMENT. One rule, one sentence (`bytePackedRecordStrideMessage`), because for a row's length the
+	// literal was refused for this incoherence and the buffer was accepted with it — and a record striding 1
+	// under a type striding N is what makes every question further down, including E3118's slot question,
+	// unanswerable.
+	//
+	// ⚠ It takes the INSTANCE rather than minting one, so the literal's caller can hand over the very giid its
+	// bounds clause reads and the two provably speak about one element. `create`'s caller hands over the
+	// instance its own `elementSize` picked, which is the same requirement seen from the other side: the
+	// refusal must be about the type the result will WEAR, not about a fresh derivation of it.
+	function requireBytePackedRecordStridesLikeThisFilesByte(giid GenericInstanceId, producer BytePackedProducer, line LineNumber, column ColumnNumber) throws ParseError
+		let declaredStride = self.signatures.arrayElementSize(giid) as ParsedInt
+		if declaredStride == ByteStringElementSize 'thisFilesByteIsOneByte'
+			return
+		end 'thisFilesByteIsOneByte'
+
+		throw ParseError.unsupported(bytePackedRecordStrideMessage(producer, declaredStride: declaredStride), line: line, column: column)
+	end 'requireBytePackedRecordStridesLikeThisFilesByte'
 
 	// Rule 2's walk, split out so the rule above reads as its two clauses. EVERY byte is tested and the FIRST
 	// offending one is reported: a blob is a run the source never spelled out, so a diagnostic naming one byte
@@ -29879,7 +29944,24 @@ export type Parser
 			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}.{String.from(ManagedMemoryCreateMethod)}`'s `{String.from(ManagedMemoryElementSizeParamName)}` is {size}, and shv2 has no element TYPE of that width — a buffer must be byte-packed ({ByteStringElementSize}) or machine-word ({primitiveTypeByteSize(ValueTypeTag.integer)}). Typing it as a word anyway would check `get`/`set` against a range the buffer's stride cannot hold, and store the value truncated.", line: self.tokenAt(argStart).line, column: self.tokenAt(argStart).column)
 		end 'noElementTypeIsThatWide'
 
-		return self.signatures.managedMemoryInstanceForElementSize(size, readerFilePath: self.filePath)
+		let instance = self.signatures.managedMemoryInstanceForElementSize(size, readerFilePath: self.filePath)
+
+		// ⭐⭐ **AND THE INSTANCE MUST STRIDE WHAT THE RECORD WILL BE STAMPED WITH (A4c).** `__arr_mem_create`
+		// stamps `element_size@24` from this very ARGUMENT, so a `create` whose instance strides something
+		// else is a record and a static type disagreeing about one buffer — the `b"…"` literal's incoherence
+		// through the other producer, and it was accepted for a row's length while the literal was refused
+		// (`requireBytePackedRecordStridesLikeThisFilesByte` carries the measurement).
+		//
+		// ⚠ **ONLY THE BYTE ARM CAN DISAGREE, WHICH IS WHY THE TEST IS NOT `size == arrayElementSize`.** The
+		// word arm takes the bare-`int` instance, whose stride is the machine word by construction whatever
+		// `Byte` was declared to be; and a NON-POSITIVE size never reaches a live record at all — the corpus
+		// pins `create(4, 0)` as a caught runtime `invalidAllocation`, so which instance a doomed `create`
+		// wore is unobservable and a `size == stride` test would turn that case into a compile error.
+		if size == ByteStringElementSize 'aBytePackedBuffer'
+			try self.requireBytePackedRecordStridesLikeThisFilesByte(instance, producer: BytePackedProducer.managedMemoryCreate, line: self.tokenAt(argStart).line, column: self.tokenAt(argStart).column)
+		end 'aBytePackedBuffer'
+
+		return instance
 	end 'requireManagedMemoryElementSize'
 
 	// The argument to `String.from` must be an `Array with Byte` — the instance a `b"…"` literal and a
@@ -32389,44 +32471,41 @@ export type Parser
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.requireBufferBytesAreNotAPointer(giid, methodTok: methodTok)
-			// ⭐⭐ **THE RAW-BYTE WRITER ANSWERS TO THE ELEMENT'S DECLARED RANGE — BUT ONLY WHERE ONE BYTE IS
-			// ONE ELEMENT (A4a).** `setByte` addresses a byte OFFSET, so on a record that strides more than a
-			// byte it writes a FRAGMENT of an element, and a rule that asks whether a range holds every BYTE
-			// has nothing true to say about a fragment. MEASURED by the suite when this clause was missing:
-			// three `managed-memory-methods` cases stopped compiling, all of them `arr.managed.setByte(…)` on
-			// an `Array with Int` — `IntArray.create()` staging a low byte, refused with a sentence about a
-			// range a machine word obviously holds.
-			// ⇒ the stride is the PRECONDITION here and nowhere else. `parseByteView` needs none (its fill is
-			// ELEMENT-wise at whatever stride — measured through `.managed.byteAt` on a stride-2 record as
-			// `raw0=97 raw1=0 raw2=98`, i.e. each byte in its own slot), and `__ManagedFile.read` needs none
-			// because `requireManagedMemoryValue` has already established it one line earlier.
+			// ⭐⭐ **THE RAW-BYTE WRITER ANSWERS TO ITS SLOT, AT EVERY STRIDE (E3118, A4c).** `setByte`
+			// addresses a byte OFFSET, so on a record striding more than a byte it writes a FRAGMENT of an
+			// element — and what the ARRAY surface reads back afterwards is an arbitrary unsigned value of
+			// that element's whole SLOT. One question, one rule, whatever the width.
 			//
-			// ⛔⛔ **WHAT THE PRECONDITION SKIPS IS NOT ALL "BYTE-LEVEL STAGING" — THIS HEADER CLAIMED IT WAS,
-			// AND THE A4a REVIEW MEASURED THE CLAIM FALSE.** Staging is honest only where every bit pattern of
-			// the SLOT is a value the element admits. That is true of `Array with Int` (a machine word, which
-			// is the case the three suite cases above pin) and FALSE of three shapes the skip lets through,
-			// each a silent wrong answer on this tree:
-			//   • a RANGED element wider than a byte — under `typealias Wide = int(0 to 1000)`,
-			//     `a.managed.setByte(1, 223)` reads back **57089** through an accessor declared `int(0 to 1000)`.
-			//   • a 4-byte `ExitCode` element — `setByte(3, 223)` reads back **3741319169**.
-			//   • a 1-byte `bool` element — `setByte(0, 223)` makes `v` and `not v` BOTH true while `v == true`
-			//     is FALSE, which is not a boolean.
-			// ⇒ the honest question for those is *"does the element admit every bit pattern of its SLOT?"*,
-			// which COINCIDES with this rule's question at a one-byte slot and is a different rule everywhere
-			// else. It is FILED for its own row rather than fixed here, because it cannot yet be asked
-			// honestly: the compiler and the runtime disagree about the slot width of one of these very
-			// records — `__ManagedMemory.create(n, 1)` written in a file whose `Byte` is two bytes is TYPED
-			// stride 2 over a record stamped stride 1, and `set(0, value: 300)` on it reads back **44** — while
-			// the same file's `b"…"` literal is already REFUSED for that identical incoherence
-			// (`byteStringBlobStrideMessage`). One producer refused and its twin accepted is the prerequisite,
-			// and settling it changes which programs compile.
+			// ⛔⛔ **A4a ASKED "DOES THE ELEMENT HOLD EVERY BYTE" HERE BEHIND A STRIDE PRECONDITION, AND ITS
+			// OWN HEADER CALLED THAT A BOUNDARY RATHER THAN A PROOF.** It was: the skip let through four
+			// silent wrong answers measured on that tree — `typealias Wide = int(0 to 1000)` reading back
+			// **57089**, `int(-5 to 5)` reading back **223** (the unsigned ladder keeps it a machine word
+			// without filling one), a `bool` element for which `v` and `not v` were BOTH true, and an ENUM
+			// element on which the program compiled and then HUNG on an ordinal no arm names. The stride is
+			// therefore no longer a precondition: it is an INPUT to the one rule
+			// (`ProgramSignatures.elementAdmitsEverySlotValue`), which asks `rangeHoldsEveryByte` at a
+			// one-byte slot and the slot's own value set above it.
 			//
-			// ⚠ Its `byteAt` dual two arms up is untouched whatever the stride — it yields a plain `int`,
+			// ⚠⚠ **THAT IS NOT E3117 WIDENED, AND WIDENING IT IS THE MEASURED WRONG ANSWER IN THE OTHER
+			// DIRECTION.** "Holds every byte" asked at a wider slot refuses `Array with Int` — three
+			// `managed-memory-methods` cases stopped compiling when A4a's first cut did exactly that,
+			// `IntArray.create()` staging a low byte told about a range a machine word obviously holds. E3117
+			// keeps the two fills that ARE byte-per-element by contract (`parseByteView`, whose fill is
+			// element-wise at whatever stride, and `__ManagedFile.read`, whose argument gate has already
+			// established a byte-packed buffer); this site left it because its construct never asked that
+			// question except at one width.
+			//
+			// ⚠ **THE PREREQUISITE THIS ROW WAITED ON IS SETTLED ONE DOOR AWAY**: a
+			// `__ManagedMemory.create(n, 1)` in a file whose `Byte` is two bytes was TYPED stride 2 over a
+			// record stamped stride 1 (`set(0, value: 300)` read back **44**) while the same file's `b"…"`
+			// literal was already refused for the identical incoherence. Both producers now go through
+			// `requireBytePackedRecordStridesLikeThisFilesByte`, so no receiver reaching here disagrees with
+			// its own record about its stride — which is what makes a slot question answerable at all.
+			//
+			// ⚠ Its `byteAt` dual two arms up is untouched whatever the slot — it yields a plain `int`,
 			// never the element — which is the one place this rule and E3110's pair part company; see
 			// `requireRawByteFillFitsItsElement`.
-			if self.valueIsByteArray(arr) 'oneRawByteIsOneElement'
-				try self.requireRawByteFillFitsItsElement(giid, methodTok: methodTok)
-			end 'oneRawByteIsOneElement'
+			try self.requireRawByteWriteFitsItsSlot(giid, methodTok: methodTok)
 
 			// The RECEIVER is argument 0, so the two-int list's array is prepended to rather than rebuilt —
 			// the arg-list protocol stays in its one home and the receiver is added where it belongs.
@@ -32750,20 +32829,22 @@ export type Parser
 		throw ParseError.bufferByteAccessManagedElement(String.from(methodTok.value), elementType: self.signatures.arrayElementDisplayName(giid), line: methodTok.line, column: methodTok.column)
 	end 'requireBufferBytesAreNotAPointer'
 
-	// ⭐⭐ **A RAW-BYTE FILL NEEDS AN ELEMENT THAT ADMITS EVERY BYTE (E3117, A4a).** ⛔ Three constructs write
-	// bytes into an `Array with Byte` that exist only at RUN TIME, and every one of them was a silent wrong
-	// answer under a `Byte` too narrow to hold them:
+	// ⭐⭐ **A RAW-BYTE FILL, ONE BYTE PER ELEMENT, NEEDS AN ELEMENT THAT ADMITS EVERY BYTE (E3117, A4a).**
+	// ⛔ Two constructs write bytes into an `Array with Byte` that exist only at RUN TIME, and both were a
+	// silent wrong answer under a `Byte` too narrow to hold them:
 	//
 	//   • the BYTE VIEW (`parseByteView` — `String.toByteArray()`, `String.bytes()`, `Character.bytes()`),
 	//     whose `__str_to_bytes` blits the receiver's UTF-8. MEASURED on `origin/main` with A3r's fix already
 	//     in: `takes("ß".toByteArray())` into `takes(b Array with Byte)` under `typealias Byte = int(0 to 100)`
 	//     returned **195**, exit 195, no diagnostic. `.bytes()` returned the same 195 through the same emitter.
-	//   • the BUFFER SURFACE's `setByte` (`arr.managed.setByte(o, v)`), which stores a raw byte into the very
-	//     record the ARRAY surface reads through the element's declared range. MEASURED: **223** out of both
-	//     a `__ManagedMemory.create(8, 1)` buffer AND a `b"abc"` literal's `.managed` — the second reaching
-	//     A3r's own subject through a writer A3r structurally cannot see, since it runs after the blob has
-	//     been approved.
 	//   • `__ManagedFile.read(managed, size)`, which blits a file's contents into a caller's buffer.
+	//
+	// ⚠⚠ **A THIRD SITE — THE BUFFER SURFACE'S `setByte` — REACHED THIS RULE AT A4a AND NO LONGER DOES
+	// (A4c).** It addresses a byte OFFSET rather than an element, so what its write leaves behind is any bit
+	// pattern of the element's whole SLOT, and *"admits every byte"* is that question's answer at ONE width
+	// and no other. It asks `requireRawByteWriteFitsItsSlot` (E3118) instead, at every stride. The two
+	// remaining sites are exactly the ones whose fill is byte-per-element BY CONTRACT, which is why neither
+	// needs — or may have — a stride test of its own; see the note below.
 	//
 	// ⚠⚠ **IT IS PER-TYPE AND A3r's `requireByteStringBlobFitsItsElement` IS PER-VALUE, AND THEY MAY NOT BE
 	// MERGED.** A3r inspects the blob it holds, so it can accept `b"abc"` under `int(0 to 100)` — which it
@@ -32790,15 +32871,12 @@ export type Parser
 	// fact about the REPRESENTATION and true in both directions; a declared RANGE constrains only what may be
 	// STORED. Refusing the read as well would cost a capability to close nothing.
 	//
-	// ⚠ **IT IS THE BOUNDS QUESTION AND NOTHING ELSE; A STRIDE PRECONDITION BELONGS TO THE SITE, NOT HERE.**
-	// Only `setByte` needs one, because only `setByte` addresses a byte OFFSET — its arm carries it, says why,
-	// and records the three MEASURED wrong answers its skip still lets through (a ranged element wider than a
-	// byte, an `ExitCode` element, a `bool` element). Those want *"does the element admit every bit pattern of
-	// its SLOT?"*, which is this question only at a one-byte slot; they are filed, not closed, and the arm
-	// names the prerequisite. Folding a stride test into this function would open the byte view's own
-	// negative-`low` case: a
-	// `Byte` whose bounds cannot be trusted takes the machine word (`rangedAliasStorageBytes`), so the view
-	// would stop being byte-packed and the rule would stop asking, on exactly the element it least trusts.
+	// ⚠ **IT IS THE BOUNDS QUESTION AND NOTHING ELSE, AND NEITHER REMAINING SITE MAY GROW A STRIDE TEST.**
+	// Folding one in would open the byte view's own negative-`low` case: a `Byte` whose bounds cannot be
+	// trusted takes the machine word (`rangedAliasStorageBytes`), so the view would stop LOOKING byte-packed
+	// and the rule would stop asking, on exactly the element it least trusts. The construct that genuinely
+	// needs the stride — `setByte` — does not have it as a precondition either: it feeds the stride INTO its
+	// rule (`requireRawByteWriteFitsItsSlot`), which is the difference between a boundary and an answer.
 	//
 	// ⚠ A raw-negative `low` is REFUSED here, and it is the same conservative direction
 	// `rangeHoldsEveryByte`'s header argues for: bounds ride as raw 64-bit patterns, so a negative `low` and
@@ -32828,6 +32906,34 @@ export type Parser
 
 		throw ParseError.rawByteFillNarrowElement(String.from(methodTok.value), aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: aliasIsFloat(alias), line: methodTok.line, column: methodTok.column)
 	end 'requireElementAdmitsEveryByte'
+
+	// ⭐⭐ **A RAW-BYTE WRITE NEEDS AN ELEMENT THAT ADMITS EVERY BIT PATTERN OF ITS SLOT (E3118, A4c).** The
+	// rule above's neighbour and NOT its widening: this one is asked by the single construct that addresses a
+	// byte OFFSET, so the value its write leaves in the element is an arbitrary unsigned value of the whole
+	// slot, and the width is part of the question rather than a gate in front of it. The predicate is
+	// `ProgramSignatures.elementAdmitsEverySlotValue`, whose one-byte rung IS `rangeHoldsEveryByte` — so at
+	// the width where the two rules coincide they cannot come to disagree, and above it only this one speaks.
+	//
+	// ⚠ The SLOT is read from `arrayElementSize` — the sole producer of `element_size@24`, so the width this
+	// refusal names is the width the runtime will actually stride, not a second derivation of it.
+	function requireRawByteWriteFitsItsSlot(giid GenericInstanceId, methodTok Token) throws ParseError
+		if self.signatures.elementAdmitsEverySlotValue(giid, readerFilePath: self.filePath) 'fillsItsSlot'
+			return
+		end 'fillsItsSlot'
+
+		throw ParseError.rawByteWriteSlotDomain(String.from(methodTok.value), elementDisplay: self.slotElementDisplay(giid), slotBytes: self.signatures.arrayElementSize(giid), line: methodTok.line, column: methodTok.column)
+	end 'requireRawByteWriteFitsItsSlot'
+
+	// The element as the refusal above must NAME it: the display name, plus the DECLARED RANGE when there is
+	// one, because a sentence about which values an element admits is unreadable without the values. The
+	// choice between the two shapes is made HERE and not in the renderer, because only the parser holds the
+	// signatures — `valueDisplayTypeName` feeding `builtinArgumentType`'s `got:` is the same split.
+	function slotElementDisplay(giid GenericInstanceId) returns String
+		return match self.signatures.arrayElementAliasOf(giid, readerFilePath: self.filePath) 'element'
+			undeclared gives "'{self.signatures.arrayElementDisplayName(giid)}'"
+			declared(alias) gives rangedElementValueSetDisplay(String.from(alias.name), low: alias.low, high: alias.high, isFloat: aliasIsFloat(alias))
+		end 'element'
+	end 'slotElementDisplay'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append`, routed by element KIND (P1.7 slice 3b-vi-b).** An OPAQUE-`T`
 	// element (a generic body's shared `Array with <type parameter>`) copies through the descriptor's `copyFunc@32`

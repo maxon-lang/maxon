@@ -1,0 +1,20 @@
+// Test: error.a-raw-byte-write-is-refused-on-an-enum-element
+enum Color
+	red
+	green
+end 'Color'
+
+typealias Colors = Array with Color
+
+function main() returns ExitCode
+	var a = Colors.create()
+	a.push(Color.red)
+	try a.managed.setByte(0, 223) otherwise return 3
+	return match (try a.get(0) otherwise Color.red) 'v'
+		red gives 0
+		green gives 1
+	end 'v'
+end 'main'
+---
+CompilerError:
+error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'Color' does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element

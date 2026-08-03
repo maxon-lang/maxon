@@ -1,0 +1,17 @@
+// Test: error.a-byte-packed-buffer-is-refused-when-byte-is-wider-than-one-byte
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	try buf.setLength(4) otherwise return 2
+	try buf.set(0, value: 300) otherwise return 3
+	return takes(buf)
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:10:38: Unsupported: `__ManagedMemory.create(count, elementSize: 1)` in a program whose `Byte` is a 2-byte range: the buffer it asks for is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 2 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
