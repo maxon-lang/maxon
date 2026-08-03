@@ -1,0 +1,23 @@
+// Test: the-narrow-files-own-byte-literal-is-still-refused
+// --- file: wide.maxon
+typealias Byte = int(0 to u8.max)
+
+export function anyByte(b Byte) returns int
+	var a = b"\xdf"
+	return (try a.get(0) otherwise 0) - b
+end 'anyByte'
+
+// --- file: main.maxon
+typealias Byte = int(0 to 100)
+
+function narrow(b Byte) returns int
+	return b
+end 'narrow'
+
+function main() returns ExitCode
+	var mine = b"\xdf"
+	return anyByte(narrow(try mine.get(0) otherwise 0)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:18:13: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))

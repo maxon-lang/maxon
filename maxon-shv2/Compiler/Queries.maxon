@@ -1148,6 +1148,12 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// (`lexer-edge-cases.md`'s `maxoncstderr` goldens gate it exactly). Why it is a second variant
 		// rather than another raiser on `strayToken` is argued on the union arm.
 		expectedDeclaration(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{got}'", line: line, column: column, filePath: path)
+		// The THIRD shape of E2001, and byte-for-byte both reference compilers' sentence — the bootstrap
+		// emits it for the free-function and the `static function` spellings alike (measured), v1 at
+		// `Parser.maxon:18362`. `closure-self/error-self-in-free-function-closure`'s `maxoncstderr` golden
+		// gates it exactly. Why it is a variant of its own rather than another raiser on `strayToken` is
+		// argued on the union arm.
+		selfOutsideInstanceMethod(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "'self' can only be used inside instance methods", line: line, column: column, filePath: path)
 		// The SAME code as `strayToken` above — E2001 is "the parser met a token that cannot appear at
 		// this point in the grammar", and a second `module` after an `export` is exactly that. Byte-for-byte
 		// the reference's text, which `module-keyword/error.module-and-export-conflict` gates exactly.

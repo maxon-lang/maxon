@@ -690,6 +690,22 @@ export union ParseError implements Error
 	// construct this compiler does not implement YET", and a stray `42` at file scope is malformed
 	// syntax that no future feature makes legal — a permanent refusal filed as a pending one.
 	expectedDeclaration(got String, line LineNumber, column ColumnNumber)
+	// ⭐ **`self` WHERE THERE IS NO INSTANCE — a `static function`, a free function, or a closure inside
+	// either.** Renders as **E2001** `'self' can only be used inside instance methods`, positioned at the
+	// `self` token (or at the bare self-field name that needs the receiver).
+	//
+	// ⚠ **IT IS NOT `unsupported`, and that is the whole reason the variant exists.** This site used to
+	// throw E2015, which means "a construct this compiler does not implement YET" — but `self` outside an
+	// instance method is PERMANENTLY illegal: no future rung makes it legal, so filing it as pending
+	// misdescribes it. The same argument `expectedDeclaration` above makes about its own former E2015.
+	//
+	// The message is byte-for-byte both reference compilers' (measured on the bootstrap for the free-function
+	// and the `static function` spellings alike; v1 `Parser.maxon:18362`), which
+	// `closure-self/error-self-in-free-function-closure` gates exactly. ONE variant for every context that
+	// lacks a receiver, because it is one rule: there is no instance here. The old E2015 sentence went
+	// further and named the `static function` case specifically; that explanation is dropped deliberately —
+	// a rule that holds in three contexts must not be worded as though it were about one of them.
+	selfOutsideInstanceMethod(line LineNumber, column ColumnNumber)
 	// An initializer that has to fold to a compile-time constant and does not. Renders as **E2004**
 	// `Expected constant expression, got '<got>'`, positioned at the offending token, and `got` is the
 	// token's own source text. Both reference compilers spend E2004 on exactly this sentence
@@ -25671,7 +25687,7 @@ export type Parser
 			return false
 		end 'notAnUnclaimedKeyword'
 
-		if not (self.peekKind() == TokenKind.leftParen or self.scope.contains(tok.value) or self.captureBinds(tok)) 'namesNothingHere'
+		if not (self.peekKind() == TokenKind.leftParen or self.scope.contains(tok.value) or self.captureBinds(tok.value)) 'namesNothingHere'
 			return false
 		end 'namesNothingHere'
 
@@ -28045,7 +28061,7 @@ export type Parser
 		// GLOBAL for `msg.byteLength()` (yielding 13) — two resolutions of one name, in one expression,
 		// neither of them a compile error. The `var` half is the worse one: a `var` receiver is WRITABLE,
 		// so a mutating method would have written the global while the program named a local.
-		match try self.captureScopeOf(baseTok) 'captured'
+		match try self.captureScopeOf(self.baseBindingName(baseTok), anchor: baseTok) 'captured'
 			found(enclosing) then return try self.capturedMethodCall(func, baseTok: baseTok, enclosing: enclosing, resultUsed: resultUsed)
 			notCaptured then break 'captured'
 		end 'captured'
@@ -28751,7 +28767,8 @@ export type Parser
 	// struct type exactly as `requireStructBase` does for a local base. A captured non-struct is refused (only a
 	// struct carries fields and methods; a captured String's builtin methods are reached by no case here).
 	function capturedStructBase(baseTok Token, enclosing Scope) returns StructBase throws ParseError
-		let binding = enclosing.getInfo(baseTok.value)
+		let baseName = self.baseBindingName(baseTok)
+		let binding = enclosing.getInfo(baseName)
 		let capturedTag = maxonTypeTag(binding.varType)
 		let capturedTypeNameId = typeNameIdOf(binding.varType)
 		if capturedTag != ValueTypeTag.structRef 'notAStruct'
@@ -28766,7 +28783,7 @@ export type Parser
 		// method call on a CAPTURED receiver cannot reach a binding of the enclosing body, and a captured
 		// managed CONTAINER — the only thing a borrow could be taken out of — is refused outright at this rung
 		// (`capturedStructBase` admits only a struct). There is no storage here for a conflict to be about.
-		return StructBase.create(try self.structLayoutOfType(capturedTag, nameId: capturedTypeNameId, baseTok: baseTok), box: try self.emitCaptureRead(baseTok, enclosing: enclosing), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
+		return StructBase.create(try self.structLayoutOfType(capturedTag, nameId: capturedTypeNameId, baseTok: baseTok), box: try self.emitCaptureRead(baseName, enclosing: enclosing, anchor: baseTok), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
 	end 'capturedStructBase'
 
 	// A STRING'S BUILTIN METHODS -- s.append(t) and s.byteLength(). String is the one non-struct type
@@ -31521,8 +31538,12 @@ export type Parser
 		if chainEnd == index or self.kindAt(chainEnd) != TokenKind.leftParen 'notChainMethod'
 			return false
 		end 'notChainMethod'
-		let baseTok = self.tokenAt(index)
-		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok)
+		// ASK THE SHARED DOOR. This used to re-derive `baseNamesAValueInScope`'s two-line test by hand and so
+		// lost its `Self` guard (D9): `fieldChainEndAfter` bases the chain test on `tokenCanBeAName`, which
+		// ADMITS `TokenKind.selfType`, and `baseBindingName` special-cases only `TokenKind.self` — so with a
+		// parameter legally bound under the literal name `Self` (D8), a `Self.field.method(…)` chain read as
+		// naming a VALUE base here while the other three doors read it as the TYPE.
+		return self.baseNamesAValueInScope(self.tokenAt(index))
 	end 'fieldChainMethodCallAt'
 
 	// The token index just PAST a field-access chain starting at `index` — a `base` (an identifier or
@@ -32192,7 +32213,7 @@ export type Parser
 	// copy of it.
 	function receiverStorageMask(func IrFunction, binding VarInfo) returns MutatedParamMask
 		if binding.isSelfField 'fieldOfTheEnclosingReceiver'
-			return paramMaskOfValue(func, value: try self.scope.lookupValue(SelfParamName) otherwise panic("receiverStorageMask: a self-field alias is in scope but `self` is not — `declareSelfFieldAliases` and `bindParameters` both run at method entry before a body token is read, and the two paths that could hold an alias without a receiver are refused earlier (a closure body gets a FRESH scope and a self-field access inside one is E2015; a `static function` installs no alias at all)"))
+			return paramMaskOfValue(func, value: try self.scope.lookupValue(SelfParamName) otherwise panic("receiverStorageMask: a self-field alias is in scope but `self` is not — `declareSelfFieldAliases` and `bindParameters` both run at method entry before a body token is read, and neither other path can hold an alias in THIS scope without a receiver (a closure body gets a FRESH scope carrying no alias — a bare self-field name inside one resolves through the CAPTURE path instead, off the enclosing scope; a `static function` installs no alias at all)"))
 		end 'fieldOfTheEnclosingReceiver'
 
 		// ⚠ **MODULE STORAGE REACHES NO PARAMETER, AND THE ARM IS EXPLICIT FOR `receiverOwnerMask`'s OWN
@@ -33058,7 +33079,8 @@ export type Parser
 			return false
 		end 'alwaysAType'
 
-		return self.scope.contains(self.baseBindingName(tok)) or self.captureBinds(tok)
+		let name = self.baseBindingName(tok)
+		return self.scope.contains(name) or self.captureBinds(name)
 	end 'baseNamesAValueInScope'
 
 	// `p.x` — read field `x` out of the box `p` points at.
@@ -33241,7 +33263,7 @@ export type Parser
 			// A CAPTURED enclosing struct is the base (P1.5-A2b-2): `level.rawValue` inside a closure that captures
 			// `level`. The base is not in the closure's own scope; `resolveCapturedFieldChain` reads the box out of
 			// the env and resolves its layout the same way `requireStructBase` does.
-			match try self.captureScopeOf(baseTok) 'captured'
+			match try self.captureScopeOf(baseName, anchor: baseTok) 'captured'
 				found(enclosing) then return try self.resolveCapturedFieldChain(baseTok, enclosing: enclosing)
 				notCaptured then break 'captured'
 			end 'captured'
@@ -33259,7 +33281,7 @@ export type Parser
 		let base = try self.capturedStructBase(baseTok, enclosing: enclosing)
 		// The enclosing binding is threaded as `baseBinding` so a WRITE through a captured base (`level.x = …`)
 		// is correctly refused — a captured `let` is immutable (E2013). A read never reads it.
-		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: enclosing.getInfo(baseTok.value))
+		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: enclosing.getInfo(self.baseBindingName(baseTok)))
 	end 'resolveCapturedFieldChain'
 
 	// Consume one `.field` on `(box, layout)`. The final field (no `.` after) is RETURNED unread for the
@@ -33435,18 +33457,6 @@ export type Parser
 		try self.emitFieldWrite(receiver, layout: layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: fieldTok, range: range)
 	end 'emitCheckedSelfFieldStore'
 
-	// `self` inside a closure body is a CAPTURE, which shv2 does not yet support (P1.5-A2b): a lifted closure has
-	// no receiver, so reading the enclosing `self` would read the closure's own parameter slot 0 as a struct box
-	// — a silent wrong answer or crash. BOTH spellings that resolve a `self` receiver must refuse it identically:
-	// the explicit `self.…` (`parseSelfPrimary`) and the implicit-self bare sibling call (`implicitSelfReceiver`,
-	// #65). ONE condition, ONE message, ONE home — so a bare `foo()` and an explicit `self.foo()` can never drift
-	// into giving different diagnostics for the one unsupported construct.
-	function requireNotInSelfCapture(anchor Token) throws ParseError
-		if self.closureCaptureScopes.count() > 0 'capturedSelf'
-			throw ParseError.unsupported("a closure that captures `self` (P1.5-A2b: capturing closures + env block)", line: anchor.line, column: anchor.column)
-		end 'capturedSelf'
-	end 'requireNotInSelfCapture'
-
 	// `self.x` / `self.m(…)` — the receiver named explicitly. `self` is its own KEYWORD token, so it
 	// cannot ride the identifier paths; what it can do is resolve to the same two destinations they
 	// do, which is what this routine is for.
@@ -33466,18 +33476,12 @@ export type Parser
 	function parseSelfPrimary(func IrFunction) returns ValueId throws ParseError
 		let selfTok = self.current()
 
-		// The receiver is required for EITHER destination, so it is established once, here, before
-		// the split — which is also what keeps `self` in a `static function` out of
-		// `parseMethodCall`, whose binding lookup would panic rather than report.
-		//
-		// ⭐ **`self` INSIDE A CLOSURE IS A CAPTURE (P1.5-A2a), and this line is what refuses it.** A lifted
-		// closure has no receiver — its ValueId 0 is its first PARAMETER, not the enclosing method's `self` —
-		// so resolving `self` here would read a parameter as a struct box: a silent wrong answer or crash. It
-		// is refused as the capture it is; A2b captures the receiver into the env block. The refusal used to
-		// be a SEPARATE `requireNotInSelfCapture` call on this line, which is precisely how the BARE
-		// self-field spelling escaped it; it now lives inside `requireReceiverValue`, the one door every
-		// spelling passes through. See that function.
-		let receiver = try self.requireReceiverValue(selfTok)
+		// A receiver is required for EVERY destination, so its EXISTENCE is established once, here, before
+		// the split — which is what keeps `self` in a `static function` out of `parseMethodCall`, whose
+		// binding lookup would panic rather than report. It is the existence and NOT the value: the two
+		// dotted arms resolve the receiver for themselves, and inside a closure a resolve EMITS an env load,
+		// so resolving here as well would leave a dead one behind. See `requireReceiverInScope`.
+		try self.requireReceiverInScope(selfTok)
 
 		// ⭐ **ONE ARM FOR EVERY RECEIVER KIND, and the two used to be split for a reason that was never real
 		// (D1 opened the enum half, S5 closed the struct half).** An enum's `self` is its i64 TAG or a pointer
@@ -33485,6 +33489,7 @@ export type Parser
 		// each is exactly what a PARAMETER of that type holds, which `self` is. So there is nothing here to
 		// decide: the value goes back, and whichever rule governs a borrowed value of that type governs it.
 		if self.peekKind() != TokenKind.dot 'bareSelf'
+			let receiver = try self.requireReceiverValue(selfTok)
 			self.advance()
 			return receiver
 		end 'bareSelf'
@@ -33761,26 +33766,51 @@ export type Parser
 	// rather than reaching `enclosingLayout` and panicking on an enclosing type that is absent or
 	// irrelevant.
 	function requireReceiverValue(anchor Token) returns ValueId throws ParseError
-		// ⭐⭐ **AND IT IS WHERE `self`-IN-A-CLOSURE IS REFUSED, BECAUSE THE THIRD SPELLING WAS READING
-		// GARBAGE.** `parseSelfPrimary` claimed the refusal was shared "so the two spellings cannot disagree
-		// about it" — but a bare self-FIELD name is a THIRD spelling, and it reached `parseSelfFieldRead`
-		// without ever passing the gate. Inside a closure the enclosing scope is still visible, so
-		// `lookupValue(SelfParamName)` SUCCEEDS and hands back ValueId 0 — which in a LIFTED closure is its
-		// own first PARAMETER, not the enclosing method's receiver. MEASURED: `apply(function(k int) gives
-		// k + n, x: 1)` inside a method of a `type Counter` with `n = 3` compiled clean and returned **25**
-		// where the answer is 4, with no diagnostic anywhere; the `self.n` spelling of the same expression was
-		// refused, and the ranged-alias spelling panicked in lowering instead. Exactly the wrong answer
-		// `parseSelfPrimary`'s own header predicts — "would read a parameter as a struct box".
-		//
-		// The gate belongs HERE and not at the three call sites because this is the one place the receiver
-		// VALUE comes from: a read, a write, `self.x` and a bare `self` all pass through, so every present
-		// and future spelling is covered by one statement rather than by remembering. `implicitSelfReceiver`
-		// keeps its own call — it needs `none` rather than a value for a static sibling call, so it cannot
-		// come through this door.
-		try self.requireNotInSelfCapture(anchor)
+		// The existence question first, so the two arms below can be a straight dispatch: whichever one
+		// answers, the other is provably empty, and there is no third outcome to invent a sentinel for.
+		try self.requireReceiverInScope(anchor)
 
-		return try self.scope.lookupValue(SelfParamName) otherwise throw ParseError.unsupported("'{anchor.kind.rawValue}' outside an instance method (`self` names the instance a method was called on; a `static function` is called on the type itself and has none)", line: anchor.line, column: anchor.column)
+		// ⭐⭐ **INSIDE A CLOSURE THE RECEIVER IS A CAPTURE, AND IT IS THE ORDINARY ONE.** A lifted closure has
+		// no receiver of its own — its ValueId 0 is its first PARAMETER — so the enclosing `self` reaches the
+		// body the way every other enclosing binding does: one env slot holding the receiver POINTER, read
+		// back with one `loadIndirect`. Captured under `SelfParamName`, which is what makes ALL THREE
+		// spellings share it: `self.x`, a bare self-field name (`parseSelfFieldRead`) and `self.m(…)` each
+		// resolve the receiver through this door, `captureSlotFor` dedupes by name, so a body naming four
+		// fields still allocates ONE slot.
+		//
+		// Before this, the gate here REFUSED the capture — and the refusal was load-bearing, because the
+		// enclosing scope is still visible from a closure body: a `lookupValue(SelfParamName)` that reached
+		// past it would hand back ValueId 0 and read the closure's own first parameter as a struct box.
+		// MEASURED then: `apply(function(k int) gives k + n, x: 1)` inside a method of a `type Counter` with
+		// `n = 3` returned **25** — the box pointer's low byte — with no diagnostic anywhere. That cannot
+		// arise now for the reason it never arose for an ordinary capture: the closure's OWN scope is fresh
+		// and binds no `__self`, so the receiver is found in the enclosing scope or nowhere, and the value it
+		// yields is the env load rather than an id from a different function's SSA space.
+		match try self.captureScopeOf(SelfParamName, anchor: anchor) 'capturedReceiver'
+			found(enclosing) then return try self.emitCaptureRead(SelfParamName, enclosing: enclosing, anchor: anchor)
+			notCaptured then break 'capturedReceiver'
+		end 'capturedReceiver'
+
+		return try self.scope.lookupValue(SelfParamName) otherwise panic("requireReceiverValue: `requireReceiverInScope` passed and no enclosing scope captured the receiver, so it is bound in this function's own scope — but `lookupValue` missed it. The two are reading one `Scope` and disagree.")
 	end 'requireReceiverValue'
+
+	// ⭐ **IS THERE A RECEIVER HERE AT ALL — bound as this function's own parameter 0, or reachable as a
+	// CAPTURE of the enclosing method's?** The one home of that rule and of the E2001 it raises, asked by
+	// `requireReceiverValue` before it resolves and by `parseSelfPrimary` before it splits on the token
+	// after `self`.
+	//
+	// ⚠ **`parseSelfPrimary` NEEDS THE CHECK WITHOUT THE VALUE, and that is why this is separate.** Its
+	// two dotted arms re-resolve the receiver for themselves (`parseMethodCall` from the cursor,
+	// `parseExplicitSelfFieldRead` after consuming the field token), so resolving it up front would emit a
+	// SECOND env load inside a closure body that nothing reads. Outside a closure the same call was free —
+	// which is why the split only became necessary when the capture landed.
+	function requireReceiverInScope(anchor Token) throws ParseError
+		if self.scope.contains(SelfParamName) or self.captureBinds(SelfParamName) 'haveReceiver'
+			return
+		end 'haveReceiver'
+
+		throw ParseError.selfOutsideInstanceMethod(anchor.line, column: anchor.column)
+	end 'requireReceiverInScope'
 
 	// **The declaration index `fieldTok` names in `layout`, or E3018** — asked by every one of the
 	// three places a field is named by a TOKEN: the struct literal's `x:` label, the field READ,
@@ -34570,19 +34600,25 @@ export type Parser
 	// (`closureEnvParamId`). A capture from a NON-immediate enclosing frame (a nested capturing closure) needs
 	// an env chain this slice does not build, so it is refused cleanly (E2015 → A2b-2).
 	function captureEnclosing(tok Token) returns CaptureResult throws ParseError
-		match try self.captureScopeOf(tok) 'scope'
-			found(enclosing) then return CaptureResult.captured(try self.emitCaptureRead(tok, enclosing: enclosing))
+		let name = self.baseBindingName(tok)
+		match try self.captureScopeOf(name, anchor: tok) 'scope'
+			found(enclosing) then return CaptureResult.captured(try self.emitCaptureRead(name, enclosing: enclosing, anchor: tok))
 			notCaptured then return CaptureResult.notCaptured
 		end 'scope'
 	end 'captureEnclosing'
 
-	// Does `tok` resolve to a CAPTURE — a binding in any enclosing scope this closure body is nested in? A
+	// Does `name` resolve to a CAPTURE — a binding in any enclosing scope this closure body is nested in? A
 	// cheap membership predicate that neither emits a capture nor raises the nested-frame error (the actual
 	// capture through `captureScopeOf` does both). Used by `parseDottedPrimary` to route `capturedStruct.field`
-	// to field access. False outside a closure (`closureCaptureScopes` empty).
-	function captureBinds(tok Token) returns bool
+	// to field access, and by `requireReceiverInScope` to answer "is the enclosing `self` reachable from
+	// here?". False outside a closure (`closureCaptureScopes` empty).
+	//
+	// ⚠ It takes the BINDING NAME, not the token: the receiver is bound under `SelfParamName` and no token
+	// spells that (`baseBindingName` is the one place the `self` keyword and `__self` are connected). A
+	// `tok.value` here would look the receiver up under the word the source happened to write and miss it.
+	function captureBinds(name ByteArray) returns bool
 		for enclosing in self.closureCaptureScopes 'each'
-			if enclosing.contains(tok.value) 'bound'
+			if enclosing.contains(name) 'bound'
 				return true
 			end 'bound'
 		end 'each'
@@ -34597,15 +34633,19 @@ export type Parser
 	// source. A hit in a NON-immediate enclosing frame is a nested capturing closure, refused cleanly (the env
 	// chain this slice does not build). Outside a closure `closureCaptureScopes` is empty and this returns
 	// `notCaptured` after one `count()` read.
-	function captureScopeOf(tok Token) returns CaptureScopeResult throws ParseError
+	//
+	// ⚠ It keys on the BINDING NAME rather than the token, for `captureBinds`'s reason: the enclosing
+	// RECEIVER is bound under `SelfParamName`, which no token spells (`baseBindingName` maps the `self`
+	// keyword to it). `anchor` is the token the nested-frame diagnostic points at, and only that.
+	function captureScopeOf(name ByteArray, anchor Token) returns CaptureScopeResult throws ParseError
 		let depth = self.closureCaptureScopes.count()
 		var i = depth
 		while i > 0 'eachEnclosing'
 			i = i - 1
 			let enclosing = try self.closureCaptureScopes.get(i) otherwise panic("captureScopeOf: closureCaptureScopes.get OOB at {i}")
-			if enclosing.contains(tok.value) 'captured'
+			if enclosing.contains(name) 'captured'
 				if i != depth - 1 'nested'
-					throw ParseError.unsupported("a closure that captures a variable from a non-immediate enclosing frame (nested capturing closures — P1.5-A2b-2)", line: tok.line, column: tok.column)
+					throw ParseError.unsupported("a closure that captures a variable from a non-immediate enclosing frame (nested capturing closures — P1.5-A2b-2)", line: anchor.line, column: anchor.column)
 				end 'nested'
 				return CaptureScopeResult.found(enclosing)
 			end 'captured'
@@ -34618,10 +34658,13 @@ export type Parser
 	// slot*8`. The slot column (`captureNames`) is env-array order; the parallel `captureValues`/`captureTypes`
 	// carry the enclosing value to store and the type to read back, filled in lockstep on FIRST sight only so
 	// a name captured twice shares one slot and one env store.
-	function emitCaptureRead(tok Token, enclosing Scope) returns ValueId throws ParseError
+	//
+	// ⚠ Keyed by the BINDING NAME, not the token — the enclosing RECEIVER captures under `SelfParamName`,
+	// which no token spells. `anchor` positions the read and the diagnostics, and only that.
+	function emitCaptureRead(name ByteArray, enclosing Scope, anchor Token) returns ValueId throws ParseError
 		// `var`, because the read is RECORDED on the binding below — a `let` here is a store through an
 		// immutable local (E2013), the same rule `declareInitializedBinding` binds its own `VarInfo` under.
-		var binding = enclosing.getInfo(tok.value)
+		var binding = enclosing.getInfo(name)
 
 		// ⭐ **A CAPTURE IS A READ OF THE ENCLOSING BINDING, and this is the ONE read door that does not run
 		// through `requireBindingLive`** (which owns the move guard a capture is deliberately not subject
@@ -34640,21 +34683,22 @@ export type Parser
 		// from `binding.varType` at parse time and a `named` reaches `maxonTypeToStdType` unresolved. One
 		// defect, two faces.
 		//
-		// It is the SAME refusal the explicit spelling already gets, through the same wire format: reading a
-		// field by bare name needs the receiver, so it IS a capture of `self`, and `self.n` inside a closure
-		// is refused in as many words. This is the THIRD reader of `boundValue` that took 0 for a real id —
-		// `dispatchMethodOnBinding` and `builtinConformanceReceiverValue` were the other two, and the census
-		// says it is the last: every other reader either guards on `isSelfField` first (`receiverOwnerMask`),
-		// is reached only where the alias was already refused (`requireStructBase`'s struct-typed-FIELD arm),
-		// or cannot see an alias at all (`parseVariableReference`'s local arm runs under `not isSelfField`;
-		// `consumedArgName` and the move/alias searches scan `ownedBindings`, which a `trivial`-ownership
-		// alias never joins).
+		// ⭐ **SO THE BARE NAME IS NOT CAPTURED — THE RECEIVER IS, AND THE FIELD IS READ THROUGH IT.** That is
+		// exactly what the alias MEANS (`n` is `self.n`), so it routes to `parseSelfFieldRead`, the one
+		// self-field read door, whose `requireReceiverValue` resolves the enclosing receiver as the capture it
+		// is. The env therefore holds ONE slot — the receiver — however many fields the body names, and both
+		// spellings of a field read emit the identical `loadIndirect` off it. This is the THIRD reader of
+		// `boundValue` that took 0 for a real id — `dispatchMethodOnBinding` and
+		// `builtinConformanceReceiverValue` were the other two, and the census says it is the last: every
+		// other reader either guards on `isSelfField` first (`receiverOwnerMask`), is reached only where the
+		// alias was already refused (`requireStructBase`'s struct-typed-FIELD arm), or cannot see an alias at
+		// all (`parseVariableReference`'s local arm runs under `not isSelfField`; `consumedArgName` and the
+		// move/alias searches scan `ownedBindings`, which a `trivial`-ownership alias never joins).
 		//
-		// ⚠ `requireNotInSelfCapture` ALWAYS throws here — `captureScopeOf` answers `found` only while
-		// `closureCaptureScopes` is non-empty, so a capture read is by construction inside a closure body.
-		// The DECISION is `isSelfField`; the shared routine is called for its one sentence, not its predicate.
+		// ⚠ It cannot recurse: the receiver's OWN binding is a parameter, so the capture this delegation
+		// triggers reaches this same routine with `isSelfField` false.
 		if binding.isSelfField 'capturedSelfField'
-			try self.requireNotInSelfCapture(tok)
+			return try self.parseSelfFieldRead(anchor, binding: binding)
 		end 'capturedSelfField'
 
 		// ⭐ **DECLARED vs STORAGE, at an env slot.** `captureType` is what the SOURCE said, and it is
@@ -34667,8 +34711,8 @@ export type Parser
 		// asks. That the two ask ONE routine is the invariant, not a tidiness: a slot filled at one
 		// width and read at another corrupts the environment silently.
 		let captureType = self.resolveFloatAliasType(binding.varType)
-		let slot = self.captureSlotFor(tok.value, enclosingValue: binding.boundValue, captureType: captureType)
-		return self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.envSlotStorageType(captureType), range: SourceRange.ofToken(tok))
+		let slot = self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: captureType)
+		return self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.envSlotStorageType(captureType), range: SourceRange.ofToken(anchor))
 	end 'emitCaptureRead'
 
 	// The env slot for `name`, appending a fresh one (recording the enclosing value + type to store) on first
@@ -36492,12 +36536,14 @@ export type Parser
 	// prepended at parameter 0 — resolved EXACTLY as an explicit `self.name(…)` resolves it, so the two spellings
 	// emit byte-identical calls in every context. A `static` sibling gets none. Two contexts make the self
 	// resolution more than a plain scope read, and BOTH are shared with the explicit path so they cannot drift:
-	//   • inside a CLOSURE, `self` is an unsupported capture (P1.5-A2b) — refused with the SAME E2015
-	//     `parseSelfPrimary` raises (`requireNotInSelfCapture`), NOT the confusing arity E3036 a silent
-	//     receiver-less fallback would surface on a call the explicit spelling rejects outright;
-	//   • in a `static` method there is no `self` at all, so the lookup fails and the sibling resolves
+	//   • inside a CLOSURE, `self` is a CAPTURE — the receiver comes out of the env block, through the very
+	//     door `parseSelfPrimary` resolves it through, so `doubled()` and `self.doubled()` still emit the
+	//     same call from inside a closure body as they do outside one;
+	//   • in a `static` method there is no `self` at all, so the resolve fails and the sibling resolves
 	//     receiver-less, failing the arity check on the hidden `self` parameter (E3036) — the same rejection the
-	//     oracle gives ("missing argument for parameter 'self'").
+	//     oracle gives ("missing argument for parameter 'self'"). That fallback is why this door swallows
+	//     `requireReceiverValue`'s E2001 rather than propagating it: "there is no instance" is not an error
+	//     HERE, it is the answer, and the arity check words it in terms of the call the author actually wrote.
 	// The caller (`parseCall`) has already established `name` IS a sibling (`isImplicitSelfMethod`), so the map
 	// is built and this `ensureSiblingReceivers` is a memo hit.
 	function implicitSelfReceiver(name ByteArray, anchor Token) returns ReceiverArg throws ParseError
@@ -36505,13 +36551,23 @@ export type Parser
 		if not (try self.siblingReceivers.get(name) otherwise false) 'staticSibling'
 			return ReceiverArg.none
 		end 'staticSibling'
-		try self.requireNotInSelfCapture(anchor)
 		// `self` is a PARAMETER — a borrowed reference to the caller's record — so it is writable and has no
 		// blame name, which is exactly what keeps a sibling call inside a mutating method legal.
 		// ⭐ The empty subject is not an exemption here — it is what makes `self` reach ALL of them. A bare
 		// sibling call names no ONE storage, and `noteReceiverBorrowSubjects` turns that plus the receiver's
 		// own value into one site per borrowed field of the enclosing receiver. See there.
-		return ReceiverArg.value(try self.scope.lookupValue(SelfParamName) otherwise return ReceiverArg.none, immutableName: EmptySourceText, subjectName: EmptySourceText)
+		// ⚠ DECIDE EXISTENCE WITHOUT THE THROWING RESOLVER. `requireReceiverValue` fails for two structurally
+		// different reasons — there is no receiver at all (a static function), and the receiver exists but is
+		// only reachable through a NON-IMMEDIATE enclosing frame (A2b-2's nested-capture refusal, general to
+		// every capture). A blanket `otherwise` here caught both and turned the second into `none`, so a
+		// sibling call from a doubly-nested closure reported the arity error `'T.helper' expects 1 argument(s)
+		// but 0 were provided` — the receiver counted as the missing argument — instead of the honest
+		// "unsupported nested capture". Measured; the predecessor `requireNotInSelfCapture` threw
+		// unconditionally and could not swallow it.
+		if not (self.scope.contains(SelfParamName) or self.captureBinds(SelfParamName)) 'noReceiver'
+			return ReceiverArg.none
+		end 'noReceiver'
+		return ReceiverArg.value(try self.requireReceiverValue(anchor), immutableName: EmptySourceText, subjectName: EmptySourceText)
 	end 'implicitSelfReceiver'
 
 	// Populate `siblingReceivers` (the enclosing type's member methods, bare name -> takesReceiver) unless it is

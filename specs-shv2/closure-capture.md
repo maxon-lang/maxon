@@ -539,16 +539,28 @@ end 'main'
 42
 ```
 
-<!-- test: closure-capture.bare-self-field-refused -->
-A closure body naming a field of the enclosing type by its BARE name is a capture of `self`, and is refused
-in the same words — through the same wire format — the `self.n` spelling already was.
+<!-- test: closure-capture.bare-self-field-captured -->
+A closure body naming a field of the enclosing type by its BARE name is a capture of `self`, and it now
+CAPTURES THE RECEIVER and reads the field through it. **The answer is 4.**
 
-It used to be captured as if it were an ordinary enclosing local. A self-field alias holds NO SSA value
-(`VarInfo.createSelfField` leaves `boundValue` 0) and **0 is the enclosing method's receiver**, so the env
-slot stored the receiver's BOX and the closure handed it back as the field: this program returned **25** —
-the box pointer's low byte — where the answer is 4, with no diagnostic anywhere. Declaring the field
-through a ranged alias instead PANICKED in lowering, because the env slot's type is filled from the
-binding at parse time and a `named` reaches `maxonTypeToStdType` unresolved. One defect, two faces.
+⭐ **This case used to assert a REFUSAL, and the refusal was scaffolding.** It was captured as if it were
+an ordinary enclosing local: a self-field alias holds NO SSA value (`VarInfo.createSelfField` leaves
+`boundValue` 0) and **0 is the enclosing method's receiver**, so the env slot stored the receiver's BOX and
+the closure handed it back as the field — this program returned **25**, the box pointer's low byte, with no
+diagnostic anywhere. Declaring the field through a ranged alias instead PANICKED in lowering. One defect,
+two faces. Refusing the whole shape (`E2015 … P1.5-A2b: capturing closures + env block`) bought a correct
+answer — "no" — while the capture path could not give a right one, and this case pinned that "no".
+
+⚠ **A refusal that names the rung which will remove it is a placeholder, and this one's rung arrived.**
+`/specs/closure-self.md` — the language definition — requires exactly this shape to compile and gives the
+bare-name form its own case, so the refusal could not survive that spec's port. The capture machinery was
+never the gap: it keyed on `tok.value`, and the receiver is bound under `__self`, which **no token spells**.
+Re-keyed on `baseBindingName`, `self` became an ordinary capture.
+
+**What this case is FOR is unchanged**, which is why it is converted rather than deleted: it still fails if
+the env slot ever hands back the receiver's box again — that regression reads as **25**, not as a missing
+diagnostic. Its sibling in `closure-self.md` cannot replace it, because that spec must spell its fields
+through a ranged alias and this one deliberately uses bare `int` — the very shape whose lowering panicked.
 ```maxon
 
 typealias Fn1 = function(int) returns int
@@ -574,8 +586,8 @@ function main() returns ExitCode
 	return c.via() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:17:42: Unsupported: a closure that captures `self` (P1.5-A2b: capturing closures + env block)
+```exitcode
+4
 ```
 
 <!-- test: closure-capture.captured-ranged-alias-binding -->
