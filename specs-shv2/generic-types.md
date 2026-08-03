@@ -2413,3 +2413,146 @@ end 'main'
 ```stdout
 f=6
 ```
+
+<!-- test: a-field-chain-through-a-generic-instance-field -->
+⭐⭐ **A FIELD CHAIN THROUGH A GENERIC-INSTANCE-TYPED FIELD (A4j).** `structLayoutOfType` — the door a
+chain's BASE resolves through — has known `genericInstance` since P1.6-B1; `structLayoutOfField`, the door
+each later HOP resolves through, did not. So `o.b.value` on a plain `type Outer` with `export var b as
+IntBox` was refused by a message that contradicted itself, because `typeTagName(genericInstance)` prints
+`"struct"`: *"a field access through 'Outer.b', which is declared 'struct' and not a struct"*. No type
+parameter appears anywhere in this program's chain — the receiver `o` is an ordinary struct. MEASURED on the
+runnable oracle, which prints 7.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias IntBox = Box with Integer
+type Outer
+	export var b as IntBox
+	export static function create(v IntBox) returns Self
+		return Self{b: v}
+	end 'create'
+end 'Outer'
+function main() returns ExitCode
+	let o = Outer.create(IntBox.create(7))
+	print("{o.b.value}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: a-field-chain-through-a-type-parameter-field -->
+⭐ **THE SECOND SPELLING, AND IT IS THE SAME DOOR.** `pb.value.x` hops through a field the shared generic
+body typed `T`, so `structLayoutOfField` saw a `typeParameter` where the first case gave it a
+`genericInstance` — one function, two tags, one refusal. Continuing the walk therefore needs the hop's type
+SUBSTITUTED through the instance in hand, which is the same substitution `emitFieldLoad` already applies to
+the loaded VALUE (`instanceSubstitutedType`); left unsubstituted a `typeParameter` reads as an INTEGER
+(`tagIsIntegral`). `opaque-field-read-of-a-struct-argument-is-that-struct` above is this program with the
+read SPLIT INTO TWO STATEMENTS, which is precisely the hop that never reached the walk. MEASURED on the
+oracle: 7.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Point
+	export var x as Integer
+	export static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias PointBox = Box with Point
+function main() returns ExitCode
+	let pb = PointBox.create(Point.create(7))
+	print("{pb.value.x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: a-three-hop-chain-through-an-instance-survives-both-substitutions -->
+Both hops in one chain: `o.b` is a generic-instance field, `.value` is that instance's `T`-typed field, and
+`.n` is a plain field of the struct `T` turned out to be. The substitution has to survive more than one hop
+or the third one reads an integer. MEASURED on the oracle: 9.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Leaf
+	export var n as Integer
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Leaf'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+type Outer
+	export var b as LeafBox
+	export static function create(v LeafBox) returns Self
+		return Self{b: v}
+	end 'create'
+end 'Outer'
+function main() returns ExitCode
+	let o = Outer.create(LeafBox.create(Leaf.create(9)))
+	print("{o.b.value.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9
+```
+
+<!-- test: error.a-field-chain-through-a-builtin-instance-field-is-still-refused -->
+⛔⛔ **THE MEMORY-SAFETY GATE, CARRIED ACROSS TO THE HOP DOOR.** `structLayoutOfType` does not ask `structOf`
+for an instance — it asks `genericInstanceHasBaseLayout` first, and its header records what happens without
+that, MEASURED, with no diagnostic anywhere and a compile that exits 0: `a.value` on an `Array with Integer`
+printed **7077984**, the element buffer POINTER read as an Integer, and `a.value = 4242` overwrote that
+pointer and took an access violation (0xC0000005) in the teardown. `structOf` answering "a type of this name
+is declared" is NOT the same fact as "this instance's fields live at that layout": for a BUILTIN base the
+runtime record is a synthesized struct unrelated to any user `type` of the same name.
+
+So teaching the HOP door about `genericInstance` and forgetting the gate would reintroduce that miscompile
+one door over. This case is what says it did not. The oracle refuses the same program its own way
+(`E4006 Type 'IntArray' has no field named 'value'`); shv2's answer is the one it can honestly give — it
+reads no stdlib, so the field is missing from this compiler rather than from the language.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+type Holder
+	export var a as IntArray
+	export static function create(a IntArray) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Holder'
+function main() returns ExitCode
+	let h = Holder.create([1, 2, 3])
+	print("{h.a.value}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:12: Unsupported: a field access on 'a': `Array` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Array.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
+```

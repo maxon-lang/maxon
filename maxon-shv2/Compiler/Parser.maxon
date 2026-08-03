@@ -35114,7 +35114,14 @@ export type Parser
 			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
 		end 'receiverField'
 
-		let fieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
+		// ⭐ **A `T`-TYPED HOP IS SUBSTITUTED BEFORE THE WALK ASKS WHAT IT ADDRESSES (A4j).** `pb.value.x` on a
+		// `Box with Point` hops through a field the shared generic body typed `T`, and an unsubstituted
+		// `typeParameter` reads as an INTEGER (`tagIsIntegral`) — so the hop door refused it as "not a struct"
+		// on a program the oracle runs. This is the SAME substitution `emitFieldLoad` applies to the loaded
+		// VALUE one line below, under the same shared condition; it has to happen here as well because the
+		// walk decides where to go NEXT from the type, before any value exists.
+		let declaredFieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
+		let fieldType = self.instanceSubstitutedType(box, opaque: declaredFieldType) if self.readsTypeParameterThroughInstance(box, declared: declaredFieldType) else declaredFieldType
 		let nextLayout = try self.structLayoutOfField(layout, fieldTok: fieldTok, fieldType: fieldType)
 		let nextBox = self.emitFieldLoad(box, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
 		return try self.resolveFieldChainFrom(nextBox, layout: nextLayout, baseTok: baseTok, baseBinding: baseBinding)
@@ -35122,19 +35129,35 @@ export type Parser
 
 	// The `StructLayout` of a field whose already-resolved type `fieldType` is passed in — used to continue a
 	// field chain THROUGH a struct-typed field (`o.inner.x`). The type is resolved to a `structRef`
-	// (`named(Inner)` → `structRef`) and must be a struct; a chain through a scalar / String / array field is
-	// refused (an array is handled by the caller before this), since there is nothing to address a further
-	// field on. `fieldType` is threaded IN (the caller already computed it) so it is not read twice.
+	// (`named(Inner)` → `structRef`) and must carry a struct layout; a chain through a scalar / String / array
+	// field is refused (an array is handled by the caller before this), since there is nothing to address a
+	// further field on. `fieldType` is threaded IN (the caller already computed it) so it is not read twice.
+	//
+	// ⭐⭐ **IT ASKS `structLayoutOfType` RATHER THAN ANSWERING FOR ITSELF (A4j), AND THAT IS THE WHOLE FIX.**
+	// The BASE door has known `genericInstance` since P1.6-B1 and this HOP door did not, so a chain through a
+	// generic-instance-typed field — an ordinary `type Outer` with `export var b as IntBox`, no type parameter
+	// anywhere — was refused by a message that contradicted itself: `typeTagName(genericInstance)` prints
+	// `"struct"`, so it read *"declared 'struct' and not a struct"*. The oracle compiles that program and
+	// prints 7.
+	//
+	// ⛔⛔ **AND THE ASK IS THE POINT, NOT A TIDY-UP: `structLayoutOfType` CARRIES A MEMORY-SAFETY GATE THIS
+	// DOOR WOULD OTHERWISE HAVE HAD TO REMEMBER.** An instance may not ask `structOf` alone — see that
+	// function's ⚠⚠ block, which records `a.value` on an `Array with Integer` printing the element buffer
+	// POINTER and `a.value = 4242` overwriting it, with no diagnostic and exit 0. A second copy of the gate is
+	// exactly the shape this compiler keeps paying for; one door means it cannot be forgotten here.
+	// `specs-shv2/generic-types.md`'s `error.a-field-chain-through-a-builtin-instance-field-is-still-refused`
+	// is what says it came across.
+	//
+	// The `baseTok` `structLayoutOfType` names in its diagnostics is the FIELD token here — for a hop, the
+	// field IS what the reader must fix.
 	function structLayoutOfField(baseLayout StructLayout, fieldTok Token, fieldType MaxonType) returns StructLayout throws ParseError
 		let resolved = self.resolveNamedStruct(fieldType)
-		if maxonTypeTag(resolved) != ValueTypeTag.structRef 'notAStruct'
-			throw ParseError.unsupported("a field access through '{String.from(baseLayout.name)}.{String.from(fieldTok.value)}', which is declared '{typeTagName(maxonTypeTag(resolved))}' and not a struct — only a struct field can carry a further field access", line: fieldTok.line, column: fieldTok.column)
+		let tag = maxonTypeTag(resolved)
+		if not tagCarriesStructLayout(tag) 'notAStruct'
+			throw ParseError.unsupported("a field access through '{String.from(baseLayout.name)}.{String.from(fieldTok.value)}', which is declared '{typeTagName(tag)}' and not a struct — only a struct field can carry a further field access", line: fieldTok.line, column: fieldTok.column)
 		end 'notAStruct'
-		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(resolved)) otherwise panic("structLayoutOfField: a struct field's structRef name id is not in this file's interner — every structRef is interned from a recorded name")
-		match self.signatures.structOf(name) 'declared'
-			declared(layout) then return layout
-			undeclared then panic("structLayoutOfField: field '{String.from(fieldTok.value)}' is typed `structRef({String.from(name)})` but no file declares that struct — a structRef is only minted for a recorded type name")
-		end 'declared'
+
+		return try self.structLayoutOfType(tag, nameId: typeNameIdOf(resolved), baseTok: fieldTok)
 	end 'structLayoutOfField'
 
 	// ⭐⭐ **A SELF-FIELD READ — `count` AND `self.count`, ONE PATH.**
@@ -36117,7 +36140,7 @@ export type Parser
 		// moves: the read is a BORROW (`emitFieldLoad` never marks it owned-heap), so the box keeps its +1 and
 		// drops the value at ITS scope exit; a `let s = b.value` re-reads a live pointer and is never
 		// double-dropped. `adoptType` re-interns any named argument into this file's interner.
-		if maxonTypeTag(declared) == ValueTypeTag.typeParameter and self.tagOf(box) == ValueTypeTag.genericInstance 'concreteTypeParamRead'
+		if self.readsTypeParameterThroughInstance(box, declared: declared) 'concreteTypeParamRead'
 			self.retypeValue(result, valueType: self.instanceSubstitutedType(box, opaque: declared))
 		end 'concreteTypeParamRead'
 
@@ -36153,6 +36176,16 @@ export type Parser
 
 		return result
 	end 'emitFieldLoad'
+
+	// ⭐ **IS THIS SLOT'S DECLARED TYPE THE SHARED GENERIC BODY'S `T`, READ THROUGH A CONCRETE INSTANCE?** —
+	// the ONE condition under which `instanceSubstitutedType` has anything to say, asked by the two doors that
+	// each need the answer at a different moment: `emitFieldLoad` retypes the loaded VALUE, and
+	// `resolveFieldChainFrom` needs the TYPE one step earlier, to decide what the next hop addresses (A4j).
+	// Written out twice it was one condition with two homes; the second home did not exist yet, and the
+	// spelling it would have needed is exactly what the chain walk was missing.
+	function readsTypeParameterThroughInstance(box ValueId, declared MaxonType) returns bool
+		return maxonTypeTag(declared) == ValueTypeTag.typeParameter and self.tagOf(box) == ValueTypeTag.genericInstance
+	end 'readsTypeParameterThroughInstance'
 
 	// ⭐ **THE ONE `loadIndirect` EMIT** — and it now IS the one, which it was not when it first claimed
 	// to be. A field read (`p.x`), a union tag load, a union payload read, a capturing closure's
