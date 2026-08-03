@@ -319,15 +319,21 @@ print("{neg:06}")    // "-00042" — sign comes before padding
 ```
 
 *Float format specifiers:* `[0][width][.precision]`
-- `0` — pad with zeros instead of spaces
-- `width` — minimum total output width (right-aligned)
-- `.precision` — number of decimal places (max 20)
+- `0` — pad with zeros instead of spaces, after the sign, exactly as for an integer
+- `width` — minimum total output width (right-aligned); never truncates
+- `.precision` — number of decimal places, rounded half-to-even. Omit it and the float keeps its
+  default spelling: the shortest decimal that reads back as the same value.
 
 ```maxon
 var f = 3.14159
 print("{f:.2}")      // "3.14"     — 2 decimal places
 print("{f:.4}")      // "3.1416"   — 4 decimal places (rounded)
 print("{f:8.2}")     // "    3.14" — width 8, 2 decimal places
+print("{f:8}")       // " 3.14159" — a width alone never changes the digits
+
+var negf = -3.14
+print("{negf:08}")   // "-0003.14" — sign comes before padding, as for an integer
+print("{2.5:.0}")    // "2"        — an exact half rounds to the EVEN digit
 ```
 
 Custom types can implement `FormattedStringable` to support format specifiers:

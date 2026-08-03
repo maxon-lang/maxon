@@ -1070,8 +1070,10 @@ end '__bigTrimLeadingZeroLimbs'
 
 // The TEXT of a digit string. Each entry is a value 0..9, so interpolating it IS its character — no
 // ASCII arithmetic, and no `String.from`, which requires the program's own `Array with Byte` (see
-// `DigitString`). The quadratic append is `__repeatedText`', and bounded by the same figure: a rendered float
-// is at most a few hundred characters.
+// `DigitString`). The append is quadratic and stays that way because its count is bounded by the value
+// being rendered: a float's shortest-round-trip expansion is at most a few hundred digits. ⚠ That
+// argument does NOT carry to `__repeatedText`, whose count is a field width the PROGRAM writes — which
+// is why that one had to stop being quadratic.
 function __digitText(digits DigitString) returns String
 	var text = ""
 	for d in digits 'each'
@@ -1589,11 +1591,32 @@ typealias RepeatCount = int(0 to u64.max)
 // and miss the fourth.
 let __ZeroDigitText = "0"
 
+// ⚠ **DOUBLING, NOT ONE APPEND PER REPEAT.** `text = "{text}{unit}"` in a loop copies the whole
+// accumulator every time, which is quadratic in `count`. That was harmless while the only caller was a
+// run of zeros inside a rendered float, where the count is bounded by the VALUE — but `__leftPadded`
+// hands it a `"{x:W}"` field width the PROGRAM writes, and the parser accepts widths up to `u32.max`.
+// Measured on the quadratic form: 0.06 s at 20,000 and 3.60 s at 160,000, ×4 per doubling of the
+// width, so a width a typo could produce did not finish. Halving `count` and squaring the block makes
+// it `log(count)` concatenations instead of `count`.
 function __repeatedText(unit String, count RepeatCount) returns String
 	var text = ""
-	for _ in 0 upto count 'each'
-		text = "{text}{unit}"
-	end 'each'
+	var block = unit
+	var remaining = count
+
+	while remaining > 0 'halve'
+		if remaining mod 2 == 1 'takeBlock'
+			text = "{text}{block}"
+		end 'takeBlock'
+
+		remaining = remaining / 2
+
+		// Every block is the same `unit` repeated, so the order they are appended in cannot matter —
+		// and the last halving leaves nothing to take, so doubling then would only copy for nobody.
+		if remaining > 0 'growBlock'
+			block = "{block}{block}"
+		end 'growBlock'
+	end 'halve'
+
 	return text
 end '__repeatedText'
 
@@ -1636,7 +1659,13 @@ let __NegativeSignText = "-"
 // (shv2's `Parser.materializeInterpExpr`; the bootstrap's `RewriteFloatPartAsStdlibText`).
 export function __float_toString(value ParsedFloat) returns String
 	let bits = __Builtins.floatToBits(value)
-	return "{__floatSignText(bits)}{__floatMagnitudeText(bits and __FloatMagnitudeMask)}"
+
+	// ⭐ **THE ZERO-WIDE FIELD IS NOT CEREMONY — IT IS HOW THE SIGN MEETS THE MAGNITUDE EXACTLY ONCE.**
+	// `__floatFieldText` is the one place that decides a sign goes in FRONT of the digits; spelling the
+	// join here as well would be a second copy of that decision, free to disagree with it the next time
+	// the padded spelling moves. Which is this rung's own bug one level down: `"{x}"` and `"{x:0}"`
+	// answering from two renderers is exactly what printed one double two different ways.
+	return __floatFieldText(__floatSignText(bits), magnitude: __floatMagnitudeText(bits and __FloatMagnitudeMask), width: __NoFieldWidth, zeroFill: false)
 end '__float_toString'
 
 // ⭐ **THE SIGN AND THE MAGNITUDE ARE SPLIT BECAUSE A FIELD HAS TO GET BETWEEN THEM.** `"{x:08}"` pads
@@ -1706,6 +1735,9 @@ typealias PadWidth = int(0 to u32.max)
 typealias DecimalPrecision = int(0 to u32.max)
 
 let __SpaceFillText = " "
+
+// `"{x}"` asks for no field at all, which is the same thing as a field nothing can be short of.
+let __NoFieldWidth = 0
 
 export function __float_toStringPadded(value ParsedFloat, width PadWidth, zeroFill bool) returns String
 	let bits = __Builtins.floatToBits(value)
