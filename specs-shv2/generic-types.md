@@ -2105,3 +2105,80 @@ end 'main'
 ```stdout
 9 3
 ```
+
+<!-- test: opaque-field-write-on-a-concrete-instance-drops-a-generic-alias-argument -->
+⭐⭐ **THE WRITE TWIN OF THE READ ABOVE, AND IT WAS A READ-AFTER-FREE (A4i review).** `emitFieldWrite`
+re-spelled the read's `adoptType(substitutedInstanceArg(…))` instead of calling it, so fixing the READ
+door left its declared twin handing a bare `named` to `classifyUnionPayload` — which resolves a `named`
+through its OWN cascade, and that cascade has a struct arm but NO generic-alias arm. So this write fell
+through to `undeclaredName`, took the SCALAR store, and neither dropped the old box nor moved the new one
+in: the temporary was freed at the statement and the field kept pointing at it, so the read printed
+`4557430888798830399` — `0x3F3F3F3F3F3F3F3F`, the free poison. Reading the field back was `E3011` before
+A4i, so A4i is what turned a clean refusal into this.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+type Holder uses U
+	export var item as U
+	export static function hold(v U) returns Self
+		return Self{item: v}
+	end 'hold'
+end 'Holder'
+typealias IntBox = Box with Integer
+typealias BoxHolder = Holder with IntBox
+function main() returns ExitCode
+	var h = BoxHolder.hold(IntBox.create(7))
+	h.item = IntBox.create(8)
+	let q = h.item
+	print("{q.value}\n")
+	return q.value - 8
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8
+```
+
+<!-- test: opaque-field-write-on-a-concrete-instance-drops-a-managed-struct-argument -->
+The OTHER arm of that same door, and the reason the split above stayed hidden: a STRUCT argument was
+already answered correctly — not by the shared door, but by `classifyUnionPayload`'s own struct arm
+resolving the bare `named` a second time. Both arms come out of one call now, so this case and the one
+above cannot part again. The old `Label` owns a `String`, so a write that failed to drop it would leak
+and a write that dropped it twice would fault — the runner treats either as a failure.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Label
+	export var text as String
+	export var n as Integer
+	export static function create(t String, n Integer) returns Self
+		return Self{text: t, n: n}
+	end 'create'
+end 'Label'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LabelBox = Box with Label
+function main() returns ExitCode
+	var b = LabelBox.create(Label.create("{9}", n: 3))
+	b.value = Label.create("{8}", n: 4)
+	let q = b.value
+	print("{q.text} {q.n}\n")
+	return q.n - 4
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 4
+```

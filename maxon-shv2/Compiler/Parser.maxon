@@ -34993,6 +34993,24 @@ export type Parser
 		//     that substituted concrete type (as `emitFieldLoad` retypes a READ) and fall through to the normal
 		//     write below — a managed concrete field drops the old through its own decref (`__str_decref` /
 		//     `__destruct_<T>`, Finding B) and moves the new in; a trivial one reclassifies to a scalar store.
+		//
+		// ⭐⭐ **"AS `emitFieldLoad` RETYPES A READ" IS NOW LITERALLY THE SAME CALL, AND THE DAY IT WAS ONLY A
+		// COMMENT IT WAS A READ-AFTER-FREE (A4i review).** This line spelled `adoptType(substitutedInstanceArg(…))`
+		// — the exact body `instanceSubstitutedType` had before A4i routed it through `declaredSlotType` — so the
+		// READ door was fixed and its declared twin was not. What the copy handed on was a bare `named`, and the
+		// consumer here is `classifyUnionPayload`, which resolves a `named` through its OWN cascade: it has a
+		// struct arm (so a `Box with Point` write kept working, which is why the split hid) and NO generic-alias
+		// arm, so a `Holder with IntBox` write fell through to `undeclaredName`, took the SCALAR store, and
+		// neither dropped the old box nor moved the new one in.
+		//
+		// ⚠ **MEASURED**, `var h = BoxHolder.hold(IntBox.create(7)); h.item = IntBox.create(8); h.item.value`:
+		// the temporary was freed at the statement and the field kept pointing at it, so the read printed
+		// **4557430888798830399** — `0x3F3F3F3F3F3F3F3F`, the free poison — where the oracle prints 8. A4i is
+		// what made it reachable: before it, reading the field back was `E3011 Unknown type 'IntBox'`, so the
+		// program could not be written at all and a clean refusal became a silent wrong answer.
+		//
+		// Sharing the door rather than re-spelling it is the cure: a re-tag added to `declaredSlotType` now
+		// reaches the WRITE the same day it reaches the READ, which is exactly what nothing made true before.
 		if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'opaqueTypeParamField'
 			let tag = self.tagOf(box)
 			if tag == ValueTypeTag.structRef 'sharedBody'
@@ -35000,7 +35018,7 @@ export type Parser
 				return
 			end 'sharedBody'
 			if tag == ValueTypeTag.genericInstance 'concreteInstance'
-				fieldType = self.signatures.adoptType(self.signatures.substitutedInstanceArg(self.valueNameId(box), position: typeNameIdOf(fieldType)), into: self.artifact.typeNames)
+				fieldType = self.instanceSubstitutedType(box, opaque: fieldType)
 			end 'concreteInstance' else 'unexpectedBox'
 				panic("emitFieldWrite: a `typeParameter` field write has a box of tag {tag.name} — only the enclosing self (a structRef) or a concrete generic instance (`b.f = …`) reaches an opaque field")
 			end 'unexpectedBox'

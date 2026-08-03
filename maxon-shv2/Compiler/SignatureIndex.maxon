@@ -10197,8 +10197,13 @@ export type ProgramSignatures
 	//   • **A GENERIC INSTANCE's TYPE ARGUMENT** (`Parser.instanceSubstitutedType`, A4i) passes the PARSING
 	//     FILE for the `Array` ELEMENT's reason and not the struct FIELD's, and it is the same reason twice
 	//     over: an instance is declared in no file, and its `giid` was already range-scoped FOR the reading
-	//     file at the receiver's own mint. It is the door a `T`-typed field read learns what `T` is through,
-	//     and it reached here as a bare `adoptType` — see that function for the three faces that cost.
+	//     file at the receiver's own mint. It is the door a `T`-typed field READ, a `T`-returning METHOD CALL
+	//     and a `T`-typed field WRITE all learn what `T` is through, and it reached here as a bare `adoptType`
+	//     — see that function for the three faces that cost. ⚠ The WRITE arrived one commit later and by the
+	//     SAME lesson: it kept its own copy of the pre-A4i `adoptType(substitutedInstanceArg(…))`, so the fix
+	//     reached the read and not its twin, and the twin's consumer (`classifyUnionPayload`) resolves a bare
+	//     `named` through a cascade with a struct arm and NO generic-alias arm — which turned a
+	//     `Holder with IntBox` field write into a SCALAR store that dropped nothing and moved nothing in.
 	//   • **A TUPLE element and a COMPILER-SYNTHESIZED layout** carry `CompilerOwnedDeclFilePath`, the same
 	//     probe a file declaring none of a contested name makes: a type declared in no file resolves like a
 	//     stranger, which is the one answer that is the same for all of them.
