@@ -1,0 +1,17 @@
+// Test: error.a-raw-byte-write-is-refused-at-a-slot-the-element-does-not-fill
+typealias Wide = int(0 to 1000)
+typealias Wides = Array with Wide
+
+function takes(b Wides) returns ExitCode
+	return ((try b.get(0) otherwise 0) and u8.max) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var a = Wides.create()
+	a.push(1)
+	try a.managed.setByte(1, 223) otherwise return 3
+	return takes(a)
+end 'main'
+---
+CompilerError:
+error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 2-byte slot — every value of int(0 to 65535). The element 'Wide' (int(0 to 1000)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
