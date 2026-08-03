@@ -64,6 +64,20 @@ ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
 step() { printf '\n\033[1m── %s\033[0m\n' "$*"; }
 warn() { printf '\033[33m⚠\033[0m %s\n' "$*"; }
 
+# win_path <path> — the path as the maxon-dev MCP tools need it: ABSOLUTE and Windows-style.
+#
+# ⚠ FOUND ON THE FIRST LIVE RUN (BATCH14, 2026-08-03). Git Bash's `pwd` returns an MSYS path
+# (`/c/Users/Eric/Dev/maxon-batch14`), and the MCP **REFUSES** that: it takes absolute Windows paths
+# only, and a relative one would resolve against the SERVER's working directory rather than yours.
+# So the worktree brief was printing a `repoRoot` that cannot work — which is the very failure the
+# `repoRoot` parameter exists to prevent, reproduced one level up in the tool that hands it over.
+# `pwd -W` is Git Bash's own conversion; the sed fallback covers shells that lack it.
+win_path() {
+  local p="$1"
+  if [ -d "$p" ]; then ( cd "$p" && pwd -W 2>/dev/null ) && return 0; fi
+  printf '%s\n' "$p" | sed -E 's|^/([a-zA-Z])/|\1:/|'
+}
+
 # ── the scan ─────────────────────────────────────────────────────────────────────────────────────
 # One TAB-separated record per board row:
 #     line \t id \t status \t lanes(comma) \t members(comma) \t owner \t claimed

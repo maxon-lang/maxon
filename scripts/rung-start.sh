@@ -316,7 +316,7 @@ cat <<EOF
   ⚠ EVERY maxon-dev MCP CALL FROM HERE ON NEEDS repoRoot, or it drives the MAIN repo and tells you
     \`success: true\` about a tree containing none of your work:
 
-      repoRoot: "$(echo "$WORKTREE" | tr '\\' '/')"
+      repoRoot: "$(win_path "$WORKTREE")"
 
   NEXT: §2 plan it — survey BOTH references, write the SPEC PORT LIST, and watch it go RED.
         Then the wave, the ladder read, the review, and:

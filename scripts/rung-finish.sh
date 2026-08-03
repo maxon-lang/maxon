@@ -206,8 +206,14 @@ TIP="$(git -C "$WORKTREE" rev-parse HEAD)"
 [ "$OLD_TIP" = "$TIP" ] || echo "  branch tip ${OLD_TIP:0:9} → ${TIP:0:9}"
 
 CHANGED_FILES="$(git -C "$WORKTREE" diff --name-only "$BASE_SHA...$TIP")"
-echo "$CHANGED_FILES" | grep -q '^maxon-sharp/' && RUN_CSHARP=1
-[ "$RUN_CSHARP" = "0" ] || ok "the branch touched maxon-sharp/ — the C# suite is now part of this battery"
+# ⚠ `stdlib/` IS IN THIS TRIGGER, AND IT WAS MISSING — found by the BATCH14 review, 2026-08-03.
+#   The condition used to ask only about `maxon-sharp/`, on the reading that the C# suite gates the C#
+#   compiler. But **the bootstrap COMPILES `stdlib/` too**, and `/specs` is its suite — so a stdlib edit
+#   made from an shv2 rung would have landed with the one suite that covers it never run. The review hit
+#   this concretely: it declined a one-fact cleanup in `stdlib/Subprocess.maxon` partly *because* this
+#   script would not have gated it. A gate nobody can reach is not a gate.
+echo "$CHANGED_FILES" | grep -qE '^(maxon-sharp|stdlib)/' && RUN_CSHARP=1
+[ "$RUN_CSHARP" = "0" ] || ok "the branch touched maxon-sharp/ or stdlib/ — the C# suite is now part of this battery"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 step "3/9  Build"
