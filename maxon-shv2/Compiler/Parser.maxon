@@ -5303,6 +5303,15 @@ let IterationSourceBindingName = b"__for_source"
 // INTO it.
 let BorrowSourceBindingName = b"__borrow_source"
 
+// The remaining two `giveTemporaryScopeLifetime` callers' names. Both used to pass `EmptySourceText`,
+// which made that function's own promise — *"each caller states its own, so a dump of `ownedBindings`
+// still says WHY each nameless entry is there"* — false for two entries out of five, and an
+// `ownedBindings` dump showed two anonymous rows with nothing to tell them apart. The name is inert
+// (these bindings are never installed in a `Scope`, so no source line can name one, and nothing reads
+// the field to decide anything), so it costs a byte string and buys a legible dump.
+let ScrutineeSourceBindingName = b"__match_scrutinee"
+let EscapingFeedSourceBindingName = b"__escaping_feed"
+
 // The value a match arm produces, if any: `none` for a `then` (statement) arm, `value` for a
 // `gives` (expression) arm. A union rather than a `ValueId` plus a bool — for the reason
 // `ReceiverArg` is one: a `ValueId` has no empty value, and a sentinel would be READ downstream
@@ -20934,7 +20943,7 @@ export type Parser
 		// carries an `async` spawn's PROMISE (`emitAsyncCall` enrols one directly), which owns a green thread
 		// rather than heap and must not be re-homed as an owned heap binding by a `match` on it.
 		if scrutOwned 'enrollTempScrutinee'
-			self.giveTemporaryScopeLifetime(scrut, name: EmptySourceText)
+			self.giveTemporaryScopeLifetime(scrut, name: ScrutineeSourceBindingName)
 		end 'enrollTempScrutinee'
 
 		// ⭐ **AND THE SCRUTINEE EXPRESSION'S OTHER TEMPORARIES DIE HERE, BEFORE THE FIRST CASE TEST.** The
@@ -21800,33 +21809,21 @@ export type Parser
 		end 'g'
 	end 'giveValueOf'
 
-	// ⭐ **TRANSFER AN OWNED `gives` VALUE OUT OF ITS OWNER (P1.3).** An expression arm whose yielded value
-	// is OWNED — an owned interpolation/heap `String`, a struct box, or a managed payload a binding arm
-	// moved out (`text(s) gives s`) — hands that value to the merge's result phi, which becomes its sole
-	// owner (`finalizeMatchMerge` marks the phi owned so its consumer drops it once). So the value must
-	// leave its current owner HERE, before `dropArmScopedOwned` releases the arm's bindings and before the
-	// post-match statement drain runs: an owned temporary leaves the pending list, and a bare-local owner
-	// (the payload binding of `text(s) gives s`, or an outer owned binding) is poisoned so `emitScopeDrops`
-	// skips its drop and a later read of it is use-after-move. A borrowed/scalar give owns nothing, so both
-	// calls are no-ops — a borrowed String is promoted at the merge instead, where phi ownership is decided.
-	// ⭐ **SETTLE ONE MATCH ARM'S OWN VALUES BEFORE ITS EDGE LEAVES.** Two things an arm owes, which used to
-	// be one thing done twice (the give transfer was spelled at both the pattern-arm and default-arm sites)
-	// and one thing done nowhere:
+	// The union an arm hands back: the one it ARRIVED with, unless the settlement really produced a different
+	// SSA name.
 	//
-	//   • an OWNED `gives` value ESCAPES to the result phi, so it leaves its owner here — the merge drops it,
-	//     not the arm (`transferGiveToPhi`);
-	//   • every TEMPORARY the arm body built and abandoned is released in the arm's OWN exit block, which is
-	//     the only block those definitions dominate. An arm runs on one edge, so a release after the merge
-	//     would free a value the other arms never built — the short-circuit mistake, in a wider construct.
-	//     The give is transferred FIRST, so an escaping value is out of the list before the sweep.
-	//
-	// Inert for a `then` arm: its body is a STATEMENT, and the statement tail already released the whole list
-	// on its own edge, leaving nothing above the floor. It is the `gives` arm of a match EXPRESSION — which
-	// parses an expression and so has no statement tail — that this exists for.
-	//
+	// ⚠ **NOT TIDINESS — A MEASURED ALLOCATION.** `MatchGiveValue` carries a payload and is therefore a heap
+	// box, so rebuilding one per arm unconditionally cost **+1,060 allocations at rung 5 of the scale ladder**
+	// against a like-for-like base build — one box per `match`/ternary arm in the program, and the whole of this
+	// rung's movement in that column. Reusing brings it back to Δ0. Almost no arm launders, so almost every arm
+	// hands back the union it arrived with.
+	function armGiveUnion(arrived MatchGiveValue, settled ValueId) returns MatchGiveValue
+		return arrived if settled == self.giveValueOf(arrived) else MatchGiveValue.value(settled)
+	end 'armGiveUnion'
+
 	// ⭐⭐ **EVERYTHING A FORK ARM OWES AS CONTROL LEAVES IT, IN THE ONE ORDER THAT IS SOUND** — shared by a
-	// `match` arm and a ternary arm, which used to spell the first two steps separately and the third not at
-	// all. Three steps, and the order is the whole content:
+	// `match` arm and a ternary arm, which used to spell the first two steps separately (in `finishArmValues`,
+	// which this replaces) and the third not at all. Three steps, and the order is the whole content:
 	//
 	//   1. SETTLE THE GIVE — the value escaping to the result phi leaves its owner, or, when it is a BORROW
 	//      into something this arm is about to release, is given a reference of its own (`settleArmGive`).
@@ -21841,26 +21838,21 @@ export type Parser
 	// (`text(s) gives s` would drop the payload it is handing back), and a borrow laundered AFTER its source
 	// is released increfs freed memory.
 	//
+	// Step 2 is inert for a `then` arm: its body is a STATEMENT, and the statement tail already released the
+	// whole pending list on its own edge, leaving nothing above the floor. It is the `gives` arm of a match
+	// EXPRESSION — which parses an expression and so has no statement tail — that step 2 exists for. Step 1 is
+	// inert there too, and structurally so: `parseArmBody` mints `value(…)` only on the `isExpression` path,
+	// so a `then` arm's give is `none` and the match below skips it.
+	//
 	// It takes and returns a `MatchGiveValue` rather than a `ValueId` plus a flag, because a STATEMENT arm
 	// genuinely carries no value and the union is what says so — and the caller must take the answer BACK: a
 	// laundered give is a FRESH SSA name, and the merge (`resolveGivesOwnership`) has to join the value the
 	// arm really hands over rather than the borrow it started from.
-	// The union an arm hands back: the one it ARRIVED with, unless the settlement really produced a different
-	// SSA name.
-	//
-	// ⚠ **NOT TIDINESS — A MEASURED ALLOCATION.** `MatchGiveValue` carries a payload and is therefore a heap
-	// box, so rebuilding one per arm unconditionally cost **+1,060 allocations at rung 5 of the scale ladder**
-	// against a like-for-like base build — one box per `match`/ternary arm in the program, and the whole of this
-	// rung's movement in that column. Reusing brings it back to Δ0. Almost no arm launders, so almost every arm
-	// hands back the union it arrived with.
-	function armGiveUnion(arrived MatchGiveValue, settled ValueId) returns MatchGiveValue
-		return arrived if settled == self.giveValueOf(arrived) else MatchGiveValue.value(settled)
-	end 'armGiveUnion'
-
 	function finishArmExit(give MatchGiveValue, tempFloor TempDropMark, ownedFloor BindingMark, exitBlock IrBlock, anchor Token) returns MatchGiveValue throws ParseError
 		var settled = give
 		match give 'g'
-			none then settled = give
+			// A STATEMENT arm carries no value, so there is nothing to settle — not "settle it to itself".
+			none then break 'g'
 			value(v) then settled = self.armGiveUnion(give, settled: try self.settleArmGive(v, ownedFloor: ownedFloor, exitBlock: exitBlock, anchor: anchor))
 		end 'g'
 
@@ -21923,6 +21915,15 @@ export type Parser
 		return self.valueIsManagedHeap(give) and not self.valueIsOwnedHeap(give) and not self.immutableGlobalReads.contains(give)
 	end 'giveBorrowsIntoDyingRecords'
 
+	// ⭐ **TRANSFER AN OWNED `gives` VALUE OUT OF ITS OWNER (P1.3).** An expression arm whose yielded value
+	// is OWNED — an owned interpolation/heap `String`, a struct box, or a managed payload a binding arm
+	// moved out (`text(s) gives s`) — hands that value to the merge's result phi, which becomes its sole
+	// owner (`finalizeMatchMerge` marks the phi owned so its consumer drops it once). So the value must
+	// leave its current owner HERE, before `dropArmScopedOwned` releases the arm's bindings and before the
+	// post-match statement drain runs: an owned temporary leaves the pending list, and a bare-local owner
+	// (the payload binding of `text(s) gives s`, or an outer owned binding) is poisoned so `emitScopeDrops`
+	// skips its drop and a later read of it is use-after-move. A borrowed/scalar give owns nothing, so both
+	// calls are no-ops — a borrowed String is promoted at the merge instead, where phi ownership is decided.
 	function transferGiveToPhi(give ValueId, anchor Token) throws ParseError
 		if not self.valueIsOwnedHeap(give) 'borrowed'
 			return
@@ -39015,7 +39016,7 @@ export type Parser
 			end 'coOwnedAggregate'
 			return
 		end 'constructorFeed'
-		self.giveTemporaryScopeLifetime(argValue, name: EmptySourceText)
+		self.giveTemporaryScopeLifetime(argValue, name: EscapingFeedSourceBindingName)
 	end 'handleEscapingBorrowFeed'
 
 	// Does the concrete instance's argument at parameter `position`'s type-parameter feed own managed heap
