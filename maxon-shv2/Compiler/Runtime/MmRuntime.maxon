@@ -399,6 +399,34 @@ export function emitStoreField(module StdModule, block IrBlock, record ValueId, 
 	module.appendOp(block, op: StdOp.storeIndirect(record, offset: offset, valueId: value, valueType: StdType.i64))
 end 'emitStoreField'
 
+// ⭐ **ONE MACHINE-WORD SLOT — the stride every WORD-INDEXED buffer in the runtime uses.** A hash table's
+// `keys`/`states`/`hashes`/`values` columns, and the element buffer of any `Array` whose element is a managed
+// POINTER or a machine-word int, all address slot `i` at `base + i·8`.
+export let WordSlotBytes = 8 as ParsedInt
+
+// The byte address of word slot `index` in a parallel buffer — `base + index · WordSlotBytes`.
+//
+// ⚠ **IT LIVES HERE, WITH THE OTHER SINGLE-OP EMIT HELPERS, BECAUSE THE HASH TABLE WAS NEVER ITS ONLY
+// CALLER.** It was `HashTableRuntime`'s `emitHtSlotAddr` — but `__set_from` already reads an ARRAY's element
+// buffer through it, which is what identifies it as a word-slot fact rather than a hash-table one, and
+// `__list_from` reads the same buffer the same way. A second copy under a list-shaped name would have been
+// "the address of word slot i" written down twice, over the same buffers.
+function emitWordSlotAddr(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
+	let slotBytes = emitConst(module, block: block, value: WordSlotBytes, ids: ids)
+	let offset = emitBin(module, block: block, a: index, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
+	return emitBin(module, block: block, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
+end 'emitWordSlotAddr'
+
+// Load slot `index` (one i64 word) of parallel buffer `base`.
+export function emitWordSlotLoad(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
+	return emitLoadField(module, block: block, record: emitWordSlotAddr(module, block: block, base: base, index: index, ids: ids), offset: 0, ids: ids)
+end 'emitWordSlotLoad'
+
+// Store `value` into slot `index` (one i64 word) of parallel buffer `base`.
+export function emitWordSlotStore(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: emitWordSlotAddr(module, block: block, base: base, index: index, ids: ids), offset: 0, value: value)
+end 'emitWordSlotStore'
+
 // `a <op> b` into a fresh value.
 export function emitBin(module StdModule, block IrBlock, a ValueId, b ValueId, opcode StdBinOpcode, ids ValueMinter) returns ValueId
 	let v = ids.mint()

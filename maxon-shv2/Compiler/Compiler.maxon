@@ -585,6 +585,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// any install ran and the linker resolves the cross-references by name.
 	installMapRuntime(pipeline.stdModule, usage: usage)
 
+	// The List runtime (`__list_create`/`__list_append`/`__list_get`/…) — installed the same already-lowered
+	// way, keyed on its own `usesList` bit. It shares no graph with the two above (a chain is not a table), so
+	// it is a plain third container install; the order is readability for their reason.
+	installListRuntime(pipeline.stdModule, usage: usage)
+
 	// The single-value descriptor-gated drop (`__drop_type_param`, P1.7 slice 3b-v / Finding A) — installed on
 	// its OWN `usesDropTypeParam` bit, DECOUPLED from `usesArray`, so a bare opaque `T` field reassignment in an
 	// array-free generic struct links its drop. An opaque-array program sets the bit too, so this installs the

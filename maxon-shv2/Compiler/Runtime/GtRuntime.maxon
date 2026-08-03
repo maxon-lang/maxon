@@ -630,7 +630,7 @@ end 'isThrowingGtRuntimeCallee'
 // changes nothing here: this predicate answers "must a `try` wrap it", which is a property of the OPERATION, and
 // both gates that read it run on the MAXON tier where the callee is still a call.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee)
+	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -711,6 +711,20 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	if isThrowingMapRuntimeCallee(callee) 'mapFamily'
 		return mapErrorThrows()
 	end 'mapFamily'
+
+	// ⭐ **THE LIST FAMILY THROWS `ArrayError`, NOT AN ERROR OF ITS OWN — and that is `stdlib/List.maxon`'s
+	// OWN declaration rather than a shortcut.** `first`/`get`/`removeFirst` are each written
+	// `throws ArrayError` there (`:44`, `:73`, `:112`), and the case they raise is `indexOutOfBounds`. Minting
+	// a `ListError` would put a SECOND enum behind the one the canonical spec names, so a user function that
+	// propagates `list.get(i)` and `arr.get(i)` through one `throws ArrayError` clause — which that file's own
+	// `walkTo` does — would meet E3059 for a difference the language does not have.
+	//
+	// ⚠ It asks the THROWING predicate, not the wide `isListRuntimeCallee`: `create`/`count`/`append`/
+	// `prepend`/`decref`/`from` and the three cursor primitives cannot fail, and typing a non-throwing callee
+	// as `throwing` is exactly what makes `try` REQUIRED on a call that cannot (E3055).
+	if isThrowingListRuntimeCallee(callee) 'listFamily'
+		return arrayErrorThrows()
+	end 'listFamily'
 
 	return ThrowsClause.none
 end 'runtimeThrowsClause'
@@ -836,6 +850,13 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 	if isThrowingMapRuntimeCallee(callee) 'mapFamily'
 		return RuntimeCalleeSourceMethod.found(mapSourceMethodName(callee))
 	end 'mapFamily'
+
+	// The `List` family answers through a map: three callees, three distinct spellings the author writes
+	// (`first`, `get`, `removeFirst`), so this is the several-names shape the five maps above have and not the
+	// `Character` family's one-name identity.
+	if isThrowingListRuntimeCallee(callee) 'listFamily'
+		return RuntimeCalleeSourceMethod.found(listAccessorSourceMethodName(callee))
+	end 'listFamily'
 
 	// ⚠ **`notFound` IS NOW EXACTLY TWO FAMILIES, AND NEITHER NAMES A METHOD.** The subprocess family's
 	// `runProcess` is a free FUNCTION and the division family is an OPERATOR — there is no method spelling to

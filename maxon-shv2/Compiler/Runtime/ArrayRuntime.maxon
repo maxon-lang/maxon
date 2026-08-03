@@ -1156,7 +1156,13 @@ function emitSliceRangeViolated(module StdModule, block IrBlock, arr ValueId, st
 end 'emitSliceRangeViolated'
 
 // The out-of-bounds throw: `errorReturn(0, indexOutOfBounds)` — the one `ArrayError` case an INDEX earns.
-function emitOobReturn(module StdModule, block IrBlock, ids ValueMinter)
+//
+// ⚠ **EXPORTED FOR `ListRuntime`, WHICH THROWS THE SAME `ArrayError.indexOutOfBounds` FROM THE SAME KIND OF
+// FAILURE.** `stdlib/List.maxon` declares `first`/`get`/`removeFirst` as `throws ArrayError`, so shv2's
+// synthesized `List` owes that enum's ordinal — and `ArrIndexOutOfBoundsFlag` is the fact, written here once
+// and asserted by `verifyArrayRuntimeOrdinals`. A private copy in the list runtime would be a second
+// transcription of an ordinal only this file's guard checks.
+export function emitOobReturn(module StdModule, block IrBlock, ids ValueMinter)
 	emitErrorReturn(module, block: block, flag: ArrIndexOutOfBoundsFlag, ids: ids)
 end 'emitOobReturn'
 
@@ -1735,7 +1741,7 @@ end 'emitElementStoreAndOkReturn'
 
 // ⭐⭐ **DESTROY AN ELEMENT THE SETTER REFUSED TO STORE — THE THROW PATH'S HALF OF THE MOVE-IN CONTRACT
 // (found and fixed in R4.6).** `Parser.parseArraySetOrInsert` MOVES the value into the call
-// (`moveElementIntoArray`), so from that point the callee owns it and the caller's scope-exit drop is
+// (`moveElementIntoContainer`), so from that point the callee owns it and the caller's scope-exit drop is
 // suppressed. On the success path the array becomes the owner; on the out-of-range path nothing did, and the
 // element simply leaked.
 //
@@ -2285,7 +2291,7 @@ end 'buildArrAppend'
 // them — a double destroy of every shared element. The deep clone sidesteps that trap: each array is the sole
 // owner of its own element boxes. The runtime gate here (`element_destroy@40 != 0`) and the parser's managed
 // route (`Parser.requireArrayElementCopyable` → the `_managed` builders) are BOTH
-// `SignatureIndex.arrayElementIsManaged(giid)`, so "this array's elements are managed" is one fact read at the
+// `SignatureIndex.containerElementIsManaged(giid)`, so "this array's elements are managed" is one fact read at the
 // drop and at the copy — there is no third spelling to drift.
 // ⭐ `__arr_mem_create(count, elementSize) -> (rec, flag)` — the `__ManagedMemory.create` constructor.
 // PUBLISHES `count` elements: length == capacity == count, the buffer zeroed (a fresh `__mm_alloc` is), which

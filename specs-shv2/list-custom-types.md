@@ -1,0 +1,191 @@
+---
+feature: list-custom-types
+status: experimental
+keywords: [list, linked list, struct, custom type, generic]
+category: collections
+---
+# List with Custom Types
+
+## Documentation
+
+`List` should work with custom struct types, not just primitives. When using `List with MyStruct`, all operations (append, prepend, get, iterate, remove) should work correctly with user-defined types.
+
+## Tests
+
+<!-- test: list-of-structs-basic -->
+### Basic List of Structs
+Create a list of custom structs and retrieve elements.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+typealias PointList = List with Point
+
+function main() returns ExitCode
+	var list = PointList.create()
+	list.append(Point.create(10, y: 20))
+	list.append(Point.create(30, y: 40))
+	let first = try list.first() otherwise Point.create(0, y: 0)
+	let second = try list.get(1) otherwise Point.create(0, y: 0)
+	print("{first.x}\n")
+	print("{first.y}\n")
+	print("{second.x}\n")
+	print("{second.y}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+20
+30
+40
+```
+
+<!-- test: list-of-structs-iterate -->
+### Iterate Over List of Structs
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Entry
+	export var id as Integer
+	export var value as Integer
+
+	static function create(id Integer, value Integer) returns Self
+		return Self{id: id, value: value}
+	end 'create'
+end 'Entry'
+
+typealias EntryList = List with Entry
+
+function main() returns ExitCode
+	var list = EntryList.create()
+	list.append(Entry.create(1, value: 100))
+	list.append(Entry.create(2, value: 200))
+	list.append(Entry.create(3, value: 300))
+	var sum = 0
+	for item in list 'loop'
+		sum = sum + item.value
+	end 'loop'
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+600
+```
+
+<!-- test: list-of-structs-with-string -->
+### List of Structs with Managed String Fields
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Person
+	export var name as String
+	export var age as Integer
+
+	static function create(name String, age Integer) returns Self
+		return Self{name: name, age: age}
+	end 'create'
+end 'Person'
+
+typealias PersonList = List with Person
+
+function main() returns ExitCode
+	var list = PersonList.create()
+	list.append(Person.create("Alice has a long name for heap", age: 30))
+	list.append(Person.create("Bob also has a long name for heap", age: 25))
+	let first = try list.first() otherwise Person.create("", age: 0)
+	print("{first.name}\n")
+	print("{first.age}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Alice has a long name for heap
+30
+```
+
+<!-- test: list-of-structs-prepend-remove -->
+### Prepend and Remove Structs
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+typealias PairList = List with Pair
+
+function main() returns ExitCode
+	var list = PairList.create()
+	list.prepend(Pair.create(3, b: 30))
+	list.prepend(Pair.create(2, b: 20))
+	list.prepend(Pair.create(1, b: 10))
+	let removed = try list.removeFirst() otherwise Pair.create(0, b: 0)
+	print("{removed.a}\n")
+	print("{removed.b}\n")
+	print("{list.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+10
+2
+```
+
+<!-- test: list-of-structs-from-literal -->
+### List from Array Literal of Structs
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Vec2
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Vec2'
+
+function main() returns ExitCode
+	let list = List from [Vec2.create(1, y: 2), Vec2.create(3, y: 4), Vec2.create(5, y: 6)]
+	for item in list 'loop'
+		print("{item.x},{item.y}\n")
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1,2
+3,4
+5,6
+```

@@ -501,7 +501,7 @@ export union ConstArrayElement
 	integer(payload ParsedInt)
 	// A String element: the literal's decoded bytes, materialized as the immortal `.rdata` record and then
 	// CLONED — the array's `element_destroy@40` walk drops every live slot, so each element must be a record
-	// the array may own (exactly what `Parser.moveElementIntoArray` promotes a borrowed String literal to).
+	// the array may own (exactly what `Parser.moveElementIntoContainer` promotes a borrowed String literal to).
 	string(bytes ByteArray)
 end 'ConstArrayElement'
 
@@ -1685,7 +1685,7 @@ function instanceCloneStrategy(signatures ProgramSignatures, id GenericInstanceI
 	if not signatures.isArrayInstance(id) 'notArray'
 		return ManagedCloneStrategy.unsupported
 	end 'notArray'
-	if not signatures.arrayElementIsManaged(id) 'trivialElement'
+	if not signatures.containerElementIsManaged(id) 'trivialElement'
 		return ManagedCloneStrategy.direct(ArrCloneName)
 	end 'trivialElement'
 	// A managed-element array field clones each element through the element's OWN `(box) -> newBox` callee; if
@@ -1781,7 +1781,8 @@ export let MapTypeParamCount = 2 as FieldIndex
 
 // ⭐ **WHICH TYPE ARGUMENT IS THE KEY — A FACT ABOUT EVERY HASH TABLE, NOT ABOUT `Map`.** A `Set with Key`
 // and a `Map with (Key, Value)` both put the key first, and three doors depend on it being the same 0:
-// `Parser.parseSetStaticCall`'s and `Parser.parseMapStaticCall`'s column gates, and
+// `Parser.gateAndEmitContainerCreate`'s two column gates (the `Set` arm's and, through
+// `requireMapColumnTypes`, the `Map` arm's), and
 // `LowerMaxonToStd.setWitnessKeyTypeName`, which threads the `Hashable`/`Equatable` tables of that argument
 // for BOTH containers. So it is ONE exported constant those three read — it was briefly two, a `Map`-named
 // one here and a file-private `Set`-named copy in `LowerMaxonToStd`, which made the shared invariant
@@ -1790,6 +1791,19 @@ export let MapTypeParamCount = 2 as FieldIndex
 // The VALUE position stays `Map`-only, because only a `Map` has a second column.
 export let HashTableKeyArgPosition = 0 as TypeParamId
 export let MapValueArgPosition = 1 as TypeParamId
+
+// The name of the builtin `List` generic type (`List with Element`) — the linked-list twin of
+// `ArrayBuiltinBaseName`. Like `Array`, `Set` and `Map`, no file declares `type List uses Element` for shv2
+// to read: `stdlib/List.maxon` writes one, and `ListRuntime.maxon`'s header carries the MEASUREMENT that
+// makes it uncompilable here (a generic type holding a compiler-owned container over its own type parameter
+// erases the element's managed-ness and access-violates at teardown). So every `genericInstance*` query that
+// would read a base `StructLayout` special-cases a `List` instance exactly as it does an `Array` one — its
+// box is the fixed `ListRecordBytes` chain header and it drops through `__list_decref`.
+export let ListBuiltinBaseName = b"List"
+
+// The single type parameter `List` declares (`List with Element`) — the arity `checkGenericInstance`
+// validates a `List with …` against, the `Array`/`Set` twin.
+export let ListTypeParamCount = 1 as FieldIndex
 
 // ⭐⭐ **`MapError` — WHAT A MISSING-KEY `Map.get` THROWS, AND IT WEARS THE BARE NAME FOR `ArrayError`'S
 // EXACT REASON.** `stdlib/Map.maxon:6-9` declares it, and shv2 does not load that module (see
@@ -2312,6 +2326,13 @@ export let ArrayLastMethod = b"last"
 export let ArrayPopMethod = b"pop"
 export let RemoveMethod = b"remove"
 export let SliceMethod = b"slice"
+
+// The two spellings only a `List` has. They live in THIS block rather than in `Parser.maxon` for the reason
+// the eight above them do: `ListRuntime.listAccessorSourceMethodName` has to name `removeFirst`, and a map
+// cannot name a constant its file cannot see. `prepend` sits beside it so the pair a list adds to the
+// language is read in one place; `append`/`get`/`first`/`count`/`create` are already shared above.
+export let ListPrependMethod = b"prepend"
+export let ListRemoveFirstMethod = b"removeFirst"
 
 // Its parameter names, the reference's own (`2-Parser.cs:1470-1511`) for the same reason the file's are.
 // ⚠ **`endIndex` IS v1's SPELLING AND THE BOOTSTRAP'S IS `end`** (`LowerMaxonToStd.maxon:1657` vs
@@ -3582,10 +3603,15 @@ export type ProgramSignatures
 	var tupleAliases as TupleCanonicalNameMap
 	// ⭐ **DOES ANY FILE IN THE PROGRAM MATERIALIZE A `[<identifier>…]` ARRAY LITERAL?** (P1.7 slice 3.) Set
 	// by the sweep, read ONCE by `queryProgramSignatures` after the last file folds, which is what makes
-	// `internArrayLiteralAggregateInstances` a single whole-program walk instead of a per-file one. A bool
+	// `internLiteralContainerInstances` a single whole-program walk instead of a per-file one. A bool
 	// and not a count: the over-interning is over every declared type, so one such file asks for exactly
 	// what a thousand do.
 	var sawAggregateArrayLiteral as bool
+	// ⭐ **DOES ANY FILE IN THE PROGRAM MATERIALIZE A `List from […]` CONSTRUCTION?** The `List` half of the
+	// bit above, read at the same moment and for the same reason: the construction's element type is the
+	// source array literal's, so the `List with <T>` instances it may need are the same whole-program set of
+	// declared types — one walk after the last file folds, not one per file.
+	var sawListFromConstruction as bool
 	// ⭐ Generic-instance TYPEALIAS name ⇒ its interned instance (P1.6-A) — `IntBox` ⇒ the giid for
 	// `Box with Integer`. THE door `Parser.parseQualifiedCall` resolves `IntBox.create` to `Box.create`
 	// through, and the one the instantiation checks read the base + args from. It carries no ids of its
@@ -3928,7 +3954,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -5612,7 +5638,7 @@ export type ProgramSignatures
 	export function constArrayValueType(element ConstArrayElementKind) returns MaxonType
 		return match element 'e'
 			integer gives MaxonType.genericInstance(self.internBuiltinIntegerInstance(ArrayBuiltinBaseName))
-			string gives MaxonType.genericInstance(self.arrayInstanceForString())
+			string gives MaxonType.genericInstance(self.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string))
 		end 'e'
 	end 'constArrayValueType'
 
@@ -6770,7 +6796,7 @@ export type ProgramSignatures
 	// `containsStruct` answers for; if a later slice adds a field read, add the accessor with it.
 
 	// The `Set with Character` instance a `CharacterSet`'s explicit members live in, and the instance a
-	// `CharSet from [...]` constructs (P1.8 Slice D) — the `setInstanceForString` twin. Keyed as
+	// `CharSet from [...]` constructs (P1.8 Slice D) — the `builtinInstanceForElement` twin. Keyed as
 	// `MaxonType.character`, the SAME arg a `typealias CharSet = Set with Character` interns, so a
 	// compiler-built member set and a user-declared one share ONE gid and are type-identical. Idempotent.
 	export function setInstanceForCharacter() returns GenericInstanceId
@@ -6827,7 +6853,7 @@ export type ProgramSignatures
 	// exist yet — a sweep-time verdict would be decided by file order. The sweep therefore records whatever
 	// spelling it sees, the real parse asks the question with the whole program in hand, and a program that
 	// fails it is rejected before anything downstream reads the tuple. The sweep's spelling is registered but
-	// never referenced, exactly like the instances `internArrayLiteralAggregateInstances` over-interns.
+	// never referenced, exactly like the instances `internLiteralContainerInstances` over-interns.
 	export function internTupleType(elements MaxonTypeArray, from TypeNameInterner) returns ByteArray throws TupleElementRejection
 		var interned = MaxonTypeArray.create()
 		for i in 0 upto elements.count() 'eachElement'
@@ -6943,7 +6969,7 @@ export type ProgramSignatures
 	// ⭐ **THE `MaxonType`-LEVEL TWIN OF `canonicalNameOfStruct`: a tuple `structRef` under a SWEEP spelling
 	// answered as the canonical one, everything else itself.** One derivation, two readers — a NESTED tuple
 	// ELEMENT (`canonicalTupleElement`, whose recursion this terminates: each step strips one nesting level
-	// off a type written in finite source) and a generic instance's stored ARGUMENT (`arrayElementType`).
+	// off a type written in finite source) and a generic instance's stored ARGUMENT (`containerElementType`).
 	// Both ask the same question about the same tag, and the `allFilesFolded` gate that says whether a
 	// canonical form exists yet lives once, in `canonicalNameOfStruct`, rather than at each asker.
 	function canonicalTupleStructRef(element MaxonType) returns MaxonType
@@ -7224,7 +7250,14 @@ export type ProgramSignatures
 		return tag == ValueTypeTag.genericInstance and self.isArrayInstance(nameId)
 	end 'isArrayInstanceAt'
 
-	// The element TYPE of `Array with T` — its sole type argument, in this index's own interner.
+	// The element TYPE of a ONE-ARGUMENT container instance — `Array with T` or `List with T` — its sole type
+	// argument, in this index's own interner.
+	//
+	// ⚠ **IT SERVES BOTH CONTAINERS AND IS NOT `Array`-SPECIFIC, WHICH IS WHY IT NO LONGER WEARS THAT NAME.**
+	// The canonicalization below is a fact about how an INSTANCE ARGUMENT is stored, not about what holds it,
+	// and a `List with Tagged` would have hit the identical unresolved-symbol panic through its own
+	// `element_drop@24` stamp. A second `listElementType` would have been this whole header copied — and the
+	// copy that mattered is the one line of canonicalization, which is exactly the line a copy drops.
 	//
 	// ⭐⭐ **A TUPLE ARGUMENT IS CANONICALIZED ON THE WAY OUT (P1.10), and a generic instance's stored ARG is
 	// the SECOND door this index's types leave by.** `adoptType` performs the same rewrite for every type
@@ -7242,14 +7275,14 @@ export type ProgramSignatures
 	// ⚠ **THE INSTANCE'S OWN COMPILED NAME IS DELIBERATELY NOT CANONICALIZED**: `mangleGenericInstance` reads
 	// `instanceArgs` directly. Rewriting it there would give a sweep-spelled instance and a canonically-spelled
 	// one the SAME symbol while they remain two gids — the `E3006 duplicate definition` shape
-	// `arrayInstanceForNamedElement` documents. That the two stay two TYPES is this rung's named residual:
+	// `builtinInstanceForNamedElement` documents. That the two stay two TYPES is this rung's named residual:
 	// `Array with Tagged` and an `Array` of the same tuple minted from a literal do not unify, reported as an
 	// honest argument-type mismatch naming both spellings. Unifying them means MERGING two gids in the
 	// registry, which is a change to instance identity itself and not something a read door may make.
-	export function arrayElementType(id GenericInstanceId) returns MaxonType
+	export function containerElementType(id GenericInstanceId) returns MaxonType
 		let args = self.genericInstances.instanceArgs(id)
-		return self.canonicalTupleStructRef(try args.get(0) otherwise panic("ProgramSignatures.arrayElementType: `Array` instance {id} has no type argument — arity (1) was checked at instantiation"))
-	end 'arrayElementType'
+		return self.canonicalTupleStructRef(try args.get(0) otherwise panic("ProgramSignatures.containerElementType: `{String.from(self.genericInstanceBaseName(id))}` instance {id} has no type argument — arity (1) was checked at instantiation"))
+	end 'containerElementType'
 
 	// ⭐⭐ **THE DECLARED RANGE OF AN `Array` INSTANCE'S ELEMENT, AS `readerFilePath` RESOLVES IT** — the
 	// BOUNDS twin of `arrayElementSize`, and the question a value being stored INTO the instance has to be
@@ -7266,7 +7299,7 @@ export type ProgramSignatures
 	// alias to have bounds, which is the same answer a `named` element no file declares gets, and both mean
 	// "no declared range constrains this element" to every caller.
 	export function arrayElementAliasOf(id GenericInstanceId, readerFilePath FilePath) returns DeclaredAlias
-		let element = self.arrayElementType(id)
+		let element = self.containerElementType(id)
 		if maxonTypeTag(element) != ValueTypeTag.named 'notANamedElement'
 			return DeclaredAlias.undeclared
 		end 'notANamedElement'
@@ -7293,7 +7326,7 @@ export type ProgramSignatures
 	end 'isSetInstance'
 
 	// The KEY type of `Set with T` — its sole type argument, in this index's own interner. The `Set` twin of
-	// `arrayElementType`.
+	// `containerElementType`.
 	export function setKeyType(id GenericInstanceId) returns MaxonType
 		let args = self.genericInstances.instanceArgs(id)
 		return try args.get(HashTableKeyArgPosition) otherwise panic("ProgramSignatures.setKeyType: `Set` instance {id} has no type argument — arity (1) was checked at instantiation")
@@ -7358,6 +7391,34 @@ export type ProgramSignatures
 		return try args.get(MapValueArgPosition) otherwise panic("ProgramSignatures.mapValueType: `Map` instance {id} has no value type argument — arity (2) was checked at instantiation")
 	end 'mapValueType'
 
+	// --- The `List` builtin generic ---
+	//
+	// The linked-list twin of the `Set` section above, and the SIMPLEST of the four containers: a `List with T`
+	// has one column, no hashing and no comparison, so it needs neither a key-type gate nor witness threading.
+	// Its element TYPE is read through the shared `containerElementType` (the `Array` door — one argument, one
+	// canonicalization), so the only `List`-specific type-level facts are these two predicates, its box size
+	// and its drop callee. See `ListRuntime.maxon`'s header for why it is synthesized rather than read from
+	// `stdlib/List.maxon`.
+
+	// Is `name` the builtin `List` type — the base of every list instance.
+	export function isListBaseName(name ByteArray) returns bool
+		return name.equals(ListBuiltinBaseName)
+	end 'isListBaseName'
+
+	// Is generic instance `id` a `List with T`? (Reads the base NAME, which needs no base struct.)
+	export function isListInstance(id GenericInstanceId) returns bool
+		return self.isListBaseName(self.genericInstanceBaseName(id))
+	end 'isListInstance'
+
+	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `List with T`?** — `isArrayInstanceAt`'s twin, and it exists for
+	// that function's measured reason rather than for symmetry: a `TypeNameId` and a `GenericInstanceId` share
+	// one numeric space, so `isListInstance` handed a plain `named` id can answer TRUE about an instance the
+	// caller never had. Both of this predicate's callers (the receiver dispatch and the `for … in` source
+	// test) hold a value's (tag, nameId) pair, which is exactly the shape that hazard bites.
+	export function isListInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.isListInstance(nameId)
+	end 'isListInstanceAt'
+
 	// ⚠ There is deliberately no `mapKeyIsManaged` / `mapValueIsManaged` / `setKeyIsManaged` beside these two
 	// selectors. A map carries TWO independently stamped destructors (`keyDrop@40`, `valueDrop@56`) — a
 	// `Map with (String, Int)` owns heap keys and trivial values — and a per-column predicate is a second place
@@ -7365,29 +7426,33 @@ export type ProgramSignatures
 	// `setKeyType` / `mapKeyType` / `mapValueType`) and asks `slotTypeIsManaged` of it, so the moved-in value
 	// and the stamped destructor read the one answer.
 
-	// Is `Array with T`'s element itself managed (String / struct / boxed union / nested array) — the
-	// slice-1 boundary: a managed-element array needs the element-destroy walk (P1.7 slice 3) and is
+	// Is a SINGLE-ELEMENT container's element itself managed (String / struct / boxed union / nested container)
+	// — the slice-1 boundary: a managed-element array needs the element-destroy walk (P1.7 slice 3) and is
 	// rejected with a clean E2015 until then. A trivial element (int / Byte / ranged-int / bool) is stored
 	// inline and owns nothing.
-	export function arrayElementIsManaged(id GenericInstanceId) returns bool
-		return self.typeIsManaged(self.arrayElementType(id), from: self.typeNames)
-	end 'arrayElementIsManaged'
+	//
+	// ⚠ **`container`, NOT `array`, AND THE NAME IS LOAD-BEARING.** It reads through `containerElementType`, so
+	// a `List` giid answers here exactly as an `Array` one does — and `Parser.dispatchListMethod` and the list
+	// move-in/borrow doors ask it that way. Named for `Array` it invited an `isListInstance` arm nobody needs.
+	export function containerElementIsManaged(id GenericInstanceId) returns bool
+		return self.typeIsManaged(self.containerElementType(id), from: self.typeNames)
+	end 'containerElementIsManaged'
 
-	// Is `Array with T`'s element an OPAQUE TYPE PARAMETER — a `T` from an enclosing generic type's shared body
-	// (`type W uses T { var xs as Array with T }`), NOT a concrete type (P1.7 slice 3a). A concrete managed
+	// Is a SINGLE-ELEMENT container's element an OPAQUE TYPE PARAMETER — a `T` from an enclosing generic type's
+	// shared body (`type W uses T { var xs as Array with T }`), NOT a concrete type (P1.7 slice 3a). A concrete managed
 	// element knows its destructor at the construction site (the `funcAddr` stamp into `element_destroy@40`); an
 	// opaque `T` does not — its element destructor lives in the layout descriptor's `destroyFunc@40`, reached
 	// through the rdata reloc path, which is slice 3b. Rejected with a positioned E2015 until then.
-	export function arrayElementIsOpaque(id GenericInstanceId) returns bool
-		return maxonTypeTag(self.arrayElementType(id)) == ValueTypeTag.typeParameter
-	end 'arrayElementIsOpaque'
+	export function containerElementIsOpaque(id GenericInstanceId) returns bool
+		return maxonTypeTag(self.containerElementType(id)) == ValueTypeTag.typeParameter
+	end 'containerElementIsOpaque'
 
 	// The element type's name AS A DIAGNOSTIC PRINTS IT (`Slot`, `String`) — for the one message that has to
 	// say WHICH element type it is refusing (E3106, `Parser.requireArrayResizeHasZeroElement`). It lives here
 	// because `typeNames` is this index's own interner and is not the parser's to reach into; the parser holds
-	// a per-FILE interner, and an element type id from `arrayElementType` belongs to this one.
+	// a per-FILE interner, and an element type id from `containerElementType` belongs to this one.
 	export function arrayElementDisplayName(id GenericInstanceId) returns String
-		return maxonTypeName(self.arrayElementType(id), typeNames: self.typeNames)
+		return maxonTypeName(self.containerElementType(id), typeNames: self.typeNames)
 	end 'arrayElementDisplayName'
 
 	// ⭐ **THE SOLE PRODUCER OF `element_size@24`** — the number every `__arr_create` is stamped with, every
@@ -7402,12 +7467,24 @@ export type ProgramSignatures
 	// 48-byte record, and a `Byte` element's slot is 1 where `sizeof(Byte)` is a machine word. Sharing one
 	// door forced one answer on two questions — see `typeLogicalByteSize`, which is the other.
 	export function arrayElementSize(id GenericInstanceId) returns ByteOffset
-		if self.arrayElementIsManaged(id) 'managed'
+		if self.containerElementIsManaged(id) 'managed'
 			return ManagedArrayElementBytes
 		end 'managed'
 
-		return self.trivialElementStorageBytes(self.arrayElementType(id))
+		return self.trivialElementStorageBytes(self.containerElementType(id))
 	end 'arrayElementSize'
+
+	// ⭐ **DOES INSTANCE `id`'s ELEMENT STRIDE A FULL MACHINE WORD** — the question a door asks when it reads a
+	// buffer ONE WORD PER SLOT and so cannot walk a byte-PACKED element (`Parser.parseListFromConstruction`,
+	// whose `__list_from` copies the source array's slots into single-word nodes).
+	//
+	// It lives HERE, beside the producer, because it is a comparison between two answers this file already
+	// owns: `arrayElementSize` above and `ManagedArrayElementBytes`. Written at the call site it would be a
+	// THIRD transcription of the machine word — the header on `ManagedMemoryWordElementSize` names the two
+	// this compiler admits — and a transcription is what drifts when a width is not what a door assumed.
+	export function arrayElementIsMachineWord(id GenericInstanceId) returns bool
+		return self.arrayElementSize(id) == ManagedArrayElementBytes
+	end 'arrayElementIsMachineWord'
 
 	// ⭐⭐ **IS THIS VALUE — OR THIS DECLARED TYPE — A BYTE-PACKED BUFFER? (R4.7.)** The ONE stride question
 	// every byte door in the compiler asks, asked in ONE place. An `Array with T` whose element strides ONE
@@ -7442,7 +7519,7 @@ export type ProgramSignatures
 			return EmptySourceText
 		end 'notAnArrayInstance'
 
-		let element = self.arrayElementType(nameId)
+		let element = self.containerElementType(nameId)
 		if maxonTypeTag(element) != ValueTypeTag.named 'notANamedElement'
 			return EmptySourceText
 		end 'notANamedElement'
@@ -7583,7 +7660,7 @@ export type ProgramSignatures
 	// `primitiveTypeByteSize` (`integer`/`float` 8, `boolean` 1, `ExitCode` 4).
 	//
 	// A trivial element is never a struct or a generic instance — every aggregate is a managed box, caught
-	// by the `arrayElementIsManaged` arm above — so this has no aggregate arms to carry and needs no
+	// by the `containerElementIsManaged` arm above — so this has no aggregate arms to carry and needs no
 	// interner walk past the element's own name.
 	//
 	// ⚠ A `named` element that the registry MISSES is not one case but two, and they do not share an answer
@@ -7604,19 +7681,19 @@ export type ProgramSignatures
 	// `__destruct_<T>` (a scalar-only struct/union box → the trivial `__mm_decref`), a nested Array → `__arr_decref`.
 	// Routed through the SHARED `managedFieldDropCallee` over the element type, so the stamped element destructor
 	// equals the drop callee any managed FIELD of the same type gets — the moved-in set and the dropped set agree
-	// by construction. Precondition: `arrayElementIsManaged`.
+	// by construction. Precondition: `containerElementIsManaged`.
 	export function arrayElementDropCallee(id GenericInstanceId) returns ByteArray
-		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.arrayElementType(id))
+		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.containerElementType(id))
 	end 'arrayElementDropCallee'
 
 	// ⭐ **WHAT `element_destroy@40` IS STAMPED WITH for `Array with T`, as a DESCRIPTION** — what a top-level
 	// array global's record carries to `ModuleInit`, which has no `ProgramSignatures` to ask (P1.7 slice 2b).
 	// It composes the same two accessors `Parser.arrayElementDestroyValue` does, off the same
-	// `arrayElementIsManaged` decision, so the destructor a global's record is stamped with equals the one a
+	// `containerElementIsManaged` decision, so the destructor a global's record is stamped with equals the one a
 	// body's literal of the same instance gets. It is asked ONCE PER MANAGED GLOBAL, which is why it may box
 	// a union where the parser's per-SITE emitter deliberately does not.
 	function arrayElementDestroy(id GenericInstanceId) returns ArrayElementDestroy
-		if self.arrayElementIsManaged(id) 'managed'
+		if self.containerElementIsManaged(id) 'managed'
 			return ArrayElementDestroy.drop(self.arrayElementDropCallee(id))
 		end 'managed'
 
@@ -7631,7 +7708,7 @@ export type ProgramSignatures
 	// guarantees the result is `direct` (an element cloner is invoked through `callIndirect`, a `(box) -> box`
 	// shape a `managedArray`/`unsupported` strategy cannot satisfy).
 	export function arrayElementCloneStrategy(id GenericInstanceId) returns ManagedCloneStrategy
-		return managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: self.arrayElementType(id))
+		return managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: self.containerElementType(id))
 	end 'arrayElementCloneStrategy'
 
 	// ⭐ **THE `<Base> with integer` INSTANCE FOR AN INFERRED-INT LITERAL CONSTRUCTION.** A bare `[…]` int-array
@@ -8208,30 +8285,28 @@ export type ProgramSignatures
 		return elementSize <= ByteStringElementSize or elementSize == ManagedMemoryWordElementSize
 	end 'managedMemoryElementSizeIsTypeable'
 
-	// ⭐ **THE `Array with String` / `Array with <aggregate>` INSTANCES FOR A MANAGED-ELEMENT LITERAL (P1.7
-	// slice 3).** A bare `["a","b"]` / `[p1,p2]` has no typealias to intern from, and — unlike the int/Byte
-	// literals above — its element type is not fixed by the token, so the SWEEP over-interns the possible
-	// element instances (`internArrayLiteralAggregateInstances`) and the parser looks up whichever the first
-	// element resolves to. Both are keyed the way a `typealias Array with T` interns its arg (a String as
-	// `MaxonType.string`, a struct/union by `named(<name>)`), so a literal and a typealias-backed value of the
-	// same element type share ONE gid. Idempotent, so the sweep is the WRITE and the parser a pure READ.
-	export function arrayInstanceForString() returns GenericInstanceId
+	// ⭐ **THE ONE-TYPE-ARGUMENT CONTAINER INSTANCE FOR AN ELEMENT TYPE NO TYPEALIAS NAMES.** A bare
+	// `["a","b"]` / `[p1,p2]`, a `Set from ["…"]` and a `List from [p1, p2]` all build a container whose
+	// element type is fixed by the ARRAY LITERAL rather than by a `typealias`, so the SWEEP over-interns the
+	// possible element instances (`internLiteralContainerInstances`) and the parser looks up whichever the
+	// first element resolves to. Idempotent, so the sweep is the WRITE and the parser a pure READ.
+	//
+	// ⚠ **IT IS ONE FUNCTION BECAUSE THE THREE CONTAINERS WERE ALREADY ONE FACT** — it was
+	// `arrayInstanceForString` and `setInstanceForString`, two identical three-line bodies differing only in
+	// the base name, whose headers each said the other was its "twin". The KEYING is the load-bearing part
+	// (a String as `MaxonType.string`, so a literal-built container and a typealias-backed one of the same
+	// element share ONE gid), and it is exactly what a third copy would have been free to get subtly wrong.
+	//
+	// ⭐ **IT TAKES THE ELEMENT AS A RESOLVED `MaxonType`, NOT AS A NAME**, because `List from […]` reads its
+	// element straight off the SOURCE ARRAY's instance (`containerElementType`) — already `MaxonType.string`
+	// for a String, `named(<id>)` for a struct, a canonicalized `structRef` for a tuple. Going back through a
+	// NAME would re-derive the `structRef`-vs-`named` choice `builtinInstanceForNamedElement` carries a
+	// measured E3006 about, from an answer that already has it right.
+	export function builtinInstanceForElement(baseName ByteArray, element MaxonType) returns GenericInstanceId
 		var args = MaxonTypeArray.create()
-		args.push(MaxonType.string)
-		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
-	end 'arrayInstanceForString'
-
-	// The `Set with String` instance for a `Set from ["…"]` construction (P1.7b) — the `Set` twin of
-	// `arrayInstanceForString`. A `Set from [strings]` has no typealias to intern from and its key type is not
-	// fixed by a token, so the SWEEP over-interns it (alongside `Set with integer`) and the parser reads back
-	// whichever the source array's element resolves to. Keyed as `MaxonType.string` — the SAME arg a
-	// `typealias Set with String` interns and a `["…"]` literal shares — so a from-built set and a `.create()`d
-	// one of the same key type share ONE gid. Idempotent, so the sweep is the WRITE and the parser a pure READ.
-	export function setInstanceForString() returns GenericInstanceId
-		var args = MaxonTypeArray.create()
-		args.push(MaxonType.string)
-		return self.genericInstances.intern(self.typeNames.intern(SetBuiltinBaseName), args: args)
-	end 'setInstanceForString'
+		args.push(element)
+		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args)
+	end 'builtinInstanceForElement'
 
 	// ⭐⭐ **THE ELEMENT ARG MUST CARRY THE TAG A TYPE REFERENCE TO THAT NAME CARRIES**, because the
 	// instance registry keys on `(tag, id)` while `mangleGenericInstance` reads only the NAME. Two tags for
@@ -8245,18 +8320,23 @@ export type ProgramSignatures
 	// `typealias` through `tupleAliasTarget`), so `named` here would be a SECOND spelling of one type with
 	// nothing to make the two agree. MEASURED: `typealias PairArray = Array with Pair` plus any
 	// `[<identifier>…]` literal in the program was rejected with that spurious E3006 (P1.10 review).
-	export function arrayInstanceForNamedElement(name ByteArray) returns GenericInstanceId
-		let elementId = self.typeNames.intern(name)
-		var args = MaxonTypeArray.create()
-		args.push(MaxonType.structRef(elementId) if isTupleTypeName(name) else MaxonType.named(elementId))
-		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
-	end 'arrayInstanceForNamedElement'
+	export function builtinInstanceForNamedElement(baseName ByteArray, element ByteArray) returns GenericInstanceId
+		let elementId = self.typeNames.intern(element)
+		return self.builtinInstanceForElement(baseName, element: MaxonType.structRef(elementId) if isTupleTypeName(element) else MaxonType.named(elementId))
+	end 'builtinInstanceForNamedElement'
 
-	// Over-intern `Array with <T>` for the possible element types of a `[<identifier>…]` array literal (P1.7
-	// slice 3): a local identifier's type is unknowable from the sweep's tokens, so `Array with String` and one
-	// instance per declared struct/union are interned, and the parser looks up whichever the first element
-	// resolves to. An UNREFERENCED instance gets no descriptor or destructor synthesized (both gate on usage),
-	// so this is bounded registry entries — not codegen — and it leaves int-only-array programs' goldens untouched.
+	// Over-intern `<base> with <T>` for the possible element types of an array literal whose elements the
+	// sweep's tokens cannot name (P1.7 slice 3): a local identifier's type is unknowable there, so
+	// `<base> with String` and one instance per declared struct/union are interned, and the parser looks up
+	// whichever the first element resolves to. An UNREFERENCED instance gets no descriptor or destructor
+	// synthesized (both gate on usage), so this is bounded registry entries — not codegen — and it leaves
+	// int-only-array programs' goldens untouched.
+	//
+	// ⚠ **TWO BASES ASK IT, and both ask it about the SAME literal.** An `[<identifier>…]` gives its `Array`
+	// instance; a `List from [<identifier>…]` gives that array AND the `List` built over it, whose element type
+	// is the array's own (`Parser.listInstanceForArrayLiteral` reads it back through `containerElementType`).
+	// One walk, told which base — a second copy under a `List` name would have re-derived the whole measured
+	// asymptotic below, and its `sawX` gate, for a set of names that is identical by construction.
 	// ⚠ **CALLED ONCE, AFTER THE LAST FILE FOLDS — NOT PER FILE, and that is a MEASURED asymptotic and not a
 	// tidy-up.** The struct/union tables ACCUMULATE across the sweep, so a walk placed at each
 	// `[<identifier>…]`-bearing file re-walks every type folded so far, at every such file: **O(files × types)**.
@@ -8291,26 +8371,43 @@ export type ProgramSignatures
 	// What the hoist does rest on is that nothing between the sweep's last fold and this call READS a generic
 	// instance — the sweep only records — so no reader can observe the difference between "interned early" and
 	// "interned here".
-	export function internArrayLiteralAggregateInstances()
-		if not self.sawAggregateArrayLiteral 'noAggregateLiteralAnywhere'
-			return
-		end 'noAggregateLiteralAnywhere'
+	export function internLiteralContainerInstances()
+		if self.sawAggregateArrayLiteral 'aggregateArrayLiteral'
+			self.internAggregateElementInstances(ArrayBuiltinBaseName)
+		end 'aggregateArrayLiteral'
 
-		_ = self.arrayInstanceForString()
+		// A `List from […]` needs the same set one base over: the construction's element type is the SOURCE
+		// ARRAY's, which is exactly one of the names walked above. `List with integer` and `List with String`
+		// are interned per-file beside it (`foldDeclaredSignaturesInto`), as the `Set from` arm does — this
+		// walk is the aggregate half, and only it needs the whole program.
+		if self.sawListFromConstruction 'listFromConstruction'
+			self.internAggregateElementInstances(ListBuiltinBaseName)
+		end 'listFromConstruction'
+	end 'internLiteralContainerInstances'
+
+	function internAggregateElementInstances(baseName ByteArray)
+		_ = self.builtinInstanceForElement(baseName, element: MaxonType.string)
 		for (name, _) in self.structTypes 'eachStruct'
-			_ = self.arrayInstanceForNamedElement(name)
+			_ = self.builtinInstanceForNamedElement(baseName, element: name)
 		end 'eachStruct'
 		for (name, _) in self.enumTypes 'eachUnion'
-			_ = self.arrayInstanceForNamedElement(name)
+			_ = self.builtinInstanceForNamedElement(baseName, element: name)
 		end 'eachUnion'
-	end 'internArrayLiteralAggregateInstances'
+	end 'internAggregateElementInstances'
 
 	// This file materializes a `[<identifier>…]` array literal, whose element type the sweep's tokens cannot
 	// name. All the sweep does is remember that SOMETHING asked; the over-interning itself waits for the whole
-	// program (see `internArrayLiteralAggregateInstances`).
+	// program (see `internLiteralContainerInstances`).
 	export function noteAggregateArrayLiteral()
 		self.sawAggregateArrayLiteral = true
 	end 'noteAggregateArrayLiteral'
+
+	// This file materializes a `List from […]` construction. Its `List with <T>` instance follows the source
+	// array literal's element type, so — like the aggregate array literal above — the over-interning waits for
+	// the whole program.
+	export function noteListFromConstruction()
+		self.sawListFromConstruction = true
+	end 'noteListFromConstruction'
 
 	// --- Layout-descriptor sizing (P1.6-B1) ---
 	//
@@ -8333,6 +8430,11 @@ export type ProgramSignatures
 		if self.isMapInstance(id) 'map'
 			return MapRecordBytes as ByteOffset
 		end 'map'
+		// A `List` instance's box is the fixed chain header (`head`/`tail`/`count`/`element_drop`), no base
+		// struct — the `Array` twin above. Its NODES are separate allocations the runtime owns.
+		if self.isListInstance(id) 'list'
+			return ListRecordBytes as ByteOffset
+		end 'list'
 		match self.structOf(self.genericInstanceBaseName(id)) 'base'
 			declared(layout) then return layout.sizeBytes()
 			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base '{String.from(self.genericInstanceBaseName(id))}' is neither a builtin nor a declared struct, so it has no box — every caller opens with genericInstanceBaseIsKnown")
@@ -8667,7 +8769,7 @@ export type ProgramSignatures
 	// while a second one sat un-warmed beside it is how one fact became two.
 	//
 	// ⚠ It warms the instances the SWEEP interned, which is exactly the set a parse can name. The builtin
-	// instances minted later (`internArrayByteInstance`, `arrayInstanceForString`, …) still derive lazily on
+	// instances minted later (`internArrayByteInstance`, `builtinInstanceForElement`, …) still derive lazily on
 	// first ask — they are interned during lowering, long after the last parse, so they are never contended.
 	export function deriveInstanceNames()
 		for id in 0 upto self.genericInstances.count() 'eachInstance'
@@ -8915,12 +9017,12 @@ export type ProgramSignatures
 	// CONFLATING THEM IS WHAT CRASHED THE COMPILER.** A generic instance's base has no `StructLayout` for
 	// exactly two reasons, and they are not the same reason:
 	//
-	//   • **SYNTHESIZED** — `Array` / `Set`. shv2 reads no stdlib and emits their runtime records itself, so
-	//     no `type Array uses Element` declaration exists to carry a layout. The type is LEGAL and the
-	//     program is fine; it simply has no fields.
-	//   • **UNDECLARED** — `Map with (K, V)`, `Foo with Int`, `Int with Int`. Nothing declares the base at
-	//     all. The program is MALFORMED, and `Parser.checkGenericInstance` has already recorded E2055
-	//     against the `with` that wrote it.
+	//   • **SYNTHESIZED** — `Array` / `Set` / `Map` / `List`. shv2 reads no stdlib and emits their runtime
+	//     records itself, so no `type Array uses Element` declaration exists to carry a layout. The type is
+	//     LEGAL and the program is fine; it simply has no fields.
+	//   • **UNDECLARED** — `Foo with Int`, `Int with Int`. Nothing declares the base at all. The program is
+	//     MALFORMED, and `Parser.checkGenericInstance` has already recorded E2055 against the `with` that
+	//     wrote it.
 	//
 	// Every walk over an instance's fields must stop for BOTH, because in both cases there are no fields to
 	// read. Four such walks spelled the stop condition as `isArrayInstance(id) or isSetInstance(id)` — the
@@ -8934,12 +9036,13 @@ export type ProgramSignatures
 	// need to tell the reasons apart rather than merely stop: `Parser.structLayoutOfType`, whose
 	// diagnostic must say "a builtin with no fields YET" for one and "no such type" for the other, and the
 	// per-builtin routers below (`genericInstanceBoxSize`, `genericInstanceBoxDropCallee`), which do not stop
-	// at all — they answer `Array` and `Set` differently from each other.
+	// at all — they answer each of the four builtin containers differently from the others.
 
 	// Is `name` a BUILTIN generic base — one shv2 synthesizes rather than reads a declaration for, so no
-	// `StructLayout` exists for it and none is missing. The one home of the `Array`-or-`Set` disjunction.
+	// `StructLayout` exists for it and none is missing. The ONE home of the builtin-container disjunction —
+	// every door that means "a container this compiler owns" asks here rather than re-spelling the four names.
 	export function isBuiltinGenericBaseName(name ByteArray) returns bool
-		return self.isArrayBaseName(name) or self.isSetBaseName(name) or self.isMapBaseName(name)
+		return self.isArrayBaseName(name) or self.isSetBaseName(name) or self.isMapBaseName(name) or self.isListBaseName(name)
 	end 'isBuiltinGenericBaseName'
 
 	// ⭐ **HOW MANY TYPE ARGUMENTS THE SYNTHESIZED GENERIC `name` TAKES** — the arity `Parser.checkGenericInstance`
@@ -8960,6 +9063,9 @@ export type ProgramSignatures
 		if self.isMapBaseName(name) 'map'
 			return MapTypeParamCount
 		end 'map'
+		if self.isListBaseName(name) 'list'
+			return ListTypeParamCount
+		end 'list'
 		panic("ProgramSignatures.builtinGenericTypeParamCount: `{String.from(name)}` is not a synthesized builtin generic — every caller opens with isBuiltinGenericBaseName, and a name that answers yes there owes an arity here")
 	end 'builtinGenericTypeParamCount'
 
@@ -9338,6 +9444,23 @@ export type ProgramSignatures
 		if self.isMapInstance(id) 'map'
 			return MapDecrefName
 		end 'map'
+		// A `List` drops through `__list_decref` — the same teardown over a CHAIN rather than a buffer: it walks
+		// head→tail destroying each live element through the stamped `element_drop@24`, frees every node, then
+		// frees the record. None of those nodes is reachable from a generic `__mm_decref`.
+		if self.isListInstance(id) 'list'
+			return ListDecrefName
+		end 'list'
+
+		// ⭐ **THE OMISSION THIS ROUTER USED TO SWALLOW, MADE LOUD** — its two sibling routers
+		// (`builtinGenericTypeParamCount`, `genericInstanceBoxSize`) already panic on a builtin they have no arm
+		// for, and this one silently did not. A builtin base has NO layout, so `genericInstanceHasManagedField`
+		// answers `false` for it by its own early-out and the fallthrough hands back `__mm_decref` — which frees
+		// the record and walks NOTHING, leaking every buffer, node and managed element the container links. A
+		// leak with no diagnostic, in the one family where a fifth container is the expected next change.
+		if self.isBuiltinGenericBaseName(self.genericInstanceBaseName(id)) 'builtinOwesADropCallee'
+			panic("ProgramSignatures.genericInstanceBoxDropCallee: `{String.from(self.genericInstanceBaseName(id))}` is a synthesized builtin container with no drop-callee arm — a builtin's record is never reclaimed by __mm_decref, which would free the box and leak everything it links")
+		end 'builtinOwesADropCallee'
+
 		if self.genericInstanceHasManagedField(id) 'managed'
 			return destructorSymbol(self.mangleGenericInstance(id))
 		end 'managed'
@@ -9476,7 +9599,7 @@ export type ProgramSignatures
 	// DROPPED WAS REACHABLE.** `Parser.containerSlotValueType` spelled out the generic-alias re-tag and
 	// neither of the other two, so an `Array with <function alias>` element stayed `named` — an INT. It
 	// went unnoticed while nothing compared an element against its type; the moment the element-argument
-	// check (`Parser.requireArrayElementType`) did, that `named` would have read a pushed function VALUE as
+	// check (`Parser.requireContainerElementType`) did, that `named` would have read a pushed function VALUE as
 	// a function meeting an int slot and refused a program both compilers accept. A rule with two homes
 	// drifts, and only the newer home's obligations reveal which half the older one was missing.
 	//
@@ -9495,7 +9618,7 @@ export type ProgramSignatures
 	//     review, both directions: `E3005 … expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'` at the
 	//     construction line, and the narrow declarer's own read striding 1 correctly) — and every read of
 	//     the slot strides the way the record was stamped.
-	//   • **An `Array` ELEMENT** (`Parser.containerSlotValueType`, `Parser.requireArrayElementType`) passes
+	//   • **An `Array` ELEMENT** (`Parser.containerSlotValueType`, `Parser.requireContainerElementType`) passes
 	//     the PARSING FILE — which reads as "the reader's" and is not that at all. An array INSTANCE is
 	//     declared in no file, so it has no declaring one to ask; what it has is the file its `giid` was
 	//     already range-scoped FOR, one line earlier in the same parser, and that file is `self.filePath`.
@@ -9741,7 +9864,7 @@ export type ProgramSignatures
 			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.managedOpaqueArrayElementOf: fieldTypes.get OOB at {i}")
 			// An opaque `Array with T` field: the descriptor drops each ELEMENT (P1.7 slice 3b-ii).
 			if self.fieldTypeIsArray(fieldType) 'arrayField'
-				let element = self.arrayElementType(self.arrayInstanceOfFieldType(fieldType))
+				let element = self.containerElementType(self.arrayInstanceOfFieldType(fieldType))
 				if maxonTypeTag(element) == ValueTypeTag.typeParameter and self.genericInstanceArgIsOwned(id, position: typeNameIdOf(element)) 'managedArrayElement'
 					return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: typeNameIdOf(element)))
 				end 'managedArrayElement'
@@ -9874,9 +9997,9 @@ export type ProgramSignatures
 	// accepted (else it would panic, a compiler crash on valid input). The element is invoked through
 	// `callIndirect` (`asElement: true`), so it must be `direct`-cloneable (String / struct / union / trivial-
 	// element array), and its whole reachable type graph must be clonable too. Precondition:
-	// `arrayElementIsManaged` (a trivial-element array never needs this — its copy is a byte blit).
+	// `containerElementIsManaged` (a trivial-element array never needs this — its copy is a byte blit).
 	export function arrayElementSupportsDeepClone(id GenericInstanceId) returns bool
-		return self.typeSupportsDeepClone(self.arrayElementType(id), asElement: true, visited: ClonerSet.create())
+		return self.typeSupportsDeepClone(self.containerElementType(id), asElement: true, visited: ClonerSet.create())
 	end 'arrayElementSupportsDeepClone'
 
 	// Recursively: can a value of `type` be deep-cloned? A scalar owns no heap (nothing to clone); a String is a
@@ -9928,7 +10051,7 @@ export type ProgramSignatures
 		if not self.isArrayInstance(id) 'notArray'
 			return false
 		end 'notArray'
-		if not self.arrayElementIsManaged(id) 'trivialElement'
+		if not self.containerElementIsManaged(id) 'trivialElement'
 			return true
 		end 'trivialElement'
 		// A managed-element array clones its elements through `__arr_clone_managed(field, funcAddr(elementClone))`
@@ -9936,7 +10059,7 @@ export type ProgramSignatures
 		if asElement 'nestedManagedArrayElement'
 			return false
 		end 'nestedManagedArrayElement'
-		return self.typeSupportsDeepClone(self.arrayElementType(id), asElement: true, visited: visited)
+		return self.typeSupportsDeepClone(self.containerElementType(id), asElement: true, visited: visited)
 	end 'instanceSupportsDeepClone'
 
 	function structFieldsSupportDeepClone(structName ByteArray, visited ClonerSet) returns bool

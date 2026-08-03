@@ -3862,6 +3862,17 @@ function mapMethodMutatesReceiver(name ByteArray) returns bool
 	return name.equals(UpsertMethod)
 end 'mapMethodMutatesReceiver'
 
+// ⭐ **WHICH `List` METHODS WRITE THEIR RECEIVER** — the fourth half of the one immutable-receiver rule, here
+// with its three siblings for their stated reason. `append`/`prepend` link a fresh node and bump the count;
+// `removeFirst` unlinks one and FREES it. `get`/`first`/`count` only read.
+//
+// ⚠ **THIS WHOLE SET IS ALSO WHAT INVALIDATES AN OUTSTANDING `first()` BORROW** (E3070) — `dispatchListMethod`
+// hands `noteBorrowSubjectWrite` the answer below, not a `removeFirst` special case. `removeFirst` is merely
+// the one that frees the borrowed node outright; the other two write the record the borrow was taken off.
+function listMethodMutatesReceiver(name ByteArray) returns bool
+	return name.equals(AppendMethod) or name.equals(ListPrependMethod) or name.equals(ListRemoveFirstMethod)
+end 'listMethodMutatesReceiver'
+
 // ⭐⭐ **DOES A VALUE'S TAG FIT A HASH-TABLE COLUMN WHOSE DECLARED TYPE IS `declared`?** — THE rule, asked
 // by every container column: a `Set`'s key, a `Map`'s key and a `Map`'s value. The three containers word
 // their refusals differently (each names the type it is), but the RULE must not fork, which is why only the
@@ -6167,7 +6178,7 @@ export type Parser
 	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
 	var bufferSurfaceSlots as ValueSlotSurfaceMap
 	// ⭐ **WHOSE ELEMENTS DENOTE THE BUFFER (A2m)** — an ARRAY value declared through an alias written
-	// `Array with __ManagedMemory`. Read at `emitArrayElementAccessor`, the one door every element-yielding
+	// `Array with __ManagedMemory`. Read at `emitContainerElementAccessor`, the one door every element-yielding
 	// array member comes out of.
 	//
 	// ⚠⚠ **WHY THESE ARE THREE CARRIERS AND NOT ONE `Map with (ValueId, DeclaredSurface)` — REVIEWED, A2m.**
@@ -6865,10 +6876,15 @@ export type Parser
 		// source array resolves to. (The `[…]` of the literal itself sets `hasIntArrayLiteral` / `hasStringArrayLiteral`,
 		// so the SOURCE array instance is interned too.) Set here, acted on after the walk.
 		var hasSetFromLiteral = false
+		// A bare `List` identifier followed by `from` is a `List from […]` construction. Its element type is the
+		// array literal's, which the sweep cannot see, so the well-known scalar instances are interned here and
+		// the AGGREGATE ones — one per declared struct/union — wait for the whole program
+		// (`noteListFromConstruction`), exactly as the array literal's own do. Set here, acted on after the walk.
+		var hasListFromLiteral = false
 		// A `.split` — the one builtin METHOD that constructs an `Array with String` at runtime (P1.8 Slice C).
 		// Like a bare `["…"]`, its instance has no typealias to intern from, so the sweep interns it and the
 		// parser reads the giid back at construction time. The sweep reads TOKENS and cannot know the receiver
-		// is a String, so it OVER-interns — the same answer `internArrayLiteralAggregateInstances` gives to the
+		// is a String, so it OVER-interns — the same answer `internLiteralContainerInstances` gives to the
 		// same limitation, and an unreferenced instance has no descriptor or destructor synthesized (both gate
 		// on usage), so it costs a registry entry and no codegen.
 		var hasStringSplitCall = false
@@ -6923,6 +6939,10 @@ export type Parser
 			if self.atSetFromConstruction() 'setFromToken'
 				hasSetFromLiteral = true
 			end 'setFromToken'
+
+			if self.atListFromConstruction() 'listFromToken'
+				hasListFromLiteral = true
+			end 'listFromToken'
 
 			if self.atStringSplitCall() 'splitToken'
 				hasStringSplitCall = true
@@ -7021,11 +7041,11 @@ export type Parser
 		// struct/union for a `[<identifier>…]` (whose element type the sweep cannot see). After `foldFile` so the
 		// aggregate loop reads the folded structs/unions and so the giids follow the file's named instances (P1.7 slice 3).
 		if hasStringArrayLiteral or hasStringSplitCall 'internStringArrayLiteral'
-			_ = index.arrayInstanceForString()
+			_ = index.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
 		end 'internStringArrayLiteral'
 		// Only NOTED here, never performed: the over-interning is over every declared struct/union in the
 		// PROGRAM, so doing it at each such file re-walks tables that are still growing — O(files × types),
-		// measured (see `ProgramSignatures.internArrayLiteralAggregateInstances`). `queryProgramSignatures`
+		// measured (see `ProgramSignatures.internLiteralContainerInstances`). `queryProgramSignatures`
 		// performs it once, after the last file folds.
 		if hasAggregateArrayLiteral 'noteAggregateArrayLiteral'
 			index.noteAggregateArrayLiteral()
@@ -7034,12 +7054,22 @@ export type Parser
 		// Intern the `Set with integer` AND `Set with String` instances if this file materializes a `Set from […]`
 		// construction — its key type (int or String) is inferred from the array literal, which the sweep cannot
 		// see, so both are over-interned (the parser reads back whichever the source array resolves to), exactly as
-		// `internArrayLiteralAggregateInstances` over-interns the array's possible element instances. After
+		// `internLiteralContainerInstances` over-interns the array's possible element instances. After
 		// `foldFile` so their giids follow the file's named generic instances (a stable, source-path-ordered assignment).
 		if hasSetFromLiteral 'internSetFromLiteral'
 			_ = index.internBuiltinIntegerInstance(SetBuiltinBaseName)
-			_ = index.setInstanceForString()
+			_ = index.builtinInstanceForElement(SetBuiltinBaseName, element: MaxonType.string)
 		end 'internSetFromLiteral'
+
+		// The `List from […]` twin of the arm above, plus the whole-program NOTE. A list's element type is not
+		// confined to the two scalars a set's key is, so the two well-known instances are interned here and the
+		// declared struct/union set is left to `internLiteralContainerInstances` — one walk after the last file
+		// folds, for the measured O(files × types) reason stated there.
+		if hasListFromLiteral 'internListFromLiteral'
+			_ = index.internBuiltinIntegerInstance(ListBuiltinBaseName)
+			_ = index.builtinInstanceForElement(ListBuiltinBaseName, element: MaxonType.string)
+			index.noteListFromConstruction()
+		end 'internListFromLiteral'
 
 		// Register the compiler-owned `StringIndex` type if this file names a method that produces one
 		// (P1.8 Slice B2). After `foldFile`, exactly as the instance interns above are, so a user
@@ -7126,6 +7156,22 @@ export type Parser
 		// type the array literal cannot infer.
 		return self.current().value.equals(SetBuiltinBaseName) or self.namesSetInstanceAlias(self.current().value)
 	end 'atSetFromConstruction'
+
+	// Is the cursor on a `List from` construction — a bare `List` identifier immediately followed by `from`?
+	// The `Set` predicate's twin, read by BOTH the declaration sweep (which NOTES the construction so the
+	// possible `List with <T>` instances are over-interned whole-program) and `parsePrimary`'s construction
+	// arm, for that predicate's stated reason: teaching one and not the other would leave the parser's
+	// instance read as the first write to the shared registry mid-parse.
+	//
+	// ⚠ **ONLY THE BARE BASE NAME, where `Set` also admits an INSTANCE ALIAS.** That form exists for a
+	// `CharSet from ['x']`, whose key type the array literal genuinely cannot infer (a one-byte character
+	// literal materializes as an int). A `List`'s element is whatever the literal's elements are — there is no
+	// element type an alias could state that the literal does not already carry — so `PointList from […]`
+	// would be a second spelling with nothing to decide, and it keeps falling through to `E2004 Undefined
+	// variable 'PointList'` as it does today.
+	function atListFromConstruction() returns bool
+		return self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.current().value.equals(ListBuiltinBaseName)
+	end 'atListFromConstruction'
 
 	// ⭐ **IS THE CURSOR ON A `<Type> from "…"` LITERAL CONSTRUCTION?** — the `InitableFromStringLiteral`
 	// sugar, which is how `/specs` spells nearly every `FilePath` in the corpus (128 occurrences, and 31 of
@@ -7989,7 +8035,7 @@ export type Parser
 	// construction that seeds the descriptor need (P1.7 slice 3b-i)? `X` `.` `create` `(`, four contiguous
 	// tokens whose `X` qualifies (`Container.X`) to a whole-program generic alias naming an OPAQUE `Array`
 	// instance. The opacity is read straight off `self.signatures` — the SAME index and the SAME
-	// `arrayElementIsOpaque` predicate `emitArrayCreateOp` branches the descriptor-reading create on — so the
+	// `containerElementIsOpaque` predicate `emitArrayCreateOp` branches the descriptor-reading create on — so the
 	// reserved slot and the emitted read decide off ONE fact and cannot diverge, whatever their token distance.
 	// The sweep has folded every inner alias before the real parse reaches here, so the lookup is complete
 	// regardless of where the alias sits in the body (a constructing method may textually precede it).
@@ -8002,7 +8048,7 @@ export type Parser
 			return false
 		end 'notAlias'
 		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
-		return self.signatures.isArrayInstance(giid) and self.signatures.arrayElementIsOpaque(giid)
+		return self.signatures.isArrayInstance(giid) and self.signatures.containerElementIsOpaque(giid)
 	end 'opaqueArrayCreateAt'
 
 	// Is the token at `q` a `<receiver> . <method> (` call HEAD — a preceding `.` and a following `(`? The shared
@@ -18652,7 +18698,7 @@ export type Parser
 	// comparison against the real length IS the bounds check, which is what lets the element read below
 	// be the UNCHECKED one; a stale snapshot would let that read run off the end of the buffer.
 	//
-	// ⭐ **THE ELEMENT IS A BORROW** (`emitArrayElementAccessor(owned: false)`) — the array keeps
+	// ⭐ **THE ELEMENT IS A BORROW** (`emitContainerElementAccessor(owned: false)`) — the array keeps
 	// ownership and its own `__arr_decref` walk destroys it, exactly as `get`/`first`/`last` already
 	// yield (`dispatchArrayMethod`). The loop variable is therefore enrolled in NEITHER `ownedBindings`
 	// NOR `pendingTempDrops`, and the loop costs zero refcount traffic per iteration. The reference
@@ -18733,6 +18779,17 @@ export type Parser
 		// borrow for a mutation to invalidate. What it does share with the array form is that its source is
 		// a heap record evaluated once into the preheader.
 		var isString = false
+		// ⭐ **A LIST SOURCE IS THE FOURTH FORM, AND IT IS A CURSOR RATHER THAN A COUNTER.** A chain has no
+		// random access, so the header block-arg that carries an ordinal for the other three carries a NODE
+		// POINTER here: it starts at `__list_head`, the header tests it against 0, the body reads
+		// `__list_node_value` off it and the step advances it with `__list_node_next`. That is exactly the
+		// O(n)-total traversal `/specs/list.md` documents (*"a cached cursor … O(1) per element"*), where a
+		// counter over `get(i)` would have been O(n²) — the one shape this form must not take.
+		//
+		// ⚠ It answers the ARRAY's way to everything else: it takes the iteration LOCK (a rebind would free the
+		// chain the header is walking) and it RECORDS a borrow subject, because the element it hands the body is
+		// a reference into a node the list still owns.
+		var isList = false
 		var sourceLock = false
 		// ⭐ **THE E3070 SUBJECT OF THE ELEMENT THIS LOOP WILL BORROW** — resolved HERE, beside the lock and
 		// off the same `sourceStart`, because both are answers about the SOURCE and both must be taken before
@@ -18741,8 +18798,9 @@ export type Parser
 		// binding, exactly as the lock is.
 		var elementBorrowSubject = EmptySourceText
 		if not isRange 'collectionSource'
-			try self.requireIterableArray(source, forTok: forTok)
+			try self.requireIterableSource(source, forTok: forTok)
 			isString = tagIsText(self.tagOf(source))
+			isList = self.signatures.isListInstanceAt(self.tagOf(source), nameId: self.valueNameId(source))
 
 			// ⭐⭐ **THE LOCK IS EVERY COLLECTION FORM'S; ONLY THE BORROW SUBJECT IS THE ARRAY'S.** The
 			// String form shipped without the lock, on the reasoning that a String hands the body a MINTED
@@ -18762,13 +18820,15 @@ export type Parser
 			// was protecting and segfaulted on the one it was not.
 			sourceLock = self.lockIterationSource(sourceStart)
 
-			// The BORROW SUBJECT stays the array form's alone, and for the reason the lock is not: a
-			// String's element is MINTED, so no live reference into the source outlives the read and
-			// E3070 has nothing to track (`attachPendingBorrows` is a no-op on a value that filed no
-			// pending borrow). Recording a subject here would enrol a borrow that does not exist.
-			if not isString 'arrayBorrowConcerns'
+			// The BORROW SUBJECT is every SLOT-BACKED form's — the array's and the list's — and the
+			// String form's alone is exempt, for the reason the lock is not: a String's element is
+			// MINTED, so no live reference into the source outlives the read and E3070 has nothing to
+			// track (`attachPendingBorrows` is a no-op on a value that filed no pending borrow).
+			// Recording a subject here would enrol a borrow that does not exist. The list's element IS a
+			// reference into a node the list still owns, so it records one (see the `isList` note above).
+			if not isString 'slotBorrowConcerns'
 				elementBorrowSubject = self.borrowSubjectNameAt(sourceStart)
-			end 'arrayBorrowConcerns'
+			end 'slotBorrowConcerns'
 
 			// ⭐ **AN OWNED ARRAY TEMPORARY BECOMES AN OWNED BINDING OF THIS FRAME.** `for x in [1,2,3]`
 			// / `for x in build()` produces a record the statement owns; left in `pendingTempDrops` it
@@ -18818,19 +18878,37 @@ export type Parser
 
 		// The preheader is `currentBlock`, not `block`: a short-circuit `and`/`or` inside a bound leaves
 		// control in a fresh merge block, and the entry edge belongs on the block control is actually in.
+		// ⭐ **THE HEADER'S CARRIED POSITION, WHICH IS NOT THE SAME KIND OF THING IN ALL FOUR FORMS.** A RANGE
+		// carries the user's own loop variable, an ARRAY and a STRING a compiler-owned index starting at 0, and
+		// a LIST the NODE CURSOR — `__list_head`, which answers 0 on an empty list so the header's first test
+		// exits before the body runs.
 		var firstIndex = source
-		if not isRange 'arrayCounterStartsAtZero'
-			firstIndex = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
-		end 'arrayCounterStartsAtZero'
+		if isList 'listCursorStartsAtHead'
+			firstIndex = self.emitRuntimeCall(ListHeadName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
+		end 'listCursorStartsAtHead' else 'countedForms'
+			if not isRange 'counterStartsAtZero'
+				firstIndex = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+			end 'counterStartsAtZero'
+		end 'countedForms'
 		self.recordBranchEdge(self.currentBlock, targetId: header.id, argIds: self.loopHeaderArgs(firstIndex, carried: self.edgeArgsFor(phiVars, preLoop: true)))
 		self.emitBranch(self.currentBlock, targetId: header.id)
 
 		// The loop test, in the header. For a range it is the user's own comparison against the upper
 		// bound and goes through `emitCompare`, so `for i in 1 to "x"` is the ordinary comparison type
 		// error; for an array it is `idx < __arr_count(arr)`, both operands compiler-minted integers.
+		//
+		// ⭐ **A LIST'S TEST IS `cursor != 0`, WHICH IS A BOUND OF A DIFFERENT KIND AND NEEDS NO LENGTH READ.**
+		// The chain's own null terminator is the end condition, so the header reads nothing off the record —
+		// and it is still the check that licenses the unchecked `__list_node_value` below it, exactly as the
+		// live length read is for the other two collection forms.
 		self.currentBlock = header
 		var bound = limit
-		if not isRange 'lengthReadLive'
+		var testOp = MaxonCmpOp.le if rangeInclusive else MaxonCmpOp.lt
+		if isList 'cursorReachedTheEnd'
+			bound = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+			testOp = MaxonCmpOp.ne
+		end 'cursorReachedTheEnd'
+		if not isRange and not isList 'lengthReadLive'
 			// ⭐ **THE LENGTH IS RE-READ LIVE IN THE HEADER for a String too** — `length@8` off the record,
 			// the same discipline the array form's live `__arr_count` follows and for the same reason: the
 			// header comparison IS the bounds check that licenses the unchecked read below it.
@@ -18840,7 +18918,6 @@ export type Parser
 			// (`while pos < len`). A cluster ordinal would need the count, which costs a whole extra scan.
 			bound = self.emitLoadStringField(source, offset: StringLengthOffset, range: SourceRange.ofToken(forTok)) if isString else self.emitRuntimeCall(ArrCountName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
 		end 'lengthReadLive'
-		let testOp = MaxonCmpOp.le if rangeInclusive else MaxonCmpOp.lt
 		let cond = try self.emitCompare(indexPhi, rhs: bound, op: testOp, opTok: self.tokenAt(testAnchorIndex))
 
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
@@ -18910,8 +18987,15 @@ export type Parser
 			self.markValueOwnsHeap(loopValue)
 			self.ownedBindings.push(VarInfo.createValueBinding(nameTok.value, varType: self.typeOf(loopValue), mutable: false, boundValue: loopValue))
 		end 'readCluster'
+		// ⭐ **THE TWO INDEXED-CONTAINER FORMS READ THEIR ELEMENT THROUGH ONE DOOR**, differing only in what the
+		// carried header value MEANS: an ARRAY's is an ordinal into its buffer, a LIST's is the node the value
+		// sits in. Both hand back a BORROW the container still owns, both are the UNCHECKED read the header's
+		// own test licenses, and both mint the same E3070 borrow against `elementBorrowSubject` — so the
+		// ownership, the type and the borrow are `emitContainerElementAccessor`'s one answer, and the fork is
+		// exactly the callee and its arguments.
 		if not isRange and not isString 'readElement'
-			loopValue = self.emitArrayElementAccessor(func, callee: ArrGetUncheckedName, args: pairArgs(source, second: indexPhi), giid: self.valueNameId(source), owned: false, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(nameTok))
+			let elementArgs = singletonArgs(indexPhi) if isList else pairArgs(source, second: indexPhi)
+			loopValue = self.emitContainerElementAccessor(func, callee: ListNodeValueName if isList else ArrGetUncheckedName, container: source, args: elementArgs, giid: self.valueNameId(source), owned: false, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(nameTok))
 		end 'readElement'
 		if not nameTok.value.equals(DiscardBindingName) 'bindLoopVariable'
 			// Declared in the per-trip frame, so it is in scope for the whole body and gone at the loop's
@@ -18969,11 +19053,19 @@ export type Parser
 		// (every predecessor of the step — the fall-through and every `continue` — is inside the body), so
 		// it is read straight rather than carried on a phi. Computing it again here would run the whole
 		// UAX #29 scan a second time per trip.
+		//
+		// ⭐ **A LIST ADVANCES TO THE NEXT NODE**, read off the cursor the HEADER carries — which dominates the
+		// step, so the read is straight, and which the header has already proved non-null. `__list_node_next`
+		// answers 0 at the tail, and that is the value the header tests on the next trip.
 		var nextIndex = graphemeEnd
-		if not isString 'ordinalStep'
-			let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
-			nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
-		end 'ordinalStep'
+		if isList 'cursorStep'
+			nextIndex = self.emitRuntimeCall(ListNodeNextName, args: singletonArgs(indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
+		end 'cursorStep' else 'countedStep'
+			if not isString 'ordinalStep'
+				let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+				nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
+			end 'ordinalStep'
+		end 'countedStep'
 		self.recordBranchEdge(step, targetId: header.id, argIds: self.loopHeaderArgs(nextIndex, carried: self.edgeArgsFor(phiVars, preLoop: false)))
 		self.emitBranch(step, targetId: header.id)
 
@@ -19006,7 +19098,7 @@ export type Parser
 	// element read is a random-access index, which is what the counter lowering requires. Everything
 	// else is a clean E2015 naming the gap rather than a silent acceptance: a String, a byte/codepoint
 	// view, a `Set` and a `Map` each need a cursor protocol shv2 has not built.
-	function requireIterableArray(source ValueId, forTok Token) throws ParseError
+	function requireIterableSource(source ValueId, forTok Token) throws ParseError
 		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'array'
 			return
 		end 'array'
@@ -19014,10 +19106,15 @@ export type Parser
 		if tagIsText(self.tagOf(source)) 'string'
 			return
 		end 'string'
-		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `String`'s grapheme clusters, and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`; byte-view / codepoint / `Set` / `Map` iteration needs a cursor protocol that arrives with the later P1.8 slices", line: forTok.line, column: forTok.column)
-	end 'requireIterableArray'
+		// A LIST walks its CHAIN with a node cursor — the one container here whose element read is not a
+		// random-access index, and the reason this function is no longer named for the `Array`.
+		if self.signatures.isListInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'list'
+			return
+		end 'list'
+		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `List`, a `String`'s grapheme clusters, and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`; byte-view / codepoint / `Set` / `Map` iteration needs a cursor protocol that arrives with the later P1.8 slices", line: forTok.line, column: forTok.column)
+	end 'requireIterableSource'
 
-	// ⭐⭐ **WHAT A COUNTED RANGE'S BOUNDS MAY BE — the RANGE form's twin of `requireIterableArray`, and
+	// ⭐⭐ **WHAT A COUNTED RANGE'S BOUNDS MAY BE — the RANGE form's twin of `requireIterableSource`, and
 	// the rung shipped without it.** A counted range is an INDEX PHI stepped by `emitMachineWordAdd`, a
 	// raw i64 add; a bound of any other domain hands that add something it cannot step, and the failure
 	// was never a diagnostic:
@@ -19171,7 +19268,7 @@ export type Parser
 	// **They are the PRE-EXISTING borrow-on-get hazard, not a for-in one, and the proof is that neither
 	// needs a loop:** `let it = try arr.get(0) otherwise …` then `arr.clear()` then `it.value` reads the
 	// same 0x3F with no `for` in the program. `for … in` reads its element through the SAME door
-	// (`emitArrayElementAccessor(owned: false)`) under the SAME rule, so it inherits that hazard and
+	// (`emitContainerElementAccessor(owned: false)`) under the SAME rule, so it inherits that hazard and
 	// adds none. Its cure is the thesis decision PLAN.md's P1.7 Slice 3a residual (a) already names —
 	// incref-on-get, copy-on-get, or E3070 borrow-liveness — and it is not a loop's to make. The
 	// runnable oracle ACCEPTS both uncovered programs (measured: `wipe(b.items)` returns 5), because it
@@ -19362,7 +19459,7 @@ export type Parser
 	// `dispatchMethodOnBinding`), because the name is needed to MINT a borrow as well as to record a write —
 	// and minting happens precisely when no borrow exists yet, so the gate cannot be hoisted in front of it.
 	// The optimizer measured the one variant that could be — gating the array-method derivation on
-	// `functionHoldsABorrow() or arrayElementIsManaged()` — and it read -19k +120k -228k -618k ticks,
+	// `functionHoldsABorrow() or containerElementIsManaged()` — and it read -19k +120k -228k -618k ticks,
 	// SIGN-FLIPPING across the ladder, i.e. inside the noise band. It does not ship.
 	function functionHoldsABorrow(func IrFunction) returns bool
 		return func.borrowFacts.borrows.count() > 0
@@ -24773,7 +24870,7 @@ export type Parser
 	// — it was the LANGUAGE's unenforced premise, not an shv2 divergence.
 	//
 	// ⚠ **EVERY DOOR IS NOW SHUT — the ARRAY ELEMENT was the last, and `A1f-arrayelem` shut it at the
-	// STORE** (`requireArrayElementType`), which is the one place that still knows the element type: A1f's
+	// STORE** (`requireContainerElementType`), which is the one place that still knows the element type: A1f's
 	// callee-entry cure could not reach it, because the element travels into a shared `Array` body whose
 	// parameter is the opaque element type. A runtime 0 `push`/`set`/`insert`ed into an `Array with NonZero`
 	// is now refused where it is written.
@@ -25604,6 +25701,13 @@ export type Parser
 			if self.atSetFromConstruction() 'setFromConstruction'
 				return try self.parseSetFromConstruction(func)
 			end 'setFromConstruction'
+
+			// `List from [a, b, c]` — the same shape one container over, and it is here rather than folded into
+			// the arm above because the two build DIFFERENT things from the same tokens; sharing an arm would
+			// mean a runtime callee chosen by re-testing the base name that already picked the arm.
+			if self.atListFromConstruction() 'listFromConstruction'
+				return try self.parseListFromConstruction(func)
+			end 'listFromConstruction'
 
 			// `FilePath from "C:\\x.txt"` — the `InitableFromStringLiteral` construction, which is the SECOND
 			// `<Type> from …` form (see `atStringLiteralInitConstruction`, and the paragraph above it that
@@ -27548,7 +27652,7 @@ export type Parser
 
 	// ⭐ **MOVE AN ALREADY-CLASSIFIED-MANAGED VALUE INTO DURABLE STORAGE** — the core of `moveInPayload`,
 	// factored out so a struct field / union payload (`moveInPayload`) and an ARRAY element (P1.7 slice 3,
-	// `moveElementIntoArray`) share the ONE transfer rule and cannot drift on it. A borrowed String is promoted
+	// `moveElementIntoContainer`) share the ONE transfer rule and cannot drift on it. A borrowed String is promoted
 	// to an owned copy (a fresh temp de-listed); an owned managed value is transferred (bare local poisoned,
 	// temp de-listed); a borrowed struct/union is refused (no clone). Precondition: the value is managed.
 	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, anchor Token, range SourceRange) returns ValueId throws ParseError
@@ -27832,16 +27936,15 @@ export type Parser
 			return try self.parseStringStaticCall(func, typeTok: typeTok)
 		end 'stringStatic'
 
-		// `IntArray.create()` / `IntSet.create()` / `StrMap.create()` — a static call on a BUILTIN-CONTAINER
-		// instance alias (P1.7 slice 1, P1.7b slice A, and `Map`). All three are intercepted before the
-		// generic-alias → base rewrite below, which would mangle them to `Array.create` / `Set.create` /
-		// `Map.create` — callees no file declares, because none of the three builtins has a base struct. Their
-		// statics lower to their own runtime, not to a user method.
+		// `IntArray.create()` / `IntSet.create()` / `StrMap.create()` / `PointList.create()` — a static call on a
+		// BUILTIN-CONTAINER instance alias (P1.7 slice 1, P1.7b slice A, `Map`, `List`). Every one is intercepted
+		// before the generic-alias → base rewrite below, which would mangle them to `Array.create` /
+		// `Set.create` / `Map.create` / `List.create` — callees no file declares, because no builtin container
+		// has a base struct. Their statics lower to their own runtime, not to a user method.
 		//
-		// ⚠ **THE ALIAS QUESTION IS ASKED ONCE AND THE INSTANCE RESOLVED ONCE**, then each container tests the
-		// SINGLE resolved id. Written as three self-contained arms it was six index resolves to answer one
-		// question, and each new container added two more — the shape that grows fastest is the one to collapse
-		// first.
+		// ⚠ **THE ALIAS QUESTION IS ASKED ONCE AND THE INSTANCE RESOLVED ONCE**, then the resolved id is tested.
+		// Written as self-contained arms it was two index resolves per container to answer one question, and
+		// each new container added two more — the shape that grows fastest is the one to collapse first.
 		if self.signatures.isGenericAlias(typeTok.value) 'containerAliasStatic'
 			let aliasGiid = self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath)
 
@@ -27849,13 +27952,15 @@ export type Parser
 				return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: typeTok.value, giid: aliasGiid)
 			end 'arrayStatic'
 
-			if self.signatures.isSetInstance(aliasGiid) 'setStatic'
-				return try self.parseSetStaticCall(typeTok, giid: aliasGiid)
-			end 'setStatic'
-
-			if self.signatures.isMapInstance(aliasGiid) 'mapStatic'
-				return try self.parseMapStaticCall(typeTok, giid: aliasGiid)
-			end 'mapStatic'
+			// Every OTHER builtin container — `Set`, `Map`, `List` — shares one `create()`-only parse
+			// (`parseBuiltinContainerStaticCall`). The test is the builtin-base disjunction itself
+			// (`isBuiltinGenericBaseName`, the ONE home of it) rather than a second roster of the three names, so
+			// a fifth container is admitted here the day it exists and meets a NAMED panic inside if its routers
+			// were not widened — never the mangled `Base.create` fallthrough, which names a callee no file
+			// declares.
+			if self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(aliasGiid)) 'containerStatic'
+				return try self.parseBuiltinContainerStaticCall(typeTok, giid: aliasGiid)
+			end 'containerStatic'
 		end 'containerAliasStatic'
 
 		// `ElementArray.create()` — a static call on a NESTED generic-instance alias inside the enclosing
@@ -27871,6 +27976,20 @@ export type Parser
 				if self.signatures.isArrayInstance(innerGiid) 'innerArrayStatic'
 					return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: qualified, giid: innerGiid)
 				end 'innerArrayStatic'
+
+				// ⭐ **THE `List` TWIN, AND IT IS HERE TO BE REFUSED HONESTLY RATHER THAN TO WORK.** A
+				// `List with <type parameter>` has no statically known element destructor to stamp
+				// (`requireListElementType`), so this arm exists so that the author of
+				// `type W uses T { var xs as List with T }` meets that sentence at the `.create()` they wrote.
+				// MEASURED without it: the call fell through to the mangled-callee path and answered
+				// `E3005 cannot assign 'unknown' to variable 'W.xs' of type 'struct'` — a diagnostic about the
+				// ASSIGNMENT, naming neither the list nor the reason.
+				// ⚠ Kept NARROW to `List` where the top-level arm above asks the whole builtin disjunction: a
+				// `Set`/`Map` inner alias has never reached the shared parse, and widening it here would move a
+				// diagnostic no case pins.
+				if self.signatures.isListInstance(innerGiid) 'innerListStatic'
+					return try self.parseBuiltinContainerStaticCall(typeTok, giid: innerGiid)
+				end 'innerListStatic'
 			end 'innerAliasResolves'
 		end 'innerAlias'
 
@@ -28229,6 +28348,14 @@ export type Parser
 		if recv.tag == ValueTypeTag.genericInstance and self.signatures.isMapInstance(recv.nameId) 'mapMethod'
 			return try self.dispatchMapMethod(func, map: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, receiverOwner: recv.owner)
 		end 'mapMethod'
+
+		// A LIST RECEIVER (`list.append(x)`, `try list.first()`, `list.count()`) goes to the list runtime. It
+		// carries the BORROW SUBJECT the two hash-table arms above do not: a list's `first`/`get` hand back a
+		// reference into a node the list owns, so E3070 has an outstanding borrow to invalidate when
+		// `removeFirst` frees that node — the same reason the `Array` arm carries one and a `Set` does not.
+		if self.signatures.isListInstanceAt(recv.tag, nameId: recv.nameId) 'listMethod'
+			return try self.dispatchListMethod(func, list: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner)
+		end 'listMethod'
 
 		// A `StringIndex` RECEIVER (`idx.charIndex()`, `idx.bytePos()`, P1.8 slice B2) takes its own two
 		// accessors rather than the struct path — which would accept the box (the layout IS registered) and
@@ -29186,7 +29313,7 @@ export type Parser
 	// void result of the call that filled it — the same order `finishArrayLiteral` uses for its pushes.
 	function parseStringSplit(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
 		let delimiter = try self.parseStringArg(func, methodName: StringSplitMethod)
-		let giid = self.signatures.arrayInstanceForString()
+		let giid = self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
 		let parts = self.emitArrayCreateOp(giid, range: range)
 		_ = self.emitRuntimeCall(StrSplitName, args: tripleArgs(receiver, second: delimiter, third: parts), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		self.trackOwnedTemp(parts)
@@ -30406,7 +30533,7 @@ export type Parser
 	//
 	// ⚠ **A NEWLINE IS SKIPPED ONLY AT AN ELEMENT BOUNDARY, and never before `pushArrayLiteralElement`** —
 	// the same two rules `parseStructLiteralFields` states for `{…}`. A skip before the push would widen the
-	// `[valueStart, self.pos)` window `moveElementIntoArray` reads to decide whether the element was a bare
+	// `[valueStart, self.pos)` window `moveElementIntoContainer` reads to decide whether the element was a bare
 	// local, and silently mis-decide a managed element's move-in.
 	function finishArrayLiteral(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
 		self.skipNewlines()
@@ -30427,15 +30554,15 @@ export type Parser
 	end 'finishArrayLiteral'
 
 	// Push one already-parsed array-literal element, moving a managed element in (the array owns it; a trivial
-	// element passes through) — `moveElementIntoArray` off the value's start position so a bare local is poisoned.
+	// element passes through) — `moveElementIntoContainer` off the value's start position so a bare local is poisoned.
 	function pushArrayLiteralElement(arr ValueId, elem ValueId, giid GenericInstanceId, valueStart TokenIndex, range SourceRange) throws ParseError
-		let stored = try self.moveElementIntoArray(elem, giid: giid, valueStart: valueStart)
+		let stored = try self.moveElementIntoContainer(elem, giid: giid, valueStart: valueStart)
 		_ = self.emitRuntimeCall(ArrPushName, args: pairArgs(arr, second: stored), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'pushArrayLiteralElement'
 
 	// The `Array with T` instance a literal's FIRST element fixes (P1.7 slice 3) — an integer element → the
 	// int instance, a String → `Array with String`, a struct/boxed-union → `Array with <name>`. All are
-	// interned by the sweep (`internBuiltinIntegerInstance` / `internArrayLiteralAggregateInstances`), so this is a
+	// interned by the sweep (`internBuiltinIntegerInstance` / `internLiteralContainerInstances`), so this is a
 	// pure lookup. A float/function/other element is not a supported literal element yet (E2015).
 	function arrayLiteralInstanceFor(elem ValueId, elemTok Token) returns GenericInstanceId throws ParseError
 		let tag = self.tagOf(elem)
@@ -30443,10 +30570,10 @@ export type Parser
 			return self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
 		end 'int'
 		if tagIsText(tag) 'string'
-			return self.signatures.arrayInstanceForString()
+			return self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
 		end 'string'
 		if tagIsStructRef(tag) or tag == ValueTypeTag.named 'aggregate'
-			return self.signatures.arrayInstanceForNamedElement(try self.artifact.typeNames.nameOf(self.valueNameId(elem)) otherwise panic("arrayLiteralInstanceFor: a struct/union element's name id is not in this file's interner"))
+			return self.signatures.builtinInstanceForNamedElement(ArrayBuiltinBaseName, element: try self.artifact.typeNames.nameOf(self.valueNameId(elem)) otherwise panic("arrayLiteralInstanceFor: a struct/union element's name id is not in this file's interner"))
 		end 'aggregate'
 		throw ParseError.unsupported("an array literal element of type '{typeTagName(tag)}' — a literal's elements are an integer, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)", line: elemTok.line, column: elemTok.column)
 	end 'arrayLiteralInstanceFor'
@@ -30466,7 +30593,7 @@ export type Parser
 	// stores it inside its body, so it is set at birth); 0 for a trivial element. NOT tracked owned — the caller
 	// decides that (a literal tracks after its pushes, a `create()` immediately).
 	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
-		if self.signatures.arrayElementIsOpaque(giid) 'opaque'
+		if self.signatures.containerElementIsOpaque(giid) 'opaque'
 			return self.emitOpaqueArrayCreateOp(giid, range: range)
 		end 'opaque'
 		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid) as ParsedInt, valueType: MaxonType.integer, range: range)
@@ -30502,11 +30629,11 @@ export type Parser
 	// same pair (`ProgramSignatures.arrayRecordInitializer`), and folding the two into one union-returning
 	// door was tidier — but a Maxon union value is a HEAP OBJECT, and this runs at every array creation SITE
 	// in the program: MEASURED at exactly +1 allocation per site (32 sites → +32, 64 → +64, and +32 at scale
-	// rung 0 doubling to +1,024 at rung 5). The DECISION is single-homed regardless — `arrayElementIsManaged`
+	// rung 0 doubling to +1,024 at rung 5). The DECISION is single-homed regardless — `containerElementIsManaged`
 	// is the one place "does this element own anything?" is answered, and both sites ask it — so what is
 	// written twice is a three-line composition, not a rule.
 	function arrayElementDestroyValue(giid GenericInstanceId, range SourceRange) returns ValueId
-		if self.signatures.arrayElementIsManaged(giid) 'managed'
+		if self.signatures.containerElementIsManaged(giid) 'managed'
 			return self.emitRuntimeFuncAddr(self.signatures.arrayElementDropCallee(giid), range: range)
 		end 'managed'
 
@@ -30654,21 +30781,70 @@ export type Parser
 		throw ParseError.builtinArgumentType(String.from(StringInitManagedParamName), expected: "{String.from(ManagedMemoryTypeName)} with {self.signatures.arrayElementDisplayName(giid)}", got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
 	end 'requireSameArrayInstance'
 
-	// `IntSet.create()` — the one `Set` static factory at this slice (P1.7b slice A). Yields an OWNED empty set
-	// (`__set_create`), tracked so its scope-exit drop routes through `genericInstanceBoxDropCallee` →
-	// `__set_decref`, which frees the record and its three buffers. The `Set` twin of `parseArrayStaticCall`.
-	function parseSetStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
+	// --- The `create()` static surface the compiler-owned containers SHARE (`Set` / `Map` / `List`) ---
+
+	// ⭐ **`IntSet.create()` / `StrMap.create()` / `PointList.create()` — ONE PARSE.** Every container whose
+	// whole static surface is `create()` is born here: consume `.<name>`, refuse anything but `create`, consume
+	// the empty argument list, gate the element/column types, emit the create, and TRACK THE RESULT as an owned
+	// temporary so an unbound one drops at statement end and a bound one transfers to its binding.
+	//
+	// ⚠ **THE `trackOwnedTemp` IS THE REASON THIS IS ONE FUNCTION AND NOT THREE.** It was written three times,
+	// and a fourth container whose copy omitted it would LEAK with no diagnostic anywhere — the record is
+	// created, nothing tracks it, and `genericInstanceBoxDropCallee` is never asked. The two things a container
+	// genuinely does differently (the sentence its unknown static is refused with, and the gate/emit pair) are
+	// the two routers below; the skeleton around them cannot drift because there is one of it.
+	//
+	// `Array` is NOT here: its static surface is several methods with arguments (`parseArrayStaticCall`), so it
+	// shares the skeleton with nothing.
+	function parseBuiltinContainerStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
+
 		if not methodTok.value.equals(CreateMethod) 'unknownStatic'
-			throw ParseError.unsupported("`Set` static method '{String.from(methodTok.value)}' — P1.7b slice A provides `create()` only", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported(self.containerStaticSurfaceSentence(giid, method: methodTok.value), line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
+
 		try self.consumeEmptyArgList()
-		try self.requireHashTableColumnType(giid, position: HashTableKeyArgPosition, containerName: "Set", columnNoun: "key", tok: aliasTok)
-		let set = self.emitSetCreateOp(giid, range: SourceRange.between(aliasTok, last: methodTok))
-		self.trackOwnedTemp(set)
-		return set
-	end 'parseSetStaticCall'
+
+		let container = try self.gateAndEmitContainerCreate(giid, aliasTok: aliasTok, range: SourceRange.between(aliasTok, last: methodTok))
+		self.trackOwnedTemp(container)
+		return container
+	end 'parseBuiltinContainerStaticCall'
+
+	// What each container says when the author names a static it does not have. A per-container ROUTER rather
+	// than a name threaded into one template, because the three tails are not the same sentence with a noun
+	// swapped — a `List` points the author at `List from […]`, which the other two have no equivalent of.
+	function containerStaticSurfaceSentence(giid GenericInstanceId, method ByteArray) returns String
+		if self.signatures.isSetInstance(giid) 'set'
+			return "`Set` static method '{String.from(method)}' — P1.7b slice A provides `create()` only"
+		end 'set'
+		if self.signatures.isMapInstance(giid) 'map'
+			return "`Map` static method '{String.from(method)}' — shv2 provides `create()` only"
+		end 'map'
+		if self.signatures.isListInstance(giid) 'list'
+			return "`List` static method '{String.from(method)}' — shv2 provides `create()` only; a `List` is otherwise built with `List from […]`"
+		end 'list'
+		panic("Parser.containerStaticSurfaceSentence: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `parseBuiltinContainerStaticCall`'s call sites make, and a container admitted there owes a sentence here")
+	end 'containerStaticSurfaceSentence'
+
+	// Gate this container's element/column types and emit its `create` — ONE router, so the gate and the emit
+	// cannot come to disagree about which container they are serving. The gate anchors its diagnostic on the
+	// ALIAS token (the type the author wrote is what is inadmissible), the emit spans alias→method.
+	function gateAndEmitContainerCreate(giid GenericInstanceId, aliasTok Token, range SourceRange) returns ValueId throws ParseError
+		if self.signatures.isSetInstance(giid) 'set'
+			try self.requireHashTableColumnType(giid, position: HashTableKeyArgPosition, containerName: "Set", columnNoun: "key", tok: aliasTok)
+			return self.emitSetCreateOp(giid, range: range)
+		end 'set'
+		if self.signatures.isMapInstance(giid) 'map'
+			try self.requireMapColumnTypes(giid, tok: aliasTok)
+			return self.emitMapCreateOp(giid, range: range)
+		end 'map'
+		if self.signatures.isListInstance(giid) 'list'
+			try self.requireListElementType(giid, tok: aliasTok)
+			return self.emitListCreateOp(giid, range: range)
+		end 'list'
+		panic("Parser.gateAndEmitContainerCreate: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `parseBuiltinContainerStaticCall`'s call sites make, and a container admitted there owes a gate and an emit here")
+	end 'gateAndEmitContainerCreate'
 
 	// Emit `__set_create(elemDrop)` for instance `giid`, yielding the empty set record (P1.7b). The record is
 	// zeroed by `__mm_alloc`, so the first insert lazily allocates the buffers; `elemDrop@40` carries the key
@@ -30824,8 +31000,8 @@ export type Parser
 		if arrGid == self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName) 'intKey'
 			return self.signatures.internBuiltinIntegerInstance(SetBuiltinBaseName)
 		end 'intKey'
-		if arrGid == self.signatures.arrayInstanceForString() 'stringKey'
-			return self.signatures.setInstanceForString()
+		if arrGid == self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string) 'stringKey'
+			return self.signatures.builtinInstanceForElement(SetBuiltinBaseName, element: MaxonType.string)
 		end 'stringKey'
 		throw ParseError.unsupported("`Set from […]` supports `int` and `String` keys — a struct / ByteArray literal is a later slice", line: setTok.line, column: setTok.column)
 	end 'setInstanceForArrayLiteral'
@@ -30933,12 +31109,12 @@ export type Parser
 		return try self.moveColumnValueIntoTable(parsed, columnType: columnType, valueStart: valueStart)
 	end 'parseHashTableColumnArg'
 
-	// ⭐ **MOVE A PARSED KEY INTO A MANAGED-KEY SET (P1.7b String keys).** The `Set` twin of `moveElementIntoArray`:
+	// ⭐ **MOVE A PARSED KEY INTO A MANAGED-KEY SET (P1.7b String keys).** The `Set` twin of `moveElementIntoContainer`:
 	// the set becomes the key's sole owner (its `__set_decref` walk / dup-drop / remove-drop destroys it), so a
 	// managed (String) key is consumed exactly as an array element is — a borrowed String literal is promoted to
 	// an owned copy, an owned value is transferred (bare local poisoned / temp de-listed) — through the SHARED
 	// `moveManagedValueInto`. A trivial int key owns no heap and passes through unchanged. A `Set` key is always
-	// CONCRETE this slice (int or String), so there is no opaque-`T` case `moveElementIntoArray` carries.
+	// CONCRETE this slice (int or String), so there is no opaque-`T` case `moveElementIntoContainer` carries.
 	// `valueStart` locates the value's first token — its bare-local source and the diagnostic anchor both.
 	// ⚠ It takes the column's TYPE rather than a `giid`, so a `Set`'s key, a `Map`'s key and a `Map`'s VALUE —
 	// independently managed columns of two containers — ask it without a per-column copy. Whether the column
@@ -30950,7 +31126,7 @@ export type Parser
 			return value
 		end 'trivial'
 		let anchor = self.tokenAt(valueStart)
-		// `tagIsByteRecord`, mirroring `moveElementIntoArray`: the flag names the fused-record COPY
+		// `tagIsByteRecord`, mirroring `moveElementIntoContainer`: the flag names the fused-record COPY
 		// protocol, a question about the key's REPRESENTATION — and since P1.8 Slice D a `Set with Character`
 		// reaches it, which is exactly the day this spelling was written for. A borrowed `.rdata` Character
 		// literal is promoted to an owned copy here; an owned one is transferred.
@@ -30959,22 +31135,6 @@ export type Parser
 	end 'moveColumnValueIntoTable'
 
 	// --- The `Map` builtin generic: `create` / `upsert` / `contains` / `get` / `count` ---
-
-	// `StrMap.create()` — the one `Map` static factory. Yields an OWNED empty map (`__map_create`), tracked so
-	// its scope-exit drop routes through `genericInstanceBoxDropCallee` → `__map_decref`, which frees the record
-	// and its four buffers after dropping every live key and value. The `Map` twin of `parseSetStaticCall`.
-	function parseMapStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
-		try self.consume(TokenKind.dot)
-		let methodTok = try self.consume(TokenKind.identifier)
-		if not methodTok.value.equals(CreateMethod) 'unknownStatic'
-			throw ParseError.unsupported("`Map` static method '{String.from(methodTok.value)}' — shv2 provides `create()` only", line: methodTok.line, column: methodTok.column)
-		end 'unknownStatic'
-		try self.consumeEmptyArgList()
-		try self.requireMapColumnTypes(giid, tok: aliasTok)
-		let map = self.emitMapCreateOp(giid, range: SourceRange.between(aliasTok, last: methodTok))
-		self.trackOwnedTemp(map)
-		return map
-	end 'parseMapStaticCall'
 
 	// BOTH of a map's column types, gated together at the one door a map is born through, so a program can
 	// never build a table whose key is admissible and whose value is not.
@@ -31084,6 +31244,146 @@ export type Parser
 	function mapColumnType(giid GenericInstanceId, position TypeParamId) returns MaxonType
 		return self.signatures.mapKeyType(giid) if position == HashTableKeyArgPosition else self.signatures.mapValueType(giid)
 	end 'mapColumnType'
+
+	// --- The `List` builtin generic: `create` / `append` / `prepend` / `get` / `first` / `removeFirst` / `count` ---
+
+	// Emit `__list_create(elementDrop)` for instance `giid`, yielding the empty chain header. `head`/`tail`/
+	// `count` are zeroed by `__mm_alloc`, so only the stamp is written; `element_drop@24` carries the element's
+	// destructor (the SAME `columnDestroyValue` a `Set`'s key and a `Map`'s two columns are stamped from) so
+	// the list drops what it owns at teardown.
+	function emitListCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+		let elementDrop = self.columnDestroyValue(self.signatures.containerElementType(giid), range: range)
+		return self.emitRuntimeCall(ListCreateName, args: singletonArgs(elementDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+	end 'emitListCreateOp'
+
+	// ⭐ **THE `List` ELEMENT-TYPE GATE.** A node's `value@16` is ONE MACHINE WORD, so the element must be a
+	// type whose whole value rides one: a MANAGED type (String / struct / union / instance / nested container,
+	// each held as its 8-byte heap pointer) or an INTEGRAL one (`int`, a ranged-int alias, `bool`, `Character`
+	// — all stored inline).
+	//
+	// ⭐ **THE ARM THAT DOES THE WORK IS THE OPAQUE ONE.** A `List with <type parameter>`
+	// (`type W uses T { var xs as List with T }`) has no statically known destructor to stamp into
+	// `element_drop@24`, so a managed instantiation would tear down without dropping its elements. That is
+	// `containerElementIsOpaque`'s slice-3b question over a second container — and it is the VERY HOLE
+	// `ListRuntime.maxon`'s header measures as the reason `stdlib/List.maxon` cannot be compiled. Refusing it
+	// is what keeps this container from shipping the defect it was built to avoid.
+	//
+	// ⚠ **`float` IS NOT WHAT THE LAST REFUSAL IS FOR, AND THAT WAS MEASURED RATHER THAN ASSUMED.** A float
+	// element would indeed arrive in the XMM file while every `__list_*` entry is declared `i64`, but it never
+	// reaches here: `typealias FList = List with F` is already **E2062 on the type ARGUMENT** (a type parameter
+	// is an opaque general-purpose slot and a float has no way through it) — the same gate
+	// `requireHashTableColumnType` records for a float key. What the last refusal is for is therefore any
+	// element neither managed nor word-shaped that a future type kind might introduce, in the shape
+	// `columnValueTagMatches`'s own last arm documents: a clean E2015 rather than a wrong stride.
+	//
+	// MEASURED to pass, each printing and tearing down clean: `bool`, a ranged `Byte`, a declared enum, a
+	// nested `List`, a nested `Array`, `String`, and a struct with a `String` field.
+	function requireListElementType(giid GenericInstanceId, tok Token) throws ParseError
+		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
+			throw ParseError.unsupported("`List with <type parameter>` — a list inside a generic body has no element destructor to stamp, so a managed instantiation would leak its elements; declare the list at a concrete element type", line: tok.line, column: tok.column)
+		end 'opaqueElement'
+
+		let element = self.signatures.containerElementType(giid)
+		if self.signatures.slotTypeIsManaged(element) 'managedElement'
+			return
+		end 'managedElement'
+		if tagIsIntegral(maxonTypeTag(element)) or maxonTypeTag(element) == ValueTypeTag.boolean or maxonTypeTag(element) == ValueTypeTag.character 'wordElement'
+			return
+		end 'wordElement'
+
+		throw ParseError.unsupported("`List` holds one machine word per element, so its element must be a managed type or an integral one — a '{typeTagName(maxonTypeTag(element))}' element does not fit that slot", line: tok.line, column: tok.column)
+	end 'requireListElementType'
+
+	// ⭐ **DISPATCH A BUILTIN `List` METHOD** — cursor on the method NAME, `list` the (borrowed) receiver
+	// record. `count` returns the element count; `append`/`prepend` are VOID mutators (refused in value
+	// position by `requireVoidMethodIsStatement`) that return the receiver — what the statement still denotes,
+	// like `emitArrayVoidCall`; `first`/`get`/`removeFirst` are THROWING accessors emitted as ordinary calls
+	// the enclosing `try` rewrites (`rewriteLastCallToTryCall`), exactly as every throwing `Array` accessor is.
+	//
+	// ⚠ **THE OWNERSHIP SPLIT IS THE `Array`'s, ASKED THROUGH THE `Array`'s OWN DOORS.** `append`/`prepend`
+	// MOVE a managed element in (the list becomes its sole owner) via `parseContainerElementArg`;
+	// `first`/`get` hand back a BORROW and `removeFirst` a value MOVED OUT, both through
+	// `emitContainerElementAccessor`'s `owned` flag. Not one of those doors needed a `List` arm — see that
+	// function's header for why they were container doors all along.
+	function dispatchListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.ofToken(methodTok)
+		let giid = self.valueNameId(list)
+
+		// `receiverStorage: NoMutatedParams` for the reason the `String`, `Set` and `Map` dispatchers state: a
+		// list write cannot free an ARRAY element, which is the only borrow E3070 tracks.
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: listMethodMutatesReceiver(methodTok.value))
+
+		// ⭐ A write through the receiver invalidates every borrow outstanding on it — `removeFirst` FREES the
+		// node whose element a `first()` borrow still names, so the E3070 door is taken with the same answer
+		// the immutable-binding rule above just read.
+		self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: listMethodMutatesReceiver(methodTok.value))
+
+		if methodTok.value.equals(CountMethod) 'count'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ListCountName, args: singletonArgs(list), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'count'
+
+		if methodTok.value.equals(ArrayFirstMethod) 'first'
+			try self.consumeEmptyArgList()
+			return self.emitContainerElementAccessor(func, callee: ListFirstName, container: list, args: singletonArgs(list), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+		end 'first'
+
+		if methodTok.value.equals(GetMethod) 'get'
+			let index = try self.parseArrayOneArg(func)
+			return self.emitContainerElementAccessor(func, callee: ListGetName, container: list, args: pairArgs(list, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+		end 'get'
+
+		if methodTok.value.equals(ListRemoveFirstMethod) 'removeFirst'
+			try self.consumeEmptyArgList()
+			return self.emitContainerElementAccessor(func, callee: ListRemoveFirstName, container: list, args: singletonArgs(list), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
+		end 'removeFirst'
+
+		// The two insertions are non-throwing VOID mutators, so a value-position call is refused — from INSIDE
+		// the arm the name matched, which is the shared check's whole scoping (`requireVoidMethodIsStatement`).
+		// They differ only in WHICH end the runtime links onto, so they share this arm rather than spelling the
+		// argument parse, the void guard and the receiver hand-back twice.
+		if methodTok.value.equals(AppendMethod) or methodTok.value.equals(ListPrependMethod) 'insertAtAnEnd'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			let value = try self.parseContainerElementArg(func, giid: giid, methodTok: methodTok)
+			let callee = ListAppendName if methodTok.value.equals(AppendMethod) else ListPrependName
+			_ = self.emitRuntimeCall(callee, args: pairArgs(list, second: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return list
+		end 'insertAtAnEnd'
+
+		throw ParseError.unsupported("`List` method '{String.from(methodTok.value)}' — shv2 provides create/append/prepend/get/first/removeFirst/count and `for … in`; last/isEmpty/insert/remove/removeLast/clear/clone are later slices", line: methodTok.line, column: methodTok.column)
+	end 'dispatchListMethod'
+
+	// ⭐ **`List from [a, b, c]` — CONSTRUCT A LIST FROM AN ARRAY LITERAL.** The cursor sits on the `List`
+	// identifier. Parse `from` then the `[…]` through the EXISTING array-literal parser — which infers the
+	// element type and yields an OWNED `Array with <elem>` temporary — then emit `__list_from` over it,
+	// yielding an OWNED `List with <elem>`.
+	//
+	// The array is the caller's owned temporary and drops at statement end; `__list_from` NULLS each slot it
+	// moves an element out of, so that decref walk skips exactly the elements the list now owns. The list
+	// itself drops at scope exit through `genericInstanceBoxDropCallee` → `__list_decref`.
+	function parseListFromConstruction(func IrFunction) returns ValueId throws ParseError
+		let listTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.from)
+
+		// The source must be an array literal `[…]`; `List from <other-expr>` is not a construction shv2 parses.
+		if not self.at(TokenKind.leftBracket) 'notArrayLiteral'
+			let srcTok = self.current()
+			throw ParseError.unsupported("`List from` requires an array literal `[…]` — `List from <expr>` for another source is a later slice", line: srcTok.line, column: srcTok.column)
+		end 'notArrayLiteral'
+
+		let arr = try self.parseArrayLiteral(func)
+		let listGid = self.signatures.builtinInstanceForElement(ListBuiltinBaseName, element: self.signatures.containerElementType(self.valueNameId(arr)))
+		try self.requireListElementType(listGid, tok: listTok)
+		// ⚠ `__list_from` reads the source buffer one machine WORD per slot, so an element that is byte-PACKED
+		// in an array (a `Byte`, whose `element_size@24` is 1) would be read at the wrong stride. The gate above
+		// admits an integral element of any declared range, so this is the one thing it does not already settle.
+		if not self.signatures.arrayElementIsMachineWord(self.valueNameId(arr)) 'packedElement'
+			throw ParseError.unsupported("`List from […]` reads its source array one machine word per element, and this literal's elements are packed narrower — build the list with `create()` and `append` instead", line: listTok.line, column: listTok.column)
+		end 'packedElement'
+
+		return self.emitOwnedRuntimeResult(ListFromName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: listGid, range: SourceRange.ofToken(listTok))
+	end 'parseListFromConstruction'
 
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THIS BINDING-BACKED RECEIVER — EMPTY when it may be
 	// written through.** The ONE place the `let` rule and the parameter exception meet, for EVERY
@@ -31879,7 +32179,7 @@ export type Parser
 		// it); pop/remove MOVE the element OUT (the runtime nulls its slot), so their result is OWNED (P1.7 slice 3).
 		if methodTok.value.equals(GetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitArrayElementAccessor(func, callee: ArrGetName, args: pairArgs(arr, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: ArrGetName, container: arr, args: pairArgs(arr, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
 		// ⭐⭐ **ONE SPELLING, TWO ENTRIES — THE BUFFER'S `set` IS BOUNDED BY CAPACITY AND THE `Array`'s BY LENGTH
 		// (R4.6).** ⚖ The capacity bound is a USER RULING of 2026-07-30, taken after a measured three-way
@@ -31925,19 +32225,19 @@ export type Parser
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.consumeEmptyArgList()
-			return self.emitArrayElementAccessor(func, callee: ArrFirstName, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: ArrFirstName, container: arr, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'first'
 		if methodTok.value.equals(ArrayLastMethod) 'last'
 			try self.consumeEmptyArgList()
-			return self.emitArrayElementAccessor(func, callee: ArrLastName, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: ArrLastName, container: arr, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'last'
 		if methodTok.value.equals(ArrayPopMethod) 'pop'
 			try self.consumeEmptyArgList()
-			return self.emitArrayElementAccessor(func, callee: ArrPopName, args: singletonArgs(arr), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: ArrPopName, container: arr, args: singletonArgs(arr), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'pop'
 		if methodTok.value.equals(RemoveMethod) 'remove'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitArrayElementAccessor(func, callee: ArrRemoveName, args: pairArgs(arr, second: index), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: ArrRemoveName, container: arr, args: pairArgs(arr, second: index), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
 		if methodTok.value.equals(SliceMethod) 'slice'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
@@ -31989,7 +32289,7 @@ export type Parser
 		// reachable only once a real void method NAME has matched.
 		if methodTok.value.equals(ArrayPushMethod) 'push'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			let value = try self.parseArrayElementArg(func, giid: giid, methodTok: methodTok)
+			let value = try self.parseContainerElementArg(func, giid: giid, methodTok: methodTok)
 			return self.emitArrayVoidCall(ArrPushName, args: pairArgs(arr, second: value), receiver: arr, range: range)
 		end 'push'
 		if methodTok.value.equals(ArrayReserveMethod) 'reserve'
@@ -32347,7 +32647,7 @@ export type Parser
 	// generic body serves every instantiation, so there is no element type to name and no single answer to
 	// give — and a deliberately SPARSE slot table (a hash map's key column, which tracks occupancy in a
 	// parallel state column and never reads a slot it did not write) is built through exactly that path.
-	// `arrayElementIsManaged` already answers false for a type parameter, so the carve-out needs no second
+	// `containerElementIsManaged` already answers false for a type parameter, so the carve-out needs no second
 	// test written here.
 	//
 	// ⚠⚠ **A SECOND THING NOW DEPENDS ON THIS REFUSAL, IN ANOTHER FILE (P1.8 slice A).**
@@ -32358,7 +32658,7 @@ export type Parser
 	// correct: `ArrayRuntime.maxon`'s `ArrGetUncheckedName` header states the obligation from its end,
 	// and this note is the pointer back, so neither side can be changed without meeting the other.
 	function requireArrayResizeHasZeroElement(giid GenericInstanceId, methodTok Token) throws ParseError
-		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+		if not self.signatures.containerElementIsManaged(giid) 'trivial'
 			return
 		end 'trivial'
 		throw ParseError.arrayResizeManagedElement(self.signatures.arrayElementDisplayName(giid), line: methodTok.line, column: methodTok.column)
@@ -32393,9 +32693,9 @@ export type Parser
 	// `requireArrayResizeHasZeroElement`'s note** (which does need one). `.managed` is not reachable inside a
 	// shared generic body: `self.items.managed` is refused a step earlier as a field access through a
 	// non-struct, so every site this rule can see has a CONCRETE element and a statically known answer.
-	// `arrayElementIsManaged` answering false for a type parameter is therefore not what makes this sound.
+	// `containerElementIsManaged` answering false for a type parameter is therefore not what makes this sound.
 	function requireBufferSetOwnsWhatItStores(giid GenericInstanceId, methodTok Token) throws ParseError
-		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+		if not self.signatures.containerElementIsManaged(giid) 'trivial'
 			return
 		end 'trivial'
 
@@ -32416,7 +32716,7 @@ export type Parser
 	//
 	// ⚠ **IT SHARES `requireBufferSetOwnsWhatItStores`'s PREDICATE AND MUST NOT SHARE ITS MESSAGE.** The
 	// question ("is this element managed?") is one fact and is asked once, through
-	// `signatures.arrayElementIsManaged`. The ANSWER's consequence is two different facts: `set` is refused
+	// `signatures.containerElementIsManaged`. The ANSWER's consequence is two different facts: `set` is refused
 	// for OWNERSHIP and only past the published length, so it has a harmless half and an exact replacement
 	// (`arr.set(i, value:)`) the message names; these two are refused for REPRESENTATION, at every offset,
 	// with no replacement — byte access to a pointer is not something a correct program wants. Folding the
@@ -32427,7 +32727,7 @@ export type Parser
 	// exemption: `__ManagedMemory.create` can only ever yield a trivial element, so string building and the
 	// NUL terminator `stdlib/File.maxon` writes at the length boundary go through here unchanged.
 	function requireBufferBytesAreNotAPointer(giid GenericInstanceId, methodTok Token) throws ParseError
-		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+		if not self.signatures.containerElementIsManaged(giid) 'trivial'
 			return
 		end 'trivial'
 
@@ -32518,7 +32818,7 @@ export type Parser
 	// (`requireOpaqueArrayCopyable`); a CONCRETE element copies through its statically-known cloner
 	// (`requireArrayElementCopyable`). One home so the three copy methods pick the right gate identically.
 	function requireArrayCopyMethodSupported(giid GenericInstanceId, methodTok Token) throws ParseError
-		if self.signatures.arrayElementIsOpaque(giid) 'opaque'
+		if self.signatures.containerElementIsOpaque(giid) 'opaque'
 			try self.requireOpaqueArrayCopyable(giid, methodTok: methodTok)
 			return
 		end 'opaque'
@@ -32537,7 +32837,7 @@ export type Parser
 	// element is opaque), so it enumerates the enclosing type's instances through
 	// `genericTypeFieldHasUncopyableInstantiation`, mirroring the concrete gate's `arrayElementSupportsDeepClone`.
 	function requireOpaqueArrayCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
-		let elementPosition = typeNameIdOf(self.signatures.arrayElementType(giid))
+		let elementPosition = typeNameIdOf(self.signatures.containerElementType(giid))
 		if self.signatures.genericTypeFieldHasUncopyableInstantiation(self.enclosingType, position: elementPosition) 'uncopyable'
 			throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).", line: methodTok.line, column: methodTok.column)
 		end 'uncopyable'
@@ -32551,6 +32851,14 @@ export type Parser
 	end 'emitArrayVoidCall'
 
 	// ⭐ **EMIT A MANAGED-AWARE ELEMENT ACCESSOR** (`get`/`first`/`last`/`pop`/`remove`, P1.7 slice 3 / 3b-vi-a).
+	//
+	// ⚠ **IT SERVES A `List` TOO, AND IT NEEDED NO CHANGE TO — which is what identifies it as a CONTAINER
+	// door rather than an `Array` one.** Everything below reads the instance through `containerElementType`
+	// (managed-ness, opacity, the result's value type) and the ownership rule it states is about the
+	// OPERATION: `list.first()`/`list.get(i)` look at an element the list keeps, `list.removeFirst()` takes
+	// one out, exactly as `arr.first()` and `arr.pop()` do. A second copy under a list name would have been
+	// this whole header — the borrow mint, the buffer-surface mark, the opaque arm — transcribed for a
+	// container that answers every one of its questions identically.
 	// The result carries the element's VALUE type: for a CONCRETE managed element its usable form — a struct →
 	// `structRef` so `first.name` resolves, a boxed union → `named` so `match first` dispatches, a String → text,
 	// an instance → `genericInstance`; for an OPAQUE element the element's own `typeParameter(pos)` (the shared
@@ -32589,7 +32897,7 @@ export type Parser
 	// back a raw word that no mutation can dangle. Refusing there would reject a program the oracle — which
 	// monomorphizes — accepts. The managed instantiation's hazard is real and unclosed; it is the same
 	// descriptor-gated question `finishValueTry`'s opaque try-merge already defers.
-	function emitArrayElementAccessor(func IrFunction, callee ByteArray, args ValueIdArray, giid GenericInstanceId, owned bool, borrowSubjectName ByteArray, range SourceRange) returns ValueId
+	function emitContainerElementAccessor(func IrFunction, callee ByteArray, container ValueId, args ValueIdArray, giid GenericInstanceId, owned bool, borrowSubjectName ByteArray, range SourceRange) returns ValueId
 		// A TRIVIAL CONCRETE element (int / Byte / ranged-int / bool) is a bare inline word that owns nothing, so
 		// it is NEVER tracked owned, read or moved out (a decref of an integer would corrupt the count). An
 		// OPAQUE element is NOT trivial here — `typeIsManaged` is false for a `typeParameter`, but a managed
@@ -32606,23 +32914,23 @@ export type Parser
 		// Array_int`, a false reject of a program both references accept. `containerSlotValueType` is the one
 		// function that answers "what type does an element READ as", and it answered here already for a
 		// managed element; a trivial one now asks the same question of the same function.
-		if not self.signatures.arrayElementIsManaged(giid) and not self.signatures.arrayElementIsOpaque(giid) 'trivial'
-			let trivialType = self.containerSlotValueType(self.signatures.arrayElementType(giid))
+		if not self.signatures.containerElementIsManaged(giid) and not self.signatures.containerElementIsOpaque(giid) 'trivial'
+			let trivialType = self.containerSlotValueType(self.signatures.containerElementType(giid))
 			return self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(trivialType), resultNameId: typeNameIdOf(trivialType), range: range)
 		end 'trivial'
 
 		let resultType = self.elementAccessorResultType(giid)
 		let result = self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: range)
-		self.markElementReadSurface(result, args: args, callee: callee)
+		self.markElementReadSurface(result, container: container)
 		if owned 'moveOut'
 			self.trackOwnedTemp(result)
 		end 'moveOut' else 'borrowsInPlace'
-			if not borrowSubjectName.isEmpty() and self.signatures.arrayElementIsManaged(giid) 'borrowsANamedSourcesElement'
+			if not borrowSubjectName.isEmpty() and self.signatures.containerElementIsManaged(giid) 'borrowsANamedSourcesElement'
 				self.mintPendingBorrow(func, subjectName: borrowSubjectName, borrowValue: result, range: range)
 			end 'borrowsANamedSourcesElement'
 		end 'borrowsInPlace'
 		return result
-	end 'emitArrayElementAccessor'
+	end 'emitContainerElementAccessor'
 
 	// ⭐ **AN ELEMENT READ OFF AN ARRAY OF BUFFERS IS A BUFFER (A2m).** Placed at the accessor's ONE mint
 	// rather than at the five arms that reach it (`get`, `first`, `last`, `pop`, `remove` — plus the `for … in`
@@ -32630,27 +32938,29 @@ export type Parser
 	// the enumeration that misses the sixth. A trivial element never arrives here at all: an `Array with
 	// Integer` returns from the early arm above, and no trivial element can be a buffer.
 	//
-	// ⚠ **THE RECEIVER IS ARGUMENT 0, WHICH IS THE RUNTIME ABI AND NOT A COINCIDENCE OF THESE CALL SITES** —
-	// `__arr_get(arr, i)`, `__arr_pop(arr)`, `__arr_remove(arr, i)` all take the array first. Recovering it
-	// here rather than threading it through six callers keeps the receiver ONE value: a threaded copy would be
-	// a second spelling of `args`'s own first element, free to disagree with it.
-	function markElementReadSurface(result ValueId, args ValueIdArray, callee ByteArray)
-		let receiver = try args.get(0) otherwise panic("markElementReadSurface: `{String.from(callee)}` was emitted with no arguments — every array element accessor's runtime callee takes the array as its first argument")
-		if self.valueElementIsBufferSurface(receiver) 'receiverHoldsBuffers'
+	// ⚠⚠ **THE CONTAINER IS PASSED IN, AND IT USED TO BE RECOVERED FROM `args.get(0)` ON THE ARGUMENT THAT
+	// "argument 0 is the container, which is the runtime ABI".** That premise held for every `__arr_*`
+	// accessor — `__arr_get(arr, i)`, `__arr_pop(arr)`, `__arr_remove(arr, i)` — and it is FALSE for the list's
+	// loop read: `__list_node_value(node)` takes the NODE the value sits in, so `args.get(0)` there is a node
+	// pointer, and asking a buffer-surface question of it answers `false` by accident rather than by
+	// derivation. A premise that has broken is not a premise, so the value comes from the caller, which holds
+	// the container in every arm regardless of where the ABI happens to put it.
+	function markElementReadSurface(result ValueId, container ValueId)
+		if self.valueElementIsBufferSurface(container) 'containerHoldsBuffers'
 			self.markBufferSurface(result)
-		end 'receiverHoldsBuffers'
+		end 'containerHoldsBuffers'
 	end 'markElementReadSurface'
 
 	// The VALUE type an element accessor's result carries — the opaque element's own `typeParameter(pos)` for an
 	// OPAQUE array (the shared body keeps the element opaque; its drop is descriptor-gated, `decrefCalleeFor`'s
 	// `typeParameter` arm → `__drop_type_param`), else the CONCRETE managed element's usable value form
-	// (`containerSlotValueType`). Split so `emitArrayElementAccessor` reads ONE type either way; the opaque
+	// (`containerSlotValueType`). Split so `emitContainerElementAccessor` reads ONE type either way; the opaque
 	// `typeParameter` carries a POSITION, not an interned name, so it needs no interner adoption.
 	function elementAccessorResultType(giid GenericInstanceId) returns MaxonType
-		if self.signatures.arrayElementIsOpaque(giid) 'opaque'
-			return self.signatures.arrayElementType(giid)
+		if self.signatures.containerElementIsOpaque(giid) 'opaque'
+			return self.signatures.containerElementType(giid)
 		end 'opaque'
-		return self.containerSlotValueType(self.signatures.arrayElementType(giid))
+		return self.containerSlotValueType(self.signatures.containerElementType(giid))
 	end 'elementAccessorResultType'
 
 	// ⭐ **THE ONE DOOR FOR "A RUNTIME CALL WHOSE RESULT IS A FRESH OWNED HEAP VALUE".** The result carries the
@@ -32711,10 +33021,10 @@ export type Parser
 	// choice verbatim, split out of the `clone` arm for the identical reason: the element-surface inheritance
 	// needs ONE value to name rather than one per arm.
 	function emitArrayCloneCall(giid GenericInstanceId, arr ValueId, range SourceRange) returns ValueId
-		if self.signatures.arrayElementIsOpaque(giid) 'opaqueClone'
+		if self.signatures.containerElementIsOpaque(giid) 'opaqueClone'
 			return self.emitOwnedRuntimeResult(ArrCloneOpaqueName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'opaqueClone'
-		if self.signatures.arrayElementIsManaged(giid) 'managedClone'
+		if self.signatures.containerElementIsManaged(giid) 'managedClone'
 			return self.emitOwnedRuntimeResult(ArrCloneManagedName, args: pairArgs(arr, second: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'managedClone'
 		return self.emitOwnedRuntimeResult(ArrCloneName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
@@ -32735,10 +33045,10 @@ export type Parser
 	end 'inheritArrayElementSurface'
 
 	function emitArraySliceCall(giid GenericInstanceId, arr ValueId, start ValueId, endIndex ValueId, range SourceRange) returns ValueId
-		if self.signatures.arrayElementIsOpaque(giid) 'opaqueSlice'
+		if self.signatures.containerElementIsOpaque(giid) 'opaqueSlice'
 			return self.emitOwnedRuntimeResult(ArrSliceOpaqueName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'opaqueSlice'
-		if self.signatures.arrayElementIsManaged(giid) 'managedSlice'
+		if self.signatures.containerElementIsManaged(giid) 'managedSlice'
 			return self.emitOwnedRuntimeResult(ArrSliceManagedName, args: quadArgs(arr, second: start, third: endIndex, fourth: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'managedSlice'
 		return self.emitOwnedRuntimeResult(ArrSliceName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
@@ -32756,10 +33066,10 @@ export type Parser
 		let other = try self.parseExpression(func, block: self.currentBlock)
 		try self.requireArrayAppendArg(other, giid: giid, otherTok: otherTok)
 		try self.consume(TokenKind.rightParen)
-		if self.signatures.arrayElementIsOpaque(giid) 'opaqueAppend'
+		if self.signatures.containerElementIsOpaque(giid) 'opaqueAppend'
 			return self.emitArrayVoidCall(ArrAppendOpaqueName, args: pairArgs(arr, second: other), receiver: arr, range: range)
 		end 'opaqueAppend'
-		if self.signatures.arrayElementIsManaged(giid) 'managedAppend'
+		if self.signatures.containerElementIsManaged(giid) 'managedAppend'
 			return self.emitArrayVoidCall(ArrAppendManagedName, args: tripleArgs(arr, second: other, third: self.arrayElementCloneValue(giid, range: range)), receiver: arr, range: range)
 		end 'managedAppend'
 		return self.emitArrayVoidCall(ArrAppendName, args: pairArgs(arr, second: other), receiver: arr, range: range)
@@ -32787,7 +33097,7 @@ export type Parser
 	// an operation that copies raw bytes sized by `element_size`? Read by both `append` argument rules, because
 	// the byte copy they authorize is one operation with one precondition; only the diagnostic differs.
 	function sameTrivialArrayShape(giid GenericInstanceId, otherGiid GenericInstanceId) returns bool
-		return not self.signatures.arrayElementIsManaged(otherGiid) and self.signatures.arrayElementSize(otherGiid) == self.signatures.arrayElementSize(giid)
+		return not self.signatures.containerElementIsManaged(otherGiid) and self.signatures.arrayElementSize(otherGiid) == self.signatures.arrayElementSize(giid)
 	end 'sameTrivialArrayShape'
 
 	function requireArrayAppendArg(other ValueId, giid GenericInstanceId, otherTok Token) throws ParseError
@@ -32798,14 +33108,14 @@ export type Parser
 		// An OPAQUE receiver (`self.items.append(other)` in a generic body) deep-clones `other`'s elements through
 		// the RECEIVER's descriptor `copyFunc@32` (P1.7 slice 3b-vi-b-β), which is correct only when `other` shares
 		// the receiver's opaque element type — so, like the managed receiver, `other` must be the IDENTICAL giid.
-		if self.signatures.arrayElementIsOpaque(giid) 'opaqueReceiver'
-			if not self.signatures.arrayElementIsOpaque(otherGiid) or otherGiid != giid 'opaqueMismatch'
+		if self.signatures.containerElementIsOpaque(giid) 'opaqueReceiver'
+			if not self.signatures.containerElementIsOpaque(otherGiid) or otherGiid != giid 'opaqueMismatch'
 				throw ParseError.unsupported("`append` on an opaque `Array with <type parameter>` field requires an `Array` of the same type-parameter element as the receiver", line: otherTok.line, column: otherTok.column)
 			end 'opaqueMismatch'
 			return
 		end 'opaqueReceiver'
-		if self.signatures.arrayElementIsManaged(giid) 'managedReceiver'
-			if not self.signatures.arrayElementIsManaged(otherGiid) or otherGiid != giid 'managedMismatch'
+		if self.signatures.containerElementIsManaged(giid) 'managedReceiver'
+			if not self.signatures.containerElementIsManaged(otherGiid) or otherGiid != giid 'managedMismatch'
 				throw ParseError.unsupported("`append` requires an `Array` with the same MANAGED element type as the receiver", line: otherTok.line, column: otherTok.column)
 			end 'managedMismatch'
 			return
@@ -32824,7 +33134,7 @@ export type Parser
 	// or an array-of-managed-arrays. An OPAQUE-`T` element (a generic body) is routed to `requireOpaqueArrayCopyable`
 	// by `requireArrayCopyMethodSupported` instead, so only CONCRETE elements reach here.
 	function requireArrayElementCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
-		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+		if not self.signatures.containerElementIsManaged(giid) 'trivial'
 			return
 		end 'trivial'
 		if not self.signatures.arrayElementSupportsDeepClone(giid) 'unsupportedNested'
@@ -32902,7 +33212,7 @@ export type Parser
 	// ⭐⭐ **AN ELEMENT ARGUMENT MUST AGREE WITH THE INSTANCE'S ELEMENT TYPE.** The `Array` mutators are
 	// PARSER-INTRINSIC — `push`/`set`/`insert` emit `__arr_push`/`__arr_set`/`__arr_insert` directly, so they
 	// have no `FuncSignature` and never reach `SemanticCheck.validateCall` — and until this existed nothing
-	// asked the question at all: `moveElementIntoArray` asked only about OWNERSHIP. All three symptoms were
+	// asked the question at all: `moveElementIntoContainer` asked only about OWNERSHIP. All three symptoms were
 	// MEASURED, and none of them was a diagnostic:
 	//
 	//   • `Array with String` + `push(42)` — compiled clean, then the array's `__arr_decref` walk freed `42`
@@ -32926,7 +33236,7 @@ export type Parser
 	// three-line composition; the RULE is single-homed.
 	//
 	// ⚠ **THE MANAGED/TRIVIAL ARM IS CHOSEN BY THE CLASSIFIER AND BY NOTHING ELSE, AND THAT COSTS A MEASURED
-	// ALLOCATION WORTH PAYING.** `ProgramSignatures.arrayElementIsManaged` answers the same question without
+	// ALLOCATION WORTH PAYING.** `ProgramSignatures.containerElementIsManaged` answers the same question without
 	// boxing anything, and asking it here instead saves exactly one `PayloadClass` box per trivial-element
 	// `push`/`set`/`insert` SITE (measured on the ladder: 32 allocations at rung 0, doubling to 1,024 at
 	// rung 5 — 0.007% of the compile). It is NOT taken. The two predicates are SEPARATE implementations of
@@ -32937,7 +33247,7 @@ export type Parser
 	// it exists to stop.
 	//
 	// ⚠ **IT RUNS BEFORE THE MOVE-IN, NOT AFTER**, and that ordering is the fix rather than an ordering
-	// preference: `moveElementIntoArray` PROMOTES a borrowed record by the ELEMENT's protocol
+	// preference: `moveElementIntoContainer` PROMOTES a borrowed record by the ELEMENT's protocol
 	// (`tagIsByteRecord`), so a struct pushed into a `String` array would be copied as a fused byte record
 	// before any check could see it. It hands back the value the slot wants, so the caller rebinds — the
 	// widening is unreachable here (`Array with Float` is E2062 at the type argument), but a caller that
@@ -32959,13 +33269,13 @@ export type Parser
 	// oracle counts one element and shv2 answers *"cannot assign 'int' … of type 'Character'"*. It is asked
 	// through the ONE adoption door — a literal in a Character position, never a tag pairing — so
 	// `char-literal-to-int.md`'s codepoint arithmetic is untouched, and it needs the value's TOKEN SPAN,
-	// which is why the callers hand over `valueStart` (the same position `moveElementIntoArray` reads).
-	function requireArrayElementType(giid GenericInstanceId, value ValueId, valueStart TokenIndex, methodTok Token) returns ValueId throws ParseError
-		if self.signatures.arrayElementIsOpaque(giid) 'opaqueInSharedBody'
+	// which is why the callers hand over `valueStart` (the same position `moveElementIntoContainer` reads).
+	function requireContainerElementType(giid GenericInstanceId, value ValueId, valueStart TokenIndex, methodTok Token) returns ValueId throws ParseError
+		if self.signatures.containerElementIsOpaque(giid) 'opaqueInSharedBody'
 			return value
 		end 'opaqueInSharedBody'
 
-		let declared = self.signatures.declaredSlotType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames, slotScopeFilePath: self.filePath)
+		let declared = self.signatures.declaredSlotType(self.signatures.containerElementType(giid), into: self.artifact.typeNames, slotScopeFilePath: self.filePath)
 		let element = try self.characterizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared)
 		if payloadClassIsManaged(class) 'managed'
@@ -32997,7 +33307,7 @@ export type Parser
 		// of. Pinned by `specs-shv2/safety.md`'s `divide-by-zero-fault-through-a-resized-array-slot`.
 		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(declared), line: methodTok.line, column: methodTok.column)
 		return stored
-	end 'requireArrayElementType'
+	end 'requireContainerElementType'
 
 	// `( expr )` — a single positional array-method argument (`push(x)`, `get(i)`, `reserve(n)`).
 	function parseArrayOneArg(func IrFunction) returns ValueId throws ParseError
@@ -33067,14 +33377,14 @@ export type Parser
 		let index = try self.parseExpression(func, block: self.currentBlock)
 		try self.consumeArrayArgLabel(ArrayValueLabel, required: secondArgLabelled)
 		// The value is a managed-element MOVE-IN (`set`/`insert`), so it is consumed exactly as `push` is —
-		// `moveElementIntoArray` promotes a borrowed String, transfers an owned value, refuses a borrowed
+		// `moveElementIntoContainer` promotes a borrowed String, transfers an owned value, refuses a borrowed
 		// aggregate. `__arr_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
 		// slot), so no leak; `__arr_insert` shifts the tail (a relocation) and stores into the vacated slot.
-		// The TYPE check precedes the move-in for the reason `requireArrayElementType` states.
+		// The TYPE check precedes the move-in for the reason `requireContainerElementType` states.
 		let valueStart = self.pos
 		let raw = try self.parseExpression(func, block: self.currentBlock)
-		let checked = try self.requireArrayElementType(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
-		let value = try self.moveElementIntoArray(checked, giid: giid, valueStart: valueStart)
+		let checked = try self.requireContainerElementType(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
+		let value = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart)
 		try self.consume(TokenKind.rightParen)
 
 		// ⭐⭐ **THE THROWING `set` IS VOID AND ITS TAG MUST SAY SO — the guard the void mutators call cannot
@@ -33100,7 +33410,7 @@ export type Parser
 	// type and then MOVED into the array (P1.7 slice 3): a managed element is consumed so the array owns it
 	// (its decref walk destroys it), a trivial element passes through. The value's start position is captured
 	// so a bare-local source can be poisoned (E3102).
-	function parseArrayElementArg(func IrFunction, giid GenericInstanceId, methodTok Token) returns ValueId throws ParseError
+	function parseContainerElementArg(func IrFunction, giid GenericInstanceId, methodTok Token) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: self.currentBlock)
@@ -33108,11 +33418,11 @@ export type Parser
 		// to decide whether the arg is a bare local to POISON, and a consumed `)` would widen that window past a
 		// single-identifier arg (`push(node)`) — the poison would silently not fire and the moved binding would
 		// drop a second time at scope exit (a double-free / over-release, exit 101).
-		let checked = try self.requireArrayElementType(giid, value: value, valueStart: valueStart, methodTok: methodTok)
-		let moved = try self.moveElementIntoArray(checked, giid: giid, valueStart: valueStart)
+		let checked = try self.requireContainerElementType(giid, value: value, valueStart: valueStart, methodTok: methodTok)
+		let moved = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart)
 		try self.consume(TokenKind.rightParen)
 		return moved
-	end 'parseArrayElementArg'
+	end 'parseContainerElementArg'
 
 	// ⭐ **MOVE A PARSED ELEMENT INTO A MANAGED-ELEMENT ARRAY (P1.7 slice 3).** The array becomes the element's
 	// sole owner (its `__arr_decref` walk destroys it), so the source is consumed exactly as a struct-field /
@@ -33121,19 +33431,19 @@ export type Parser
 	// (no clone). A TRIVIAL-element array's value owns no heap and passes through unchanged. Shared by
 	// push/set/insert. `valueStart` locates the value's first token — its bare-local source and the diagnostic
 	// anchor both.
-	function moveElementIntoArray(value ValueId, giid GenericInstanceId, valueStart TokenIndex) returns ValueId throws ParseError
+	function moveElementIntoContainer(value ValueId, giid GenericInstanceId, valueStart TokenIndex) returns ValueId throws ParseError
 		// ⭐ **AN OPAQUE-`T` ARRAY MOVE-IN IN THE SHARED BODY (P1.7 slice 3b-v).** The shared generic body has no
-		// static type for the element (`arrayElementIsManaged` is false — the element is a `typeParameter` word),
+		// static type for the element (`containerElementIsManaged` is false — the element is a `typeParameter` word),
 		// so it neither promotes nor refuses here. But when the pushed value is an enrolled opaque owned binding
 		// (a consumed feed parameter, `bindParameters`), the array becomes its owner: MOVE it (poison the source
 		// binding) so a second use is E3102 and this frame does not also drop it. A borrowed opaque word or a
 		// non-bare-local expression owns nothing and passes through. The CONCRETE call site's own consume
 		// (3b-iii/3b-iv) is untouched — it runs in the caller's frame on the concrete argument.
-		if self.signatures.arrayElementIsOpaque(giid) 'opaque'
+		if self.signatures.containerElementIsOpaque(giid) 'opaque'
 			try self.moveOpaqueFeedArg(value, valueStart: valueStart)
 			return value
 		end 'opaque'
-		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+		if not self.signatures.containerElementIsManaged(giid) 'trivial'
 			return value
 		end 'trivial'
 		let anchor = self.tokenAt(valueStart)
@@ -33144,9 +33454,9 @@ export type Parser
 		// storage … a struct/union has no `clone`"* — on a value that has exactly the clone that message
 		// says it lacks, while the identical literal into a struct FIELD was accepted (that door asks
 		// `classifyUnionPayload`, which already answers `isString: true` for a Character).
-		let isString = tagIsByteRecord(maxonTypeTag(self.signatures.arrayElementType(giid)))
+		let isString = tagIsByteRecord(maxonTypeTag(self.signatures.containerElementType(giid)))
 		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
-	end 'moveElementIntoArray'
+	end 'moveElementIntoContainer'
 
 	// ⭐ **MOVE AN OPAQUE OWNED FEED VALUE OUT OF ITS BINDING (P1.7 slice 3b-v).** When the fed value (a
 	// `self.items.push(item)` element, or a `self.N(item)` forward argument) is a bare reference to a LIVE owned
@@ -35343,7 +35653,7 @@ export type Parser
 	end 'valueSlotSurface'
 
 	// Do the ELEMENTS of the array `value` denote buffers (A2m)? The read side of
-	// `markBufferSurfaceElements`, asked at `emitArrayElementAccessor`.
+	// `markBufferSurfaceElements`, asked at `emitContainerElementAccessor`.
 	function valueElementIsBufferSurface(value ValueId) returns bool
 		return self.bufferSurfaceElements.contains(value)
 	end 'valueElementIsBufferSurface'
@@ -35971,7 +36281,7 @@ export type Parser
 	// owned temp) because its elements can be values something else already owns. A top-level initializer's
 	// elements are CONSTANTS — there is no binding to poison and no temp to de-list — so the only thing that
 	// carries over is that a String element must reach the array OWNED, which `ModuleInit` does by cloning
-	// the literal exactly as `moveElementIntoArray` promotes a borrowed one.
+	// the literal exactly as `moveElementIntoContainer` promotes a borrowed one.
 	function evalConstArrayLiteral(stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
 		let openTok = try self.consumeConst(TokenKind.leftBracket)
 		self.skipNewlines()
@@ -38330,7 +38640,7 @@ export type Parser
 	// feed position whose argument is an enrolled owned opaque `typeParameter` binding — the SHARED-body
 	// forward move (`self.store(item)`) that `argIsConsumedAt`'s instance test cannot see, because the shared
 	// body carries no concrete instance (`constructorInstance` none). The value-level dual of the direct
-	// `moveElementIntoArray` opaque poison. False for every non-feed position and every non-opaque argument
+	// `moveElementIntoContainer` opaque poison. False for every non-feed position and every non-opaque argument
 	// (a concrete String / struct feed argument, the CONCRETE call site's own value), so it moves nothing the
 	// instance path already owns.
 	function isOpaqueOwnedFeedArg(info ParamConsumeInfo, position ParamCount, argValue ValueId) returns bool

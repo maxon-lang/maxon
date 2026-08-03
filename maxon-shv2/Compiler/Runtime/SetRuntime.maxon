@@ -198,11 +198,11 @@ function buildSetFrom(module StdModule)
 	// slots, so a moved-out slot must read null or the key double-frees (the set owns it now). The exact mirror
 	// of `__arr_pop` nulling the slot it hands out. A trivial int element is unaffected by the null (its array
 	// decref never walks). Then advance `i = i + 1`.
-	let elem = emitHtSlotLoad(module, block: body, base: buffer, index: i, ids: ids)
+	let elem = emitWordSlotLoad(module, block: body, base: buffer, index: i, ids: ids)
 	let inserted = ids.mint()
 	module.appendOp(body, op: StdOp.call(inserted, callee: SetInsertName, args: fourArgs(set, second: elem, third: hashWitness, fourth: eqWitness)))
 	let nullSlot = emitConst(module, block: body, value: 0, ids: ids)
-	emitHtSlotStore(module, block: body, base: buffer, index: i, value: nullSlot, ids: ids)
+	emitWordSlotStore(module, block: body, base: buffer, index: i, value: nullSlot, ids: ids)
 	let one = emitConst(module, block: body, value: 1, ids: ids)
 	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(body, op: StdOp.branch(header.id))

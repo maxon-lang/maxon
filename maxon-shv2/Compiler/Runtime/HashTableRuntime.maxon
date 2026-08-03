@@ -75,10 +75,11 @@ export let HtValuesOffset = 48 as ByteOffset
 export let HtValueDropOffset = 56 as ByteOffset
 
 // Every buffer slot — a key, a state tag, a cached hash, a value — is one 8-byte machine word, so a slot's
-// byte address is `buffer + index * HtSlotBytes` and a buffer sized for `capacity` slots is
-// `capacity * HtSlotBytes` bytes. Keys and values are scalar (or a managed POINTER) this slice, so each rides
-// its word inline.
-let HtSlotBytes = 8 as ParsedInt
+// byte address is `buffer + index * WordSlotBytes` and a buffer sized for `capacity` slots is
+// `capacity * WordSlotBytes` bytes. Keys and values are scalar (or a managed POINTER) this slice, so each
+// rides its word inline. ⚠ The stride and the three emit helpers over it are `MmRuntime`'s, not this file's:
+// they were named `Ht*` here while `__set_from` already used them on an ARRAY's element buffer, and
+// `__list_from` uses them on the same buffer — see `MmRuntime.emitWordSlotAddr`.
 
 // The `states` buffer's per-slot tag. `Empty` is 0 so a freshly `__mm_alloc`'d (zeroed) states buffer starts
 // all-empty with no init loop — the same reason the record needs no field stamp. Occupied/Deleted match the
@@ -165,37 +166,19 @@ end 'installHashTable'
 
 // --- Shared leaf helpers ---
 
-// The byte address of slot `index` in a parallel buffer — `base + index * HtSlotBytes`. Shared by every
-// key/state/hash/value load and store so the 8-byte stride lives in exactly one place.
-function emitHtSlotAddr(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
-	let slotBytes = emitConst(module, block: block, value: HtSlotBytes, ids: ids)
-	let offset = emitBin(module, block: block, a: index, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
-	return emitBin(module, block: block, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
-end 'emitHtSlotAddr'
-
-// Load slot `index` (one i64 word) of parallel buffer `base`.
-export function emitHtSlotLoad(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
-	return emitLoadField(module, block: block, record: emitHtSlotAddr(module, block: block, base: base, index: index, ids: ids), offset: 0, ids: ids)
-end 'emitHtSlotLoad'
-
-// Store `value` into slot `index` (one i64 word) of parallel buffer `base`.
-export function emitHtSlotStore(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
-	emitStoreField(module, block: block, record: emitHtSlotAddr(module, block: block, base: base, index: index, ids: ids), offset: 0, value: value)
-end 'emitHtSlotStore'
-
 // Load slot `index` of the buffer at record field `bufferOffset` — reloading the buffer pointer from `table`
 // rather than from a hoisted register (see the register-pressure note in the header). The one door a probe
 // reads a slot through, so "reload then stride" is written once.
 export function emitHtRecordSlotLoad(module StdModule, block IrBlock, table ValueId, bufferOffset ByteOffset, index ValueId, ids ValueMinter) returns ValueId
 	let base = emitLoadField(module, block: block, record: table, offset: bufferOffset, ids: ids)
-	return emitHtSlotLoad(module, block: block, base: base, index: index, ids: ids)
+	return emitWordSlotLoad(module, block: block, base: base, index: index, ids: ids)
 end 'emitHtRecordSlotLoad'
 
 // Store `value` into slot `index` of the buffer at record field `bufferOffset` — the store twin of
 // `emitHtRecordSlotLoad`, reloading the buffer pointer from `table`.
 function emitHtRecordSlotStore(module StdModule, block IrBlock, table ValueId, bufferOffset ByteOffset, index ValueId, value ValueId, ids ValueMinter)
 	let base = emitLoadField(module, block: block, record: table, offset: bufferOffset, ids: ids)
-	emitHtSlotStore(module, block: block, base: base, index: index, value: value, ids: ids)
+	emitWordSlotStore(module, block: block, base: base, index: index, value: value, ids: ids)
 end 'emitHtRecordSlotStore'
 
 // `capacity - 1` — the power-of-two mask, reloaded from `table`'s `capacity@8` (unchanged during a probe). The
@@ -407,12 +390,12 @@ function emitHtOccupiedDropRange(module StdModule, func IrFunction, cur IrBlock,
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
 	// body: an Occupied slot holds a live entry to drop; Empty/Deleted slots hold none.
-	let state = emitHtSlotLoad(module, block: body, base: states, index: i, ids: ids)
+	let state = emitWordSlotLoad(module, block: body, base: states, index: i, ids: ids)
 	let occupiedTag = emitConst(module, block: body, value: HtSlotOccupied, ids: ids)
 	let isOccupied = emitCmp(module, block: body, a: state, b: occupiedTag, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(body, op: StdOp.condBranch(isOccupied, thenBlockId: doDrop.id, elseBlockId: step.id))
 
-	let entry = emitHtSlotLoad(module, block: doDrop, base: entries, index: i, ids: ids)
+	let entry = emitWordSlotLoad(module, block: doDrop, base: entries, index: i, ids: ids)
 	emitElementDestructorCall(module, block: doDrop, destroy: drop, elem: entry, ids: ids)
 	module.setTerminator(doDrop, op: StdOp.branch(step.id))
 
@@ -521,7 +504,7 @@ function buildHtGrow(module StdModule, family HashTableFamily)
 
 	let newCap = ids.mint()
 	alloc.blockArgs.push(IrBlockArg.create(newCap, argType: StdType.i64))
-	let slotBytes = emitConst(module, block: alloc, value: HtSlotBytes, ids: ids)
+	let slotBytes = emitConst(module, block: alloc, value: WordSlotBytes, ids: ids)
 	let newBytes = emitBin(module, block: alloc, a: newCap, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
 	let bufDtor = emitConst(module, block: alloc, value: 0, ids: ids)
 	let newKeys = ids.mint()
@@ -552,14 +535,14 @@ function buildHtGrow(module StdModule, family HashTableFamily)
 	module.setTerminator(rehashHeader, op: StdOp.condBranch(scanDone, thenBlockId: freeOld.id, elseBlockId: rehashBody.id))
 
 	// rehashBody: only an OLD `Occupied` slot is re-inserted (a tombstone is dropped).
-	let oldState = emitHtSlotLoad(module, block: rehashBody, base: oldStates, index: i, ids: ids)
+	let oldState = emitWordSlotLoad(module, block: rehashBody, base: oldStates, index: i, ids: ids)
 	let occupiedTag = emitConst(module, block: rehashBody, value: HtSlotOccupied, ids: ids)
 	let isOccupied = emitCmp(module, block: rehashBody, a: oldState, b: occupiedTag, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(rehashBody, op: StdOp.condBranch(isOccupied, thenBlockId: reinsert.id, elseBlockId: rehashStep.id))
 
 	// reinsert: seed the find-empty-slot probe from the CACHED hash (no witness call).
-	let key = emitHtSlotLoad(module, block: reinsert, base: oldKeys, index: i, ids: ids)
-	let hash = emitHtSlotLoad(module, block: reinsert, base: oldHashes, index: i, ids: ids)
+	let key = emitWordSlotLoad(module, block: reinsert, base: oldKeys, index: i, ids: ids)
+	let hash = emitWordSlotLoad(module, block: reinsert, base: oldHashes, index: i, ids: ids)
 	let seedMask = emitHtMask(module, block: reinsert, table: table, ids: ids)
 	let seedSlot = emitBin(module, block: reinsert, a: hash, b: seedMask, opcode: StdBinOpcode.bitAnd, ids: ids)
 	module.setTerminator(reinsert, op: StdOp.branch(findHeader.id))
@@ -637,7 +620,7 @@ function emitHtRehashValueMove(module StdModule, block IrBlock, oldValues HtInse
 	var moved = HtInsertValue.absent
 	match oldValues 'column'
 		absent then break 'column'
-		present(buffer) then moved = HtInsertValue.present(emitHtSlotLoad(module, block: block, base: buffer, index: index, ids: ids))
+		present(buffer) then moved = HtInsertValue.present(emitWordSlotLoad(module, block: block, base: buffer, index: index, ids: ids))
 	end 'column'
 	return moved
 end 'emitHtRehashValueMove'
