@@ -1,0 +1,61 @@
+// Test: function-param
+enum Status
+	on
+	off
+end 'Status'
+
+function isOn(s Status) returns bool
+	if s == Status.on 'check'
+		return true
+	end 'check'
+	return false
+end 'isOn'
+
+function main() returns ExitCode
+	let status = Status.on
+	if isOn(status) 'test'
+		return 1
+	end 'test'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @isOn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect isOn
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, test
+    x64.jmp ifcont
+  test:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
