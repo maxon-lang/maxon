@@ -1828,9 +1828,10 @@ end 'main'
 **Top-Level Variable Rules:**
 - `var` declares a mutable top-level variable (can be reassigned from any function)
 - `let` declares an immutable top-level constant (compile-time evaluated when possible)
-- Most initializers must be constant expressions (integer, float, bool, string literal, or enum member reference like `Color.red`)
+- Most initializers must be constant expressions (integer, float, bool, string literal, or a SCALAR enum's member reference like `Color.red`)
 - `Type from "literal"` expressions (e.g., `FilePath from "path"`) are also allowed as top-level `let` initializers; these are runtime-initialized before `main()` executes
 - Static factory calls (e.g., `let shared = Counter.create()`) and array literals (e.g., `var items = [1, 2, 3]`) are also allowed; their initializers run in a per-file `__module_init` function before `main()`
+- A union case reference is a constant only when the union is a bare discriminant. A union with any payload-bearing case is a heap box, so `var hold = Hold.unowned` and `var hold = Hold.owned(5)` alike are runtime-initialized in `__module_init` and the slot owns its occupant. The split follows the REPRESENTATION, not whether the case is written with a payload at the declaration site
 - Initialized before `main()` executes
 - Accessible from any function in the same file (use `export` for cross-file visibility)
 

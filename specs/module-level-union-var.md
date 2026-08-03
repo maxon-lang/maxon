@@ -35,6 +35,13 @@ not a box, so its case reference stays a compile-time constant and its global st
 `.data` ordinal. The split is on the representation, never on the syntax: `Hold.unowned`
 and `Hold.owned(5)` are both boxes because `Hold` has a payload case.
 
+The union type name has to reach lowering on the OP, not just in the module's
+`GlobalVarInfos`, because a global load/store inside a generic method is rebuilt from
+scratch when that method is monomorphized. A specialization that reconstructed the op
+without the type name lowered the same slot as a bare integer *inside the clone only* —
+the identical wrong answer, restricted to one specialization and therefore invisible to
+a corpus with no generic reader of a union global.
+
 ## Tests
 
 <!-- test: module-union-store-then-match -->
@@ -230,4 +237,50 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: module-union-in-monomorphized-method -->
+A generic type's methods store to and read from the union global. Monomorphizing them
+rebuilds every op, so the slot's type name must travel with the rebuilt load and store.
+Without it the specialization alone lowered the global as a bare integer and the tag
+read dereferenced it: `panic: nil pointer or invalid memory access in Cell.readBack`.
+```maxon
+typealias Small = int(0 to 100)
+
+union Hold
+	unowned
+	owned(v Small)
+end 'Hold'
+
+var hold = Hold.unowned
+
+type Cell uses T
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function stash(v Small)
+		hold = Hold.owned(v)
+	end 'stash'
+
+	export function readBack() returns Small
+		return match hold 'r'
+			unowned gives 0
+			owned(v) gives v
+		end 'r'
+	end 'readBack'
+end 'Cell'
+
+typealias SmallCell = Cell with Small
+
+function main() returns ExitCode
+	let c = SmallCell.create(1)
+	c.stash(5)
+	return c.readBack()
+end 'main'
+```
+```exitcode
+5
 ```
