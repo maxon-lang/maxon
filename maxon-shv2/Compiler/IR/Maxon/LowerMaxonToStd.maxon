@@ -1905,30 +1905,20 @@ type MaxonToStdLowering
 	// many words — and an existential's receiver is its fat pointer's value half, a pointer. So the receiver
 	// takes `integer`, and the formals fill positions 1…n.
 	//
-	// ⭐ **A FORMAL WHOSE NAME IS NOT A BUILTIN TYPE IS A MACHINE WORD — EXCEPT AN ASSOCIATED TYPE, WHICH IS
-	// THE ONE THING THE INTERFACE GENUINELY CANNOT SAY.** The formals are RENDERED SOURCE NAMES, so
-	// `builtinTypeNameTag` — the one table every door that holds a type only as its spelling asks — answers
-	// `named` for `Self`, for a user type, for a type parameter, for a RANGED ALIAS and for an ASSOCIATED TYPE
-	// alike. Four of those five are machine words under dictionary passing and are taken as such.
+	// ⭐ **A FORMAL THE INTERFACE DOES NOT NAME A TYPE FOR IS AN ASSOCIATED TYPE, AND ITS TYPE IS THE
+	// CONFORMERS' BINDING.** The formals are RENDERED SOURCE NAMES, and `witnessFormalType` below decides each
+	// one: an ASSOCIATED type first (a `uses` parameter can spell a builtin, so the order is load-bearing —
+	// see there), resolved through `associatedAbiBindingOf`; otherwise `builtinTypeNameTag`, with everything it
+	// does not name reduced to the machine word by `renderedTypeNameAbiType`, which is right for `Self`, a user
+	// type, a type parameter and a ranged alias alike.
 	//
-	// The fifth is not, and it is not because a CONFORMER binds it rather than the interface:
-	// `interface Taker uses Element` with `take(e Element)`, implemented by `implements Taker with float`,
-	// declares its impl parameter `f64`, and the spelling `Element` can never say so. MEASURED: that program
-	// answers 40 on BOTH targets, and a rule that called every `named` formal a machine word would have declared
-	// the argument an i64 against an f64 callee and regressed it into a trap. An associated type is recognised
-	// EXACTLY — by membership of the declaring interface's own `uses` list (`associatedTypeNames`) — and only
-	// there does the ACTUAL stand in, because there it is the only witness that exists.
-	//
-	// ⚠ **THE TEST HAS TO BE THAT EXACT, AND A LOOSER ONE WAS MEASURED WRONG.** Falling back to the actual for
-	// every `named` formal re-opens this defect one type over: `take(n Integer)` given `true` declares the
-	// argument an i32 against an i64 callee — x64 answered 21 and wasm trapped. The interface DOES name that
-	// type; only an associated type leaves it unnamed.
-	//
-	// (⚠ Two conformers binding one associated type to types of DIFFERENT ABI class have NO single answer at
-	// all — the shared body is compiled once, so one `call_indirect` type is wrong for one of them whichever
-	// source is asked. That is not a nuance: MEASURED, x64-windows answered 1 where the program computes 51,
-	// SILENTLY, while wasm trapped. It is refused whole-program by E3119 rather than resolved here, and it is
-	// refused on every target because the register targets are the half that fails quietly.)
+	// ⚠ **THE ACTUAL IS NEVER CONSULTED, AND IT USED TO BE.** Falling back to the argument's own tag reads the
+	// unresolved `valueTags` column — this slice's own defect one level down — and it cannot see a binding the
+	// actual does not happen to match. Two conformers that bind one dispatched associated type DIFFERENTLY have
+	// no single answer at all: the shared body is compiled once, so it is compiled against one of them and
+	// hands the other's impl bits it reads as something else. MEASURED, x64 SEGFAULTED on one such pair and
+	// silently answered 1 for 51 on another. That is refused whole-program by E3119, on every target, because
+	// the register targets are the half that fails quietly.
 	function witnessFormalTypes(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns MaxonTypeArray
 		let slot = self.witnessRequirementSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		let formals = slot.method.paramTypeNames
@@ -1989,9 +1979,9 @@ type MaxonToStdLowering
 	// reaching it here means the error gate did not fire.
 	function associatedFormalType(interfaceName ByteArray, position ElementCount, formalName ByteArray) returns MaxonType
 		match associatedAbiBindingOf(self.conformances, interfaceName: interfaceName, position: position) 'binding'
-			agreed(declaredType) then return declaredType
+			agreed(_, _, declaredType) then return declaredType
 			unconformed then return MaxonType.integer
-			disagreed(firstConformer, firstBinding, secondConformer, secondBinding) then panic("associatedFormalType: '{String.from(interfaceName)}' binds `{String.from(formalName)}` to `{String.from(firstBinding)}` in '{String.from(firstConformer)}' and to `{String.from(secondBinding)}` in '{String.from(secondConformer)}' — different ABI classes, which `ConformanceCheck.checkAssociatedTypeAbiAgreement` reports as E3119 and the pipeline's error gate must stop before lowering")
+			disagreed(first, firstBinding, second, secondBinding) then panic("associatedFormalType: '{String.from(interfaceName)}' binds `{String.from(formalName)}` to `{String.from(firstBinding)}` in '{String.from(first.typeName)}' and to `{String.from(secondBinding)}` in '{String.from(second.typeName)}' — which `ConformanceCheck.checkAssociatedTypeAbiAgreement` reports as E3119, so the pipeline's error gate must stop before lowering")
 		end 'binding'
 	end 'associatedFormalType'
 

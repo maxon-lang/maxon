@@ -824,6 +824,13 @@ export union ParseError implements Error
 	// IS its i64 tag, so `==` is a real tag compare); only `isUnion` triggers this. `op` is the
 	// operator's spelling (`==`/`!=`) for the message.
 	unionNotComparable(op String, line LineNumber, column ColumnNumber)
+	// Two values held at an INTERFACE type are compared. Renders as **E3005**, positioned at the operator.
+	// An existential erases the dynamic type, so `c == other` carried no way to compare the VALUES and
+	// lowered to a compare of the two fat pointers' value halves — measured answering `7 == 7` FALSE, and
+	// flipping `a > b` when the two allocations were reordered. `op` is the operator's spelling, from the
+	// same `comparisonOpSpelling` the union arm reads, so every form is named rather than only the two the
+	// corpus happens to exercise.
+	existentialNotComparable(op String, line LineNumber, column ColumnNumber)
 	// --- The reserved-name arm (P1.2 follow-up) ---
 	//
 	// A user DECLARATION whose name starts with `__` — the prefix Maxon reserves for compiler
@@ -26666,6 +26673,22 @@ export type Parser
 			return try self.emitStructEqualityCall(lhs, rhs: rhs, op: op, opTok: opTok)
 		end 'structEquality'
 
+		// ⭐⭐ **A COMPARISON OF TWO EXISTENTIALS IS REFUSED WITH ITS OWN REASON, NOT WITH "cannot compare
+		// Comparable with Comparable".** `comparableOperands` already returns false for the pair (see there for
+		// the measured wrong answers), so this changes no verdict — it changes what the author is told. The
+		// generic mismatch message names the two tags, which for a pair of existentials reads as though the
+		// types disagree when in fact they agree perfectly and the OPERATION is what has no meaning. Asked
+		// before that message for the same reason `unionNotComparable` is.
+		//
+		// ⚠ BOTH operands, where `comparableOperands`' backstop asks EITHER (`operandsAreInterfaceRef`, the
+		// shape `operandsAreStructRef` keeps). A MIXED pair — an existential against an `int` — really is a
+		// type mismatch, and it already reads as one: `typesAgree` refuses it and the message below names the
+		// two tags, which is the true and more useful answer there. Only a pair that AGREES and still cannot
+		// be compared needs this explanation.
+		if tagIsInterfaceRef(leftTag) and tagIsInterfaceRef(rightTag) 'existentialComparison'
+			throw ParseError.existentialNotComparable(comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
+		end 'existentialComparison'
+
 		// ⭐⭐ **A FLOAT-BACKED ENUM IS COMPARED AS ITS NUMBER — EXCEPT WHERE THE COMPARISON IS AN IDENTITY
 		// TEST (A4o).** Everything else here is exact for an enum already, because an enum value IS its i64
 		// tag; this is the one question the tag cannot answer, and it splits by operator:
@@ -27050,7 +27073,7 @@ export type Parser
 				continue
 			end 'notSelfFormal'
 
-			throw ParseError.unsupported("a `Self`-typed parameter of '{self.witnessCalleeName(target)}' dispatched on a value held at {self.witnessDispatchReceiverPhrase(receiver)} — a `Self` formal requires an argument of the RECEIVER's own dynamic type, and two values held at one interface may be different types, so nothing here can prove it. Dispatch it on a concrete value, or on a type parameter constrained to the interface", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("a `Self`-typed parameter of '{self.witnessCalleeName(target)}' dispatched on a value held at {self.witnessDispatchReceiverPhrase(receiver)} — a `Self` formal requires an argument of the RECEIVER's own dynamic type, and {ExistentialPairUnprovableReason}. Dispatch it on a concrete value, or on a type parameter constrained to the interface", line: methodTok.line, column: methodTok.column)
 		end 'eachFormal'
 	end 'requireWitnessSelfArgs'
 

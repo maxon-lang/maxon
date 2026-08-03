@@ -1730,15 +1730,21 @@ end 'main'
 40
 ```
 
-<!-- test: associated-types.two-conformers-agreeing-on-the-abi-class-still-compile -->
-The other FALSE-REJECT CONTROL, for E3119 specifically: TWO conformers binding one associated type, to
-DIFFERENT types that travel the SAME way. `Integer` and `Score` are different ranged aliases and both
-are the machine word, so there is one calling convention and the program compiles. What E3119 compares
-is the ABI CLASS, never the spelling — a refusal keyed on "the bindings differ" would reject this.
-`(5 + 10) + (6 + 10)`.
+<!-- test: error.two-conformers-binding-one-associated-type-differently -->
+⭐⭐ **THIS CASE WAS PINNED AS LEGAL ONE ROUND AGO, AND IT IS A LIVE WRONG ANSWER.** It was the
+false-reject control for a rule that compared the ABI CLASS: `Integer` and `Score` are different ranged
+aliases and the same machine word, so the two conformers were held to agree. They do not.
+**MEASURED with `t.take(5000)` at a call site both conformers reach: `A` answers 5000 and `B`
+RANGE-PANICS at run time**, because `Score`'s `int(0 to 100)` is `B`'s declared parameter and the shared
+body was compiled against `A`'s. Its sibling is worse — `String` beside `Integer`, also one ABI class,
+SEGFAULTED on x64 (exit 139) and silently answered 20 on wasm.
+⇒ The line is "two conformers bind a dispatched associated type to different TYPES", not "to different
+ABI classes". Under dictionary passing there is no per-conformer specialization at all: the body is
+compiled ONCE, against one binding, and every other conformer reinterprets those bits. The narrower
+rule was strictly inside where the wrong answers fall.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Score = int(0 to 1000)
+typealias Score = int(0 to 100)
 
 interface Taker uses Element
 	function take(e Element) returns Integer
@@ -1769,6 +1775,53 @@ type B implements Taker with Score
 end 'B'
 
 function useIt(t Taker) returns Integer
+	return t.take(5000)
+end 'useIt'
+
+function main() returns ExitCode
+	return (useIt(A.create(0)) + useIt(B.create(0))) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3119: specs/fragments/associated-types/error.two-conformers-binding-one-associated-type-differently.test:21:6: 'B' binds 'Taker's associated type 'Element' to 'Score', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces
+```
+
+<!-- test: associated-types.two-conformers-binding-the-same-type-still-compile -->
+The FALSE-REJECT CONTROL for E3119, re-cut after the rule moved: TWO conformers binding one associated
+type to the SAME type is exactly what the refusal above must NOT take with it, and it is the only
+two-conformer shape a shared body can be compiled for. `(5 + 10) + (6 + 10)`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type A implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'A'
+
+type B implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'B'
+
+function useIt(t Taker) returns Integer
 	return t.take(10)
 end 'useIt'
 
@@ -1778,6 +1831,94 @@ end 'main'
 ```
 ```exitcode
 31
+```
+
+<!-- test: associated-types.conformers-disagree-but-nothing-dispatches -->
+⭐⭐ **THE DISPATCH GATE, AND WITHOUT IT E3119 REFUSES A CORRECT PROGRAM.** Two conformers bind
+`Element` to `float` and to `Integer` — the disagreement the case two above refuses — but every call
+here is statically resolved, so no shared body is compiled against both and no witness table exists to
+be wrong about. **MEASURED: this program builds and answers 51 correctly on both targets, and a rule
+keyed only on "a requirement WRITES the name in an ABI position" refused it.** shv2 is whole-program,
+so which interfaces are actually dispatched is knowable exactly, and the check reads it off the
+`witnessDispatch` ops the parser emitted. `(0 + 20) + (11 + 20)`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type FloatRunner implements Taker with float
+	let base as Integer
+
+	function take(e float) returns Integer
+		return base + (20 if e > 19.0 else 0)
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'FloatRunner'
+
+type IntRunner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'IntRunner'
+
+function main() returns ExitCode
+	return (FloatRunner.create(0).take(20.0) + IntRunner.create(11).take(20)) as ExitCode
+end 'main'
+```
+```exitcode
+51
+```
+
+<!-- test: error.associated-return-bound-to-a-managed-type -->
+⭐⭐ **"MACHINE WORD" WAS THE WRONG PREDICATE FOR E3120, AND WHAT IT LET THROUGH LEAKED.** A `String`
+binding IS a machine word — a pointer — so the first cut of this rule admitted it. The parser types
+`m.make()` off the interface's spelling (`Element` → `named` → `int`), so nothing takes OWNERSHIP of the
+returned refcounted value and nothing releases it.
+**MEASURED: `with String` and `with Point` both ran to completion and exited 101 — the leak gate — on
+x64-windows AND wasm32-wasi. The same interface with the return SPELLED `String` instead of associated
+is clean, which attributes the leak exactly to the associated-return path.**
+⇒ The conjunct is an UNMANAGED machine word, and what "managed" means is
+`ProgramSignatures.declaredNameIsManaged` — the same answer a struct field's drop routing takes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker uses Element
+	function make() returns Element
+end 'Maker'
+
+type Runner implements Maker with String
+	let base as String
+
+	function make() returns String
+		return base
+	end 'make'
+
+	static function create(base String) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function useIt(m Maker) returns Integer
+	return m.make() + 11
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(Runner.create("hello")) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a-managed-type.test:8:6: 'Runner' binds 'Maker's associated type 'Element' to 'String', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and that is chosen while the interface is still only a NAME, because a conformer's binding is not known until every file has parsed. Bind it to an `int`, a ranged typealias or a payload-free enum, or take the value as a PARAMETER instead, where the binding IS resolved
 ```
 
 <!-- test: associated-types.assoc-return-bound-to-a-machine-word-still-compiles -->

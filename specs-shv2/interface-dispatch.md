@@ -1206,18 +1206,69 @@ and the `movqGprXmm` bitcast are each their own op.
 `a register-to-register move from xmm0 to rcx crosses register files` — with no source position and
 nothing an author could act on.** It is E2062's fact one widening position over: dictionary passing
 gives a type parameter and an existential the SAME opaque slot, so it gives them the same limit.
+⚠ The parameter is named `_` deliberately. This case is about the ARGUMENT, and an earlier draft used
+the two operands of `c < other` to consume them — which is the address-compare shape
+`error.existentials-cannot-be-compared` below refuses, so the program stopped reaching E3121 at all.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function use(c Comparable, other Comparable) returns Integer
-	return 11 if c < other else 20
+function use(_ Comparable) returns Integer
+	return 11
 end 'use'
 
 function main() returns ExitCode
-	return use(2.5, other: 9.5) as ExitCode
+	return use(2.5) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3121: specs/fragments/interface-dispatch/error.float-cannot-be-held-at-an-interface.test:9:9: Cannot pass a `float` as 'c', which is declared at the interface type 'Comparable': a value held at an interface travels as a fat pointer whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`
-error E3121: specs/fragments/interface-dispatch/error.float-cannot-be-held-at-an-interface.test:9:9: Cannot pass a `float` as 'other', which is declared at the interface type 'Comparable': a value held at an interface travels as a fat pointer whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`
+error E3121: specs/fragments/interface-dispatch/error.float-cannot-be-held-at-an-interface.test:9:9: Cannot pass a `float` as '_', which is declared at the interface type 'Comparable': a value held at an interface travels as a fat pointer whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`
+```
+
+<!-- test: error.existentials-cannot-be-compared -->
+⭐⭐ **COMPARING TWO VALUES HELD AT ONE INTERFACE ANSWERED WITH THEIR HEAP ADDRESSES, SILENTLY, ON EVERY
+TARGET.** `typeClassOf` gives `interfaceRef` its own class, so a pair of existentials passed the
+agreement gate; neither is a float, so the domain test passed them too — and the comparison lowered to
+an integer compare of the two fat pointers' VALUE HALVES.
+**MEASURED before the rule, identically on x64-windows and wasm32-wasi, on two distinct `Wrapped(7)`
+boxes: `7 == 7` answered `false`, `7 != 7` answered `true`, `7 >= 7` answered `false`, and
+`a(2) > b(1)` FLIPPED its answer when the two allocations were reordered.** Reference identity
+answering a question the author asked about values — word for word the hazard `comparableOperands`
+already refused for two structs, one tag over.
+It is also the OPERATOR half of a rule whose METHOD half was already closed: dispatching a `Self`-typed
+requirement on an existential is refused by `requireWitnessSelfArgs`, because two values held at one
+interface may have different dynamic types and nothing can prove they match — which is exactly what
+`==` and `<` need. Both doors now read the one sentence in `IrInterface.ExistentialPairUnprovableReason`.
+⚠ All six operators are refused, not only the two the corpus exercises. A MIXED pair (an existential
+against an `int`) is untouched and still reads as the type mismatch it is.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapped implements Comparable
+	let v as Integer
+
+	export function compare(other Wrapped) returns Ordering
+		if self.v > other.v 'gt'
+			return Ordering.greaterThan
+		end 'gt'
+		if self.v < other.v 'lt'
+			return Ordering.lessThan
+		end 'lt'
+		return Ordering.equalTo
+	end 'compare'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Wrapped'
+
+function existEq(c Comparable, other Comparable) returns bool
+	return c == other
+end 'existEq'
+
+function main() returns ExitCode
+	return 0 if existEq(Wrapped.create(7), other: Wrapped.create(7)) else 1
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/interface-dispatch/error.existentials-cannot-be-compared.test:23:11: cannot compare values held at an interface type using '==': two values held at one interface may have different dynamic types, and nothing here can prove they match, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares
 ```

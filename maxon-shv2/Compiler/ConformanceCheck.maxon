@@ -74,99 +74,166 @@ export function checkConformance(project Project, module MaxonModule, signatures
 		checkOneConformance(project, functionsByName: functionsByName, conformance: conformance, signatures: signatures)
 	end 'eachDecl'
 
-	checkAssociatedTypeAbiAgreement(project, signatures: signatures)
+	checkAssociatedTypeAbiAgreement(project, module: module, signatures: signatures)
 end 'checkConformance'
 
-// ⭐⭐ **REFUSE AN ASSOCIATED TYPE THAT TWO CONFORMERS BIND TO DIFFERENT ABI CLASSES, WHERE IT REACHES THE
-// CALLING CONVENTION (E3119).** Under dictionary passing an interface's method bodies are compiled ONCE for
-// every conformer, so a witness dispatch has exactly one functype: one register file and one width per
-// argument. `implements Taker with float` wants an f64 argument and `implements Taker with Integer` an i64,
-// and no single emitted call can be both — so a program holding both has no honest lowering.
+// ⭐⭐ **AN ASSOCIATED TYPE A DISPATCHED REQUIREMENT WRITES IN AN ABI POSITION HAS EXACTLY ONE LEGAL BINDING
+// (E3119), AND MUST NOT BE MANAGED WHEN IT IS THE RESULT (E3120).** Both refusals key on the same three
+// facts, so they are decided in one walk: the interface is actually DISPATCHED, the associated type reaches
+// the CALLING CONVENTION, and what the conformers bound it to.
 //
-// ⚠ **IT IS REFUSED ON EVERY TARGET, AND THE REGISTER TARGETS ARE WHY.** MEASURED on one call site reached
-// with both conformers: wasm32-wasi trapped `indirect call type mismatch`, but x64-windows compiled clean and
-// answered 1 where the program computes 51 — the float conformer's argument read out of the wrong register
-// file. A wasm-only guard would have left the SILENT half shipping, so this lives in a whole-program semantic
-// check that no backend can opt out of, and it runs before lowering (the pipeline's error gate throws).
+// ⚠ **DISPATCH IS THE GATE, AND WITHOUT IT THE CHECK FALSE-REJECTS A CORRECT PROGRAM.** Two conformers of one
+// interface are only in tension if a SHARED body is compiled against both; a program whose every call is
+// statically resolved has no shared body and no witness table to be wrong about. MEASURED: two conformers
+// binding `Element` to `float` and to `Integer`, every call direct, ran correctly (51) and was refused.
+// shv2 is whole-program, so which interfaces are dispatched is knowable exactly — `dispatchedInterfaceNames`
+// reads it off the ops the parser emitted.
 //
-// ⚠ **IT FIRES ONLY WHERE THE ASSOCIATED TYPE REACHES THE ABI** — a requirement's PARAMETER or RETURN
-// position. One written only in a field type constrains no call, and refusing it would refuse programs that
-// compile correctly. What is compared is the ABI CLASS and not the spelling, so `with Integer` beside
-// `with Score` is fine: two ranged aliases are one machine word (`associatedAbiBindingOf`).
-function checkAssociatedTypeAbiAgreement(project Project, signatures ProgramSignatures)
+// ⚠ **BOTH ARE REFUSED ON EVERY TARGET, AND THE REGISTER TARGETS ARE WHY.** wasm traps `indirect call type
+// mismatch`, which is loud; x64-windows compiled every one of these clean and answered 1 for 51, 20 for 51,
+// 35 for 31, leaked (exit 101), or SEGFAULTED. A wasm-only guard would have left the silent half shipping.
+function checkAssociatedTypeAbiAgreement(project Project, module MaxonModule, signatures ProgramSignatures)
+	let dispatched = dispatchedInterfaceNames(module, signatures: signatures)
+	if dispatched.count() == 0 'nothingDispatchesThroughAWitnessTable'
+		return
+	end 'nothingDispatchesThroughAWitnessTable'
+
 	for (_, iface) in signatures.interfaceMap() 'eachInterface'
+		if not dispatched.contains(iface.name) 'neverDispatched'
+			continue
+		end 'neverDispatched'
+
 		for position in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
 			let name = try iface.associatedTypeNames.get(position) otherwise panic("checkAssociatedTypeAbiAgreement: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()}")
-			if not interfaceRequirementUsesTypeInAbiPosition(iface, name: name) 'reachesNoCallingConvention'
-				continue
-			end 'reachesNoCallingConvention'
-
-			match associatedAbiBindingOf(project.conformances, interfaceName: iface.name, position: position) 'binding'
-				agreed(declaredType) then checkAssociatedReturnIsMachineWord(project, iface: iface, name: name, declaredType: declaredType)
-				unconformed then break 'binding'
-				disagreed(firstConformer, firstBinding, secondConformer, secondBinding) then reportAssociatedTypeAbiDisagreement(project, iface: iface, name: name, firstConformer: firstConformer, firstBinding: firstBinding, secondConformer: secondConformer, secondBinding: secondBinding)
-			end 'binding'
+			checkOneAssociatedType(project, signatures: signatures, iface: iface, name: name, position: position)
 		end 'eachAssociatedType'
 	end 'eachInterface'
 end 'checkAssociatedTypeAbiAgreement'
 
-// ⭐⭐ **REFUSE AN ASSOCIATED RETURN THAT IS NOT A MACHINE WORD (E3120), AND THE ASYMMETRY WITH THE PARAMETER
-// POSITION IS THE WHOLE POINT.** A dispatch's ARGUMENT types are settled where the call is emitted, so an
-// associated parameter needs nothing from the front end: `LowerMaxonToStd.witnessFormalType` resolves the
-// binding and `widenIntArgsToFloatParams` coerces the actual to it. A RESULT's type does not stay at the call
-// — `m.make() > 19.0` picks a float or an integer compare and `m.make() + 11` picks an instruction — and the
-// PARSER decides that, from `Parser.interfaceReturnMaxonType`, off the interface's own rendered spelling. That
-// spelling names the associated type; it cannot name what a conformer bound it to, and there is no
-// whole-program conformance registry mid-parse to ask (`project.conformances` is filled at MERGE, after every
-// file has parsed). So the front end has nothing available, and a program it cannot type is refused rather
-// than compiled to the wrong instruction.
+// The two verdicts for ONE associated type of one dispatched interface. Split out so the walk above reads as
+// the three gates it is, and so the ABI-position test is asked once for both refusals.
+function checkOneAssociatedType(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementCount)
+	if not requirementWritesTypeInAbiPosition(iface, name: name) 'reachesNoCallingConvention'
+		return
+	end 'reachesNoCallingConvention'
+
+	match associatedAbiBindingOf(project.conformances, interfaceName: iface.name, position: position) 'binding'
+		agreed(conformer, binding, _) then checkAssociatedReturnIsUnmanagedMachineWord(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding)
+		unconformed then break 'binding'
+		disagreed(first, firstBinding, second, secondBinding) then reportAssociatedTypeBindingDisagreement(project, iface: iface, name: name, first: first, firstBinding: firstBinding, second: second, secondBinding: secondBinding)
+	end 'binding'
+end 'checkOneAssociatedType'
+
+// ⭐ **EVERY INTERFACE THE PROGRAM ACTUALLY DISPATCHES THROUGH**, read off the two witness-dispatch ops the
+// parser emits. Each carries the `interfaceDeclIndex` its `methodIndex` is numbered against — the same handle
+// `LowerMaxonToStd` resolves the requirement through — so this asks the identical question the emission asks
+// and cannot come to a different answer about which tables are live.
 //
-// MEASURED before the rule: `make() returns Element` under `implements Maker with float` answered 35 on
-// x64-windows where the program computes 31 — the f64 read out of the integer return register — and trapped on
-// wasm. NARROW by construction: a binding that IS a machine word is untouched, which is every struct, every
-// ranged alias, every generic instance and `int`, so nothing that compiles today stops compiling.
-function checkAssociatedReturnIsMachineWord(project Project, iface IrInterface, name ByteArray, declaredType MaxonType)
-	if maxonTypeToStdType(declaredType) == StdType.i64 'travelsAsAMachineWord'
+// A program that dispatches nothing (the whole corpus but the interface families) walks its ops once and
+// returns an empty set, and the caller then does nothing at all.
+function dispatchedInterfaceNames(module MaxonModule, signatures ProgramSignatures) returns InterfaceNameSet
+	var names = InterfaceNameSet.create()
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("dispatchedInterfaceNames: blockRef {blockRef} not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				noteDispatchedInterface(try module.ops.get(opIdx) otherwise panic("dispatchedInterfaceNames: opIdx {opIdx} not in module.ops"), names: names, signatures: signatures)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return names
+end 'dispatchedInterfaceNames'
+
+// Record the interface one op dispatches through, if it dispatches at all. It RANGES over the whole `MaxonOp`
+// union so a newly-appended op FAILS TO COMPILE here rather than being silently swept into an ignore arm (the
+// band-append invariant) — which for this walk would mean a dispatch form that quietly escapes both refusals.
+function noteDispatchedInterface(op MaxonOp, names InterfaceNameSet, signatures ProgramSignatures)
+	match op 'op'
+		call to switch then break 'op'
+		witnessDispatch(_, _, _, _, interfaceDeclIndex, _, _) then names.insert(signatures.interfaceNameAtDeclIndex(interfaceDeclIndex))
+		witnessTryDispatch(_, _, _, _, _, interfaceDeclIndex, _) then names.insert(signatures.interfaceNameAtDeclIndex(interfaceDeclIndex))
+		panicAbortValue then break 'op'
+	end 'op'
+end 'noteDispatchedInterface'
+
+// ⭐⭐ **REFUSE AN ASSOCIATED RETURN BOUND TO ANYTHING BUT AN UNMANAGED MACHINE WORD (E3120), AND "MACHINE
+// WORD" ALONE WAS THE WRONG PREDICATE.** The parser types a dispatch's result from the interface's own
+// rendered spelling, which names the associated type and can never name what a conformer bound it to — so the
+// result is typed `int`. For a `float` binding that is the wrong WIDTH and register file. For a MANAGED
+// binding it is the wrong OWNERSHIP: nothing takes ownership of the returned refcounted value and nothing
+// releases it. MEASURED: `with String` and `with Point` both leaked, **exit 101 on x64 AND wasm**, while the
+// same interface with the return SPELLED `String` instead of associated was clean — which attributes the leak
+// exactly to this path.
+//
+// The admitted set is therefore "an unmanaged machine word", asked of the BINDING NAME because the resolved
+// type has already collapsed a struct and a ranged alias to the same `integer` (`renderedTypeNameAbiType`).
+function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray)
+	if bindingIsUnmanagedMachineWord(signatures, binding: binding) 'travelsAsAPlainWord'
 		return
-	end 'travelsAsAMachineWord'
+	end 'travelsAsAPlainWord'
 
-	for method in iface.methods 'eachRequirement'
-		if not method.returnTypeName.equals(name) 'notThisRequirementsResult'
-			continue
-		end 'notThisRequirementsResult'
-
-		reportAssociatedReturnNotMachineWord(project, iface: iface, name: name, methodName: method.name)
+	if not requirementReturnsType(iface, name: name) 'notAResultAnywhere'
 		return
-	end 'eachRequirement'
-end 'checkAssociatedReturnIsMachineWord'
+	end 'notAResultAnywhere'
 
-// The E3120 message, anchored on the FIRST conformer of the interface — the declaration that gave the
-// associated type the class being refused. The interface's own declaration site is not available here
-// (`IrInterface` carries no position; `InterfaceDeclSite` is a token cursor the sweep keeps), and a
-// conformance is the thing the author would edit anyway.
-function reportAssociatedReturnNotMachineWord(project Project, iface IrInterface, name ByteArray, methodName ByteArray)
-	for decl in project.conformances 'findAConformer'
-		for entry in decl.interfaces 'eachInterface'
-			if not entry.interfaceName.equals(iface.name) 'otherInterface'
-				continue
-			end 'otherInterface'
+	reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(binding)}', and '{String.from(name)}' is the RETURN type of one of '{String.from(iface.name)}'s requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and that is chosen while the interface is still only a NAME, because a conformer's binding is not known until every file has parsed. Bind it to an `int`, a ranged typealias or a payload-free enum, or take the value as a PARAMETER instead, where the binding IS resolved", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
+end 'checkAssociatedReturnIsUnmanagedMachineWord'
 
-			reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(decl.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to a type that does not travel as a machine word, and '{String.from(name)}' is the RETURN type of the requirement '{String.from(methodName)}'. A dispatch's result type flows on into the arithmetic around it, and that is chosen while the interface is still only a NAME — the conformer's binding is not known until every file has parsed, so the compiler cannot type '{String.from(methodName)}()' at its call sites. Return a machine-word type (an `int`, a ranged alias, a struct) and let the caller convert, or make the requirement take the value as a parameter instead", line: decl.nameLine, column: decl.nameColumn, filePath: decl.filePath)
-			return
-		end 'eachInterface'
-	end 'findAConformer'
+// Can shv2 PROVE this binding is a plain, unowned machine word? The BUILTIN names it answers itself — `int`
+// alone qualifies, because `float`/`bool`/`ExitCode` are not machine words at all and `String` is a managed
+// byte record. Every other name is a DECLARED one, and `ProgramSignatures.declaredNameIsManaged` is the single
+// home of "does a value of this declared name own a record?", the same answer a struct field's drop routing
+// takes: a ranged alias and a payload-free enum are scalars there, a struct, a boxed union and a generic
+// instance are not. Asking it rather than re-listing the forms is what stops this from becoming the fifth
+// cascade over those registries that function exists to have collapsed.
+//
+// A name no registry declares answers "unmanaged", and that is safe rather than lax: an undeclared type in a
+// conformance is E3011 long before this, so the program is already refused.
+function bindingIsUnmanagedMachineWord(signatures ProgramSignatures, binding ByteArray) returns bool
+	let tag = builtinTypeNameTag(binding)
+	if tag != ValueTypeTag.named 'aBuiltinTypeName'
+		return tag == ValueTypeTag.integer
+	end 'aBuiltinTypeName'
 
-	panic("reportAssociatedReturnNotMachineWord: '{String.from(iface.name)}' has an agreed associated-type binding but no `ConformanceDecl` names it — `associatedAbiBindingOf` and this walk read the same store")
-end 'reportAssociatedReturnNotMachineWord'
+	return not signatures.declaredNameIsManaged(binding)
+end 'bindingIsUnmanagedMachineWord'
 
-// Does any requirement of `iface` write `name` as a PARAMETER or RETURN type — i.e. does it reach a witness
-// call's calling convention at all? Only the interface's OWN requirements are asked: a parent's are checked
-// when the parent itself is walked, and a parent's associated types are the parent's to constrain.
-function interfaceRequirementUsesTypeInAbiPosition(iface IrInterface, name ByteArray) returns bool
+// The E3119 message, anchored on the SECOND conformer — the declaration that introduced the disagreement,
+// exactly as `checkTypeSymbolNamespace` blames the newcomer rather than the claimant that settled the name.
+// Both declarations arrive ON the fold's answer, so nothing is re-derived here and nothing has to panic if a
+// re-derivation misses.
+function reportAssociatedTypeBindingDisagreement(project Project, iface IrInterface, name ByteArray, first ConformanceDecl, firstBinding ByteArray, second ConformanceDecl, secondBinding ByteArray)
+	reportPositioned(project, code: ErrorCode.associatedTypeAbiDisagreement, message: "'{String.from(second.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(secondBinding)}', but '{String.from(first.typeName)}' binds it to '{String.from(firstBinding)}' — and '{String.from(name)}' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces", line: second.nameLine, column: second.nameColumn, filePath: second.filePath)
+end 'reportAssociatedTypeBindingDisagreement'
+
+// Does any requirement of `iface` write `name` where it reaches a witness call's calling convention — a
+// PARAMETER or the RETURN? Only the interface's OWN requirements are asked: a parent's are checked when the
+// parent itself is walked, and a parent's associated types are the parent's to constrain.
+//
+// ⚠ **A `throws` CLAUSE IS A THIRD POSITION AN ASSOCIATED TYPE CAN REACH, AND IT IS DELIBERATELY NOT ONE OF
+// THESE.** `substituteAssociatedTypes` substitutes into it, so `function next() throws Element` is
+// well-formed. It does not reach the ABI: the error travels through the dual-register flag, the error VALUE is
+// an enum ordinal in a machine word whatever the clause names, and the clause is compared by NAME
+// (`requireSameErrorType`) rather than lowered. MEASURED green on both targets. If a throwing witness call
+// ever carries the error's own type in its signature, this predicate is where that becomes a third arm.
+function requirementWritesTypeInAbiPosition(iface IrInterface, name ByteArray) returns bool
+	return requirementReturnsType(iface, name: name) or requirementTakesType(iface, name: name)
+end 'requirementWritesTypeInAbiPosition'
+
+// Is `name` the RETURN type of any of `iface`'s own requirements? The half E3120 asks alone — written once
+// here rather than a second time inside that check, which is what let the two scans drift apart.
+function requirementReturnsType(iface IrInterface, name ByteArray) returns bool
 	for method in iface.methods 'eachRequirement'
 		if method.returnTypeName.equals(name) 'inTheResult'
 			return true
 		end 'inTheResult'
+	end 'eachRequirement'
+	return false
+end 'requirementReturnsType'
+
+// Is `name` a PARAMETER type of any of `iface`'s own requirements? `requirementReturnsType`'s twin.
+function requirementTakesType(iface IrInterface, name ByteArray) returns bool
+	for method in iface.methods 'eachRequirement'
 		for paramTypeName in method.paramTypeNames 'eachFormal'
 			if paramTypeName.equals(name) 'inAnArgument'
 				return true
@@ -174,24 +241,7 @@ function interfaceRequirementUsesTypeInAbiPosition(iface IrInterface, name ByteA
 		end 'eachFormal'
 	end 'eachRequirement'
 	return false
-end 'interfaceRequirementUsesTypeInAbiPosition'
-
-// The E3119 message, anchored on the SECOND conformer's type name — the declaration that introduced the
-// disagreement, exactly as `checkTypeSymbolNamespace` blames the newcomer rather than the claimant that
-// settled the name. Its position comes from that conformance's own `ConformanceDecl`, so the caret lands on a
-// type the author wrote.
-function reportAssociatedTypeAbiDisagreement(project Project, iface IrInterface, name ByteArray, firstConformer ByteArray, firstBinding ByteArray, secondConformer ByteArray, secondBinding ByteArray)
-	for decl in project.conformances 'findTheNewcomer'
-		if not decl.typeName.equals(secondConformer) 'otherType'
-			continue
-		end 'otherType'
-
-		reportPositioned(project, code: ErrorCode.associatedTypeAbiDisagreement, message: "'{String.from(secondConformer)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(secondBinding)}', but '{String.from(firstConformer)}' binds it to '{String.from(firstBinding)}' — and '{String.from(name)}' is written as a parameter or return type of one of '{String.from(iface.name)}'s requirements. A witness dispatch is compiled ONCE for every conformer, so those two bindings would need one call to pass its argument in a float register and in a general-purpose register at the same time. Bind the associated type to types that travel the same way, or give the two conformers different interfaces", line: decl.nameLine, column: decl.nameColumn, filePath: decl.filePath)
-		return
-	end 'findTheNewcomer'
-
-	panic("reportAssociatedTypeAbiDisagreement: '{String.from(secondConformer)}' was reported as a conformer of '{String.from(iface.name)}' by `associatedAbiBindingOf` but is in no `ConformanceDecl` — the two read the same store")
-end 'reportAssociatedTypeAbiDisagreement'
+end 'requirementTakesType'
 
 // The interfaces a type is DECLARED to implement — `Point` -> {`Digest`}. Built from `project.conformances`
 // for the E3017 where-constraint check: an instantiation `Box with Point where T is Digest` is legal iff

@@ -1214,6 +1214,9 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// ported `enum-match-only.md` `maxoncstderr` goldens gate this stderr exactly, so the two
 		// compilers must not drift.
 		unionNotComparable(op, line, column) then reportPositioned(project, code: ErrorCode.semanticEnumNotComparable, message: "cannot compare union values using '{op}', use 'match' instead", line: line, column: column, filePath: path)
+		// The OPERATOR half of the existential-identity rule; its METHOD half is the `unsupported` arm
+		// `Parser.requireWitnessSelfArgs` throws, and both messages end in the same shared sentence.
+		existentialNotComparable(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot compare values held at an interface type using '{op}': {ExistentialPairUnprovableReason}, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares", line: line, column: column, filePath: path)
 		// The reserved-name arm (P1.2 follow-up). Byte-for-byte the bootstrap's text — the ported
 		// `reserved-double-underscore.md` `maxoncstderr` goldens gate this stderr exactly, so the two
 		// compilers must not drift.

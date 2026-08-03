@@ -1,12 +1,23 @@
-// Test: associated-types.two-conformers-agreeing-on-the-abi-class-still-compile
+// Test: associated-types.conformers-disagree-but-nothing-dispatches
 typealias Integer = int(i64.min to i64.max)
-typealias Score = int(0 to 1000)
 
 interface Taker uses Element
 	function take(e Element) returns Integer
 end 'Taker'
 
-type A implements Taker with Integer
+type FloatRunner implements Taker with float
+	let base as Integer
+
+	function take(e float) returns Integer
+		return base + (20 if e > 19.0 else 0)
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'FloatRunner'
+
+type IntRunner implements Taker with Integer
 	let base as Integer
 
 	function take(e Integer) returns Integer
@@ -16,29 +27,13 @@ type A implements Taker with Integer
 	static function create(base Integer) returns Self
 		return Self{base: base}
 	end 'create'
-end 'A'
-
-type B implements Taker with Score
-	let base as Integer
-
-	function take(e Score) returns Integer
-		return base + e
-	end 'take'
-
-	static function create(base Integer) returns Self
-		return Self{base: base}
-	end 'create'
-end 'B'
-
-function useIt(t Taker) returns Integer
-	return t.take(10)
-end 'useIt'
+end 'IntRunner'
 
 function main() returns ExitCode
-	return (useIt(A.create(5)) + useIt(B.create(6))) as ExitCode
+	return (FloatRunner.create(0).take(20.0) + IntRunner.create(11).take(20)) as ExitCode
 end 'main'
 ---
-ExitCode: 31
+ExitCode: 51
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -46,17 +41,28 @@ data {
   __mm_alloc_count@16 = i64 0
 }
 
-func @A.take {
+func @FloatRunner.take {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.leaRegRegReg r8, rax, rdx
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 rcx, 20
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 rcx, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.leaRegRegReg r8, rax, rcx
     x64.popReg rbp
     x64.ret
 }
 
-func @A.create {
+func @FloatRunner.create {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -73,34 +79,17 @@ func @A.create {
     x64.ret
 }
 
-func @B.take {
+func @IntRunner.take {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg r8, rax, rdx
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
 
-func @B.create {
+func @IntRunner.create {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -111,21 +100,6 @@ func @B.create {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @useIt {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rdx
-    x64.movRegImm32 rdx, 10
-    x64.callMem [rbx + 24]
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -140,19 +114,19 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.movRegImm32 rcx, 5
-    x64.callDirect A.create
+    x64.movRegImm32 rcx, 0
+    x64.callDirect FloatRunner.create
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rdx, [rip + __witness_A.Taker]
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
     x64.movRegReg rcx, rbx
-    x64.callDirect useIt
+    x64.callDirect FloatRunner.take
     x64.movRegReg r12, r8
-    x64.movRegImm32 rcx, 6
-    x64.callDirect B.create
+    x64.movRegImm32 rcx, 11
+    x64.callDirect IntRunner.create
     x64.movRegReg r13, r8
-    x64.leaRegRdata rdx, [rip + __witness_B.Taker]
+    x64.movRegImm32 rdx, 20
     x64.movRegReg rcx, r13
-    x64.callDirect useIt
+    x64.callDirect IntRunner.take
     x64.leaRegRegReg r12, r12, r8
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
@@ -163,7 +137,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

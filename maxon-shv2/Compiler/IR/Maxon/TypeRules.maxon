@@ -1922,6 +1922,23 @@ export function comparableOperands(left ValueTypeTag, right ValueTypeTag) return
 		return false
 	end 'noStructuralEquality'
 
+	// ⚠⚠ **TWO EXISTENTIALS AGREE AND STILL DO NOT COMPARE — THE STRUCT RULE ABOVE, ONE TAG OVER, AND IT WAS
+	// MISSING.** `typeClassOf` gives `interfaceRef` its own `TypeClass.interfaceValue`, so a pair of them passes
+	// the agreement gate; neither is a float, so the domain test below passed them too — and `c == other`
+	// lowered to an integer compare of the two FAT POINTERS' value halves. MEASURED on two `Wrapped(7)` boxes,
+	// identically on x64 and wasm: `7 == 7` answered **false**, `7 != 7` **true**, `7 >= 7` **false**, and
+	// `a(2) > b(1)` flipped its answer when the two allocations were reordered. Reference identity silently
+	// answering a question about VALUES — word for word the hazard the paragraph above refuses for structs.
+	//
+	// ⚠ It is also the OPERATOR half of a rule whose METHOD half was already closed: dispatching a `Self`-typed
+	// requirement on an existential is refused by `Parser.requireWitnessSelfArgs`, because two values held at
+	// one interface may have different dynamic types and nothing can prove they match — which is exactly what
+	// `==` and `<` need. Both doors now say so, from the one sentence in
+	// `IrInterface.ExistentialPairUnprovableReason`.
+	if operandsAreInterfaceRef(left, right: right) 'noExistentialIdentity'
+		return false
+	end 'noExistentialIdentity'
+
 	// ⚠ **TWO STRINGS AGREE AND STILL DO NOT `comparableOperands`**, and this is what keeps ORDERING
 	// (`s < t`, `s >= t`) out of the language. `==`/`!=` on strings never reach here — `Parser.emitCompare`
 	// special-cases a both-`string` pair at its TOP, routing it to the `__str_eq` runtime call before
@@ -2004,6 +2021,18 @@ end 'operandsAreByteRecord'
 export function operandsAreStructRef(left ValueTypeTag, right ValueTypeTag) returns bool
 	return tagIsStructRef(left) or tagIsStructRef(right)
 end 'operandsAreStructRef'
+
+// True for the tag of a value held at an INTERFACE type — the same DEFINITELY question `tagIsStructRef`
+// asks, for the type that is a FAT POINTER rather than a plain one.
+export function tagIsInterfaceRef(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.interfaceRef
+end 'tagIsInterfaceRef'
+
+// Either operand held at an interface — `operandsAreStructRef`'s shape, and asked for the same reason: an
+// operator that has no reading for one existential has none for a pair of them either.
+export function operandsAreInterfaceRef(left ValueTypeTag, right ValueTypeTag) returns bool
+	return tagIsInterfaceRef(left) or tagIsInterfaceRef(right)
+end 'operandsAreInterfaceRef'
 
 // ⭐ **WHAT A FLOAT ZERO IS, AS BITS** — IEEE-754 `+0.0`, whose encoding is all 64 bits clear.
 //
