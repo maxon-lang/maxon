@@ -3744,8 +3744,8 @@ function rosterHasMember(name ByteArray, roster ByteArrayArray) returns bool
 end 'rosterHasMember'
 
 // A roster as a refusal prints it — `length/capacity/get/…`, joined from the list the dispatch consults
-// rather than transcribed beside it. `IrInterface.builtinConformerMethodNames` renders a diagnostic's
-// method list off its own dispatch walk for the identical reason.
+// rather than transcribed beside it. `IrInterface.builtinConformerDispatchMethodNames` renders a
+// diagnostic's method list off its own dispatch walk for the identical reason.
 //
 // ⚠ ONE renderer for BOTH surfaces: a second `/`-join would be the very duplication these lists exist to
 // remove — two spellings of one sentence's shape, free to drift in punctuation while each stays "derived".
@@ -26975,6 +26975,26 @@ export type Parser
 		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
 	end 'materializeStructToStringPart'
 
+	// ⭐ **ONE VALUE'S TEXT, WITH NOTHING AROUND IT — `"{x}"` MINUS THE LITERAL FRAGMENTS.** The whole of
+	// `x.toString()` on a builtin-typed receiver (`dispatchBuiltinConformanceMethod`), and it is the
+	// interpolation path rather than a path LIKE it: the same `materializeInterpExpr` chooses the same arm
+	// per tag (`__int_to_string` for an integer and for a ranged `Byte` alias, `__bool_to_string` for a
+	// bool, the `stdlib/Builtins.maxon` `__float_toString` call for a float), and the same
+	// `emitStringInterp` assembles the same fused owned record and frees the same scratch. So there is no
+	// second formatter to keep in step, and `x.toString()` cannot come to disagree with `"{x}"` — the
+	// property this project has already paid to learn the cost of.
+	//
+	// The result is an owned temporary exactly as an interpolation's is (`emitStringInterp` →
+	// `trackOwnedTemp`): `let s = x.toString()` transfers it to a scope-exit drop through `parseBinding`,
+	// and a bare `x.toString()` statement drops at statement end.
+	function emitValueToString(exprVal ValueId, exprTok Token, range SourceRange) returns ValueId throws ParseError
+		var partBufs = ValueIdArray.create()
+		var partLens = ValueIdArray.create()
+		var scratchIds = ValueIdArray.create()
+		try self.materializeInterpExpr(exprVal, exprTok: exprTok, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+	end 'emitValueToString'
+
 	// A String-record part: load `buffer@0` and `length@8` off the record. Shared by literal fragments and
 	// `{s}` String parts — both are pointers to the fused 48-byte record, so both read the same two fields.
 	function materializeStringRecordPart(rec ValueId, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange)
@@ -30877,9 +30897,30 @@ export type Parser
 	function dispatchBuiltinConformanceMethod(func IrFunction, receiver ValueId, conformer BuiltinConformer, baseTok Token) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let typeName = builtinConformerName(conformer)
+
+		// ⭐⭐ **`x.toString()` IS `Stringable`'S METHOD AND IT REACHES NO IMPL — IT IS LOWERED, exactly as
+		// `"{x}"` is** (`specs-shv2/primitive-stringable.md`, whose Notes say "uses the same conversion as
+		// string interpolation" and mean it literally). Both reference compilers say the same thing by
+		// construction: `stdlib/PrimitiveExtensions.maxon` gives `int`/`float`/`bool` an
+		// `extension … implements … Stringable` whose whole body is `return "{self}"`, so a reference's
+		// `x.toString()` is a call frame around one interpolation. shv2 has no `extension` mechanism to hang
+		// that body on, so it emits the body's ONE expression here and skips the frame — which is why this arm
+		// sits AHEAD of the conformance lookup rather than adding a fourth protocol to it.
+		//
+		// ⚠ **AND THAT IS WHY `Stringable` IS DELIBERATELY ABSENT FROM `isIntrinsicBuiltinConformance`.** That
+		// predicate is the WITNESS-TABLE answer: every conformance it admits owes a real `<type>.<method>`
+		// symbol for a slot's reloc to name (see its header). A lowering has no symbol, so admitting
+		// `Stringable` there would make `where T is Stringable` typecheck against a slot nothing can fill —
+		// a link-time panic in place of today's clean refusal. The language-level conformance is real; the
+		// dictionary-passing one is not built, and the two are kept apart on purpose.
+		if methodTok.value.equals(ToStringMethodName) 'stringableLowering'
+			try self.consumeEmptyArgList()
+			return try self.emitValueToString(receiver, exprTok: methodTok, range: SourceRange.between(baseTok, last: methodTok))
+		end 'stringableLowering'
+
 		match builtinConformerMethod(typeName, methodName: methodTok.value) 'lookup'
 			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: receiver, conformer: conformer, method: method, baseTok: baseTok, methodTok: methodTok)
-			notSupplied then throw ParseError.unsupported("'{String.from(typeName)}' has no method named '{String.from(methodTok.value)}' — its builtin conformances supply {builtinConformerMethodNames(typeName)}; `toString`/`clone` need the Stringable/Cloneable impls, which are not built", line: methodTok.line, column: methodTok.column)
+			notSupplied then throw ParseError.unsupported("'{String.from(typeName)}' has no method named '{String.from(methodTok.value)}' — a builtin-typed receiver supplies {builtinConformerDispatchMethodNames(typeName)}", line: methodTok.line, column: methodTok.column)
 		end 'lookup'
 	end 'dispatchBuiltinConformanceMethod'
 

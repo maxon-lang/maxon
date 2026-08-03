@@ -1301,15 +1301,27 @@ export function builtinConformerMethodNameList(typeName ByteArray) returns ByteA
 	return names
 end 'builtinConformerMethodNameList'
 
-// The same answer as a diagnostic prints it — "`hash`, `equals`". Joined from the list above rather than
-// walked a second time, for the reason stated there.
-export function builtinConformerMethodNames(typeName ByteArray) returns String
+// ⭐ **EVERYTHING A DIRECT `<value>.<name>(…)` DISPATCH ON A BUILTIN CONFORMER RESOLVES, as a diagnostic
+// prints it** — "`hash`, `equals`, `compare`, `toString`". Joined from the list above rather than walked a
+// second time, for the reason stated there, plus `toString`, which that list structurally cannot carry.
+//
+// ⚠ **`toString` IS APPENDED HERE AND NOT PUSHED INTO `builtinConformerMethodNameList`, and the two are
+// different questions rather than two spellings of one.** That list answers *"which INTRINSIC CONFORMANCE
+// methods does this type supply?"* — every entry names an installed `<type>.<method>` impl a witness slot
+// can be stamped with. `toString` names none: `Parser.dispatchBuiltinConformanceMethod` LOWERS it to the
+// very conversion `"{x}"` lowers to, so there is no symbol and none is needed. Pushing it into the
+// conformance list would also be read by `Parser.stringSurfaceMemberNames`, which GATES the `String`
+// dispatcher on that list — admitting `s.toString()` at the gate and then finding no supplier behind it.
+export function builtinConformerDispatchMethodNames(typeName ByteArray) returns String
+	var names = builtinConformerMethodNameList(typeName)
+	names.push(ToStringMethodName)
+
 	var rendered = ""
-	for methodName in builtinConformerMethodNameList(typeName) 'eachMethod'
+	for methodName in names 'eachMethod'
 		if not rendered.isEmpty() 'separator'
 			rendered = "{rendered}, "
 		end 'separator'
 		rendered = "{rendered}`{String.from(methodName)}`"
 	end 'eachMethod'
 	return rendered
-end 'builtinConformerMethodNames'
+end 'builtinConformerDispatchMethodNames'

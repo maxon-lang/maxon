@@ -537,7 +537,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/lexer-parser-robustness/long-method-chain-truncated.test:3:14: Unsupported: 'int' has no method named 'a' — its builtin conformances supply `hash`, `equals`, `compare`; `toString`/`clone` need the Stringable/Cloneable impls, which are not built
+error E2015: specs/fragments/lexer-parser-robustness/long-method-chain-truncated.test:3:14: Unsupported: 'int' has no method named 'a' — a builtin-typed receiver supplies `hash`, `equals`, `compare`, `toString`
 ```
 
 <!-- test: interpolation-nesting-deep -->
