@@ -1370,6 +1370,16 @@ function prepareSharedDirs(specDir FilePath, effectiveTarget Target) throws Comp
 		throw CompileError.directoryNotFound(tempRoot)
 	end 'noTempRoot'
 
+	// ⭐ The cwd every TEST BINARY is spawned with (`SpecTestRunner.specRunWorkingDir`). Unlike the two
+	// roots around it this one holds no harness artifact at all — it is where a spec case's OWN relative
+	// paths land, which is why the corpus can assert things about it and why a failure to create it is
+	// as fatal as the scratch root's: every case that touches the filesystem would then run somewhere
+	// nobody chose.
+	let runWorkingDir = specRunWorkingDir()
+	if not Directory.create(runWorkingDir) 'noRunWorkingDir'
+		throw CompileError.directoryNotFound(runWorkingDir)
+	end 'noRunWorkingDir'
+
 	// A fragments root that cannot be created is NOT a gate — `checkTestFragment` swallows the
 	// ensuing write error and the behaviour tests still run — so unlike the scratch root, a failure
 	// here is not fatal. It is created up front only so that N workers do not race to make it.

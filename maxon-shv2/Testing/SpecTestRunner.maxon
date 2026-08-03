@@ -31,6 +31,30 @@ let SpecFileExtension = ".md"
 let MaxonFragmentExtension = ".test"
 let TempSubdirName = ".spec-tmp"
 
+// ⭐⭐ **THE DIRECTORY EVERY TEST BINARY IS RUN FROM — `<checkoutRoot>/temp/` — AND IT IS A CONTRACT
+// WITH THE CORPUS, NOT A SCRATCH LOCATION THIS RUNNER IS FREE TO PICK.**
+//
+// A spec case's relative paths are resolved by the OS against whatever cwd the harness gave the
+// process, so the cwd is part of what a `/specs` case ASSERTS — and the corpus was written against the
+// bootstrap's answer (`Program.cs`: `Path.Combine(projectDir, "temp")`, handed to
+// `TestRunner.RunExecutable` as its `WorkingDirectory`). ⇒ **The name and the depth are both load
+// bearing**: `specs/directory.md` reads `Directory.list(FilePath from "../bin")` to find the compiler's
+// own `bin/`, which resolves only from a DIRECT CHILD of the checkout root.
+//
+// ⛔ **THIS RUNNER USED TO PASS NO WORKING DIRECTORY AT ALL, so a test binary inherited the SUITE's
+// cwd — the checkout root — and `../bin` pointed at the checkout's PARENT.** MEASURED: four of
+// `directory.md`'s nine cases answered 0 or 99 where 42 was pinned, under a compiler with nothing wrong
+// with it, while the bootstrap passed all four from the same spec text and the same `stdlib/`. That is
+// one corpus with two harness contracts — this project's own signature bug — and it was invisible
+// because every OTHER filesystem case in the suite only ever writes and reads paths it made itself,
+// which is self-consistent from ANY cwd.
+//
+// ⚠ It is the SAME directory the bootstrap uses rather than a private one, deliberately: a second
+// gitignored scratch child of the root would be a second answer to a question the corpus asks once.
+// The two suites cannot run at the same time in one checkout (`TreeLock`), which is what makes sharing
+// it safe.
+let RunWorkingSubdirName = "temp"
+
 // A multi-file test's staged source DIRECTORY hangs off `<tempDir>/<name>.src`, NOT `<tempDir>/<name>`
 // — because `<tempDir>/<name>` is exactly the `-o` output base (`exeBase`, runOneTest). With no suffix
 // the two collide: on a host whose `executableExtension` is EMPTY (macOS, Linux) `build <dir> -o <dir>`
@@ -360,10 +384,24 @@ end 'ProcessCapture'
 // `WedgeWatchdogMs`.
 export let SpecSpawnTimeoutMs = 120000
 
-export function runProcess(exe Executable, argv StringArray) returns ProcessCapture throws SubprocessError
+// `Subprocess`'s own sentinel for "give the child MY cwd" — the EMPTY path, which is exactly what
+// `Configuration.create` defaults `workingDirectory` to. Named here rather than spelled at each spawn
+// because `workingDirectory` below is a REQUIRED argument and five of this harness's six spawns want
+// this value: five hand-written `FilePath.from("")`s would be five chances to write something that is
+// not the sentinel, and a wrong one is silent — the child simply starts somewhere else.
+//
+// ⚠ It is a required argument rather than a defaulted one ON PURPOSE. The defect this parameter exists
+// to fix (see `RunWorkingSubdirName`) was precisely a spawn that never said where it should run and got
+// an answer nobody had chosen; a default would restore that, one call site at a time.
+export function inheritedWorkingDir() returns FilePath
+	return try FilePath.from("") otherwise panic("SpecTestRunner: the empty path is Subprocess's 'inherit cwd' sentinel and must parse")
+end 'inheritedWorkingDir'
+
+export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath) returns ProcessCapture throws SubprocessError
 	var config = Configuration.create(exe)
 	config.arguments = argv
 	config.timeoutMs = SpecSpawnTimeoutMs
+	config.workingDirectory = workingDirectory
 
 	let collected = try Subprocess.runConfiguration(config)
 	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
@@ -543,6 +581,12 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 		throw CompileError.directoryNotFound(tempDir)
 	end 'noTempDir'
 
+	// The cwd each test binary will be spawned with — asked here rather than threaded from the parent
+	// because a WORKER is a separate process and derives it itself, exactly as it derives `tempDir`.
+	// NOT created here: it is shared by every spec, so the parent makes it once (`prepareSharedDirs`),
+	// and N workers racing a mkdir on one directory is what that arrangement exists to prevent.
+	let runWorkingDir = specRunWorkingDir()
+
 	// BOTH follow the EFFECTIVE target. The exe suffix must, so the path reconstructed to run matches
 	// what the build's `resolveOutputPath` wrote for the same `--target`.
 	//
@@ -564,7 +608,7 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 	end 'hasGoldens'
 
 	for test in tests 'eachTest'
-		let run = runOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+		let run = runOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 		results.push(SpecTestResult.create(specName, testName: test.name, outcome: run.outcome, golden: run.golden))
 		cpu = cpu.adding(run.cpu)
 	end 'eachTest'
@@ -756,6 +800,30 @@ export function specTempRootDir(specDir FilePath) returns FilePath
 	return specDir.join(tempSub)
 end 'specTempRootDir'
 
+// The cwd every test binary is spawned with — `<checkoutRoot>/temp/`. See `RunWorkingSubdirName` for
+// why the corpus, and not this runner, decides where that is.
+//
+// ⚠ **THE CHECKOUT ROOT IS THE PROCESS CWD, AND THAT IS THIS HARNESS'S EXISTING CONTRACT RATHER THAN A
+// NEW ASSUMPTION** — the same fact `HarnessSelfTest.FixturesRelativeDir`, `LadderIndex` and
+// `Main.DefaultSpecDir` are all already built on ("Run the suite from the repo root", which one of them
+// says in a panic).
+//
+// ⛔ It is deliberately NOT `specDir.parent()`, which is the obvious reading and is WRONG — MEASURED,
+// by `HarnessSelfTest` failing the moment it was tried. A harness FIXTURE SUB-RUN is this same harness
+// relaunched with `specDir` pointing at `maxon-shv2/Testing/harness-fixtures/<case>`, so the parent of
+// its spec directory is the fixture CORPUS, not the checkout — and the sub-run promptly created a
+// `temp/` inside it, which the next sweep read as a fixture case holding zero specs. A run's spec
+// directory says which specs to read; it does not say which tree it is standing in.
+//
+// ⚠ Exported for `specTempRootDir`'s reason, which is the same reason: BOTH HALVES OF THE POOL ASK IT,
+// in different processes. The parent creates it once (`prepareSharedDirs`), each worker spawns into it.
+// A second copy in either is a copy that can disagree — and this one would disagree SILENTLY, as a
+// wrong answer from a test rather than as a missing directory.
+export function specRunWorkingDir() returns FilePath
+	let runSub = try FilePath.from(RunWorkingSubdirName) otherwise panic("SpecTestRunner: RunWorkingSubdirName '{RunWorkingSubdirName}' must be a valid relative path")
+	return Directory.currentPath().join(runSub)
+end 'specRunWorkingDir'
+
 // Does `--filter=<pattern>` select this test? The pattern is matched as a
 // SUBSTRING of the `<spec>/<test>` label the runner reports — the same string a
 // reader sees in a PASS/FAIL line — so one rule covers every way you would want to
@@ -886,7 +954,7 @@ end 'StagingResult'
 // Compile one test via a subprocess build (with `--emit-ir` so the Target-IR sidecar is produced),
 // check its expectation, then check the emitted IR against the committed `.test` golden. Everything
 // written is cleaned up before returning.
-function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
+function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, runWorkingDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
 	let exeBase = tempDir.join(test.name)
 	// The driver appends the platform extension to the `-o` value
 	// (resolveOutputPath), so the produced exe is `<exeBase><ext>` — reconstruct
@@ -913,14 +981,14 @@ function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDi
 
 	match stageTest(tempDir, test: test) 'staging'
 		failed(reason) then return TestRun.notCompiled(reason)
-		staged(s) then return runStagedTest(compilerExe, test: test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, metricsPath: metricsPath, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+		staged(s) then return runStagedTest(compilerExe, test: test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, metricsPath: metricsPath, runWorkingDir: runWorkingDir, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 	end 'staging'
 end 'runOneTest'
 
 // Compile a test whose source is already on disk, check its behaviour, then check its golden.
 // Split out of `runOneTest` only because staging can FAIL, and a union's arms are the honest way to
 // say so — the two functions are one story read top to bottom.
-function runStagedTest(compilerExe FilePath, test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, metricsPath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
+function runStagedTest(compilerExe FilePath, test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, metricsPath FilePath, runWorkingDir FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
 	let pinnable = emitsTargetIr(effectiveTarget)
 
 	var compileArgv = StringArray.create()
@@ -953,7 +1021,7 @@ function runStagedTest(compilerExe FilePath, test SpecTest, specName String, sta
 	// applies the same rule to the exe and the IR sidecar for the same reason).
 	try File.delete(metricsPath) otherwise ignore
 
-	let compile = try runProcess(Executable.path(compilerExe), argv: compileArgv) otherwise (e) 'compileSpawnFailed'
+	let compile = try runProcess(Executable.path(compilerExe), argv: compileArgv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'compileSpawnFailed'
 		cleanup(staged, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
 		return TestRun.notCompiled("compiler spawn failed: {e.displayReason()}")
 	end 'compileSpawnFailed'
@@ -961,7 +1029,7 @@ function runStagedTest(compilerExe FilePath, test SpecTest, specName String, sta
 	// Read before `cleanup` removes it, and before anything can return.
 	let cpu = readCompileCpu(metricsPath)
 
-	let outcome = checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath, effectiveTarget: effectiveTarget)
+	let outcome = checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
 
 	// The fragment records the emitted Target IR for REFERENCE (see `FragmentsSubdir`), and the step is
 	// skipped in two cases:
@@ -1313,9 +1381,9 @@ function buildErrorFragment(test SpecTest, compile ProcessCapture, staged Staged
 	return "{fragmentHeader(test)}{CompilerErrorLabel}\n{normalizedError}\n"
 end 'buildErrorFragment'
 
-function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath, effectiveTarget Target) returns TestOutcome
+function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath, runWorkingDir FilePath, effectiveTarget Target) returns TestOutcome
 	return match test.expectation 'e'
-		run(expected, stderr, stdout, sectionPins) gives checkRun(expected, stderr: stderr, stdout: stdout, sectionPins: sectionPins, compile: compile, exePath: exePath, effectiveTarget: effectiveTarget, programArgs: test.programArgs)
+		run(expected, stderr, stdout, sectionPins) gives checkRun(expected, stderr: stderr, stdout: stdout, sectionPins: sectionPins, compile: compile, exePath: exePath, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, programArgs: test.programArgs)
 		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged)
 	end 'e'
 end 'checkExpectation'
@@ -1624,7 +1692,7 @@ function requireOrbMachineReachable(effectiveTarget Target)
 	// Rosetta) and could not be reached by a renaming.
 	let orbTargetKey = targetToString(effectiveTarget)
 
-	let probe = try runProcess(Executable.name(OrbExecutableName), argv: argv) otherwise (e) 'notInstalled'
+	let probe = try runProcess(Executable.name(OrbExecutableName), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'notInstalled'
 		panic("SpecTestRunner: could not run '{OrbExecutableName}' ({e.displayReason()}) — running a {orbTargetKey} binary from a non-Linux host needs OrbStack (https://orbstack.dev); install it, or drop {TargetFlagPrefix}{orbTargetKey} and run the suite for this host")
 	end 'notInstalled'
 
@@ -1645,7 +1713,7 @@ function requireWslAvailable(effectiveTarget Target)
 	argv.push(WslExecFlag)
 	argv.push(WslProbeCommand)
 
-	let probe = try runProcess(Executable.name(WslExecutableName), argv: argv) otherwise (e) 'notInstalled'
+	let probe = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'notInstalled'
 		panic("SpecTestRunner: could not run '{WslExecutableName}' ({e.displayReason()}) — running a {wslTargetKey} binary from a Windows host needs WSL2 (`wsl --install`); install it, or drop {TargetFlagPrefix}{wslTargetKey} and run the suite for this host")
 	end 'notInstalled'
 
@@ -1657,7 +1725,7 @@ end 'requireWslAvailable'
 // A RUN test (whatever result blocks the case carried — an ```exitcode, a ```stdout, a ```stderr, a
 // ```RequiredData, a ```RequiredRdata, in any combination): the compile MUST succeed, then the produced
 // exe is spawned and EVERY half the spec pinned is checked against that one execution.
-function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile ProcessCapture, exePath FilePath, effectiveTarget Target, programArgs ProgramArgArray) returns TestOutcome
+function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile ProcessCapture, exePath FilePath, runWorkingDir FilePath, effectiveTarget Target, programArgs ProgramArgArray) returns TestOutcome
 	if compile.exitCode != 0 'compileFailed'
 		return TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}")
 	end 'compileFailed'
@@ -1682,7 +1750,10 @@ function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, s
 	// by the host, so it is run through the vendored wasmtime instead — everything checked against
 	// that one execution afterwards is IDENTICAL either way.
 	let runCommand = buildRunCommand(exePath, effectiveTarget: effectiveTarget, programArgs: programArgs)
-	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv) otherwise (e) 'runSpawnFailed'
+	// ⭐ THE ONE SPAWN IN THIS HARNESS THAT NAMES ITS OWN WORKING DIRECTORY. A test binary's cwd is part
+	// of what its spec ASSERTS — `directory.md` reaches `../bin` through it — so it is stated here rather
+	// than inherited from whoever launched the suite. See `RunWorkingSubdirName`.
+	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir) otherwise (e) 'runSpawnFailed'
 		return TestOutcome.fail("program spawn failed: {e.displayReason()}")
 	end 'runSpawnFailed'
 

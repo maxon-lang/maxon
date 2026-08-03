@@ -586,6 +586,81 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// moved anyway, through a door that mechanism does not stand in. See the ⛔ paragraph in this file's
 	// header.
 	try listWhitelistedModule(stdlibDir, relative: "File.maxon", into: listed)
+	// ⭐⭐ **`stdlib/Directory.maxon` — THE LAST LINK OF THE `URL → FilePath → File → Directory` CONE
+	// (R4.8)**, and the entry that gives a program `Directory.list`/`exists`/`isDirectory`/`create`/
+	// `currentPath`. Every public signature takes or returns a `FilePath`, which is why that entry had to
+	// land first; it imports nothing else and calls only `__ManagedDirectory` builtins, `FilePath` and
+	// `String`.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS (E3006): it declares NONE — all five functions are `static`s of `Directory` — so
+	//     the whole free-function clause, and with it the SILENT bare-builtin shadow that cost
+	//     `Sleep.maxon` a builtin retirement, is vacuous here. Checked against `Parser.parseCallNamed`'s
+	//     bare-name `if` chain AT THE CHAIN, as that rule's last bullet insists, and in BOTH directions:
+	//     this module declares nothing the chain can see, and it CONSUMES nothing the chain claims either
+	//     — every call in its body is receiver-dot or `Type.`-qualified, the way `Math.pow` consumes
+	//     `floor` and this module does not.
+	//   • TYPE NAMES: `Directory` and `DirectoryListError` are nominal declarations, so a user program
+	//     spelling either wins and this module's moves into the reserved space (A1s wave 2, directory-scoped
+	//     by N1). Against the other listed modules there is no overlap, checked AT THE SOURCE by reading
+	//     those modules' own declarations rather than a roster transcribed here. ⚠ `File.maxon` is the near
+	//     miss and it is a miss twice over: it declares neither name, and its `FileInfo.isDirectory` is a
+	//     MEMBER spelling, which the bullet below is about and this one is not.
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: neither name is a builtin. `__ManagedDirectory`
+	//     — the builtin this module wraps — is a DIFFERENT name and is `__`-reserved, and this module
+	//     declares no name beginning `__`. Checked the harder way too, at both registries that can answer
+	//     for a bare type name: `Directory` is on neither `TypeResolution.isCompilerOwnedTypeName` nor
+	//     `builtinTypeNameTag`, and nothing in the compiler synthesizes a declaration of it.
+	//   • ⚠ **THE RANGED-TYPEALIAS CLAUSE THAT MOVED A GOLDEN FOR `File.maxon` IS VACUOUS HERE, AND THAT IS
+	//     A DECLARATION COUNT RATHER THAN A HOPE.** This module declares exactly ONE typealias —
+	//     `FilePathArray = Array with FilePath` (`:12`) — and it is a GENERIC-INSTANCE alias, file-local per
+	//     alias FORM exactly as `CommandLine`'s `StringArray` is, so it reserves nothing from a user program
+	//     and joins neither of the whole-program folds (`storageBytesInEveryFile`, `settleRangeContests`)
+	//     that carried `File.maxon`'s golden. There is no ranged alias here for a `b"…"` literal in an
+	//     unrelated program to reach. ⚠ Weighed on the DECLARATION and not on the `export` keyword, which
+	//     this file's header measured to be unreadable at both mechanisms: the alias is file-private and
+	//     would have counted just the same had it been ranged.
+	//   • ⚠⚠ **THE "TYPE-PARAMETERIZED BY A USER DECLARATION" CLAUSE IS THE ONE THAT HAD TO BE BUILT RATHER
+	//     THAN READ, AND THIS MODULE HAS THE EXACT SHAPE THAT BROKE THE LAST TWO.** Its body passes
+	//     `__ManagedMemory` values around twice — `pattern.addressableBytes()` (`:19`) and
+	//     `String.init(search.dir.filename())` (`:25`) — which is where `stdlib/URL.maxon` and then
+	//     `stdlib/CommandLine.maxon` each died with `E3005 … expected '__ManagedMemory', got 'Array_Byte'`
+	//     in any program declaring its own wide `Byte`. That clause says checking it is a BUILD and not a
+	//     reading, so it was built: a program declaring `typealias Byte = int(0 to 1000)` that calls
+	//     NOTHING in this module compiles and runs clean, because `SignatureIndex.SynthesizedByteElementName`
+	//     MINTS that element instead of spelling it out of user-declarable names.
+	//   • The E3112 MEMBER-name rule — the one shadowing does not rescue — is a whole-program CHECK that
+	//     fires only when a user program actually contests a spelling, so there is nothing to clear ahead of
+	//     time. The surface it exposes is five method names, one field (`dir`) and one argument label
+	//     (`path`). Counted against what the listed set ALREADY contests rather than against this module's
+	//     own roster: `exists`, `create`, `isDirectory` and `path` are all `File.maxon`'s already
+	//     (`File.exists`, `FileInfo.create`, `FileInfo.isDirectory`, and `path` as the label of six of its
+	//     statics), so the spellings genuinely NEW to the listed set are just `list`, `currentPath` and
+	//     `dir`.
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes:
+	// `maxon-shv2 build stdlib/Directory.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING
+	// ELSE — the module parses and analyzes clean under shv2 and fails only for not being a program.
+	//
+	// ⚠ **ZERO COMMITTED GOLDENS MOVE ON THIS ENTRY, and that is an A/B rather than a clean `git status`**
+	// — which cannot answer the question at all (see this file's header and `.claude/CLAUDE.md`). MEASURED
+	// in ONE worktree by building the same tree with and without this single line and running
+	// `--filter=array-init/` against each: **16 fragments drift either way, and the runner's whole drift
+	// block is BYTE-IDENTICAL between the two runs**, down to the register in every
+	// `cmpRegImm32 r13, 0` → `movRegReg r8, r13`. Those 16 are inherited from the merge base and belong to
+	// something else; this entry's contribution to them is nil. `array-init` is the right probe precisely
+	// because it is the family that would notice: it is built on `Array with Byte` and on adoption, so it
+	// reads both doors an entry can move a golden through — the `.rdata` one `StdlibFacts.unreachable`
+	// closes, and the DECLARED-NAME one it does not, which is what `File.maxon`'s ranged `Byte` went
+	// through.
+	//
+	// ⚠ **IT IS x64-WINDOWS-ONLY, AND THE GATE FOR THAT IS NOT HERE.** `isManagedDirectoryRuntimeCallee` is
+	// already inside `SemanticCheck.calleeNeedsWin32Substrate`, so a wasm/linux/arm64 program that reaches
+	// `Directory.list` is refused (E3104) at ITS OWN call site, while a program that never calls one is
+	// unaffected on every target. Listing the module is what makes those calls exist; it is not what gates
+	// them — which is why `specs-shv2/directory.md` carries the same `<!-- targets: x64-windows -->` marker
+	// `file-io.md` documents, and points at that file for the reason.
+	try listWhitelistedModule(stdlibDir, relative: "Directory.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

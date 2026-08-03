@@ -140,12 +140,8 @@ end 'main'
 not found
 ```
 
-<!-- disabled-test: file-info.directory -->
+<!-- test: file-info.directory -->
 <!-- targets: x64-windows -->
-<!-- stdlib whitelist: `Directory.create` lives in `stdlib/Directory.maxon`, which R4.7's cone
-     (`URL → FilePath → File`) does not reach. `File.info` itself already answers `isDirectory` — this
-     case is blocked on MAKING the directory, not on reading it. MEASURED with `stdlib/File.maxon`
-     listed: `error E3004: call to undefined function 'Directory.create'` at the case's own line 5 -->
 ```maxon
 function main() returns ExitCode
 	let path = FilePath from "test_fi_dir"
