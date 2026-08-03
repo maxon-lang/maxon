@@ -2110,10 +2110,42 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   ⚠ **It needs a RULING before a fix**: unifying moves two already-ported specs' expectations, which is
   out of bounds for a port tick (`/spec-port` HALT). Decide which sentence wins, then re-mint the two
   goldens with it.
-- **⬜⬜ A `bool` COMPUTED FROM A FLOAT COMPARISON AND HELD ACROSS A LOOP READS BACK FALSE — A SILENT
-  WRONG ANSWER ON PLAIN USER CODE.** **Found 2026-08-02 by `/spec-port` while listing `stdlib/Math.maxon`;
-  PRE-EXISTING and nothing to do with that entry.** ⭐ **Reproduced minimally, with an oracle control —
-  21 lines, no `Math`, no stdlib, no generics:**
+- **✅ CLOSED 2026-08-02 (`c5e5ac179`, the `sin` port) — A `bool` COMPUTED FROM A FLOAT COMPARISON AND HELD
+  ACROSS A LOOP READ BACK FALSE.** ⭐ **THE DIAGNOSIS BELOW WAS RIGHT ABOUT THE SYMPTOM AND WRONG ABOUT THE
+  CAUSE, AND THE DIFFERENCE IS THE LESSON.** It reads as a *flags-liveness* problem — "which producers and
+  consumers of a comparison-derived `bool` take this path" — and prescribes a survey. The actual fault was
+  **one lossy key**: compare/branch fusion was PROVED per BLOCK but RECORDED per VALUE, so a compare
+  feeding two branches in different blocks had the first block's proof answer for the second. Fixed by
+  keying on `BlockRef` — a block has exactly one terminator, so the key cannot be lossy — which also
+  deleted a 25-arm `StdOp` match that was re-deriving what the lookup now knows. **No survey was needed and
+  no arm64 work was needed**: arm64 does not fuse at all (`lowerCmp` always materializes), so the
+  cross-target obligation this entry anticipated was vacuous. The float compare was indeed incidental, as
+  the last paragraph guessed — the clobber came from an integer `cmp`.
+
+  **MEASURED after the fix, both compilers agreeing:** the probe below returns **11 on both** (it returned
+  22 under shv2), and `Math.exp(-2.0)` is `0.13533528323661265` under shv2 against the bootstrap's
+  `0.135335` — the same double through two formatters.
+
+  ⚠ **`Math.exp` is the ONLY function in the module with this shape, and I nearly asserted the opposite.**
+  The entry below says `sin`/`cos`/`log`/`log2`/`atan` "want checking with it"; a first draft of this
+  closure upgraded that guess to "carried the same shape and were never separately wrong", **without doing
+  the check** — the exact move this entry congratulates itself for catching, two sentences earlier. Checked
+  on review: `is_negative` occurs at three lines in `stdlib/Math.maxon`, all inside `exp`. `atan` folds its
+  negative case by immediate recursion (`return -Math.atan(-z)`), `log`/`log2` hold no boolean local at
+  all, and `sin`/`cos` never compare against `0.0`. **They were never wrong because they never had the
+  shape** — not because one fix covered them.
+
+  ⭐ **The pin was built BY DESIGN, in the fix's own commit:**
+  `specs-shv2/float-compare-branch.md`'s `one-compare-two-branches-across-a-loop` — integer-only, no float
+  and no stdlib, encoding the defect directly with the wrong answer named ("*reading the loop's exit flags
+  instead answers 7*"). **That is the primary pin and it is stdlib-independent.**
+  `specs-shv2/exp.md`'s `negative` (`trunc(Math.exp(-1.0)) == 0`, which the old lowering failed with `2`,
+  the un-inverted `e`) arrived three ticks later by the whitelist and is a **secondary, end-to-end**
+  confirmation — worth having, but its detection power depends on `Math.exp` keeping its current
+  algorithm, so it would stop pinning silently if that function were rewritten. ✅ The re-mint below was
+  done by the same commit.
+
+  The original entry, kept because its evidence is what made the fix findable:
 
   ```maxon
   typealias Real = float(f64.min to f64.max)
@@ -2168,11 +2200,47 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   `specs-shv2/fragments/x64-windows/stdlib-basic/stdlib-call-exp.test`, minted by the tick that found this.
   A golden records what the compiler emits, so it is a correct artifact of a wrong compiler; **re-mint it
   with `--update-required` as part of this rung and do not read it as a specification.**
-- **⬜ THE UNUSED-BINDING CHECK (E3012) DOES NOT EXIST IN shv2 AT ALL** — not for parameters, not for
-  locals. **Found 2026-08-02 by `/spec-port` on `specs/unused-parameters.md`, 4 of whose 6 cases it
-  blocks.** ⚠ That tick DEFERRED the spec, and deferring was abolished the same day (user ruling;
-  `.claude/skills/spec-port/SKILL.md` §4). `unused-parameters` is back in the loop's whitelist order and
-  **this row is the work its next tick has to do**, not a reason the spec waits. Measured, not
+- **🟡 HALF CLOSED 2026-08-02 (`ff9c825fa`) — E3012 EXISTS FOR PARAMETERS; LOCALS ARE STILL ABSENT.**
+  `specs-shv2/unused-parameters.md` is ported 6/6, with the registry claim, a per-function candidate
+  column, and the per-METHOD interface waiver. **The locals half was deliberately NOT built**, and the
+  reason is a scope rule worth keeping: all six cases in that spec are PARAMETERS, and locals are
+  `unused-variables.md`'s subject at whitelist **170** against `unused-parameters`' **26** — building them
+  together was jumping the queue by 144 places. A first attempt did build both and reddened six cases whose
+  programs have **no legal repair**: a borrow of an opaque generic element cannot be bound (E3012), cannot
+  be discarded (E3064 — *"neither bare `foo()` nor `_ = foo()` is permitted"*), and cannot be used, because
+  a type parameter has no operations. Every one of those six was a LOCAL.
+
+  ⚠ **The real cost was not the mechanism, it was the corpus:** the parameter check alone was refused by
+  **21 committed cases across 11 specs**, every one of which was invalid Maxon the bootstrap also rejects —
+  they compiled only because shv2 was not checking. 19 became `_`; 5 had their expectation flipped to
+  assert E3012 where the unread parameter IS the subject (a parameter named `while`, three named `Self`).
+  ⭐ **No probe could bound that set** — three separate filters each found a subset and each missed more —
+  which is why the full unfiltered suite has to run EARLY on a change that adds a refusal.
+
+  **Disposition of the four shelved cases this row listed:**
+  `interface-conformance/non-interface-method-on-conforming-type-still-errors` is **ENABLED** (a
+  parameter); `discarded-results/underscore-not-prefix-suppression` and
+  `interface-conformance/interface-method-local-var-still-errors` **remain shelved** and are
+  `unused-variables.md`'s to unblock; `ternary-expression/…unused-loopvar-before-ternary` was **mis-filed
+  against this row** — but not for the reason its shelf comment gives. ⚠ Checked on review: `for … in` over
+  a numeric `upto` range **compiles and runs correctly today**; that half of the shelf reason went stale
+  after it was written (`1d76a649e`). Compiling the actual case program gives the real blocker, `E2015` on
+  `List with T` — *"its type instantiates 'List', which no file declares as a generic `type`"*. Either way
+  it is not E3012's.
+
+  ⚠ Also inherited and worth fixing at `unused-variables.md`: `docs/error-codes.txt` documents E3012 as
+  *"A local binding is declared and never read"*, and shv2 now claims that code while emitting it only for
+  parameters. `error-codes check` stays green because the claim is live, but the registry's one sentence
+  no longer describes what shv2 does with it.
+
+  ⇒ **What remains for `unused-variables.md` (170):** the locals half, and with it rules (2) and (3) below
+  — `_` vs `_x`, and the E3012/E3077 precedence, since E3077 `SemanticVarShouldBeLet` is still unclaimed by
+  shv2 (`var-should-be-let.md`, 175). Rule (1), the interface exemption, is **done and pinned**
+  (`interface-conformance/interface-method-may-leave-a-required-parameter-unread`, added because review
+  found the waiver was load-bearing for seven cases and named by none). Rule (4)'s blast radius is
+  **measured above, not predicted.**
+
+  The original entry, kept for its contracts: Measured, not
   inferred: `docs/error-codes.txt` E3012 carries `csharp` and `selfhosted` claims and **no `shv2` line**,
   and shv2's sources contain no emitter under any spelling (grep for both the member name and the message
   text — the check is structural, since `ErrorCode.<name>` does not compile unless the registry generated

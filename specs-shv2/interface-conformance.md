@@ -501,7 +501,7 @@ error E3012: specs/fragments/interface-conformance/non-interface-method-on-confo
 
 
 <!-- disabled-test: interface-method-local-var-still-errors -->
-<!-- P1.7a-s2: E3012 unused-variable checking is not implemented in shv2 (the conformance half works; this asserts the unused-local check still fires) -->
+<!-- E3012 exists for PARAMETERS (ff9c825fa) but not yet for LOCALS, and this case asserts the LOCAL half — an unused `let` inside an interface method, which the waiver must not cover. Unblocked by `unused-variables.md` (whitelist 170), not by this file. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

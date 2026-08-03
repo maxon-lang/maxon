@@ -363,10 +363,12 @@ function indirectResultRegister(resultType StdType) returns X64Register
 	return X64Register.xmm0 if stdTypeIsFloat(resultType) else X64Register.r8
 end 'indirectResultRegister'
 
-// Maps the SSA value a FUSED `cmp` defines to the predicate it compared with. Populated
-// when a fusable `cmp` is lowered and consumed at the `condBranch` terminating its block —
-// the two become `cmp` + `jcc`, and no boolean is written to a register. Keyed by ValueId,
-// which is function-local, so the map is reset per function.
+// Maps a BRANCHING BLOCK to the predicate the `cmp` fused into its terminator compared with.
+// Populated when a fusable `cmp` is lowered and consumed at the `condBranch` terminating that
+// block — the two become `cmp` + `jcc`, and no boolean is written to a register. Keyed by
+// `BlockRef`, which is function-local, so the map is reset per function. **Why the key is the
+// block and not the compare's value is the ⛔⛔ block below** — it was a ValueId until
+// 2026-08-02 and that was a wrong answer, not a style choice.
 //
 // A cmp that is NOT fusable is deliberately ABSENT here, which is what makes
 // `lowerCondBranch`'s lookup the single source of truth: a hit means "the flags this branch

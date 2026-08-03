@@ -445,14 +445,30 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// function no path from `main` reaches now registers no `.rdata` and no `__fconst` slot to displace anyone
 	// else's. A module listed before that repair would have moved goldens here; this one cannot.
 	//
-	// ⚠⚠ **LOADABLE IS NOT CORRECT, AND THIS ENTRY SHIPS A MEASURED WRONG ANSWER — the filed
-	// float-compare/bool miscompile (PLAN.md "Future rungs"), which this listing is what EXPOSED to user
-	// programs.** `Math.exp` holds `is_negative = val < 0.0` across the `while val > 1.0` reduction loop and
-	// re-tests it at `invert`; MEASURED, `Math.exp(-2.0)` is `>= 1.0` under shv2 and `< 1.0` under the
-	// bootstrap, so the inversion is silently skipped. `sin`/`cos`/`log`/`log2`/`atan` carry the same
-	// hold-a-flag-across-a-loop shape. The spec case that motivated this entry is `Math.exp(0.0)`, which
-	// takes the early return and cannot see it. ⇒ this entry is sound as a LISTING — nothing about the
-	// whitelist is what is wrong — and the module's answers are only as good as that rung leaves them.
+	// ✅ **THE WRONG ANSWER THIS ENTRY ONCE SHIPPED IS FIXED (2026-08-02), and the note is kept because the
+	// shape it describes is the reason the listing was safe all along.** This entry used to read "LOADABLE
+	// IS NOT CORRECT": `Math.exp` holds `is_negative = val < 0.0` across the `while val > 1.0` reduction
+	// loop and re-tests it at `invert`, and shv2 answered `Math.exp(-2.0) >= 1.0` — the reciprocal silently
+	// skipped — where the bootstrap answered `< 1.0`.
+	//
+	// The fault was never in this module or in the whitelist. It was **compare/branch fusion proved PER
+	// BLOCK but recorded PER VALUE** in `StdToX64Conversion` — a lossy key, so the second `if is_negative`
+	// emitted a bare `jcc` on flags left by the squaring loop's INTEGER counter compare, with no `cmp` and
+	// no `setcc` anywhere. Fixed by keying the map on `BlockRef`; a block has exactly one terminator, so the
+	// key cannot be lossy.
+	//
+	// ⚠ **`exp` is the ONLY function here with that shape** — checked, not assumed: `is_negative` occurs at
+	// three lines in this stdlib module, all inside `exp`. `atan` folds its negative case by immediate
+	// recursion, `log`/`log2` hold no boolean local, and `sin`/`cos` never compare against `0.0`. They were
+	// never wrong because they never had the shape, which is a different claim from being covered by a fix.
+	//
+	// MEASURED after the fix, both compilers agreeing: `Math.exp(-2.0)` is `0.13533528323661265` under shv2
+	// and `0.135335` under the bootstrap (same double, different formatter). ⇒ **the primary pin is
+	// `specs-shv2/float-compare-branch.md`'s `one-compare-two-branches-across-a-loop`**, built by the fix's
+	// own commit — integer-only, no float, no stdlib, so it holds whatever this module does next.
+	// `specs-shv2/exp.md`'s `negative` case (`trunc(Math.exp(-1.0))` is `0`; the old lowering gave `2`, the
+	// un-inverted `e`) is a SECONDARY end-to-end confirmation that arrived later by the whitelist — real,
+	// but it would stop pinning silently if `exp`'s algorithm were rewritten.
 	try listWhitelistedModule(stdlibDir, relative: "Math.maxon", into: listed)
 	// ⭐⭐ **`stdlib/CommandLine.maxon` — `CommandLine.args()`, `optionValue`, `getOptionValue`.** The first
 	// listed module whose leaves are OS intrinsics rather than pure Maxon: `args()` is a loop over

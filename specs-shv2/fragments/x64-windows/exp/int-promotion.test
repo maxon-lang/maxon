@@ -1,0 +1,202 @@
+// Test: int-promotion
+function main() returns ExitCode
+	let result = Math.exp(3)  // Int promoted to float
+	return trunc(result)
+end 'main'
+---
+ExitCode: 20
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 3
+    x64.cvtsi2sdRegReg xmm0, rax
+    x64.callDirect Math.exp
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Math.exp {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.storeSlotReg slot0, xmm6
+    x64.movRegReg xmm6, xmm0
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.ucomisdRegReg xmm6, xmm0
+    x64.jcc parity, ifcont
+    x64.jmp fordered
+  fordered:
+    x64.jcc equal, zero
+    x64.jmp ifcont
+  zero:
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg xmm0, xmm6
+    x64.callDirect Math.isPositiveInfinity
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, positiveInfinity
+    x64.jmp ifcont
+  positiveInfinity:
+    x64.movRegReg xmm0, xmm6
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg xmm0, xmm6
+    x64.callDirect Math.isNegativeInfinity
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, negativeInfinity
+    x64.jmp ifcont
+  negativeInfinity:
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.ucomisdRegReg xmm0, xmm6
+    x64.setccReg above, rax
+    x64.jcc above, neg
+    x64.jmp critsplit
+  neg:
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.subsdRegReg xmm0, xmm0, xmm6
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg xmm0, xmm6
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rsi, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, reduce
+    x64.jmp whileexit
+  reduce:
+    x64.movsdRegRip xmm1, [rip + __fconst_4]
+    x64.divsdRegReg xmm0, xmm0, xmm1
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.movsdRegRip xmm2, [rip + __fconst_3]
+    x64.movsdRegRip xmm3, [rip + __fconst_3]
+    x64.movsdRegRip xmm4, [rip + __fconst_5]
+    x64.jmp whilehdr
+  whilehdr:
+    x64.ucomisdRegReg xmm4, xmm3
+    x64.jcc above, series
+    x64.jmp whileexit
+  series:
+    x64.mulsdRegReg xmm1, xmm1, xmm0
+    x64.movsdRegRip xmm5, [rip + __fconst_2]
+    x64.ucomisdRegReg xmm3, xmm5
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rcx
+    x64.divsdRegReg xmm1, xmm1, xmm3
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.addsdRegReg xmm2, xmm2, xmm1
+    x64.movRegImm32 rcx, 1
+    x64.cvtsi2sdRegReg xmm5, rcx
+    x64.addsdRegReg xmm3, xmm3, xmm5
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegReg rcx, rsi
+    x64.jcc less, square
+    x64.jmp forexit
+  square:
+    x64.mulsdRegReg xmm2, xmm2, xmm2
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, invert
+    x64.jmp critsplit
+  invert:
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.ucomisdRegReg xmm2, xmm1
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rax
+    x64.divsdRegReg xmm0, xmm0, xmm2
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg xmm0, xmm2
+    x64.jmp ifcont
+  ifcont:
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Math.isPositiveInfinity {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movqGprXmm rax, xmm0
+    x64.movRegImm rcx, 9218868437227405312
+    x64.cmpRegReg rax, rcx
+    x64.setccReg equal, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Math.isNegativeInfinity {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movqGprXmm rax, xmm0
+    x64.movRegImm rcx, -4503599627370496
+    x64.cmpRegReg rax, rcx
+    x64.setccReg equal, r8
+    x64.popReg rbp
+    x64.ret
+}
