@@ -683,7 +683,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/character-ownership/an-array-literal-element-is-not-a-character.test:3:11: Unsupported: an array literal element of type 'Character' — a literal's elements are an integer, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)
+error E2015: specs/fragments/character-ownership/an-array-literal-element-is-not-a-character.test:3:11: Unsupported: an array literal element of type 'Character' — a literal's elements are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)
 ```
 
 <!-- test: a-single-byte-literal-adopts-on-the-left-too -->

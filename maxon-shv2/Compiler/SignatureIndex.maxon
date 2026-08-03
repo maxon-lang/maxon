@@ -1805,6 +1805,40 @@ export let ListBuiltinBaseName = b"List"
 // validates a `List with …` against, the `Array`/`Set` twin.
 export let ListTypeParamCount = 1 as FieldIndex
 
+// ⭐⭐ **THE FIFTH COMPILER-OWNED CONTAINER: `Vector with <N> <Element>`, A FIXED-SIZE ARRAY.**
+// `stdlib/Vector.maxon` declares one, and shv2 cannot read that file for the reason `ListRuntime.maxon`'s
+// header measured a second time and this rung measured a third: its sole field is
+// `__ManagedMemory with Element`, and (a) shv2's `__ManagedMemory` is an ARITY-ZERO alias for
+// `Array with Byte` (`ManagedMemoryTypeName`), so that annotation is **E2055 "Type '__ManagedMemory' has no
+// associated types"**; (b) its `create()`'s `return Self{}` is **E3086** (no field initializer, no default);
+// and (c) a generic type holding a compiler-owned container over its OWN type parameter erases the
+// element's managed-ness and access-violates at teardown. So `Vector` is synthesized here like the other
+// four.
+//
+// ⭐ **ITS RUNTIME REPRESENTATION IS AN `Array`'s, EXACTLY — the 48-byte `ArrRecordBytes` fused record, the
+// `__arr_*` helpers, `__arr_decref`.** A fixed-size buffer and a growable one differ in what may be DONE to
+// them, not in how the bytes sit, so a second record would have been the same six slots under a second
+// name: `genericInstanceBoxSize` and `genericInstanceBoxDropCallee` answer a Vector with the `Array` row,
+// and `Vector.create()` is one `__arr_mem_create(N, elementSize)` — the entry that PUBLISHES `N`
+// zero-initialized elements, which is precisely the spec's *"zero-initialized, N elements"*.
+//
+// ⭐⭐ **WHAT IS `Vector`'s ALONE IS THE SIZE, AND IT LIVES IN THE INSTANCE'S IDENTITY** —
+// `GenericInstanceRegistry.fixedSizes`, part of the intern KEY, so `Vector with 3 Int` and
+// `Vector with 4 Int` are different gids by construction (`/specs/vector.md`: *"The size is part of the
+// type"*). ⚠ **AND IT IS A COLUMN RATHER THAN A `MaxonType` ARM, WHICH IS THE DEPARTURE FROM v1.** v1
+// prepends a `MaxonType.constInt(size)` to the argument list (`TypeResolution.buildSizedGenericInstanceType`)
+// — a VALUE wearing a type's clothes. shv2's `MaxonType` is read through a DENSE PER-VALUE COLUMN
+// (`ValueTypeTag` + `TypeNameId`, see MaxonDialect), so a `constInt` arm would owe an answer to every rule
+// that reads a tag — `typeClassOf`, `tagIsIntegral`, `valueTagToStdType`, `notOperatorFor` — about "the type
+// that is the number 3", and there is no honest one. A number is not a type; it is a second coordinate of
+// the instance, and it is stored as one.
+export let VectorBuiltinBaseName = b"Vector"
+
+// The single TYPE parameter `Vector` declares. Its SIZE is not a type argument (see above), so a
+// `Vector with 3 Int` has arity ONE here exactly as `Array with Int` does, and every one-argument container
+// door (`containerElementType`, `arrayElementSize`, `containerElementIsManaged`) serves it unchanged.
+export let VectorTypeParamCount = 1 as FieldIndex
+
 // ⭐⭐ **`MapError` — WHAT A MISSING-KEY `Map.get` THROWS, AND IT WEARS THE BARE NAME FOR `ArrayError`'S
 // EXACT REASON.** `stdlib/Map.maxon:6-9` declares it, and shv2 does not load that module (see
 // `ProgramSignatures.isMapBaseName` for the measured reason), so the compiler synthesizes what that file
@@ -2995,6 +3029,29 @@ typealias DeclaredTypeNameSet = Set with ByteArray
 // that shadows nothing renames nothing and compiles to the bytes it did before this existed.
 typealias StdlibShadowRenameMap = Map with (ByteArray, ByteArray)
 
+// ⭐ **HOW MANY ELEMENTS A SIZED CONTAINER INSTANCE HOLDS** — `Vector with 3 Int`'s 3. It is a COUNT of
+// elements the compiler must be able to fold into a `__arr_mem_create` argument and into a `count()`
+// constant, so it is bounded by what a buffer of machine words can address rather than by `u64.max`.
+export typealias FixedElementCount = int(0 to u32.max)
+export typealias FixedSizeArray = Array with FixedElementCount
+
+// The size an UNSIZED instance carries. It is not a sentinel standing in for a real answer: `Vector with 0`
+// is REFUSED at its own `with` (`Parser.readSizedGenericArgs`), exactly as v1 refuses a non-positive sized
+// typealias, so 0 is a size no instance can ever have and "unsized" is the only thing it can mean.
+export let NoFixedSize = 0 as FixedElementCount
+
+// The counts a sized spelling may state — the ends of `FixedElementCount`'s own domain, minus the 0 the
+// constant above reserves. They are the bounds E2069 reports, read from here so the message and the test
+// cannot come to disagree about what is accepted.
+export let MinFixedElementCount = 1 as FixedElementCount
+export let MaxFixedElementCount = u32.max as FixedElementCount
+
+// ⭐ **HOW A SIZE APPEARS IN AN INSTANCE'S NAME** — `Vector with 3 Int` is `Vector_N3_Int`. The letter keeps
+// the count from reading as a type argument's mangling, and it is v1's own spelling for the same symbol
+// (`__layout_Vector_N3_Int`, pinned in `/specs/vector.md`'s RequiredIR blocks), so the two compilers name one
+// type one way.
+export let FixedSizeNameTag = "N"
+
 // ⭐ **THE GENERIC-INSTANCE INTERNER (P1.6-A)** — `Box with Integer` ⇒ a `GenericInstanceId`, with the
 // `(baseId, argTypes)` payload held OUT OF LINE (inlining args into `MaxonType` would make the union
 // recursively aggregate — E4014). Two instances with the same base and structurally equal args share
@@ -3008,41 +3065,53 @@ typealias StdlibShadowRenameMap = Map with (ByteArray, ByteArray)
 export type GenericInstanceRegistry
 	var baseIds as TypeNameIdArray
 	var argLists as MaxonTypeArrayArray
+	// ⭐ **THE SIZED CONTAINER'S SECOND IDENTITY COORDINATE** — `Vector with 3 Int`'s 3, and
+	// `NoFixedSize` for every instance whose base is not sized (see `VectorBuiltinBaseName` for why a
+	// size is a column here and not a `MaxonType` arm). It rides `instanceKey`, so two vectors of
+	// different length can never share a gid.
+	var fixedSizes as FixedSizeArray
 	var index as GenericInstanceIndexMap
 	// Base id ⇒ its instances, in intern order. The SECOND payload⇒id index (see
 	// `GenericInstancesByBaseMap`), written only by `intern` alongside the columns it indexes.
 	var byBase as GenericInstancesByBaseMap
 
 	export static function create() returns GenericInstanceRegistry
-		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create()}
+		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedSizeArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create()}
 	end 'create'
 
-	// The cheap composite key that makes interning O(1): the base id and each arg's (tag, id) pair,
-	// joined. Two structurally equal instances build the SAME key — the arg TAG plus its name/registry
-	// id is the whole of a slice-A type's identity (a trivial arg is a primitive, a struct name id, or
-	// a nested-instance giid), so equal keys mean equal instances.
-	function instanceKey(baseId TypeNameId, args MaxonTypeArray) returns ByteArray
-		var key = "{baseId}"
+	// The cheap composite key that makes interning O(1): the base id, the fixed size, and each arg's
+	// (tag, id) pair, joined. Two structurally equal instances build the SAME key — the arg TAG plus its
+	// name/registry id is the whole of a slice-A type's identity (a trivial arg is a primitive, a struct
+	// name id, or a nested-instance giid), so equal keys mean equal instances.
+	function instanceKey(baseId TypeNameId, args MaxonTypeArray, fixedSize FixedElementCount) returns ByteArray
+		var key = "{baseId}#{fixedSize}"
 		for arg in args 'eachArg'
 			key.append("|{maxonTypeTag(arg).rawValue}:{typeNameIdOf(arg)}")
 		end 'eachArg'
 		return key.toByteArray()
 	end 'instanceKey'
 
-	// Intern `(baseId, args)`, returning an existing id for a structural repeat. O(1) amortized via
-	// `index`.
-	export function intern(baseId TypeNameId, args MaxonTypeArray) returns GenericInstanceId
-		let key = self.instanceKey(baseId, args: args)
+	// Intern `(baseId, args, fixedSize)`, returning an existing id for a structural repeat. O(1)
+	// amortized via `index`. `fixedSize` defaults to `NoFixedSize` — every base but `Vector` is unsized,
+	// so the default is what every one of the ~40 other call sites means and none of them spells it.
+	export function intern(baseId TypeNameId, args MaxonTypeArray, fixedSize FixedElementCount = NoFixedSize) returns GenericInstanceId
+		let key = self.instanceKey(baseId, args: args, fixedSize: fixedSize)
 		if let existing = try self.index.get(key) 'hit'
 			return existing
 		end 'hit'
 		let id = self.baseIds.count()
 		self.baseIds.push(baseId)
 		self.argLists.push(args)
+		self.fixedSizes.push(fixedSize)
 		self.index.upsert(key, value: id)
 		self.recordBase(baseId, id: id)
 		return id
 	end 'intern'
+
+	// The fixed element COUNT of a sized instance — `NoFixedSize` for every unsized one.
+	export function instanceFixedSize(id GenericInstanceId) returns FixedElementCount
+		return try self.fixedSizes.get(id) otherwise panic("GenericInstanceRegistry.instanceFixedSize: fixedSizes desync at GenericInstanceId {id}")
+	end 'instanceFixedSize'
 
 	// File the new instance under its base. Appended, never re-sorted, so a base's bucket is in intern
 	// order — the same order the gates' old whole-registry walk visited them in.
@@ -3081,7 +3150,7 @@ end 'GenericInstanceRegistry'
 
 // ⭐ **ONE NODE OF A `Base with Args` ARGUMENT TREE, PRE-ORDER FLATTENED (P1.6-A/B2)** — a LEAF is an
 // ordinary type reference (a primitive, a struct name, a ranged alias) whose `MaxonType` the parser already
-// produced; a NESTED instance (`Box with (Box with Integer)`) is an `instanceHeader(baseName, argCount)`
+// produced; a NESTED instance (`Box with (Box with Integer)`) is an `instanceHeader(baseName, argCount, fixedSize)`
 // followed IN THE LIST by its `argCount` args' nodes (recursively). The tree is FLATTENED rather than
 // self-referential because a directly recursive union is rejected (E4014); the gid is not known at parse
 // time anyway — interning lives in `recordGenericAlias`, which walks the flat list DEPTH-FIRST (the inner
@@ -3089,7 +3158,10 @@ end 'GenericInstanceRegistry'
 // what the composite key's "nested-instance giid" and `mangleTypeArg`'s nested arm already anticipated.
 export union GenericArgNode
 	leaf(argType MaxonType)
-	instanceHeader(baseName ByteArray, argCount FieldIndex)
+	// ⭐ `fixedSize` is the nested instance's own element COUNT — `NoFixedSize` for every base but `Vector`.
+	// It rides the NODE because the node is all `resolveArgNode` has when it interns the instance, and the
+	// size is half of that instance's identity (`GenericInstanceRegistry.instanceKey`).
+	instanceHeader(baseName ByteArray, argCount FieldIndex, fixedSize FixedElementCount)
 end 'GenericArgNode'
 
 export typealias GenericArgNodeArray = Array with GenericArgNode
@@ -3157,16 +3229,21 @@ export type GenericAliasEntry
 	// below, so they cannot drift.
 	export var sweptInstance as GenericInstanceId
 	export var sweptInstanceRecorded as bool
+	// ⭐ **THE SIZE A SIZED DECLARATION WROTE** — `typealias Vec3 = Vector with 3 Int`'s 3, read off the
+	// literal by `Parser.readSizedGenericArgs` and carried here because `recordGenericAlias` is where the
+	// instance is interned and the size is half of that instance's identity. `NoFixedSize` for every other
+	// declaration, which is every declaration whose base is not `Vector`.
+	export var fixedSize as FixedElementCount
 
-	export static function create(aliasName ByteArray, baseName ByteArray, argCount FieldIndex, args GenericArgNodeArray, elementIsBuffer bool = false, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, filePath FilePath = FilePath from "", visibility Visibility = Visibility.file) returns GenericAliasEntry
-		return Self{aliasName: aliasName, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath, visibility: visibility, sweptInstance: 0, sweptInstanceRecorded: false}
+	export static function create(aliasName ByteArray, baseName ByteArray, argCount FieldIndex, args GenericArgNodeArray, elementIsBuffer bool = false, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, filePath FilePath = FilePath from "", visibility Visibility = Visibility.file, fixedSize FixedElementCount = NoFixedSize) returns GenericAliasEntry
+		return Self{aliasName: aliasName, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath, visibility: visibility, sweptInstance: 0, sweptInstanceRecorded: false, fixedSize: fixedSize}
 	end 'create'
 
 	// This declaration, carrying the instance the index interned it to — the form `genericAliasDecls`
 	// retains. A COPY rather than a mutation so the parser's own entry, whose instance is not yet knowable,
 	// can never be mistaken for a recorded one.
 	export function recorded(id GenericInstanceId) returns GenericAliasEntry
-		return Self{aliasName: self.aliasName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath, visibility: self.visibility, sweptInstance: id, sweptInstanceRecorded: true}
+		return Self{aliasName: self.aliasName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath, visibility: self.visibility, sweptInstance: id, sweptInstanceRecorded: true, fixedSize: self.fixedSize}
 	end 'recorded'
 
 	// The instance this declaration names. Precondition: the entry came from `genericAliasDecls`, which
@@ -4925,7 +5002,7 @@ export type ProgramSignatures
 	function recordGenericAlias(entry GenericAliasEntry, remap TypeNameRemap)
 		let baseId = self.typeNames.intern(entry.baseName)
 		let args = self.resolveGenericArgs(entry, remap: remap)
-		let giid = self.genericInstances.intern(baseId, args: args)
+		let giid = self.genericInstances.intern(baseId, args: args, fixedSize: entry.fixedSize)
 		// ⭐ **THE PRIOR PROBE (N3)** — asked BEFORE the upsert, because after it every name is present. A name
 		// two declarations mention is the only kind that can ever be contested, so this is what lets
 		// `settleGenericAliasContest` cost nothing at all for a program with none.
@@ -4960,8 +5037,13 @@ export type ProgramSignatures
 		// The alias name, its base name, its ELEMENT SPELLING and each arg's SHAPE ride the hash — a change to
 		// any of them changes what a `IntBox.create(…)` in another file resolves and type-checks against, and
 		// the spelling is the one `mixType` cannot carry (both arguments fold to one `genericInstance`).
+		// ⭐ The SIZE rides for the element spelling's exact reason: it is half of the instance's identity and
+		// `mixType` cannot carry it (`Vector with 3 Int` and `Vector with 4 Int` fold to the same base name and
+		// the same one argument), so an edit from 3 to 4 would change what every `Vec3.create()` in another
+		// file compiles to while this declaration's hashed bytes never moved.
 		let elementSpelling = SurfaceBitElementIsBuffer if entry.elementIsBuffer else 0 as DeclaredSurfaceNode
-		var state = mix(mixBytes(mixBytes(mix(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: elementSpelling)
+		let sizeBits = entry.fixedSize as ContentHash
+		var state = mix(mix(mixBytes(mixBytes(mix(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: elementSpelling), value: sizeBits)
 		for arg in args 'eachHash'
 			state = self.mixType(state, t: arg)
 		end 'eachHash'
@@ -4994,14 +5076,14 @@ export type ProgramSignatures
 		cursor.pos = cursor.pos + 1
 		return match node 'k'
 			leaf(argType) gives remapMaxonType(argType, remap: remap)
-			instanceHeader(baseName, argCount) gives self.internNestedNode(baseName, argCount: argCount, nodes: nodes, cursor: cursor, remap: remap)
+			instanceHeader(baseName, argCount, fixedSize) gives self.internNestedNode(baseName, argCount: argCount, fixedSize: fixedSize, nodes: nodes, cursor: cursor, remap: remap)
 		end 'k'
 	end 'resolveArgNode'
 
-	function internNestedNode(baseName ByteArray, argCount FieldIndex, nodes GenericArgNodeArray, cursor ArgCursor, remap TypeNameRemap) returns MaxonType
+	function internNestedNode(baseName ByteArray, argCount FieldIndex, fixedSize FixedElementCount, nodes GenericArgNodeArray, cursor ArgCursor, remap TypeNameRemap) returns MaxonType
 		let baseId = self.typeNames.intern(baseName)
 		let args = self.resolveArgList(nodes, count: argCount, cursor: cursor, remap: remap)
-		return MaxonType.genericInstance(self.genericInstances.intern(baseId, args: args))
+		return MaxonType.genericInstance(self.genericInstances.intern(baseId, args: args, fixedSize: fixedSize))
 	end 'internNestedNode'
 
 	// Fold one case's NAME and TAG into the enum's hash. Split out so the SIGNED tag (`ParsedInt`)
@@ -7518,6 +7600,50 @@ export type ProgramSignatures
 		return tag == ValueTypeTag.genericInstance and self.isListInstance(nameId)
 	end 'isListInstanceAt'
 
+	// --- The `Vector` builtin generic ---
+	//
+	// The FIXED-SIZE array (see `VectorBuiltinBaseName`). Its element is read through the shared
+	// `containerElementType`, its stride through the shared `arrayElementSize`, its box and its drop through
+	// the `Array` rows of the two routers — so the only `Vector`-specific type-level facts are these three
+	// predicates and the SIZE below.
+
+	// Is `name` the builtin `Vector` type — the base of every vector instance.
+	export function isVectorBaseName(name ByteArray) returns bool
+		return name.equals(VectorBuiltinBaseName)
+	end 'isVectorBaseName'
+
+	// Is generic instance `id` a `Vector with N T`? (Reads the base NAME, which needs no base struct.)
+	export function isVectorInstance(id GenericInstanceId) returns bool
+		return self.isVectorBaseName(self.genericInstanceBaseName(id))
+	end 'isVectorInstance'
+
+	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `Vector with N T`?** — `isArrayInstanceAt`'s twin, and it exists
+	// for that function's MEASURED reason and not for symmetry: a `TypeNameId` and a `GenericInstanceId` share
+	// one numeric space, so `isVectorInstance` handed a plain `named` id can answer TRUE about an instance the
+	// caller never had. Both callers (the receiver dispatch and the `for … in` source test) hold a value's
+	// (tag, nameId) pair, which is exactly the shape that hazard bites.
+	export function isVectorInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.isVectorInstance(nameId)
+	end 'isVectorInstanceAt'
+
+	// ⭐ **HOW MANY ELEMENTS INSTANCE `id` HOLDS** — the second coordinate of a sized instance's identity, and
+	// `NoFixedSize` for every unsized one. Read by `Vector.create()` (the `__arr_mem_create` count) and by
+	// `count()`, which folds to this constant rather than reading `length@8`: a fixed size is a fact about the
+	// TYPE, so the value it publishes may not depend on the record.
+	export function genericInstanceFixedSize(id GenericInstanceId) returns FixedElementCount
+		return self.genericInstances.instanceFixedSize(id)
+	end 'genericInstanceFixedSize'
+
+	// The `Vector with <size> <element>` instance — the SIZED twin of `builtinInstanceForElement`, and the one
+	// door that mints one. Its two callers are the alias fold (`recordGenericAlias`, off a declaration) and the
+	// declaration sweep's `Vector from […]` pre-intern, which must agree on the instance or the parser's own
+	// read would be the first write to the shared registry mid-parse (`Parser.atSetFromConstruction`'s rule).
+	export function vectorInstanceForElement(element MaxonType, size FixedElementCount) returns GenericInstanceId
+		var args = MaxonTypeArray.create()
+		args.push(element)
+		return self.genericInstances.intern(self.typeNames.intern(VectorBuiltinBaseName), args: args, fixedSize: size)
+	end 'vectorInstanceForElement'
+
 	// ⚠ There is deliberately no `mapKeyIsManaged` / `mapValueIsManaged` / `setKeyIsManaged` beside these two
 	// selectors. A map carries TWO independently stamped destructors (`keyDrop@40`, `valueDrop@56`) — a
 	// `Map with (String, Int)` owns heap keys and trivial values — and a per-column predicate is a second place
@@ -8737,6 +8863,13 @@ export type ProgramSignatures
 		if self.isListInstance(id) 'list'
 			return ListRecordBytes as ByteOffset
 		end 'list'
+		// A `Vector` instance's box is an `Array`'s — the SAME fused record, because a fixed-size buffer and a
+		// growable one differ in what may be done to them and not in how the bytes sit (see
+		// `VectorBuiltinBaseName`). It is a separate arm and not a widened `isArrayInstance` because the two
+		// are separate TYPES; only their layouts coincide.
+		if self.isVectorInstance(id) 'vector'
+			return ArrRecordBytes as ByteOffset
+		end 'vector'
 		match self.structOf(self.genericInstanceBaseName(id)) 'base'
 			declared(layout) then return layout.sizeBytes()
 			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base '{String.from(self.genericInstanceBaseName(id))}' is neither a builtin nor a declared struct, so it has no box — every caller opens with genericInstanceBaseIsKnown")
@@ -8874,12 +9007,32 @@ export type ProgramSignatures
 	// consumer be a pure read: the PARSER is one of them (`decrefCalleeFor` bakes
 	// `__destruct_<mangled>` into an emitted drop call), so a name revised after the parse would leave
 	// `main` calling a symbol the destructor synthesis no longer emits.
+	// ⭐⭐ **THE STEM BOTH INSTANCE-NAME BUILDERS START FROM — the base name, PLUS a sized container's COUNT.**
+	// The two builders (`mangleGenericInstance`, the emitted symbol; `canonicalNameWithin`, the comparison
+	// name) differ only in how they render an ARGUMENT, so the head is written once and neither can come to
+	// disagree with the other about whether a size is part of a type's name.
+	//
+	// ⚠ **WITHOUT THE COUNT, TWO LEGAL TYPES SHARE ONE NAME, AND IT IS NOT A COSMETIC CLASH.** `Vector with 3
+	// Int` and `Vector with 4 Int` are different types by construction (the size is half of the instance
+	// key), and both mangled to `Vector_Int` — MEASURED: a program declaring both is refused outright with
+	// **E3006 duplicate definition of 'Vector_Int' — the generic instantiations `Vector with Int` and
+	// `Vector with Int` compile to that same name**, a message naming one type twice. `ParseStaging`'s symbol
+	// check is what caught it, which is exactly what that check is for.
+	function instanceNameStem(id GenericInstanceId) returns String
+		var out = String.from(self.genericInstanceBaseName(id))
+		let size = self.genericInstanceFixedSize(id)
+		if size != NoFixedSize 'sized'
+			out.append("_{FixedSizeNameTag}{size}")
+		end 'sized'
+		return out
+	end 'instanceNameStem'
+
 	export function mangleGenericInstance(id GenericInstanceId) returns ByteArray
 		if let derived = try self.compiledInstanceNames.get(id) 'alreadyDerived'
 			return derived
 		end 'alreadyDerived'
 
-		var out = String.from(self.genericInstanceBaseName(id))
+		var out = self.instanceNameStem(id)
 		for arg in self.genericInstances.instanceArgs(id) 'eachArg'
 			out.append("_")
 			out.append(self.mangleTypeArg(arg))
@@ -9019,7 +9172,7 @@ export type ProgramSignatures
 		end 'alreadyDerived'
 
 		path.push(id)
-		var out = String.from(self.genericInstanceBaseName(id))
+		var out = self.instanceNameStem(id)
 		for arg in self.genericInstances.instanceArgs(id) 'eachArg'
 			out.append("_")
 			out.append(self.canonicalTypeArgName(arg, path: path))
@@ -9344,7 +9497,7 @@ export type ProgramSignatures
 	// `StructLayout` exists for it and none is missing. The ONE home of the builtin-container disjunction —
 	// every door that means "a container this compiler owns" asks here rather than re-spelling the four names.
 	export function isBuiltinGenericBaseName(name ByteArray) returns bool
-		return self.isArrayBaseName(name) or self.isSetBaseName(name) or self.isMapBaseName(name) or self.isListBaseName(name)
+		return self.isArrayBaseName(name) or self.isSetBaseName(name) or self.isMapBaseName(name) or self.isListBaseName(name) or self.isVectorBaseName(name)
 	end 'isBuiltinGenericBaseName'
 
 	// ⭐ **HOW MANY TYPE ARGUMENTS THE SYNTHESIZED GENERIC `name` TAKES** — the arity `Parser.checkGenericInstance`
@@ -9368,6 +9521,12 @@ export type ProgramSignatures
 		if self.isListBaseName(name) 'list'
 			return ListTypeParamCount
 		end 'list'
+		// ⚠ **A `Vector`'s SIZE IS NOT COUNTED HERE, and that is what makes this arm a 1 rather than a 2.**
+		// `Vector with 3 Int` supplies one TYPE argument; the 3 is consumed by `readSizedGenericArgs` before
+		// the argument list is parsed at all, so the `argCount` this is compared against never saw it.
+		if self.isVectorBaseName(name) 'vector'
+			return VectorTypeParamCount
+		end 'vector'
 		panic("ProgramSignatures.builtinGenericTypeParamCount: `{String.from(name)}` is not a synthesized builtin generic — every caller opens with isBuiltinGenericBaseName, and a name that answers yes there owes an arity here")
 	end 'builtinGenericTypeParamCount'
 
@@ -9752,6 +9911,11 @@ export type ProgramSignatures
 		if self.isListInstance(id) 'list'
 			return ListDecrefName
 		end 'list'
+		// A `Vector` drops through `__arr_decref` — its record IS an `Array`'s (see `genericInstanceBoxSize`'s
+		// vector arm), so the buffer it must free and the record it must reclaim are the ones that entry knows.
+		if self.isVectorInstance(id) 'vector'
+			return ArrDecrefName
+		end 'vector'
 
 		// ⭐ **THE OMISSION THIS ROUTER USED TO SWALLOW, MADE LOUD** — its two sibling routers
 		// (`builtinGenericTypeParamCount`, `genericInstanceBoxSize`) already panic on a builtin they have no arm

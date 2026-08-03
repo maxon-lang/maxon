@@ -237,6 +237,18 @@ export enum ErrorCode
 	// position, and a layer that cannot say no is a layer whose caller's leniency has nowhere to
 	// surface.
 	parserMalformedNumericLiteral = "E2068"
+	// A 'Vector with ...' does not state a usable element COUNT before its element type:
+	// 'Vector with Int' (no count at all), 'Vector with 0 Int' (a vector of no elements), or a
+	// count too large for the compiler to fold into a buffer allocation.
+	// A Vector's SIZE IS PART OF ITS TYPE ('Vector with 3 Int' and 'Vector with 4 Int' are
+	// different types), which is why the count is required rather than defaulted: there is no
+	// size a sizeless spelling could mean, and a default would silently give two declarations
+	// one type. It is NOT E2056 GenericArityMismatch, which counts TYPE arguments -- the count
+	// is a value, is consumed before the type-argument list is read, and a 'Vector with 3'
+	// missing its element type IS the E2056 that code names.
+	// v1 reports the same two faults through its generic parser-error codes; shv2 registers its
+	// own so the one rule has one message wherever the spelling is met.
+	vectorSizeMalformed = "E2069"
 
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"

@@ -6965,6 +6965,14 @@ export type Parser
 		// the AGGREGATE ones — one per declared struct/union — wait for the whole program
 		// (`noteListFromConstruction`), exactly as the array literal's own do. Set here, acted on after the walk.
 		var hasListFromLiteral = false
+		// ⭐ **THE SIZES OF THIS FILE'S `Vector from […]` CONSTRUCTIONS.** A vector's instance is keyed by its
+		// SIZE as well as its element (`SignatureIndex.VectorBuiltinBaseName`), so — unlike every other
+		// container's `from` — one flag cannot say which instances the file can name: the size is per SITE.
+		// The sizes are collected here off the same token counter the parser will read back
+		// (`arrayLiteralElementCountAt`) and the three scalar element instances are interned per size after the
+		// walk, exactly as the `Set`/`List` arms intern theirs. A vector's element cannot be an aggregate
+		// (`requireVectorElementType`), so there is no whole-program half to defer.
+		var vectorFromSizes = FixedSizeArray.create()
 		// A `.split` — the one builtin METHOD that constructs an `Array with String` at runtime (P1.8 Slice C).
 		// Like a bare `["…"]`, its instance has no typealias to intern from, so the sweep interns it and the
 		// parser reads the giid back at construction time. The sweep reads TOKENS and cannot know the receiver
@@ -7027,6 +7035,16 @@ export type Parser
 			if self.atListFromConstruction() 'listFromToken'
 				hasListFromLiteral = true
 			end 'listFromToken'
+
+			// A `Vector from […]`: record the literal's element COUNT, which is half of the instance the
+			// parser will look up. A construction whose literal is unterminated is skipped here rather than
+			// refused — the real parse reports it with a position (`arrayLiteralElementCountAt`), and the
+			// sweep's job is to over-intern, never to diagnose.
+			if self.atVectorFromConstruction() and self.kindAt(self.pos + 2) == TokenKind.leftBracket 'vectorFromToken'
+				if let size = try self.arrayLiteralElementCountAt((self.pos + 2) as TokenIndex, anchor: self.current()) 'wellFormedLiteral'
+					vectorFromSizes.push(size)
+				end 'wellFormedLiteral'
+			end 'vectorFromToken'
 
 			if self.atStringSplitCall() 'splitToken'
 				hasStringSplitCall = true
@@ -7154,6 +7172,16 @@ export type Parser
 			_ = index.builtinInstanceForElement(ListBuiltinBaseName, element: MaxonType.string)
 			index.noteListFromConstruction()
 		end 'internListFromLiteral'
+
+		// The `Vector from […]` arm — PER SIZE, because a vector's size is half of its instance's identity, and
+		// over the three element types a literal can give a vector (`requireVectorElementType` refuses every
+		// managed one, so there is no String or aggregate half to intern). After `foldFile`, exactly as the
+		// arms above, so the giids follow the file's named generic instances.
+		for size in vectorFromSizes 'internVectorFromLiteral'
+			_ = index.vectorInstanceForElement(MaxonType.integer, size: size)
+			_ = index.vectorInstanceForElement(MaxonType.float, size: size)
+			_ = index.vectorInstanceForElement(MaxonType.boolean, size: size)
+		end 'internVectorFromLiteral'
 
 		// Register the compiler-owned `StringIndex` type if this file names a method that produces one
 		// (P1.8 Slice B2). After `foldFile`, exactly as the instance interns above are, so a user
@@ -10572,12 +10600,77 @@ export type Parser
 		// `genericInstance(Array with Byte)` a `ByteArray` argument resolves to. For an `Array` base argument 0
 		// is the ELEMENT, so this is the whole of what tells `Array with __ManagedMemory` from
 		// `Array with ByteArray` — one instance, two spellings. See `GenericAliasEntry.elementIsBuffer`.
+		// ⭐ **A SIZED BASE EATS ITS COUNT BEFORE THE ARGUMENT LIST** — `Vector with 3 Int`. The count is a
+		// VALUE, not a type argument (see `VectorBuiltinBaseName`), so it is consumed here and the list below
+		// reads the ONE type argument `builtinGenericTypeParamCount` validates against. Read in the SWEEP as
+		// well as the real parse, because the sweep is what interns the instance and the size is half of that
+		// instance's identity — a sweep that skipped it would file every `Vector with N Int` under one gid.
+		let fixedSize = try self.readSizedBaseElementCount(baseTok)
 		let elementIsBuffer = self.firstGenericArgSpellingDenotesBuffer()
 		var args = GenericArgNodeArray.create()
-		let argCount = try self.parseGenericArgNodes(args)
-		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility))
+		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseTok.value))
+		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize))
 		self.checkGenericInstance(baseTok, argCount: argCount)
 	end 'readGenericInstanceAlias'
+
+	// ⭐⭐ **THE ELEMENT COUNT OF A SIZED CONTAINER SPELLING, cursor just past `with`** — `NoFixedSize` for
+	// every base that is not sized, which is every base but `Vector`, and for those the cursor does not move.
+	//
+	// ⚠ **A MISSING OR UNUSABLE COUNT IS RECORDED, NOT THROWN** — `checkGenericInstance`'s discipline, for its
+	// reason: this is a whole-program semantic verdict about a declaration, not a token the grammar cannot
+	// consume, so it must not abort the file's parse. `Vector with Int` goes on to parse `Int` as the element
+	// and interns an instance nothing can reach, because a recorded diagnostic gates the build.
+	//
+	// ⚠ **AND IT IS SILENT DURING THE SWEEP, exactly as `checkGenericInstance` is.** The sweep re-reads none
+	// of its diagnostics (`queryProgramSignatures` throws its artifact away) and the real parse re-reads every
+	// one of these declarations, so recording here would build a positioned `Diagnostic` plus an interpolated
+	// message per sized alias for an answer nothing reads.
+	// ⭐⭐ **DOES BASE `name` STORE ITS TYPE ARGUMENT AS AN INLINE BUFFER SLOT, rather than in a
+	// dictionary-passed type-parameter slot — the ONE home of `checkGenericArgType`'s rule-1 exemption.**
+	//
+	// ⚠ **IT IS ONE HOME BECAUSE THE ANSWER IS NEEDED AT BOTH `Base with …` DOORS — the top-level alias and
+	// the NESTED argument — and a widening applied to only one is a SILENT DIVERGENCE IN A REFUSAL** (review
+	// finding 3): with the derivation spelled at each site, `Vector with 2 Real` would stop earning E2062
+	// while `Box with (Vector with 2 Real)` went on earning it, or the reverse, with nothing to say which is
+	// the rule. `checkGenericArgType`'s header promises the exemption widens in one line; this is that line.
+	function baseStoresArgumentsInline(name ByteArray) returns bool
+		return self.signatures.isVectorBaseName(name)
+	end 'baseStoresArgumentsInline'
+
+	function readSizedBaseElementCount(baseTok Token) returns FixedElementCount throws ParseError
+		if not self.signatures.isVectorBaseName(baseTok.value) 'unsizedBase'
+			return NoFixedSize
+		end 'unsizedBase'
+
+		if not self.at(TokenKind.intLiteral) 'noCount'
+			self.recordSizedBaseCountRefusal(self.current(), fault: "it states no element count")
+			return NoFixedSize
+		end 'noCount'
+
+		let countTok = try self.consume(TokenKind.intLiteral)
+		let count = try self.intLiteralValue(countTok, negated: false)
+		if count < MinFixedElementCount or count > MaxFixedElementCount 'outOfRange'
+			self.recordSizedBaseCountRefusal(countTok, fault: "its element count is {count}")
+			return NoFixedSize
+		end 'outOfRange'
+
+		return count as FixedElementCount
+	end 'readSizedBaseElementCount'
+
+	// The ONE wording of E2069, shared by the two faults that reach it (no count, and a count outside the
+	// usable range) so a reader meets one sentence about one rule however the declaration went wrong.
+	//
+	// ⚠ It takes only the token to BLAME. The base it names is `VectorBuiltinBaseName` and cannot be anything
+	// else — `readSizedBaseElementCount` returns before this is reachable for every other base — so passing
+	// the base token in and then interpolating both it and the constant was one name written twice, free to
+	// disagree with itself in a single sentence.
+	function recordSizedBaseCountRefusal(spelledAt Token, fault String)
+		if not self.signatures.allFilesFolded 'indexStillBuilding'
+			return
+		end 'indexStillBuilding'
+
+		self.recordArtifactDiagnostic(ErrorCode.vectorSizeMalformed, message: "`{String.from(VectorBuiltinBaseName)} with …` needs a positive element count before its element type (`{String.from(VectorBuiltinBaseName)} with 3 Int`), and {fault}. The count is part of the TYPE — a `{String.from(VectorBuiltinBaseName)} with 3 Int` is a different type from a `{String.from(VectorBuiltinBaseName)} with 4 Int` — so there is no size a sizeless spelling could mean and none is assumed. Counts run from {MinFixedElementCount} to {MaxFixedElementCount}", range: SourceRange.ofToken(spelledAt))
+	end 'recordSizedBaseCountRefusal'
 
 	// Was the FIRST type argument of the `Base with …` at the cursor spelled `__ManagedMemory` (A2m)? The
 	// cursor sits just past `with`, so the answer is the token there — or the one after it for the
@@ -10610,15 +10703,21 @@ export type Parser
 	// Parse a `Base with Args` argument LIST — `Box with Integer` (a single arg) or `Pair with (A, B)` (a
 	// parenthesized comma list) — appending its pre-order nodes to `nodes` and returning the number of
 	// TOP-LEVEL arguments (the arity `checkGenericInstance` validates).
-	function parseGenericArgNodes(nodes GenericArgNodeArray) returns FieldIndex throws ParseError
+	//
+	// ⭐ **`inlineElement` SAYS THE ARGUMENT NAMES AN ELEMENT STORED INLINE IN A BUFFER, WHICH IS THE ONE
+	// THING THAT DECIDES WHETHER A FLOAT MAY BE IT** — see `checkGenericArgType`'s rule 1. It is a fact about
+	// the BASE, so it is passed down from the base that was read rather than re-derived per argument, and a
+	// NESTED instance recomputes it from its own base (a `Vector with 2 (Box with Real)` puts `Real` in a
+	// declared generic's slot, not in a buffer).
+	function parseGenericArgNodes(nodes GenericArgNodeArray, inlineElement bool) returns FieldIndex throws ParseError
 		if not self.at(TokenKind.leftParen) 'singleArg'
-			try self.parseGenericArgNode(nodes)
+			try self.parseGenericArgNode(nodes, inlineElement: inlineElement)
 			return 1
 		end 'singleArg'
 		try self.consume(TokenKind.leftParen)
 		var count = 0 as FieldIndex
 		while true 'argLoop'
-			try self.parseGenericArgNode(nodes)
+			try self.parseGenericArgNode(nodes, inlineElement: inlineElement)
 			count = count + 1
 			if not self.at(TokenKind.comma) 'doneArgs'
 				break
@@ -10637,33 +10736,55 @@ export type Parser
 	// diagnosed with the tolerant sweep's index-complete answer, exactly as the outer instance is
 	// (`checkGenericInstance` records, never throws). The header is pushed BEFORE its sub-args (parsed into a
 	// temp so the header's count is known), preserving pre-order.
-	function parseGenericArgNode(nodes GenericArgNodeArray) throws ParseError
+	function parseGenericArgNode(nodes GenericArgNodeArray, inlineElement bool) throws ParseError
 		if self.at(TokenKind.identifier) and self.kindAt(self.pos + 1) == TokenKind.with 'nested'
 			let baseTok = try self.consume(TokenKind.identifier)
 			try self.consume(TokenKind.with)
+			// ⭐ **A NESTED INSTANCE READS ITS SIZE THROUGH THE SAME DOOR THE TOP-LEVEL ONE DOES (review
+			// finding 5).** Without it `typealias X = Box with (Vector with 3 Int)` died as
+			// `E2010 Expected 'a type' but got 'integer literal'` — the raw token complaint the top-level
+			// spelling stopped giving the moment `Vector` existed — instead of reaching E2069 or the element
+			// gate. This arm had already been taught the OTHER `Vector`-specific fact (`inlineElement` below),
+			// so the asymmetry was an omission and not a decision.
+			let subSize = try self.readSizedBaseElementCount(baseTok)
 			var subNodes = GenericArgNodeArray.create()
-			let subCount = try self.parseGenericArgNodes(subNodes)
+			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(baseTok.value))
 			self.checkGenericInstance(baseTok, argCount: subCount)
-			nodes.push(GenericArgNode.instanceHeader(baseTok.value, argCount: subCount))
+			nodes.push(GenericArgNode.instanceHeader(baseTok.value, argCount: subCount, fixedSize: subSize))
 			nodes.append(subNodes)
 			return
 		end 'nested'
 
 		let argTok = self.current()
 		let argType = try self.parseTypeReference()
-		self.checkGenericArgType(argType, argTok: argTok)
+		self.checkGenericArgType(argType, argTok: argTok, inlineElement: inlineElement)
 		nodes.push(GenericArgNode.leaf(argType))
 	end 'parseGenericArgNode'
 
 	// ⭐ **WHAT A TYPE ARGUMENT MAY BE — THREE RULES, AND THE ORDER IS LOAD-BEARING, NOT TIDINESS.**
 	//
-	// **1. It may not resolve to `float` (E2062)** — bare or through a ranged float alias. A COMPILER
-	// limitation, not a language rule: dictionary-passing gives a type parameter a general-purpose slot,
-	// which a float cannot travel in. ONE rule with ONE message, decided at TWO points, and each placement
-	// is forced. The BARE keyword goes before rule 2, because a bare `float` satisfies rule 2 as well and
-	// rule 2's workaround is a trap for it. The ALIAS goes after rule 3 — a name must denote something
-	// before it can denote a float, and rule 3's answer already carries the domain, so asking there is free
-	// where asking separately is a heap box per argument.
+	// **1. It may not resolve to `float` (E2062) UNLESS IT NAMES AN INLINE BUFFER ELEMENT** — bare or through
+	// a ranged float alias. A COMPILER limitation, not a language rule: dictionary-passing gives a type
+	// parameter a general-purpose slot, which a float cannot travel in. ONE rule with ONE message, decided at
+	// TWO points, and each placement is forced. The BARE keyword goes before rule 2, because a bare `float`
+	// satisfies rule 2 as well and rule 2's workaround is a trap for it. The ALIAS goes after rule 3 — a name
+	// must denote something before it can denote a float, and rule 3's answer already carries the domain, so
+	// asking there is free where asking separately is a heap box per argument.
+	//
+	// ⭐⭐ **THE `inlineElement` EXEMPTION, AND WHAT IT IS AND IS NOT.** The rule's own stated reason is about a
+	// TYPE PARAMETER's opaque slot; a `Vector with 2 Real`'s element is not one — it is a stride in a buffer,
+	// written and read as its 64 BITS (`containerElementWord` / `containerSlotValueType`), which is machinery
+	// this port had to build for `/specs/vector.md`'s float cases and which works. So the exemption is exactly
+	// as wide as the reason is narrow.
+	//
+	// ⚠⚠ **IT IS `Vector`'s ALONE TODAY, AND THAT IS A DELIBERATE STOP, NOT A DISTINCTION THE LANGUAGE MAKES.**
+	// An `Array`'s element is a buffer stride by the identical argument and `Array with float` now WORKS end
+	// to end (a bare `[1.5, 2.5]` literal compiles, stores and reads back), so the E2062 an
+	// `Array with Real` still earns is a POLICY rather than a limitation. It is left standing because
+	// `specs-shv2/generic-types.md:error.float-type-arg-builtin-generic` pins it, and retiring a committed
+	// expectation is the spec owner's call and not a side effect of porting a different file. The day that
+	// case is retracted, widen `baseStoresArgumentsInline` to `isBuiltinGenericBaseName` — ONE line, in ONE
+	// place, and both `Base with …` doors follow, which is exactly why that predicate has a home of its own.
 	//
 	// **2. It may not be a BARE NUMERIC KEYWORD (E2061).** A bare `int` is minted CONCRETE by
 	// `parseTypeReference`, so it too is answered before the `named` cascade it never enters.
@@ -10696,7 +10817,7 @@ export type Parser
 	// that WRITES `Array with Byte` declares its own `typealias Byte = int(0 to u8.max)` — a ranged alias the
 	// cascade resolves — which is exactly what `undeclaredNamedElementStorageBytes` means when it says no user
 	// type can name the literal's own instance.
-	function checkGenericArgType(argType MaxonType, argTok Token)
+	function checkGenericArgType(argType MaxonType, argTok Token, inlineElement bool)
 		if not self.signatures.allFilesFolded 'indexStillBuilding'
 			return
 		end 'indexStillBuilding'
@@ -10725,7 +10846,7 @@ export type Parser
 		// milestone there is none. It retires when a float register class for descriptor-typed values lands,
 		// and until then the diagnostic is what makes that a decision someone takes rather than a panic
 		// someone trips over.
-		if tagIsFloat(tag) 'bareFloatArg'
+		if tagIsFloat(tag) and not inlineElement 'bareFloatArg'
 			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(typeTagName(tag)), range: SourceRange.ofToken(argTok))
 			return
 		end 'bareFloatArg'
@@ -10788,7 +10909,7 @@ export type Parser
 		//
 		// A declared `enum`/`union` erases to `integer` here (a float-BACKED enum too — its bits ARE an i64)
 		// and a struct stays `structRef`, so `float` reaches this test only from a genuine float alias.
-		if tagIsFloat(maxonTypeTag(denoted)) 'floatAliasArg'
+		if tagIsFloat(maxonTypeTag(denoted)) and not inlineElement 'floatAliasArg'
 			// Named by the ALIAS the source wrote, not by `float`: a reader told "cannot use 'float'" about a
 			// line that says `Real` would have to work out which of its aliases is meant.
 			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(String.from(name)), range: SourceRange.ofToken(argTok))
@@ -15913,12 +16034,63 @@ export type Parser
 	// call in place for the same reason: it makes nested tries (`try consume(try get() otherwise 0)`)
 	// work — each inner try rewrites its OWN call, and the outer rewrites the last op after the whole
 	// parse, which is its own call.
+	// The op a `try` target's rewrite belongs on — `lastIdx`, or the CALL one step behind it when `lastIdx` is
+	// the element reinterpretation that call's float result is read through. See the caller for why one step
+	// and not a scan.
+	//
+	// ⚠ It requires the reinterpretation's operand to be the previous op's OWN result, so a `bitsToFloat` the
+	// author wrote (`__Builtins.bitsToFloat(x)` — a call, not a bare op) and a reinterpretation over anything
+	// but the call in front of it both leave the index alone.
+	function tryTargetCallOpIndex(lastIdx OpIndex, refCount OpIndex, targetOpFloor OpIndex) returns OpIndex throws ParseError
+		if refCount < 2 'noOpBehindIt'
+			return lastIdx
+		end 'noOpBehindIt'
+
+		let prevIdx = try self.currentBlock.opRefs.get(refCount - 2) otherwise panic("tryTargetCallOpIndex: opRefs.get OOB at {refCount - 2} on a block with {refCount} ops")
+		if prevIdx < targetOpFloor 'beforeTheTarget'
+			return lastIdx
+		end 'beforeTheTarget'
+
+		return prevIdx if try self.opReinterpretsResultOf(lastIdx, producer: prevIdx) else lastIdx
+	end 'tryTargetCallOpIndex'
+
+	// Is op `idx` a float REINTERPRETATION of the value the CALL at `producer` defines — the one shape
+	// `tryTargetCallOpIndex` steps back over. Both halves are required: a `bitsToFloat` over anything else,
+	// and a reinterpretation sitting behind a non-call, leave the try target where it was.
+	function opReinterpretsResultOf(idx OpIndex, producer OpIndex) returns bool throws ParseError
+		return match try self.artifact.module.ops.get(idx) otherwise panic("opReinterpretsResultOf: opRef {idx} not in module.ops") 'reinterpretation'
+			unaryOp(_, operand, op) gives op == MaxonUnaryOp.bitsToFloat and try self.opDefines(producer, value: operand)
+			call to binOp gives false
+			compare to panicAbortValue gives false
+		end 'reinterpretation'
+	end 'opReinterpretsResultOf'
+
+	// Does the op at `idx` DEFINE `value` as the result of a direct call — the producer half of the test above.
+	function opDefines(idx OpIndex, value ValueId) returns bool throws ParseError
+		return match try self.artifact.module.ops.get(idx) otherwise panic("opDefines: opRef {idx} not in module.ops") 'producer'
+			call(result, _, _, _, _, _, _, _) gives result == value
+			literal to panicAbortValue gives false
+		end 'producer'
+	end 'opDefines'
+
 	function rewriteLastCallToTryCall(func IrFunction, flag ValueId, tryTok Token, targetOpFloor OpIndex) returns TryTarget throws ParseError
 		let refCount = self.currentBlock.opRefs.count()
 		if refCount == 0 'noOp'
 			throw ParseError.unsupported("`try` must be applied to a call — the expression after `try` emitted no call", line: tryTok.line, column: tryTok.column)
 		end 'noOp'
-		let opIdx = try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("rewriteLastCallToTryCall: opRefs.get OOB on a non-empty block")
+		// ⭐⭐ **A TRAILING ELEMENT REINTERPRETATION BELONGS TO THE CALL THAT PRODUCED IT.** A container whose
+		// element is a FLOAT reads its slot as 64 BITS — the runtime returns in a general-purpose register —
+		// and reinterprets them with a `bitsToFloat` op right after the call (`emitContainerElementAccessor`).
+		// That op, not the call, is then the last one the target emitted, and `try v.get(0) otherwise 0.0`
+		// would be refused as *"`try` must be applied to a call"* on a program that is exactly one.
+		//
+		// ⚠ **IT IS NOT A BACKWARD SCAN, AND THE DIFFERENCE IS THE WHOLE SAFETY ARGUMENT.** It steps back over
+		// ONE op, only when that op is a reinterpretation whose operand is the immediately preceding op's own
+		// result, and never below `targetOpFloor` — so `try f() + 1` (a `binOp`) and `try (a)` (no op of the
+		// target's at all) keep the verdicts the paragraph below describes, and nothing can reach a previous
+		// statement's call. The step is what makes the reinterpretation part of the call's RESULT PRODUCTION
+		// rather than a second expression the `try` was applied to.
+		let opIdx = try self.tryTargetCallOpIndex(try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("rewriteLastCallToTryCall: opRefs.get OOB on a non-empty block"), refCount: refCount, targetOpFloor: targetOpFloor)
 
 		// ⭐⭐ **THE LAST OP MUST BE ONE THE TARGET EMITTED (see `targetOpFloor`).** Every try form but one
 		// is guaranteed to emit its call, so this never fired until `try (…)` opened the door to a group
@@ -19236,7 +19408,13 @@ export type Parser
 		if self.signatures.isListInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'list'
 			return
 		end 'list'
-		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `List`, a `String`'s grapheme clusters, and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`; byte-view / codepoint / `Set` / `Map` iteration needs a cursor protocol that arrives with the later P1.8 slices", line: forTok.line, column: forTok.column)
+		// A VECTOR iterates exactly as an `Array` does — its record IS an array's, its length is its fixed
+		// size, and `parseForStatement`'s counted form reads both off the record and the element through the
+		// shared accessor, so the loop needed no arm of its own: only this admission.
+		if self.signatures.isVectorInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'vector'
+			return
+		end 'vector'
+		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `{String.from(VectorBuiltinBaseName)}`, a `List`, a `String`'s grapheme clusters, and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`; byte-view / codepoint / `Set` / `Map` iteration needs a cursor protocol that arrives with the later P1.8 slices", line: forTok.line, column: forTok.column)
 	end 'requireIterableSource'
 
 	// ⭐⭐ **WHAT A COUNTED RANGE'S BOUNDS MAY BE — the RANGE form's twin of `requireIterableSource`, and
@@ -24082,7 +24260,7 @@ export type Parser
 
 		let outOfRangeBits = self.emitLiteral(0 - ShiftCountBits, valueType: MaxonType.integer, range: range)
 		let bitsAboveCount = try self.emitBinOp(count, rhs: outOfRangeBits, op: MaxonBinOp.bitAnd, opTok: opTok)
-		let negatedBits = self.emitUnaryOp(bitsAboveCount, op: MaxonUnaryOp.neg, resultTag: ValueTypeTag.integer, opTok: opTok)
+		let negatedBits = self.emitUnaryOp(bitsAboveCount, op: MaxonUnaryOp.neg, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
 		let signCarrier = try self.emitBinOp(bitsAboveCount, rhs: negatedBits, op: MaxonBinOp.bitOr, opTok: opTok)
 		let signBit = self.emitLiteral(MaxUnguardedShiftCount, valueType: MaxonType.integer, range: range)
 		// ARITHMETIC, and unconditionally so: this `shr` is not the user's shift but the MASK's, and
@@ -24103,7 +24281,7 @@ export type Parser
 		// an out-of-range count, so both saturate to 0 by masking the RESULT. The shift itself is
 		// `op`, which is why one branch now serves the two of them.
 		let raw = try self.emitBinOp(lhs, rhs: count, op: op, opTok: opTok)
-		let keep = self.emitUnaryOp(mask, op: MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer, opTok: opTok)
+		let keep = self.emitUnaryOp(mask, op: MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
 		return try self.emitBinOp(raw, rhs: keep, op: MaxonBinOp.bitAnd, opTok: opTok)
 	end 'emitGuardedShift'
 
@@ -24424,7 +24602,7 @@ export type Parser
 				return try self.emitFloatNegation(operand, opTok: opTok)
 			end 'float'
 
-			return self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: operandTag, opTok: opTok)
+			return self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: operandTag, range: SourceRange.ofToken(opTok))
 		end 'neg'
 
 		if self.at(TokenKind.not) 'not'
@@ -24432,7 +24610,7 @@ export type Parser
 			let operand = try self.parseUnary(func)
 			let operandTag = self.tagOf(operand)
 			match notOperatorFor(operandTag) 'which'
-				op(kind, resultTag) then return self.emitUnaryOp(operand, op: kind, resultTag: resultTag, opTok: opTok)
+				op(kind, resultTag) then return self.emitUnaryOp(operand, op: kind, resultTag: resultTag, range: SourceRange.ofToken(opTok))
 				unknownOperandType then throw ParseError.notOnUnknownType(opTok.line, column: opTok.column)
 				nonIntegralOperand then throw ParseError.nonIntegralOperands(opTok.kind.rawValue, operand: typeTagName(operandTag), line: opTok.line, column: opTok.column)
 			end 'which'
@@ -24607,7 +24785,7 @@ export type Parser
 			// The trunc RESULT is the narrowed integer, so it — not the float source — is what a ranged INT
 			// target checks (`500.7 as Byte` guards `500`). The result has its own Std op, but the guard still
 			// anchors at the cast's BLOCK (below) for the same reason an int->int cast does.
-			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: asTok)
+			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(asTok))
 			self.recordRangeCheckSite(narrowed, targetAlias: targetAlias, line: asTok.line, column: asTok.column)
 			return self.finishCast(narrowed, source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'floatToInt'
@@ -25274,7 +25452,7 @@ export type Parser
 			return value
 		end 'alreadyFloat'
 
-		return self.emitUnaryOp(value, op: MaxonUnaryOp.promoteToFloat, resultTag: ValueTypeTag.float, opTok: opTok)
+		return self.emitUnaryOp(value, op: MaxonUnaryOp.promoteToFloat, resultTag: ValueTypeTag.float, range: SourceRange.ofToken(opTok))
 	end 'promoteToFloat'
 
 	// ⭐ **FLOAT NEGATION IS A SUBTRACT FROM ZERO**, and that is a PORT, not a shortcut — v1 says
@@ -25297,9 +25475,9 @@ export type Parser
 
 	// Append a `unaryOp` op over one SSA value; return the ValueId it defines. The source
 	// range anchors on the operator token, mirroring emitBinOp.
-	function emitUnaryOp(operand ValueId, op MaxonUnaryOp, resultTag ValueTypeTag, opTok Token) returns ValueId
+	function emitUnaryOp(operand ValueId, op MaxonUnaryOp, resultTag ValueTypeTag, range SourceRange) returns ValueId
 		let result = self.mintValue(resultTag, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.unaryOp(result, operand: operand, op: op), range: SourceRange.ofToken(opTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.unaryOp(result, operand: operand, op: op), range: range)
 
 		// `-1` is `neg` of the literal 1, not a negative literal — so without this arm the parser
 		// could not see the count in `x shl -1` at all.
@@ -25514,7 +25692,7 @@ export type Parser
 
 		return match op 'op'
 			eq gives equal
-			ne gives self.emitUnaryOp(equal, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, opTok: opTok)
+			ne gives self.emitUnaryOp(equal, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, range: SourceRange.ofToken(opTok))
 			// Unreachable: `structEqualityOperands` admits only `eq`/`ne`, and it is the one gate in front of
 			// this function.
 			lt to ge panic("emitStructEqualityCall: reached with the ordering operator {comparisonOpSpelling(op)}, which `structEqualityOperands` refuses")
@@ -25551,7 +25729,7 @@ export type Parser
 	function emitStringCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
 		match op 'op'
 			eq then return self.emitStrEqCall(lhs, rhs: rhs, opTok: opTok)
-			ne then return self.emitUnaryOp(self.emitStrEqCall(lhs, rhs: rhs, opTok: opTok), op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, opTok: opTok)
+			ne then return self.emitUnaryOp(self.emitStrEqCall(lhs, rhs: rhs, opTok: opTok), op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, range: SourceRange.ofToken(opTok))
 			// `lt`/`gt`/`le`/`ge` — ordering on a String. Reported as a comparison type mismatch (there
 			// is no ordering to fall through to), which is the acceptable existing diagnostic; a String
 			// is orderable by no operator this rung provides.
@@ -25614,7 +25792,7 @@ export type Parser
 		// the `Ordering` (below).
 		match op 'verdict'
 			eq then return dispatchResult
-			ne then return self.emitUnaryOp(dispatchResult, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, opTok: opTok)
+			ne then return self.emitUnaryOp(dispatchResult, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, range: SourceRange.ofToken(opTok))
 			lt to ge then return self.emitOrderingVerdict(dispatchResult, op: op, opTok: opTok)
 		end 'verdict'
 	end 'emitTypeParamComparison'
@@ -25956,6 +26134,12 @@ export type Parser
 			if self.atListFromConstruction() 'listFromConstruction'
 				return try self.parseListFromConstruction(func)
 			end 'listFromConstruction'
+
+			// `Vector from [10, 20, 30]` — the same shape a third container over, and its own arm for the
+			// `List` arm's reason: the three build different things from the same tokens.
+			if self.atVectorFromConstruction() 'vectorFromConstruction'
+				return try self.parseVectorFromConstruction(func)
+			end 'vectorFromConstruction'
 
 			// `FilePath from "C:\\x.txt"` — the `InitableFromStringLiteral` construction, which is the SECOND
 			// `<Type> from …` form (see `atStringLiteralInitConstruction`, and the paragraph above it that
@@ -28633,6 +28817,14 @@ export type Parser
 			return try self.dispatchListMethod(func, list: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner)
 		end 'listMethod'
 
+		// A VECTOR RECEIVER (`v.get(0)`, `v.set(0, value: 42)`, `v.count()`) goes to the fixed-size container's
+		// dispatch. It carries the STORAGE mask as well as the borrow subject, which the `List` arm above does
+		// not: a vector's slots ARE an array's, so a `set` through one can free the very element an outstanding
+		// `get` borrow names — the exact question E3070 tracks for an `Array`.
+		if self.signatures.isVectorInstanceAt(recv.tag, nameId: recv.nameId) 'vectorMethod'
+			return try self.dispatchVectorMethod(func, vec: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName))
+		end 'vectorMethod'
+
 		// A `StringIndex` RECEIVER (`idx.charIndex()`, `idx.bytePos()`, P1.8 slice B2) takes its own two
 		// accessors rather than the struct path — which would accept the box (the layout IS registered) and
 		// then resolve the method name against `funcSignatures`, where no file declares
@@ -30855,19 +31047,38 @@ export type Parser
 	// The `Array with T` instance a literal's FIRST element fixes (P1.7 slice 3) — an integer element → the
 	// int instance, a String → `Array with String`, a struct/boxed-union → `Array with <name>`. All are
 	// interned by the sweep (`internBuiltinIntegerInstance` / `internLiteralContainerInstances`), so this is a
-	// pure lookup. A float/function/other element is not a supported literal element yet (E2015).
+	// pure lookup. A function/other element is not a supported literal element yet (E2015).
+	//
+	// ⭐ **`bool` AND `float` JOINED THE ADMITTED SET WITH THE `Vector` PORT, and neither was a refusal with a
+	// mechanism behind it.** `/specs/vector.md` writes `Vector from [true, false, …]` and
+	// `Vector from [1.5, 2.5]`, and a `Vector from […]` builds its record through THIS literal — so the
+	// question was never "should a vector be special" but "why did a bare `[…]` refuse two element types the
+	// array runtime already strides correctly". Measured: `bool` needed nothing but this arm (its slot is one
+	// byte by `trivialElementStorageBytes`, and `Array with bool` built through `BArr.create()` + `push` has
+	// always worked); `float` needed the element-word bitcast (`containerElementWord` /
+	// `containerSlotValueType`), which is the whole of what was missing and is now built.
+	//
+	// ⚠ **`typealias FloatArray = Array with float` IS STILL E2062, and that is now a POLICY and not a
+	// limitation.** That refusal is about a type ARGUMENT in a `with` clause — `checkGenericArgType`'s rule 1,
+	// pinned by `generic-types.md:error.float-type-arg-builtin-generic` — and it is deliberately untouched by
+	// this rung. What it says about dictionary-passing is true of a declared generic's `T` and was never true
+	// of a builtin container's element, which lives in a buffer at a known stride; retiring it is a decision
+	// for whoever owns that spec file, not a side effect of this one.
 	function arrayLiteralInstanceFor(elem ValueId, elemTok Token) returns GenericInstanceId throws ParseError
 		let tag = self.tagOf(elem)
 		if tag == ValueTypeTag.integer 'int'
 			return self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
 		end 'int'
+		if tag == ValueTypeTag.boolean or tagIsFloat(tag) 'scalar'
+			return self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.boolean if tag == ValueTypeTag.boolean else MaxonType.float)
+		end 'scalar'
 		if tagIsText(tag) 'string'
 			return self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
 		end 'string'
 		if tagIsStructRef(tag) or tag == ValueTypeTag.named 'aggregate'
 			return self.signatures.builtinInstanceForNamedElement(ArrayBuiltinBaseName, element: try self.artifact.typeNames.nameOf(self.valueNameId(elem)) otherwise panic("arrayLiteralInstanceFor: a struct/union element's name id is not in this file's interner"))
 		end 'aggregate'
-		throw ParseError.unsupported("an array literal element of type '{typeTagName(tag)}' — a literal's elements are an integer, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)", line: elemTok.line, column: elemTok.column)
+		throw ParseError.unsupported("an array literal element of type '{typeTagName(tag)}' — a literal's elements are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)", line: elemTok.line, column: elemTok.column)
 	end 'arrayLiteralInstanceFor'
 
 	// Every element after the first must have the SAME element type — its inferred instance must equal the
@@ -31116,6 +31327,9 @@ export type Parser
 		if self.signatures.isListInstance(giid) 'list'
 			return "`List` static method '{String.from(method)}' — shv2 provides `create()` only; a `List` is otherwise built with `List from […]`"
 		end 'list'
+		if self.signatures.isVectorInstance(giid) 'vector'
+			return "`{String.from(VectorBuiltinBaseName)}` static method '{String.from(method)}' — shv2 provides `create()` only; a vector is otherwise built with `{String.from(VectorBuiltinBaseName)} from […]`"
+		end 'vector'
 		panic("Parser.containerStaticSurfaceSentence: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `parseBuiltinContainerStaticCall`'s call sites make, and a container admitted there owes a sentence here")
 	end 'containerStaticSurfaceSentence'
 
@@ -31135,6 +31349,10 @@ export type Parser
 			try self.requireListElementType(giid, tok: aliasTok)
 			return self.emitListCreateOp(giid, range: range)
 		end 'list'
+		if self.signatures.isVectorInstance(giid) 'vector'
+			try self.requireVectorElementType(giid, tok: aliasTok)
+			return self.emitVectorCreateOp(giid, range: range)
+		end 'vector'
 		panic("Parser.gateAndEmitContainerCreate: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `parseBuiltinContainerStaticCall`'s call sites make, and a container admitted there owes a gate and an emit here")
 	end 'gateAndEmitContainerCreate'
 
@@ -31676,6 +31894,248 @@ export type Parser
 
 		return self.emitOwnedRuntimeResult(ListFromName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: listGid, range: SourceRange.ofToken(listTok))
 	end 'parseListFromConstruction'
+
+	// ==========================================================================================
+	// The `Vector` builtin container — a FIXED-SIZE array (see `SignatureIndex.VectorBuiltinBaseName`).
+	// ==========================================================================================
+
+	// ⭐ **WHAT A VECTOR MAY HOLD.** Its slot is an inline word of the element's own stride, so any element the
+	// array runtime already strides fits — an integer of any declared range, a `bool`, a `float`. What it may
+	// NOT hold is anything MANAGED: `create()` PUBLISHES every slot (`__arr_resize`) while
+	// `element_destroy@40` stays 0, so a managed element would leak at teardown and every `set` would
+	// overwrite a live pointer. A `Character` is refused for that same reason and not a separate one.
+	//
+	// ⚠ **AN OPAQUE `T` IS REFUSED AHEAD OF THE OTHERS, exactly as `requireListElementType` refuses one** — a
+	// vector inside a generic body has no statically known stride at all, so the element size `create()`
+	// stamps would be a guess rather than the element's.
+	//
+	// ⚠⚠ **THE MANAGED TEST IS `containerElementIsManaged`, AND THE TAG WHITELIST BELOW CANNOT STAND IN FOR
+	// IT — THAT WAS A MEASURED SEGFAULT, NOT A THEORETICAL GAP (review finding 1).** `tagIsIntegral` answers
+	// TRUE for `named`, whose comment claims a `named` type is a ranged alias; it is not, in general — a
+	// boxed union, a DECLARED STRUCT and a generic-instance ALIAS NAME all carry `named` too. So this gate
+	// admitted `Vector with 2 IntArray` (`typealias IntArray = Array with Int`) and the vector published two
+	// NULL slots: `count()` answered **2** while `try v.get(0)` took the empty-slot branch — two elements it
+	// does not have, exit 0, no diagnostic — and `for a in v` with a read of `a` dereferenced those NULLs
+	// through `__arr_get_unchecked` and **ACCESS-VIOLATED (0xC0000005)**. `requireArrayResizeHasZeroElement`'s
+	// E3106 is the rule that normally holds this shut, and `emitVectorCreateOp` reaches `__arr_resize`
+	// without passing it; that header predicted this exact failure in these words — *"If this refusal is ever
+	// relaxed, that read becomes a null deref in a function whose own text still looks correct."*
+	// ⇒ The question is asked of the ONE door that answers it (`requireListElementType` opens with the same
+	// door), and the whitelist below stays as the POSITIVE rule for everything that is not managed.
+	function requireVectorElementType(giid GenericInstanceId, tok Token) throws ParseError
+		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
+			throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)} with <N> <type parameter>` — a vector inside a generic body has no statically known element stride to size its storage with; declare it at a concrete element type", line: tok.line, column: tok.column)
+		end 'opaqueElement'
+
+		if self.signatures.containerElementIsManaged(giid) 'managedElement'
+			throw ParseError.unsupported(self.vectorElementRefusal(giid), line: tok.line, column: tok.column)
+		end 'managedElement'
+
+		let tag = maxonTypeTag(self.signatures.containerElementType(giid))
+		if tagIsIntegral(tag) or tag == ValueTypeTag.boolean or tagIsFloat(tag) 'inlineScalar'
+			return
+		end 'inlineScalar'
+
+		throw ParseError.unsupported(self.vectorElementRefusal(giid), line: tok.line, column: tok.column)
+	end 'requireVectorElementType'
+
+	// The ONE wording of "a vector cannot hold that", shared by the two gates that reach it — the managed
+	// door and the tag whitelist — so a reader meets one sentence about one rule however the element was
+	// refused. It names the element as the SOURCE spells it (`arrayElementDisplayName`) — a declared alias, a
+	// struct, an instance, or the primitive's own keyword.
+	//
+	// ⚠ **IT DOES NOT PRINT THE TAG, and that is finding 1's own defect one layer up.** `typeTagName(named)` is
+	// the word `int`, so an `IntArray` element read back as *"'IntArray' (int)"* — a sentence refusing a type
+	// while calling it something it is not, in the very message explaining that the tag was the wrong thing to
+	// judge by.
+	function vectorElementRefusal(giid GenericInstanceId) returns String
+		return "`{String.from(VectorBuiltinBaseName)}` holds its elements INLINE and publishes every slot at `{String.from(CreateMethod)}`, so it has no element destructor to stamp and a '{self.signatures.arrayElementDisplayName(giid)}' element would leak its storage and be read back as a null slot — a vector's element is an integer, a bool or a float"
+	end 'vectorElementRefusal'
+
+	// ⭐ **`Vec3.create()` — THE EMPTY RECORD, THEN ITS SLOTS PUBLISHED.** `__arr_create` yields a record with
+	// no slots (every index out of bounds), and `__arr_resize` grows it to `N` and ZEROES the new range — which
+	// together are exactly *"zero-initialized, N elements"*. `element_destroy@40` stays 0, which
+	// `requireVectorElementType` is what makes correct.
+	//
+	// ⚠ **NOT `__arr_mem_create(N, elementSize)`, WHICH PUBLISHES `N` SLOTS IN ONE CALL AND WOULD OTHERWISE BE
+	// THE OBVIOUS FIT.** That entry is THROWING (`isManagedMemoryRuntimeCallee` — it reports
+	// `invalidAllocation` for a size the allocator cannot use), so a `Vec3.create()` built on it is
+	// **E3057 throwing function requires try: 'create'** on every one of `/specs/vector.md`'s cases, which
+	// write a bare `create()`. Measured, on the first build of this port. The two-call form throws nothing:
+	// `__arr_resize` rejects only a NEGATIVE length, and a `FixedElementCount` cannot be one.
+	//
+	// ⚠⚠ **IT REACHES `__arr_resize` WITHOUT PASSING `requireArrayResizeHasZeroElement`, WHOSE E3106 IS THE
+	// RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ.** `resize` grows a record by ZEROING the new
+	// range, so a published slot of a MANAGED element is a null pointer every accessor will dereference —
+	// which is why that door refuses a non-zero element for the source-level `resize`. The source-level rule
+	// cannot be reused here (its diagnostic is about a `resize` call the author wrote, and a vector's author
+	// wrote `create()`), so the guarantee is carried by `requireVectorElementType` instead: it refuses every
+	// managed element at the `create()` itself. **The two are one invariant with two doors — do not relax
+	// either without the other.** Review finding 1 is what happens when only this one exists.
+	function emitVectorCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+		let vec = self.emitArrayCreateOp(giid, range: range)
+		let countVal = self.emitLiteral(self.signatures.genericInstanceFixedSize(giid), valueType: MaxonType.integer, range: range)
+		_ = self.emitRuntimeCall(ArrResizeName, args: pairArgs(vec, second: countVal), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return vec
+	end 'emitVectorCreateOp'
+
+	// Does this `Vector` method WRITE through its receiver — the `let`-rule and E3070 question, asked of the
+	// one mutator a fixed-size container has.
+	function vectorMethodMutatesReceiver(name ByteArray) returns bool
+		return name.equals(ArraySetMethod)
+	end 'vectorMethodMutatesReceiver'
+
+	// ⭐ **DISPATCH A BUILTIN `Vector` METHOD** — cursor on the method NAME, `vec` the (borrowed) receiver
+	// record. Three members, and every one of them is emitted through the CONTAINER doors the `Array` and
+	// `List` dispatchers already use (`emitContainerElementAccessor`, `parseArraySetOrInsert`), so the
+	// ownership, the borrow and the element type are one answer for all three containers.
+	//
+	// ⭐⭐ **`count()` FOLDS TO A CONSTANT, WHICH IS THE ONE PLACE A VECTOR VISIBLY IS NOT AN ARRAY.** The size
+	// is part of the TYPE (`SignatureIndex.VectorBuiltinBaseName`), so the count is known wherever the type is
+	// — including for a vector arriving as a PARAMETER, whose record this code never sees. Reading `length@8`
+	// would answer the same number by a route that could disagree with the type, and a fixed size that can
+	// disagree with its own type is not a fixed size.
+	//
+	// ⚠ The roster is refused in full rather than per-member: a fixed-size container deliberately has no
+	// `push`/`pop`/`append`/`resize`/`clear`, and that absence is the whole content of "fixed size".
+	function dispatchVectorMethod(func IrFunction, vec ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask, receiverStorage MutatedParamMask) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.ofToken(methodTok)
+		let giid = self.valueNameId(vec)
+		let mutates = vectorMethodMutatesReceiver(methodTok.value)
+
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
+		self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: mutates)
+
+		if methodTok.value.equals(CountMethod) 'count'
+			try self.consumeEmptyArgList()
+			return self.emitLiteral(self.signatures.genericInstanceFixedSize(giid), valueType: MaxonType.integer, range: range)
+		end 'count'
+
+		if methodTok.value.equals(GetMethod) 'get'
+			let index = try self.parseArrayOneArg(func)
+			return self.emitContainerElementAccessor(func, callee: ArrGetName, container: vec, args: pairArgs(vec, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+		end 'get'
+
+		if methodTok.value.equals(ArraySetMethod) 'set'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			return try self.parseArraySetOrInsert(func, arr: vec, giid: giid, callee: ArrSetName, methodTok: methodTok, throwing: true, secondArgLabelled: true, range: range)
+		end 'set'
+
+		throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)}` method '{String.from(methodTok.value)}' — a vector provides `{String.from(CountMethod)}`/`{String.from(GetMethod)}`/`{String.from(ArraySetMethod)}` and `for … in`. It has no `push`/`pop`/`append`/`resize`/`clear`: its size is part of its type, and an operation that changed the length would change the value's type", line: methodTok.line, column: methodTok.column)
+	end 'dispatchVectorMethod'
+
+	// Is the cursor on a `Vector from` construction — the bare `Vector` identifier immediately followed by
+	// `from`? `atListFromConstruction`'s twin, read by BOTH the declaration sweep (which pre-interns the
+	// instances the construction can name) and `parsePrimary`'s construction arm, for that predicate's stated
+	// reason: taught to one and not the other, the parser's own instance read becomes the FIRST write to the
+	// shared registry mid-parse — an order-dependent gid no drift guard can see.
+	//
+	// ⚠ **BARE BASE NAME ONLY, where `Set` also admits an instance ALIAS.** A vector's element AND its size
+	// both come from the literal, so an alias would state nothing the literal does not already carry;
+	// `Vec3 from […]` keeps falling through to `E2004 Undefined variable 'Vec3'` as it does today.
+	function atVectorFromConstruction() returns bool
+		return self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.current().value.equals(VectorBuiltinBaseName)
+	end 'atVectorFromConstruction'
+
+	// ⭐⭐ **`Vector from [a, b, c]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN.** The source array literal
+	// already built exactly the record a vector is (`emitArrayCreateOp` + the pushes), so the construction is
+	// the array literal RETYPED: `Vector with 3 <elem>` names the same 48 bytes `Array with <elem>` does, and
+	// its drop callee is the same `__arr_decref` the literal's owned temp was already registered with. A
+	// `__vec_from` would have been a copy of a record into an identical record.
+	//
+	// ⭐ **THE SIZE COMES FROM THE TOKENS, NOT FROM THE RECORD.** It is part of the TYPE, so it must be known
+	// at parse time — `length@8` is a runtime fact — and the literal's element COUNT is exactly what the
+	// source wrote between its brackets (`arrayLiteralElementCountAt`, the same counter the sweep pre-interns
+	// with, so the instance the parser reads back is the instance the sweep minted).
+	//
+	// ⚠⚠ **NOTHING IS INTERNED UNTIL THE ELEMENT IS ADMITTED (review finding 6).** Minting first meant that a
+	// `Vector from […]` over an element the sweep did NOT pre-intern made the parse's own read the FIRST write
+	// to the shared registry mid-parse — the order-dependent gid `atVectorFromConstruction` above exists to
+	// prevent — and it did so on the way to refusing the program anyway.
+	//
+	// ⭐ **THE GATE IS ASKED OF THE SOURCE ARRAY'S INSTANCE, WHICH IS NOT A STAND-IN — IT IS THE SAME
+	// QUESTION.** `Array with T` and `Vector with N T` share their element exactly, and every door
+	// `requireVectorElementType` opens (`containerElementIsOpaque`, `containerElementIsManaged`,
+	// `containerElementType`, `arrayElementDisplayName`) reads only that element. So the vector's admissibility
+	// is fully decided by the array the literal already built, and no vector instance need exist to decide it.
+	function parseVectorFromConstruction(func IrFunction) returns ValueId throws ParseError
+		let vecTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.from)
+
+		if not self.at(TokenKind.leftBracket) 'notArrayLiteral'
+			let srcTok = self.current()
+			throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)} from` requires an array literal `[…]` — a vector's SIZE is part of its type, and only a literal states it in the source", line: srcTok.line, column: srcTok.column)
+		end 'notArrayLiteral'
+
+		// The literal is parsed FIRST so its own refusals — an empty `[]`, mixed element types, an element type
+		// no literal admits — are reported by the reader that owns those sentences, before this arm asks a
+		// question about an element the program does not have.
+		let openIndex = self.pos
+		let arr = try self.parseArrayLiteral(func)
+		let arrGiid = self.valueNameId(arr)
+		try self.requireVectorElementType(arrGiid, tok: vecTok)
+
+		let size = try self.arrayLiteralElementCountAt(openIndex, anchor: vecTok)
+		let giid = self.signatures.vectorInstanceForElement(self.signatures.containerElementType(arrGiid), size: size)
+
+		// The retype is the WHOLE construction: same record, same bytes, same owner. `arr` is already this
+		// statement's tracked owned temporary (`finishArrayLiteral`), and both instances drop through
+		// `__arr_decref` (`genericInstanceBoxDropCallee`), so the value's registered ownership stays true of it.
+		self.retypeValue(arr, valueType: MaxonType.genericInstance(giid))
+		return arr
+	end 'parseVectorFromConstruction'
+
+	// ⭐ **HOW MANY ELEMENTS THE ARRAY LITERAL AT `openIndex` WRITES** — the top-level commas between its
+	// brackets, plus one. Read from TOKENS because both of its callers need the answer before any expression
+	// is parsed: the declaration sweep (which has no parser state at all) and the construction above (which
+	// must know the instance before it can retype the value into it), and the two must agree exactly or the
+	// parser's read is the first write to the shared instance registry.
+	//
+	// Nesting is tracked over the three bracket kinds a literal element can open, so `[f(1, 2), g(3)]` counts
+	// TWO and `[[1, 2], [3, 4]]` counts two as well.
+	//
+	// ⚠ **AN EMPTY `[]` IS REFUSED RATHER THAN COUNTED AS ONE (review finding 6).** "Commas plus one" is only
+	// true of a literal that has an element, and `[]` has none — `parseArrayLiteral` refuses it outright. Left
+	// answering 1, this counter told the declaration SWEEP to intern three `Vector with 1 …` instances for a
+	// literal the very next line rejects: registry rows minted on behalf of a program that cannot compile.
+	function arrayLiteralElementCountAt(openIndex TokenIndex, anchor Token) returns FixedElementCount throws ParseError
+		var depth = 0
+		var commas = 0 as FixedElementCount
+		var sawElement = false
+		var i = openIndex
+		while i < self.tokens.count() 'scan'
+			let kind = self.kindAt(i)
+			if kind == TokenKind.leftBracket or kind == TokenKind.leftParen or kind == TokenKind.leftBrace 'opens'
+				depth = depth + 1
+			end 'opens'
+			if kind == TokenKind.rightBracket or kind == TokenKind.rightParen or kind == TokenKind.rightBrace 'closes'
+				depth = depth - 1
+				if depth == 0 'closesTheLiteral'
+					if not sawElement 'emptyLiteral'
+						throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)} from []` — an empty array literal states neither the vector's element type nor its size, and both are part of the type", line: anchor.line, column: anchor.column)
+					end 'emptyLiteral'
+
+					return commas + 1
+				end 'closesTheLiteral'
+			end 'closes'
+			if kind == TokenKind.comma and depth == 1 'topLevelSeparator'
+				commas = commas + 1
+			end 'topLevelSeparator'
+			// Anything between the literal's own `[` and its `]` is an element token — except a NEWLINE, which
+			// `finishArrayLiteral` skips at every element boundary, so `[\n]` is as empty as `[]`. Keyed on the
+			// OPENER'S INDEX rather than on the bracket kind, so a nested `[` still counts as content.
+			if i != openIndex and kind != TokenKind.newline 'elementToken'
+				sawElement = true
+			end 'elementToken'
+			i = i + 1
+		end 'scan'
+
+		// The literal is unterminated. `parseArrayLiteral` would report it against the token it actually stops
+		// at; this counter runs FIRST, so it says the same thing here rather than answering a count for a
+		// literal that has no closing bracket.
+		throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)} from […]` — the array literal has no closing `]`", line: anchor.line, column: anchor.column)
+	end 'arrayLiteralElementCountAt'
 
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THIS BINDING-BACKED RECEIVER — EMPTY when it may be
 	// written through.** The ONE place the `let` rule and the parameter exception meet, for EVERY
@@ -33232,6 +33692,16 @@ export type Parser
 		// managed element; a trivial one now asks the same question of the same function.
 		if not self.signatures.containerElementIsManaged(giid) and not self.signatures.containerElementIsOpaque(giid) 'trivial'
 			let trivialType = self.containerSlotValueType(self.signatures.containerElementType(giid))
+			// ⭐ **A FLOAT ELEMENT COMES BACK AS ITS BITS AND IS REINTERPRETED HERE** — the read half of
+			// `containerElementWord`, and it may not simply TAG the call's result `float`: the runtime returns
+			// in a general-purpose register, so a float-tagged result would make the allocator colour the same
+			// value into two register files and panic the emitter. The call is therefore typed honestly as an
+			// integer and the bitcast is a real op.
+			if self.containerElementIsFloatWord(giid) 'floatElement'
+				let bits = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+				return self.emitUnaryOp(bits, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)
+			end 'floatElement'
+
 			return self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(trivialType), resultNameId: typeNameIdOf(trivialType), range: range)
 		end 'trivial'
 
@@ -33543,6 +34013,16 @@ export type Parser
 				return MaxonType.float if tagIsFloat(maxonTypeTag(underlying)) else declared
 			end 'rangedAlias'
 		end 'named'
+		// ⭐ **A BARE FLOAT SLOT IS A FLOAT, and it is answered HERE rather than by the payload classifier
+		// below, which has no arm for one.** `classifyUnionPayload` reports `floatPayload` and
+		// `payloadValueTypeOf` PANICS on it — *"a float payload has no lowerable value type"* — because a
+		// union payload's float is refused before any load reaches it. A container ELEMENT's is not refused:
+		// it rides the slot as its 64 bits (`containerElementWord`) and reads back through the inverse
+		// reinterpretation, so the type it reads as is `float`. MEASURED before this arm, on
+		// `Array with Real` + `.get(0)`: that panic, with a stack trace and no `error E….`
+		if tagIsFloat(tag) 'floatSlot'
+			return MaxonType.float
+		end 'floatSlot'
 		return payloadValueTypeOf(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared), declared: declared)
 	end 'containerSlotValueType'
 
@@ -33781,7 +34261,7 @@ export type Parser
 			return value
 		end 'opaque'
 		if not self.signatures.containerElementIsManaged(giid) 'trivial'
-			return value
+			return self.containerElementWord(value, giid: giid, range: SourceRange.ofToken(self.tokenAt(valueStart)))
 		end 'trivial'
 		let anchor = self.tokenAt(valueStart)
 		// ⚠ `tagIsByteRecord`, NOT `tagIsText`: this flag selects the fused-record COPY protocol (promote a
@@ -33794,6 +34274,51 @@ export type Parser
 		let isString = tagIsByteRecord(maxonTypeTag(self.signatures.containerElementType(giid)))
 		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
 	end 'moveElementIntoContainer'
+
+	// ⭐⭐ **THE MACHINE WORD A TRIVIAL ELEMENT IS STORED AS — the FLOAT boundary, and the only element type
+	// where the value and its slot live in different register files.**
+	//
+	// Every `__arr_*` mutator takes its element as an ordinary integer parameter, so it arrives in a
+	// general-purpose register; a float value is born in XMM. Handed over unconverted it reached
+	// `X64Backend.emitRegRegMove` and PANICKED — *"a register-to-register move from xmm0 to rdx crosses
+	// register files"* (measured on `Array with Real` + `push(2.5)`, which is exactly the crash
+	// `generic-types.md:error.float-type-arg` describes from the other side). A REINTERPRETATION is the
+	// correct conversion and not a widening: the slot holds the f64's 64 bits, so `bitcastF64ToI64` in and
+	// `bitcastI64ToF64` out (`containerSlotValueType`'s float arm) round-trip every value including NaNs and
+	// the two zeros, where a numeric convert would not.
+	//
+	// ⚠ **ASKED OF THE INSTANCE'S ELEMENT, NOT OF THE VALUE'S TAG.** A `Byte` element assigned an int literal
+	// carries an `integer` tag and must pass straight through; a float element handed an int literal has
+	// already been promoted by `requireContainerElementType`, so the tag agreeing with the element is the
+	// precondition rather than the test. Reading the element is what makes this one question with one answer
+	// per instance.
+	//
+	// ⚠⚠ **THE TEST IS `containerElementIsFloatWord` BELOW, AND BOTH SIDES ASK IT — see that predicate for the
+	// measured wrong answer a bare `tagIsFloat` on the raw element type gives.**
+	function containerElementWord(value ValueId, giid GenericInstanceId, range SourceRange) returns ValueId
+		if not self.containerElementIsFloatWord(giid) 'wordAlready'
+			return value
+		end 'wordAlready'
+
+		return self.emitUnaryOp(value, op: MaxonUnaryOp.floatToBits, resultTag: ValueTypeTag.integer, range: range)
+	end 'containerElementWord'
+
+	// ⭐⭐ **DOES CONTAINER `giid`'s ELEMENT TRAVEL AS ITS 64 BITS — the ONE home of the float-element question,
+	// and it has to be one home because its two askers are the two ENDS of a round trip.**
+	// `containerElementWord` writes the bits in; `emitContainerElementAccessor` reads them back out. Spelled
+	// separately, the two are free to disagree about what counts as a float element, and a disagreement is not
+	// a diagnostic — it is a value that goes in through one door and comes out of another.
+	//
+	// ⚠ **IT RESOLVES THROUGH `containerSlotValueType`, NOT OFF THE RAW ELEMENT TYPE, AND THAT IS THE MEASURED
+	// PART.** The stored element of a RANGED FLOAT ALIAS is `named("Float")`, which answers FALSE to a bare
+	// `tagIsFloat`. With the raw type on the write side only, `Vector with 2 Float` over
+	// `typealias Float = float(f64.min to f64.max)` stored its element unconverted and panicked the x64
+	// emitter — *"a register-to-register move from xmm0 to rax crosses register files"* — while the
+	// bare-float `Vector from [1.5, 2.5]`, whose element IS `float`, was already correct. Exactly the
+	// asymmetry one shared door makes unrepresentable.
+	function containerElementIsFloatWord(giid GenericInstanceId) returns bool
+		return tagIsFloat(maxonTypeTag(self.containerSlotValueType(self.signatures.containerElementType(giid))))
+	end 'containerElementIsFloatWord'
 
 	// ⭐ **MOVE AN OPAQUE OWNED FEED VALUE OUT OF ITS BINDING (P1.7 slice 3b-v).** When the fed value (a
 	// `self.items.push(item)` element, or a `self.N(item)` forward argument) is a bare reference to a LIVE owned
@@ -37776,7 +38301,7 @@ export type Parser
 			return operand
 		end 'identity'
 
-		return self.emitUnaryOp(operand, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: calleeTok)
+		return self.emitUnaryOp(operand, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(calleeTok))
 	end 'emitTrunc'
 
 	// ⭐ **THE ARITY GATE EVERY NUMERIC BUILTIN PASSES**, written once and taking the arity as an
@@ -37839,7 +38364,7 @@ export type Parser
 	// them, and a diagnostic must quote what the user wrote.
 	function emitMathIntrinsic(args ValueIdArray, op MaxonUnaryOp, name ByteArray, calleeTok Token) returns ValueId throws ParseError
 		let operand = try self.numericBuiltinOperand(args, name: name, calleeTok: calleeTok)
-		return self.emitUnaryOp(self.promoteToFloat(operand, opTok: calleeTok), op: op, resultTag: ValueTypeTag.float, opTok: calleeTok)
+		return self.emitUnaryOp(self.promoteToFloat(operand, opTok: calleeTok), op: op, resultTag: ValueTypeTag.float, range: SourceRange.ofToken(calleeTok))
 	end 'emitMathIntrinsic'
 
 	// ⭐ `__Builtins.floatToBits(x)` — the f64's IEEE-754 ENCODING as an i64. See
@@ -37870,7 +38395,7 @@ export type Parser
 			throw ParseError.builtinOperandType(String.from(BuiltinsFloatToBitsName), required: typeTagName(ValueTypeTag.float), got: typeTagName(operandTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notAFloat'
 
-		return self.emitUnaryOp(operand, op: MaxonUnaryOp.floatToBits, resultTag: ValueTypeTag.integer, opTok: calleeTok)
+		return self.emitUnaryOp(operand, op: MaxonUnaryOp.floatToBits, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(calleeTok))
 	end 'emitFloatToBits'
 
 	// ⭐ `__Builtins.bitsToFloat(bits)` — the f64 an i64's 64 bits ALREADY SPELL, and the exact inverse of
@@ -37905,7 +38430,7 @@ export type Parser
 			throw ParseError.builtinOperandType(String.from(BuiltinsBitsToFloatName), required: typeTagName(ValueTypeTag.integer), got: typeTagName(operandTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notAnInteger'
 
-		return self.emitUnaryOp(operand, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, opTok: calleeTok)
+		return self.emitUnaryOp(operand, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: SourceRange.ofToken(calleeTok))
 	end 'emitBitsToFloat'
 
 	// ⭐ `min(a, b)` / `max(a, b)` — the ARITY-2 FLOAT MATH INTRINSICS (`specs/min.md`,

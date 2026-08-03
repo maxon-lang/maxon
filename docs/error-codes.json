@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "144970877f43f6ab",
+  "sourceHash": "5446deb9089a6ac6",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -524,6 +524,15 @@
       "doc": "A numeric literal's text is not a number -- two decimal points ('1.5.3'), or any byte the\nnumber grammar does not admit.\nIT REPLACES A PANIC, and the panic's premise is why this code exists. The parser used to\nassert a malformed literal was UNREACHABLE from source, on the ground that Lexer.scanNumber\nonly ever hands over digits, '_', '.', 'e'/'E' and an exponent sign -- so a rejection could\nonly mean the lexer and the number reader had diverged, a compiler defect rather than a\nprogram's. That premise was FALSE: the lexer's trailing-byte rule appended a SECOND '.' to a\ntoken that already carried a fraction, so '1.5.3' reached the reader as '1.5.' and CRASHED\nthe compiler. A parser must be able to answer 'that literal is not well-formed' with a\nposition, and a layer that cannot say no is a layer whose caller's leniency has nowhere to\nsurface.",
       "emittedBy": {"csharp": "ParserMalformedNumericLiteral", "shv2": "parserMalformedNumericLiteral"},
       "notEmittedBy": ["selfhosted"]
+    },
+    {
+      "code": 2069,
+      "tag": "E2069",
+      "name": "VectorSizeMalformed",
+      "stage": "parser",
+      "doc": "A 'Vector with ...' does not state a usable element COUNT before its element type:\n'Vector with Int' (no count at all), 'Vector with 0 Int' (a vector of no elements), or a\ncount too large for the compiler to fold into a buffer allocation.\nA Vector's SIZE IS PART OF ITS TYPE ('Vector with 3 Int' and 'Vector with 4 Int' are\ndifferent types), which is why the count is required rather than defaulted: there is no\nsize a sizeless spelling could mean, and a default would silently give two declarations\none type. It is NOT E2056 GenericArityMismatch, which counts TYPE arguments -- the count\nis a value, is consumed before the type-argument list is read, and a 'Vector with 3'\nmissing its element type IS the E2056 that code names.\nv1 reports the same two faults through its generic parser-error codes; shv2 registers its\nown so the one rule has one message wherever the spelling is met.",
+      "emittedBy": {"shv2": "vectorSizeMalformed"},
+      "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
       "code": 3001,
