@@ -158,4 +158,20 @@
     <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; golden-mint-selftest" />
   </Target>
 
+  <!-- THE FIFTH GUARD, and the fourth's other half. The fourth says a foreign-OS target's goldens may
+       not be MINTED here; this one says what a test that could not be RUN here is worth. They read the
+       same one fact (`TargetRunHost.WhyCannotRun`) and this guard deliberately does NOT re-check its
+       rows - it checks the VERDICT the fact feeds, which is its own: NotRunHere when the host never
+       could have launched the binary, and a plain FAILURE when it should have. The second direction is
+       the dangerous one to lose, because excusing every failed launch would wave through a binary this
+       compiler had just emitted and could not execute.
+
+       Nothing a spec case can reach, again: a case cannot ask which host it is on, and the corpus is
+       only ever run natively. It compiles nothing and launches nothing - every row is a pure function
+       of a synthesized launch result - so it costs one process. Chained AFTER the mint guard, keeping
+       the five a defined sequence rather than two sharing an anchor. -->
+  <Target Name="CheckSpecRunVerdict" AfterTargets="CheckGoldenMintHost">
+    <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; spec-run-selftest" />
+  </Target>
+
 </Project>

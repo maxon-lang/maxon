@@ -3,7 +3,7 @@ using MaxonSharp.Compiler;
 namespace MaxonSharp.Testing;
 
 /// <summary>
-/// The self-test for <see cref="GoldenMintHost"/>, wired as `maxon golden-mint-selftest` and run by
+/// The self-test for <see cref="TargetRunHost.MintRefusalFor"/>, wired as `maxon golden-mint-selftest` and run by
 /// every `dotnet build`, in the same idiom as `stdlib-target-selftest` and for a related reason.
 ///
 /// <para>NO SPEC CASE CAN REACH THIS RULE. A spec case is Maxon source that the runner compiles; it
@@ -20,14 +20,19 @@ namespace MaxonSharp.Testing;
 /// worse than the defect. The sites are covered instead by there being TWO of them, at different
 /// depths (the `--update-required` flag in <c>Program.RunSpecTests</c>, and every golden write in
 /// <c>TestRunner.CheckFragmentGolden</c>), so a mint cannot escape by losing one.</para>
+///
+/// <para>⭐ IT PINS THE SHARED TABLE, ONCE. <see cref="TargetRunHost.MintRefusalFor"/> returns null
+/// exactly when <see cref="TargetRunHost.WhyCannotRun"/> does, so the rows below classify BOTH
+/// consequences and <see cref="SpecRunSelfTest"/> does not repeat them — that guard pins only what is
+/// its own, which is the VERDICT a test earns when the fact says no.</para>
 /// </summary>
-public static class GoldenMintHostSelfTest {
+public static class GoldenMintSelfTest {
   public static int Run() {
     var host = CompileTarget.Native;
     var failures = 0;
 
     foreach (var (target, _) in CompileTarget.Supported) {
-      var refusal = GoldenMintHost.RefusalFor(target);
+      var refusal = TargetRunHost.MintRefusalFor(target);
 
       if (target.Os == host.Os) {
         // ASCII only, here and below: this reports through MSBuild's `Exec`, whose console encoding
@@ -52,7 +57,7 @@ public static class GoldenMintHostSelfTest {
     // Linux box shares its OS with neither supported target.
     var foreignArch = host.Arch == CompileTarget.X64Arch ? CompileTarget.Arm64Arch : CompileTarget.X64Arch;
     var archOnly = new CompileTarget(foreignArch, host.Os);
-    if (GoldenMintHost.RefusalFor(archOnly) is { } archRefusal) {
+    if (TargetRunHost.MintRefusalFor(archOnly) is { } archRefusal) {
       Console.Error.WriteLine(
         $"golden-mint-selftest FAIL: {archOnly.Triple} differs from this host in ARCHITECTURE only, "
         + $"which this rule does not refuse, but it was refused: {archRefusal}");

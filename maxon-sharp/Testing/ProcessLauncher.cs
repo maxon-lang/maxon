@@ -30,6 +30,23 @@ internal enum ProcessRunOutcome {
   /// and is reported as empty rather than as a truncated prefix that reads like real output.
   /// </summary>
   OutputReadTimedOut,
+
+  /// <summary>
+  /// The child NEVER STARTED: the OS refused the spawn. There is no exit code and no output of its
+  /// own — <see cref="ProcessRunResult.Stderr"/> carries the reason instead.
+  ///
+  /// It is an OUTCOME rather than an exception because the harnesses that launch binaries do so on
+  /// bare worker threads, where an unhandled exception ends the PROCESS: a cross-OS
+  /// `spec-test --target=x64-windows` on a Mac used to die exit 134 with a
+  /// `Win32Exception (13) Permission denied` stack trace at the first test binary it tried to
+  /// launch, taking every result already collected with it (PLAN row G12).
+  ///
+  /// ⚠ IT DOES NOT SAY WHOSE FAULT IT IS, and no caller may assume. A binary this host was never
+  /// able to execute (a PE on macOS) and a binary that SHOULD have started and did not (a locked
+  /// file, a mode bit the compiler failed to set, a malformed image) both arrive here. The caller
+  /// that knows the target decides which — see <c>TargetRunHost.WhyCannotRun</c>.
+  /// </summary>
+  LaunchFailed,
 }
 
 /// <summary>
@@ -144,11 +161,12 @@ internal static class ProcessLauncher {
   public const int MemoryLeakExitCode = 101;
 
   /// <summary>
-  /// Stand-in exit code reported when the child was killed for exceeding its timeout and
-  /// so never returned one. <see cref="ProcessRunResult.Outcome"/> is what says the code
-  /// is synthetic; this value exists so the field has something in it, not as a signal.
+  /// Stand-in exit code reported when the child never returned one of its own — it was killed for
+  /// exceeding its timeout, or it never started at all.
+  /// <see cref="ProcessRunResult.Outcome"/> is what says the code is synthetic; this value exists so
+  /// the field has something in it, not as a signal.
   /// </summary>
-  private const int NoExitCodeFromKilledProcess = -1;
+  internal const int NoExitCodeFromProcess = -1;
 
   /// <summary>
   /// How long to let the abandoned stream reads finish after a timeout kill. The child is
@@ -214,9 +232,24 @@ internal static class ProcessLauncher {
       }
     }
 
-    // A failed spawn has no result to report, so it throws rather than returning some
-    // stand-in exit code that a caller would have to recognize.
-    using var process = Process.Start(startInfo)
+    // A REFUSED SPAWN IS AN OUTCOME, NOT AN EXCEPTION. Every harness here launches from a bare
+    // worker thread, where an unhandled exception ends the whole process and takes every result
+    // already collected with it — which is exactly how `spec-test --target=x64-windows` on a Mac
+    // died exit 134 with a `Win32Exception (13)` stack trace instead of reporting 3242 tests
+    // (PLAN row G12). `Win32Exception` is the one .NET raises when the OS itself refuses the exec,
+    // on both platforms and for every reason (no exec permission, wrong image format, file gone);
+    // anything else escaping Process.Start is a fault in this launcher's own arguments and must
+    // still be loud.
+    Process? started;
+    try {
+      started = Process.Start(startInfo);
+    } catch (System.ComponentModel.Win32Exception ex) {
+      return new ProcessRunResult(ProcessRunOutcome.LaunchFailed, NoExitCodeFromProcess, "", ex.Message);
+    }
+
+    // A null with no exception means the runtime reused an already-running process instead of
+    // starting one, which none of these requests can ask for — there is no child to wait on.
+    using var process = started
       ?? throw new InvalidOperationException($"Failed to start process: {request.ExecutablePath}");
 
     if (!RunnerJob.AssignProcess(process.Handle)) {
@@ -252,11 +285,11 @@ internal static class ProcessLauncher {
       try {
         bool drained = Task.WaitAll([stdoutTask, stderrTask], PostKillDrainMs);
         return drained
-          ? new ProcessRunResult(ProcessRunOutcome.TimedOut, NoExitCodeFromKilledProcess,
+          ? new ProcessRunResult(ProcessRunOutcome.TimedOut, NoExitCodeFromProcess,
               stdoutTask.GetAwaiter().GetResult(), stderrTask.GetAwaiter().GetResult())
-          : new ProcessRunResult(ProcessRunOutcome.TimedOut, NoExitCodeFromKilledProcess, "", TimedOutMessage);
+          : new ProcessRunResult(ProcessRunOutcome.TimedOut, NoExitCodeFromProcess, "", TimedOutMessage);
       } catch (Exception ex) when (ex is AggregateException or IOException or ObjectDisposedException) {
-        return new ProcessRunResult(ProcessRunOutcome.TimedOut, NoExitCodeFromKilledProcess, "", TimedOutMessage);
+        return new ProcessRunResult(ProcessRunOutcome.TimedOut, NoExitCodeFromProcess, "", TimedOutMessage);
       }
 #pragma warning restore VSTHRD002
     }

@@ -154,11 +154,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       }
       return new TestSummary {
         Results = [],
-        Passed = 0,
-        Failed = 0,
-        Total = 0,
         TotalDuration = sw.Elapsed,
-        FragmentGenerationErrors = prepResult.Errors.Count
+        PreparationErrors = prepResult.Errors.Count
       };
     }
 
@@ -167,9 +164,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       Logger.Info(LogCategory.Testing, "No tests found");
       return new TestSummary {
         Results = [],
-        Passed = 0,
-        Failed = 0,
-        Total = 0,
         TotalDuration = sw.Elapsed
       };
     }
@@ -195,6 +189,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var specTotal = new Dictionary<string, int>();
     var specDone = new Dictionary<string, int>();
     var specFailed = new Dictionary<string, List<string>>();
+
+    // Counted, not listed. A cross-OS run leaves most of a spec unrunnable and the reason is the same
+    // one line for every test in the suite (it is said once, by the summary) — listing three thousand
+    // identical entries would bury the real failures this report exists to surface.
+    var specNotRunHere = new Dictionary<string, int>();
+
     foreach (var item in workItems) {
       var specName = WorkItemSpecName(item);
       specTotal.TryAdd(specName, 0);
@@ -203,6 +203,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     foreach (var name in specTotal.Keys) {
       specDone[name] = 0;
       specFailed[name] = [];
+      specNotRunHere[name] = 0;
     }
 
     // Spawn worker threads (Zig-style: explicit threads + atomic work-stealing)
@@ -239,11 +240,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
               var testIdentifier = $"specs/fragments/{specName}/{testName}.test";
 
               if (_verbose && itemSw != null) {
-                var status = result.Passed ? "PASS" : "FAIL";
-                Logger.Info(LogCategory.Testing, $"[W{workerId}] [{status}] {specName}/{testName} ({itemSw.ElapsedMilliseconds}ms)");
+                Logger.Info(LogCategory.Testing, $"[W{workerId}] [{StatusLabel(result.Outcome)}] {specName}/{testName} ({itemSw.ElapsedMilliseconds}ms)");
               }
 
-              if (!result.Passed) {
+              if (result.Outcome == SpecTestOutcome.NotRunHere) {
+                specNotRunHere[specName]++;
+              } else if (result.Outcome == SpecTestOutcome.Failed) {
                 var msg = result.ErrorMessage;
                 var isCompilationError = msg != null && msg.StartsWith("Compilation failed:");
                 if (isCompilationError && Interlocked.Exchange(ref compilationFailed, 1) == 0) {
@@ -266,6 +268,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
                 foreach (var f in failures) {
                   Logger.Error(LogCategory.Testing, f);
                 }
+              } else if (specNotRunHere[specName] > 0) {
+                // Its own line and its own marker: this spec was neither green nor red here, and
+                // reporting it as either would be the lie. The count is what a reader acts on.
+                Logger.Error(LogCategory.Testing,
+                  $"[NOT RUN] {specName} ({specNotRunHere[specName]}/{total} compiled but not run on this host)");
               }
             }
           }
@@ -303,19 +310,23 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
     CleanupExecutables(_tempDir);
 
-    var resultList = results.Where(r => r != null).SelectMany(r => r).ToList();
-    var passed = resultList.Count(r => r.Passed);
-    var failed = resultList.Count(r => !r.Passed);
-
     return new TestSummary {
-      Results = resultList,
-      Passed = passed,
-      Failed = failed,
-      Total = resultList.Count,
+      Results = [.. results.Where(r => r != null).SelectMany(r => r)],
       TotalDuration = sw.Elapsed,
-      FragmentGenerationErrors = tally.Errors.Count,
+      UngatedGoldens = tally.Errors.Count,
+      WhyNotRunHere = TargetRunHost.WhyCannotRun(_target),
     };
   }
+
+  /// The `--verbose` per-test marker. A `match` rather than a ternary so a fourth outcome cannot be
+  /// silently printed as FAIL.
+  private static string StatusLabel(SpecTestOutcome outcome) => outcome switch {
+    SpecTestOutcome.Passed => "PASS",
+    SpecTestOutcome.Failed => "FAIL",
+    SpecTestOutcome.NotRunHere => "NOT RUN",
+    var unhandled => throw new ArgumentOutOfRangeException(nameof(outcome), unhandled,
+      "Unhandled spec-test outcome; every outcome needs a marker of its own."),
+  };
 
   // ----- helpers for the unified work-item list -----
 
@@ -347,24 +358,26 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// real failure is the report, and a derived second one buries it) nor written (a fragment from a
   /// broken compile is not a golden anybody should keep).
   ///
+  /// ⭐ A TEST THAT COULD NOT BE RUN HERE IS STILL GATED, and that is most of what a cross-OS run is
+  /// FOR. What the golden pins is the COMPILE, which happened and succeeded; whether this machine can
+  /// then execute the result is a different question and not one the fragment records. So a
+  /// `--target=x64-windows` suite on a Mac still compares all three thousand committed x64 goldens
+  /// byte for byte, and a codegen regression that only shows on that target is caught on a host that
+  /// cannot run a single one of its binaries. (Writing stays refused — see
+  /// <see cref="CheckFragmentGolden"/>.)
+  ///
   /// EVERY OTHER PASSING TEST IS GATED — there is no ungated path. Which COMPILE each one is gated
   /// against is <see cref="FragmentSource"/>'s question, and the answer never depends on how the run
   /// went, only on what compiled.
   /// </summary>
   private TestResult ApplyFragmentGolden(TestResult result, string fragmentPath, string content, FragmentTally tally) {
-    if (!result.Passed) return result;
+    if (result.Outcome == SpecTestOutcome.Failed) return result;
     if (!FragmentGoldensAreAuthoritative) return result;
 
     var mismatch = CheckFragmentGolden(fragmentPath, content, tally);
     if (mismatch == null) return result;
 
-    return new TestResult {
-      TestName = result.TestName,
-      Passed = false,
-      ErrorMessage = mismatch,
-      Duration = result.Duration,
-      FilePath = result.FilePath,
-    };
+    return TestResult.Fail(result.TestName, result.FilePath, result.Duration, mismatch);
   }
 
   /// <summary>
@@ -389,25 +402,24 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   ///   have to open, because the diff IS the review.</item>
   /// </list>
   ///
-  /// ⚖ BOTH DOORS ARE SHUT ON A CROSS-OS RUN (see <see cref="GoldenMintHost"/>), and the FIRST-RUN one
-  /// is why the rule is asked here as well as at the flag: it needs no flag at all. A test with no
-  /// committed golden yet mints one on any run that passes, and under a foreign OS a compiler-error
-  /// case passes without ever launching a binary — the same unvalidated golden `--update-required`
-  /// is refused for, arriving without it. (`--update-required` itself cannot reach this method
-  /// cross-OS: <c>Program.RunSpecTests</c> refuses it before the runner is constructed.)
+  /// ⚖ BOTH DOORS ARE SHUT ON A CROSS-OS RUN (see <see cref="TargetRunHost.MintRefusalFor"/>), and the
+  /// FIRST-RUN one is why the rule is asked here as well as at the flag: it needs no flag at all. A
+  /// test with no committed golden yet mints one on any run that passes, and under a foreign OS a
+  /// compiler-error case passes without ever launching a binary — the same unvalidated golden
+  /// `--update-required` is refused for, arriving without it. (`--update-required` itself cannot reach
+  /// this method cross-OS: <c>Program.RunSpecTests</c> refuses it before the runner is constructed.)
   ///
-  /// ⚠ MEASURED, so that this guard is not read as covering more than it does: no cross-OS run
-  /// currently gets this far. `spec-test --target=x64-windows` on an arm64-macOS host ABORTS at the
-  /// first test binary it tries to launch — `Process.Start` throws <c>Win32Exception (13)</c> on a
-  /// worker thread and an unhandled exception there ends the process (exit 134, a stack trace). That
-  /// is a separate defect, reported against this row rather than fixed inside it, because closing it
-  /// properly means either withdrawing cross-OS runs outright or plumbing a launch-failure outcome
-  /// through every <see cref="ProcessRunResult"/> caller. This guard is what stands between that fix
-  /// and a run that silently mints goldens nothing executed.
+  /// ⚠ CROSS-OS RUNS NOW REACH THIS METHOD IN NUMBERS, which they did not when the guard was written:
+  /// `spec-test --target=x64-windows` on an arm64-macOS host used to ABORT at the first test binary it
+  /// tried to launch (`Win32Exception (13)` on a worker thread, exit 134, a stack trace), and since
+  /// PLAN row G12 it runs the whole suite and reports the unrunnable tests as
+  /// <see cref="SpecTestOutcome.NotRunHere"/>. Every one of those still arrives here to have its
+  /// golden COMPARED — which is the point of the exercise — and the refusal below is what keeps the
+  /// two doors that WRITE one shut.
   /// </summary>
   private string? CheckFragmentGolden(string fragmentPath, string content, FragmentTally tally) {
     if (!File.Exists(fragmentPath) || _updateRequired) {
-      if (GoldenMintHost.RefusalFor(_target) is { } refusal) {
+      if (TargetRunHost.MintRefusalFor(_target) is { } refusal) {
         // Into the errors bag rather than the test's own verdict: the test itself did what it was
         // asked, and what failed is that this run could neither compare nor write its golden — which
         // is exactly what that bag reports, and why it makes the run's exit non-zero.
@@ -469,26 +481,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath, _target);
       if (genError != null) {
         tally.Errors.Add($"Error compiling 'specs/fragments/{item.SpecName}/{item.TestName}.test':\n{genError}");
-        return new TestResult {
-          TestName = item.TestName,
-          Passed = false,
-          ErrorMessage = $"Fragment generation failed: {genError}",
-          Duration = testSw.Elapsed,
-          FilePath = item.FragmentPath
-        };
+        return TestResult.Fail(item.TestName, item.FragmentPath, testSw.Elapsed, $"Fragment generation failed: {genError}");
       }
 
       // Step 2: Parse what we just generated — NOT the file on disk, which is now the committed
       // golden and may legitimately differ (that difference is what step 4 reports).
       var fragment = FragmentGenerator.ParseFragmentContent(content, item.FragmentPath);
       if (fragment == null) {
-        return new TestResult {
-          TestName = item.TestName,
-          Passed = false,
-          ErrorMessage = "Failed to parse generated fragment content",
-          Duration = testSw.Elapsed,
-          FilePath = item.FragmentPath
-        };
+        return TestResult.Fail(item.TestName, item.FragmentPath, testSw.Elapsed, "Failed to parse generated fragment content");
       }
 
       // Step 3: Run the test (compile + execute + check expectations)
@@ -500,13 +500,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         ? ApplyFragmentGolden(result, item.FragmentPath, content, tally)
         : result;
     } catch (Exception ex) {
-      return new TestResult {
-        TestName = item.TestName,
-        Passed = false,
-        ErrorMessage = $"Exception: {ex.Message}",
-        Duration = testSw.Elapsed,
-        FilePath = item.FragmentPath
-      };
+      return TestResult.Fail(item.TestName, item.FragmentPath, testSw.Elapsed, $"Exception: {ex.Message}");
     }
   }
 
@@ -597,6 +591,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var batchableIdx = new List<int>();
     var batchedResults = new TestResult?[item.Tests.Length];
 
+    // A BATCH THIS HOST COULD NOT LAUNCH DOES NOT FALL BACK, and the reason is that falling back
+    // would answer a question nobody asked: re-running each test in its own binary produces the
+    // same "cannot be launched here" for every one of them, having paid a separate compile for
+    // each. The batched compile ALREADY SUCCEEDED, which is the whole of what these tests' goldens
+    // pin, so the per-test verdict is settled without another process.
+    var batchUnrunnable = WhyUncomparable(batchRun, _target) is { HostCannotRun: true } why ? why : null;
+
     // The dispatcher returns 0 on a clean run, so a non-zero PROCESS exit means
     // something happened that the per-test markers cannot express: most importantly
     // a memory leak, which mm_leak_check reports by overriding the exit code with 101
@@ -606,8 +607,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // behind a green suite. The leak counter is process-global, so the batch cannot say
     // WHICH test leaked; invalidating the batch re-runs each test in its own binary,
     // where its own leak check attributes it.
-    var allBatchablePassed = batchRun.ExitCode == 0;
-    if (batchRun.ExitCode != 0) {
+    var allBatchablePassed = batchUnrunnable != null || batchRun.ExitCode == 0;
+    if (batchUnrunnable == null && batchRun.ExitCode != 0) {
       Logger.Debug(LogCategory.Testing,
         $"[BATCH EXIT {batchRun.ExitCode}] {item.SpecName}: batched binary exited non-zero "
         + $"({(batchRun.IsMemoryLeak ? "memory leak" : "crash or runtime error")}) — "
@@ -630,6 +631,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         continue;
       }
       batchableIdx.Add(i);
+
+      if (batchUnrunnable != null) {
+        batchedResults[i] = TestResult.NotRunHere(
+          test.Name, PerTestFragmentPath(item.SpecName, test.Name), batchSw.Elapsed, batchUnrunnable.Message);
+        continue;
+      }
+
       var batched = CheckBatchedTestResult(item, test, perTest, batchSw.Elapsed);
       if (batched == null || !batched.Passed) {
         allBatchablePassed = false;
@@ -682,12 +690,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       return;
     }
 
-    var specFragmentDir = Path.Combine(_fragmentDir, item.SpecName);
     foreach (var i in batchableIdx) {
       var test = item.Tests[i];
       perTestIr.TryGetValue(test.Name, out var ir);
       var content = FragmentGenerator.GenerateFragmentContentWithIr(test, ir);
-      var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
+      var fragmentPath = PerTestFragmentPath(item.SpecName, test.Name);
       try {
         results[i] = ApplyFragmentGolden(results[i], fragmentPath, content, tally);
       } catch (Exception ex) {
@@ -777,7 +784,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // Surface the per-test fragment path so failure reports point at the same
     // file the per-fragment path would — even though we didn't write a fragment
     // for the batched compile itself.
-    var perTestFragmentPath = Path.Combine(_fragmentDir, item.SpecName, $"{test.Name}.test");
+    var perTestFragmentPath = PerTestFragmentPath(item.SpecName, test.Name);
 
     // ASKED, not restated. A batched test's exit code and stdout are judged by exactly the routines
     // the per-fragment path uses — the POSIX 8-bit exit mask and the CRLF/path normalization are one
@@ -787,24 +794,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       ? CheckExitCode(success.ExitCode.Value, slice.ExitCode)
       : null;
     if (exitCodeError != null) {
-      return new TestResult {
-        TestName = test.Name,
-        Passed = false,
-        ErrorMessage = exitCodeError,
-        Duration = elapsed,
-        FilePath = perTestFragmentPath,
-      };
+      return TestResult.Fail(test.Name, perTestFragmentPath, elapsed, exitCodeError);
     }
 
     var stdoutError = success.Stdout != null ? CheckStdout(success.Stdout, slice.Stdout) : null;
     if (stdoutError != null) {
-      return new TestResult {
-        TestName = test.Name,
-        Passed = false,
-        ErrorMessage = stdoutError,
-        Duration = elapsed,
-        FilePath = perTestFragmentPath,
-      };
+      return TestResult.Fail(test.Name, perTestFragmentPath, elapsed, stdoutError);
     }
 
     // Note: stderr is shared across the whole batch (it's the parent process's
@@ -812,12 +807,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // Tests with `Stderr:` expectations are excluded from batching by the
     // eligibility filter.
 
-    return new TestResult {
-      TestName = test.Name,
-      Passed = true,
-      Duration = elapsed,
-      FilePath = perTestFragmentPath,
-    };
+    return TestResult.Pass(test.Name, perTestFragmentPath, elapsed);
   }
 
   /// <summary>
@@ -827,7 +817,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// slice mismatch) — the user always sees real per-test pass/fail.
   /// </summary>
   private TestResult RunOneAsSingle(string specName, TestCase test, FileInfo specFile, FragmentSource source, FragmentTally tally) {
-    var fragmentPath = Path.Combine(_fragmentDir, specName, $"{test.Name}.test");
+    var fragmentPath = PerTestFragmentPath(specName, test.Name);
     var irExePath = Path.Combine(_fragmentDir, specName, $"{test.Name}.ir_exe");
     var single = new TestWorkItem(fragmentPath, irExePath, specName, test.Name, test, specFile);
     return ProcessWorkItem(single, source, tally);
@@ -908,8 +898,22 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// "" for an OS the compiler has no writer for, where the compiler's own answer throws.
   private string ExeExtension => Program.GetOutputExtension(_target);
 
+  /// Where one test's committed `.test` golden lives. Five call sites spelled this join out, and they
+  /// have to agree exactly: the batched IR gate, the batched failure report and the per-fragment path
+  /// all name the SAME file for one test, and a report pointing at a path the gate did not read is a
+  /// report about the wrong file.
+  private string PerTestFragmentPath(string specName, string testName) =>
+    Path.Combine(_fragmentDir, specName, $"{testName}.test");
+
   private TestResult RunTest(Fragment fragment, TestWorkItem item) {
     var sw = Stopwatch.StartNew();
+
+    // BOUND ONCE. Every verdict this method returns is about the same test, names the same fragment
+    // file and is measured by the same stopwatch, and it returns from twenty places — spelled out at
+    // each, that triple is twenty chances for a report to point at another test's file.
+    TestResult Fail(string message) => TestResult.Fail(fragment.TestName, fragment.FilePath, sw.Elapsed, message);
+    TestResult Pass() => TestResult.Pass(fragment.TestName, fragment.FilePath, sw.Elapsed);
+    TestResult NotComparable(UncomparableRun why) => Uncomparable(fragment.TestName, fragment.FilePath, sw.Elapsed, why);
 
     try {
       // Cached executable path in .spec-cache/{specName}/{testName}.exe
@@ -931,34 +935,17 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
         var compiledSuccessfully = compileError == null;
         if (compiledSuccessfully) {
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = false,
-            ErrorMessage = "Expected compiler error but compilation succeeded",
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
+          return Fail("Expected compiler error but compilation succeeded");
         }
 
         // Normalize and compare stderr exactly
         var expectedNorm = NormalizeStderr(errorExpectation.ExpectedStderr);
         var actualNorm = NormalizeStderr(compileError!);
         if (expectedNorm != actualNorm) {
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = false,
-            ErrorMessage = $"Stderr mismatch.\nExpected:\n  {expectedNorm}\nActual:\n  {actualNorm}",
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
+          return Fail($"Stderr mismatch.\nExpected:\n  {expectedNorm}\nActual:\n  {actualNorm}");
         }
 
-        return new TestResult {
-          TestName = fragment.TestName,
-          Passed = true,
-          Duration = sw.Elapsed,
-          FilePath = fragment.FilePath
-        };
+        return Pass();
       }
 
       // Success expectation — compile to the on-disk staging path so the run
@@ -973,13 +960,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
       // Expect compilation to succeed
       if (compileError != null) {
-        return new TestResult {
-          TestName = fragment.TestName,
-          Passed = false,
-          ErrorMessage = $"Compilation failed: {compileError}",
-          Duration = sw.Elapsed,
-          FilePath = fragment.FilePath
-        };
+        return Fail($"Compilation failed: {compileError}");
       }
 
       var successExpectation = (SuccessExpectation)fragment.Expectation;
@@ -1005,24 +986,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         }
 
         if (!irResult.Success || irResult.AllStagesIr == null) {
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = false,
-            ErrorMessage = "RequiredIR specified but compilation failed or produced no IR",
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
+          return Fail("RequiredIR specified but compilation failed or produced no IR");
         }
 
         var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredIR, irResult.AllStagesIr, _target);
         if (!Passed) {
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = false,
-            ErrorMessage = $"Required IR mismatch: {Message}",
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
+          return Fail($"Required IR mismatch: {Message}");
         }
       }
 
@@ -1036,13 +1005,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           var (sectionPassed, sectionMessage) = CheckRequiredSection(required, exePath, sectionName);
           if (sectionPassed) continue;
 
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = false,
-            ErrorMessage = $"Required {sectionName} mismatch: {sectionMessage}",
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
+          return Fail($"Required {sectionName} mismatch: {sectionMessage}");
         }
       }
 
@@ -1055,14 +1018,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         var monitorRun = CaptureMmTrace(exePath, fragment.TimeoutMs ?? DefaultTestTimeoutMs);
         var monitorStderr = monitorRun.Stderr;
 
-        if (IncompleteRunError(monitorRun) is { } monitorIncomplete) {
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = false,
-            ErrorMessage = monitorIncomplete,
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
+        if (WhyUncomparable(monitorRun, _target) is { } monitorIncomplete) {
+          return NotComparable(monitorIncomplete);
         }
 
         // THE EXIT CODE COMES FIRST. It is the monitor's, and so the child's —
@@ -1075,49 +1032,29 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         if (successExpectation.ExitCode.HasValue) {
           var exitError = CheckExitCode(successExpectation.ExitCode.Value, monitorRun.ExitCode);
           if (exitError != null) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = WithMonitorStderr(exitError, monitorStderr),
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
+            return Fail(WithMonitorStderr(exitError, monitorStderr));
           }
         }
 
         var expectedTrace = NormalizeMmTrace(successExpectation.MmTraceExpected ?? "");
         var actualTrace = NormalizeMmTrace(monitorRun.Stdout);
         if (expectedTrace != actualTrace) {
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = false,
-            ErrorMessage = WithMonitorStderr(
-              $"mm-trace mismatch:\nExpected:\n{expectedTrace}\nActual:\n{actualTrace}", monitorStderr),
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
+          return Fail(WithMonitorStderr(
+              $"mm-trace mismatch:\nExpected:\n{expectedTrace}\nActual:\n{actualTrace}", monitorStderr));
         }
 
         if (successExpectation.Stdout != null) {
           var plainRun = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
-          var stdoutError = IncompleteRunError(plainRun) ?? CheckStdout(successExpectation.Stdout, plainRun.Stdout);
-          if (stdoutError != null) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = stdoutError,
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
+          if (WhyUncomparable(plainRun, _target) is { } plainIncomplete) {
+            return NotComparable(plainIncomplete);
+          }
+
+          if (CheckStdout(successExpectation.Stdout, plainRun.Stdout) is { } stdoutError) {
+            return Fail(stdoutError);
           }
         }
 
-        return new TestResult {
-          TestName = fragment.TestName,
-          Passed = true,
-          Duration = sw.Elapsed,
-          FilePath = fragment.FilePath
-        };
+        return Pass();
       }
 
       // Run the executable if we have runtime expectations
@@ -1125,40 +1062,23 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         var run = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
 
         // Ahead of every expectation below: a killed or half-drained child has a PREFIX, and each
-        // of those checks would happily match one.
-        if (IncompleteRunError(run) is { } incomplete) {
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = false,
-            ErrorMessage = incomplete,
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
+        // of those checks would happily match one — and a child that never started has nothing at
+        // all, which every one of them would read as an empty stdout and a zero exit code.
+        if (WhyUncomparable(run, _target) is { } incomplete) {
+          return NotComparable(incomplete);
         }
 
         if (successExpectation.ExitCode.HasValue) {
           var exitError = CheckExitCode(successExpectation.ExitCode.Value, run.ExitCode);
           if (exitError != null) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = exitError,
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
+            return Fail(exitError);
           }
         }
 
         if (successExpectation.Stdout != null) {
           var stdoutError = CheckStdout(successExpectation.Stdout, run.Stdout);
           if (stdoutError != null) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = stdoutError,
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
+            return Fail(stdoutError);
           }
         }
 
@@ -1167,39 +1087,16 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           var expectedStderr = normalize(successExpectation.Stderr);
           var actualStderr = normalize(StripFaultRipSuffix(run.Stderr));
           if (expectedStderr != actualStderr) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = $"Stderr mismatch:\nExpected: {expectedStderr}\nActual: {actualStderr}",
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
+            return Fail($"Stderr mismatch:\nExpected: {expectedStderr}\nActual: {actualStderr}");
           }
         } else if (!string.IsNullOrWhiteSpace(run.Stderr)) {
-          return new TestResult {
-            TestName = fragment.TestName,
-            Passed = false,
-            ErrorMessage = $"Unexpected stderr output:\n{run.Stderr.Trim()}",
-            Duration = sw.Elapsed,
-            FilePath = fragment.FilePath
-          };
+          return Fail($"Unexpected stderr output:\n{run.Stderr.Trim()}");
         }
       }
 
-      return new TestResult {
-        TestName = fragment.TestName,
-        Passed = true,
-        Duration = sw.Elapsed,
-        FilePath = fragment.FilePath
-      };
+      return Pass();
     } catch (Exception ex) {
-      return new TestResult {
-        TestName = fragment.TestName,
-        Passed = false,
-        ErrorMessage = $"Exception: {ex.Message}",
-        Duration = sw.Elapsed,
-        FilePath = fragment.FilePath
-      };
+      return Fail($"Exception: {ex.Message}");
     }
   }
 
@@ -1392,30 +1289,75 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private const string MmTraceEventPrefix = "mm_";
 
   /// <summary>
-  /// Why this run's output cannot be compared against an expectation, or null when it can.
+  /// Why this run's output cannot be compared against an expectation — and WHOSE limit that is.
+  /// Null when it can be compared.
   ///
-  /// A child that was KILLED for outliving its deadline, or whose streams never finished draining,
-  /// did not produce a result — it produced a PREFIX. Comparing a prefix against a golden is how a
-  /// hanging binary passes: it prints exactly what the spec expects, then hangs, and every
-  /// expectation matches. It used to be caught by accident, because the launcher replaced a killed
-  /// child's output with the words "Process timed out" and the stderr check tripped on them. That
-  /// substitution is gone — the prefix is now reported, because `maxon test` needs it to say WHICH
-  /// test was running — so the accident has to become a rule.
+  /// <para>The second field is the whole of what row G12 added, and it is not a nicety: a launch that
+  /// failed is a real DEFECT when the host could have run the binary (a locked file, a mode bit the
+  /// compiler failed to set, a malformed image) and is the HOST's limit when it never could (a PE on
+  /// macOS). Collapsing the two would excuse an unexecutable binary this compiler had just emitted —
+  /// the worst possible false green, since a codegen bug that produces an unrunnable program is
+  /// exactly what the run is there to catch.</para>
+  /// </summary>
+  internal sealed record UncomparableRun(string Message, bool HostCannotRun);
+
+  /// <summary>
+  /// Classify one launch. A child that was KILLED for outliving its deadline, or whose streams never
+  /// finished draining, did not produce a result — it produced a PREFIX. Comparing a prefix against a
+  /// golden is how a hanging binary passes: it prints exactly what the spec expects, then hangs, and
+  /// every expectation matches. It used to be caught by accident, because the launcher replaced a
+  /// killed child's output with the words "Process timed out" and the stderr check tripped on them.
+  /// That substitution is gone — the prefix is now reported, because `maxon test` needs it to say
+  /// WHICH test was running — so the accident has to become a rule.
   ///
   /// <see cref="ProcessRunOutcome"/> is the launcher's answer to "did this finish", and this is the
   /// one place the spec runner asks it, so no individual expectation check has to remember to.
+  ///
+  /// Static and internal so <see cref="SpecRunSelfTest"/> can pin the LaunchFailed rows without
+  /// standing up a runner or a suite.
   /// </summary>
-  private static string? IncompleteRunError(ProcessRunResult run) => run.Outcome switch {
+  internal static UncomparableRun? WhyUncomparable(ProcessRunResult run, Compiler.CompileTarget target) => run.Outcome switch {
     ProcessRunOutcome.Exited => null,
-    ProcessRunOutcome.TimedOut =>
+    ProcessRunOutcome.TimedOut => new UncomparableRun(
       "process did not exit before its timeout and was killed. What it wrote before the kill is a "
       + $"prefix, not a result, so no expectation was compared against it:\nstdout:\n{run.Stdout}\nstderr:\n{run.Stderr}",
-    ProcessRunOutcome.OutputReadTimedOut =>
+      HostCannotRun: false),
+    ProcessRunOutcome.OutputReadTimedOut => new UncomparableRun(
       $"process exited ({run.ExitCode}) but its output never finished draining, so what it printed "
       + "is incomplete and no expectation was compared against it",
+      HostCannotRun: false),
+    ProcessRunOutcome.LaunchFailed => new UncomparableRun(
+      $"the test binary never started, so no expectation was compared against it: {run.Stderr}",
+      HostCannotRun: TargetRunHost.WhyCannotRun(target) != null),
     var unhandled => throw new ArgumentOutOfRangeException(nameof(run), unhandled,
       "Unhandled process outcome; every outcome must state whether its output is comparable."),
   };
+
+  /// <summary>
+  /// The verdict a test earns when its run could not be compared. Internal and static for the same
+  /// reason as <see cref="WhyUncomparable"/>: this mapping — and NOT the launcher outcome — is what
+  /// decides whether a test that did not run is a failure or a limit of this machine, so it is the
+  /// thing worth pinning.
+  /// </summary>
+  internal static TestResult Uncomparable(string testName, string filePath, TimeSpan duration, UncomparableRun why) =>
+    why.HostCannotRun
+      ? TestResult.NotRunHere(testName, filePath, duration, why.Message)
+      : TestResult.Fail(testName, filePath, duration, why.Message);
+
+  /// <summary>
+  /// The result every launch of a target binary gets when this host cannot execute one, or null when
+  /// it can — in which case the caller launches for real.
+  ///
+  /// <para>SYNTHESIZED RATHER THAN ATTEMPTED, for two reasons. The message is then the RULE's ("a PE
+  /// can only be spawned on Windows") instead of an errno the reader has to interpret — a foreign-OS
+  /// binary on macOS reports `Permission denied`, which reads like a mode bit and is not one. And a
+  /// cross-OS suite does not spend three thousand doomed <c>fork</c>/<c>exec</c> pairs to be told the
+  /// same thing three thousand times.</para>
+  /// </summary>
+  private ProcessRunResult? UnrunnableTargetBinary() =>
+    TargetRunHost.WhyCannotRun(_target) is { } why
+      ? new ProcessRunResult(ProcessRunOutcome.LaunchFailed, ProcessLauncher.NoExitCodeFromProcess, "", why)
+      : null;
 
   /// <summary>
   /// Run a compiled test binary and capture it. This is where the spec suite's own
@@ -1423,10 +1365,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// and a spec's `Args:` line is a command line its author already quoted, so it is
   /// passed through verbatim rather than re-split into argv.
   ///
-  /// Every caller must pass the result through <see cref="IncompleteRunError"/> before comparing it
+  /// Every caller must pass the result through <see cref="WhyUncomparable"/> before comparing it
   /// against anything.
   /// </summary>
-  private static ProcessRunResult RunExecutable(string exePath, string workingDirectory, string? args = null, int? timeoutMs = null) {
+  private ProcessRunResult RunExecutable(string exePath, string workingDirectory, string? args = null, int? timeoutMs = null) {
+    if (UnrunnableTargetBinary() is { } unrunnable) return unrunnable;
+
     // Code signing and executable permissions are now handled by MachOWriter at compile time
     return ProcessLauncher.Run(new ProcessLaunchRequest {
       ExecutablePath = exePath,
@@ -1453,7 +1397,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// an empty trace while the `PlatformNotSupportedException` explaining it was
   /// thrown away by this very call.
   /// </summary>
-  private static ProcessRunResult CaptureMmTrace(string exePath, int timeoutMs) {
+  private ProcessRunResult CaptureMmTrace(string exePath, int timeoutMs) {
+    // The MONITOR is native and would start happily; the binary it exists to trace is the target's,
+    // so this door needs the same preflight as a plain run. Without it a cross-OS mm-trace test
+    // reported an empty trace — the monitor's own report of a child it could not spawn — as a
+    // codegen mismatch.
+    if (UnrunnableTargetBinary() is { } unrunnable) return unrunnable;
+
     // Self-invoke the running maxon.exe as the monitor: ProcessPath is the
     // host compiler binary, which carries the DebugStreamMonitor CLI.
     var monitorExe = Environment.ProcessPath
@@ -2003,7 +1953,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           if (!testPath.Contains(_filter, StringComparison.OrdinalIgnoreCase)) continue;
         }
 
-        var fragmentPath = Path.GetFullPath(Path.Combine(_fragmentDir, specName, $"{test.Name}.test"));
+        var fragmentPath = Path.GetFullPath(PerTestFragmentPath(specName, test.Name));
         var sourceWithComment = $"// Test: {test.Name}\n{test.Source}";
 
         // Find the test marker once (shared by both RequiredIR and stderr updates)
@@ -2162,9 +2112,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             // a truncated expectation that then passes forever — the one failure a regenerator must
             // never produce.
             var stderrRun = RunExecutable(exePath, _tempDir, test.Args, test.TimeoutMs);
-            if (result.Success && IncompleteRunError(stderrRun) is { } stderrIncomplete) {
+            if (result.Success && WhyUncomparable(stderrRun, _target) is { } stderrIncomplete) {
               Logger.Error(LogCategory.Testing,
-                $"Not updating stderr for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}: {stderrIncomplete}");
+                $"Not updating stderr for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}: {stderrIncomplete.Message}");
             } else if (result.Success) {
               var actualStderr = stderrRun.Stderr;
               var normalize = test.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
@@ -2206,9 +2156,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             // Refused for the reason the stderr regeneration above is: a prefix must never become a
             // committed expectation.
             var traceRun = CaptureMmTrace(exePath, test.TimeoutMs ?? DefaultTestTimeoutMs);
-            if (result.Success && IncompleteRunError(traceRun) is { } traceIncomplete) {
+            if (result.Success && WhyUncomparable(traceRun, _target) is { } traceIncomplete) {
               Logger.Error(LogCategory.Testing,
-                $"Not updating mm-trace for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}: {traceIncomplete}");
+                $"Not updating mm-trace for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}: {traceIncomplete.Message}");
             } else if (result.Success) {
               var monitorStdout = traceRun.Stdout;
               var newTrace = NormalizeMmTrace(monitorStdout);

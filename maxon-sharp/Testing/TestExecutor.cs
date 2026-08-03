@@ -391,6 +391,16 @@ internal static class TestExecutor {
       shardOutput.Append(NoOutputCapturedText);
     }
 
+    // A binary that never started produced no stream at all, so every test in the shard comes back
+    // unclaimed and `ExecuteShard`'s no-progress arm reports them as DidNotRun. That is the right
+    // verdict — nothing observed them — but without this the REASON is lost: the launcher used to
+    // throw, and `RunShardGuarded` put the exception's message in each result. Now it returns, so
+    // the message has to be carried here or the report reads "nothing started" with no cause.
+    if (launch.Outcome == ProcessRunOutcome.LaunchFailed) {
+      shardOutput.Clear();
+      shardOutput.Append($"the test binary could not be launched: {launch.Stderr}");
+    }
+
     // Materialized ONCE. `StringBuilder.ToString()` copies the whole buffer on every call and caches
     // nothing, so asking for it inside the loop below made the shard's stray output cost
     // O(tests x bytes) to hand out — a product of two things that both grow with a project, for a

@@ -30,7 +30,8 @@ class Program {
       "batch-rewriter-test" => BatchRewriterTests.RunAll(),
       "mxdbg-selftest" => Debug.MxdbgSelfTest.Run(),
       "stdlib-target-selftest" => Compiler.StdlibTargetSelfTest.Run(),
-      "golden-mint-selftest" => Testing.GoldenMintHostSelfTest.Run(),
+      "golden-mint-selftest" => Testing.GoldenMintSelfTest.Run(),
+      "spec-run-selftest" => Testing.SpecRunSelfTest.Run(),
       "debug" => RunDebug(args[1..]),
       "coverage" => CoverageCommand.Run(args[1..]),
       "profile" => ProfileCommand.Run(args[1..]),
@@ -1246,12 +1247,12 @@ class Program {
     }
 
     // ⚖ THE MINT DOOR, refused before anything is compiled, run or written (user ruling, 2026-08-02 —
-    // see GoldenMintHost). `--update-required` is the only flag that rewrites goldens the tree already
+    // see TargetRunHost). `--update-required` is the only flag that rewrites goldens the tree already
     // has, and it also drives `TestRunner.UpdateRequiredInSpecFiles`, which regenerates the
     // `RequiredIR:<target>` and `maxoncstderr` blocks INSIDE `specs/*.md` from compile output alone —
     // the one mint in this compiler that no run ever validates. Refusing at the flag is what covers it;
     // there is no second check down there, because the flag is its only way in.
-    if (updateRequired && Testing.GoldenMintHost.RefusalFor(target) is { } mintRefusal) {
+    if (updateRequired && Testing.TargetRunHost.MintRefusalFor(target) is { } mintRefusal) {
       Console.Error.WriteLine($"error: {TargetFlag}{target.Triple} cannot be minted here — {mintRefusal}");
       return TreeLock.NothingRanExitCode;
     }
@@ -1287,12 +1288,27 @@ class Program {
     var summary = runner.RunAllSpecTests();
 
     Logger.Info(LogCategory.Testing, "");
-    if (summary.FragmentGenerationErrors > 0) {
-      Logger.Error(LogCategory.Testing, $"Fragment generation failed: {summary.FragmentGenerationErrors} error(s) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
+
+    // Nothing ran, so there are no per-test counts to print — only the reason there are none.
+    if (summary.PreparationErrors > 0) {
+      Logger.Error(LogCategory.Testing,
+        $"Could not prepare the suite: {summary.PreparationErrors} error(s) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
       return 1;
     }
 
-    return ReportTestResults(summary);
+    // ⚠ THE PER-TEST REPORT IS PRINTED FIRST AND UNCONDITIONALLY, and that is not cosmetic. An
+    // ungated golden used to RETURN before the summary, so a run in which eight of three thousand
+    // goldens could not be written printed no counts at all — the 3242 verdicts the suite had just
+    // spent two minutes producing were discarded in favour of one line about the eight. It is
+    // routine on a cross-OS run, where every test with no committed golden yet trips the mint
+    // refusal, and that is exactly the run whose per-test report is the whole product.
+    var testExit = ReportTestResults(summary);
+    if (summary.UngatedGoldens == 0) return testExit;
+
+    Logger.Error(LogCategory.Testing,
+      $"Fragment goldens: {summary.UngatedGoldens} could neither be compared nor written (listed "
+      + "above). A gate that could not run is not a gate that passed.");
+    return 1;
   }
 
   static string? FindProjectRoot() {
@@ -1316,15 +1332,32 @@ class Program {
 
   /// <summary>
   /// Reports test results in a consistent format.
+  ///
+  /// <para>⚠ THE "not run here" COUNT IS ON THE SUMMARY LINE, not in a log. A cross-OS run compiles
+  /// and gates the whole corpus but can execute none of it, and a reader who saw only "N passed"
+  /// would take a partial check for a complete one — which is the exact failure the third outcome
+  /// exists to prevent. The verdict itself comes from <see cref="TestSummary.IsGreen"/>, so no other
+  /// reporting path can reach a different one from the same results.</para>
   /// </summary>
   static int ReportTestResults(TestSummary summary) {
-    if (summary.Failed == 0) {
-      Logger.Info(LogCategory.Testing, $"Tests: {summary.Passed} passed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
+    var counts = $"{summary.Passed} passed"
+      + (summary.Failed > 0 ? $", {summary.Failed} failed" : "")
+      + (summary.NotRunHere > 0 ? $", {summary.NotRunHere} not run here" : "");
+    var line = $"Tests: {counts} (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms";
+
+    if (summary.IsGreen) {
+      Logger.Info(LogCategory.Testing, line);
       return 0;
-    } else {
-      Logger.Error(LogCategory.Testing, $"Tests: {summary.Passed} passed, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
-      return 1;
     }
+
+    Logger.Error(LogCategory.Testing, line);
+    if (summary.NotRunHere > 0 && summary.WhyNotRunHere is { } why) {
+      Logger.Error(LogCategory.Testing,
+        $"  not run here: {why}. They COMPILED, and every check that needs no run — compiler errors, "
+        + "RequiredIR, section pins, the committed fragment goldens — was made.");
+    }
+
+    return 1;
   }
 
   static async Task<int> RunLspAsync() {

@@ -177,14 +177,66 @@ public class Fragment {
 }
 
 /// <summary>
+/// How one spec test finished. THREE states and not two, because "this test's expectations were
+/// checked and held" and "this test's expectations were never checked" are different answers and the
+/// suite must not report the second as the first.
+///
+/// <para>Distinct from <see cref="TestOutcome"/>, which is `maxon test`'s vocabulary for a UNIT test
+/// inside a running binary. A spec test is a whole compile-and-run, so the shapes do not correspond.</para>
+/// </summary>
+public enum SpecTestOutcome {
+  /// <summary>Every expectation this test states was compared against real output and held.</summary>
+  Passed,
+
+  /// <summary>An expectation was compared and did not hold, or producing the output failed.</summary>
+  Failed,
+
+  /// <summary>
+  /// The test COMPILED, and everything that could be checked without executing it was checked — but
+  /// its runtime expectations needed a binary this host cannot launch, so nothing compared them.
+  ///
+  /// NOT A PASS, and never folded into one: it is reported in its own column of the summary and it
+  /// makes the run's exit non-zero, on the same principle the fragment tally already states — a gate
+  /// that could not run is not a gate that passed. It is reached only through
+  /// <see cref="TargetRunHost.WhyCannotRun"/>, so it can never excuse a binary that SHOULD have
+  /// started and did not.
+  /// </summary>
+  NotRunHere,
+}
+
+/// <summary>
 /// Result of running a single test.
 /// </summary>
 public class TestResult {
   public required string TestName { get; init; }
-  public required bool Passed { get; init; }
+  public required SpecTestOutcome Outcome { get; init; }
+
+  /// <summary>Why it failed, or why it could not be run. Null only for a pass.</summary>
   public string? ErrorMessage { get; init; }
   public TimeSpan Duration { get; init; }
   public required string FilePath { get; init; }
+
+  public bool Passed => Outcome == SpecTestOutcome.Passed;
+
+  /// <summary>
+  /// The three named constructors. They exist because this object was built inline at thirty call
+  /// sites, each repeating the same five initializers, and a third outcome would have had to be
+  /// spelled correctly at every one of them.
+  /// </summary>
+  public static TestResult Pass(string testName, string filePath, TimeSpan duration) =>
+    new() { TestName = testName, Outcome = SpecTestOutcome.Passed, FilePath = filePath, Duration = duration };
+
+  public static TestResult Fail(string testName, string filePath, TimeSpan duration, string errorMessage) =>
+    new() {
+      TestName = testName, Outcome = SpecTestOutcome.Failed, FilePath = filePath,
+      Duration = duration, ErrorMessage = errorMessage,
+    };
+
+  public static TestResult NotRunHere(string testName, string filePath, TimeSpan duration, string reason) =>
+    new() {
+      TestName = testName, Outcome = SpecTestOutcome.NotRunHere, FilePath = filePath,
+      Duration = duration, ErrorMessage = reason,
+    };
 }
 
 /// <summary>
@@ -233,16 +285,52 @@ public record PrepareResult(
 
 /// <summary>
 /// Summary of all test results.
+///
+/// <para>Every total is COMPUTED from <see cref="Results"/> rather than stored beside it, exactly as
+/// <c>TestRunReport</c> does it and for the same reason: a stored count is a second copy of a fact
+/// the list already holds, and the two can disagree. With three outcomes rather than two that stopped
+/// being theoretical — a summary built by hand could report a passed count that silently included
+/// tests nothing ran.</para>
 /// </summary>
 public class TestSummary {
   public required List<TestResult> Results { get; init; }
-  public required int Passed { get; init; }
-  public required int Failed { get; init; }
-  public required int Total { get; init; }
   public required TimeSpan TotalDuration { get; init; }
+
   /// <summary>
-  /// Number of fragment generation errors (compilation failures during fragment generation).
+  /// Why this host could not run the target's binaries, when that is why anything is
+  /// <see cref="SpecTestOutcome.NotRunHere"/>; null on a run where everything was runnable. Carried
+  /// so the summary line can say it ONCE instead of repeating it against every test.
   /// </summary>
-  public int FragmentGenerationErrors { get; init; }
+  public string? WhyNotRunHere { get; init; }
+
+  /// <summary>
+  /// How many specs could not even be turned into work — a duplicate test name, an unparseable spec.
+  /// NOTHING RAN when this is non-zero, which is why it is separate from
+  /// <see cref="UngatedGoldens"/>: reporting "0 passed" for a run that never started would read as a
+  /// suite that found nothing to do.
+  /// </summary>
+  public int PreparationErrors { get; init; }
+
+  /// <summary>
+  /// How many committed goldens this run could neither compare nor write — the fragment failed to
+  /// compile, or the write was refused because this host may not mint that target's goldens.
+  ///
+  /// Separate from the per-test outcomes because it is not a verdict on any test: the test itself may
+  /// have done exactly what it was asked. What failed is that its golden went ungated, and a gate that
+  /// could not run is not a gate that passed — so it reddens the run on its own.
+  /// </summary>
+  public int UngatedGoldens { get; init; }
+
+  public int Total => Results.Count;
+  public int Passed => Results.Count(r => r.Outcome == SpecTestOutcome.Passed);
+  public int Failed => Results.Count(r => r.Outcome == SpecTestOutcome.Failed);
+  public int NotRunHere => Results.Count(r => r.Outcome == SpecTestOutcome.NotRunHere);
+
+  /// <summary>
+  /// Whether this run certifies the suite. A test nothing ran leaves it uncertified just as a failing
+  /// one does — a gate that could not run is not a gate that passed — and this is the one place that
+  /// is decided, so no reporting path can reach a different verdict from the same results.
+  /// </summary>
+  public bool IsGreen => Failed == 0 && NotRunHere == 0;
 }
 
