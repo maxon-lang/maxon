@@ -263,6 +263,14 @@ public abstract class MaxonOp : IPrintableOp {
 
   public virtual IReadOnlyDictionary<string, IrAttribute> PrintableAttributes => new Dictionary<string, IrAttribute>();
 
+  /// <summary>
+  /// A field-for-field copy, for <see cref="Core.OpGraphCopier"/> — which then rebinds the copy's
+  /// value references. It is here, on the base, rather than 112 hand-written clone methods on the
+  /// subclasses, because a hand-written one can FORGET a field and forgetting is silent: the copy
+  /// would keep pointing at the template's value and the leak this exists to close would reopen for
+  /// exactly one op. `MemberwiseClone` cannot forget.
+  /// </summary>
+  internal MaxonOp ShallowCopy() => (MaxonOp)MemberwiseClone();
 }
 
 /// Implemented by every op that READS A VARIABLE BY NAME. THE single source of truth for that

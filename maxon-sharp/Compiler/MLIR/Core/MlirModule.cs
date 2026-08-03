@@ -589,19 +589,29 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     return typeName;
   }
 
+  /// <summary>
+  /// A copy that shares no mutable object with the original — which is what its one caller, the
+  /// process-wide parsed-stdlib cache, needs it to mean. A compile writes to the types it is handed
+  /// (see <see cref="TypeGraphCopier"/>), so a clone that copied the function bodies but shared the
+  /// TYPE GRAPH left every compile in a process editing the same stdlib. That is board row A4r: the
+  /// emitted binary depended on whether another program had been compiled first.
+  /// </summary>
   public IrModule<TOp> Clone() {
     var clone = new IrModule<TOp> {
       EntryFunctionName = EntryFunctionName
     };
+    var typeCopier = new TypeGraphCopier();
+    var copyOp = OpCopierForDialect();
     foreach (var func in Functions)
-      clone.AddFunction(func.DeepClone());
+      clone.AddFunction(func.DeepClone(typeCopier, copyOp));
     clone.RdataEntries.AddRange(RdataEntries);
     clone.SymdataEntries.AddRange(SymdataEntries);
     clone.UcddataEntries.AddRange(UcddataEntries);
-    clone.Globals.AddRange(Globals);
-    foreach (var (k, v) in TypeDefs) clone.TypeDefs[k] = v;
+    foreach (var global in Globals)
+      clone.Globals.Add(new IrGlobal(global.Name, typeCopier.Copy(global.Type)!, global.InitValue));
+    foreach (var (k, v) in TypeDefs) clone.TypeDefs[k] = typeCopier.Copy(v)!;
     foreach (var (k, v) in FunctionDefaults) clone.FunctionDefaults[k] = v;
-    foreach (var (k, v) in TypeAliasSources) clone.TypeAliasSources[k] = v;
+    foreach (var (k, v) in TypeAliasSources) clone.TypeAliasSources[k] = CopyAliasInfo(v, typeCopier);
     foreach (var (k, v) in ConstantArrayLiterals) clone.ConstantArrayLiterals[k] = v;
     foreach (var (k, v) in InterfaceAssociatedTypes) clone.InterfaceAssociatedTypes[k] = v;
     foreach (var (k, v) in PrimitiveConformances) clone.PrimitiveConformances[k] = [.. v];
@@ -625,6 +635,31 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var n in StackEligibleStructs) clone.StackEligibleStructs.Add(n);
     foreach (var n in ValueTupleReturnFunctions) clone.ValueTupleReturnFunctions.Add(n);
     return clone;
+  }
+
+  /// <summary>
+  /// The op copier for this module's dialect. Only the MAXON tier has one, because only the Maxon
+  /// tier is ever cloned — the parsed-stdlib cache is a Maxon module. A Standard or target module
+  /// reaching here would need its own copier, and getting the identity function instead would be a
+  /// silent half-copy, so it is refused out loud.
+  /// </summary>
+  private static Func<TOp, TOp> OpCopierForDialect() {
+    if (typeof(TOp) != typeof(MaxonOp))
+      throw new InvalidOperationException(
+        $"IrModule<{typeof(TOp).Name}>.Clone has no op copier for that dialect; only the Maxon tier is cloned");
+
+    var opCopier = new OpGraphCopier();
+    return op => (TOp)(object)opCopier.Copy((MaxonOp)(object)op!);
+  }
+
+  /// An alias's TypeParams dictionary is the alias's own, not the source type's, so the clone needs
+  /// its own — and its values name types the clone must reach through its own graph.
+  private static TypeAliasInfo CopyAliasInfo(TypeAliasInfo info, TypeGraphCopier typeCopier) {
+    if (info.TypeParams == null) return info;
+
+    var typeParams = new Dictionary<string, IrType>(info.TypeParams.Count);
+    foreach (var (name, type) in info.TypeParams) typeParams[name] = typeCopier.Copy(type)!;
+    return info with { TypeParams = typeParams };
   }
 
   public void Merge(IrModule<TOp> other) {

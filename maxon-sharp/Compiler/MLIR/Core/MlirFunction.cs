@@ -133,8 +133,20 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
   }
 
   /// Create an independent deep copy of this function.
-  public IrFunction<TOp> DeepClone() {
-    var clone = new IrFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes], ReturnType, ThrowsType) {
+  /// <param name="typeCopier">
+  /// Maps every type in the signature into the CLONE's own type graph. Required rather than optional
+  /// because a signature that still points into the original graph is the half-copy this whole
+  /// mechanism exists to prevent — see <see cref="TypeGraphCopier"/>. <c>ThrowsType</c> is get-only,
+  /// so the mapping has to happen here, at construction, and cannot be patched up by the caller.
+  /// </param>
+  /// <param name="copyOp">
+  /// Copies one op into the clone's own op graph. Also required, and for the same reason: an op
+  /// carries per-compile conclusions (a call's resolved callee, a value's concrete struct type), so a
+  /// clone that shared ops with its template let one compile read another's.
+  /// </param>
+  public IrFunction<TOp> DeepClone(TypeGraphCopier typeCopier, Func<TOp, TOp> copyOp) {
+    var clone = new IrFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes.Select(t => typeCopier.Copy(t)!)],
+        typeCopier.Copy(ReturnType), typeCopier.Copy(ThrowsType)) {
       DisplayName = DisplayName,
       IsStdlib = IsStdlib,
       IsExported = IsExported,
@@ -153,14 +165,27 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
       EscapingParams = EscapingParams != null ? [.. EscapingParams] : null,
       BorrowOnlyParamIndices = BorrowOnlyParamIndices != null ? [.. BorrowOnlyParamIndices] : null
     };
+    var opCopies = new Dictionary<TOp, TOp>();
     foreach (var block in Body.Blocks) {
       var clonedBlock = new IrBlock<TOp>(block.Name);
-      clonedBlock.Operations.AddRange(block.Operations);
+      foreach (var op in block.Operations) {
+        // One op object listed twice must stay one op object in the clone: the copy is looked up, not
+        // remade, so the clone reproduces the original's op identity and not merely its op sequence.
+        if (!opCopies.TryGetValue(op, out var copied)) {
+          copied = copyOp(op);
+          opCopies[op] = copied;
+        }
+        clonedBlock.Operations.Add(copied);
+      }
       clone.Body.Blocks.Add(clonedBlock);
     }
-    // The clone shares op references (AddRange above copies the list, not the ops), so the same
-    // op->span keys apply verbatim. Copy them so a monomorphized instance keeps its source lines.
-    if (_debugSpans != null) clone._debugSpans = new Dictionary<TOp, SourceSpan>(_debugSpans);
+    // Spans are keyed by OP, and the clone's ops are new objects — so the keys have to travel with
+    // them. Keyed by the original here, looked up by the copy there.
+    if (_debugSpans != null) {
+      clone._debugSpans = [];
+      foreach (var (op, span) in _debugSpans)
+        if (opCopies.TryGetValue(op, out var copied)) clone._debugSpans[copied] = span;
+    }
     return clone;
   }
 }

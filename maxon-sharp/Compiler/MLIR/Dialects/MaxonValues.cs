@@ -7,6 +7,11 @@ public abstract class MaxonValue(int id) {
     : $"%{Id}";
   public override bool Equals(object? obj) => obj is MaxonValue other && Id == other.Id;
   public override int GetHashCode() => Id;
+
+  /// A field-for-field copy KEEPING THE ID — the copy is the same SSA value, in a different module.
+  /// Needed because <see cref="MaxonStruct.TypeName"/> is refined per compile, so two compiles that
+  /// share a value object refine each other's (board row A4r).
+  internal MaxonValue CopyKeepingId() => (MaxonValue)MemberwiseClone();
 }
 
 public sealed class MaxonInteger(int id) : MaxonValue(id);
