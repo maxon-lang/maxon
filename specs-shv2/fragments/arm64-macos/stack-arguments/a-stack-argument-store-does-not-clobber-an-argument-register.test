@@ -1,7 +1,7 @@
 // Test: a-stack-argument-store-does-not-clobber-an-argument-register
 typealias Integer = int(i64.min to i64.max)
 
-function pick(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer) returns Integer
+function pick(_ Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer) returns Integer
 	return c
 end 'pick'
 
@@ -9,36 +9,5 @@ function main() returns ExitCode
 	return pick(0, b: 0, c: 3, d: 0, e: 0, f: 0, g: 0, h: 99)
 end 'main'
 ---
-ExitCode: 3
----
-func @pick {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x8, x3
-    arm64.movRegReg x8, x4
-    arm64.movRegReg x8, x5
-    arm64.movRegReg x0, x2
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.movImm x1, 0
-    arm64.movImm x2, 3
-    arm64.movImm x6, 0
-    arm64.movImm x7, 0
-    arm64.movImm x8, 0
-    arm64.movImm x9, 0
-    arm64.movImm x10, 99
-    arm64.movRegReg x3, x6
-    arm64.movRegReg x4, x7
-    arm64.movRegReg x5, x8
-    arm64.movRegReg x6, x9
-    arm64.movRegReg x7, x10
-    arm64.bl pick
-    arm64.epilogue 16
-    arm64.ret
-}
+CompilerError:
+error E3012: <fragment>:4:26: unused variable: 'b'

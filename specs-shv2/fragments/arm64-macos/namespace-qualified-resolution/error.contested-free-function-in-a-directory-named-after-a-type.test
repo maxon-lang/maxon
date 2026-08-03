@@ -1,0 +1,33 @@
+// Test: error.contested-free-function-in-a-directory-named-after-a-type
+// --- file: Point/p.maxon
+typealias Integer = int(0 to 125)
+
+export function create() returns Integer
+	return 3
+end 'create'
+
+// --- file: other/o.maxon
+typealias Integer = int(0 to 125)
+
+export function create() returns Integer
+	return 5
+end 'create'
+
+// --- file: app/main.maxon
+typealias Integer = int(0 to 125)
+
+export type Point
+	export var x as Integer
+
+	export static function create() returns Self
+		return Self{x: 9}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create()
+	return p.x as ExitCode
+end 'main'
+---
+CompilerError:
+error E3006: Point/<fragment>:5:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function

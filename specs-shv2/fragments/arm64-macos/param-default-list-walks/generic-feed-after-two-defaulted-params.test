@@ -4,7 +4,7 @@ typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var item as T
 
-	static function create(tag Integer = 1, note String = "n", item T) returns Self
+	static function create(_ Integer = 1, _ String = "n", item T) returns Self
 		return Self{item: item}
 	end 'create'
 end 'Box'
@@ -16,7 +16,7 @@ function main() returns ExitCode
 	var i = 0
 	while i < 50 'loop'
 		let s = "hello!"
-		let b = StrBox.create(2, note: "x", item: s)
+		let b = StrBox.create(2, item: s)
 		total = 6
 		i = i + 1
 	end 'loop'
@@ -64,35 +64,40 @@ func @main {
     arm64.cbnz x1, loop
     arm64.b whileexit
   loop:
-    arm64.leaRdata x0, __str_rec_1
-    arm64.movImm x20, 2
-    arm64.leaRdata x21, __str_rec_3
-    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-    arm64.add x0, x23, 49
+    arm64.leaRdata x20, __str_rec_1
+    arm64.movImm x21, 2
+    arm64.bl __paramDefault#Box.create#1
+    arm64.movRegReg x22, x0
+    arm64.loadRegBaseDisp.word64 x23, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
+    arm64.add x0, x20, 49
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
     arm64.add x25, x24, 48
     arm64.movRegReg x0, x25
-    arm64.movRegReg x1, x22
-    arm64.movRegReg x2, x23
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x25, x23
+    arm64.add x0, x25, x20
     arm64.storeBaseDispReg.word64 [x24 + 0], x25
-    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.storeBaseDispReg.word64 [x24 + 8], x20
     arm64.movImm x0, -3
     arm64.storeBaseDispReg.word64 [x24 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x21
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
     arm64.movRegReg x2, x24
     arm64.bl Box.create
-    arm64.movImm x20, 6
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movImm x21, 6
     arm64.add x19, x19, 1
-    arm64.bl __destruct_Box_String
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x21
     arm64.b whilehdr
   whileexit:
     arm64.loadRegSlot x19, slot0
@@ -103,5 +108,40 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.epilogue 80
+    arm64.ret
+}
+
+func @__paramDefault#Box.create#1 {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_3
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.add x0, x20, 49
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.add x22, x21, 48
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x22, x20
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movImm x0, -3
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
 }

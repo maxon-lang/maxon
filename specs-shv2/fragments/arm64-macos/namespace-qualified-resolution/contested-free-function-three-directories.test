@@ -1,0 +1,70 @@
+// Test: contested-free-function-three-directories
+// --- file: alpha/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 1
+end 'pick'
+
+// --- file: beta/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 2
+end 'pick'
+
+// --- file: gamma/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick() * 100 + beta.pick() * 10 + gamma.pick()) as ExitCode
+end 'main'
+---
+ExitCode: 124
+---
+func @beta.pick {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @gamma.pick {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl alpha.pick
+    arm64.movImm x16, 100
+    arm64.mul x19, x0, x16
+    arm64.bl beta.pick
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+    arm64.add x19, x19, x0
+    arm64.bl gamma.pick
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @alpha.pick {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
