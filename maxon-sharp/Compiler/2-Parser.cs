@@ -18613,13 +18613,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var exprText = text[exprStart..pos];
         if (pos < text.Length) pos++;
 
+        // The format specifier's `:` is the one token that may legally follow the expression, so
+        // this scan decides where the expression ENDS. It has to skip every `:` the expression
+        // owns, and two constructs contain one: a named call argument `f(1, b: 2)` and a struct
+        // literal `Pt{x: 7}`. Counting parentheses alone split `"{Pt{x: 7}.px()}"` at the struct
+        // literal's colon and handed the parser the fragment `Pt{x` — an over-refusal (E2007) on a
+        // form shv2 has always accepted, which is the same "where does the expression end"
+        // question the trailing-token check below answers.
         string? formatSpec = null;
-        int parenDepth = 0;
+        int nestDepth = 0;
         int colonIdx = -1;
         for (int ci = 0; ci < exprText.Length; ci++) {
-          if (exprText[ci] == '(') parenDepth++;
-          else if (exprText[ci] == ')') parenDepth--;
-          else if (exprText[ci] == ':' && parenDepth == 0) { colonIdx = ci; break; }
+          if (exprText[ci] is '(' or '{') nestDepth++;
+          else if (exprText[ci] is ')' or '}') nestDepth--;
+          else if (exprText[ci] == ':' && nestDepth == 0) { colonIdx = ci; break; }
         }
         if (colonIdx >= 0) {
           formatSpec = exprText[(colonIdx + 1)..];
@@ -18922,6 +18929,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     try {
       var exprResult = ParseExpression();
+
+      // `"{7 zzz}"` printed `7` and `"{1e100}"` printed `1` — see RequireInjectedStreamConsumed for
+      // the rule and why it is one. The wording matches shv2's, which has always enforced this by
+      // consuming a real `stringInterpEnd` token, so the two compilers now report the same refusal at
+      // the same column and agree about what such a program means.
+      RequireInjectedStreamConsumed("'interpolation end'");
+
       var kind = exprResult switch {
         ExprResult.VarRef v => v.Info.Kind,
         ExprResult.Direct d => GetValueKind(d.Value),
@@ -24185,7 +24199,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _tokens = [.. tokenRange.Tokens, new Token(TokenType.Eof, "", 0, 0)];
     _pos = 0;
     try {
-      return ResolveExprValue(ParseExpression());
+      var value = ResolveExprValue(ParseExpression());
+
+      // The capture ran to the `,` or `)` that ends the default, so anything the expression left
+      // behind is text the author wrote and the compiler was about to ignore: `b Integer = 7 zzz`
+      // silently defaulted to 7, and `b Real = 1e100` silently defaulted to 1.
+      RequireInjectedStreamConsumed("'end of default value'");
+
+      return value;
     } finally {
       _tokens = savedTokens;
       _pos = savedPos;
@@ -25391,6 +25412,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         $"'{keyword.Value}(' is not allowed; write '{keyword.Value} (' with a space between the keyword and the opening parenthesis",
         lp.Line, lp.Column);
     }
+  }
+
+  /// ⭐ AN INJECTED TOKEN STREAM MUST BE CONSUMED WHOLE, and this is the single place that says so.
+  ///
+  /// Two constructs hand `ParseExpression` a private token list carved out of the real one — an
+  /// interpolation's `{...}` body and a captured parameter/field default — and both used to keep
+  /// whatever the expression did not consume and then THROW IT AWAY. Everywhere else in the language
+  /// the leftovers are caught for free, because the statement parser meets a newline or EOF and says
+  /// so; `let x = 1 zzz` has never been legal. The cost of the omission was not cosmetic: `1e100` is
+  /// not a float literal (one must contain a decimal point — see lexer-edge-cases' float-exponent-eof),
+  /// so `e100` lexed as an identifier and vanished, and BOTH doors printed a number a hundred orders of
+  /// magnitude wrong with no diagnostic.
+  ///
+  /// One rule, one place: a third injected stream must call this rather than re-derive the answer.
+  private void RequireInjectedStreamConsumed(string endDisplay) {
+    if (!Check(TokenType.Eof)) throw ExpectedTokenError(endDisplay, Current());
   }
 
   /// Build the appropriate "expected X" diagnostic for `tok`: ParserUnexpectedEof

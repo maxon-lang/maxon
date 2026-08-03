@@ -107,3 +107,42 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:4:22: Unsupported: a default value on parameter 'a' of 'f' — that name is declared more than once in this program, each declaration with its own parameter defaults, and the whole-program declaration sweep publishes defaults under the name the source wrote, so a call that omits an argument cannot be told which declaration's default to supply. Remove the duplicate declaration, or drop the default
 ```
+
+<!-- test: error-param-default-trailing-tokens -->
+The capture walks to the `,` or `)` that ends the default, and the expression the drain parses out of
+that region has to reach it. Anything left over is text the author wrote and the compiler was about to
+ignore — `b Integer = 7 zzz` silently defaulted to 7. The bootstrap dropped it too, and now neither does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function f(a Integer, b Integer = 7 zzz) returns Integer
+	return a + b
+end 'f'
+
+function main() returns ExitCode
+	return f(1)
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:4:37: Expected 'end of default value' but got 'identifier'
+```
+
+<!-- test: error-param-default-exponent-without-point -->
+`1e100` is the integer `1` followed by the identifier `e100` — a float literal must contain a decimal
+point. Dropped, it made `b Real = 1e100` default to `1`: a hundred orders of magnitude, silently.
+Write `1.0e100`.
+```maxon
+typealias Real = float(f64.min to f64.max)
+
+function f(a Real, b Real = 1e100) returns Real
+	return a + b
+end 'f'
+
+function main() returns ExitCode
+	print("{f(1.0)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:4:30: Expected 'end of default value' but got 'identifier'
+```

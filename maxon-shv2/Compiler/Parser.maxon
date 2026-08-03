@@ -1381,9 +1381,15 @@ type PendingParamDefault
 	export let paramIndex as ParamCount
 	export let paramType as MaxonType
 	export let exprStart as TokenIndex
+	// The `,` or `)` the CAPTURE skipped to. The drain parses one expression from `exprStart` and must
+	// arrive exactly here: `skipParamDefault` already decided where the author's default ends, so any
+	// gap between the two is text the author wrote and the compiler was about to ignore. Recorded
+	// rather than recomputed at the drain — a second walk is a second answer, and this file has paid
+	// for that twice already (see `sweptParamDefaultHelperName`).
+	export let exprEnd as TokenIndex
 
-	export static function create(ownerName ByteArray, paramIndex ParamCount, paramType MaxonType, exprStart TokenIndex) returns PendingParamDefault
-		return Self{ownerName: ownerName, paramIndex: paramIndex, paramType: paramType, exprStart: exprStart}
+	export static function create(ownerName ByteArray, paramIndex ParamCount, paramType MaxonType, exprStart TokenIndex, exprEnd TokenIndex) returns PendingParamDefault
+		return Self{ownerName: ownerName, paramIndex: paramIndex, paramType: paramType, exprStart: exprStart, exprEnd: exprEnd}
 	end 'create'
 end 'PendingParamDefault'
 
@@ -13062,9 +13068,10 @@ export type Parser
 		// and the only input the two could disagree on — the parameter's index — is exactly what they did
 		// disagree on when this was written that way. Reading it turns the agreement into a lookup that
 		// either finds the sweep's answer or says so.
+		let exprEnd = self.skipParamDefault(self.pos)
 		self.pendingParamDefaults = materializedPendingParamDefaults(self.pendingParamDefaults)
-		self.pendingParamDefaults.push(PendingParamDefault.create(ownerName, paramIndex: paramIndex, paramType: paramType, exprStart: (self.pos + 1) as TokenIndex))
-		self.pos = self.skipParamDefault(self.pos)
+		self.pendingParamDefaults.push(PendingParamDefault.create(ownerName, paramIndex: paramIndex, paramType: paramType, exprStart: (self.pos + 1) as TokenIndex, exprEnd: exprEnd))
+		self.pos = exprEnd
 	end 'captureParamDefault'
 
 	// The declared name a `declaredFunction` owner carries. It panics on the other two arms because
@@ -13199,6 +13206,20 @@ export type Parser
 		self.currentBlock = entry
 
 		try self.parseCheckedValueReturn(helper, block: entry, anchor: anchor)
+
+		// ⭐ THE DEFAULT EXPRESSION MUST CONSUME EVERYTHING THE CAPTURE SKIPPED. Everywhere a statement
+		// is read this is free — the parser meets a newline and says so, and `let x = 1 zzz` has never
+		// been legal — but the helper's body is one expression lifted out of a token region, and what
+		// the expression did not reach was simply abandoned: `b Integer = 7 zzz` defaulted to 7, and
+		// `b Real = 1e100` defaulted to 1, because `1e100` is not a float literal (one must contain a
+		// decimal point) so `e100` lexed as an identifier and vanished — a number a hundred orders of
+		// magnitude wrong, silently. The bootstrap refused neither and now refuses both, at its own two
+		// injected streams; a rule enforced by one compiler and not the other would make a program's
+		// meaning depend on which one read it.
+		if self.pos != pending.exprEnd 'trailingTokens'
+			let stray = self.current()
+			throw ParseError.unexpectedToken("end of default value", got: stray.kind.rawValue, line: stray.line, column: stray.column)
+		end 'trailingTokens'
 
 		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
 		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create()), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)

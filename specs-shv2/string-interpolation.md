@@ -1410,3 +1410,114 @@ param=12.5
 field=12.5
 ret=12.5
 ```
+
+### Error: An interpolation expression must consume everything up to its closing brace
+
+`{...}` holds ONE expression. Anything the expression does not consume is an error, exactly as
+it would be outside a string — `let x = 1 zzz` has never been legal, and an interpolation is not
+a place where trailing tokens become invisible. This is the one pin that keeps the two compilers
+agreeing about what such a program MEANS: the bootstrap dropped the leftovers and printed `7`.
+
+<!-- test: error.interp-trailing-tokens -->
+```maxon
+function main() returns ExitCode
+	print("{7 zzz}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:3:12: Expected 'interpolation end' but got 'identifier'
+```
+
+### Error: An exponent without a decimal point is not a float literal
+
+A float literal must contain a decimal point, so `1e100` lexes as the integer `1` followed by the
+identifier `e100`. Outside a string that identifier is E2001; inside one the bootstrap used to DROP
+it, and `print("{1e100}")` printed `1` — a number a hundred orders of magnitude wrong, with no
+diagnostic. Write `1.0e100`.
+
+<!-- test: error.interp-exponent-without-point -->
+```maxon
+function main() returns ExitCode
+	print("{1e100}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:3:11: Expected 'interpolation end' but got 'identifier'
+```
+
+### The expression boundary is exact in both directions
+
+The refusal above must not cost any ordinary interpolation. A bare name, a method call, a call with
+named arguments, an operator expression, escaped braces, surrounding whitespace, a `toString` struct
+and a brace-nested struct literal all still parse.
+
+<!-- test: interp-expression-boundary-forms -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pt
+	var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+
+	// The nested struct literal has to be written from inside the type — E3076 forbids it
+	// anywhere else — so the brace-nested interpolation lives here rather than in main.
+	static function printNested()
+		print("[{Pt{x: 7}}]\n")
+	end 'printNested'
+
+	function px() returns Integer
+		return self.x
+	end 'px'
+
+	function toString() returns String
+		return "Pt({self.x})"
+	end 'toString'
+end 'Pt'
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function main() returns ExitCode
+	let a = 3
+	let b = 4
+	let p = Pt.create(1)
+	print("[{a}][{p.px()}][{add(1, b: 2)}][{a + b}][\{lit\}][{ a }][{p}]\n")
+	Pt.printNested()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[3][1][3][7][{lit}][3][Pt(1)]
+[Pt(7)]
+```
+
+### The expression boundary is exact around a format specifier
+
+The `:` that opens a format specifier is the one place a token legitimately follows the expression,
+so the boundary rule and the specifier split are the same decision read twice. shv2 has no format
+specifiers yet, so this half of the boundary is pinned and disabled rather than dropped.
+
+<!-- disabled-test: interp-expression-boundary-format-spec -->
+<!-- P1.2 wave B-format: format specifiers -->
+```maxon
+function main() returns ExitCode
+	let a = 3
+	print("[{a:8}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[       3]
+```

@@ -247,3 +247,34 @@ end 'main'
 ```maxoncstderr
 error E2004: specs/fragments/field-defaults/field-defaults.missing-type-annotation-errors.test:6:14: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type annotation: 'var name Type = expr'.
 ```
+
+### Error: A field default must consume everything up to the end of its line
+
+A field default is captured by the same walk a parameter default is, and re-parsed through the same
+sub-parse, so it inherited the same silent drop: `var v as Integer = 7 zzz` initialized `v` to 7 and
+said nothing.
+
+<!-- test: field-defaults.error.trailing-tokens -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	var v as Integer = 7 zzz
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function get() returns Integer
+		return self.v
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	var b = Box.create()
+	return b.get()
+end 'main'
+```
+```maxoncstderr
+error E2010: specs/fragments/field-defaults/field-defaults.error.trailing-tokens.test:5:23: Expected 'end of default value' but got 'zzz'
+```
