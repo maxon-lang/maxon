@@ -39225,8 +39225,33 @@ export type Parser
 	// The same type re-interned into THIS FILE's table, which is what a value's `valueNameIds` column and
 	// every `maxonTypeName` render against. Shared by the field read (`emitFieldLoad`) and the method return
 	// above, so the adoption rides here rather than at each site.
+	//
+	// ⭐⭐ **THROUGH `declaredSlotType` AND NOT A BARE `adoptType` (A4i) — AN INSTANCE'S TYPE ARGUMENT IS A
+	// SLOT LIKE ANY OTHER, RECORDED BEFORE THE ALIAS REGISTRIES EXISTED.** The DECLARATION SWEEP interns
+	// `Box with Point`'s argument before anything can say what `Point` denotes, so it arrives here as a bare
+	// `named` for exactly the reason a struct FIELD's and an `Array` ELEMENT's declared types do — and
+	// `adoptType` re-interns the NAME while leaving the tag alone. That is not a cosmetic loss: `named` reads
+	// as an INTEGER (`tagIsIntegral`), so this door — the ONE place a `T`-typed read learns what `T` is —
+	// handed back a type that says "int" for a value that is a POINTER.
+	//
+	// ⚠ **MEASURED, THREE FACES OF THIS ONE LINE, against the runnable oracle** (which compiles and runs all
+	// three): `let q = b.value` on a `Box with Point` then
+	//   • `q + 0` **COMPILED AND PRINTED THE RAW HEAP ADDRESS** — arithmetic accepted against a pointer, and
+	//     the worst of the three because it is the one that does not refuse (the oracle says E2004);
+	//   • `q.x` was `E2015 … 'q', which is declared 'int' and not a struct type`;
+	//   • with a GENERIC-ALIAS argument (`Holder with IntBox`) it was `E3011 Unknown type 'IntBox'`, said of
+	//     a name the program declares one line above.
+	// One decision, one cause, one door — the struct arm and the generic-alias arm of `declaredSlotType` are
+	// literally the two the three faces split along.
+	//
+	// `slotScopeFilePath` is THIS FILE for the `Array` ELEMENT's reason and not the struct FIELD's: an
+	// instance is declared in no file, so it has no declaring one to ask, and what it has is the file its
+	// `giid` was already range-scoped FOR (`genericAliasInstanceFrom(…, readerFilePath: self.filePath)` at
+	// the receiver's own mint). Passing anything else would let an argument disagree with the very instance
+	// it was read out of. `declaredSlotType` ends in `adoptType`, so the crossing this function exists for
+	// is unchanged for every argument that needs no re-tag.
 	function instanceSubstitutedType(receiver ValueId, opaque MaxonType) returns MaxonType
-		return self.signatures.adoptType(self.instanceSubstitutedIndexType(receiver, opaque: opaque), into: self.artifact.typeNames)
+		return self.signatures.declaredSlotType(self.instanceSubstitutedIndexType(receiver, opaque: opaque), into: self.artifact.typeNames, slotScopeFilePath: self.filePath)
 	end 'instanceSubstitutedType'
 
 	// ⭐ **A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE (P1.9), and this is the door that used to

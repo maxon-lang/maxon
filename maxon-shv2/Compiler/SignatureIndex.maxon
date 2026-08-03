@@ -10179,8 +10179,8 @@ export type ProgramSignatures
 	// generic-alias arm below resolves a compiler-minted alias — `__ManagedMemory` — whose element is the
 	// reader's `Byte` by design, so a range-contested program has two answers to choose from.
 	//
-	// **THE THREE ASKERS, AND WHY ONE PARAMETER SERVES ALL THREE.** They are not three policies; they are
-	// three answers to the one question *"whose reading of a contested alias is this slot's identity?"*:
+	// **THE KINDS OF ASKER, AND WHY ONE PARAMETER SERVES THEM ALL.** They are not separate policies; they are
+	// answers to the one question *"whose reading of a contested alias is this slot's identity?"*:
 	//
 	//   • **A struct FIELD** (`fieldTypeOf`) passes `StructLayout.declFilePath`. A field's type must be ONE
 	//     type program-wide: scoped to the reader, file X could build `Holder{buf: <a stride-1 buffer>}` and
@@ -10194,6 +10194,11 @@ export type ProgramSignatures
 	//     declared in no file, so it has no declaring one to ask; what it has is the file its `giid` was
 	//     already range-scoped FOR, one line earlier in the same parser, and that file is `self.filePath`.
 	//     Passing anything else would let an element disagree with the very instance it was read out of.
+	//   • **A GENERIC INSTANCE's TYPE ARGUMENT** (`Parser.instanceSubstitutedType`, A4i) passes the PARSING
+	//     FILE for the `Array` ELEMENT's reason and not the struct FIELD's, and it is the same reason twice
+	//     over: an instance is declared in no file, and its `giid` was already range-scoped FOR the reading
+	//     file at the receiver's own mint. It is the door a `T`-typed field read learns what `T` is through,
+	//     and it reached here as a bare `adoptType` — see that function for the three faces that cost.
 	//   • **A TUPLE element and a COMPILER-SYNTHESIZED layout** carry `CompilerOwnedDeclFilePath`, the same
 	//     probe a file declaring none of a contested name makes: a type declared in no file resolves like a
 	//     stranger, which is the one answer that is the same for all of them.

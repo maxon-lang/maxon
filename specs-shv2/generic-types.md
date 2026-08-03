@@ -1966,3 +1966,142 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:27:10: argument type mismatch for 'v': expected 'Leaf', got 'IntWrapper.Idx'
 ```
+
+<!-- test: opaque-field-read-of-a-struct-argument-is-that-struct -->
+⭐ **A `T`-TYPED FIELD READ FROM OUTSIDE THE GENERIC BODY IS THE INSTANCE'S ARGUMENT, AND FOR A
+STRUCT ARGUMENT IT WAS AN INTEGER (A4i).** The retype-of-`T` at a concrete field read has been here
+since P1.6-B2, but it handed the value the instance's argument exactly as the registry stored it —
+and a struct argument is stored as a bare `named`, which reads as an INTEGER everywhere. So
+`pb.value` on a `Box with Point` bound a value the front end typed `int` and the machine typed a
+pointer. `generic-trivial-struct-arg` above builds the same box and never reads its field, which is
+why the suite could be green over it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Point
+	export var x as Integer
+	export static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias PointBox = Box with Point
+function main() returns ExitCode
+	let pb = PointBox.create(Point.create(7))
+	let q = pb.value
+	print("{q.x}\n")
+	return q.x - 7
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: error.opaque-field-read-of-a-struct-argument-is-not-an-integer -->
+⚠ **THE SAME READ, AND THE WORST OF ITS FACES: ARITHMETIC WAS ACCEPTED AGAINST A POINTER.** Typed
+`int`, `q + 0` compiled and PRINTED THE RAW HEAP ADDRESS — a silent wrong answer where the two
+refusing faces at least stopped. The correct verdict is the one a plain struct already gets from
+this compiler and from the bootstrap alike, at the same code with the same words: a struct is not
+an operand of `+`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Point
+	export var x as Integer
+	export static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias PointBox = Box with Point
+function main() returns ExitCode
+	let pb = PointBox.create(Point.create(7))
+	let q = pb.value
+	print("{q + 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:19:12: Cannot operate on struct and int
+```
+
+<!-- test: opaque-field-read-of-a-generic-alias-argument-is-that-instance -->
+The third face, and the one that proves the cause is the ARGUMENT's storage and not struct-hood: a
+GENERIC-ALIAS argument (`Holder with IntBox`) is stored as a bare `named` too, so the read used to
+report `E3011 Unknown type 'IntBox'` — a name the program declares one line above. Resolved through
+the same door, it is the instance, and `q.value` reaches `Box`'s field.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+type Holder uses U
+	export var item as U
+	export static function hold(v U) returns Self
+		return Self{item: v}
+	end 'hold'
+end 'Holder'
+typealias IntBox = Box with Integer
+typealias BoxHolder = Holder with IntBox
+function main() returns ExitCode
+	let h = BoxHolder.hold(IntBox.create(7))
+	let q = h.item
+	print("{q.value}\n")
+	return q.value - 7
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: opaque-field-read-of-a-managed-struct-argument-borrows -->
+⚠ **THE OWNERSHIP DIRECTION OF THE SAME RETYPE.** The argument here OWNS heap (a `String` field), so
+naming the read's type correctly is exactly where a drop could be invented that the box already
+owes: `q` is a BORROW of the box's content, the box drops it once at ITS scope exit, and a leak or a
+double free would both show here — the runner treats either as a failure.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Label
+	export var text as String
+	export var n as Integer
+	export static function create(t String, n Integer) returns Self
+		return Self{text: t, n: n}
+	end 'create'
+end 'Label'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LabelBox = Box with Label
+function main() returns ExitCode
+	let b = LabelBox.create(Label.create("{9}", n: 3))
+	let q = b.value
+	print("{q.text} {q.n}\n")
+	return q.n - 3
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9 3
+```

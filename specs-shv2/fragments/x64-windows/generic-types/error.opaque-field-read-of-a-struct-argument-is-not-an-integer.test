@@ -1,0 +1,24 @@
+// Test: error.opaque-field-read-of-a-struct-argument-is-not-an-integer
+typealias Integer = int(i64.min to i64.max)
+type Point
+	export var x as Integer
+	export static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias PointBox = Box with Point
+function main() returns ExitCode
+	let pb = PointBox.create(Point.create(7))
+	let q = pb.value
+	print("{q + 0}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2004: <fragment>:19:12: Cannot operate on struct and int
