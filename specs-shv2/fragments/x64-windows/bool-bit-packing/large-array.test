@@ -1,0 +1,120 @@
+// Test: large-array
+typealias BoolArray = Array with bool
+
+function main() returns ExitCode
+	var arr = BoolArray.create()
+	var i = 0
+	while i < 100 'push'
+		arr.push(i < 50)
+		i = i + 1
+	end 'push'
+	var count = 0
+	var j = 0
+	while j < 100 'count'
+		let v = try arr.get(j) otherwise false
+		if v 'inc'
+			count = count + 1
+		end 'inc'
+		j = j + 1
+	end 'count'
+	return count
+end 'main'
+---
+ExitCode: 50
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r12, 100
+    x64.jcc less, push
+    x64.jmp whileexit
+  push:
+    x64.cmpRegImm32 r12, 50
+    x64.setccReg less, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r13, 100
+    x64.jcc less, count
+    x64.jmp whileexit
+  count:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, inc
+    x64.jmp critsplit
+  inc:
+    x64.leaRegRegImm32 rax, r12, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, r12
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg r12, rax
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
