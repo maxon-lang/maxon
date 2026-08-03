@@ -8840,6 +8840,27 @@ export type ProgramSignatures
 	// refuses a contested name outright. That is the whole reason the file-less door has a guard rather than a
 	// comment: the set of places a declared type is RECORDED is a thing this rung must get right, and getting
 	// it wrong has to be loud.
+	function resolveRecordedGenericAliasTypes()
+		if self.contestedGenericAliases.count() == 0 'noNameIsContested'
+			return
+		end 'noNameIsContested'
+
+		for (_, layout) in self.structTypes 'eachStruct'
+			for index in 0 upto layout.fieldCount() 'eachField'
+				let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.resolveRecordedGenericAliasTypes: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
+				if let resolved = try self.contestScopedDeclaredType(declared, slotScopeFilePath: layout.declFilePath) 'namesAContestedAlias'
+					layout.retypeField(index, declaredType: resolved)
+				end 'namesAContestedAlias'
+			end 'eachField'
+		end 'eachStruct'
+
+		for (_, layout) in self.enumTypes 'eachEnum'
+			for caseIndex in 0 upto layout.caseCount() 'eachCase'
+				self.resolveRecordedPayloadTypes(layout, caseIndex: caseIndex)
+			end 'eachCase'
+		end 'eachEnum'
+	end 'resolveRecordedGenericAliasTypes'
+
 	// ⭐⭐ **RE-TAG EVERY SWEPT `named` THAT DENOTES AN `interface` AS AN `interfaceRef`
 	// (P1.7a-existentials slice 1) — the ONE repair that makes the two type registries agree about what an
 	// interface annotation MEANS.**
@@ -8923,27 +8944,6 @@ export type ProgramSignatures
 			value(inner) then return try self.sweptInterfaceTypeOf(inner)
 		end 'shape'
 	end 'sweptInterfaceReturnOf'
-
-	function resolveRecordedGenericAliasTypes()
-		if self.contestedGenericAliases.count() == 0 'noNameIsContested'
-			return
-		end 'noNameIsContested'
-
-		for (_, layout) in self.structTypes 'eachStruct'
-			for index in 0 upto layout.fieldCount() 'eachField'
-				let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.resolveRecordedGenericAliasTypes: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
-				if let resolved = try self.contestScopedDeclaredType(declared, slotScopeFilePath: layout.declFilePath) 'namesAContestedAlias'
-					layout.retypeField(index, declaredType: resolved)
-				end 'namesAContestedAlias'
-			end 'eachField'
-		end 'eachStruct'
-
-		for (_, layout) in self.enumTypes 'eachEnum'
-			for caseIndex in 0 upto layout.caseCount() 'eachCase'
-				self.resolveRecordedPayloadTypes(layout, caseIndex: caseIndex)
-			end 'eachCase'
-		end 'eachEnum'
-	end 'resolveRecordedGenericAliasTypes'
 
 	// One union case's payload slots, rewritten by the rule above. Split out because a payload array is
 	// replaced wholesale (`PayloadField` holds `let` columns), where a struct field column is retyped in place.

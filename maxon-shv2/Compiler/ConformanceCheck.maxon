@@ -209,11 +209,16 @@ export function declaredConformanceIndex(project Project) returns DeclaredConfor
 	return project.declaredConformances
 end 'declaredConformanceIndex'
 
-// ⭐⭐ **MAY A VALUE OF `valueType` STAND WHERE AN `interfaceRef` IS DECLARED? — THE ONE WIDENING DOOR
-// (P1.7a-existentials slice 1).** Every position that can widen asks exactly this: a call ARGUMENT
-// (`SemanticCheck.checkOneArgType`), a `return`, a struct-FIELD store and a local's declared type. v1 checks
-// only the first and lets the other three soft-fail to a NULL witness — a wild jump at the first dispatch
-// rather than a diagnostic — which is precisely why this is a door and not three tests.
+// ⭐⭐ **MAY A VALUE OF `valueType` STAND WHERE AN `interfaceRef` IS DECLARED? — THE WIDENING DOOR
+// (P1.7a-existentials slice 1).**
+//
+// ⚠ **ONE CALLER, BECAUSE AT THIS SLICE THERE IS ONE WIDENING POSITION:** the call ARGUMENT
+// (`SemanticCheck.checkOneArgType`). A parameter is the only declared place with room for the fat pointer's
+// second word — it travels as an adjacent hidden argument — so a `return`, a struct FIELD, a union payload
+// and a container element are REFUSED outright at their declarations
+// (`Parser.requireStorableDeclaredType`) rather than widened. v1 checks the argument too and lets its other
+// three positions soft-fail to a NULL witness, which is a wild jump at the first dispatch; shv2 has no
+// other position to soft-fail, and the day one opens it asks HERE rather than growing a second test.
 //
 // Two ways a value may stand there, and the second is the one that costs nothing:
 //

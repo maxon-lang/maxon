@@ -386,6 +386,34 @@ end 'typeNameIdOf'
 // The filler the name column carries for a type that has no name.
 export let UnnamedTypeId = 0 as TypeNameId
 
+// ⭐⭐ **HOW MANY OF THESE DECLARED PARAMETERS CARRY `tag` — THE RESERVE/SUPPLY COUNT, AND IT HAS EXACTLY
+// ONE HOME (P1.7a-existentials slice 1 review).**
+//
+// Two hidden-parameter blocks are sized by it, and each is counted TWICE — once by the PARSER, deciding how
+// many slots a declaration RESERVES, and once by the LOWERING, deciding how many arguments a call SUPPLIES:
+//
+//   • `ValueTypeTag.function` — the companion ENVIRONMENT block (`Parser.bindClosureEnvParams`);
+//   • `ValueTypeTag.interfaceRef` — the companion WITNESS block (`Parser.bindExistentialWitnessParams`).
+//
+// ⚠ **THE TWO SIDES CANNOT BE ALLOWED TO DRIFT, AND NOTHING BUT THIS FUNCTION STOPS THEM.** They were four
+// byte-identical bodies in two files. A clause added to the reserve side and not the supply side is a callee
+// reading a witness (or an env) slot the caller never filled — a wrong function pointer at the first
+// dispatch, with no compile error anywhere and no diagnostic at run time. It is not a tidiness point: it is
+// the one place a mis-sized ABI block becomes unrepresentable rather than merely unwritten.
+//
+// It lives beside `maxonTypeTag`, whose answer it counts, and takes the declared parameter TYPES — the list
+// both sides genuinely hold (the callee side reads `IrFunction.maxonParamTypes`, the caller side the
+// callee's `FuncSignature.paramTypes`).
+export function countParamsWithTag(paramTypes MaxonTypeArray, tag ValueTypeTag) returns ParamCount
+	var n = 0 as ParamCount
+	for pt in paramTypes 'each'
+		if maxonTypeTag(pt) == tag 'matches'
+			n = n + 1
+		end 'matches'
+	end 'each'
+	return n
+end 'countParamsWithTag'
+
 // Rebuild a `MaxonType` from the two columns — the inverse of `maxonTypeTag` +
 // `typeNameIdOf`. THIS ALLOCATES (it constructs a union), which is why it is called only
 // where a `MaxonType` is genuinely stored: a binding's declared type, a `literal` op's type.

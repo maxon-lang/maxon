@@ -5696,6 +5696,41 @@ function controlTargetNoun(isBreak bool) returns String
 	return "loop or match" if isBreak else "loop"
 end 'controlTargetNoun'
 
+// Which declared place `Parser.requireStorableDeclaredType` is refusing. An enum (a scalar), so the
+// classification costs nothing at the three sites that pass it.
+enum DeclaredStoragePosition
+	structField
+	unionPayload
+	returnType
+	containerElement
+end 'DeclaredStoragePosition'
+
+// WHAT is being declared, for the refusal's sentence. Rendered on the FAILURE path only.
+function storagePositionSubject(position DeclaredStoragePosition) returns String
+	match position 'which'
+		structField then return "a struct field"
+		unionPayload then return "a union case payload"
+		returnType then return "a function's return type"
+		containerElement then return "a container's element type"
+	end 'which'
+end 'storagePositionSubject'
+
+// WHERE the second word has nowhere to go — the reason, per position, so the message says what is missing
+// rather than that something is.
+function storagePositionRoom(position DeclaredStoragePosition) returns String
+	match position 'which'
+		structField then return "a field slot is one machine word (the 16-byte carve-out, and the witness-dispatched destructor an owned interface field would need, arrive with the managed-existential slice)"
+		unionPayload then return "a payload slot is one machine word"
+		returnType then return "a return hands back one register, plus a second only for a throwing call's error flag — an interface-returning ABI is a distinct slice"
+		// ⚠ **IT IS REFUSED WHERE THE ARGUMENT IS PARSED AND NOT IN `checkGenericArgType`, which RECORDS.** A
+		// recorded diagnostic is DISCARDED when a later throw aborts the file's parse, and this construct
+		// makes everything downstream meaningless — MEASURED with it recorded: the E2015 was produced at the
+		// `typealias` and then thrown away, and what the author saw was *"E3005: cannot assign 'struct' to
+		// variable 'push' of type 'int'"* eighteen lines further down.
+		containerElement then return "an element slot is one machine word"
+	end 'which'
+end 'storagePositionRoom'
+
 // ⭐ **WHICH VALUE-MERGE CONSTRUCT `finalizeMatchMerge` is finishing (P1.5 #80).** The three share ONE
 // merge — the phi, the give-agreement rules, the ownership normalisation — but they must NOT share their
 // DIAGNOSTIC NOUN: a `match` reports "match arms give incompatible types" (E3005) naming the offending
@@ -9978,7 +10013,9 @@ export type Parser
 		// Int)` asked there answers *how far the sweep had got*. The field's ROOT keeps asking, because
 		// `ProgramSignatures.fieldSurfaceOf` ORs in the complementary derivation; see `declaredSurfaceAt`.
 		let declaredSurface = self.declaredSurfaceAt(self.pos, slotElementsFromAliases: false)
+		let typeTok = self.current()
 		let fieldType = try self.parseTypeReference()
+		try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.structField, anchor: typeTok)
 
 		if not self.at(TokenKind.equals) 'noDefault'
 			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.none, declaredSurface: declaredSurface)
@@ -10917,6 +10954,7 @@ export type Parser
 
 		let argTok = self.current()
 		let argType = try self.parseTypeReference()
+		try self.requireStorableDeclaredType(argType, position: DeclaredStoragePosition.containerElement, anchor: argTok)
 		self.checkGenericArgType(argType, argTok: argTok, inlineElement: inlineElement)
 		nodes.push(GenericArgNode.leaf(argType))
 	end 'parseGenericArgNode'
@@ -12210,7 +12248,9 @@ export type Parser
 			// (`readStructFieldInto`). The tolerant sweep swallows the throw and leaves the diagnostic
 			// to the real parse.
 			try self.requireUnreservedName(nameTok)
+			let typeTok = self.current()
 			let fieldType = try self.parseTypeReference()
+			try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.unionPayload, anchor: typeTok)
 			fields.push(PayloadField.create(nameTok.value, declaredType: fieldType))
 
 			if not self.at(TokenKind.comma) 'endFields'
@@ -12467,6 +12507,13 @@ export type Parser
 		// source, so `materializeStaticConstructorLayout` would panic on the non-instance result — reject it here
 		// cleanly, the way a receiverless `sizeof(T)` body is. An instance method sources it from `self`, so this
 		// is gated on `not takesReceiver`.
+		// An interface RETURN TYPE has no register for the witness half — refused at the declaration, which is
+		// the line that has to change. See `requireStorableDeclaredType`.
+		match returnType 'declaredReturn'
+			void then break 'declaredReturn'
+			value(inner) then try self.requireStorableDeclaredType(inner, position: DeclaredStoragePosition.returnType, anchor: nameTok)
+		end 'declaredReturn'
+
 		if needsLayoutParam and not takesReceiver and not self.returnsEnclosingType(returnType) 'staticLayoutNeedsSelfReturn'
 			throw ParseError.unsupported("a `static function` that needs the type parameter's layout descriptor — it constructs an opaque type-parameter `Array` (`ElementArray.create()`) or reads `sizeof` of the type parameter — must return `Self` so the caller can source the descriptor from the instance the static builds; a static returning any other type has no descriptor source (build the array or read the size through an instance method on `self`, or return `Self`). Threading a descriptor from a static call site's alias is a later slice", line: nameTok.line, column: nameTok.column)
 		end 'staticLayoutNeedsSelfReturn'
@@ -12486,8 +12533,10 @@ export type Parser
 		// other half of the fat pointer, travelling as an adjacent ABI parameter rather than as an aggregate.
 		// It sits between the env block and the layout slot; see `bindExistentialWitnessParams` for why that
 		// is the only placement that moves nothing.
-		let envParamCount = self.countFunctionParams(paramTypes)
-		let existentialWitnessCount = self.countInterfaceParams(paramTypes)
+		// Both hidden blocks are sized through the ONE counter the lowering's SUPPLY side reads — see
+		// `countParamsWithTag` for why a second body here is an ABI hazard rather than a duplicate.
+		let envParamCount = countParamsWithTag(paramTypes, tag: ValueTypeTag.function)
+		let existentialWitnessCount = countParamsWithTag(paramTypes, tag: ValueTypeTag.interfaceRef)
 		let paramCount = userParamCount + envParamCount + existentialWitnessCount + layoutParamCount + witnessParamCount
 		try requireAbiParamCount(paramCount, anchor: nameTok)
 		self.scope.reset()
@@ -13424,34 +13473,6 @@ export type Parser
 			end 'opaqueFeed'
 		end 'eachParam'
 	end 'bindParameters'
-
-	// The number of `function`-typed parameters — each of which needs a companion environment parameter under
-	// the uniform ABI (P1.5-A2b-2). A function alias was already resolved to `MaxonType.function` by
-	// `parseTypeReference`, so the tag is the whole test.
-	// ⭐ **HOW MANY OF THESE PARAMETERS ARE EXISTENTIALS (P1.7a-existentials slice 1)** — the count of hidden
-	// WITNESS companions the declaration reserves, `countFunctionParams`' twin one mechanism over. It is
-	// derivable whole-program from the declared parameter types alone, which is what lets the LOWERING recover
-	// the same number for a CALLEE it has only a `FuncSignature` for (`existentialWitnessCountOf`) without a
-	// per-function field for either side to get wrong.
-	function countInterfaceParams(paramTypes MaxonTypeArray) returns ParamCount
-		var n = 0 as ParamCount
-		for pt in paramTypes 'each'
-			if maxonTypeTag(pt) == ValueTypeTag.interfaceRef 'existentialParam'
-				n = n + 1
-			end 'existentialParam'
-		end 'each'
-		return n
-	end 'countInterfaceParams'
-
-	function countFunctionParams(paramTypes MaxonTypeArray) returns ParamCount
-		var n = 0 as ParamCount
-		for pt in paramTypes 'each'
-			if maxonTypeTag(pt) == ValueTypeTag.function 'fnParam'
-				n = n + 1
-			end 'fnParam'
-		end 'each'
-		return n
-	end 'countFunctionParams'
 
 	// ⭐ **SEED AND WIRE THE COMPANION ENVIRONMENT PARAMETERS (P1.5-A2b-2).** Under the uniform ABI a
 	// function-typed PARAMETER travels with an environment: the caller supplies the (fn ptr, env) pair, and
@@ -15370,6 +15391,42 @@ export type Parser
 		end 'declared'
 	end 'requireAssignable'
 
+	// ⭐⭐ **A DECLARED PLACE THAT CANNOT HOLD A FAT POINTER YET — THE ONE REFUSAL, THREE POSITIONS
+	// (P1.7a-existentials slice 1 review).** An existential is TWO machine words, and this slice supplies
+	// the two-word form only where the ABI already had somewhere to put the second one: a PARAMETER (an
+	// adjacent hidden argument) and a LOCAL (a second SSA value). Three declared places have no such room,
+	// and each was a COMPILER PANIC on a program the front end accepted until this existed — measured, with
+	// a stack trace and no `error E…`:
+	//
+	//   • a STRUCT FIELD — `classifyUnionPayload` panicked naming this very function, which had been
+	//     designed and never written. A field slot is one machine word; the carve-out plus the
+	//     witness-based DESTRUCTION an owned interface field needs are Slice 2's.
+	//   • a UNION PAYLOAD — the same panic, the same slot, and a payload bound out of a `match` arm would
+	//     dispatch through whatever the next slot happened to hold.
+	//   • a RETURN TYPE — the witness has no register: shv2 returns one value plus, for a throwing call,
+	//     one error flag, and an interface return needs a second register on a NON-throwing one. ⚠ v1 hits
+	//     the identical wall and SILENTLY SKIPS its return-witness path (`LowerMaxonToStd.maxon:13545`);
+	//     the ported spec's own note says shv2 refuses instead, because silence is the one unacceptable
+	//     outcome — and until this line it did neither, it panicked at the first dispatch on the result.
+	//
+	// ⚠ **IT IS ASKED AT THE DECLARATION AND NOT AT THE USE, which is what makes one call per position
+	// enough.** The panics all fired at a USE — a field store, a method call on a returned value — where
+	// the mechanism is already missing and the author has nothing left to change. Refusing where the type
+	// is WRITTEN names the line that has to move.
+	//
+	// ⚠ **THE TOLERANT DECLARATION SWEEP IS INERT HERE, BY CONSTRUCTION RATHER THAN BY A FLAG.** Both field
+	// readers are shared with `foldDeclaredSignaturesInto`, which must never veto — and during the sweep
+	// `parseTypeReference` cannot mint an `interfaceRef` at all (its arm is gated on `allFilesFolded`, and
+	// the interface registry is not filled until the sweep ends), so a swept declaration is a bare `named`
+	// and never reaches the throw. The real parse reports it.
+	function requireStorableDeclaredType(declared MaxonType, position DeclaredStoragePosition, anchor Token) throws ParseError
+		if maxonTypeTag(declared) != ValueTypeTag.interfaceRef 'notAnExistential'
+			return
+		end 'notAnExistential'
+
+		throw ParseError.unsupported("{storagePositionSubject(position)} declared at the interface type '{String.from(self.internedName(typeNameIdOf(declared)))}' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and {storagePositionRoom(position)}. Declare it at a concrete type, or take the interface as a PARAMETER, which carries its witness as an adjacent argument", line: anchor.line, column: anchor.column)
+	end 'requireStorableDeclaredType'
+
 	// The interned NAME behind a `named`/`structRef` id, from THIS file's interner — where every id a
 	// type check sees was minted: the value during this parse, a declared return/field/binding type
 	// from this file. A miss is a compiler invariant break, never user input (see TypeNameInterner).
@@ -15508,6 +15565,30 @@ export type Parser
 		if tag == ValueTypeTag.structRef 'struct'
 			return self.internedName(nameId)
 		end 'struct'
+
+		// ⭐⭐ **AN EXISTENTIAL IS A NOMINAL AGGREGATE, IDENTIFIED BY ITS INTERFACE (P1.7a-existentials slice 1
+		// review), AND WITHOUT THIS ARM IT WAS A MEASURED SILENT WRONG ANSWER.** Two existentials share the
+		// `interfaceRef` tag and therefore `TypeClass.interfaceValue`, so `checkDeclaredType` — the tag-only
+		// verdict every coercion site opens with — AGREES for any two interfaces. Nothing else then asks:
+		// this function is where the parser's assignment, return, field-store, global-store and
+		// container-element doors get their nominal identity, and an empty answer means "no identity to
+		// compare".
+		//
+		// **MEASURED**, on `interface Derived extends Base` with `var t = <a Base>` then `t = <a Derived>`:
+		// the program COMPILED and returned **2** where the answer is **1**. `t.base()` numbered slot 0 of
+		// `Base`'s table through `__witness_Impl.Derived`, whose slot 0 is `derived()` —
+		// `interfaceWitnessSlots` puts an interface's OWN requirements before its parents'. A wrong function
+		// pointer, no diagnostic, and the one thing this rung's own header says the refusal exists to stop.
+		//
+		// ⚠ **NAME IDENTITY IS EXACT HERE, AND DELIBERATELY NOT THE `extends`-TRANSITIVE RULE
+		// `ConformanceCheck.typeConformsTo` USES.** A CONCRETE `Impl implements Derived` reaching a `Base`
+		// place is a widening the argument door performs by MATERIALIZING `__witness_Impl.Base`; a `Derived`
+		// EXISTENTIAL reaching one is not, because its witness half already addresses `Derived`'s table and
+		// there is no conversion between two tables with two slot orders. Transitive conformance answers the
+		// first question; exact identity answers this one.
+		if tag == ValueTypeTag.interfaceRef 'existential'
+			return self.internedName(nameId)
+		end 'existential'
 
 		// ⭐ A GENERIC INSTANCE IS A NOMINAL AGGREGATE, IDENTIFIED BY ITS COMPILED NAME (P1.7). `Box with
 		// Leaf` and `Box with Other` are both `genericInstance`-tagged pointers to a base `Box` box, so the
@@ -19201,8 +19282,8 @@ export type Parser
 			end 'same' else 'differ'
 				let phiId = self.mintPhiForBinding(cont, binding: binding)
 				binding.boundValue = phiId
-				self.pushMergedEdgeValue(edgeArgsA, value: a)
-				self.pushMergedEdgeValue(edgeArgsB, value: b)
+				self.pushMergedEdgeValue(edgeArgsA, binding: binding, value: a)
+				self.pushMergedEdgeValue(edgeArgsB, binding: binding, value: b)
 
 				// ⭐⭐ **AN `if` CONTINUATION IS A MERGE WHOSE INCOMING SET IS COMPLETE AT THE MINT, SO IT
 				// ASKS FOR ITS ALIAS CLAIM BACK (G14 review).** `mintPhi` withholds the claim from EVERY
@@ -21133,7 +21214,7 @@ export type Parser
 			var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
 			let exitPhiId = self.mintPhiForBinding(exit, binding: pv.binding)
 			pv.binding.boundValue = exitPhiId
-			self.pushMergedEdgeValue(headerVals, value: pv.phiId)
+			self.pushMergedEdgeValue(headerVals, binding: pv.binding, value: pv.phiId)
 		end 'mkExitPhi'
 		self.recordBranchEdge(condExit, targetId: exit.id, argIds: headerVals)
 	end 'wireLoopExit'
@@ -21424,7 +21505,7 @@ export type Parser
 	function edgeArgsFor(phiVars LoopPhiVarArray, preLoop bool) returns ValueIdArray
 		var vals = ValueIdArray.create()
 		for pv in phiVars 'each'
-			self.pushMergedEdgeValue(vals, value: pv.entryValue if preLoop else pv.binding.boundValue)
+			self.pushMergedEdgeValue(vals, binding: pv.binding, value: pv.entryValue if preLoop else pv.binding.boundValue)
 		end 'each'
 		return vals
 	end 'edgeArgsFor'
@@ -22105,8 +22186,8 @@ export type Parser
 			end 'same' else 'differ'
 				let phiId = self.mintPhiForBinding(bodyBlock, binding: binding)
 				binding.boundValue = phiId
-				self.pushMergedEdgeValue(matchEdgeArgs, value: entryV)
-				self.pushMergedEdgeValue(fallthroughEdgeArgs, value: prevV)
+				self.pushMergedEdgeValue(matchEdgeArgs, binding: binding, value: entryV)
+				self.pushMergedEdgeValue(fallthroughEdgeArgs, binding: binding, value: prevV)
 			end 'differ'
 		end 'each'
 		self.recordBranchEdge(prevExitBlock, targetId: bodyBlock.id, argIds: fallthroughEdgeArgs)
@@ -22381,7 +22462,7 @@ export type Parser
 			for k in 0 upto carried.count() 'eachVarArg'
 				let isDifferent = try differs.get(k) otherwise panic("finalizeMatchMerge: differs.get OOB at {k}")
 				if isDifferent 'diffArg'
-					self.pushMergedEdgeValue(argIds, value: try arm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}"))
+					self.pushMergedEdgeValue(argIds, binding: try carried.get(k) otherwise panic("finalizeMatchMerge: carried.get OOB at {k}"), value: try arm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}"))
 				end 'diffArg'
 			end 'eachVarArg'
 
@@ -24179,7 +24260,7 @@ export type Parser
 		// ⚠ **THE WITNESS PHI IS MINTED IMMEDIATELY AFTER ITS DATA PHI, and every edge pushes the pair in the
 		// same order (`pushMergedEdgeValue`).** Block-args and edge args are POSITIONAL, so that ordering IS
 		// the pairing; the two are written as one mint and one push so a site cannot honour half of it.
-		if maxonTypeTag(binding.varType) == ValueTypeTag.interfaceRef 'existentialBinding'
+		if bindingCarriesWitness(binding) 'existentialBinding'
 			self.pairInterfaceWitness(phiId, witness: self.mintPhi(block, tag: ValueTypeTag.integer, nameId: UnnamedTypeId))
 		end 'existentialBinding'
 
@@ -24212,12 +24293,28 @@ export type Parser
 		throw ParseError.unsupported("{what} is a value held at an interface type — an interface value is a two-word fat pointer `(value, witness)`, and a value-producing merge carries one word per branch. Bind the arms to a `var` of the interface type and merge THAT (a rebound binding carries both halves), or give a concrete type", line: tok.line, column: tok.column)
 	end 'refuseExistentialValueMerge'
 
-	function pushMergedEdgeValue(args ValueIdArray, value ValueId)
+	function pushMergedEdgeValue(args ValueIdArray, binding VarInfo, value ValueId)
 		args.push(value)
-		if self.tagOf(value) == ValueTypeTag.interfaceRef 'existentialValue'
+		if bindingCarriesWitness(binding) 'existentialBinding'
 			args.push(self.witnessOfValue(value))
-		end 'existentialValue'
+		end 'existentialBinding'
 	end 'pushMergedEdgeValue'
+
+	// ⭐⭐ **DOES THIS CARRIED BINDING CONTRIBUTE A WITNESS TO A MERGE? — THE ONE FACT BOTH HALVES READ
+	// (P1.7a-existentials slice 1 review).** Block-args and edge args are POSITIONAL, so the mint
+	// (`mintPhiForBinding`) and the push (`pushMergedEdgeValue`) must agree for EVERY carried binding or
+	// every later binding in that merge lands in the wrong slot — silently, with no compile error and no
+	// diagnostic at run time.
+	//
+	// ⚠ **THEY WERE KEYED OFF DIFFERENT FACTS**: the mint read `binding.varType`'s tag and the push read
+	// `tagOf(value)`. Those agree today because a carried binding's value always carries the binding's tag —
+	// which is an invariant nothing states and nothing checks, and exactly the shape that stops being true
+	// the first time a merge carries a value the binding did not produce. Both now read the DECLARED type,
+	// which is the fact the phi is minted from and the one every merge site holds (all six pass the binding
+	// they are merging).
+	function bindingCarriesWitness(binding VarInfo) returns bool
+		return maxonTypeTag(binding.varType) == ValueTypeTag.interfaceRef
+	end 'bindingCarriesWitness'
 
 	// Allocate a fresh ValueId AND record its source-level type, in lockstep. THE only way
 	// the parser mints a value: the type columns are dense by ValueId, so an id allocated
@@ -24301,6 +24398,11 @@ export type Parser
 	//
 	// A value ABOVE the grown prefix and a 0 WITHIN it are the same fact — nobody paired it — so they raise
 	// the same panic rather than two that would have to be kept saying the same thing.
+	// ⚠ Its LOWERING twin is `LowerMaxonToStd.pairedWitnessOf` — the same rule, read on the other side of the
+	// tier boundary over the same column, and it cannot share a home: this one reads the PARSER's live column
+	// and that one the `IrFunction` it was published into, and neither type can reach the other's. What they
+	// must never do is disagree about what an unpaired slot MEANS, so each states the whole rule and names
+	// the other.
 	function witnessOfValue(value ValueId) returns ValueId
 		let witness = try self.valueWitnessIds.get(value) otherwise 0 as ValueId
 		if witness == 0 'unpaired'
@@ -26907,6 +27009,20 @@ export type Parser
 	// against the interface's `paramNames`; `witnessTargetIsProtocol` requires the protocol's own formals), so a
 	// missing actual is a compiler defect rather than a program's, and it panics instead of quietly passing an
 	// under-supplied dispatch through to the emit.
+	function requireGenuineSelfArgs(target WitnessDispatchTarget, args ValueIdArray, what String, receiverParamPos TypeParamId, errorTok Token) throws ParseError
+		for j in 0 upto target.paramTypeNames.count() 'eachFormal'
+			let formalTypeName = try target.paramTypeNames.get(j) otherwise panic("requireGenuineSelfArgs: paramTypeNames.get OOB at {j}")
+			if not formalTypeName.equals(InterfaceSelfTypeName) 'notSelfFormal'
+				continue
+			end 'notSelfFormal'
+
+			let actual = try args.get(j + 1) otherwise panic("requireGenuineSelfArgs: formal {j} of '{what}' has no actual — args holds {args.count()} entries (receiver + {args.count() - 1}) for {target.paramTypeNames.count()} formals, so the caller's arity check did not run")
+			if not self.isReceiverTypeParamValue(actual, receiverParamPos: receiverParamPos) 'notSelfArg'
+				throw ParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.enclosingTypeParamName(receiverParamPos)), got: self.selfArgActualDescription(actual), line: errorTok.line, column: errorTok.column)
+			end 'notSelfArg'
+		end 'eachFormal'
+	end 'requireGenuineSelfArgs'
+
 	// ⭐ **THE `.method(…)` FORM'S `Self`-FORMAL GATE, SPLIT BY RECEIVER KIND (P1.7a-existentials slice 1).**
 	// A `Self`-typed formal demands an argument of the receiver's OWN dynamic type, and only one of the two
 	// receivers can supply that proof:
@@ -26938,20 +27054,6 @@ export type Parser
 		end 'eachFormal'
 	end 'requireWitnessSelfArgs'
 
-	function requireGenuineSelfArgs(target WitnessDispatchTarget, args ValueIdArray, what String, receiverParamPos TypeParamId, errorTok Token) throws ParseError
-		for j in 0 upto target.paramTypeNames.count() 'eachFormal'
-			let formalTypeName = try target.paramTypeNames.get(j) otherwise panic("requireGenuineSelfArgs: paramTypeNames.get OOB at {j}")
-			if not formalTypeName.equals(InterfaceSelfTypeName) 'notSelfFormal'
-				continue
-			end 'notSelfFormal'
-
-			let actual = try args.get(j + 1) otherwise panic("requireGenuineSelfArgs: formal {j} of '{what}' has no actual — args holds {args.count()} entries (receiver + {args.count() - 1}) for {target.paramTypeNames.count()} formals, so the caller's arity check did not run")
-			if not self.isReceiverTypeParamValue(actual, receiverParamPos: receiverParamPos) 'notSelfArg'
-				throw ParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.enclosingTypeParamName(receiverParamPos)), got: self.selfArgActualDescription(actual), line: errorTok.line, column: errorTok.column)
-			end 'notSelfArg'
-		end 'eachFormal'
-	end 'requireGenuineSelfArgs'
-
 	// ⭐ **IS `actual` A VALUE OF THE RECEIVER'S OWN TYPE PARAMETER — the ONLY thing a `Self`-typed formal
 	// accepts?** "A value of SOME enclosing type parameter" is not enough, and the difference is a **MEASURED
 	// 0xC0000005**: in `type Mix uses A, B where A is Comparable, B is Comparable` instantiated at
@@ -26981,6 +27083,10 @@ export type Parser
 	// The declared NAME of the enclosing type's type parameter at `pos` (P1.7a slice 2b) — `T` in `type Box uses
 	// T`. `enclosingTypeParams` is name-by-position, populated for every generic type body, so a `typeParameter`
 	// value's position always indexes it.
+	function enclosingTypeParamName(position TypeParamId) returns ByteArray
+		return try self.enclosingTypeParams.get(position) otherwise panic("enclosingTypeParamName: type-parameter position {position} out of range of the enclosing type's {self.enclosingTypeParams.count()} parameter(s)")
+	end 'enclosingTypeParamName'
+
 	// ⭐ **WHAT PROVIDES THE REQUIREMENTS A WITNESS DISPATCH SEARCHED — for the diagnostics that have to name
 	// it (P1.7a-existentials slice 1).** One dispatch mechanism serves two receivers and only this differs:
 	// a constrained type parameter's requirements come from its `where` constraints, an existential's from the
@@ -27003,10 +27109,6 @@ export type Parser
 
 		return "type parameter '{String.from(self.enclosingTypeParamName(self.valueNameId(receiver)))}'"
 	end 'witnessDispatchReceiverPhrase'
-
-	function enclosingTypeParamName(position TypeParamId) returns ByteArray
-		return try self.enclosingTypeParams.get(position) otherwise panic("enclosingTypeParamName: type-parameter position {position} out of range of the enclosing type's {self.enclosingTypeParams.count()} parameter(s)")
-	end 'enclosingTypeParamName'
 
 	// Emit the `__str_eq(lhs, rhs)` runtime call, typed `boolean` (its i64 result is 0/1). The one
 	// caller-typed emit site for both `==` and `!=`, and for a `string`-scrutinee `match` pattern.
@@ -33641,9 +33743,11 @@ export type Parser
 		throw ParseError.staticRequirementNotDispatchable(self.witnessCalleeName(refused), receiver: self.witnessDispatchReceiverPhrase(receiver), line: methodTok.line, column: methodTok.column)
 	end 'requireWitnessDispatchCandidates'
 
-	// ⭐⭐ **EVERY REQUIREMENT THE CONSTRAINTS ON `receiverParamPos` SUPPLY UNDER `methodName` (P1.7a slice 2b;
-	// made a LIST, and made TRANSITIVE, by R10c).** Each carries the constraint whose witness parameter
-	// supplies it, its SLOT in that constraint's interface, and the requirement's own signature.
+	// ⭐⭐ **EVERY REQUIREMENT `receiver` CAN REACH UNDER `methodName` (P1.7a slice 2b; made a LIST, and made
+	// TRANSITIVE, by R10c; both receiver kinds since P1.7a-existentials slice 1).** For a CONSTRAINED TYPE
+	// PARAMETER that is every `where` constraint on it; for an EXISTENTIAL it is the one interface the value
+	// is held at. Each candidate carries the VALUE holding the table to jump through, the requirement's SLOT
+	// in that table, and the requirement's own signature.
 	//
 	// ⚠ **IT USED TO RETURN ON THE FIRST HIT, AND THAT WAS TWO SILENT PICKS IN ONE LOOP.** It stopped at the
 	// first CONSTRAINT declaring the name (so a later constraint declaring it too was never consulted) and it
@@ -33656,20 +33760,6 @@ export type Parser
 	// ⭐ **THE SLOT NUMBERING IS `interfaceWitnessSlots`', asked of the DECLARATION INDEX** — the same walk
 	// `LowerMaxonToStd.ensureWitnessTable` lays the table out by, so `methodIndex` names the slot the emitted
 	// blob actually fills. `errorTok` positions `requireInterfaceForParse`'s undeclared-interface reject.
-	// ⭐ **THE HIDDEN WITNESS PARAMETER THAT CARRIES CONSTRAINT `constraintIndex`'s TABLE (P1.7a slice 2a).**
-	// The parser RESERVED these slots (`parseFunction`, `[user][env][existentialWitness][layout][witness_0..k]`),
-	// so resolving one is arithmetic on the reservation this same pass made, not a whole-program re-derivation.
-	// It PANICS on a function that reserved none, which is what the lowering's cross-check used to catch: a
-	// dispatch through a constraint can only be emitted inside an instance method of the constrained type, and
-	// that is exactly the shape `witnessParamCountFor` reserves for.
-	function witnessParamValueId(constraintIndex WitnessSlotIndex) returns ValueId
-		if self.currentWitnessParamCount == 0 'reservesNoWitnessParameter'
-			panic("Parser.witnessParamValueId: a dispatch through `where` constraint {constraintIndex} inside a function that reserved no witness parameters — `witnessParamCountFor` reserves them for an INSTANCE method of a constrained type, so a dispatch reaching here was resolved against constraints the current function does not carry")
-		end 'reservesNoWitnessParameter'
-
-		return (self.currentWitnessParamBase + constraintIndex) as ValueId
-	end 'witnessParamValueId'
-
 	function findWitnessDispatchCandidates(receiver ValueId, methodName ByteArray, errorTok Token) returns WitnessDispatchTargetArray throws ParseError
 		var candidates = WitnessDispatchTargetArray.create()
 
@@ -33696,6 +33786,20 @@ export type Parser
 
 		return candidates
 	end 'findWitnessDispatchCandidates'
+
+	// ⭐ **THE HIDDEN WITNESS PARAMETER THAT CARRIES CONSTRAINT `constraintIndex`'s TABLE (P1.7a slice 2a).**
+	// The parser RESERVED these slots (`parseFunction`, `[user][env][existentialWitness][layout][witness_0..k]`),
+	// so resolving one is arithmetic on the reservation this same pass made, not a whole-program re-derivation.
+	// It PANICS on a function that reserved none, which is what the lowering's cross-check used to catch: a
+	// dispatch through a constraint can only be emitted inside an instance method of the constrained type, and
+	// that is exactly the shape `witnessParamCountFor` reserves for.
+	function witnessParamValueId(constraintIndex WitnessSlotIndex) returns ValueId
+		if self.currentWitnessParamCount == 0 'reservesNoWitnessParameter'
+			panic("Parser.witnessParamValueId: a dispatch through `where` constraint {constraintIndex} inside a function that reserved no witness parameters — `witnessParamCountFor` reserves them for an INSTANCE method of a constrained type, so a dispatch reaching here was resolved against constraints the current function does not carry")
+		end 'reservesNoWitnessParameter'
+
+		return (self.currentWitnessParamBase + constraintIndex) as ValueId
+	end 'witnessParamValueId'
 
 	// ⭐ **EVERY REQUIREMENT OF `iface` (TRANSITIVELY) NAMED `methodName`, AS A DISPATCH TARGET THROUGH
 	// `witness`** — the per-interface half of the search above, shared by both receiver kinds so a candidate is
@@ -37091,12 +37195,14 @@ export type Parser
 			// A CHARACTER field stores a POINTER to the fused byte record, exactly as a String field
 			// does — already concrete, so `maxonTypeToStdType` gives the machine word directly.
 			character then return declared
-			// ⭐ **AN INTERFACE-TYPED FIELD IS THE ONE SLOT THAT IS NOT ONE MACHINE WORD** — it is the fat
-			// pointer `{value@0, witness@8}`, and `StructLayout.offsetOfField` gives it two adjacent slots.
-			// Already concrete, and this type describes the VALUE half's width; the witness half is loaded
-			// and stored by its own `loadIndirect`/`storeIndirect` at `+InterfaceWitnessHalfOffset`, always
-			// as an i64.
-			interfaceRef then return declared
+			// ⛔ **AN INTERFACE-TYPED SLOT IS REFUSED AT ITS DECLARATION, so this arm is a BACKSTOP and not a
+			// storage decision.** A fat pointer is two machine words and a slot is one;
+			// `Parser.requireStorableDeclaredType` says so at the field, the payload, the return and the
+			// container element, and a CAPTURED interface binding is refused by the capture path's own
+			// E2015. A type reaching here is therefore a route none of those cover, which is a compiler
+			// defect rather than a width to invent — the 16-byte carve-out arrives with the
+			// managed-existential slice.
+			interfaceRef then panic("fieldStorageType: a slot is declared at an interface type — `Parser.requireStorableDeclaredType` refuses every declared place that could hold one, so a type reaching here came through a route that refusal does not cover")
 			named then break 'kind'
 		end 'kind'
 

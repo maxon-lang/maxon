@@ -1106,7 +1106,7 @@ type MaxonToStdLowering
 	// `layoutNeedingFuncs` claim a free function needs a descriptor, and the caller then panicked in
 	// `materializeStaticConstructorLayout` looking for a generic instance to source one from.
 	function functionHasDescriptorParam(func IrFunction) returns bool
-		return func.paramCount > func.maxonParamTypes.count() + self.envParamCount(func) + self.existentialWitnessCount(func.maxonParamTypes) + self.witnessParamCountForFunc(func)
+		return func.paramCount > func.maxonParamTypes.count() + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.function) + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.interfaceRef) + self.witnessParamCountForFunc(func)
 	end 'functionHasDescriptorParam'
 
 	// Bind the CURRENT function's hidden implicit parameters (P1.6-B1 layout + P1.7a slice 2a witnesses). The
@@ -1150,33 +1150,6 @@ type MaxonToStdLowering
 		end 'q'
 	end 'witnessParamCountForCallee'
 
-	// ⭐ **THE NUMBER OF COMPANION WITNESS PARAMETERS A DECLARATION CARRIES (P1.7a-existentials slice 1)** —
-	// one per INTERFACE-typed user parameter, the fat pointer's second half travelling as an adjacent ABI
-	// parameter. `envParamCount`'s twin one mechanism over, and it takes the parameter TYPE LIST rather than
-	// an `IrFunction` because both sides of a call need it: the CALLEE side reads `func.maxonParamTypes`, the
-	// CALLER side reads the callee's `sig.paramTypes`. One rule, two holders of the same list.
-	function existentialWitnessCount(paramTypes MaxonTypeArray) returns ParamCount
-		var n = 0 as ParamCount
-		for pt in paramTypes 'each'
-			if maxonTypeTag(pt) == ValueTypeTag.interfaceRef 'existentialParam'
-				n = n + 1
-			end 'existentialParam'
-		end 'each'
-		return n
-	end 'existentialWitnessCount'
-
-	// The number of companion-environment parameters `func` carries (P1.5-A2b-2) — one per function-typed
-	// user parameter — used to locate the layout slot that sits past them.
-	function envParamCount(func IrFunction) returns ParamCount
-		var n = 0 as ParamCount
-		for pt in func.maxonParamTypes 'each'
-			if maxonTypeTag(pt) == ValueTypeTag.function 'fnParam'
-				n = n + 1
-			end 'fnParam'
-		end 'each'
-		return n
-	end 'envParamCount'
-
 	// `finalizeCallArgs` (float widening + companion env args) PLUS the hidden IMPLICIT arguments a
 	// dictionary-passing call carries: the layout descriptor (P1.6-B1) THEN one witness pointer per `where`
 	// constraint (P1.7a slice 2a), in the `[user][env][layout][witness_0..k]` order the parser reserved them
@@ -1185,7 +1158,8 @@ type MaxonToStdLowering
 		let baseArgs = self.finalizeCallArgs(argIds, sig: sig, dstBlock: dstBlock)
 		let needsLayout = self.layoutNeedingFuncs.contains(callee)
 		let witnessCount = self.witnessParamCountForCallee(callee, sig: sig)
-		let existentialCount = self.existentialWitnessCount(sig.paramTypes)
+		// The SUPPLY side of the reserve/supply pair — the SAME counter `Parser.parseFunction` reserves with.
+		let existentialCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef)
 		if not needsLayout and witnessCount == 0 and existentialCount == 0 'noImplicits'
 			return baseArgs
 		end 'noImplicits'
@@ -1256,6 +1230,8 @@ type MaxonToStdLowering
 	// The column is grown on demand and stops at its highest paired value, so a ValueId PAST its end is the
 	// same fact as a 0 within it — unpaired — and takes the same refusal. `Parser.witnessOfValue` states that
 	// equivalence at the other end of the handoff.
+	// ⚠ Its PARSER twin is `Parser.witnessOfValue`, which states the rule in full; see there for why the two
+	// cannot share a home and must never disagree.
 	function pairedWitnessOf(value ValueId, site ByteArray) returns ValueId
 		let witness = try self.valueWitnessIds.get(value) otherwise 0 as ValueId
 		if witness == 0 'unpaired'

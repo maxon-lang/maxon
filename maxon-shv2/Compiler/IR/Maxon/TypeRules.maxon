@@ -104,14 +104,23 @@ export enum TypeClass
 	// ⭐ **The class of an EXISTENTIAL — a value held at its INTERFACE type (P1.7a-existentials slice 1).**
 	// Its OWN class, and it agrees with NOTHING but another existential — deliberately, including with the
 	// `structRef` of a conforming type. A conformer reaching an interface-typed place is a WIDENING (the
-	// value gains a witness half), not an agreement, and it is checked by the four widening doors
-	// (`Parser.widenToInterface`) which ask CONFORMANCE and mint the witness. Admitting `structRef` here
-	// would let a conformer through with no witness paired — the fat pointer's second half simply absent —
-	// which is a wild jump at the first dispatch rather than a diagnostic.
+	// value gains a witness half), not an agreement. Admitting `structRef` here would let one through with
+	// no witness paired — the fat pointer's second half simply absent — which is a wild jump at the first
+	// dispatch rather than a diagnostic.
 	//
-	// Two existentials agreeing at the class level is tag-level assignability, exactly as `function`'s is:
-	// interface IDENTITY (a `Base` place fed a `Derived` value) is a separate question the widening door
-	// asks by name, because a tag carries no name (this file's header).
+	// ⭐⭐ **THERE IS EXACTLY ONE WIDENING POSITION AT THIS SLICE, AND IT IS THE CALL ARGUMENT.**
+	// `SemanticCheck.checkOneArgType` asks `ConformanceCheck.valueWidensToInterface` (conformance, walked
+	// transitively through `extends`) and the LOWERING materializes `__witness_<conformer>.<Iface>`. Every
+	// OTHER declared place that could hold a fat pointer is refused outright — a struct field, a union
+	// payload, a return type and a container element, all by `Parser.requireStorableDeclaredType` — because
+	// none of them has room for the second word. So there is no fourth door to keep in step with, and this
+	// class agreeing with nothing is what routes every other position to a diagnostic.
+	//
+	// ⚠ **TWO EXISTENTIALS AGREEING AT THE CLASS LEVEL IS TAG-LEVEL ASSIGNABILITY AND NOTHING MORE — the
+	// INTERFACE identity is `Parser.aggregateNameOf`'s to compare, and it must.** A `Derived` value reaching
+	// a `Base`-typed binding agrees here, and its witness half addresses `Derived`'s table while the place
+	// dispatches by numbering `Base`'s: MEASURED before that arm existed, a program that compiled clean and
+	// returned 2 where the answer is 1.
 	interfaceValue
 end 'TypeClass'
 

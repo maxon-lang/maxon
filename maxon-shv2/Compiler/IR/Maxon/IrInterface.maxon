@@ -66,22 +66,17 @@ export typealias WitnessMethodIndex = int(0 to u16.max)
 export let WitnessTableHeaderBytes = 24 as ByteOffset
 export let WitnessSlotBytes = 8 as ByteOffset
 
-// ⭐⭐ **THE FAT POINTER'S SHAPE — `{value@0, witness@8}` (P1.7a-existentials slice 1).** A value held at
-// its INTERFACE type occupies TWO machine words, and these two constants are the whole of that layout.
-// They are stated HERE, beside the table the witness half points at, because the two facts are one design:
-// the second word is a `__witness_<Type>.<Iface>` address and nothing else.
+// ⭐ **WHAT A VALUE HELD AT ITS INTERFACE TYPE OCCUPIES — TWO MACHINE WORDS (P1.7a-existentials slice 1).**
+// The value half and the witness half, and the second word is a `__witness_<Type>.<Iface>` address and
+// nothing else — which is why the size is stated HERE, beside the table it points at.
 //
-// ⚠ **THEY DESCRIBE MEMORY ONLY — a struct FIELD.** In every other position the two halves are two
-// PARALLEL SCALARS with no memory between them: a local is two SSA values, a parameter is two adjacent ABI
-// parameters, a return is the primary plus the secondary register. That is the design (see MaxonType's
-// `interfaceRef` arm), and it is why there is no "load the fat pointer" anywhere — there is nothing to load
-// except at a field, where a struct's payload is genuine memory.
-//
-// `InterfaceWitnessHalfOffset` is derived from `MachineWordBytes` rather than spelled `8`: the value half
-// is one machine word (a box pointer), so the witness half starts exactly one word in, and the day a word
-// is not eight bytes both numbers move together.
-export let InterfaceWitnessHalfOffset = MachineWordBytes
-export let InterfaceValueBytes = MachineWordBytes + InterfaceWitnessHalfOffset
+// ⚠ **IT IS A SIZE AND NOT A LAYOUT, because at this slice the two halves are never adjacent in MEMORY.**
+// They are two PARALLEL SCALARS everywhere they occur: a local is two SSA values, a parameter two adjacent
+// ABI parameters. The one position that WOULD need a memory layout — a struct field, at `+0` and `+8` — is
+// refused outright (`Parser.requireStorableDeclaredType`), and its `+8` constant went with the refusal
+// rather than sitting here describing storage nothing writes. Its live reader is `sizeof(<Interface>)`
+// (`primitiveTypeByteSize`), which answers 16.
+export let InterfaceValueBytes = MachineWordBytes + MachineWordBytes
 
 // The byte offset of witness-table method slot `index` (P1.7a slice 2a) — `24 + 8*index`. The ONE place
 // the header size and slot stride combine, so the blob's slot layout and the fused call's memory offset
@@ -820,14 +815,20 @@ function conformanceReachesInterface(interfaces IrInterfaceMap, declaredName Byt
 	end 'alreadySeen'
 	visited.insert(declaredName)
 
+	// ⚠ The parent walk runs INSIDE the `found` arm rather than after it. Bound and discarded, the lookup had
+	// to be made a SECOND time to recover the declaration — two `lookupInterface` calls per `extends` node,
+	// each of which may synthesize a protocol interface, for one question.
 	match lookupInterface(interfaces, name: declaredName) 'decl'
-		found(iface) then break 'decl'
+		found(iface) then return interfaceReachesInterface(interfaces, iface: iface, wanted: wanted, visited: visited)
 		// A conformance naming an interface no file declares is E3015's to report, not this walk's; it
 		// simply reaches nothing further.
 		notFound then return false
 	end 'decl'
+end 'conformanceReachesInterface'
 
-	let iface = requireDeclaredInterface(interfaces, name: declaredName)
+// Does any of `iface`'s parents reach `wanted`? The `found` arm's body, split out only because a `match`
+// arm is one expression and this is a loop.
+function interfaceReachesInterface(interfaces IrInterfaceMap, iface IrInterface, wanted ByteArray, visited InterfaceNameSet) returns bool
 	for parentName in iface.extendsInterfaces 'eachParent'
 		if conformanceReachesInterface(interfaces, declaredName: parentName, wanted: wanted, visited: visited) 'reached'
 			return true
@@ -835,17 +836,7 @@ function conformanceReachesInterface(interfaces IrInterfaceMap, declaredName Byt
 	end 'eachParent'
 
 	return false
-end 'conformanceReachesInterface'
-
-// The declaration behind a name the caller has ALREADY resolved — the `found` payload, fetched where a
-// `match` arm cannot bind it and go on. It panics for `requireBuiltinInterface`'s reason: the only caller
-// asks one line after a successful lookup of the same name against the same map.
-function requireDeclaredInterface(interfaces IrInterfaceMap, name ByteArray) returns IrInterface
-	match lookupInterface(interfaces, name: name) 'decl'
-		found(iface) then return iface
-		notFound then panic("requireDeclaredInterface: '{String.from(name)}' resolved a line ago against this same map and does not now — the map is not mutated between the two asks")
-	end 'decl'
-end 'requireDeclaredInterface'
+end 'interfaceReachesInterface'
 
 // ⭐ **IS THIS RESOLVED DISPATCH TARGET THE PROTOCOL `want` DECLARES? (P1.7a slice 2b-ii; a PREDICATE since
 // R10c.)** A constraint declaring a method of the protocol's NAME is not the protocol — its RESULT, its

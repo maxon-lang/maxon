@@ -3126,6 +3126,15 @@ function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId) 
 		return try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: structRef id {nameId} is not in the project interner — a structRef's name id is remapped project-global at merge (mergeArtifact)")
 	end 'struct'
 
+	// ⭐ **AN EXISTENTIAL IS NOMINAL IN ITS INTERFACE** — the whole-program twin of the parser's
+	// `aggregateNameOf` arm, and it carries that arm's whole argument (see there for the measured wrong
+	// answer an empty name produced). It is reached only where the PARAMETER is not itself an interface —
+	// `checkOneArgType`'s existential arm returns before this — so what it answers for is an existential
+	// handed to a CONCRETE place, which is refused by name rather than by the kind word `interface`.
+	if tag == ValueTypeTag.interfaceRef 'existential'
+		return try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: interfaceRef id {nameId} is not in the project interner — an interface name id is remapped project-global at merge (mergeArtifact)")
+	end 'existential'
+
 	// ⭐ A GENERIC INSTANCE IS A NOMINAL AGGREGATE, IDENTIFIED BY ITS COMPILED NAME (P1.7) — the twin of
 	// the parser's `aggregateNameOf` arm, and it reads no interner at all: the id a `genericInstance`
 	// carries is a whole-program `GenericInstanceId`, not a per-file name id. The compiled name is the
