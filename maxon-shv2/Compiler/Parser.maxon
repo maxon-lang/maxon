@@ -6557,9 +6557,9 @@ export type Parser
 	// ORDER is the third reason, and `vars` could not give it either: `Scope.allVars` hands back a
 	// hash MAP, so draining it would emit the drops in hash order and no golden would reproduce.
 	var ownedBindings as VarInfoArray
-	// ⭐ **THE PARAMETERS THIS FUNCTION DECLARED THAT E3012 MUST ACCOUNT FOR**, in declaration order. Drained
-	// at the function's `end` by `reportUnusedBindings`, which reports the FIRST one never mentioned. A body
-	// `let`/`var` is NOT collected — see there for the spec boundary.
+	// ⭐ **THE PARAMETERS AND `for` BINDINGS THIS FUNCTION DECLARED THAT E3012 MUST ACCOUNT FOR**, in
+	// declaration order. Drained at the function's `end` by `reportUnusedBindings`, which reports the FIRST
+	// one never mentioned. A body `let`/`var` is NOT collected — see there for the spec boundary.
 	//
 	// ⚠ It is a LIST and not `Scope.allVars()`, which is a hash MAP: its order is not the declaration order
 	// the diagnostic must follow, and no golden would reproduce. The reason `ownedBindings` gives just above.
@@ -6569,6 +6569,28 @@ export type Parser
 	// `bindParameters`, and left shared they would be reported against the ENCLOSING function, which
 	// declared none of them.
 	var unusedCandidates as UnusedBindingCandidateArray
+	// ⭐⭐ **THE NAMES A MENTION HAS RECORDED IN THIS FUNCTION — E3012's OTHER HALF, and the one
+	// `VarInfo.referenced` structurally cannot answer.** "Referenced" is a fact about the NAME within the
+	// enclosing function, not about the individual binding: MEASURED on the oracle, whose `_referencedVars` is
+	// a `HashSet<string>` per function, two sequential `for i` loops are ACCEPTED when only the second reads
+	// `i`. Each loop opens its own lexical frame and mints its own `VarInfo`, so the first one's bit stays
+	// false for ever and a per-binding verdict would refuse the program.
+	//
+	// ⚠ **THAT IS NOT A CURIOSITY — IT IS LOAD-BEARING ON THE REAL CORPUS.** `specs/array-sort.md`'s
+	// `driftsort-large-sqrt-cross-check` and `specs/generic-module-merge-pattern.md`'s
+	// `dual-specialize-inner-array` both have a `for i` whose body never reads `i`, legal only because a later
+	// `for i` in the same function does. Neither file is ported, which is why `unused-variable-name-scope.md`
+	// exists to pin it here.
+	//
+	// **APPENDED ONCE PER BINDING, NOT ONCE PER MENTION**, and SCANNED only for a candidate whose own bit is
+	// already false — i.e. only for a declaration that is about to be reported or excused. A function whose
+	// every binding is used never scans it at all.
+	//
+	// Saved/CLEARED/restored around a closure body, then the closure's CAPTURED names are pushed back into the
+	// restored list — the oracle's own algorithm (`2-Parser.cs`, `savedReferencedVars` + `foreach (var c in
+	// captures)`). Sharing it across the boundary instead would let a closure's private local excuse an
+	// enclosing declaration of the same name.
+	var referencedNames as ByteArrayArray
 	// ⭐ **THE OWNED HEAP TEMPORARIES CREATED BY THE STATEMENT BEING PARSED, awaiting their drop.** An
 	// UNBOUND owned value — `print("{x}")`, where the interpolation result is consumed by `print` (which
 	// BORROWS it) and bound to no name — has, under static single-owner, exactly one possible owner: the
@@ -6827,6 +6849,7 @@ export type Parser
 			emptyTypeParams: ByteArrayArray.create(),
 			ownedBindings: VarInfoArray.create(),
 			unusedCandidates: UnusedBindingCandidateArray.create(),
+			referencedNames: ByteArrayArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
 			lastDispatchedMemberIndex: 0,
 			lastDispatchedReceiver: 0,
@@ -12398,6 +12421,10 @@ export type Parser
 		// the previous function would be reported against THIS function's `end`, blaming a parameter no part
 		// of this declaration names.
 		self.unusedCandidates = UnusedBindingCandidateArray.create()
+		// Re-created for the same reason, one step further out: a name mentioned in the PREVIOUS function
+		// would excuse a candidate of that name here. The name-scoped half is bounded to ONE function,
+		// exactly as the oracle's per-function `_referencedVars` is.
+		self.referencedNames = ByteArrayArray.create()
 		// Re-created per function for the same reason `ownedBindings` is: a stray pending temp carried
 		// across a function boundary would decref a value from the PREVIOUS function's SSA space.
 		self.pendingTempDrops = ValueIdArray.create()
@@ -12743,13 +12770,20 @@ export type Parser
 	// a function, once the whole body has been seen, because "never mentioned" is a fact about the WHOLE
 	// body and about no smaller part of it.
 	//
-	// ⚠ **PARAMETERS ONLY — a body `let`/`var` is NOT checked, and that is a scope line drawn at the spec
-	// boundary rather than a gap.** The local rule belongs to `specs/unused-variables.md` (whitelist position
-	// 170, not ported), and it is not separable from two refusals shv2 also lacks: MEASURED on the oracle,
-	// `let _ = expr` is **E2001** ("use '_ = expr' to discard a result") and `_ = <pure call>` is **E3064**
-	// ("result of pure function … must be used"). Until all three land together, a borrowed element that may
-	// be neither bound, nor discarded, nor used has no legal spelling at all. `unused-parameters.md`
-	// (position 26) is about parameters, and so is this.
+	// ⚠ **PARAMETERS AND `for` BINDINGS — a body `let`/`var` is still NOT checked, and that is a scope line
+	// drawn at the spec boundary rather than a gap.** The local rule is not separable from two refusals shv2
+	// lacks: MEASURED on the oracle, `let _ = expr` is **E2001** ("use '_ = expr' to discard a result") and
+	// `_ = <pure call>` is **E3064** ("result of pure function … must be used"). Until all three land
+	// together, a borrowed element that may be neither bound, nor discarded, nor used has no legal spelling at
+	// all. **A `for` binding is separable precisely because `for _ in` is ALREADY legal in both compilers** —
+	// the refusal has a spelling to point the author at before it is written, which is the whole reason it
+	// rides ahead of the locals. `specs-shv2/unused-variables.md` carries both halves, the locals disabled.
+	//
+	// ⭐⭐ **"REFERENCED" IS A FACT ABOUT THE NAME, NOT ABOUT THE BINDING**, so the verdict asks TWO questions
+	// and the second is the one a per-binding bit cannot answer: two sequential `for i` loops mint two
+	// `VarInfo`s, and the oracle ACCEPTS the pair when only the second reads `i` (its `_referencedVars` is a
+	// per-function `HashSet<string>`). See `referencedNames`, which is where that half lives, and
+	// `specs-shv2/unused-variable-name-scope.md`, which pins it.
 	//
 	// ⭐ **ONE DIAGNOSTIC PER FUNCTION, AND IT IS THE EARLIEST DECLARATION.** `unusedCandidates` is in
 	// declaration order, so a forward scan reports the leftmost unused parameter — which is what both
@@ -12767,17 +12801,62 @@ export type Parser
 				continue
 			end 'wasMentioned'
 
-			// The waiver is a fact about the METHOD, so the FIRST unused parameter settles it for the whole
-			// signature and a `return` here reports none of them. Asked at this point rather than before the
-			// loop because it walks two registries, and the overwhelming majority of functions never reach it.
-			if self.parametersAreInterfaceDictated(methodName) 'contractDictatedTheList'
-				return
+			// The name-scoped half. Reached only by a declaration that is about to be reported, so the scan
+			// costs nothing on a function whose bindings are all used.
+			if self.nameWasReferenced(candidate.binding.name) 'anotherBindingOfThisNameWasMentioned'
+				continue
+			end 'anotherBindingOfThisNameWasMentioned'
+
+			// ⭐ **THE WAIVER IS ABOUT PARAMETERS AND MUST NOT REACH A LOOP BINDING.** MEASURED on the oracle:
+			// an unread `for i in 0 upto limit 'l'` inside an interface-dictated method is still
+			// `error E3012: unused variable: 'i'`. The oracle draws the same line structurally — its
+			// `skipParamCheck` skips the parameter loop and never the locals loop.
+			//
+			// A `continue` rather than the `return` this used to be: with two candidate kinds in one list, a
+			// waived parameter must not suppress a later loop binding the contract has no say over. Asked
+			// here rather than before the loop because it walks two registries, and the overwhelming majority
+			// of functions never reach it; `and` short-circuits, so a loop binding never pays for it.
+			let waivable = match candidate.kind 'candidateKind'
+				parameter gives true
+				loopVariable gives false
+			end 'candidateKind'
+			if waivable and self.parametersAreInterfaceDictated(methodName) 'contractDictatedTheList'
+				continue
 			end 'contractDictatedTheList'
 
 			self.recordArtifactDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from(candidate.binding.name)}'", range: candidate.nameRange)
 			return
 		end 'eachCandidate'
 	end 'reportUnusedBindings'
+
+	// ⭐ **THE SINGLE WRITER OF E3012'S EVIDENCE** — the per-binding bit and the per-function name list,
+	// together. Three doors call it (`requireBindingLive`, `parseAssignment`, `emitCaptureRead`); see
+	// `VarInfo.referenced` for why a name can be mentioned in exactly three places none of the others sees.
+	//
+	// The bit is the DEDUP: a name reaches the list once per binding rather than once per mention, so a hot
+	// read path pays one already-set test and nothing else.
+	function markBindingReferenced(binding VarInfo)
+		if binding.referenced 'alreadyRecorded'
+			return
+		end 'alreadyRecorded'
+
+		binding.referenced = true
+		self.referencedNames.push(binding.name)
+	end 'markBindingReferenced'
+
+	// Did SOME binding of this name get mentioned in the function being parsed? A linear scan because the
+	// list is short (one entry per mentioned binding) and it is consulted only for a declaration E3012 is
+	// about to report — a map would cost a hash of every name on the read path to save a walk on a path that
+	// runs a handful of times per compile.
+	function nameWasReferenced(name ByteArray) returns bool
+		for mentioned in self.referencedNames 'eachMentioned'
+			if mentioned.equals(name) 'sameName'
+				return true
+			end 'sameName'
+		end 'eachMentioned'
+
+		return false
+	end 'nameWasReferenced'
 
 	// ⭐ **DOES AN INTERFACE THIS TYPE IMPLEMENTS REQUIRE A METHOD OF THIS NAME?** — the E3012 parameter
 	// exemption. An implementer is forced to declare every parameter the contract names, even one this
@@ -13174,7 +13253,7 @@ export type Parser
 			// would report it; and `_` is the language's discard, which says in as many words that the author
 			// wants the slot and not the name.
 			if not paramName.equals(SelfParamName) and not paramName.equals(DiscardBindingName) 'checkedForUse'
-				self.unusedCandidates.push(UnusedBindingCandidate.create(binding, nameRange: paramRange))
+				self.unusedCandidates.push(UnusedBindingCandidate.create(binding, nameRange: paramRange, kind: UnusedBindingKind.parameter))
 			end 'checkedForUse'
 			// ⭐ **A PARAMETER THAT NAMED `__ManagedMemory` DENOTES THE BUFFER THERE (A2j / A2m)** — the spelling
 			// was read at the declaration (`parseFunctionParameters`) and this is the site that BINDS the value it
@@ -14533,8 +14612,8 @@ export type Parser
 		// It is written here rather than in `requireBindingLive` because a write must NOT go through that
 		// guard: an assignment REVIVES a moved-from binding, and routing it there would reject `t = <expr>`
 		// after a move as use-after-move (see `parseVariableReference`'s note that the READ site is the only
-		// caller). Third door, same bit — see `VarInfo.referenced`.
-		binding.referenced = true
+		// caller). Third door, same chokepoint — see `VarInfo.referenced`.
+		self.markBindingReferenced(binding)
 
 		// A bare field name inside an instance method — `count = count + 1`. It is a STORE through
 		// the receiver, not a rebinding of anything, so it asks the field's mutability rather than
@@ -19392,6 +19471,13 @@ export type Parser
 			// Declared in the per-trip frame, so it is in scope for the whole body and gone at the loop's
 			// `end`. Immutable: `for-iterator-immutable` pins `item = …` as E2013.
 			let loopBinding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(loopValue), mutable: false, value: loopValue) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+			// ⭐ **E3012 CANDIDATE: A DECLARED LOOP VARIABLE MUST BE MENTIONED** (`reportUnusedBindings`).
+			// Pushed inside this guard, so `for _ in` is exempt by the same fact that makes the refusal fair:
+			// `_` binds no name, and it is already the legal spelling in BOTH compilers for a loop that wants
+			// the iteration and not the element. Every one of the four `for` forms (counted range, array,
+			// String, List) reaches this one line, which is why the check needs no per-form knowledge — the
+			// bootstrap pushes its own candidate before the range/container fork for the same reason.
+			self.unusedCandidates.push(UnusedBindingCandidate.create(loopBinding, nameRange: SourceRange.ofToken(nameTok), kind: UnusedBindingKind.loopVariable))
 			// ⭐ E3070: the element this loop just read is a BORROW, and it is live for the BODY'S EXTENT
 			// rather than to the variable's last use — see `attachPendingBorrows`'s `liveUntil`. `_` binds
 			// nothing, so nothing can hold the element past its read and there is no borrow to record.
@@ -35702,7 +35788,7 @@ export type Parser
 		// that field is SEEDED ahead of any read by `attachPendingBorrows` — see `VarInfo.referenced`.
 		// Written before the early returns below for the reason the line above is: a self-field alias and a
 		// scalar binding are reads too, and the exclusions are about a MOVE.
-		binding.referenced = true
+		self.markBindingReferenced(binding)
 
 		if binding.isSelfField 'selfFieldAlias'
 			return
@@ -36398,7 +36484,12 @@ export type Parser
 		// to). The enclosing function's E3012 drain happens after this closure has been parsed inline, so
 		// without this line `let x = 5` + `function(n Integer) gives n + x` would report `x` unused — a
 		// false rejection of a program both reference compilers accept.
-		binding.referenced = true
+		//
+		// ⚠ The NAME half of this mention lands in the CLOSURE's `referencedNames`, which the restore
+		// discards — so `parseClosureExpression` pushes the capture names back into the enclosing function's
+		// list at the restore, exactly as the oracle re-adds `captures` to `_referencedVars`. The bit above
+		// excuses THIS binding; the re-push is what excuses another binding of the same name.
+		self.markBindingReferenced(binding)
 
 		// ⭐⭐ **A SELF-FIELD ALIAS IS NOT A CAPTURABLE BINDING — IT HOLDS NO VALUE, AND `boundValue` 0 IS THE
 		// RECEIVER.** `createSelfField` leaves `boundValue` 0 because a read of the alias is a `loadIndirect`
@@ -37053,6 +37144,7 @@ export type Parser
 		let savedValuePromiseMarks = self.valuePromiseMarks
 		let savedOwnedBindings = self.ownedBindings
 		let savedUnusedCandidates = self.unusedCandidates
+		let savedReferencedNames = self.referencedNames
 		let savedPendingTempDrops = self.pendingTempDrops
 		// The last-field-read record is ONE fact spread over FOUR fields, and ALL FOUR are saved/restored as
 		// a unit — not `lastFieldReadValid` alone. The closure body opens with `lastFieldReadValid = false`,
@@ -37132,6 +37224,10 @@ export type Parser
 		// A closure declares its own parameters and its body sees none of the enclosing function's bindings,
 		// so it owes its own E3012 accounting — drained under its own name below, before the restore.
 		self.unusedCandidates = UnusedBindingCandidateArray.create()
+		// Fresh for the same reason, and the CLEAR is the point: a closure's private local named `i` may not
+		// excuse an `i` the ENCLOSING function declared and never mentioned. What DOES cross the boundary is
+		// what the closure captured, pushed back at the restore below.
+		self.referencedNames = ByteArrayArray.create()
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
@@ -37281,6 +37377,16 @@ export type Parser
 		self.valuePromiseMarks = savedValuePromiseMarks
 		self.ownedBindings = savedOwnedBindings
 		self.unusedCandidates = savedUnusedCandidates
+		// ⭐ **A CAPTURE IS A MENTION IN THE ENCLOSING FUNCTION** — the oracle's own restore step
+		// (`_referencedVars` restored, then `foreach (var c in captures) _referencedVars.Add(c.Name)`). The
+		// captured binding itself is already excused by its `referenced` bit, which `emitCaptureRead` set
+		// through the enclosing object; this is what additionally excuses ANOTHER binding of the same name —
+		// a `for x` loop elsewhere in the enclosing function whose `x` only the closure reads. Read BEFORE
+		// `captureNames` is restored below, because it is the CLOSURE's list that holds the captures.
+		self.referencedNames = savedReferencedNames
+		for capturedName in self.captureNames 'eachCapture'
+			self.referencedNames.push(capturedName)
+		end 'eachCapture'
 		self.pendingTempDrops = savedPendingTempDrops
 		// Restore the whole last-field-read record, not just its `Valid` flag — see the save block: the
 		// closure body may have overwritten the value/box/offset with its own SSA ids.

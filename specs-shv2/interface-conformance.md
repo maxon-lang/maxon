@@ -532,6 +532,45 @@ end 'main'
 error E3012: specs/fragments/interface-conformance/interface-method-local-var-still-errors.test:13:7: unused variable: 'unusedLocal'
 ```
 
+<!-- test: interface-method-loop-variable-still-errors -->
+⭐ **THE WAIVER IS ABOUT PARAMETERS, AND A `for` BINDING IS NOT ONE** (A4g). `interface-method-may-leave-a-required-parameter-unread` above is the positive control that the waiver is live at all; this is the line it stops at. A contract can force an implementer to DECLARE a parameter it has no use for, and it has nothing whatever to say about a loop variable the author wrote inside the body — so the loop binding is still refused, and `for _ in` is the spelling that fixes it.
+
+MEASURED on the runnable oracle, which draws the same line structurally: its `skipParamCheck` skips the parameter loop and never the locals loop, and it reports `unused variable: 'i'` on this program.
+
+⚠ **`limit` IS ALSO UNREAD, DELIBERATELY.** The two unused declarations in one method are what make this case discriminating in BOTH directions: it fails if the waiver is allowed to reach the loop binding, and it fails again if a waived PARAMETER is allowed to end the scan before the loop binding is reached.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Counter
+	function tally(limit Integer) returns Integer
+end 'Counter'
+
+type Impl implements Counter
+	let value as Integer
+
+	function tally(limit Integer) returns Integer
+		var total = 0
+		for i in 0 upto 3 'l'
+			total = total + 1
+		end 'l'
+		return total + value
+	end 'tally'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Impl'
+
+function main() returns ExitCode
+	let c = Impl.create(1)
+	return c.tally(3)
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/fragments/interface-conformance/interface-method-loop-variable-still-errors.test:14:7: unused variable: 'i'
+```
+
 <!-- disabled-test: interface-impl-ignore-param-name -->
 <!-- P1.7a-existentials: an interface-typed PARAMETER (`function useGreeter(g Greeter)`) is a fat pointer — plan-settled out of Phase 1 -->
 An interface-implementing method may name a parameter `_` (the ignore name) even

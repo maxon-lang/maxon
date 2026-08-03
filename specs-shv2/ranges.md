@@ -466,7 +466,7 @@ end 'sumTo'
 
 function main() returns ExitCode
 	var chars = 0
-	for c in 'a' to 'e' 'k'
+	for _ in 'a' to 'e' 'k'
 		chars = chars + 1
 	end 'k'
 	return (sumTo(5) + chars) as ExitCode

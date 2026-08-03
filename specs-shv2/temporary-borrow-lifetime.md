@@ -279,7 +279,7 @@ end 'make'
 
 function main() returns ExitCode
 	var total = 0 as Wide
-	for i in 0 upto 4 'each'
+	for _ in 0 upto 4 'each'
 		let n = try make().get(0) otherwise ByteArray.create()
 		total = total + n.count()
 	end 'each'
@@ -332,7 +332,7 @@ typealias Bytes = Array with ByteArray
 function make(n Wide) returns Bytes
 	var outer = Bytes.create()
 	var inner = ByteArray.create()
-	for i in 0 upto n 'fill'
+	for _ in 0 upto n 'fill'
 		inner.push(1)
 	end 'fill'
 	outer.push(inner)

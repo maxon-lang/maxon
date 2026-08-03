@@ -1,0 +1,31 @@
+// Test: interface-method-loop-variable-still-errors
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Counter
+	function tally(limit Integer) returns Integer
+end 'Counter'
+
+type Impl implements Counter
+	let value as Integer
+
+	function tally(limit Integer) returns Integer
+		var total = 0
+		for i in 0 upto limit 'l'
+			total = total + 1
+		end 'l'
+		return total + value
+	end 'tally'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Impl'
+
+function main() returns ExitCode
+	let c = Impl.create(1)
+	return c.tally(3)
+end 'main'
+---
+CompilerError:
+error E3012: <fragment>:14:7: unused variable: 'i'

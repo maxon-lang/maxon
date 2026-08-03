@@ -471,7 +471,15 @@ export type VarInfo
 	//
 	// False for every binding a `Scope` holds, which is every other constructor here.
 	export var namesModuleStorage as bool
-	// ⭐ **WAS THIS NAME EVER READ? — the whole of E3012's evidence** (`Parser.reportUnusedBindings`).
+	// ⭐ **WAS THIS BINDING EVER MENTIONED? — HALF of E3012's evidence** (`Parser.reportUnusedBindings`).
+	//
+	// ⚠ **THE OTHER HALF IS NAME-SCOPED, AND IT HAS TO BE.** "Referenced" is a fact about the NAME within the
+	// enclosing function, not about the individual binding — MEASURED on the oracle, whose `_referencedVars`
+	// is a `HashSet<string>` per function, so two sequential `for i` loops are legal when only the SECOND
+	// reads `i`. This bit cannot express that (each loop mints its own `VarInfo`), so the parser also keeps
+	// `referencedNames`, the per-function list of names a mention has recorded. The two cannot disagree:
+	// `Parser.markBindingReferenced` is the SINGLE writer of both, and it appends the name exactly where it
+	// flips this bit. This bit is what makes that append once-per-binding rather than once-per-mention.
 	//
 	// ⚠ **IT IS A SECOND BIT BESIDE `lastUseToken` RATHER THAN THAT FIELD TESTED AGAINST 0, and the two are
 	// NOT the same question.** `attachPendingBorrows` SEEDS a last use ahead of any read — to the activation
@@ -480,8 +488,9 @@ export type VarInfo
 	// to catch. The forward-only rule that field is written under is a BORROW's lifetime rule; this bit
 	// answers "did the source mention it", and only a real mention sets it.
 	//
-	// ⭐ **THREE WRITERS, BECAUSE A NAME CAN BE MENTIONED IN EXACTLY THREE PLACES THE OTHERS CANNOT SEE**, and
-	// each of the three was measured to matter:
+	// ⭐ **THREE DOORS, BECAUSE A NAME CAN BE MENTIONED IN EXACTLY THREE PLACES THE OTHERS CANNOT SEE** — each
+	// measured to matter, and all three routed through `Parser.markBindingReferenced` so the bit and the
+	// name list are written together or not at all:
 	//
 	//   • `Parser.requireBindingLive` — every READ inside the declaring function (a bare reference, a field
 	//     read or write through it, a method call on it). The chokepoint that already exists for that
@@ -567,24 +576,39 @@ export typealias VarInfoMap = Map with (ByteArray, VarInfo)
 // name cannot address a binding a nested block has shadowed.
 export typealias VarInfoArray = Array with VarInfo
 
-// ⭐ **ONE DECLARED PARAMETER THE UNUSED CHECK (E3012) MUST ACCOUNT FOR** — paired with the span of the NAME
-// the author wrote, which is where the diagnostic lands.
+// ⭐ **WHICH KIND OF DECLARATION AN E3012 CANDIDATE IS — and the only thing that turns on it is the
+// INTERFACE WAIVER.** An implementer is forced to declare every parameter its contract names, so an unused
+// PARAMETER of a contract-dictated method is waived; a `for` binding inside that same method is the author's
+// own and is still refused. MEASURED on the oracle, which draws the identical line structurally — its
+// `skipParamCheck` skips the parameter loop and never the locals loop — and reports
+// `error E3012: unused variable: 'i'` for an unread `for i in 0 upto limit 'l'` inside an interface-dictated
+// `tally`.
+export enum UnusedBindingKind
+	parameter
+	// A `for x in …` element. Separable from the body-local rule (`let`/`var`, still unchecked) because
+	// `for _ in` is already legal in BOTH compilers, so the refusal has a spelling to point the author at.
+	loopVariable
+end 'UnusedBindingKind'
+
+// ⭐ **ONE DECLARATION THE UNUSED CHECK (E3012) MUST ACCOUNT FOR** — paired with the span of the NAME the
+// author wrote, which is where the diagnostic lands.
 //
-// It holds the `VarInfo` itself rather than the name, because the verdict is `binding.referenced`, a bit
-// written LATER (at every mention door) through the same heap object; a name copied here would have to be
-// looked up again in a `Scope` an inner block may since have shadowed — and the shadow is a different
-// declaration with its own answer.
+// It holds the `VarInfo` itself rather than the name, because one half of the verdict is
+// `binding.referenced`, a bit written LATER (at every mention door) through the same heap object; a name
+// copied here would have to be looked up again in a `Scope` an inner block may since have shadowed — and the
+// shadow is a different declaration with its own answer.
 //
-// The RANGE rides here and not on `VarInfo` because a parameter binding is the ONLY candidate kind: a local,
-// a self-field alias, a payload binding, a `for … in` element and the module-storage stand-in all construct
-// a `VarInfo` and none of them is checked, so a declaration span on the record would be a column five of six
-// constructors fill with nothing.
+// The RANGE rides here and not on `VarInfo` because only these two binding kinds are candidates: a body
+// local, a self-field alias, a payload binding, a closure parameter and the module-storage stand-in all
+// construct a `VarInfo` and none of them is checked, so a declaration span on the record would be a column
+// most constructors fill with nothing.
 export type UnusedBindingCandidate
 	export let binding as VarInfo
 	export let nameRange as SourceRange
+	export let kind as UnusedBindingKind
 
-	export static function create(binding VarInfo, nameRange SourceRange) returns UnusedBindingCandidate
-		return Self{binding: binding, nameRange: nameRange}
+	export static function create(binding VarInfo, nameRange SourceRange, kind UnusedBindingKind) returns UnusedBindingCandidate
+		return Self{binding: binding, nameRange: nameRange, kind: kind}
 	end 'create'
 end 'UnusedBindingCandidate'
 
