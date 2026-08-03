@@ -670,3 +670,38 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:7:10: operator 'not' requires integer operands, but this one is float
 ```
+
+<!-- test: float-backed-enum-as-a-parameter-default -->
+A float-backed enum reaching a parameter DEFAULT is the seam between two rungs that landed an hour
+apart in one lane: `A4q` made a default expression consume the whole token region the capture skipped,
+and `A4o` made every read of a float-backed enum DECODE its i64 rather than read it as a magnitude. The
+default is parsed from a lifted token region rather than from a statement, so it reaches the decode by a
+path no other case here takes — and neither rung's own cases cross it. Both spellings are pinned
+together: the default the caller omits and the argument the caller supplies must give the same answer
+for the same case.
+```maxon
+typealias Real = float(f64.min to f64.max)
+
+enum Weight
+	light = 2.5
+	heavy = 4.0
+end 'Weight'
+
+function show(w Weight = Weight.light) returns Real
+	print("{w} ")
+	return w + 0.0
+end 'show'
+
+function main() returns ExitCode
+	let a = show()
+	let b = show(Weight.heavy)
+	print("{a + b}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2.5 4.0 6.5
+```
