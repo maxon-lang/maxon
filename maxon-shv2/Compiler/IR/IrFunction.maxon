@@ -207,6 +207,22 @@ export type IrFunction
 	// It marks the LITERAL, not a function-typed parameter (which also carries an env): a param passed onward is
 	// not refused, because the refusal lands at the site that passes the literal. Empty on a Std-phase function.
 	export var valueIsCapturingClosure as BoolArray
+	// ⭐⭐ **THE PER-VALUE WITNESS-PAIRING COLUMN (P1.7a-existentials slice 1), DENSE by ValueId in lockstep
+	// with `valueTags`.** For a value tagged `interfaceRef` it holds the ValueId of the fat pointer's OTHER
+	// half — the `__witness_<Type>.<Iface>` address; for every other value it holds 0. This column IS the
+	// second half of the fat pointer: shv2 has no aggregate here and no slot to spill one into, so an
+	// existential is two SSA values and this is what says WHICH two.
+	//
+	// A real witness is always a minted id or a hidden parameter past the first (`>= 1`), so a stored 0
+	// unambiguously means "not an existential", exactly as `valueClosureEnv`'s does — and it is read only on
+	// the `interfaceRef` arm, where a 0 is a compiler invariant break rather than an answer.
+	//
+	// PUBLISHED here for `valueClosureEnv`'s reason, one mechanism over: threading an existential ARGUMENT's
+	// witness to a callee is done at LOWERING (`LowerMaxonToStd.appendExistentialWitnessArgs`), the first tier
+	// holding the callee's resolved parameter types — the parser cannot know there which arguments land at
+	// interface-typed parameters, so it publishes each value's witness here and the lowering reads it.
+	// Empty on a Std-phase function (`createFromStd`).
+	export var valueWitnessIds as ValueIdArray
 	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
 	export var throwsTypeName as ThrowsClause
 	// Persistent per-function symbol table, handed off by the parser. Std-phase
@@ -348,7 +364,7 @@ export type IrFunction
 	// error, and the stack-guard one is the SIGSEGV the A1r review measured. Passing the position in means a
 	// caller cannot forget it; it can only decide it, and `SourcePosition.synthesized` is how a synthesizing
 	// caller says so out loud.
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,
 			visibility: Visibility.file,
@@ -365,6 +381,7 @@ export type IrFunction
 			valueNameIds: valueNameIds,
 			valueClosureEnv: valueClosureEnv,
 			valueIsCapturingClosure: valueIsCapturingClosure,
+			valueWitnessIds: valueWitnessIds,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: StdReturnType.void,
@@ -410,6 +427,7 @@ export type IrFunction
 			valueNameIds: TypeNameIdArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
+			valueWitnessIds: ValueIdArray.create(),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: returnType,
@@ -450,6 +468,7 @@ export type IrFunction
 			valueNameIds: src.valueNameIds,
 			valueClosureEnv: src.valueClosureEnv,
 			valueIsCapturingClosure: src.valueIsCapturingClosure,
+			valueWitnessIds: src.valueWitnessIds,
 			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
 			returnType: src.returnType,

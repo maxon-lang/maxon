@@ -346,8 +346,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: interface-method-unused-param-allowed -->
-<!-- P1.7a-existentials: an interface-typed PARAMETER (`function callGreet(g Greeter)`) is a fat pointer — plan-settled out of Phase 1 -->
+<!-- test: interface-method-unused-param-allowed -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -382,8 +381,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: interface-method-via-extended-interface -->
-<!-- P1.7a-existentials: an interface-typed PARAMETER (`function callPing(b Base)`) is a fat pointer — plan-settled out of Phase 1 -->
+<!-- test: interface-method-via-extended-interface -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -571,8 +569,7 @@ end 'main'
 error E3012: specs/fragments/interface-conformance/interface-method-loop-variable-still-errors.test:14:7: unused variable: 'i'
 ```
 
-<!-- disabled-test: interface-impl-ignore-param-name -->
-<!-- P1.7a-existentials: an interface-typed PARAMETER (`function useGreeter(g Greeter)`) is a fat pointer — plan-settled out of Phase 1 -->
+<!-- test: interface-impl-ignore-param-name -->
 An interface-implementing method may name a parameter `_` (the ignore name) even
 when the interface declares it with a real name. The impl doesn't use the
 argument; callers through the interface still pass it by the interface's name,

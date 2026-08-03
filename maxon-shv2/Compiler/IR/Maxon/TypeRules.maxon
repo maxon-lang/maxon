@@ -101,6 +101,18 @@ export enum TypeClass
 	// `comparableOperands`) — a byte-lexicographic `compare` is real but has no consumer at this slice,
 	// so `c < d` is refused rather than guessed at.
 	character
+	// ⭐ **The class of an EXISTENTIAL — a value held at its INTERFACE type (P1.7a-existentials slice 1).**
+	// Its OWN class, and it agrees with NOTHING but another existential — deliberately, including with the
+	// `structRef` of a conforming type. A conformer reaching an interface-typed place is a WIDENING (the
+	// value gains a witness half), not an agreement, and it is checked by the four widening doors
+	// (`Parser.widenToInterface`) which ask CONFORMANCE and mint the witness. Admitting `structRef` here
+	// would let a conformer through with no witness paired — the fat pointer's second half simply absent —
+	// which is a wild jump at the first dispatch rather than a diagnostic.
+	//
+	// Two existentials agreeing at the class level is tag-level assignability, exactly as `function`'s is:
+	// interface IDENTITY (a `Base` place fed a `Derived` value) is a separate question the widening door
+	// asks by name, because a tag carries no name (this file's header).
+	interfaceValue
 end 'TypeClass'
 
 // The class a source-level type belongs to. Exhaustive over `ValueTypeTag`, so a new type
@@ -147,6 +159,9 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		// REPRESENTATION fact, and a class is an AGREEMENT fact. Agreeing with `text` here would make
 		// `s == c` a silent byte compare and `print(c)` legal.
 		character gives TypeClass.character
+		// An EXISTENTIAL — a value at its interface type. NOT `structRef`, even though its VALUE half is a
+		// struct pointer: see TypeClass's `interfaceValue` for why a conformer must not simply agree.
+		interfaceRef gives TypeClass.interfaceValue
 	end 'k'
 end 'typeClassOf'
 
@@ -270,6 +285,10 @@ function typeClassIsAggregate(c TypeClass) returns bool
 		unknown gives false
 		noValue gives false
 		typeParameter gives false
+		// An EXISTENTIAL is a pointer pair, not a scalar — `structRef`'s answer, so `x as Age` on an
+		// interface-typed value and `42 as Backend` are both E3009 rather than a silent reinterpretation of
+		// the value half.
+		interfaceValue gives true
 	end 'c'
 end 'typeClassIsAggregate'
 
@@ -288,6 +307,8 @@ function typeClassIsScalar(c TypeClass) returns bool
 		unknown gives false
 		noValue gives false
 		typeParameter gives false
+		// An existential is a pointer pair, not a register-sized number — `structRef`'s answer.
+		interfaceValue gives false
 	end 'c'
 end 'typeClassIsScalar'
 
@@ -545,6 +566,9 @@ export function tagAdmitsNoAggregate(tag ValueTypeTag) returns bool
 		typeParameter gives false
 		genericInstance gives false
 		character gives false
+		// An existential's VALUE half is an aggregate reference (every conformer shv2 admits is a declared
+		// struct), so this tag admits one — `false`, with `structRef`'s reason.
+		interfaceRef gives false
 	end 'k'
 end 'tagAdmitsNoAggregate'
 
@@ -595,6 +619,9 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		// A Character is a record pointer, not a magnitude — `string`'s answer, and what makes
 		// `c shl 1` / `c and 3` the same rejection `s shl 1` gets.
 		character gives false
+		// An existential is a fat pointer, not a magnitude — `structRef`'s answer, and the statement
+		// "an interface value is not an integer" rather than a claim about reachability.
+		interfaceRef gives false
 	end 'k'
 end 'tagIsIntegral'
 
@@ -647,6 +674,11 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// The `Character` builtin. Both reference compilers print the builtin's own name here
 		// (`stdlib/Character.maxon` declares `type Character`), so a Character type error names it.
 		character gives "Character"
+		// ⚠ It names the KIND, not the interface — `structRef`'s limitation, for `structRef`'s reason: a tag
+		// is a scalar and carries no name. The four widening doors do NOT print through here; each names the
+		// interface off the declared type it holds (`Parser.interfaceNameOfType`), because "does not implement
+		// interface 'Runnable'" is the message the corpus pins and it needs the name.
+		interfaceRef gives "interface"
 	end 'k'
 end 'typeTagName'
 
@@ -2256,5 +2288,8 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// `not c` has no reading: a Character is a record pointer, and complementing one produces a
 		// number the source did not mean. `string`'s answer.
 		character gives NotOperator.nonIntegralOperand
+		// `not x` has no reading on an existential — the struct/String/function arm's reason, one level of
+		// indirection up: complementing a fat pointer's value half is not a question.
+		interfaceRef gives NotOperator.nonIntegralOperand
 	end 'k'
 end 'notOperatorFor'

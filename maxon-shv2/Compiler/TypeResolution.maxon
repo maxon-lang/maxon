@@ -493,6 +493,9 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, declared MaxonType, g
 		// `GenericInstanceId`; two function types agree only if they take the same instances in the same
 		// opaque positions, so both are compared the same way for their own reasons.
 		typeParameter to genericInstance gives true
+		// An EXISTENTIAL is nominal in its INTERFACE: a `Base`-typed place and a `Derived`-typed value are
+		// two different types, so the ids must match. Compared for `named`/`structRef`'s reason.
+		interfaceRef gives true
 	end 'k'
 
 	return not identifiedByName or typeNameIdOf(declared) == typeNameIdOf(got)
@@ -704,6 +707,10 @@ function resolveType(project Project, signatures ProgramSignatures, t MaxonType)
 		// Already concrete — `Parser.parseTypeReference` mints a `character` directly for the
 		// `Character` builtin name, exactly as it mints `string` for `String`.
 		character then return t
+		// Already concrete — `Parser.parseTypeReference` mints an `interfaceRef` directly for a name the
+		// whole-program interface registry knows, and `denotedNamedType` mints one for a swept `named` that
+		// turns out to be an interface. Resolution leaves it untouched, as it leaves `structRef`.
+		interfaceRef then return t
 	end 'r'
 end 'resolveType'
 
@@ -879,6 +886,29 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	if signatures.containsStruct(name) 'isStruct'
 		return MaxonType.structRef(id)
 	end 'isStruct'
+
+	// ⭐⭐ **A DECLARED `interface` KEEPS ITS NAME ID TOO, and for the struct arm's reason one level up
+	// (P1.7a-existentials slice 1).** A value held at an interface type is nothing BUT a nominal
+	// distinction: `b.run()` needs to know WHICH interface `b` is held at to number its witness slot, and
+	// two interfaces declaring identical methods are still two types with two witness tables. So the id
+	// survives, carried by `interfaceRef`.
+	//
+	// ⚠ **THIS ARM IS WHAT REPLACES THE INTEGER FALLBACK, AND THE FALLBACK WAS THE BUG.** Without it the
+	// cascade fell through to its recovery `MaxonType.integer` — so an interface-typed field or parameter
+	// resolved to an INT, `TypeRules.typeClassOf` read it as numeric and `typeTagName` printed it `int`.
+	// MEASURED: a field declared `as Backend` was refused *"E3005: cannot assign 'struct' to variable 'b'
+	// of type 'int'"* for an interface declared three lines above, and a method call on such a parameter
+	// was *"E3011: Unknown type 'Backend'"* — a message that was false about a name the program declares.
+	//
+	// It is asked of `interfaceMap()`, the SAME whole-program store `Parser.parseTypeReference` and every
+	// witness resolution read, so the AUTHORITY and the parser cannot come to disagree about which names
+	// are interfaces. `lookupInterface` (not a bare map probe) is what admits the SYNTHESIZED protocol
+	// interfaces on the same footing as the user-declared ones — the one lookup rule, stated in
+	// `IrInterface`.
+	match lookupInterface(signatures.interfaceMap(), name: name) 'isInterface'
+		found then return MaxonType.interfaceRef(id)
+		notFound then break 'isInterface'
+	end 'isInterface'
 
 	// ⭐ A DECLARED `enum`/`union` RESOLVES AWAY TO `integer`, the OPPOSITE of a struct — and for the
 	// same reason an alias does. An enum value IS its i64 tag (int backing) or its float BIT PATTERN

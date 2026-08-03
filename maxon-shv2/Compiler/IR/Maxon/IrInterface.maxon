@@ -66,6 +66,23 @@ export typealias WitnessMethodIndex = int(0 to u16.max)
 export let WitnessTableHeaderBytes = 24 as ByteOffset
 export let WitnessSlotBytes = 8 as ByteOffset
 
+// ⭐⭐ **THE FAT POINTER'S SHAPE — `{value@0, witness@8}` (P1.7a-existentials slice 1).** A value held at
+// its INTERFACE type occupies TWO machine words, and these two constants are the whole of that layout.
+// They are stated HERE, beside the table the witness half points at, because the two facts are one design:
+// the second word is a `__witness_<Type>.<Iface>` address and nothing else.
+//
+// ⚠ **THEY DESCRIBE MEMORY ONLY — a struct FIELD.** In every other position the two halves are two
+// PARALLEL SCALARS with no memory between them: a local is two SSA values, a parameter is two adjacent ABI
+// parameters, a return is the primary plus the secondary register. That is the design (see MaxonType's
+// `interfaceRef` arm), and it is why there is no "load the fat pointer" anywhere — there is nothing to load
+// except at a field, where a struct's payload is genuine memory.
+//
+// `InterfaceWitnessHalfOffset` is derived from `MachineWordBytes` rather than spelled `8`: the value half
+// is one machine word (a box pointer), so the witness half starts exactly one word in, and the day a word
+// is not eight bytes both numbers move together.
+export let InterfaceWitnessHalfOffset = MachineWordBytes
+export let InterfaceValueBytes = MachineWordBytes + InterfaceWitnessHalfOffset
+
 // The byte offset of witness-table method slot `index` (P1.7a slice 2a) — `24 + 8*index`. The ONE place
 // the header size and slot stride combine, so the blob's slot layout and the fused call's memory offset
 // cannot drift.
@@ -503,16 +520,34 @@ export union InterfaceLookup
 	notFound
 end 'InterfaceLookup'
 
-// ⭐ **THE RESOLVED TARGET OF A CONSTRAINED-TYPE-PARAMETER DISPATCH (P1.7a slice 2a)** — `self.item.digest()`
-// resolved against the enclosing type's `where` constraints. `constraintIndex` is which constraint (and so
-// which hidden witness parameter) supplies the method; `methodIndex` is the DECL-ORDER slot of the method in
+// ⭐ **THE RESOLVED TARGET OF A WITNESS DISPATCH (P1.7a slice 2a; both receiver kinds since
+// P1.7a-existentials slice 1)** — `self.item.digest()` resolved against the enclosing type's `where`
+// constraints, OR `b.run()` resolved against the interface a value is held at. `witnessValue` is the value
+// holding the table to jump through (see its own header — it is what makes the two receivers ONE
+// mechanism); `methodIndex` is the DECL-ORDER slot of the method in
 // that constraint's interface (the witness-table slot); `returnTypeName` is the interface method's rendered
 // return type, used to type the dispatch result exactly as a direct call types its own. `paramTypeNames` are
 // the method's rendered formal parameter types (P1.7a slice 2b) — read to reject a concrete value marshalled
 // into a `Self`-typed formal (`Equatable.equals`'s and `Comparable.compare`'s `other Self`), which would fault
 // (a struct `equals` dereferences an int literal as its `other` pointer).
 export type WitnessDispatchTarget
-	export let constraintIndex as WitnessSlotIndex
+	// ⭐⭐ **THE VALUE HOLDING THE WITNESS TABLE THIS DISPATCH JUMPS THROUGH — a ValueId, not an index
+	// (P1.7a-existentials slice 1).** It is what makes ONE dispatch mechanism serve both receivers the
+	// language has:
+	//
+	//   • a CONSTRAINED TYPE PARAMETER (`self.item.digest()` under `where T is Digest`) — the enclosing
+	//     generic body's own hidden witness PARAMETER for that constraint, whose ValueId the parser knows
+	//     because the parser is what reserved it (`Parser.witnessParamValueId`);
+	//   • an EXISTENTIAL (`b.run()` on a `b Backend`) — the fat pointer's WITNESS HALF, which is an ordinary
+	//     SSA value the parser paired with the value half (`Parser.witnessOfValue`).
+	//
+	// ⚠ **IT USED TO BE A `constraintIndex`, AND THAT IS THE FIELD AN EXISTENTIAL HAS NO HONEST VALUE FOR.**
+	// An existential's witness comes from the VALUE, not from any constraint of an enclosing type — so the
+	// index form forced either a second op pair with a second lowering, or a `0` that means nothing. Naming
+	// the VALUE says exactly as much and says it for both. The index → ValueId step also moved to the party
+	// that owns the reservation: the parser reserved the witness parameters, so the parser resolving its own
+	// reservation cannot disagree with itself, where the lowering re-deriving the count whole-program could.
+	export let witnessValue as ValueId
 	export let methodIndex as WitnessMethodIndex
 	export let returnTypeName as ByteArray
 	export let paramTypeNames as ByteArrayArray
@@ -544,8 +579,8 @@ export type WitnessDispatchTarget
 	// the last field of the requirement the two R10c rejects need and the only one nothing else reads.
 	export let isStatic as bool
 
-	export static function create(constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
-		return Self{constraintIndex: constraintIndex, methodIndex: methodIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames, declaringInterfaceName: declaringInterfaceName, isStatic: isStatic}
+	export static function create(witnessValue ValueId, methodIndex WitnessMethodIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
+		return Self{witnessValue: witnessValue, methodIndex: methodIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames, declaringInterfaceName: declaringInterfaceName, isStatic: isStatic}
 	end 'create'
 end 'WitnessDispatchTarget'
 
@@ -684,6 +719,19 @@ export typealias CollectedInterfaceMethodArray = Array with CollectedInterfaceMe
 
 export typealias InterfaceNameSet = Set with ByteArray
 
+// ⭐ **THE INTERFACE AN `interfaceRef` TYPE NAMES — the ONE place its id becomes a name
+// (P1.7a-existentials slice 1).** That name is what the witness label is built from
+// (`witnessTableLabel`), what the conformance answer is keyed by, and what every diagnostic about an
+// existential prints; three sites reading it their own way is three chances to spell one interface two ways.
+//
+// `typeNames` is the interner the id lives in — the PROJECT's for a merged signature or field type, the
+// signature index's for a swept one, the FILE's for a type the parser has just minted. The caller knows which
+// it holds, exactly as `maxonTypeName`'s does; passing the wrong one is the panic below rather than a
+// plausible other name.
+export function interfaceNameOfType(t MaxonType, typeNames TypeNameInterner) returns ByteArray
+	return try typeNames.nameOf(typeNameIdOf(t)) otherwise panic("interfaceNameOfType: the interface name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in")
+end 'interfaceNameOfType'
+
 // ⭐⭐ **THE SLOT LIST OF AN INTERFACE — ITS TRANSITIVE REQUIREMENT SET, COMPUTED IN ONE PLACE (R10c).**
 // Slot `i` of `__witness_<Type>.<Iface>` holds requirement `i` of this list, and THREE readers depend on
 // that being ONE answer:
@@ -744,6 +792,60 @@ function appendInterfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterfac
 		end 'parent'
 	end 'eachParent'
 end 'appendInterfaceWitnessSlots'
+
+// ⭐⭐ **DOES A CONFORMANCE TO `declaredName` SATISFY A REQUIREMENT FOR `wanted`? — CONFORMANCE IS
+// TRANSITIVE THROUGH `extends` (P1.7a-existentials slice 1).** `type Impl implements Derived` with
+// `interface Derived extends Base` conforms to `Base` as well, and it must: `Derived`'s requirements INCLUDE
+// `Base`'s (`interfaceWitnessSlots` projects them in), the conformance check already made `Impl` supply them,
+// and `ConformanceCheck` files each accepted member under the DECLARING interface — so `__witness_Impl.Base`
+// has a real impl for every one of its slots. A non-transitive test would refuse a value the compiler is
+// already able to dispatch, which is exactly what `specs/interface-dispatch.md`'s
+// `dispatch-extended-interface` writes.
+//
+// It walks the same `extendsInterfaces` edges `appendInterfaceWitnessSlots` does and terminates on the same
+// `visited` test, so a cyclic `extends` chain answers rather than hangs — one walk shape, two readers.
+export function conformanceSatisfiesInterface(interfaces IrInterfaceMap, declaredName ByteArray, wanted ByteArray) returns bool
+	var visited = InterfaceNameSet.create()
+	return conformanceReachesInterface(interfaces, declaredName: declaredName, wanted: wanted, visited: visited)
+end 'conformanceSatisfiesInterface'
+
+// The recursion `conformanceSatisfiesInterface` seeds — separate only because the `visited` set is the walk's
+// own bookkeeping and no caller should have to supply it (`interfaceWitnessSlots`' arrangement).
+function conformanceReachesInterface(interfaces IrInterfaceMap, declaredName ByteArray, wanted ByteArray, visited InterfaceNameSet) returns bool
+	if declaredName.equals(wanted) 'isTheOne'
+		return true
+	end 'isTheOne'
+	if visited.contains(declaredName) 'alreadySeen'
+		return false
+	end 'alreadySeen'
+	visited.insert(declaredName)
+
+	match lookupInterface(interfaces, name: declaredName) 'decl'
+		found(iface) then break 'decl'
+		// A conformance naming an interface no file declares is E3015's to report, not this walk's; it
+		// simply reaches nothing further.
+		notFound then return false
+	end 'decl'
+
+	let iface = requireDeclaredInterface(interfaces, name: declaredName)
+	for parentName in iface.extendsInterfaces 'eachParent'
+		if conformanceReachesInterface(interfaces, declaredName: parentName, wanted: wanted, visited: visited) 'reached'
+			return true
+		end 'reached'
+	end 'eachParent'
+
+	return false
+end 'conformanceReachesInterface'
+
+// The declaration behind a name the caller has ALREADY resolved — the `found` payload, fetched where a
+// `match` arm cannot bind it and go on. It panics for `requireBuiltinInterface`'s reason: the only caller
+// asks one line after a successful lookup of the same name against the same map.
+function requireDeclaredInterface(interfaces IrInterfaceMap, name ByteArray) returns IrInterface
+	match lookupInterface(interfaces, name: name) 'decl'
+		found(iface) then return iface
+		notFound then panic("requireDeclaredInterface: '{String.from(name)}' resolved a line ago against this same map and does not now — the map is not mutated between the two asks")
+	end 'decl'
+end 'requireDeclaredInterface'
 
 // ⭐ **IS THIS RESOLVED DISPATCH TARGET THE PROTOCOL `want` DECLARES? (P1.7a slice 2b-ii; a PREDICATE since
 // R10c.)** A constraint declaring a method of the protocol's NAME is not the protocol — its RESULT, its

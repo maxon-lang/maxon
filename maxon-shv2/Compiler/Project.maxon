@@ -3889,6 +3889,14 @@ export type Project
 	// type declaring conformance twice is two decls to report, not one to overwrite. Reset with the
 	// other push-merge targets (`pendingFnMergeChecks`) so a warm rebuild does not double it.
 	export var conformances as ConformanceDeclArray
+	// ⭐ **THE MEMOIZED `type -> interfaces it declares` INDEX** derived from `conformances`
+	// (P1.7a-existentials slice 1). Built on first ask by `ConformanceCheck.declaredConformanceIndex` and
+	// reset with `conformances` itself, so the two cannot come to describe different programs. The
+	// `…Built` flag is what distinguishes "not built yet" from "built, and this program declares none" —
+	// `ProgramSignatures.arrayByteInstanceComputed`'s arrangement, and for its reason: an empty map is a
+	// legitimate answer, so emptiness cannot double as the validity bit.
+	export var declaredConformances as DeclaredConformanceMap
+	export var declaredConformanceIndexBuilt as bool
 	// Every `<Type> from "…"` construction the program writes (see LiteralInitSite), one per site, in
 	// merge order. An ARRAY for `conformances`' reason: the check drains it once whole-program and two
 	// constructions of one type are two positions to report. Read by `checkLiteralInitConformance`.
@@ -3969,6 +3977,8 @@ export type Project
 			enumTypes: createEnumRegistry(),
 			interfaces: IrInterfaceMap.create(),
 			conformances: ConformanceDeclArray.create(),
+			declaredConformances: DeclaredConformanceMap.create(),
+			declaredConformanceIndexBuilt: false,
 			literalInitSites: LiteralInitSiteArray.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),

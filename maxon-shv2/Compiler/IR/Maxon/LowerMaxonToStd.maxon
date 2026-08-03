@@ -72,6 +72,11 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		genericInstance then break 'residue'
 		// A Character is concrete — a record pointer — so it is no more a residue than a String is.
 		character then break 'residue'
+		// An EXISTENTIAL is concrete: `Parser.parseTypeReference` mints `interfaceRef` directly for a name
+		// the whole-program interface registry knows, and `denotedNamedType` mints one for a swept `named`
+		// that turns out to be an interface. Its width here is the VALUE half's machine word — the witness
+		// half is a SEPARATE value with its own Std type, never a widening of this one.
+		interfaceRef then break 'residue'
 	end 'residue'
 
 	return valueTagToStdType(maxonTypeTag(ref))
@@ -138,6 +143,11 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		genericInstance then return StdType.i64
 		// A CHARACTER IS A POINTER to the fused byte record — the same machine word a String is.
 		character then return StdType.i64
+		// ⭐ **AN EXISTENTIAL'S *VALUE HALF* IS A POINTER** — one machine word, exactly as `structRef` is.
+		// This tag types ONE of the fat pointer's two words and never both: the witness half is a separate
+		// value carrying its own (integer) tag, which is what keeps the collapse a scalar-to-scalar table
+		// rather than something that would have to answer with a width of 16.
+		interfaceRef then return StdType.i64
 	end 'collapse'
 end 'valueTagToStdType'
 
@@ -587,6 +597,15 @@ type MaxonToStdLowering
 	// re-pointed per function like `valueTags`, from the SAME `IrFunction.valueClosureEnv` the parser
 	// published. `appendCalleeEnvArgs` reads it to thread a function-value ARGUMENT's environment to a callee.
 	var valueClosureEnv as ValueIdArray
+	// The per-value WITNESS-PAIRING column of the function CURRENTLY being lowered
+	// (P1.7a-existentials slice 1) — re-pointed per function like `valueTags`, from the SAME
+	// `IrFunction.valueWitnessIds` the parser published. `witnessForExistentialArg` reads it to FORWARD an
+	// already-existential argument's witness half rather than re-resolving a table that does not exist.
+	var valueWitnessIds as ValueIdArray
+	// The PROJECT's type-name interner — every id on a merged signature or an op's type is remapped into it
+	// by `mergeArtifact`, so it is what turns an `interfaceRef` parameter's id back into the interface NAME
+	// the witness label is built from (`interfaceNameOfType`).
+	var typeNames as TypeNameInterner
 	// The per-value NAME column of the function CURRENTLY being lowered — re-pointed per function like
 	// `valueTags`, from `IrFunction.valueNameIds`. For a `genericInstance`-tagged receiver at a `sizeof(T)`
 	// call site it carries the `GenericInstanceId`, which `materializeLayoutArg` resolves to a descriptor.
@@ -653,7 +672,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), typeNames: project.typeNames, currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -757,6 +776,9 @@ type MaxonToStdLowering
 			// The closure-environment column travels with it (P1.5-A2b-2): `appendCalleeEnvArgs` threads a
 			// function-value argument's env from here.
 			self.valueClosureEnv = srcFunc.valueClosureEnv
+			// The witness-pairing column travels with it too (P1.7a-existentials slice 1): an existential
+			// argument's witness half is FORWARDED from here rather than re-resolved.
+			self.valueWitnessIds = srcFunc.valueWitnessIds
 			// The name column travels with it too (P1.6-B1): `materializeLayoutArg` reads a `genericInstance`
 			// receiver's `GenericInstanceId` out of it.
 			self.valueNameIds = srcFunc.valueNameIds
@@ -1071,13 +1093,20 @@ type MaxonToStdLowering
 		end 'eachFunc'
 	end 'buildLayoutNeedingFuncs'
 
-	// Does `func` carry a layout-descriptor parameter (P1.6-B1)? The parser reserves it after the user + env
-	// companions and BEFORE any witness parameters (`[user][env][layout][witness_0..k]`, P1.7a slice 2a), so a
-	// `paramCount` above the user + env + WITNESS count means the layout slot is present. The witness count is
-	// derived whole-program from the enclosing type's `where` constraints (`witnessParamCountForFunc`), the
-	// SAME rule the parser reserved by, so caller and callee agree without a per-function field.
+	// Does `func` carry a layout-descriptor parameter (P1.6-B1)? The parser reserves it after the user + env +
+	// EXISTENTIAL-WITNESS companions and BEFORE any constraint-witness parameters
+	// (`[user][env][existentialWitness][layout][witness_0..k]`, P1.7a slice 2a + P1.7a-existentials slice 1),
+	// so a `paramCount` above every OTHER hidden block means the layout slot is present. Each of the three
+	// counts is derived from a whole-program fact the parser reserved by — the declared parameter TYPES for
+	// the env and existential blocks, the enclosing type's `where` constraints for the witness block — so
+	// caller and callee agree without a per-function field.
+	//
+	// ⚠ **A COUNT MISSING FROM THIS SUM READS AS A LAYOUT SLOT THAT IS NOT THERE.** Measured while the
+	// existential block was absent from it: the first `function callGreet(g Greeter)` in the corpus made
+	// `layoutNeedingFuncs` claim a free function needs a descriptor, and the caller then panicked in
+	// `materializeStaticConstructorLayout` looking for a generic instance to source one from.
 	function functionHasDescriptorParam(func IrFunction) returns bool
-		return func.paramCount > func.maxonParamTypes.count() + self.envParamCount(func) + self.witnessParamCountForFunc(func)
+		return func.paramCount > func.maxonParamTypes.count() + self.envParamCount(func) + self.existentialWitnessCount(func.maxonParamTypes) + self.witnessParamCountForFunc(func)
 	end 'functionHasDescriptorParam'
 
 	// Bind the CURRENT function's hidden implicit parameters (P1.6-B1 layout + P1.7a slice 2a witnesses). The
@@ -1121,6 +1150,21 @@ type MaxonToStdLowering
 		end 'q'
 	end 'witnessParamCountForCallee'
 
+	// ⭐ **THE NUMBER OF COMPANION WITNESS PARAMETERS A DECLARATION CARRIES (P1.7a-existentials slice 1)** —
+	// one per INTERFACE-typed user parameter, the fat pointer's second half travelling as an adjacent ABI
+	// parameter. `envParamCount`'s twin one mechanism over, and it takes the parameter TYPE LIST rather than
+	// an `IrFunction` because both sides of a call need it: the CALLEE side reads `func.maxonParamTypes`, the
+	// CALLER side reads the callee's `sig.paramTypes`. One rule, two holders of the same list.
+	function existentialWitnessCount(paramTypes MaxonTypeArray) returns ParamCount
+		var n = 0 as ParamCount
+		for pt in paramTypes 'each'
+			if maxonTypeTag(pt) == ValueTypeTag.interfaceRef 'existentialParam'
+				n = n + 1
+			end 'existentialParam'
+		end 'each'
+		return n
+	end 'existentialWitnessCount'
+
 	// The number of companion-environment parameters `func` carries (P1.5-A2b-2) — one per function-typed
 	// user parameter — used to locate the layout slot that sits past them.
 	function envParamCount(func IrFunction) returns ParamCount
@@ -1141,7 +1185,8 @@ type MaxonToStdLowering
 		let baseArgs = self.finalizeCallArgs(argIds, sig: sig, dstBlock: dstBlock)
 		let needsLayout = self.layoutNeedingFuncs.contains(callee)
 		let witnessCount = self.witnessParamCountForCallee(callee, sig: sig)
-		if not needsLayout and witnessCount == 0 'noImplicits'
+		let existentialCount = self.existentialWitnessCount(sig.paramTypes)
+		if not needsLayout and witnessCount == 0 and existentialCount == 0 'noImplicits'
 			return baseArgs
 		end 'noImplicits'
 
@@ -1150,6 +1195,12 @@ type MaxonToStdLowering
 		// dictionary-passing call pays this copy; the common path already returned `baseArgs` above.
 		var out = ValueIdArray.create()
 		out.append(baseArgs)
+		// ⭐ **THE EXISTENTIAL WITNESSES COME FIRST — the ABI is `[user][env][existentialWitness][layout][witness]`
+		// and this list is built in that order** (the env companions are already inside `baseArgs`, appended by
+		// `finalizeCallArgs`). See `Parser.bindExistentialWitnessParams` for why the block sits where it does.
+		if existentialCount > 0 'existentialWitnesses'
+			self.appendExistentialWitnessArgs(out, argIds: argIds, sig: sig, callee: callee, dstBlock: dstBlock)
+		end 'existentialWitnesses'
 		if needsLayout 'layout'
 			out.push(self.materializeLayoutArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
 		end 'layout'
@@ -1158,6 +1209,64 @@ type MaxonToStdLowering
 		end 'witnesses'
 		return out
 	end 'finalizeCallArgsWithLayout'
+
+	// ⭐⭐ **APPEND THE WITNESS HALF OF EVERY EXISTENTIAL ARGUMENT (P1.7a-existentials slice 1)** — one per
+	// interface-typed parameter of `callee`, in parameter order, which is the order
+	// `Parser.bindExistentialWitnessParams` reserved the companions in.
+	//
+	// TWO ways a witness reaches the callee, and they are the two halves of the widening rule
+	// (`ConformanceCheck.valueWidensToInterface`, which has already ACCEPTED this argument — a non-conforming
+	// one is E3005 at `SemanticCheck.checkOneArgType` and never reaches lowering):
+	//
+	//   • the argument is ALREADY an existential (a parameter threaded onward, a merge phi, a field read) —
+	//     FORWARD the witness the parser paired with it. Re-resolving one would ask for a table keyed
+	//     `(<Iface>, <Iface>)`, which has no conformer and does not exist; v1 hits exactly that and soft-fails
+	//     to a NULL witness (`materializeInterfaceWitness`), which is a wild jump at the next dispatch.
+	//   • the argument is a CONCRETE conformer — materialize `__witness_<conformer>.<Iface>`, through the very
+	//     helper the `Set`/`Map` runtimes already thread their key witnesses with, so a program reaches one
+	//     table whichever door asked for it.
+	function appendExistentialWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, callee ByteArray, dstBlock IrBlock)
+		for i in 0 upto sig.paramTypes.count() 'eachParam'
+			let paramType = try sig.paramTypes.get(i) otherwise panic("appendExistentialWitnessArgs: paramTypes.get OOB at {i} for '{String.from(callee)}'")
+			if maxonTypeTag(paramType) != ValueTypeTag.interfaceRef 'notExistential'
+				continue
+			end 'notExistential'
+
+			let arg = try argIds.get(i) otherwise panic("appendExistentialWitnessArgs: '{String.from(callee)}' declares an interface-typed parameter at position {i} but the call slotted only {argIds.count()} arguments — `slotCallArgs` fills every declared position")
+			out.push(self.witnessForExistentialArg(arg, interfaceName: interfaceNameOfType(paramType, typeNames: self.typeNames), callee: callee, dstBlock: dstBlock))
+		end 'eachParam'
+	end 'appendExistentialWitnessArgs'
+
+	// The witness half to pass for ONE existential argument — the FORWARD/MATERIALIZE split
+	// `appendExistentialWitnessArgs` documents, and the same split `materializeWitnessArg` makes for a
+	// constraint witness one mechanism over.
+	function witnessForExistentialArg(arg ValueId, interfaceName ByteArray, callee ByteArray, dstBlock IrBlock) returns ValueId
+		if self.valueTagOf(arg) == ValueTypeTag.interfaceRef 'forwardTheFatPointersOwnWitness'
+			return self.pairedWitnessOf(arg, site: callee)
+		end 'forwardTheFatPointersOwnWitness'
+
+		return self.materializeKeyWitness(self.conformerNameOf(arg), interfaceName: interfaceName, dstBlock: dstBlock)
+	end 'witnessForExistentialArg'
+
+	// The witness the parser paired with an existential VALUE (`IrFunction.valueWitnessIds`). It refuses the
+	// `0` filler rather than passing it: a null table address is a wild jump at the callee's first dispatch,
+	// and every producer of an interface-typed value pairs it at the moment it mints it
+	// (`Parser.pairInterfaceWitness`), so a miss is a compiler invariant break.
+	function pairedWitnessOf(value ValueId, site ByteArray) returns ValueId
+		let witness = try self.valueWitnessIds.get(value) otherwise panic("pairedWitnessOf: value v{value} has no witness slot — the column is dense by ValueId in lockstep with `valueTags`")
+		if witness == 0 'unpaired'
+			panic("pairedWitnessOf: v{value} is typed as an interface at '{String.from(site)}' but carries no witness half — the parser pairs every existential it mints (`Parser.pairInterfaceWitness`)")
+		end 'unpaired'
+
+		return witness
+	end 'pairedWitnessOf'
+
+	// The CANONICAL conformer name a concrete argument's witness table is keyed by — the SAME reduction the
+	// conformance answer and the impl symbols use (`ProgramSignatures.conformerNameOfType`), so the widening
+	// that accepted this argument and the table this looks up cannot be filed under different names.
+	function conformerNameOf(value ValueId) returns ByteArray
+		return self.signatures.conformerNameOfType(maxonTypeOfTag(self.valueTagOf(value), nameId: try self.valueNameIds.get(value) otherwise panic("conformerNameOf: value v{value} has no recorded type name — the two type columns are minted in lockstep")), idsFrom: self.typeNames).toByteArray()
+	end 'conformerNameOf'
 
 	// Append the hidden WITNESS arguments a dictionary-passing call to `callee` carries (P1.7a slice 2a) — one
 	// per `where` constraint of the callee's enclosing type, in constraint (source) order, AFTER any layout
@@ -1769,7 +1878,7 @@ type MaxonToStdLowering
 	// corruption `lowerIndirectCall` documents).
 	function lowerWitnessDispatch(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'w'
-			witnessDispatch(result, args, constraintIndex, methodIndex, isVoid, _) then self.appendWitnessCall(dstBlock, result: result, args: args, constraintIndex: constraintIndex, methodIndex: methodIndex, isVoid: isVoid)
+			witnessDispatch(result, args, witness, methodIndex, isVoid, _) then self.appendWitnessCall(dstBlock, result: result, args: args, witness: witness, methodIndex: methodIndex, isVoid: isVoid)
 			default panic("lowerWitnessDispatch: expected a `witnessDispatch` op, got a different MaxonOp variant — `lowerOp` routes only `witnessDispatch` here")
 		end 'w'
 	end 'lowerWitnessDispatch'
@@ -1781,42 +1890,35 @@ type MaxonToStdLowering
 	// `lowerOp`'s big one (the tail-slot-`Array` decref corruption `lowerIndirectCall` documents).
 	function lowerWitnessTryDispatch(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'w'
-			witnessTryDispatch(result, errorFlag, args, constraintIndex, methodIndex, isVoid) then self.appendWitnessTryCall(dstBlock, result: result, errorFlag: errorFlag, args: args, constraintIndex: constraintIndex, methodIndex: methodIndex, isVoid: isVoid)
+			witnessTryDispatch(result, errorFlag, args, witness, methodIndex, isVoid) then self.appendWitnessTryCall(dstBlock, result: result, errorFlag: errorFlag, args: args, witness: witness, methodIndex: methodIndex, isVoid: isVoid)
 			default panic("lowerWitnessTryDispatch: expected a `witnessTryDispatch` op, got a different MaxonOp variant — `lowerOp` routes only `witnessTryDispatch` here")
 		end 'w'
 	end 'lowerWitnessTryDispatch'
 
-	// Build the Std `witnessCall`: forward the current function's witness parameter for `constraintIndex` as the
-	// table address, then capture the result exactly as `appendCallIndirect` does (an `isVoid` method leaves no
-	// result register to capture, so its `resultType` is `void`). A helper because `lowerWitnessDispatch`'s arm
-	// must hand `args` to a function and touch it no other way (see there and `lowerIndirectCall`).
-	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool)
-		let witnessAddr = self.witnessParamFor(constraintIndex)
+	// Build the Std `witnessCall`: jump through the table `witness` holds, then capture the result exactly as
+	// `appendCallIndirect` does (an `isVoid` method leaves no result register to capture, so its `resultType`
+	// is `void`). A helper because `lowerWitnessDispatch`'s arm must hand `args` to a function and touch it no
+	// other way (see there and `lowerIndirectCall`).
+	//
+	// ⭐ **THE WITNESS ARRIVES AS A VALUE AND THIS LOWERING RESOLVES NOTHING (P1.7a-existentials slice 1).**
+	// It used to take a `constraintIndex` and turn it into the enclosing function's hidden witness parameter,
+	// which meant re-deriving whole-program a count the PARSER had already reserved — and left an existential
+	// receiver, whose witness is the fat pointer's own second half, with no index to name. The parser resolves
+	// its own reservation now (`Parser.witnessParamValueId`), so both receiver kinds arrive here already
+	// pointing at a value and this is the single Std emission for them.
+	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witnessAddr, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), args: args))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), args: args))
 	end 'appendWitnessCall'
 
-	// The throwing twin of `appendWitnessCall`, sharing its witness-address resolution and its result typing
-	// (`witnessCallResultType`) verbatim — the two differ ONLY in which Std op they append and in the second
-	// result the throwing one defines. A helper for the same reason its twin is one: `lowerWitnessTryDispatch`'s
-	// arm must hand `args` to a function and touch it no other way.
-	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool)
-		let witnessAddr = self.witnessParamFor(constraintIndex)
+	// The throwing twin of `appendWitnessCall`, sharing its result typing (`witnessCallResultType`) verbatim —
+	// the two differ ONLY in which Std op they append and in the second result the throwing one defines. A
+	// helper for the same reason its twin is one: `lowerWitnessTryDispatch`'s arm must hand `args` to a
+	// function and touch it no other way.
+	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witnessAddr, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), args: args))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), args: args))
 	end 'appendWitnessTryCall'
-
-	// The witness PARAMETER of the enclosing generic function that carries constraint `constraintIndex`'s
-	// table — FORWARDED, exactly as `forwardCallerLayout` forwards the layout descriptor: a witness dispatch is
-	// only ever emitted inside a generic body, whose `T` witness arrived as a hidden parameter (the concrete
-	// `__witness_<Type>.<Iface>` was materialized at the CALL SITE and passed in). ONE home, shared by the
-	// throwing and non-throwing witness lowerings.
-	function witnessParamFor(constraintIndex WitnessSlotIndex) returns ValueId
-		if self.currentWitnessCount == 0 'noWitnessParam'
-			panic("witnessParamFor: a witness dispatch in '{String.from(self.currentFuncName)}' but the function carries no witness parameters — the parser's reservation (an instance method of a constrained generic type) and this lowering's whole-program split disagree")
-		end 'noWitnessParam'
-		return (self.witnessParamBase + constraintIndex) as ValueId
-	end 'witnessParamFor'
 
 	// The Std return type a witness call CAPTURES its result in — the result value's own type, or `void` for
 	// an `isVoid` method (no result register to capture). Shared by both witness lowerings so the throwing and

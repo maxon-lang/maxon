@@ -1785,7 +1785,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:36:20: Unsupported: no `where` constraint on this type parameter declares a method 'missing' — a method call on a constrained type parameter must be provided by one of its interfaces
+error E2015: <fragment>:36:20: Unsupported: no requirement named 'missing' is provided by the constraints on type parameter 'T' — a method call on a value whose type is an interface, or on a constrained type parameter, dispatches through a witness table, so the method has to be one that interface declares
 ```
 
 ### Two requirements of one name and one arity are AMBIGUOUS, not a first-wins pick

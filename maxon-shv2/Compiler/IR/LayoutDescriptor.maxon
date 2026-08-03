@@ -323,6 +323,10 @@ export function primitiveTypeByteSize(tag ValueTypeTag) returns ByteOffset
 		typeParameter then panic("primitiveTypeByteSize: a `typeParameter`'s size is a runtime layout-descriptor read, not a compile-time constant")
 		unresolved then panic("primitiveTypeByteSize: an `unresolved` type reached sizeof — TypeResolution should have eliminated it or SemanticCheck rejected the reference")
 		void then panic("primitiveTypeByteSize: `void` is not a value type and has no size")
+		// ⭐ AN EXISTENTIAL IS THE ONE TAG WHOSE STORAGE IS NOT ONE MACHINE WORD — it is the fat pointer
+		// `{value, witness}`, two adjacent words (see MaxonType's `interfaceRef` arm). `sizeof(Iface)` and a
+		// struct field's carve-out both read this number, so it is stated once here.
+		interfaceRef then return InterfaceValueBytes
 	end 'size'
 end 'primitiveTypeByteSize'
 
@@ -346,6 +350,7 @@ export function primitiveTypeTagName(tag ValueTypeTag) returns String
 		typeParameter then panic("primitiveTypeTagName: a `typeParameter` is never a concrete instance's argument, so it never reaches a descriptor label")
 		unresolved then panic("primitiveTypeTagName: an `unresolved` type reached descriptor labelling — TypeResolution should have eliminated it")
 		void then panic("primitiveTypeTagName: `void` is not a value type and names no descriptor")
+		interfaceRef then panic("primitiveTypeTagName: an interface type is never a generic instance's argument — a container of existentials is refused at the front end (`Parser.checkGenericArgType`), because an element slot is 8 bytes and a fat pointer is 16, so the witness half would have nowhere to live")
 	end 'name'
 end 'primitiveTypeTagName'
 

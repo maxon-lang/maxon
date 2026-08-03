@@ -149,6 +149,14 @@ let TypeShapeGenericInstance = 37 as ContentHash
 // would serve a stale parse from every other file's memo.
 let TypeShapeCharacter = 41 as ContentHash
 
+// An EXISTENTIAL's shape (P1.7a-existentials slice 1) — the INTERFACE's name is mixed after it, so
+// `returns Producer` and `returns Consumer` hash apart. A DISTINCT prime from `TypeShapeStructRef`, and
+// for a sharper reason than that one's: an interface name and a struct name live in the same interner, so
+// sharing the prime would make `returns Backend` (the interface) and a hypothetical `returns Backend` (a
+// struct of that name) hash identically — and a declaration that changed which one the name denotes would
+// serve every other file a stale parse whose dispatch is a witness slot rather than a direct call.
+let TypeShapeInterfaceRef = 43 as ContentHash
+
 // A declared FIELD's mutability, mixed into the hash beside its name and type (P1.1a wave 2). The
 // struct twin of `DeclShapeConstant`/`DeclShapeMutable`, and distinct constants rather than a reuse
 // of them: those two discriminate a top-level `let` from a `var`, and colliding a field's `let` with
@@ -958,6 +966,11 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		// global ever admitted, its slot would be a record POINTER — `string`'s answer, not a width — so
 		// this panics rather than silently sizing one.
 		character then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a character literal is not a foldable constant initializer, so a global's inferred type is never a Character")
+		// An EXISTENTIAL global is unreachable for `structRef`'s reason and one more of its own: a global
+		// takes no type annotation, so the only way to reach an interface type here is a folded initializer,
+		// and there is none. Were one ever admitted, the honest answer is still not a width — a `.data` slot
+		// for a fat pointer is TWO words, which this single-width door cannot express.
+		interfaceRef then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — an interface-typed value is a two-word fat pointer, and a global's inferred type comes from a folded scalar constant")
 	end 'reachable'
 
 	return valueTagToStdType(tag)
@@ -1109,6 +1122,11 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// not about the type. A Character answering `false` here would take the aggregate path and try to
 		// co-own a record that has no `__mm_retain` owner.
 		character then return PayloadClass.managed(fieldType, isString: true)
+		// An interface-typed union payload is REFUSED at the declaration (`Parser.requireStorableDeclaredType`),
+		// because a payload slot is one machine word and a fat pointer is two — the witness half would have
+		// nowhere to live, and a payload bound out of a `match` arm would dispatch through whatever the next
+		// slot happened to hold. This arm is the backstop for that refusal, not a case to classify.
+		interfaceRef then panic("classifyUnionPayload: a union payload is declared at an interface type — `Parser.requireStorableDeclaredType` refuses that at the declaration, because a payload slot is one machine word and an existential is two")
 		named then break 'kind'
 	end 'kind'
 
@@ -1272,7 +1290,13 @@ end 'payloadValueTypeOf'
 // match itself. Its id names the alias exactly as a `named` type's does.
 export function maxonTypeName(t MaxonType, typeNames TypeNameInterner) returns String
 	let tag = maxonTypeTag(t)
-	if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef or tag == ValueTypeTag.function 'namedType'
+	// ⭐ **AN EXISTENTIAL RENDERS AS ITS INTERFACE'S NAME, AND THAT MAKES THE RENDERING ORDER-INDEPENDENT.**
+	// `parseTypeReference` mints `interfaceRef` only once the interface registry is whole (`allFilesFolded`),
+	// so the SAME annotation is a `named` during the declaration sweep and an `interfaceRef` in the real
+	// parse. Both spell the same interned name here, which is what keeps a rendered interface REQUIREMENT
+	// (`Parser.renderInterfaceTypeName` → `renderDeclaredTypeName` → here) identical whichever pass produced
+	// it — and conformance is decided by comparing two of those strings.
+	if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef or tag == ValueTypeTag.function or tag == ValueTypeTag.interfaceRef 'namedType'
 		return String.from(try typeNames.nameOf(typeNameIdOf(t)) otherwise panic("maxonTypeName: type-name id {typeNameIdOf(t)} is not in the interner — pass the interner the type's ids live in"))
 	end 'namedType'
 	return typeTagName(tag)
@@ -6427,6 +6451,9 @@ export type ProgramSignatures
 			// A CHARACTER top-level binding is unreachable for `string`'s reason: the const evaluator folds
 			// no character literal, so none is ever a top-level constant to hash.
 			character then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a character literal is not folded to a top-level constant")
+			// Unreachable for `structRef`'s reason: an existential is only ever built by widening a value the
+			// const evaluator cannot fold, so none is ever a top-level constant to hash.
+			interfaceRef then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — an interface-typed value is built by widening a conformer, which is not a constant initializer")
 		end 'k'
 	end 'mixValueTag'
 
@@ -7436,6 +7463,9 @@ export type ProgramSignatures
 			typeParameter gives t
 			genericInstance gives t
 			character gives t
+			// An existential carries the INTERFACE's per-file interner id, so it arrives by NAME exactly as
+			// `named`/`structRef`/`function` do.
+			interfaceRef(id) gives MaxonType.interfaceRef(self.typeNames.intern(foreignNameOf(from, id: id)))
 		end 'r'
 	end 'adoptTypeFrom'
 
@@ -8810,6 +8840,87 @@ export type ProgramSignatures
 	// refuses a contested name outright. That is the whole reason the file-less door has a guard rather than a
 	// comment: the set of places a declared type is RECORDED is a thing this rung must get right, and getting
 	// it wrong has to be loud.
+	// ⭐⭐ **RE-TAG EVERY SWEPT `named` THAT DENOTES AN `interface` AS AN `interfaceRef`
+	// (P1.7a-existentials slice 1) — the ONE repair that makes the two type registries agree about what an
+	// interface annotation MEANS.**
+	//
+	// The declaration sweep records a struct field's and a function's declared type by running
+	// `Parser.parseTypeReference` (`foldDeclaredSignaturesInto`), and the interface registry it would have to
+	// consult is filled by `foldInterfaceDeclarations` — which runs at the very END of
+	// `queryProgramSignatures`, after every file is swept. So a swept `Backend` is ALWAYS a bare `named`,
+	// while the real parse (reading a complete registry) mints `interfaceRef`. That is not a cosmetic
+	// difference: `StructLayout.offsetOfField` gives an existential field TWO slots and a `named` one, so the
+	// two registries would disagree about a struct's SIZE and about where every field after the first
+	// interface field lives — a wrong address rather than a diagnostic.
+	//
+	// ⚠ **IT IS A NORMALIZATION, NOT A SECOND RESOLUTION RULE.** It asks the same `lookupInterface` over the
+	// same `interfaces` map that `parseTypeReference` and `TypeResolution.denotedNamedType` ask, so there is
+	// one statement of "which names are interfaces" and three readers of it. Anything it misses stays a
+	// `named` and is caught by the authority as E3011 — never silently sized wrong, because a `named` field
+	// is one slot in BOTH registries.
+	//
+	// ⚠ **A PROGRAM THAT DECLARES NO INTERFACE PAYS ONE `Map.count()`.** The corpus is overwhelmingly of that
+	// shape, and the walk below is O(structs × fields + functions) only when it can do something.
+	export function normalizeSweptInterfaceTypes()
+		if self.interfaces.count() == 0 'noInterfaceIsDeclared'
+			return
+		end 'noInterfaceIsDeclared'
+
+		for (_, layout) in self.structTypes 'eachStruct'
+			for index in 0 upto layout.fieldCount() 'eachField'
+				let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.normalizeSweptInterfaceTypes: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
+				if let asInterface = try self.sweptInterfaceTypeOf(declared) 'namesAnInterface'
+					layout.retypeField(index, declaredType: asInterface)
+				end 'namesAnInterface'
+			end 'eachField'
+		end 'eachStruct'
+
+		// ⚠ COLLECTED, THEN APPLIED. A field re-tag writes THROUGH a layout (`retypeField`), which touches no
+		// map; a return-type re-tag rewrites the very map being walked, and rewriting a container mid-walk is
+		// the one shape a `for … in` cannot promise anything about. Two passes over a list that is empty for
+		// every program with no interface-returning declaration.
+		var rewrittenCallees = ByteArrayArray.create()
+		var rewrittenReturns = MaxonTypeArray.create()
+		for (callee, declared) in self.returnTypes 'eachReturnType'
+			if let asInterface = try self.sweptInterfaceReturnOf(declared) 'namesAnInterface'
+				rewrittenCallees.push(callee)
+				rewrittenReturns.push(asInterface)
+			end 'namesAnInterface'
+		end 'eachReturnType'
+
+		for i in 0 upto rewrittenCallees.count() 'applyEach'
+			let callee = try rewrittenCallees.get(i) otherwise panic("ProgramSignatures.normalizeSweptInterfaceTypes: rewrittenCallees.get OOB at {i} below count {rewrittenCallees.count()}")
+			let asInterface = try rewrittenReturns.get(i) otherwise panic("ProgramSignatures.normalizeSweptInterfaceTypes: rewrittenReturns.get OOB at {i} — the two columns are pushed in lockstep")
+			self.returnTypes.upsert(callee, value: MaxonReturnType.value(asInterface))
+		end 'applyEach'
+	end 'normalizeSweptInterfaceTypes'
+
+	// The `interfaceRef` a swept `named` denotes; `MapError.keyNotFound` when the name is not an interface —
+	// the single test `normalizeSweptInterfaceTypes` applies to a field type and to a return type, so the two
+	// cannot come to disagree about which types it rewrites. A type that is already concrete (a `structRef`,
+	// a primitive, an instance) is not a `named` and is refused by the tag guard. It follows
+	// `contestScopedDeclaredType`'s shape — the other recorded-type re-tag on this index — including its
+	// "absence is a throw" convention, so both read as one kind of pass.
+	function sweptInterfaceTypeOf(declared MaxonType) returns MaxonType throws MapError
+		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoInterface'
+			throw MapError.keyNotFound
+		end 'namesNoInterface'
+
+		let id = typeNameIdOf(declared)
+		match lookupInterface(self.interfaces, name: self.nameOfId(id)) 'isInterface'
+			found then return MaxonType.interfaceRef(id)
+			notFound then throw MapError.keyNotFound
+		end 'isInterface'
+	end 'sweptInterfaceTypeOf'
+
+	// The return-type wrapper of the test above: a `void` return names no type to re-tag.
+	function sweptInterfaceReturnOf(declared MaxonReturnType) returns MaxonType throws MapError
+		match declared 'shape'
+			void then throw MapError.keyNotFound
+			value(inner) then return try self.sweptInterfaceTypeOf(inner)
+		end 'shape'
+	end 'sweptInterfaceReturnOf'
+
 	function resolveRecordedGenericAliasTypes()
 		if self.contestedGenericAliases.count() == 0 'noNameIsContested'
 			return
@@ -9214,8 +9325,48 @@ export type ProgramSignatures
 	// canonicalizes only the identity the comparison rests on, exactly as `ConformanceCheck.canonicalTypeName`
 	// does for a method-signature type name.
 	export function conformerTypeArgName(gid GenericInstanceId, position TypeParamId) returns String
-		return self.mangleTypeArg(self.canonicalizeRangedAlias(self.substitutedInstanceArg(gid, position: position)))
+		// An instance's stored ARGUMENT was interned by this index, so its ids are this index's own.
+		return self.conformerNameOfType(self.substitutedInstanceArg(gid, position: position), idsFrom: self.typeNames)
 	end 'conformerTypeArgName'
+
+	// ⭐ **THE CANONICAL CONFORMER NAME A TYPE REDUCES TO — the key every conformance answer, every
+	// `__witness_<conformer>.<Iface>` label and every `<conformer>.<method>` impl symbol is filed under.**
+	// Split out of `conformerTypeArgName` when the EXISTENTIAL widening doors needed the same reduction of a
+	// type they hold DIRECTLY rather than of a generic instance's argument (P1.7a-existentials slice 1): a
+	// value passed to an interface-typed parameter has a `MaxonType`, not a `(gid, position)`. Two spellings
+	// of "which conformer is this?" would let a widening accept a type whose witness table is filed under a
+	// name the lowering then fails to find.
+	// ⚠⚠ **IT TAKES THE INTERNER THE TYPE'S IDS LIVE IN, AND THAT IS A CORRECTNESS PARAMETER RATHER THAN A
+	// CONVENIENCE.** A `named`/`structRef` carries a PER-INTERNER id, and this index's table and the
+	// PROJECT's are two different id spaces (the sweep builds one, `mergeArtifact` folds the artifacts' into
+	// the other). Its two callers hold different ones: an instance's stored argument was interned HERE, while
+	// an existential widening holds a value type whose ids were remapped project-global. Resolving a project
+	// id against this index's table answers with whatever name happens to sit at that number — MEASURED, in
+	// exactly the shape a whole-program answer fails in: `interface-param-declared-after-consumer` refused a
+	// legal `X64Query implements OpQuery` because the two tables had interned in different orders.
+	export function conformerNameOfType(t MaxonType, idsFrom TypeNameInterner) returns String
+		// The id-bearing arms are resolved against the CALLER's interner and then re-asked of this index BY
+		// NAME — the same "names travel, ids do not" discipline `adoptType` states in full. Every other arm
+		// (a primitive, a `GenericInstanceId`, a type-parameter POSITION) carries no per-interner id, so it
+		// goes to the shared mangler untouched.
+		if tagMayNameAggregate(maxonTypeTag(t)) 'namesAnAggregate'
+			return self.conformerNameOfDeclaredName(try idsFrom.nameOf(typeNameIdOf(t)) otherwise panic("conformerNameOfType: type-name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in"))
+		end 'namesAnAggregate'
+
+		return self.mangleTypeArg(t)
+	end 'conformerNameOfType'
+
+	// The conformer a declared NAME reduces to: a ranged int/float alias collapses to its underlying
+	// primitive's name (`Integer` -> `int`), which is what its intrinsic conformance and its `__witness_int.*`
+	// tables are keyed by; every other name is its own conformer. The name half of `canonicalizeRangedAlias`,
+	// split out so the reduction is stated once whether the caller arrived with a type or with a name.
+	function conformerNameOfDeclaredName(name ByteArray) returns String
+		if let underlying = try self.aliasUnderlyingInAnyFile(name) 'rangedAlias'
+			return primitiveTypeTagName(maxonTypeTag(underlying))
+		end 'rangedAlias'
+
+		return String.from(name)
+	end 'conformerNameOfDeclaredName'
 
 	// A ranged numeric alias resolves to its underlying primitive `MaxonType` (`int(0 to u32.max)` -> `integer`),
 	// exactly as `resolveNamedType` does (`alias.underlying`, range dropped); every other type passes through.
@@ -9523,6 +9674,10 @@ export type ProgramSignatures
 			genericInstance then return self.canonicalInstanceName(typeNameIdOf(arg))
 			// A Character argument carries no name — the builtin's identity is its tag, `string`'s answer.
 			character then return EmptySourceText
+			// An interface type is refused as a generic ARGUMENT at the front end (`Parser.checkGenericArgType`
+			// rule 4), because an element slot is one machine word and a fat pointer is two. This arm is that
+			// refusal's backstop, exactly as `primitiveTypeTagName`'s is.
+			interfaceRef then panic("typeArgAggregateName: an interface type reached a generic type ARGUMENT — `Parser.checkGenericArgType` refuses a container of existentials, because an element slot is one machine word and a fat pointer is two")
 		end 'k'
 	end 'typeArgAggregateName'
 
@@ -11256,6 +11411,10 @@ export type ProgramSignatures
 			genericInstance gives MaxonReturnType.value(self.adoptType(inner, into: into))
 			// A `Character` return type carries no interned name either — it crosses files unchanged.
 			character gives rt
+			// An EXISTENTIAL return type carries the INTERFACE's per-file interner id, so it re-interns like
+			// `named`. This is the crossing that makes `let p = f.make()` in another file name the same
+			// interface the declaring file did — which is what the result's dispatch resolves its slot against.
+			interfaceRef gives MaxonReturnType.value(self.adoptType(inner, into: into))
 		end 'r'
 	end 'adoptValueReturn'
 
@@ -11295,6 +11454,10 @@ export type ProgramSignatures
 			genericInstance gives t
 			// A `Character` carries no name id, so like a primitive it passes through unchanged.
 			character gives t
+			// An existential carries the INTERFACE's name id, re-interned by NAME like `named` — which is
+			// what lets a field declared at an interface type and a call returning one cross into a reader's
+			// own interner and still name the interface the dispatch resolves against.
+			interfaceRef(id) gives MaxonType.interfaceRef(into.intern(self.nameOfId(id)))
 		end 'r'
 	end 'adoptType'
 
@@ -11356,6 +11519,10 @@ export type ProgramSignatures
 			// A `Character` (P1.8 slice B) — its own shape, and no name to mix. It hashes DISTINCTLY from
 			// `string`: the two share a record but not a type (see `TypeShapeCharacter`).
 			character gives mix(state, value: TypeShapeCharacter)
+			// An EXISTENTIAL — its own shape, then the INTERFACE's name (never its id, for `mixDeclaration`'s
+			// reason). A signature declaring `returns Producer` must hash apart from one declaring
+			// `returns Consumer`: the two pick different witness slots at every dispatch of the result.
+			interfaceRef(id) gives mixBytes(mix(state, value: TypeShapeInterfaceRef), bytes: self.nameOfId(id))
 		end 'r'
 	end 'mixType'
 

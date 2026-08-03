@@ -78,7 +78,7 @@ end 'checkConformance'
 // The interfaces a type is DECLARED to implement — `Point` -> {`Digest`}. Built from `project.conformances`
 // for the E3017 where-constraint check: an instantiation `Box with Point where T is Digest` is legal iff
 // `Point` declares `implements Digest`. Conformance is DECLARED (nominal), matching `checkConformance`'s model.
-typealias DeclaredConformanceMap = Map with (ByteArray, InterfaceNameSet)
+export typealias DeclaredConformanceMap = Map with (ByteArray, InterfaceNameSet)
 
 // ⭐ **WHERE-CONSTRAINT VALIDATION AT INSTANTIATION (P1.7a slice 2a — E3017).** For every `typealias X = Base
 // with Args` whose base declares `where T is <Interface>` constraints, each concrete argument must conform to
@@ -100,7 +100,7 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 		return
 	end 'malformedProject'
 
-	let declared = buildDeclaredConformanceMap(project)
+	let declared = declaredConformanceIndex(project)
 	for site in sites 'eachSite'
 		checkOneInstantiation(project, signatures: signatures, declared: declared, site: site)
 	end 'eachSite'
@@ -134,9 +134,9 @@ export function checkLiteralInitConformance(project Project)
 		return
 	end 'malformedProject'
 
-	let declared = buildDeclaredConformanceMap(project)
+	let declared = declaredConformanceIndex(project)
 	for site in project.literalInitSites 'eachSite'
-		if not typeDeclaresInterface(declared, typeName: site.typeName, interfaceName: InitableFromStringLiteralName) 'doesNotConform'
+		if not typeDeclaresInterface(declared, interfaces: project.interfaces, typeName: site.typeName, interfaceName: InitableFromStringLiteralName) 'doesNotConform'
 			reportPositioned(project, code: ErrorCode.typeMismatch, message: "Type '{String.from(site.typeName)}' does not conform to {String.from(InitableFromStringLiteralName)}", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 		end 'doesNotConform'
 	end 'eachSite'
@@ -153,7 +153,7 @@ function checkOneInstantiation(project Project, signatures ProgramSignatures, de
 		// name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling. This is
 		// `signatureMatches`/`canonicalTypeName`'s split, applied to a `where`-constraint argument.
 		let conformerType = signatures.conformerTypeArgName(site.gid, position: constraint.typeParamIndex).toByteArray()
-		if not typeConformsTo(declared, typeName: conformerType, interfaceName: constraint.interfaceName) 'violates'
+		if not typeConformsTo(declared, interfaces: project.interfaces, typeName: conformerType, interfaceName: constraint.interfaceName) 'violates'
 			let sourceType = signatures.instanceArgTypeName(site.gid, position: constraint.typeParamIndex)
 			reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "Type '{String.from(sourceType)}' does not satisfy constraint '{String.from(constraint.interfaceName)}' required by type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex))}' of '{String.from(baseName)}'", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 		end 'violates'
@@ -182,12 +182,60 @@ end 'constrainedTypeParamName'
 // is the CANONICAL conformer name (`conformerTypeArgName`); the registry is keyed by the declared struct name,
 // which a ranged-int alias's `int` or a `String` argument's `String` never collides with, so the OR is
 // unambiguous.
-function typeConformsTo(declared DeclaredConformanceMap, typeName ByteArray, interfaceName ByteArray) returns bool
+export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray) returns bool
 	if isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName) 'intrinsic'
 		return true
 	end 'intrinsic'
-	return typeDeclaresInterface(declared, typeName: typeName, interfaceName: interfaceName)
+	return typeDeclaresInterface(declared, interfaces: interfaces, typeName: typeName, interfaceName: interfaceName)
 end 'typeConformsTo'
+
+// ⭐ **THE DECLARED-CONFORMANCE INDEX, BUILT ONCE PER COMPILE (P1.7a-existentials slice 1).** Three passes
+// now ask "does this type conform?" — the E3017 where-constraint check, the `<Type> from "…"` check, and the
+// EXISTENTIAL widening doors, which ask it once per interface-typed argument, assignment, field store and
+// return in the program. Rebuilding the map at each of those would be O(sites x declarations); memoizing it
+// on the `Project` beside the store it is derived from makes it one build and one lookup.
+//
+// ⚠ It resets in `resetMergeTargets`, with `conformances` — the store it is derived from — for
+// `WitnessSlotImplMap`'s reason stated in full there: a warm rebuild whose sources changed which types
+// declare what would otherwise answer from the PREVIOUS compile's index, and a stale "conforms" is a
+// dispatch through a witness table nothing emitted.
+export function declaredConformanceIndex(project Project) returns DeclaredConformanceMap
+	if project.declaredConformanceIndexBuilt 'alreadyBuilt'
+		return project.declaredConformances
+	end 'alreadyBuilt'
+
+	project.declaredConformances = buildDeclaredConformanceMap(project)
+	project.declaredConformanceIndexBuilt = true
+	return project.declaredConformances
+end 'declaredConformanceIndex'
+
+// ⭐⭐ **MAY A VALUE OF `valueType` STAND WHERE AN `interfaceRef` IS DECLARED? — THE ONE WIDENING DOOR
+// (P1.7a-existentials slice 1).** Every position that can widen asks exactly this: a call ARGUMENT
+// (`SemanticCheck.checkOneArgType`), a `return`, a struct-FIELD store and a local's declared type. v1 checks
+// only the first and lets the other three soft-fail to a NULL witness — a wild jump at the first dispatch
+// rather than a diagnostic — which is precisely why this is a door and not three tests.
+//
+// Two ways a value may stand there, and the second is the one that costs nothing:
+//
+//   • it is ALREADY an existential at the SAME interface, in which case the site FORWARDS the witness it
+//     already carries and no table is looked up;
+//   • it is a CONCRETE conformer, in which case the site materializes `__witness_<conformer>.<Iface>`.
+//
+// ⚠ **A DIFFERENT INTERFACE IS REFUSED, INCLUDING A DERIVED ONE, and that is a representation fact rather
+// than a type-system opinion.** A `Derived` value's witness half addresses `__witness_<T>.Derived`, and a
+// `Base`-typed place dispatches by numbering slots in `Base`'s OWN table — two different tables with two
+// different slot orders. Forwarding one where the other is expected is a wrong function pointer, not a
+// widening, and converting between them needs a runtime table the compiler does not emit. (v1 forwards it
+// silently; `interfaceTypeIsFat` short-circuits before the witness is ever re-resolved. That is the bug this
+// refusal is.) A CONCRETE `Impl implements Derived` reaching a `Base` place is a different question and is
+// ALLOWED — `typeConformsTo` walks `extends`, and `__witness_Impl.Base` has a real impl in every slot.
+export function valueWidensToInterface(project Project, signatures ProgramSignatures, valueType MaxonType, interfaceName ByteArray) returns bool
+	if maxonTypeTag(valueType) == ValueTypeTag.interfaceRef 'alreadyExistential'
+		return interfaceNameOfType(valueType, typeNames: project.typeNames).equals(interfaceName)
+	end 'alreadyExistential'
+
+	return typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: signatures.conformerNameOfType(valueType, idsFrom: project.typeNames).toByteArray(), interfaceName: interfaceName)
+end 'valueWidensToInterface'
 
 // Build the DECLARED-conformance index from `project.conformances` — a type NAME to the set of interfaces it
 // declares `implements`. The E3017 check's `Point declares Digest?` lookup, built once per constrained program.
@@ -206,11 +254,25 @@ function buildDeclaredConformanceMap(project Project) returns DeclaredConformanc
 	return declared
 end 'buildDeclaredConformanceMap'
 
-// Does `typeName` declare `implements interfaceName` (P1.7a slice 2a)? A type with no conformance declaration
-// answers false — the E3017 case.
-function typeDeclaresInterface(declared DeclaredConformanceMap, typeName ByteArray, interfaceName ByteArray) returns bool
-	if let interfaces = try declared.get(typeName) 'hasDecl'
-		return interfaces.contains(interfaceName)
+// Does `typeName` declare `implements interfaceName`, DIRECTLY OR THROUGH `extends` (P1.7a slice 2a; made
+// transitive by P1.7a-existentials slice 1)? A type with no conformance declaration answers false — the E3017
+// case.
+//
+// ⚠ **THE `extends` WALK IS WHY IT TAKES THE INTERFACE REGISTRY.** `implements Derived` where
+// `interface Derived extends Base` IS a conformance to `Base` — see `conformanceSatisfiesInterface`, which
+// owns that rule and states the argument. The set membership below is the fast path (a direct `implements`,
+// which is every conformance in the corpus but the `extends` cases); the walk runs only when it misses.
+function typeDeclaresInterface(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray) returns bool
+	if let declaredInterfaces = try declared.get(typeName) 'hasDecl'
+		if declaredInterfaces.contains(interfaceName) 'declaresItDirectly'
+			return true
+		end 'declaresItDirectly'
+
+		for declaredName in declaredInterfaces 'eachDeclared'
+			if conformanceSatisfiesInterface(interfaces, declaredName: declaredName, wanted: interfaceName) 'reachesItByExtends'
+				return true
+			end 'reachesItByExtends'
+		end 'eachDeclared'
 	end 'hasDecl'
 	return false
 end 'typeDeclaresInterface'

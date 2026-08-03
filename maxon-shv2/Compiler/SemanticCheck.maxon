@@ -2937,6 +2937,17 @@ export function argTypeMismatchSentence(label String, expected String, got Strin
 	return "argument type mismatch for {label}: expected '{expected}', got '{got}'"
 end 'argTypeMismatchSentence'
 
+// ⭐ **THE SAME SENTENCE WITH THE ONE TAIL THAT IS NOT AN "EXPECTED/GOT" (P1.7a-existentials slice 1).** A
+// value refused at an interface-typed parameter did not have the WRONG type — `NotRunnable` is exactly the
+// type the author meant — it failed a RELATION, and naming the relation is what tells them the cure
+// (`implements Runnable`) rather than a type to change. It shares the `argument type mismatch for <label>:`
+// head with its sibling above because the two are one diagnostic from a reader's point of view, and the head
+// is what `argParamLabel`'s direct/indirect split serves. **The wording is the canonical corpus's, verbatim:**
+// `specs/interface-dispatch.md`'s `dispatch-nonconforming-error` pins it.
+function nonConformingArgMessage(label String, conformer String, interfaceName String) returns String
+	return "argument type mismatch for {label}: type '{conformer}' does not implement interface '{interfaceName}'"
+end 'nonConformingArgMessage'
+
 // ⭐ **ONE ARGUMENT AGAINST ITS PARAMETER — the rule, stated once for both call shapes.** A DIRECT call
 // reaches it per slotted argument (`checkArgTypes`) and an INDIRECT one per positional argument
 // (`checkIndirectCall`); the two differ ONLY in what the parameter is CALLED, which is `argParamLabel`'s
@@ -2951,7 +2962,25 @@ end 'argTypeMismatchSentence'
 // than the nothing it got before, and it is the bound of what a `FunctionShape` can say.
 function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callRange SourceRange, filePath FilePath)
 	let argTag = try func.valueTags.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
+	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let paramTag = maxonTypeTag(paramType)
+
+	// ⭐⭐ **AN INTERFACE-TYPED PARAMETER IS A WIDENING POSITION, NOT AN AGREEMENT ONE
+	// (P1.7a-existentials slice 1).** A conforming concrete value gains a witness half here and becomes a fat
+	// pointer, so `TypeClass.interfaceValue` deliberately agrees with nothing and the tag check below would
+	// refuse every legal call. The verdict is `ConformanceCheck.valueWidensToInterface` — the ONE door all four
+	// widening positions ask — and it is asked WHOLE-PROGRAM rather than at the parse for the reason
+	// `checkLiteralInitConformance` states: a conformer's `implements` clause is recorded when its own file is
+	// parsed, and the two files have no ordering.
+	//
+	// It returns rather than falling through: the aggregate-identity rule below compares two NOMINAL names and
+	// would call every conformer a mismatch with its interface.
+	if paramTag == ValueTypeTag.interfaceRef 'existentialParam'
+		if not valueWidensToInterface(project, signatures: programSignaturesIn(project, asker: "checkOneArgType"), valueType: maxonTypeOfTag(argTag, nameId: argNameId), interfaceName: interfaceNameOfType(paramType, typeNames: project.typeNames)) 'doesNotConform'
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingArgMessage(argParamLabel(paramName, position: position), conformer: aggregateArgDisplay(aggregateNameFor(project, tag: argTag, nameId: argNameId), tag: argTag), interfaceName: String.from(interfaceNameOfType(paramType, typeNames: project.typeNames))), line: callRange.line, column: callRange.column, filePath: filePath)
+		end 'doesNotConform'
+		return
+	end 'existentialParam'
 
 	// ⭐ OPEN #54 Slice B/B2: a DIFFERENT named aggregate passed where one is declared shares the
 	// scalar tag — two STRUCTS both `structRef`, two boxed UNIONS both erased to `integer` — so the
@@ -2970,7 +2999,6 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	// either, so `takesInt(x Integer)` accepted a boxed union and did arithmetic on its payload word.
 	// `tagAdmitsNoAggregate` is what keeps that safe for a `T` parameter, and `argAggregateCannotDecay` what
 	// keeps it off a byte enum or a per-instance alias, both of which legitimately coerce to an int.
-	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	if not expectedAggregate.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
 		let gotAggregate = aggregateNameFor(project, tag: argTag, nameId: argNameId)
 		// ⭐⭐ **THE BYTE-ELEMENT BOUNDARY (R4.7) — the one place two DIFFERENT named aggregates denote one
@@ -3192,5 +3220,6 @@ function isExitCodeType(t MaxonType) returns bool
 		typeParameter gives false
 		genericInstance gives false
 		character gives false
+		interfaceRef gives false
 	end 'r'
 end 'isExitCodeType'

@@ -209,6 +209,32 @@ export union MaxonType
 	// ⚠ APPENDED AT THE END, past `genericInstance`, per the band-append invariant — the same range arms
 	// (`boolean to float`, `exitCode to unresolved`) that guard every arm above guard this one.
 	character
+	// ⭐⭐ **AN EXISTENTIAL — A VALUE HELD AT ITS INTERFACE TYPE (P1.7a-existentials slice 1).** `id` is the
+	// interned INTERFACE name (`Backend`), which is what the dispatch resolves its method slot against and
+	// what a widening checks conformance to.
+	//
+	// ⚠ **IT IS SIXTEEN BYTES — `{value, witness}` — AND IT IS NEVER AN AGGREGATE.** The two halves travel as
+	// TWO PARALLEL SCALARS, each an ordinary machine word: a local is two SSA values, a parameter is two
+	// adjacent ABI parameters, a struct field is two adjacent 8-byte slots. `valueTagToStdType` therefore
+	// answers `i64` for this arm exactly as it does for `structRef` — the tag types the VALUE half, and the
+	// witness half is a second value the parser pairs with it (`Parser.valueWitnessIds`) rather than a width
+	// on this type. Following v1 (`MaxonDialect.interfaceTypeIsFat`), and for its reason: a real aggregate
+	// would have to be spilled and re-loaded at every hand-off, where two scalars stay in registers.
+	//
+	// ⚠ **THE WITNESS HALF IS A BARE `.rdata` ADDRESS AND IS NEVER REFCOUNTED.** Only the value half can own
+	// heap; a witness table is immortal.
+	//
+	// ⚠ **IT IS ITS OWN ARM AND NOT `named`, and that is the whole of what this rung repairs.** An interface
+	// name in a type position used to fall through `parseTypeReference` to `named` — where `TypeRules.typeClassOf`
+	// reads every `named` as a ranged INT alias (the theorem its comment states, which this arm is the first
+	// counter-example to) and `typeTagName` renders it `int`. MEASURED before this arm existed: a field
+	// declared `as Backend` was refused `E3005: cannot assign 'struct' to variable 'b' of type 'int'`, and a
+	// method call on such a parameter was `E3011: Unknown type 'Backend'` for an interface declared three
+	// lines above.
+	//
+	// ⚠ APPENDED AT THE END, past `character`, per the band-append invariant — the same range arms
+	// (`boolean to float`, `exitCode to unresolved`) that guard every arm above guard this one.
+	interfaceRef(id TypeNameId)
 end 'MaxonType'
 
 export typealias MaxonTypeArray = Array with MaxonType
@@ -291,6 +317,11 @@ export enum ValueTypeTag
 	// byte record a String uses (see MaxonType's `character` arm for why it is not `string`).
 	// APPENDED AT THE END, past `genericInstance`, for the reason every other append here is.
 	character
+	// The tag of an EXISTENTIAL value — a value held at its interface type (see MaxonType's `interfaceRef`
+	// arm). It tags the fat pointer's VALUE half; the witness half is a second value paired with it
+	// (`Parser.valueWitnessIds`). APPENDED AT THE END, past `character`, for the reason every other append
+	// here is.
+	interfaceRef
 end 'ValueTypeTag'
 
 export typealias ValueTypeTagArray = Array with ValueTypeTag
@@ -312,6 +343,7 @@ export function maxonTypeTag(t MaxonType) returns ValueTypeTag
 		typeParameter gives ValueTypeTag.typeParameter
 		genericInstance gives ValueTypeTag.genericInstance
 		character gives ValueTypeTag.character
+		interfaceRef gives ValueTypeTag.interfaceRef
 	end 'k'
 end 'maxonTypeTag'
 
@@ -343,6 +375,11 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 		string gives UnnamedTypeId
 		// A Character is a builtin with no interned name either — its identity is the `character` tag.
 		character gives UnnamedTypeId
+		// An existential carries the interned INTERFACE name, so it rides the name column exactly as
+		// `named`/`structRef` do — which is what lets it intern, remap and hash by the same machinery, and
+		// what the dispatch resolves its method slot against. NOT collapsed into a range: other arms sit
+		// between it and every other id-bearing arm.
+		interfaceRef(id) gives id
 	end 'k'
 end 'typeNameIdOf'
 
@@ -389,6 +426,11 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		// `Parser.parseBinding` is the caller that matters: `let c = 'é'`, and the `for c in s` loop
 		// variable, both type their binding from this.
 		character then return MaxonType.character
+		// An existential rebuilds from its interned INTERFACE name id exactly as `structRef` rebuilds from
+		// its struct's. `Parser.parseBinding` is the caller that matters: `var t = s` over an interface-typed
+		// `s` types the binding from this, and the binding's type is the only record of WHICH interface `t`
+		// is held at — which is what the merge phi and the dispatch both read.
+		interfaceRef then return MaxonType.interfaceRef(nameId)
 	end 'k'
 end 'maxonTypeOfTag'
 
@@ -1080,12 +1122,17 @@ export union MaxonOp
 	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE PARAMETER** — `self.item.digest()` where `item`
 	// is a value of a type parameter `T` constrained `where T is Digest`. The concrete type is UNKNOWN in the
 	// shared generic body (dictionary-passing, NOT monomorphization), so the call goes through a runtime
-	// WITNESS: `args[0]` is the receiver (the `T` value), `args[1..]` the user arguments; `constraintIndex` is
-	// which of the enclosing type's `where` constraints supplies the witness (index into `whereConstraints` /
-	// the hidden witness-parameter list); `methodIndex` is the DECL-ORDER slot of the method within that
-	// constraint's interface. `lowerMaxonToStd` resolves the witness address — `rdataAddr(__witness_<T>.<I>)`
-	// at a concrete instantiation, or the caller's own forwarded witness parameter in a generic→generic call —
-	// and emits the fused `StdOp.witnessCall`. `isVoid` records whether the method returns nothing (no result
+	// WITNESS: `args[0]` is the receiver, `args[1..]` the user arguments; `witness` is the VALUE holding the
+	// table to jump through; `methodIndex` is the slot of the method within that table's interface (the
+	// TRANSITIVE requirement list — `interfaceWitnessSlots`). `lowerMaxonToStd` emits the fused
+	// `StdOp.witnessCall` over exactly those two operands and resolves nothing further.
+	//
+	// ⭐⭐ **ONE OP SERVES BOTH RECEIVERS THE LANGUAGE HAS, AND `witness` BEING A *VALUE* IS WHAT DOES IT
+	// (P1.7a-existentials slice 1).** For a constrained type parameter it is the enclosing generic body's
+	// hidden witness PARAMETER for that constraint (the parser resolves its own reservation —
+	// `Parser.witnessParamValueId`); for an EXISTENTIAL it is the fat pointer's witness half
+	// (`Parser.witnessOfValue`). It used to be a `constraintIndex` the lowering turned into a parameter id,
+	// which an existential has no honest value for — see `WitnessDispatchTarget.witnessValue`. `isVoid` records whether the method returns nothing (no result
 	// register to capture). `result` is the value it defines (a `void`-tagged discard when `isVoid`).
 	//
 	// ⚠ Its `args` (an `Array with ValueId`) is bound only in a SMALL match (`lowerWitnessDispatch`), never
@@ -1098,7 +1145,7 @@ export union MaxonOp
 	// `where` constraints, which only the parser holds. So the parser stamps the interface method's
 	// throwing-ness here and `checkCalls` reads it, keeping the rule ("a throwing call needs `try`") in ONE
 	// place for both call shapes rather than making the witness form the exception.
-	witnessDispatch(result ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
+	witnessDispatch(result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
 	// --- P1.7a slice 2b-v: the THROWING witness dispatch ---
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `witnessDispatch`, per the band-append invariant: a
@@ -1114,7 +1161,7 @@ export union MaxonOp
 	//
 	// ⚠ Its `args` is bound only in a SMALL match (`lowerWitnessTryDispatch`), never in `lowerOp`'s big one —
 	// `witnessDispatch`'s trap, unchanged.
-	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
+	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
 	// --- A3n: a panic whose message is RENDERED AT RUN TIME ---
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `witnessTryDispatch`, per the band-append invariant: a
