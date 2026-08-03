@@ -216,6 +216,32 @@ The self-hosted compiler binary is at `./maxon-selfhosted/.maxon/maxon-selfhoste
 - `--mm-trace` — trace memory management operations (useful for memory leak debugging)
 - `--target=ARCH-OS` — test a specific target (`x64-windows`, `arm64-macos`, `wasm32-wasi`). The bootstrap emits x64/arm64; the **shv2 binary** adds `wasm32-wasi` (a WASI Preview2 component — run the output under `vendor/wasmtime/wasmtime[.exe] -S cli-exit-with-code=y`). It is **not** a scalar-only lane — see the measured scope note above.
 
+### ⛔⛔ `git status specs-shv2/fragments/` CANNOT TELL YOU WHETHER CODEGEN MOVED. THE RUNNER CAN.
+
+**A clean `git status` over `specs-shv2/fragments/` is NOT evidence that the emitted code is unchanged**,
+and it has been reported as exactly that in **five rungs** (`X1`, `N3`, `X5`, `X6`, `A3h` — caught by
+`A3h`'s review 2026-08-03). `git status` answers *"has anyone REGENERATED a golden"* — i.e. whether
+someone ran `--update-required`. **A tree can have every golden mismatching and a perfectly clean
+`git status`.** The two questions are unrelated.
+
+⇒ **The instrument is the runner's own trailer**, which since `X4` prints drift as a `note:` rather than
+a failure:
+
+```
+note: N golden fragment(s) no longer match what the compiler emits. GOLDENS ARE REFERENCE, NOT A GATE
+```
+
+**To claim codegen neutrality, compare that COUNT against the merge base built the same way** — `A3h`
+read 34 at its tip against 33 at its base, which is how the one genuinely moved fragment was found and
+explained. *(It also means a rung inherits whatever drift `main` already carries, so the count alone is
+not the answer — the DELTA against a like-for-like base build is.)*
+
+⚠ **The same class of error, twice more in one day:** `build-cost-log.md` size rows are only comparable
+between **full-clean** builds (`rm -rf maxon-shv2/.maxon`) — a warm-cache build of one tree read exe
+10,907,648 where a cold build of the same tree read 10,906,112 — and four logged rows this session did
+not reproduce because they were measured against a stale `bin/maxon.exe`. **Build the base you are
+comparing to; do not difference the log.**
+
 ### ⚠ Running a suite by hand: REDIRECT IT TO A FILE. Never pipe it through `head`/`tail`/`grep`.
 
 ```
