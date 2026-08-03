@@ -1313,8 +1313,16 @@ error E3118: <fragment>:11:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so 
 producer this file's `create`/literal section now refuses, and its `setByte` then wrote into a 2-byte slot
 the element does not fill. Both refusals are pinned below in their own cases. What the case was FOR — that
 a range wider than a byte is not by itself a reason to refuse a raw write, which is the over-refusal A4a
-had to be pulled back from — survives unchanged here: `int(0 to u16.max)` is wider than a byte, is refused
-ACCEPTED by E3117's every-byte question, and admits every value of the two-byte slot it was given.
+had to be pulled back from — survives unchanged here: `int(0 to u16.max)` is wider than a byte and admits
+every value of the two-byte slot it was given.
+
+⚠ **THE RETURN NEEDS NEITHER A MASK NOR A CAST, AND UNDER X6 THAT IS A FACT ABOUT THE TYPE RATHER THAN A
+TIDY-UP.** `ExitCode` now carries `int(0 to u32.max)`, so `int(0 to u16.max)` fits it outright and
+`rangeCoversRange` would call an `as ExitCode` here what it calls the five X6 removed from this file: an
+unneeded cast. The `and u8.max` this case carried for one draft is dead for a second, arithmetic reason —
+`push(0)` then `setByte(0, …)` leaves the HIGH byte zero, so there is nothing above `u8.max` to mask off.
+The case that genuinely reads a two-byte slot back is `a-raw-byte-write-is-accepted-when-the-element-fills-
+its-two-byte-slot`, which writes at offset 1 and asserts **57089**.
 
 ⚠ **THIS CASE IS NOT THE CONTROL AGAINST A WIDENED E3117, AND AN EARLIER DRAFT OF THIS PARAGRAPH SAID IT
 WAS — MEASURED FALSE (A4c review).** `rangeHoldsEveryByte(0, 65535)` is TRUE, so a naively widened E3117
@@ -1327,7 +1335,7 @@ typealias Byte = int(0 to u16.max)
 typealias Bytes = Array with Byte
 
 function takes(b Bytes) returns ExitCode
-	return ((try b.get(0) otherwise 0) and u8.max) as ExitCode
+	return (try b.get(0) otherwise 0)
 end 'takes'
 
 function main() returns ExitCode
@@ -1586,7 +1594,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function takes(b Bytes) returns ExitCode
-	return (try b.get(0) otherwise 0) as ExitCode
+	return (try b.get(0) otherwise 0)
 end 'takes'
 
 function main() returns ExitCode
@@ -1761,7 +1769,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'ExitCode' does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'ExitCode' (int(0 to 4294967295)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
 ```
 
 <!-- test: a-raw-byte-write-is-accepted-when-the-element-fills-its-two-byte-slot -->
@@ -1837,7 +1845,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function takes(b Bytes) returns ExitCode
-	return (try b.get(0) otherwise 0) as ExitCode
+	return (try b.get(0) otherwise 0)
 end 'takes'
 
 function main() returns ExitCode
