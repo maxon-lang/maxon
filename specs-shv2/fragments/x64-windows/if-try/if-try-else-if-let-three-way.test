@@ -1,0 +1,81 @@
+// Test: if-try-else-if-let-three-way
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryA() returns Integer throws MyError
+	throw MyError.failed
+end 'tryA'
+
+function tryB() returns Integer throws MyError
+	throw MyError.failed
+end 'tryB'
+
+function main() returns ExitCode
+	var result = 0
+	if let a = try tryA() 'a'
+		result = a
+	end 'a' else if let b = try tryB() 'b'
+		result = b
+	end 'b' else 'fallback'
+		result = 7
+	end 'fallback'
+	return result
+end 'main'
+---
+ExitCode: 7
+---
+func @tryA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @tryB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect tryA
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, a
+    x64.jmp ifelse
+  a:
+    x64.jmp ifcont
+  ifelse:
+    x64.callDirect tryB
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, b
+    x64.jmp ifelse
+  b:
+    x64.jmp ifcont
+  ifelse:
+    x64.movRegImm32 rax, 7
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  ifcont:
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

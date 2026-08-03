@@ -1,0 +1,216 @@
+// Runtime/MapRuntime.maxon — what is genuinely a `Map`'s, and nothing else.
+//
+// ⭐⭐ **THE HASH TABLE ITSELF IS `HashTableRuntime.maxon`'s.** A `Map with (Key, Value)` record IS a `Set`
+// record with a value column appended — the first six slots (`count@0`, `capacity@8`, `keys@16`,
+// `states@24`, `hashes@32`, `keyDrop@40`) are byte-identical, and `values@48` / `valueDrop@56` follow — so
+// the probe, the grow, the insert and the teardown are ONE graph built for both containers, told which shape
+// it is building. Read that file's header for the algorithm, the witness dispatch and the register-pressure
+// rule; `__map_create`/`__map_grow`/`__map_upsert`/`__map_contains`/`__map_count`/`__map_decref` are all
+// built there.
+//
+// What stays here is what a `Map` has that a `Set` does not:
+//   • its `__map_*` entry-point names, its 64-byte record size, and its usage/witness predicates;
+//   • `__map_get` — the one THROWING entry point in either container, because a lookup that misses has no
+//     value to answer with, and `MapError.keyNotFound` is what it throws instead;
+//   • the three composer answers that a throwing family owes (`isThrowingMapRuntimeCallee`,
+//     `mapErrorThrows`, `mapSourceMethodName`) and the install-time guard that holds them to each other.
+//
+// Both columns are INDEPENDENTLY managed: a `Map with (String, int)` carries a `keyDrop@40` and a zero
+// `valueDrop@56`, so its teardown walks the keys and never touches the values, and a `Map with (int, String)`
+// does the opposite. That is why the shared drop helpers take the column as an argument rather than assuming
+// the key's.
+
+// The `Map` record: the shared `Set` prefix (48 bytes) plus `values@48` and `valueDrop@56` — eight 8-byte
+// slots, 64 bytes. ⚠ **EXPORTED because `SignatureIndex.genericInstanceBoxSize` reads it** as a `Map`
+// instance's box size, exactly as it reads `SetRecordBytes` for a set's.
+export let MapRecordBytes = 64 as ByteCount
+
+// The runtime entry points. `__`-prefixed (`isCompilerInternalCallee` routes their calls past the
+// user-function checks — no file declares them) but NOT `__mm_`-prefixed, so `isMapRuntimeCallee` carries the
+// `usesMap` (and, with it, `usesHeap`) bit rather than `isRuntimeCallee`'s raw-heap one — they `__mm_alloc`/
+// `__mm_free` inside their Std bodies.
+//
+// ⚠ **`__map_upsert` IS INSERT-OR-REPLACE, and the name says so on purpose.** A `Set`'s `insert` is a no-op
+// on a duplicate; a map's must REPLACE the stored value, dropping the old one. Two behaviours, two names,
+// one shared graph with one branch (`HashTableRuntime.buildHtInsert`'s duplicate-key arm).
+export let MapCreateName = b"__map_create"
+export let MapUpsertName = b"__map_upsert"
+export let MapContainsName = b"__map_contains"
+export let MapGetName = b"__map_get"
+export let MapCountName = b"__map_count"
+export let MapDecrefName = b"__map_decref"
+
+// `__map_grow` is INTERNAL — called only by `__map_upsert` when the load factor is crossed (and on the first
+// insert, from capacity 0). It reuses the cached hashes, so it needs NO witnesses; kept out of the public
+// name set so no parser path dispatches to it.
+let MapGrowName = b"__map_grow"
+
+// The `__map_` prefix identifying EVERY map runtime entry point — the one test `recordCallUsage` reads to set
+// `usesMap` (and `usesHeap`).
+let MapRuntimePrefix = b"__map_"
+
+export function isMapRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: MapRuntimePrefix)
+end 'isMapRuntimeCallee'
+
+// Is `callee` a map runtime function that DISPATCHES THROUGH THE KEY'S WITNESSES — `upsert`/`contains`/`get`,
+// the three that hash the key and compare it. `create`/`count`/`decref`/`grow` touch no key VALUE (the grow
+// reuses the cached hashes), so they carry no witnesses. `LowerMaxonToStd.lowerRuntimeCall` reads this to
+// decide whether to append the two hidden witness-table addresses to a map runtime call — the `Set` twin,
+// and it threads the KEY's tables (type argument `HashTableKeyArgPosition`), never the value's.
+export function isMapWitnessCallee(callee ByteArray) returns bool
+	return callee.equals(MapUpsertName) or callee.equals(MapContainsName) or callee.equals(MapGetName)
+end 'isMapWitnessCallee'
+
+// The THROWING map runtime callees — `__map_get` alone. It returns via the dual-register `errorReturn` ABI
+// and can throw `MapError.keyNotFound`, so a call to one MUST become a `tryCall` (it is under a `try`, which
+// `rewriteLastCallToTryCall` converts). The map-side twin of `ArrayRuntime.isThrowingArrayRuntimeCallee`: the
+// families are composed by `GtRuntime.isThrowingRuntimeCallee`, read at the ONE call site in the parser
+// (E3055 accept) and the ONE in SemanticCheck (E3057 reject), so the accept and the reject cannot name
+// different sets.
+//
+// ⚠ `upsert` does NOT throw at this slice, and that is a decision with a case behind it rather than an
+// omission: `MapError.keyAlreadyExists` belongs to an `insert` (which refuses a duplicate) and `upsert`
+// replaces instead, so there is no failure for it to report. The enum declares the case anyway
+// (`Project.builtinMapErrorEnum`) so that adding `insert` later cannot renumber handlers already written.
+export function isThrowingMapRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(MapGetName)
+end 'isThrowingMapRuntimeCallee'
+
+// ⭐ **THE `throws MapError` STAMP `__map_get` CARRIES, AND WHAT A CALLER'S `otherwise (e)` BINDING IS TYPED
+// FROM** — `arrayErrorThrows`'s twin, exported for the same reason: `GtRuntime.runtimeThrowsClause` pairs
+// each family's predicate with its clause speller, and two hand-written spellings of one enum's name is what
+// that composer exists to prevent. The name is `SignatureIndex.MapErrorTypeName` — the BARE `MapError`, which
+// that constant explains at length (a user function propagating a `map.get` failure writes `throws MapError`
+// in its own source, so a reserved `__`-spelling would meet E3059 against itself).
+export function mapErrorThrows() returns ThrowsClause
+	return ThrowsClause.throwing(String.from(MapErrorTypeName))
+end 'mapErrorThrows'
+
+// ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `arrayAccessorSourceMethodName`, read through the
+// one composer (`GtRuntime.runtimeCalleeSourceMethod`) so that an E3057 on a missing `try`, and an E3059 on a
+// valueless one, quote the method the author typed rather than a `__` symbol E2051 forbids them to type.
+//
+// ⚠ **ONE ARM, AND THE MAP EXISTS ANYWAY.** `GtRuntime`'s `Character` family answers from its constant
+// without a map because its predicate IS one name and a one-arm dispatcher would be the identity written as
+// a function. This family is one name TODAY for a reason that is visibly temporary — `insert` (refusing a
+// duplicate with `MapError.keyAlreadyExists`) is already declared in the enum — so the map is here with its
+// panic arm, which is what turns the second name into a compile-time failure at INSTALL instead of a silent
+// inherited noun. It answers with `SignatureIndex.GetMethod`, the byte string the parser's own dispatch
+// matched, never a second `b"get"`.
+export function mapSourceMethodName(callee ByteArray) returns ByteArray
+	if callee.equals(MapGetName) 'get'
+		return GetMethod
+	end 'get'
+	panic("mapSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `Map` runtime callee — this map is asked ONLY behind `isThrowingMapRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `installMapRuntime`'s drift guard asks this for every throwing `__map_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
+end 'mapSourceMethodName'
+
+// `MapError.keyNotFound`'s ORDINAL — `Project.builtinMapErrorEnum`'s FIRST case, and the wire format
+// `__map_get`'s failure edge writes into the error-flag register. The flag is DERIVED from the one
+// `MaxonDialect.ErrorFlagOrdinalBias` rather than written as a bare `1`, so the runtime encode cannot drift
+// from the parser's decode. Held to the declaration on every map-using compile by `verifyMapErrorOrdinals`.
+let MapKeyNotFoundOrdinal = 0 as ParsedInt
+let MapKeyNotFoundFlag = MapKeyNotFoundOrdinal + ErrorFlagOrdinalBias
+
+// The name this family's ordinals are transcribed under, for `BuiltinErrorOrdinalCheck`'s diagnostic.
+let MapErrorOrdinalInstaller = b"the Map runtime (MapError)"
+
+// ⭐ **THE ORDINAL DRIFT GUARD FOR `MapError`** — the sixth family on `Project.BuiltinErrorOrdinalCheck`, and
+// it exists for that mechanism's stated reason: this file transcribes `keyNotFound`'s ordinal as a literal
+// and `Project.builtinMapErrorEnum` declares it by POSITION, so a case inserted before it would silently
+// retarget every `otherwise (e)` arm in the program — no crash, no wrong exit code, just a handler naming the
+// wrong case. `MapError` is a compiler-SYNTHESIZED declaration (shv2 does not load `stdlib/Map.maxon`), so it
+// takes `overSynthesized`, as `ArrayError` and `StringError` do.
+//
+// ⚠ Only `keyNotFound` is claimed: `keyAlreadyExists` is declared but nothing emits it yet, and claiming an
+// ordinal no runtime writes would be a dead claim of exactly the kind the error-code registry refuses.
+export function verifyMapErrorOrdinals(project Project)
+	var mapErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinMapErrorEnum(), installer: MapErrorOrdinalInstaller)
+	mapErrors.claim(MapErrorKeyNotFoundCaseName, ordinal: MapKeyNotFoundOrdinal)
+end 'verifyMapErrorOrdinals'
+
+// Install the map runtime into the lowered Std module — ALL of it, when the program touches any map
+// (`usesMap`). Golden-neutral: `__`-prefixed functions are excluded from the spec goldens
+// (`isRuntimeFunction`), so an all-or-nothing install costs nothing in the fragments and needs no per-helper
+// dependency tracking; the helpers call each other (`upsert`→`grow`→`__mm_alloc`) so a dependency graph would
+// only re-derive the closure this install already is. Appended AFTER the pipeline (like `installSetRuntime`),
+// so they are never re-optimized.
+//
+// ⭐ The six shared entries come from `installHashTable`, told THIS container's names and shape — the one
+// place a `Map`'s hash-table identity is stated. `get` is built after it because it is the one this container
+// does not share.
+export function installMapRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesMap 'noMap'
+		return
+	end 'noMap'
+	installHashTable(module, family: HashTableFamily.create(MapCreateName, growName: MapGrowName, insertName: MapUpsertName, containsName: MapContainsName, countName: MapCountName, decrefName: MapDecrefName, recordBytes: MapRecordBytes, carriesValues: true))
+	buildMapGet(module)
+
+	// ⭐ **THE THREE LISTS, HELD TO EACH OTHER AT INSTALL** — `installStringIndexRuntime`'s guard, one family
+	// over. `isThrowingMapRuntimeCallee` names a set, the builders stamp a `throws` clause on a set, and
+	// `mapSourceMethodName` maps a set; nothing in the language ties the three. Checked in BOTH directions for
+	// their stated reason — a stamp without a name is a `try` that silently stops being required (and, on
+	// wasm, a signature the call site disagrees with), and a name without a stamp is an E3055 on a call that
+	// cannot fail. The missing source-method arm is that map's own panic, fired at INSTALL of any program that
+	// uses a map — which the spec suite does on every run — instead of in front of a user who merely forgot a
+	// `try`. Reasoning lives once, on `GtRuntime.runtimeCalleeSourceMethod`.
+	for func in module.functions 'eachFunc'
+		if not isMapRuntimeCallee(func.name) 'notOurs'
+			continue
+		end 'notOurs'
+		let named = isThrowingMapRuntimeCallee(func.name)
+		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
+		if stamped and not named 'stampedNotNamed'
+			panic("installMapRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingMapRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted")
+		end 'stampedNotNamed'
+		if named and not stamped 'namedNotStamped'
+			panic("installMapRuntime: isThrowingMapRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted")
+		end 'namedNotStamped'
+
+		if named 'hasSourceMethod'
+			requireQuotableSourceSpelling(mapSourceMethodName(func.name), callee: func.name)
+		end 'hasSourceMethod'
+	end 'eachFunc'
+end 'installMapRuntime'
+
+// ⭐ `__map_get(map, key, hashWitness, eqWitness) -> errorReturn(value, flag)` — probe for `key`; a matching
+// Occupied slot answers its `values@48` slot with `NoErrorFlag`, and a miss throws `MapError.keyNotFound`.
+// The one throwing entry point in either hash-table container, and the reason `Map` has an error enum at all.
+//
+// ⚠⚠ **THE RETURNED VALUE IS A BORROW — the map keeps owning it.** This is `__arr_get`'s contract exactly: no
+// clone, no refcount bump, no transfer. A managed value handed out here is still the map's to drop at
+// teardown (through `valueDrop@56`), so a caller that stored it as an owner would double-free, and one that
+// dropped it would leave the map holding freed memory. The parser's borrow classification of the result is
+// what enforces that, and it must classify `__map_get` exactly as it classifies `__arr_get`.
+//
+// ⚠ **THE EMPTY-TABLE EDGE AND THE MISS EDGE ARE ONE BLOCK.** A capacity-0 map contains nothing, so its
+// answer IS the miss's answer — the same `errorReturn(0, keyNotFound)` — and a second block spelling it would
+// be one exit written twice.
+function buildMapGet(module StdModule)
+	var func = IrFunction.createFromStd(MapGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0, throwsTypeName: mapErrorThrows())
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var probe = module.addBlock(func, label: b"probe")
+	var found = module.addBlock(func, label: b"found")
+	var notFound = module.addBlock(func, label: b"notfound")
+
+	emitParams(module, block: entry, count: 4)
+	let map = 0 as ValueId
+	let key = 1 as ValueId
+	let hashWitness = 2 as ValueId
+	let eqWitness = 3 as ValueId
+
+	emitHtEmptyTableCheck(module, entry: entry, table: map, emptyBlock: notFound, probeBlock: probe, ids: ids)
+
+	let matchedIndex = emitHtLookupProbe(module, func: func, cur: probe, table: map, key: key, hashWitness: hashWitness, eqWitness: eqWitness, foundBlock: found, notFoundBlock: notFound, ids: ids)
+
+	// found: answer the matched slot's value. `matchedIndex` is the probe header's live index — the header
+	// dominates `found` — so it names the slot the probe stopped on.
+	let value = emitHtRecordSlotLoad(module, block: found, table: map, bufferOffset: HtValuesOffset, index: matchedIndex, ids: ids)
+	emitOkReturn(module, block: found, value: value, ids: ids)
+
+	emitErrorReturn(module, block: notFound, flag: MapKeyNotFoundFlag, ids: ids)
+
+	module.functions.push(func)
+end 'buildMapGet'

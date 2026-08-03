@@ -1,91 +1,29 @@
-// Runtime/SetRuntime.maxon — the `Set` hash-table value representation and the native runtime functions it
-// needs (P1.7b). Keys are `int` / ranged-int (each ≤ 8 bytes, self-owning, no per-key destructor) OR a heap
-// `String`, which the set OWNS: it carries a per-key destructor (`elemDrop@40`, the `Array with String` twin)
-// and DROPS each live key on teardown, drops a duplicate insert's new key, and drops a removed key — so a
-// managed-key set walks its elements exactly where it vacates a slot, while an int-key set (elemDrop 0) skips
-// every walk untouched.
+// Runtime/SetRuntime.maxon — what is genuinely a `Set`'s, and nothing else.
 //
-// ⭐ THE SHAPE IS `ArrayRuntime`'s: one fused `__mm_alloc`'d backing record whose fields the runtime
-// functions read and the parser/lowering writes, plus a set of `__`-prefixed Std runtime functions built as
-// `StdOp` graphs (so they get register allocation, frames and the whole backend for free), installed on
-// demand from `RuntimeUsage.usesSet`. It DIVERGES from `Array` in the one place `Set` must: an array's
-// element operations are self-contained, but a hash table must call the KEY's `hash()` / `equals()`, which
-// are UNKNOWN to a key-type-agnostic runtime. So the record's operations DISPATCH THROUGH THE KEY'S WITNESS
-// TABLES (dictionary-passing): `insert`/`contains`/`remove` each take two hidden `Hashable`/`Equatable`
-// witness-table pointers, materialized at the concrete call site (`LowerMaxonToStd.appendSetWitnessArgs`) and
-// invoked inside the runtime body with the fused `witnessCall` StdOp (the same 2b-i machinery a constrained
-// type-parameter method dispatches through). For an `int` key the witness slots point straight at the
-// synthesized `int.hash` / `int.equals` (no thunk).
+// ⭐⭐ **THE HASH TABLE ITSELF IS `HashTableRuntime.maxon`'s** — the record layout, the linear probe, the
+// grow, the load factor, the tombstones, the per-column drop walks and the six shared entry points
+// (`create`/`grow`/`insert`/`contains`/`count`/`decref`) are built there, once, for BOTH containers: a
+// `Map with (Key, Value)` record IS this record with a value column appended, so `__set_grow` and
+// `__map_grow` are one graph under two names. Read that file's header for the algorithm, the witness
+// dispatch and the register-pressure rule.
 //
-// ⚠ THE SET IS FOUR ALLOCATIONS, not one: the fused record (`__mm_alloc`, a managed box with the MM header +
-// refcount before it) and THREE SEPARATE external buffers — `elements` (the keys), `states` (per-slot
-// Empty/Occupied/Deleted, so a removed slot leaves a TOMBSTONE) and `hashes` (the cached `hash()` per slot,
-// so a grow rehashes without re-calling the witness). `__set_decref` frees all four. The three buffers are
-// PARALLEL: slot `i` of each describes one hash-table slot. This mirrors v1's `stdlib/Set.maxon` (three
-// `Array` fields + `count`/`capacity`), hand-built here as raw `__mm_alloc`'d spans because the keys are
-// scalar and need no `Array` record's growth policy or bounds checks.
+// What stays here is what a `Set` has that a `Map` does not:
+//   • its `__set_*` entry-point names, its 48-byte record size, and its usage/witness predicates;
+//   • `__set_remove` — a set REMOVES by key and answers a bool; a map's remove would have to hand the VALUE
+//     back, so the two are not one function and this one is written where its container is;
+//   • `__set_from` — the `Set from [1,2,3]` construction, which has no map twin at all (a map literal is a
+//     different surface).
 //
-// ⭐ THE ALGORITHM IS v1's `stdlib/Set.maxon`, ported to hand-built IR: open addressing, `capacity` a power
-// of two so `index = hash and (capacity - 1)` (no `mod`) and probe step `(index + 1) and mask` (LINEAR
-// probing); lazy-init to 16 slots on the first insert; grow (double + rehash, reusing the cached hashes) when
-// `count >= (capacity * 3) / 4` (75% load); a `Deleted` tombstone on remove, reused by a later insert
-// (`firstDeleted`); and the full `equals` compare guarded by the cached hash (`slotHash == hash` THEN
-// `equals`) so an unequal hash skips the witness call.
-//
-// ⚠ **REGISTER PRESSURE — THE BUFFER POINTERS ARE RELOADED FROM THE RECORD INSIDE EACH LOOP, NOT HOISTED
-// ACROSS IT.** A hash-table probe needs the record, the key, the equality witness and the cached query hash
-// live at once; hoisting the three buffer pointers, the capacity and the mask on TOP of those would keep
-// ~12 values live across the loop and, in a hand-built function whose values carry no source spans, overruns
-// the 14-GPR pool and trips the register-pressure guard (E5001). Reloading `set`'s `elements@16`/`states@24`/
-// `hashes@32`/`capacity@8` where each is used (they do not change during a probe) keeps the cross-loop live
-// set to `{set, elem, eqWitness, hash}` plus the loop's own indices — a few extra loads for a probe that runs
-// a handful of iterations, and the difference between "allocates" and "cannot".
+// Keys are `int` / ranged-int (each ≤ 8 bytes, self-owning, no per-key destructor) OR a heap `String`, which
+// the set OWNS: it carries a per-key destructor (`keyDrop@40`, the `Array with String` twin) and DROPS each
+// live key on teardown, drops a duplicate insert's new key, and drops a removed key — so a managed-key set
+// walks its elements exactly where it vacates a slot, while an int-key set (keyDrop 0) skips every walk
+// untouched.
 
-// --- The fused Set backing record ---
-//
-// Six 8-byte slots; the offsets are 0/8/16/24/32/40 and the record is 48 bytes. `count` and `capacity` are
-// scalars; the next three are pointers to the parallel external buffers; `elemDrop@40` is the per-KEY
-// destructor a managed-key set carries (P1.7b String keys), the exact twin of `Array`'s `element_destroy@40`.
-// A fresh record comes ZEROED from `__mm_alloc` (count 0, capacity 0, all three buffer pointers null), so
-// `__set_create` writes only `elemDrop@40` — the same zeroing contract `__mm_alloc` relies on — and the first
-// insert lazily allocates the buffers via a grow from capacity 0.
-export let SetCountOffset = 0 as ByteOffset
-export let SetCapacityOffset = 8 as ByteOffset
-export let SetElementsOffset = 16 as ByteOffset
-export let SetStatesOffset = 24 as ByteOffset
-export let SetHashesOffset = 32 as ByteOffset
-
-// The per-key destructor function pointer — `__str_decref` for a String key, 0 for a trivial int key — the
-// exact twin of `Array`'s `ArrElementDestroyOffset=40`. Stamped by `__set_create` at birth and read back at
-// every slot-vacating op (insert's dup-drop, remove, decref's teardown walk); 0 means "trivial key, no walk".
-export let SetElemDropOffset = 40 as ByteOffset
+// The `Set` record is the shared prefix and stops at `keyDrop@40`: six 8-byte slots, 48 bytes. The OFFSETS
+// are `HashTableRuntime`'s (a set's `elements@16` and a map's `keys@16` are one slot under two words); this
+// SIZE is the set's own, and it is the number `SignatureIndex.genericInstanceBoxSize` asks this file for.
 export let SetRecordBytes = 48 as ByteCount
-
-// Every buffer slot — an element key, a state tag, a cached hash — is one 8-byte machine word, so a slot's
-// byte address is `buffer + index * SetSlotBytes` and a buffer sized for `capacity` slots is
-// `capacity * SetSlotBytes` bytes. The keys are scalar this slice, so a key rides its word inline.
-let SetSlotBytes = 8 as ParsedInt
-
-// The `states` buffer's per-slot tag. `Empty` is 0 so a freshly `__mm_alloc`'d (zeroed) states buffer starts
-// all-empty with no init loop — the same reason the record needs no field stamp. Occupied/Deleted match the
-// `enum SetSlotState {Empty, Occupied, Deleted}` ordinals in v1's `stdlib/Set.maxon`.
-let SetSlotEmpty = 0 as ParsedInt
-let SetSlotOccupied = 1 as ParsedInt
-let SetSlotDeleted = 2 as ParsedInt
-
-// The lazy-init / first-grow capacity: 16 slots, a power of two so the `and mask` index selection holds from
-// the first insert. v1 uses the same initial 16.
-let SetInitialCapacity = 16 as ParsedInt
-
-// The 75% load-factor threshold as an exact integer fraction — grow when `count >= (capacity * 3) / 4`
-// (v1's `trunc((capacity * 3) / 4)`). Named (and the numerator derived in the IR, not written as a second
-// literal) so the policy reads as `3/4`, not as two magic numbers.
-let LoadFactorNumerator = 3 as ParsedInt
-let LoadFactorDenominator = 4 as ParsedInt
-
-// `firstDeleted`'s "no tombstone seen yet" sentinel — a NEGATIVE slot index no real slot can hold, so
-// `firstDeleted >= 0` distinguishes "reuse this tombstone" from "none seen". v1's `-1`.
-let FirstDeletedNone = -1 as ParsedInt
 
 // The runtime entry points. `__`-prefixed (`isCompilerInternalCallee` routes their calls past the
 // user-function checks — no file declares them) but NOT `__mm_`-prefixed, so `isSetRuntimeCallee` carries the
@@ -125,18 +63,6 @@ export function isSetRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: SetRuntimePrefix)
 end 'isSetRuntimeCallee'
 
-// ⭐ **THE KEY'S CONSTRAINTS — `Set`'s `where Element is Hashable and Equatable` — are named by
-// `IrInterface`'s OWN `HashableInterfaceName`/`EquatableInterfaceName`, not by copies here.**
-// `LowerMaxonToStd.appendSetWitnessArgs` materializes `rdataAddr(__witness_<key>.Hashable)` /
-// `__witness_<key>.Equatable`, and the label it takes an address of must be the label the builtin-conformance
-// table registers under; this file used to restate both spellings because IrInterface kept them private, which
-// made the agreement a coincidence two edits could break. Both are exported now, so there is one spelling.
-
-// The witness-table slot index of the SOLE method of `Hashable` (`hash`) and of `Equatable` (`equals`) — each
-// interface declares one method, at decl-order index 0, so the fused `witnessCall` reads its function pointer
-// from `[witnessAddr + 24]` (`witnessMethodSlotOffset(0)`).
-let SetWitnessMethodIndex = 0 as WitnessMethodIndex
-
 // Is `callee` a set runtime function that DISPATCHES THROUGH THE KEY'S WITNESSES — `insert`/`contains`/
 // `remove`, the three that hash the key and compare it, plus `from`, which `__set_insert`s each array element.
 // `create`/`count`/`decref`/`grow` touch no key value, so they carry no witnesses.
@@ -163,580 +89,28 @@ end 'isCharacterKeyedWitnessCallee'
 // dependency tracking; the helpers call each other (`insert`→`grow`→`__mm_alloc`) so a dependency graph would
 // only re-derive the closure this install already is. Appended AFTER the pipeline (like `installArrayRuntime`),
 // so they are never re-optimized.
+//
+// ⭐ The six shared entries come from `installHashTable`, told THIS container's names and shape — the one
+// place a `Set`'s hash-table identity is stated. `remove` and `from` are built after it because they are the
+// two this container does not share.
 export function installSetRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesSet 'noSet'
 		return
 	end 'noSet'
-	buildSetCreate(module)
-	buildSetGrow(module)
-	buildSetInsert(module)
-	buildSetContains(module)
+	installHashTable(module, family: HashTableFamily.create(SetCreateName, growName: SetGrowName, insertName: SetInsertName, containsName: SetContainsName, countName: SetCountName, decrefName: SetDecrefName, recordBytes: SetRecordBytes, carriesValues: false))
 	buildSetRemove(module)
-	buildSetCount(module)
-	buildSetDecref(module)
 	buildSetFrom(module)
 end 'installSetRuntime'
 
-// --- Shared leaf helpers ---
-
-// The byte address of slot `index` in a parallel buffer — `base + index * SetSlotBytes`. Shared by every
-// element/state/hash load and store so the 8-byte stride lives in exactly one place.
-function emitSetSlotAddr(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
-	let slotBytes = emitConst(module, block: block, value: SetSlotBytes, ids: ids)
-	let offset = emitBin(module, block: block, a: index, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
-	return emitBin(module, block: block, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
-end 'emitSetSlotAddr'
-
-// Load slot `index` (one i64 word) of parallel buffer `base`.
-function emitSetSlotLoad(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
-	return emitLoadField(module, block: block, record: emitSetSlotAddr(module, block: block, base: base, index: index, ids: ids), offset: 0, ids: ids)
-end 'emitSetSlotLoad'
-
-// Store `value` into slot `index` (one i64 word) of parallel buffer `base`.
-function emitSetSlotStore(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
-	emitStoreField(module, block: block, record: emitSetSlotAddr(module, block: block, base: base, index: index, ids: ids), offset: 0, value: value)
-end 'emitSetSlotStore'
-
-// Load slot `index` of the buffer at record field `bufferOffset` — reloading the buffer pointer from `set`
-// rather than from a hoisted register (see the register-pressure note in the header). The one door a probe
-// reads a slot through, so "reload then stride" is written once.
-function emitSetRecordSlotLoad(module StdModule, block IrBlock, set ValueId, bufferOffset ByteOffset, index ValueId, ids ValueMinter) returns ValueId
-	let base = emitLoadField(module, block: block, record: set, offset: bufferOffset, ids: ids)
-	return emitSetSlotLoad(module, block: block, base: base, index: index, ids: ids)
-end 'emitSetRecordSlotLoad'
-
-// Store `value` into slot `index` of the buffer at record field `bufferOffset` — the store twin of
-// `emitSetRecordSlotLoad`, reloading the buffer pointer from `set`.
-function emitSetRecordSlotStore(module StdModule, block IrBlock, set ValueId, bufferOffset ByteOffset, index ValueId, value ValueId, ids ValueMinter)
-	let base = emitLoadField(module, block: block, record: set, offset: bufferOffset, ids: ids)
-	emitSetSlotStore(module, block: block, base: base, index: index, value: value, ids: ids)
-end 'emitSetRecordSlotStore'
-
-// `capacity - 1` — the power-of-two mask, reloaded from `set`'s `capacity@8` (unchanged during a probe). The
-// one place the mask is derived, so the header's bound (`probes >= capacity`) and the step's wrap
-// (`(index + 1) and mask`) read the same live-reloaded capacity.
-function emitSetMask(module StdModule, block IrBlock, set ValueId, ids ValueMinter) returns ValueId
-	let capacity = emitLoadField(module, block: block, record: set, offset: SetCapacityOffset, ids: ids)
-	let one = emitConst(module, block: block, value: 1, ids: ids)
-	return emitBin(module, block: block, a: capacity, b: one, opcode: StdBinOpcode.sub, ids: ids)
-end 'emitSetMask'
-
-// `hash()` of `elem` through the `Hashable` witness — `witnessCall(hashWitness, method 0, elem) -> HashValue`.
-// The fused `callMem [hashWitness + 24]`; for an int key the slot holds `int.hash`, so this is `elem & 0xFFFFFFFF`.
-function emitSetKeyHash(module StdModule, block IrBlock, hashWitness ValueId, elem ValueId, ids ValueMinter) returns ValueId
-	let hash = ids.mint()
-	module.appendOp(block, op: StdOp.witnessCall(hash, witnessAddr: hashWitness, methodIndex: SetWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), argFloatMask: 0 as ArgFloatMask, args: argsOf(elem)))
-	return hash
-end 'emitSetKeyHash'
-
-// `a.equals(b)` through the `Equatable` witness — `witnessCall(eqWitness, method 0, a, b) -> bool` (0/1). For
-// an int key the slot holds `int.equals`, so this is `a == b`.
-//
-// ⚠ The result type is `builtinProtocolResultStdType`'s and NOT a hand-written `i64`, because this runtime is
-// a THIRD party to a witness slot's signature (beside the dispatch site and the impl) and a slot's signature
-// is checked exactly on wasm — see that function. `bool` here, a machine word for the `hash` above.
-function emitSetKeyEquals(module StdModule, block IrBlock, eqWitness ValueId, a ValueId, b ValueId, ids ValueMinter) returns ValueId
-	let equal = ids.mint()
-	module.appendOp(block, op: StdOp.witnessCall(equal, witnessAddr: eqWitness, methodIndex: SetWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), argFloatMask: 0 as ArgFloatMask, args: twoArgs(a, second: b)))
-	return equal
-end 'emitSetKeyEquals'
-
-// Terminate `cur` branching to `matchBlock` iff slot `index` holds an entry EQUAL to `elem` — the cached hash
-// matches (`hashes[index] == hash`) AND the key compares equal through the Equatable witness — else to
-// `noMatchBlock`. The hash guard skips the witness `equals` call whenever the cached hashes differ (v1's
-// optimization, and the reason `hashes` is cached at all). The `hashes`/`elements` buffers are reloaded from
-// `set` here rather than passed in, keeping them off the probe loop's live set. Shared by insert, contains
-// and remove so the "is this slot our key?" test is written once.
-function emitSetSlotMatchCheck(module StdModule, func IrFunction, cur IrBlock, set ValueId, index ValueId, hash ValueId, elem ValueId, eqWitness ValueId, matchBlock IrBlock, noMatchBlock IrBlock, ids ValueMinter)
-	var checkEquals = module.addBlock(func, label: b"seteq")
-	let slotHash = emitSetRecordSlotLoad(module, block: cur, set: set, bufferOffset: SetHashesOffset, index: index, ids: ids)
-	let hashMatches = emitCmp(module, block: cur, a: slotHash, b: hash, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(hashMatches, thenBlockId: checkEquals.id, elseBlockId: noMatchBlock.id))
-
-	let slotElem = emitSetRecordSlotLoad(module, block: checkEquals, set: set, bufferOffset: SetElementsOffset, index: index, ids: ids)
-	let keyEqual = emitSetKeyEquals(module, block: checkEquals, eqWitness: eqWitness, a: slotElem, b: elem, ids: ids)
-	module.setTerminator(checkEquals, op: StdOp.condBranch(keyEqual, thenBlockId: matchBlock.id, elseBlockId: noMatchBlock.id))
-end 'emitSetSlotMatchCheck'
-
-// Terminate `block` with `ret <value>` — a bool/int constant result (`contains`/`remove` return 1/0; there is
-// no `setcc` at this tier, so a verdict is a constant-returning block off a fused compare).
-function emitSetReturnConst(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter)
-	let result = emitConst(module, block: block, value: value, ids: ids)
-	module.setTerminator(block, op: StdOp.ret(result))
-end 'emitSetReturnConst'
-
-// `__mm_free(buffer)` guarded on `buffer != 0` — a set that never grew has null buffers (`__set_create`
-// leaves them zeroed), so the drop and the first-grow's old-buffer release must both skip a null pointer
-// (`__mm_free` of null faults). Threads `cur` (sets its terminator) and returns the continuation block.
-function emitSetFreeBufferIfNonNull(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, ids ValueMinter) returns IrBlock
-	var doFree = module.addBlock(func, label: b"setfree")
-	let done = module.addBlock(func, label: b"setfreedone")
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	let nonNull = emitCmp(module, block: cur, a: buffer, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: doFree.id, elseBlockId: done.id))
-
-	let freed = ids.mint()
-	module.appendOp(doFree, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(buffer)))
-	module.setTerminator(doFree, op: StdOp.branch(done.id))
-
-	return done
-end 'emitSetFreeBufferIfNonNull'
-
-// Store an entry — `elem` (key), `Occupied` (state) and `hash` (cached) — into slot `index` of the three
-// parallel buffers (each reloaded from `set`) and increment the record's `count`. Does NOT terminate `block`
-// (the caller returns). The shared insert action: an empty-slot insert, a tombstone reuse, the probe-exhausted
-// fallback and the grow rehash all use it, so the "publish an entry" write set is written once.
-function emitSetStoreEntry(module StdModule, block IrBlock, set ValueId, index ValueId, elem ValueId, hash ValueId, ids ValueMinter)
-	emitSetRecordSlotStore(module, block: block, set: set, bufferOffset: SetElementsOffset, index: index, value: elem, ids: ids)
-	let occupied = emitConst(module, block: block, value: SetSlotOccupied, ids: ids)
-	emitSetRecordSlotStore(module, block: block, set: set, bufferOffset: SetStatesOffset, index: index, value: occupied, ids: ids)
-	emitSetRecordSlotStore(module, block: block, set: set, bufferOffset: SetHashesOffset, index: index, value: hash, ids: ids)
-	let count = emitLoadField(module, block: block, record: set, offset: SetCountOffset, ids: ids)
-	let one = emitConst(module, block: block, value: 1, ids: ids)
-	let newCount = emitBin(module, block: block, a: count, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: block, record: set, offset: SetCountOffset, value: newCount)
-end 'emitSetStoreEntry'
-
-// --- Managed-key drop helpers (P1.7b String keys) ---
-//
-// The key-destructor CALL ABI itself (`callIndirect(drop, key)`, `(i64) -> void`, mask 0) is NOT restated here:
-// a managed set's stored key destructor IS its source array's element destructor (same `funcAddr(__str_decref)`,
-// read from `ArrElementDestroyOffset` by `__set_from`), so both drop through ArrayRuntime's shared
-// `emitElementDestructorCall` — the ONE home of that ABI, which a third copy here would let silently drift into a
-// miscompiled indirect call. These helpers only add the set-specific gating (test `elemDrop@40 != 0`) and the
-// slot walk around it.
-
-// ⭐ **DROP ONE KEY `elem` IFF the set carries a key destructor.** Load `elemDrop@40` and, when it is non-zero
-// (a MANAGED-key set), call it on `elem`; a trivial-key set (elemDrop 0) skips it untouched. The single-value
-// twin of the decref teardown walk, shared by insert's dup-drop (the new key the set did not keep) and remove
-// (the stored key it vacated), so a trivial-key set can never `callIndirect(0)` and each managed key is freed
-// exactly once. The `Set` shape of `ArrayRuntime`'s `emitDestroyRangeIfManaged`, but on a single value rather
-// than a range. Threads `cur` (sets its terminator) and returns the block both paths converge on.
-function emitSetDropKeyIfManaged(module StdModule, func IrFunction, cur IrBlock, set ValueId, elem ValueId, ids ValueMinter) returns IrBlock
-	let drop = emitLoadField(module, block: cur, record: set, offset: SetElemDropOffset, ids: ids)
-	let zeroDrop = emitConst(module, block: cur, value: 0, ids: ids)
-	let hasDrop = emitCmp(module, block: cur, a: drop, b: zeroDrop, pred: StdCmpPred.ne, ids: ids)
-	var doDrop = module.addBlock(func, label: b"setdrop")
-	let cont = module.addBlock(func, label: b"setdropc")
-	module.setTerminator(cur, op: StdOp.condBranch(hasDrop, thenBlockId: doDrop.id, elseBlockId: cont.id))
-
-	emitElementDestructorCall(module, block: doDrop, destroy: drop, elem: elem, ids: ids)
-	module.setTerminator(doDrop, op: StdOp.branch(cont.id))
-
-	return cont
-end 'emitSetDropKeyIfManaged'
-
-// ⭐ **DESTROY EVERY LIVE KEY on set teardown IFF the set carries a key destructor.** The `Set` twin of
-// `buildArrDecref`'s `emitDestroyRangeIfManaged`: gated on `elemDrop@40 != 0` (a trivial-key set skips the whole
-// walk), it scans `[0, capacity)` and, where `states[i] == Occupied`, drops `elements[i]` through the stored
-// destructor. Gated on the STATE buffer (Occupied), not a null pointer, because a set slot's liveness is its
-// STATE, not its content — a tombstoned (Deleted) slot's key was already dropped by `remove`, and an Empty slot
-// never held one. Called by `__set_decref` BEFORE the buffers are freed (it reads them). Threads `cur` (sets its
-// terminator) and returns the block both paths converge on.
-function emitSetDestroyKeysIfManaged(module StdModule, func IrFunction, cur IrBlock, set ValueId, ids ValueMinter) returns IrBlock
-	let drop = emitLoadField(module, block: cur, record: set, offset: SetElemDropOffset, ids: ids)
-	let zeroDrop = emitConst(module, block: cur, value: 0, ids: ids)
-	let hasDrop = emitCmp(module, block: cur, a: drop, b: zeroDrop, pred: StdCmpPred.ne, ids: ids)
-	var walk = module.addBlock(func, label: b"setdtorw")
-	let cont = module.addBlock(func, label: b"setdtorc")
-	module.setTerminator(cur, op: StdOp.condBranch(hasDrop, thenBlockId: walk.id, elseBlockId: cont.id))
-
-	var afterWalk = emitSetOccupiedDropRange(module, func: func, cur: walk, set: set, drop: drop, ids: ids)
-	module.setTerminator(afterWalk, op: StdOp.branch(cont.id))
-
-	return cont
-end 'emitSetDestroyKeysIfManaged'
-
-// The `[0, capacity)` Occupied-slot destroy LOOP of `emitSetDestroyKeysIfManaged` — factored out so the gate
-// (load destructor, test non-zero) and the walk read separately, exactly as `emitElementDestroyRange` splits
-// from its own gate. `drop` is the already-loaded, non-null key destructor. The capacity and the two buffers are
-// loop-invariant (teardown neither grows nor mutates the table), loaded once in `cur` (which dominates the loop),
-// so the loop's live set stays small — a non-probe walk, exactly as `buildArrDecref`'s does. Returns the loop's
-// exit block.
-function emitSetOccupiedDropRange(module StdModule, func IrFunction, cur IrBlock, set ValueId, drop ValueId, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"soccdh")
-	var body = module.addBlock(func, label: b"soccdb")
-	var doDrop = module.addBlock(func, label: b"soccdd")
-	var step = module.addBlock(func, label: b"soccds")
-	let done = module.addBlock(func, label: b"soccdone")
-
-	let capacity = emitLoadField(module, block: cur, record: set, offset: SetCapacityOffset, ids: ids)
-	let states = emitLoadField(module, block: cur, record: set, offset: SetStatesOffset, ids: ids)
-	let elements = emitLoadField(module, block: cur, record: set, offset: SetElementsOffset, ids: ids)
-	let scanStart = emitConst(module, block: cur, value: 0, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(header.id))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(scanStart)))
-
-	// header(i): walk the whole table `[0, capacity)`.
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	let atEnd = emitCmp(module, block: header, a: i, b: capacity, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
-
-	// body: an Occupied slot holds a live key to drop; Empty/Deleted slots hold none.
-	let state = emitSetSlotLoad(module, block: body, base: states, index: i, ids: ids)
-	let occupiedTag = emitConst(module, block: body, value: SetSlotOccupied, ids: ids)
-	let isOccupied = emitCmp(module, block: body, a: state, b: occupiedTag, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(isOccupied, thenBlockId: doDrop.id, elseBlockId: step.id))
-
-	let elem = emitSetSlotLoad(module, block: doDrop, base: elements, index: i, ids: ids)
-	emitElementDestructorCall(module, block: doDrop, destroy: drop, elem: elem, ids: ids)
-	module.setTerminator(doDrop, op: StdOp.branch(step.id))
-
-	// step: `i = i + 1`.
-	let one = emitConst(module, block: step, value: 1, ids: ids)
-	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
-
-	return done
-end 'emitSetOccupiedDropRange'
-
-// --- The runtime functions ---
-
-// `__set_create(elemDrop) -> setPtr` — a fresh empty set carrying its per-key destructor. The 48-byte record
-// comes zeroed from `__mm_alloc` (count 0, capacity 0, all buffers null), so only `elemDrop@40` is stamped
-// (`__str_decref` for a String key, 0 for a trivial int key): the first insert grows from capacity 0. The
-// record's own MM-header destructor is 0 — its buffers and keys are freed explicitly by `__set_decref` (the
-// scope-exit drop), exactly as an array's buffer is freed by `__arr_decref`, not by the header destructor. The
-// `elemDrop` param is the `Array` twin of `__arr_create`'s `elementDestroy`.
-function buildSetCreate(module StdModule)
-	var func = IrFunction.createFromStd(SetCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	emitParams(module, block: entry, count: 1)
-	let elemDrop = 0 as ValueId
-
-	let recordSize = emitConst(module, block: entry, value: SetRecordBytes as ParsedInt, ids: ids)
-	let recordDtor = emitConst(module, block: entry, value: 0, ids: ids)
-	let record = ids.mint()
-	module.appendOp(entry, op: StdOp.call(record, callee: MmAllocName, args: twoArgs(recordSize, second: recordDtor)))
-	emitStoreField(module, block: entry, record: record, offset: SetElemDropOffset, value: elemDrop)
-	module.setTerminator(entry, op: StdOp.ret(record))
-
-	module.functions.push(func)
-end 'buildSetCreate'
-
-// `__set_count(set) -> count` — the record's `count@0`.
-function buildSetCount(module StdModule)
-	var func = IrFunction.createFromStd(SetCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	emitParams(module, block: entry, count: 1)
-	let count = emitLoadField(module, block: entry, record: 0 as ValueId, offset: SetCountOffset, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(count))
-
-	module.functions.push(func)
-end 'buildSetCount'
-
-// `__set_grow(set)` — double the capacity (or lazily allocate 16 slots when it is 0), reallocate all three
-// parallel buffers, and REHASH every `Occupied` entry into the new buffers REUSING its cached hash (no
-// witness call). Tombstones are DROPPED — the fresh table has no `Deleted` slots — so `grow` also cleans the
-// table. `count` is reset to 0 and re-counted during the rehash. Called by `__set_insert` when the load
-// factor is crossed.
-//
-// The OLD buffers (`oldElements`/`oldStates`/`oldHashes`) and `oldCap` are carried across the rehash — they
-// are the source data and the record no longer points at them once the new buffers are published — but the
-// NEW buffers are reloaded from `set` where written, keeping the loop's live set small (the header note).
-function buildSetGrow(module StdModule)
-	var func = IrFunction.createFromStd(SetGrowName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var useInitial = module.addBlock(func, label: b"useinit")
-	var useDoubled = module.addBlock(func, label: b"usedbl")
-	var alloc = module.addBlock(func, label: b"alloc")
-	var rehashHeader = module.addBlock(func, label: b"rehashh")
-	var rehashBody = module.addBlock(func, label: b"rehashb")
-	var reinsert = module.addBlock(func, label: b"reinsert")
-	var findHeader = module.addBlock(func, label: b"findh")
-	var findStep = module.addBlock(func, label: b"finds")
-	var place = module.addBlock(func, label: b"place")
-	var rehashStep = module.addBlock(func, label: b"rehashstep")
-	var freeOld = module.addBlock(func, label: b"freeold")
-
-	emitParams(module, block: entry, count: 1)
-	let set = 0 as ValueId
-
-	// entry: capture the old table, then pick the new capacity — double it, or 16 when it was 0 (the first
-	// grow / lazy init). `oldCap * 2` via `oldCap + oldCap`.
-	let oldCap = emitLoadField(module, block: entry, record: set, offset: SetCapacityOffset, ids: ids)
-	let oldElements = emitLoadField(module, block: entry, record: set, offset: SetElementsOffset, ids: ids)
-	let oldStates = emitLoadField(module, block: entry, record: set, offset: SetStatesOffset, ids: ids)
-	let oldHashes = emitLoadField(module, block: entry, record: set, offset: SetHashesOffset, ids: ids)
-	let doubled = emitBin(module, block: entry, a: oldCap, b: oldCap, opcode: StdBinOpcode.add, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let wasEmpty = emitCmp(module, block: entry, a: doubled, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(wasEmpty, thenBlockId: useInitial.id, elseBlockId: useDoubled.id))
-
-	// useInitial / useDoubled → alloc(newCap): the new capacity flows in as `alloc`'s block arg.
-	let initialCap = emitConst(module, block: useInitial, value: SetInitialCapacity, ids: ids)
-	module.setTerminator(useInitial, op: StdOp.branch(alloc.id))
-	useInitial.branchEdges.push(BranchEdge.create(alloc.id, argIds: argsOf(initialCap)))
-	module.setTerminator(useDoubled, op: StdOp.branch(alloc.id))
-	useDoubled.branchEdges.push(BranchEdge.create(alloc.id, argIds: argsOf(doubled)))
-
-	let newCap = ids.mint()
-	alloc.blockArgs.push(IrBlockArg.create(newCap, argType: StdType.i64))
-	let slotBytes = emitConst(module, block: alloc, value: SetSlotBytes, ids: ids)
-	let newBytes = emitBin(module, block: alloc, a: newCap, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
-	let bufDtor = emitConst(module, block: alloc, value: 0, ids: ids)
-	let newElements = ids.mint()
-	module.appendOp(alloc, op: StdOp.call(newElements, callee: MmAllocName, args: twoArgs(newBytes, second: bufDtor)))
-	let newStates = ids.mint()
-	module.appendOp(alloc, op: StdOp.call(newStates, callee: MmAllocName, args: twoArgs(newBytes, second: bufDtor)))
-	let newHashes = ids.mint()
-	module.appendOp(alloc, op: StdOp.call(newHashes, callee: MmAllocName, args: twoArgs(newBytes, second: bufDtor)))
-	// Publish the new (empty) table BEFORE the rehash — `emitSetStoreEntry` reloads the buffers and `count` off
-	// the record, so it must already hold the new buffers and a reset count of 0.
-	emitStoreField(module, block: alloc, record: set, offset: SetElementsOffset, value: newElements)
-	emitStoreField(module, block: alloc, record: set, offset: SetStatesOffset, value: newStates)
-	emitStoreField(module, block: alloc, record: set, offset: SetHashesOffset, value: newHashes)
-	emitStoreField(module, block: alloc, record: set, offset: SetCapacityOffset, value: newCap)
-	let countReset = emitConst(module, block: alloc, value: 0, ids: ids)
-	emitStoreField(module, block: alloc, record: set, offset: SetCountOffset, value: countReset)
-	let scanStart = emitConst(module, block: alloc, value: 0, ids: ids)
-	module.setTerminator(alloc, op: StdOp.branch(rehashHeader.id))
-	alloc.branchEdges.push(BranchEdge.create(rehashHeader.id, argIds: argsOf(scanStart)))
-
-	// rehashHeader(i): walk the OLD table `[0, oldCap)`.
-	let i = ids.mint()
-	rehashHeader.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	let scanDone = emitCmp(module, block: rehashHeader, a: i, b: oldCap, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(rehashHeader, op: StdOp.condBranch(scanDone, thenBlockId: freeOld.id, elseBlockId: rehashBody.id))
-
-	// rehashBody: only an OLD `Occupied` slot is re-inserted (a tombstone is dropped).
-	let oldState = emitSetSlotLoad(module, block: rehashBody, base: oldStates, index: i, ids: ids)
-	let occupiedTag = emitConst(module, block: rehashBody, value: SetSlotOccupied, ids: ids)
-	let isOccupied = emitCmp(module, block: rehashBody, a: oldState, b: occupiedTag, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(rehashBody, op: StdOp.condBranch(isOccupied, thenBlockId: reinsert.id, elseBlockId: rehashStep.id))
-
-	// reinsert: seed the find-empty-slot probe from the CACHED hash (no witness call).
-	let elem = emitSetSlotLoad(module, block: reinsert, base: oldElements, index: i, ids: ids)
-	let hash = emitSetSlotLoad(module, block: reinsert, base: oldHashes, index: i, ids: ids)
-	let seedMask = emitSetMask(module, block: reinsert, set: set, ids: ids)
-	let seedSlot = emitBin(module, block: reinsert, a: hash, b: seedMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	module.setTerminator(reinsert, op: StdOp.branch(findHeader.id))
-	reinsert.branchEdges.push(BranchEdge.create(findHeader.id, argIds: argsOf(seedSlot)))
-
-	// findHeader(slot): linear-probe the fresh table for an `Empty` slot (no tombstones exist, so `Empty` is
-	// the only stop — the guaranteed free slot the doubled capacity provides).
-	let slot = ids.mint()
-	findHeader.blockArgs.push(IrBlockArg.create(slot, argType: StdType.i64))
-	let slotState = emitSetRecordSlotLoad(module, block: findHeader, set: set, bufferOffset: SetStatesOffset, index: slot, ids: ids)
-	let emptyTag = emitConst(module, block: findHeader, value: SetSlotEmpty, ids: ids)
-	let slotIsEmpty = emitCmp(module, block: findHeader, a: slotState, b: emptyTag, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(findHeader, op: StdOp.condBranch(slotIsEmpty, thenBlockId: place.id, elseBlockId: findStep.id))
-
-	// findStep: `slot = (slot + 1) and mask`.
-	let stepOne = emitConst(module, block: findStep, value: 1, ids: ids)
-	let slotInc = emitBin(module, block: findStep, a: slot, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
-	let findMask = emitSetMask(module, block: findStep, set: set, ids: ids)
-	let slotNext = emitBin(module, block: findStep, a: slotInc, b: findMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	module.setTerminator(findStep, op: StdOp.branch(findHeader.id))
-	findStep.branchEdges.push(BranchEdge.create(findHeader.id, argIds: argsOf(slotNext)))
-
-	// place: store the entry (and bump `count`) at the empty slot, then advance the outer walk.
-	emitSetStoreEntry(module, block: place, set: set, index: slot, elem: elem, hash: hash, ids: ids)
-	module.setTerminator(place, op: StdOp.branch(rehashStep.id))
-
-	// rehashStep: `i = i + 1`.
-	let outerOne = emitConst(module, block: rehashStep, value: 1, ids: ids)
-	let iNext = emitBin(module, block: rehashStep, a: i, b: outerOne, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(rehashStep, op: StdOp.branch(rehashHeader.id))
-	rehashStep.branchEdges.push(BranchEdge.create(rehashHeader.id, argIds: argsOf(iNext)))
-
-	// freeOld: release the three old buffers (null on the first grow — skipped by the guard).
-	var afterFree = emitSetFreeBufferIfNonNull(module, func: func, cur: freeOld, buffer: oldElements, ids: ids)
-	afterFree = emitSetFreeBufferIfNonNull(module, func: func, cur: afterFree, buffer: oldStates, ids: ids)
-	afterFree = emitSetFreeBufferIfNonNull(module, func: func, cur: afterFree, buffer: oldHashes, ids: ids)
-	module.setTerminator(afterFree, op: StdOp.retVoid)
-
-	module.functions.push(func)
-end 'buildSetGrow'
-
-// `__set_insert(set, elem, hashWitness, eqWitness)` — add `elem` if absent (a duplicate is a no-op). Grows
-// first when the load factor is crossed (which also covers the lazy init from capacity 0). The probe reuses a
-// `Deleted` tombstone (`firstDeleted`) so a remove-then-reinsert refills the vacated slot rather than growing.
-//
-// Across the probe loop only `{set, elem, eqWitness, hash}` plus the loop indices `{index, probes,
-// firstDeleted}` stay live; the buffers, capacity and mask are reloaded from `set` where used (header note).
-function buildSetInsert(module StdModule)
-	var func = IrFunction.createFromStd(SetInsertName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(4)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var doGrow = module.addBlock(func, label: b"dogrow")
-	var setup = module.addBlock(func, label: b"setup")
-	var header = module.addBlock(func, label: b"probeh")
-	var body = module.addBlock(func, label: b"probeb")
-	var notEmpty = module.addBlock(func, label: b"notempty")
-	var checkDup = module.addBlock(func, label: b"checkdup")
-	var noMatchDup = module.addBlock(func, label: b"nomatch")
-	var isDeleted = module.addBlock(func, label: b"isdel")
-	var keepFirst = module.addBlock(func, label: b"keepfd")
-	var recordFirst = module.addBlock(func, label: b"recfd")
-	var step = module.addBlock(func, label: b"probestep")
-	var emptyInsert = module.addBlock(func, label: b"emptyins")
-	var insertAtDeleted = module.addBlock(func, label: b"insdel")
-	var insertAtEmpty = module.addBlock(func, label: b"insempty")
-	var dupFound = module.addBlock(func, label: b"dupfound")
-	var exhausted = module.addBlock(func, label: b"exhausted")
-	var fallbackInsert = module.addBlock(func, label: b"fallback")
-	var unreachableFull = module.addBlock(func, label: b"nofree")
-
-	emitParams(module, block: entry, count: 4)
-	let set = 0 as ValueId
-	let elem = 1 as ValueId
-	let hashWitness = 2 as ValueId
-	let eqWitness = 3 as ValueId
-
-	// entry: grow when `count >= (capacity * 3) / 4` — which for capacity 0 is `0 >= 0`, so the FIRST insert
-	// always grows (lazy init to 16). One grow suffices: it at least doubles, so `count` is well under the new
-	// load limit afterward and the probe below never grows again.
-	let count = emitLoadField(module, block: entry, record: set, offset: SetCountOffset, ids: ids)
-	let capacity = emitLoadField(module, block: entry, record: set, offset: SetCapacityOffset, ids: ids)
-	let loadNumerator = emitConst(module, block: entry, value: LoadFactorNumerator, ids: ids)
-	let scaled = emitBin(module, block: entry, a: capacity, b: loadNumerator, opcode: StdBinOpcode.mul, ids: ids)
-	let loadDenominator = emitConst(module, block: entry, value: LoadFactorDenominator, ids: ids)
-	let loadLimit = ids.mint()
-	module.appendOp(entry, op: StdOp.div(loadLimit, lhs: scaled, rhs: loadDenominator))
-	let needGrow = emitCmp(module, block: entry, a: count, b: loadLimit, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(needGrow, thenBlockId: doGrow.id, elseBlockId: setup.id))
-
-	let grew = ids.mint()
-	module.appendOp(doGrow, op: StdOp.call(grew, callee: SetGrowName, args: argsOf(set)))
-	module.setTerminator(doGrow, op: StdOp.branch(setup.id))
-
-	// setup: hash the key and seed the probe. The mask/capacity/buffers are NOT hoisted — they are reloaded in
-	// the loop bodies (see the header's register-pressure note), so only `{set, elem, eqWitness, hash}` and the
-	// three loop indices cross the loop.
-	let seedMask = emitSetMask(module, block: setup, set: set, ids: ids)
-	let hash = emitSetKeyHash(module, block: setup, hashWitness: hashWitness, elem: elem, ids: ids)
-	let startIndex = emitBin(module, block: setup, a: hash, b: seedMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let zeroProbes = emitConst(module, block: setup, value: 0, ids: ids)
-	let noneDeleted = emitConst(module, block: setup, value: FirstDeletedNone, ids: ids)
-	module.setTerminator(setup, op: StdOp.branch(header.id))
-	setup.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(startIndex, second: zeroProbes, third: noneDeleted)))
-
-	// header(index, probes, firstDeleted): bounded by `capacity` probes — a table full of Occupied+Deleted
-	// (no Empty) must not loop forever, and the exhausted exit reuses the guaranteed tombstone.
-	let index = ids.mint()
-	let probes = ids.mint()
-	let firstDeleted = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
-	header.blockArgs.push(IrBlockArg.create(probes, argType: StdType.i64))
-	header.blockArgs.push(IrBlockArg.create(firstDeleted, argType: StdType.i64))
-	let capForBound = emitLoadField(module, block: header, record: set, offset: SetCapacityOffset, ids: ids)
-	let atEnd = emitCmp(module, block: header, a: probes, b: capForBound, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: exhausted.id, elseBlockId: body.id))
-
-	// body: an Empty slot ends the probe — insert here (or at an earlier tombstone).
-	let state = emitSetRecordSlotLoad(module, block: body, set: set, bufferOffset: SetStatesOffset, index: index, ids: ids)
-	let emptyTag = emitConst(module, block: body, value: SetSlotEmpty, ids: ids)
-	let isEmpty = emitCmp(module, block: body, a: state, b: emptyTag, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(isEmpty, thenBlockId: emptyInsert.id, elseBlockId: notEmpty.id))
-
-	// notEmpty: an Occupied slot may be our key (dup check); a Deleted slot records the first tombstone.
-	let occupiedTag = emitConst(module, block: notEmpty, value: SetSlotOccupied, ids: ids)
-	let isOccupied = emitCmp(module, block: notEmpty, a: state, b: occupiedTag, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notEmpty, op: StdOp.condBranch(isOccupied, thenBlockId: checkDup.id, elseBlockId: isDeleted.id))
-
-	// checkDup: a matching Occupied slot is a duplicate (no-op); otherwise keep probing (firstDeleted unchanged).
-	emitSetSlotMatchCheck(module, func: func, cur: checkDup, set: set, index: index, hash: hash, elem: elem, eqWitness: eqWitness, matchBlock: dupFound, noMatchBlock: noMatchDup, ids: ids)
-	module.setTerminator(noMatchDup, op: StdOp.branch(step.id))
-	noMatchDup.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(firstDeleted)))
-
-	// isDeleted: remember the FIRST tombstone (`firstDeleted < 0` still), then keep probing for an Empty (a
-	// later insert prefers the tombstone, keeping the table compact).
-	let zeroForCheck = emitConst(module, block: isDeleted, value: 0, ids: ids)
-	let alreadyHave = emitCmp(module, block: isDeleted, a: firstDeleted, b: zeroForCheck, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(isDeleted, op: StdOp.condBranch(alreadyHave, thenBlockId: keepFirst.id, elseBlockId: recordFirst.id))
-	module.setTerminator(keepFirst, op: StdOp.branch(step.id))
-	keepFirst.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(firstDeleted)))
-	module.setTerminator(recordFirst, op: StdOp.branch(step.id))
-	recordFirst.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(index)))
-
-	// step(fd): `index = (index + 1) and mask`, `probes = probes + 1`, carrying the (possibly updated) firstDeleted.
-	let fd = ids.mint()
-	step.blockArgs.push(IrBlockArg.create(fd, argType: StdType.i64))
-	let stepOne = emitConst(module, block: step, value: 1, ids: ids)
-	let indexInc = emitBin(module, block: step, a: index, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
-	let stepMask = emitSetMask(module, block: step, set: set, ids: ids)
-	let nextIndex = emitBin(module, block: step, a: indexInc, b: stepMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let nextProbes = emitBin(module, block: step, a: probes, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(nextIndex, second: nextProbes, third: fd)))
-
-	// emptyInsert: insert at the earlier tombstone if one was seen, else at this empty slot.
-	let zeroForEmpty = emitConst(module, block: emptyInsert, value: 0, ids: ids)
-	let haveDeleted = emitCmp(module, block: emptyInsert, a: firstDeleted, b: zeroForEmpty, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(emptyInsert, op: StdOp.condBranch(haveDeleted, thenBlockId: insertAtDeleted.id, elseBlockId: insertAtEmpty.id))
-	emitSetStoreEntry(module, block: insertAtDeleted, set: set, index: firstDeleted, elem: elem, hash: hash, ids: ids)
-	module.setTerminator(insertAtDeleted, op: StdOp.retVoid)
-	emitSetStoreEntry(module, block: insertAtEmpty, set: set, index: index, elem: elem, hash: hash, ids: ids)
-	module.setTerminator(insertAtEmpty, op: StdOp.retVoid)
-
-	// dupFound: the key is already present — the set keeps its EXISTING copy, so the NEW `elem` (moved in by the
-	// caller) must be DROPPED here or it leaks. A trivial-key set skips the drop (elemDrop 0).
-	var afterDupDrop = emitSetDropKeyIfManaged(module, func: func, cur: dupFound, set: set, elem: elem, ids: ids)
-	module.setTerminator(afterDupDrop, op: StdOp.retVoid)
-
-	// exhausted: every slot was probed without finding Empty — the table is Occupied+Deleted. The load factor
-	// keeps `count` below capacity, so at least one slot is a tombstone and `firstDeleted >= 0` here; reuse it.
-	// The `unreachableFull` branch (no tombstone AND no empty ⇒ count == capacity) cannot happen after a grow —
-	// so it ABORTS rather than silently `retVoid`ing (which would drop the element and leave `count` lying); a
-	// reachable `unreachableFull` is a broken load-factor/grow invariant, a compiler bug, exactly the
-	// "unreachable from source, abort not silence" class `ArrayRuntime`'s aborts already occupy.
-	let zeroForFallback = emitConst(module, block: exhausted, value: 0, ids: ids)
-	let haveFallback = emitCmp(module, block: exhausted, a: firstDeleted, b: zeroForFallback, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(exhausted, op: StdOp.condBranch(haveFallback, thenBlockId: fallbackInsert.id, elseBlockId: unreachableFull.id))
-	emitSetStoreEntry(module, block: fallbackInsert, set: set, index: firstDeleted, elem: elem, hash: hash, ids: ids)
-	module.setTerminator(fallbackInsert, op: StdOp.retVoid)
-	emitRuntimeAbort(module, func: func, block: unreachableFull, abort: RuntimeAbort.setInsertNoFreeSlot, ids: ids)
-
-	module.functions.push(func)
-end 'buildSetInsert'
-
-// `__set_contains(set, elem, hashWitness, eqWitness) -> bool` — probe for `elem`, stopping at an Empty slot
-// (absent) or a matching Occupied slot (present). An empty set (capacity 0) contains nothing.
-function buildSetContains(module StdModule)
-	var func = IrFunction.createFromStd(SetContainsName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(4)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var emptySet = module.addBlock(func, label: b"emptyset")
-	var probe = module.addBlock(func, label: b"probe")
-	var found = module.addBlock(func, label: b"found")
-	var notFound = module.addBlock(func, label: b"notfound")
-
-	emitParams(module, block: entry, count: 4)
-	let set = 0 as ValueId
-	let elem = 1 as ValueId
-	let hashWitness = 2 as ValueId
-	let eqWitness = 3 as ValueId
-
-	let capacity = emitLoadField(module, block: entry, record: set, offset: SetCapacityOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmptyTable = emitCmp(module, block: entry, a: capacity, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmptyTable, thenBlockId: emptySet.id, elseBlockId: probe.id))
-
-	emitSetReturnConst(module, block: emptySet, value: 0, ids: ids)
-
-	_ = emitSetLookupProbe(module, func: func, cur: probe, set: set, elem: elem, hashWitness: hashWitness, eqWitness: eqWitness, foundBlock: found, notFoundBlock: notFound, ids: ids)
-
-	emitSetReturnConst(module, block: found, value: 1, ids: ids)
-	emitSetReturnConst(module, block: notFound, value: 0, ids: ids)
-
-	module.functions.push(func)
-end 'buildSetContains'
-
 // `__set_remove(set, elem, hashWitness, eqWitness) -> bool` — probe for `elem`; a matching Occupied slot is
-// TOMBSTONED (state `Deleted`, count decremented) and `true` returned; an absent key returns `false`. The
-// cached hash is deliberately LEFT in the slot — the hash guard only runs inside the Occupied branch, so a
-// stale hash on a tombstone can never cause a false match (v1's contract).
+// TOMBSTONED (state `Deleted`, count decremented) and `true` returned; an absent key returns `false`.
+//
+// ⚠ **IT IS NOT SHARED WITH THE MAP FAMILY, AND THAT IS A DECISION RATHER THAN AN OMISSION.** A set's remove
+// answers a bool and drops what it vacated; a map's would have to hand the VALUE back to the caller (or
+// throw for a missing key), which is a different signature and a different ownership transfer, not a
+// `carriesValues` branch inside one graph. The parts that ARE the same — the empty-table guard, the read
+// probe, the managed drop, the tombstone — are all `HashTableRuntime`'s, so what is written here is only the
+// sequencing.
 function buildSetRemove(module StdModule)
 	var func = IrFunction.createFromStd(SetRemoveName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(4)
@@ -753,130 +127,35 @@ function buildSetRemove(module StdModule)
 	let hashWitness = 2 as ValueId
 	let eqWitness = 3 as ValueId
 
-	let capacity = emitLoadField(module, block: entry, record: set, offset: SetCapacityOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmptyTable = emitCmp(module, block: entry, a: capacity, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmptyTable, thenBlockId: emptySet.id, elseBlockId: probe.id))
+	emitHtEmptyTableCheck(module, entry: entry, table: set, emptyBlock: emptySet, probeBlock: probe, ids: ids)
+	emitHtReturnConst(module, block: emptySet, value: 0, ids: ids)
 
-	emitSetReturnConst(module, block: emptySet, value: 0, ids: ids)
-
-	let matchedIndex = emitSetLookupProbe(module, func: func, cur: probe, set: set, elem: elem, hashWitness: hashWitness, eqWitness: eqWitness, foundBlock: found, notFoundBlock: notFound, ids: ids)
+	let matchedIndex = emitHtLookupProbe(module, func: func, cur: probe, table: set, key: elem, hashWitness: hashWitness, eqWitness: eqWitness, foundBlock: found, notFoundBlock: notFound, ids: ids)
 
 	// found: DROP the stored key (the caller's `elem` argument stays a BORROW — read for the compare, not
 	// consumed), then tombstone the matched slot and drop the count. `matchedIndex` is the probe header's live
 	// index — the header dominates `found` and the drop-gate blocks below it — so it names the slot throughout.
-	// A trivial-key set skips the drop (elemDrop 0), leaving `remove`'s behaviour unchanged for int keys.
-	let storedKey = emitSetRecordSlotLoad(module, block: found, set: set, bufferOffset: SetElementsOffset, index: matchedIndex, ids: ids)
-	var afterKeyDrop = emitSetDropKeyIfManaged(module, func: func, cur: found, set: set, elem: storedKey, ids: ids)
-	let deletedTag = emitConst(module, block: afterKeyDrop, value: SetSlotDeleted, ids: ids)
-	emitSetRecordSlotStore(module, block: afterKeyDrop, set: set, bufferOffset: SetStatesOffset, index: matchedIndex, value: deletedTag, ids: ids)
-	let count = emitLoadField(module, block: afterKeyDrop, record: set, offset: SetCountOffset, ids: ids)
-	let one = emitConst(module, block: afterKeyDrop, value: 1, ids: ids)
-	let newCount = emitBin(module, block: afterKeyDrop, a: count, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	emitStoreField(module, block: afterKeyDrop, record: set, offset: SetCountOffset, value: newCount)
-	emitSetReturnConst(module, block: afterKeyDrop, value: 1, ids: ids)
+	// A trivial-key set skips the drop (keyDrop 0), leaving `remove`'s behaviour unchanged for int keys.
+	let storedKey = emitHtRecordSlotLoad(module, block: found, table: set, bufferOffset: HtKeysOffset, index: matchedIndex, ids: ids)
+	var afterKeyDrop = emitHtDropIfManaged(module, func: func, cur: found, table: set, dropOffset: HtKeyDropOffset, value: storedKey, ids: ids)
+	emitHtTombstoneSlot(module, block: afterKeyDrop, table: set, index: matchedIndex, ids: ids)
+	emitHtReturnConst(module, block: afterKeyDrop, value: 1, ids: ids)
 
-	emitSetReturnConst(module, block: notFound, value: 0, ids: ids)
+	emitHtReturnConst(module, block: notFound, value: 0, ids: ids)
 
 	module.functions.push(func)
 end 'buildSetRemove'
 
-// ⭐ **THE SHARED LOOKUP PROBE for `contains` and `remove` (P1.7b slice A).** Build the linear probe from
-// `cur`: seed `index = hash and mask`, then loop bounded by `capacity` probes. Branch to `notFoundBlock` on an
-// Empty slot or probe exhaustion, and to `foundBlock` on a matching Occupied slot. Returns the matched slot's
-// index — the probe header's `index` block arg, live in `foundBlock` (which the header dominates) — so
-// `remove` can tombstone it. `insert` has its own probe (it tracks `firstDeleted` and inserts), so this serves
-// only the two read/delete probes, which are otherwise identical. The capacity/mask/buffers are reloaded from
-// `set` in the loop, keeping only `{set, elem, eqWitness, hash}` and the two indices live across it.
-function emitSetLookupProbe(module StdModule, func IrFunction, cur IrBlock, set ValueId, elem ValueId, hashWitness ValueId, eqWitness ValueId, foundBlock IrBlock, notFoundBlock IrBlock, ids ValueMinter) returns ValueId
-	var header = module.addBlock(func, label: b"lkph")
-	var body = module.addBlock(func, label: b"lkpb")
-	var notEmpty = module.addBlock(func, label: b"lkpne")
-	var checkKey = module.addBlock(func, label: b"lkpck")
-	var step = module.addBlock(func, label: b"lkps")
-
-	let seedMask = emitSetMask(module, block: cur, set: set, ids: ids)
-	let hash = emitSetKeyHash(module, block: cur, hashWitness: hashWitness, elem: elem, ids: ids)
-	let startIndex = emitBin(module, block: cur, a: hash, b: seedMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let zeroProbes = emitConst(module, block: cur, value: 0, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(header.id))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(startIndex, second: zeroProbes)))
-
-	let index = ids.mint()
-	let probes = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
-	header.blockArgs.push(IrBlockArg.create(probes, argType: StdType.i64))
-	let capForBound = emitLoadField(module, block: header, record: set, offset: SetCapacityOffset, ids: ids)
-	let atEnd = emitCmp(module, block: header, a: probes, b: capForBound, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: notFoundBlock.id, elseBlockId: body.id))
-
-	let state = emitSetRecordSlotLoad(module, block: body, set: set, bufferOffset: SetStatesOffset, index: index, ids: ids)
-	let emptyTag = emitConst(module, block: body, value: SetSlotEmpty, ids: ids)
-	let isEmpty = emitCmp(module, block: body, a: state, b: emptyTag, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(isEmpty, thenBlockId: notFoundBlock.id, elseBlockId: notEmpty.id))
-
-	let occupiedTag = emitConst(module, block: notEmpty, value: SetSlotOccupied, ids: ids)
-	let isOccupied = emitCmp(module, block: notEmpty, a: state, b: occupiedTag, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notEmpty, op: StdOp.condBranch(isOccupied, thenBlockId: checkKey.id, elseBlockId: step.id))
-
-	emitSetSlotMatchCheck(module, func: func, cur: checkKey, set: set, index: index, hash: hash, elem: elem, eqWitness: eqWitness, matchBlock: foundBlock, noMatchBlock: step, ids: ids)
-
-	let stepOne = emitConst(module, block: step, value: 1, ids: ids)
-	let indexInc = emitBin(module, block: step, a: index, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
-	let stepMask = emitSetMask(module, block: step, set: set, ids: ids)
-	let nextIndex = emitBin(module, block: step, a: indexInc, b: stepMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let nextProbes = emitBin(module, block: step, a: probes, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(nextIndex, second: nextProbes)))
-
-	return index
-end 'emitSetLookupProbe'
-
-// `__set_decref(set)` — the scope-exit drop for an owned set. Decref the record's refcount, and at the last
-// owner DESTROY every live key (a managed-key set walks its Occupied slots through the stored `elemDrop@40`; a
-// trivial int-key set skips it), then free the three external buffers (each `__mm_free` guarded on non-null —
-// an empty set never allocated them) and then the record. The hash-table twin of `__arr_decref`, key walk and
-// all.
-function buildSetDecref(module StdModule)
-	var func = IrFunction.createFromStd(SetDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var lower = module.addBlock(func, label: b"lower")
-	var release = module.addBlock(func, label: b"release")
-
-	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
-
-	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
-
-	// release: DESTROY every live key first (a managed-key set walks its Occupied slots; a trivial-key set skips
-	// the walk untouched), then read the three buffer pointers BEFORE freeing any of them, and free the buffers
-	// and the record. The key walk reads `elements`/`states`, so it MUST run before those buffers are freed.
-	var afterKeys = emitSetDestroyKeysIfManaged(module, func: func, cur: release, set: record, ids: ids)
-	let elementsBuf = emitLoadField(module, block: afterKeys, record: record, offset: SetElementsOffset, ids: ids)
-	let statesBuf = emitLoadField(module, block: afterKeys, record: record, offset: SetStatesOffset, ids: ids)
-	let hashesBuf = emitLoadField(module, block: afterKeys, record: record, offset: SetHashesOffset, ids: ids)
-	var cur = emitSetFreeBufferIfNonNull(module, func: func, cur: afterKeys, buffer: elementsBuf, ids: ids)
-	cur = emitSetFreeBufferIfNonNull(module, func: func, cur: cur, buffer: statesBuf, ids: ids)
-	cur = emitSetFreeBufferIfNonNull(module, func: func, cur: cur, buffer: hashesBuf, ids: ids)
-	let recFreed = ids.mint()
-	module.appendOp(cur, op: StdOp.call(recFreed, callee: MmFreeName, args: argsOf(record)))
-	module.setTerminator(cur, op: StdOp.retVoid)
-
-	module.functions.push(func)
-end 'buildSetDecref'
-
 // `__set_from(arr, hashWitness, eqWitness) -> setPtr` — build a set from an array (P1.7b slice B), the
 // `Set from [1,2,3]` / `Set from ["a","b"]` construction. BORROW `arr` (an `Array with <key>`, whose record
 // carries `buffer@0` / `length@8` / `element_destroy@40`): create an empty set stamped with the array's own key
-// destructor, then walk the array reading each element (one machine word, stride `SetSlotBytes`) and
-// `__set_insert` it — which grows (double + rehash) as the load factor is crossed and dedups a repeated
-// element, so a 15-element literal grows exactly `grow.preserves-elements`. A managed (String) key is MOVED out
-// of the array (the set becomes its owner), so each moved-out array slot is NULLED — the array stays the
-// CALLER's owned temporary and its `__arr_decref` at statement end skips the nulled slots (no double-free); a
-// trivial int element is copied inline (the null is harmless). The two witnesses are the key's
-// `Hashable`/`Equatable` tables, threaded in by the caller (`appendSetWitnessArgs`) and passed to `__set_insert`.
+// destructor, then walk the array reading each element (one machine word) and `__set_insert` it — which grows
+// (double + rehash) as the load factor is crossed and dedups a repeated element, so a 15-element literal grows
+// exactly `grow.preserves-elements`. A managed (String) key is MOVED out of the array (the set becomes its
+// owner), so each moved-out array slot is NULLED — the array stays the CALLER's owned temporary and its
+// `__arr_decref` at statement end skips the nulled slots (no double-free); a trivial int element is copied
+// inline (the null is harmless). The two witnesses are the key's `Hashable`/`Equatable` tables, threaded in by
+// the caller (`appendSetWitnessArgs`) and passed to `__set_insert`.
 function buildSetFrom(module StdModule)
 	var func = IrFunction.createFromStd(SetFromName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
@@ -913,17 +192,17 @@ function buildSetFrom(module StdModule)
 	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
-	// body: read element `i` (one machine word — an int inline, or a managed KEY pointer, both stride
-	// `SetSlotBytes`), MOVE it into the set (`__set_insert` takes ownership of a managed key, or drops it as a
-	// dup), then NULL the array slot so the array's own `__arr_decref` walk skips it — the array's decref drops
-	// only NON-null slots, so a moved-out slot must read null or the key double-frees (the set owns it now). The
-	// exact mirror of `__arr_pop` nulling the slot it hands out. A trivial int element is unaffected by the null
-	// (its array decref never walks). Then advance `i = i + 1`.
-	let elem = emitSetSlotLoad(module, block: body, base: buffer, index: i, ids: ids)
+	// body: read element `i` (one machine word — an int inline, or a managed KEY pointer, both one slot wide),
+	// MOVE it into the set (`__set_insert` takes ownership of a managed key, or drops it as a dup), then NULL
+	// the array slot so the array's own `__arr_decref` walk skips it — the array's decref drops only NON-null
+	// slots, so a moved-out slot must read null or the key double-frees (the set owns it now). The exact mirror
+	// of `__arr_pop` nulling the slot it hands out. A trivial int element is unaffected by the null (its array
+	// decref never walks). Then advance `i = i + 1`.
+	let elem = emitHtSlotLoad(module, block: body, base: buffer, index: i, ids: ids)
 	let inserted = ids.mint()
 	module.appendOp(body, op: StdOp.call(inserted, callee: SetInsertName, args: fourArgs(set, second: elem, third: hashWitness, fourth: eqWitness)))
 	let nullSlot = emitConst(module, block: body, value: 0, ids: ids)
-	emitSetSlotStore(module, block: body, base: buffer, index: i, value: nullSlot, ids: ids)
+	emitHtSlotStore(module, block: body, base: buffer, index: i, value: nullSlot, ids: ids)
 	let one = emitConst(module, block: body, value: 1, ids: ids)
 	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(body, op: StdOp.branch(header.id))

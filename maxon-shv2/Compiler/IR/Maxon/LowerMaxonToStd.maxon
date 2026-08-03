@@ -487,10 +487,6 @@ function requireRuntimeCallPositional(callee ByteArray, argLabels ByteArrayArray
 	end 'eachLabel'
 end 'requireRuntimeCallPositional'
 
-// A `Set`'s sole type parameter, by POSITION — the one argument `conformerTypeArgName` is ever asked for
-// in this file. Named because a bare `0` at a position argument is exactly the magic value the rule is for.
-let SetKeyTypeParamPosition = 0 as TypeParamId
-
 // ⭐⭐ **WHICH DIVISION IS BEING EXPANDED, AND — WHERE THERE IS ONE — THE ERROR-FLAG REGISTER IT WRITES.**
 // The flag is the ONE thing that differs between the fallible divisions (A1) and the total remainder
 // (A1x), which is why `lowerDivisionExpansion` is one function and not two near-copies of a four-op guard.
@@ -1496,11 +1492,15 @@ type MaxonToStdLowering
 			self.appendDropTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'dropTypeParam'
-		// A set runtime call that hashes/compares its key (`__set_insert`/`__set_contains`/`__set_remove`,
-		// P1.7b slice A) gets the key's `Hashable`/`Equatable` witness-table addresses appended as its two
-		// hidden trailing arguments — the receiver's concrete key type is known here, so `ensureWitnessTable`
-		// materializes them, the dictionary-passing twin of `appendWitnessArgs` for a generic instance method.
-		if isSetWitnessCallee(callee) or isCharacterKeyedWitnessCallee(callee) 'setWitness'
+		// A hash-table runtime call that hashes/compares its key (`__set_insert`/`__set_contains`/
+		// `__set_remove`, and the `Map` family's `__map_upsert`/`__map_contains`/`__map_get`) gets the key's
+		// `Hashable`/`Equatable` witness-table addresses appended as its two hidden trailing arguments — the
+		// receiver's concrete key type is known here, so `ensureWitnessTable` materializes them, the
+		// dictionary-passing twin of `appendWitnessArgs` for a generic instance method.
+		//
+		// ⚠ A `Map`'s VALUE column needs no witness: nothing hashes or compares it. Both families' witnesses
+		// are the KEY's, which is why one threading serves both — see `setWitnessKeyTypeName`.
+		if isSetWitnessCallee(callee) or isMapWitnessCallee(callee) or isCharacterKeyedWitnessCallee(callee) 'setWitness'
 			self.appendSetWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'setWitness'
@@ -1515,13 +1515,29 @@ type MaxonToStdLowering
 	// `Set with Integer` and a `Box with Integer` name their `int` witness table identically — and
 	// `materializeKeyWitness` takes each table's `rdataAddr`.
 	function appendSetWitnessArgs(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.withKeyWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)))
+	end 'appendSetWitnessArgs'
+
+	// ⭐⭐ **`args` PLUS THE KEY'S TWO WITNESS-TABLE ADDRESSES — THE ARGUMENT LIST ITSELF, split out from the
+	// op that carries it because there are now TWO ops that carry it.** `__map_get` is the first
+	// witness-dispatching runtime callee that also THROWS, so it lowers as a `tryCall` rather than a `call`,
+	// down `lowerTryCall`'s compiler-owned arm — and that arm never asked this question.
+	//
+	// ⚠⚠ **THAT GAP WAS A MEASURED ACCESS VIOLATION, not a tidiness point.** Every witness-carrying callee
+	// before `__map_get` was non-throwing (`__set_insert`/`contains`/`remove`/`from`, `__cs_contains`,
+	// `__str_trim`), so "append the witnesses" and "lower a throwing call" had never had to meet. Lowered
+	// without them, `__map_get(map, key)` left the two witness PARAMETERS reading whatever the ABI registers
+	// happened to hold, and the fused `witnessCall` inside the probe's `hash()` jumped through it: measured as
+	// `create` + `upsert` + `contains` all correct and the first `try m.get(k)` faulting with 0xC0000005.
+	// ⇒ Both lowering paths now build their argument list HERE, so a third can only get it right.
+	function withKeyWitnessArgs(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
 		let keyType = self.setWitnessKeyTypeName(result, callee: callee, args: args)
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
 		fullArgs.push(self.materializeKeyWitness(keyType, interfaceName: HashableInterfaceName, dstBlock: dstBlock))
 		fullArgs.push(self.materializeKeyWitness(keyType, interfaceName: EquatableInterfaceName, dstBlock: dstBlock))
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
-	end 'appendSetWitnessArgs'
+		return fullArgs
+	end 'withKeyWitnessArgs'
 
 	// ⭐ **WHOSE KEY TYPE NAMES THE WITNESS TABLES?** — the one question `appendSetWitnessArgs` asks, with two
 	// answers. A `Set` runtime call reads it off the instance a value carries; a `CharacterSet` call
@@ -1533,7 +1549,10 @@ type MaxonToStdLowering
 		if isCharacterKeyedWitnessCallee(callee) 'characterSet'
 			return CharacterConformerName
 		end 'characterSet'
-		return self.signatures.conformerTypeArgName(self.setWitnessKeyGid(result, callee: callee, args: args), position: SetKeyTypeParamPosition).toByteArray()
+		// The KEY argument for a `Set` AND for a `Map` — both put the key first, which is the invariant
+		// `SignatureIndex.HashTableKeyArgPosition` states, and this line reads THAT constant rather than a
+		// `Set`-named copy of the same 0, so the dependency the header claims is the dependency the code has.
+		return self.signatures.conformerTypeArgName(self.setWitnessKeyGid(result, callee: callee, args: args), position: HashTableKeyArgPosition).toByteArray()
 	end 'setWitnessKeyTypeName'
 
 	// The `Set` instance whose key type names the witness tables threaded into a set runtime call. For
@@ -1545,8 +1564,8 @@ type MaxonToStdLowering
 		if callee.equals(SetFromName) 'fromConstruction'
 			return try self.valueNameIds.get(result) otherwise panic("setWitnessKeyGid: `__set_from` result v{result} has no name-id (its GenericInstanceId) — a `Set from […]` value is always a concrete generic instance")
 		end 'fromConstruction'
-		let setReceiver = try args.get(0) otherwise panic("setWitnessKeyGid: set runtime call '{String.from(callee)}' has no receiver argument — its first parameter is the set record")
-		return try self.valueNameIds.get(setReceiver) otherwise panic("setWitnessKeyGid: set receiver v{setReceiver} has no name-id (its GenericInstanceId) — a `Set` value is always a concrete generic instance")
+		let setReceiver = try args.get(0) otherwise panic("setWitnessKeyGid: hash-table runtime call '{String.from(callee)}' has no receiver argument — its first parameter is the table record")
+		return try self.valueNameIds.get(setReceiver) otherwise panic("setWitnessKeyGid: hash-table receiver v{setReceiver} has no name-id (its GenericInstanceId) — a `Set` or `Map` value is always a concrete generic instance")
 	end 'setWitnessKeyGid'
 
 	// The `rdataAddr` of the `__witness_<keyType>.<interface>` table (P1.7b slice A) — the address a set runtime
@@ -2262,6 +2281,14 @@ type MaxonToStdLowering
 
 		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'compilerOwnTryCall'
 			requireRuntimeCallPositional(callee, argLabels: argLabels)
+			// ⭐ A THROWING hash-table probe (`__map_get`) hashes and compares its key, so it takes the key's
+			// two witness tables as its trailing arguments exactly as its non-throwing siblings do
+			// (`lowerRuntimeCall`'s witness arm). It is the first callee that is BOTH, and both paths build the
+			// list through `withKeyWitnessArgs` — see there for the access violation this arm's absence was.
+			if isMapWitnessCallee(callee) 'witnessTryCall'
+				self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.withKeyWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)))
+				return
+			end 'witnessTryCall'
 			// The throwing OPAQUE-`T` `slice` (`__arr_slice_opaque`) takes the enclosing instance's descriptor as
 			// its last argument, appended here exactly as the non-throwing clone/append do in `lowerRuntimeCall`.
 			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args)))

@@ -213,6 +213,9 @@ let GraphemeFalse = 0 as ParsedInt
 //   * `__gr_count(strRec)` — the cluster count, i.e. `String.count()`.
 //   * `__char_at(strRec, startPos, endPos)` — mint an OWNED `Character` from the byte range `[startPos,
 //     endPos)`. The ONE door a Character is born through.
+//   * `__char_ascii(charRec)` — `Character.asciiValue()`: the cluster's single ASCII byte, THROWING
+//     `CharacterError.notAscii` through the dual-register `errorReturn` ABI when the cluster is not one
+//     byte, or is one byte that is not ASCII (`stdlib/Character.maxon:154-166`). It BORROWS its record.
 //   * `__str_to_bytes(strRec, arr)` — fill a caller-created `Array with Byte` with the record's bytes,
 //     i.e. `.bytes()`. The array is created by the PARSER through `emitArrayCreateOp` (the one
 //     array-creation door), exactly as `__str_split`'s is; this only pushes.
@@ -229,9 +232,40 @@ export let GraphemeStateName = b"__gr_state"
 export let GraphemeEndName = b"__gr_end"
 export let GraphemeCountName = b"__gr_count"
 export let CharAtName = b"__char_at"
+export let CharAsciiValueName = b"__char_ascii"
 export let StrToBytesName = b"__str_to_bytes"
 export let StrToCodepointsName = b"__str_to_codepoints"
 export let StrToUtf16Name = b"__str_to_utf16"
+
+// The error `__char_ascii` throws, and its flag. `CharacterError` has exactly ONE case
+// (`stdlib/Character.maxon:15-17`), so `notAscii` is ordinal 0, biased into an error flag exactly as every
+// sibling family's is — DERIVED from the one `ErrorFlagOrdinalBias` rather than written as a bare `1`, so
+// the encode here cannot drift from the parser's decode.
+//
+// ⚠ **THE ENUM IS NOT SEEDED AS A DECLARATION, AND THAT IS `runtimeThrowsClause`'s STANDING RULE RATHER
+// THAN AN OMISSION** — see there: a family joins that composer when a committed case BINDS and
+// DISCRIMINATES its error, and no case does for this one (`character-type.md`'s two `asciiValue` cases test
+// the SUCCESS-vs-FAILURE fork with `if try`, never the error's identity). The clause below is stamped for
+// the ABI's sake only, which is `__gt_process_run`'s arrangement with `RunProcessError`, verbatim. The day a
+// case discriminates `notAscii`, seed the enum in `Project` and add the arm — both, in one edit.
+let CharacterNotAsciiOrdinal = 0 as ParsedInt
+let CharacterNotAsciiFlag = CharacterNotAsciiOrdinal + ErrorFlagOrdinalBias
+let CharacterErrorTypeName = "CharacterError"
+
+function characterThrows() returns ThrowsClause
+	return ThrowsClause.throwing(CharacterErrorTypeName)
+end 'characterThrows'
+
+// The THROWING `Character` runtime callees — one, and `isThrowingGtRuntimeCallee`'s argument for shipping
+// without an install-time drift guard holds here for the same three reasons: there is exactly ONE member,
+// both this predicate and `buildCharAscii`'s `throws` stamp key on the SAME `CharAsciiValueName` constant
+// (not a copied literal), and `runtimeCalleeSourceMethod` answers it from that same constant rather than
+// from a map that could lose an arm. If a SECOND throwing `Character` callee is ever added, add the guard —
+// as `installStringIndexRuntime` had to the moment its family stopped being built by one builder — rather
+// than a second name in this `or`.
+export function isThrowingCharacterRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(CharAsciiValueName)
+end 'isThrowingCharacterRuntimeCallee'
 
 // The UTF-16 encoding constants `__str_to_utf16` needs — `stdlib/helpers/string/utf16.maxon`'s own
 // numbers (`:49-60`), named here because a surrogate split written as four bare literals is four chances
@@ -337,6 +371,9 @@ export function installGraphemeRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesCharAt 'charat'
 		buildCharAt(module)
 	end 'charat'
+	if usage.usesCharAsciiValue 'charascii'
+		buildCharAscii(module)
+	end 'charascii'
 	if usage.usesStrToBytes 'tobytes'
 		buildStrToBytes(module)
 	end 'tobytes'
@@ -1048,6 +1085,53 @@ function buildCharAt(module StdModule)
 
 	module.functions.push(func)
 end 'buildCharAt'
+
+// ⭐ **`__char_ascii(charRec) -> (byte, flag)` — `Character.asciiValue()`, THE ONE THROWING `Character`
+// MEMBER**, transcribed from `stdlib/Character.maxon:154-166` rule for rule: a cluster whose byte length is
+// not 1 throws `notAscii`, and so does a single byte with the high bit set.
+//
+// ⚠ **BOTH GUARDS ARE THE REFERENCE'S AND BOTH ARE KEPT, even though the second looks redundant here.** A
+// `Character` minted through `__char_at` off well-formed UTF-8 cannot be one byte and non-ASCII — a lead
+// byte `>= 128` announces continuation bytes the cluster would then hold. But a String's bytes are not
+// guaranteed well-formed (`String.from(bytes)` takes whatever it is given), so the byte test is a real
+// second question about a reachable record rather than a transcription of a tautology. The reference asks
+// both; asking one would be a divergence, and a silent one.
+//
+// It reads TWO fields of the record and calls nothing, so it allocates nothing and pulls in no other
+// runtime — which is why `closeGraphemeNeeds` has no arm for it (`recordGraphemeUsage`'s note).
+//
+// ⚠ The two numbers are `Utf8OneByteLength` and `Utf8OneByteCeiling`, this file's own — "one byte" and "the
+// ASCII boundary" are the same two facts the UTF-8 decoder forks on, and the header over `Utf8OneByteCeiling`
+// is explicit that its 128 IS the ASCII boundary. A third and fourth spelling of them here is precisely the
+// drift that header records paying for once already.
+function buildCharAscii(module StdModule)
+	var func = IrFunction.createFromStd(CharAsciiValueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: characterThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkAscii = module.addBlock(func, label: b"chkascii")
+	var ok = module.addBlock(func, label: b"ok")
+	var notAscii = module.addBlock(func, label: b"notascii")
+
+	emitParams(module, block: entry, count: 1)
+	let record = 0 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let oneByte = emitConst(module, block: entry, value: Utf8OneByteLength, ids: ids)
+	let isSingleByte = emitCmp(module, block: entry, a: len, b: oneByte, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isSingleByte, thenBlockId: checkAscii.id, elseBlockId: notAscii.id))
+
+	let buffer = emitLoadField(module, block: checkAscii, record: record, offset: StringBufferOffset, ids: ids)
+	let byteValue = emitLoadByteAt(module, block: checkAscii, addr: buffer, ids: ids)
+	let ceiling = emitConst(module, block: checkAscii, value: Utf8OneByteCeiling, ids: ids)
+	let isAscii = emitCmp(module, block: checkAscii, a: byteValue, b: ceiling, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(checkAscii, op: StdOp.condBranch(isAscii, thenBlockId: ok.id, elseBlockId: notAscii.id))
+
+	emitOkReturn(module, block: ok, value: byteValue, ids: ids)
+	emitErrorReturn(module, block: notAscii, flag: CharacterNotAsciiFlag, ids: ids)
+
+	module.functions.push(func)
+end 'buildCharAscii'
 
 // ⭐ **`__str_to_bytes(strRec, arr)` — `.bytes()`, filling a CALLER-CREATED `Array with Byte`.** The array
 // is built by the PARSER through `emitArrayCreateOp` (the one array-creation door), exactly as

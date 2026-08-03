@@ -630,7 +630,7 @@ end 'isThrowingGtRuntimeCallee'
 // changes nothing here: this predicate answers "must a `try` wrap it", which is a property of the OPERATION, and
 // both gates that read it run on the MAXON tier where the callee is still a call.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee)
+	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -699,6 +699,18 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	if isThrowingDivisionRuntimeCallee(callee) 'divisionFamily'
 		return divisionByZeroThrows()
 	end 'divisionFamily'
+
+	// ⭐ **THE MAP FAMILY** — one callee (`__map_get`) and one case (`MapError.keyNotFound`), and the arm is
+	// here from the family's first day rather than "with the case that needs it", because a map lookup has
+	// NOTHING to answer with on a miss: without this arm `throwsOf` says `none`, `tryErrorEnumType` types the
+	// `(e)` binding `integer`, and `match e` reports a MISSING FEATURE for a program whose feature is present
+	// — the defect R4.1, R4.2 and A1 each paid for once. It asks the THROWING predicate rather than the wide
+	// `isMapRuntimeCallee` for the directory family's reason: `__map_upsert`/`__map_contains`/`__map_decref`
+	// are `__map_`-prefixed and do NOT throw, and typing a non-throwing callee's clause as `throwing` is
+	// exactly what makes `try` required on a call that cannot fail (E3055).
+	if isThrowingMapRuntimeCallee(callee) 'mapFamily'
+		return mapErrorThrows()
+	end 'mapFamily'
 
 	return ThrowsClause.none
 end 'runtimeThrowsClause'
@@ -803,6 +815,27 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 	if isThrowingArrayAccessorCallee(callee) 'arrayFamily'
 		return RuntimeCalleeSourceMethod.found(arrayAccessorSourceMethodName(callee))
 	end 'arrayFamily'
+
+	// ⚠ The `Character` family answers from the CONSTANT rather than through a map function, and that is not
+	// a shortcut taken because the family is small. Its predicate IS `callee.equals(CharAsciiValueName)` — one
+	// name — so a map would be a one-arm dispatcher over a set of size one, i.e. the identity written as a
+	// function, with a panic arm nothing can reach. The five maps above exist because their families are
+	// several names each and a name can go missing from one; here the predicate and the answer are the same
+	// fact, and pairing them at the one site that asks is what keeps them one fact. A SECOND throwing
+	// `Character` callee makes this a map, at the same edit that makes `isThrowingCharacterRuntimeCallee` an
+	// `or` — see the note there.
+	if isThrowingCharacterRuntimeCallee(callee) 'characterFamily'
+		return RuntimeCalleeSourceMethod.found(CharacterAsciiValueMethod)
+	end 'characterFamily'
+
+	// The `Map` family answers through a MAP where the `Character` family above answers from its constant,
+	// and the asymmetry is argued at `MapRuntime.mapSourceMethodName` rather than here: both predicates name
+	// one callee today, but the map's second name (`insert`, refusing a duplicate) is already declared in
+	// `MapError`, so the panic arm is what turns that addition into an install-time failure instead of an
+	// inherited noun.
+	if isThrowingMapRuntimeCallee(callee) 'mapFamily'
+		return RuntimeCalleeSourceMethod.found(mapSourceMethodName(callee))
+	end 'mapFamily'
 
 	// ⚠ **`notFound` IS NOW EXACTLY TWO FAMILIES, AND NEITHER NAMES A METHOD.** The subprocess family's
 	// `runProcess` is a free FUNCTION and the division family is an OPERATOR — there is no method spelling to

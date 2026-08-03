@@ -1369,18 +1369,22 @@ whole-program instance walks (`noteDestructorUsage`'s managed-opaque-element roo
 among them) meet an undeclared base with no fields to read. They must answer "no
 fields" and let the E2055 already recorded at the `with` be the verdict — this
 program used to die inside `ProgramSignatures.baseLayoutOf` before any diagnostic
-was printed. `Map` is the reachable spelling: it is a real stdlib generic that shv2
-has not built.
+was printed. ⚠ This case and its `sizeof` sibling below used to spell the undeclared
+base `Map`, on the stated ground that it was "a real stdlib generic that shv2 has not
+built" — **a premise the compiler falsified** when `Map` became a builtin generic. A
+base that is undeclared only until someone builds it dates the test to the day it was
+written; `Nonexistent` is undeclared by construction, and is the same spelling the
+field-access case above already uses.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias IntMap = Map with (Int, Int)
+typealias IntMap = Nonexistent with (Int, Int)
 
 function main() returns ExitCode
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2055: <fragment>:3:20: Type 'Map' has no associated types
+error E2055: <fragment>:3:20: Type 'Nonexistent' has no associated types
 ```
 
 <!-- test: error.field-write-on-builtin-base-a-declaration-also-claims -->
@@ -1445,17 +1449,18 @@ as for a declared base, and has nothing to say only when the base is neither. `s
 folds at PARSE time, while the E2055 `checkGenericInstance` recorded against this `with` is
 drained whole-program afterwards — so this used to die inside `ProgramSignatures.baseLayoutOf`'s
 sibling with a stack trace and the real diagnostic never printed. `sizeof(Array with Int)`
-still folds to 48; only an unknown base is refused.
+still folds to 48; only an unknown base is refused. (`Nonexistent` rather than `Map` for
+the reason the case above records.)
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias IntMap = Map with (Int, Int)
+typealias IntMap = Nonexistent with (Int, Int)
 
 function main() returns ExitCode
 	return sizeof(IntMap) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:9: Unsupported: sizeof of a type that instantiates 'Map', which no file declares as a generic `type`, so it has no box to size — the `with` that names it is the error
+error E2015: <fragment>:6:9: Unsupported: sizeof of a type that instantiates 'Nonexistent', which no file declares as a generic `type`, so it has no box to size — the `with` that names it is the error
 ```
 
 <!-- test: error.bare-int-type-arg -->

@@ -1,0 +1,34 @@
+// Test: ascii-value-emoji
+function main() returns ExitCode
+	let c = '🎉'
+	if try c.asciiValue() 'hasAscii'
+		return 1
+	end 'hasAscii'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __char_ascii
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, hasAscii
+    x64.jmp ifelse
+  hasAscii:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

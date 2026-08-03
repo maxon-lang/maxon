@@ -356,6 +356,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		// that its two ordinals in `StringIndexRuntime` answered to nothing; now they are one half of a wire
 		// format whose other half is that enum's case order. See `verifyStringErrorOrdinals`.
 		verifyStringErrorOrdinals(project)
+		// `MapError` is the seventh, and it is here for the same reason: `MapRuntime` transcribes
+		// `keyNotFound`'s ordinal as a literal to build `__map_get`'s failure edge, while
+		// `Project.builtinMapErrorEnum` declares it by POSITION. See `verifyMapErrorOrdinals`.
+		verifyMapErrorOrdinals(project)
 	end 'wellFormedSoFar'
 
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
@@ -573,6 +577,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// and `installBuiltinConformanceRuntime` below, so this install order is neutral — the linker resolves
 	// the cross-references by name (P1.7b slice A).
 	installSetRuntime(pipeline.stdModule, usage: usage)
+
+	// The Map runtime (`__map_create`/`__map_upsert`/`__map_get`/…) — installed the same already-lowered way,
+	// keyed on its own `usesMap` bit. It sits beside the Set install because the two are ONE graph
+	// (`HashTableRuntime`: a map record IS a set record with a value column appended), told which shape to
+	// build; the order between them is readability, since every bit was settled by `scanRuntimeUsage` before
+	// any install ran and the linker resolves the cross-references by name.
+	installMapRuntime(pipeline.stdModule, usage: usage)
 
 	// The single-value descriptor-gated drop (`__drop_type_param`, P1.7 slice 3b-v / Finding A) — installed on
 	// its OWN `usesDropTypeParam` bit, DECOUPLED from `usesArray`, so a bare opaque `T` field reassignment in an

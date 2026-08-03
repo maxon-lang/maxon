@@ -477,7 +477,7 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: find-last-not-found -->
+<!-- test: find-last-not-found -->
 <!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try s.findLast("xyz") 'found' … else`. NOT a `findLast` gap: P1.8 Slice B2 shipped `findLast`, and its five sibling cases here are enabled. The blocker is that shv2 has no `if try <throwing call>` form for ANY callee — the whole of `specs/if-try.md` is unported — measured on this very call shape: the bare `try` in a condition is E3059 ("try propagates 'E' but the enclosing function declares no 'throws'"), and past that an `if` over the call's non-bool result is E3005. Same blocker as `character-type`'s two `if try c.asciiValue()` cases -->
 ```maxon
 function main() returns ExitCode

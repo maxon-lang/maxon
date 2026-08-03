@@ -813,6 +813,11 @@ export union ParseError implements Error
 	// parser holds that token — the emitted `tryCall` op's span anchors on the callee, and the append-only
 	// span table cannot be retargeted after the fact. `callee` names the non-throwing function.
 	tryOnNonThrowing(callee String, line LineNumber, column ColumnNumber)
+	// **E3087** — an `if x.contains(k)` whose then-block reads `try x.get(k)` on the same receiver and key.
+	// It carries the whole sentence rather than its parts because the sentence quotes SOURCE SPELLINGS (the
+	// receiver's access path, the key's, the receiver type's name) that only the parser holds; see
+	// `Parser.requireNoRedundantContainsGet` for why the check lives there at all.
+	redundantContainsGet(message String, line LineNumber, column ColumnNumber)
 	// A `try` applied to a BUILTIN call that cannot throw — `try arr.count()`, `try print("x")`,
 	// `try s.append(t)`, `try arr.push(1)`. Renders as **E3055** at the `try` token, exactly as its
 	// user-function sibling above does; it is a second MESSAGE on one code, the same way `errorTypeMismatch`
@@ -3045,6 +3050,10 @@ let StringByteLengthMethod = b"byteLength"
 // ⭐ **THE P1.8 SLICE B METHOD NAMES.** `count`/`bytes` are String's; `bytes`/`byteLength`/`asciiValue`
 // are Character's. `bytes` is spelled ONCE and dispatched from both receivers to the same emitter — a
 // String's bytes and a Character's are the same question about the same record.
+//
+// ⚠ `asciiValue` is NOT here: it is `SignatureIndex.CharacterAsciiValueMethod`, for the reason its three
+// `String` neighbours moved there at D12 — its runtime callee is throwing, so `runtimeCalleeSourceMethod`
+// needs the very constant this dispatcher matches on and a file-private `let` would force a second copy.
 let ByteViewMethod = b"bytes"
 
 // ⭐ **THE P1.8 SLICE E METHOD NAMES.** `isEmpty`/`clone` are NOT here — two containers spell each, so they
@@ -3315,6 +3324,11 @@ let CloneMethod = b"clone"
 let CountMethod = b"count"
 let IsEmptyMethod = b"isEmpty"
 
+// `Map.upsert(key, value: v)` — insert-or-replace. It joins the shared block rather than sitting in
+// `MapRuntime.maxon` for the reason the `Set` five did: a method-name SPELLING belongs where the parser
+// dispatches on it, and the runtime's business is its `__map_` entry-point names.
+let UpsertMethod = b"upsert"
+
 // ⭐⭐ **`from` — A METHOD NAME THAT IS ALSO A KEYWORD, AND THE CONSTANT THAT MAKES THAT STOP MATTERING
 // (A3g).** `String.from(bytes)` and `CharacterSet.from(chars)` are both spelled `from`, which the lexer
 // classifies as `TokenKind.from` because the same word opens a `Set from […]`. Both statics were therefore
@@ -3431,7 +3445,7 @@ function bufferSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ManagedMemoryLengthMethod)
 	names.push(ArrayCapacityMethod)
-	names.push(ArrayGetMethod)
+	names.push(GetMethod)
 	names.push(ArraySetMethod)
 	names.push(ManagedMemorySetLengthMethod)
 	names.push(ManagedMemorySetByteMethod)
@@ -3470,7 +3484,7 @@ end 'bufferSurfaceMemberNames'
 function arraySurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ManagedMemoryFieldName)
-	names.push(ArrayGetMethod)
+	names.push(GetMethod)
 	names.push(ArraySetMethod)
 	names.push(ArrayFirstMethod)
 	names.push(ArrayLastMethod)
@@ -3568,15 +3582,17 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	return names
 end 'stringSurfaceMemberNames'
 
-// ⭐ **WHICH MEMBERS THE `Character` SURFACE HAS (A2q).** Two, and the pair is a roster for the same reason
-// twenty-nine are: the count is not what makes a second copy of a list drift, an EDIT is, and a dispatcher
-// with two arms gains a third exactly as one with twenty-seven does. `asciiValue` and the rest are the
-// refusal's tail clause, under `dispatchCharacterMethod`'s own obligation to move a name from there to here
-// in one edit.
+// ⭐ **WHICH MEMBERS THE `Character` SURFACE HAS (A2q).** Three, and the list is a roster for the same
+// reason twenty-nine are: the count is not what makes a second copy of a list drift, an EDIT is, and a
+// dispatcher with two arms gains a third exactly as one with twenty-seven does. `asciiValue` was that third
+// arm, and it arrived by exactly the route this file prescribes — pushed HERE and struck from the refusal's
+// tail clause in one edit. The rest of the reference's surface is still that tail clause, under the same
+// standing obligation.
 function characterSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ByteViewMethod)
 	names.push(StringByteLengthMethod)
+	names.push(CharacterAsciiValueMethod)
 	return names
 end 'characterSurfaceMemberNames'
 
@@ -3772,7 +3788,7 @@ function surfaceRosterRefusal(surface MemberSurface, member ByteArray, roster By
 	end 'stringSurface'
 
 	if surface == MemberSurface.character 'characterSurface'
-		return rosterRefusalSentence(CharacterConformerName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2", absentClause: "`asciiValue` is throwing and its `if try …` call form does not exist yet, and `codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus")
+		return rosterRefusalSentence(CharacterConformerName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2", absentClause: "`codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus")
 	end 'characterSurface'
 
 	if surface == MemberSurface.stringIndex 'stringIndexSurface'
@@ -3803,6 +3819,64 @@ end 'surfaceRosterRefusal'
 function setMethodMutatesReceiver(name ByteArray) returns bool
 	return name.equals(InsertMethod) or name.equals(RemoveMethod)
 end 'setMethodMutatesReceiver'
+
+// ⭐ **WHICH `Map` METHODS WRITE THEIR RECEIVER** — the third half of the one immutable-receiver rule, here
+// with its two siblings for their stated reason. `upsert` publishes a slot (and may `__map_grow` the four
+// buffers); `contains` and `get` only probe.
+function mapMethodMutatesReceiver(name ByteArray) returns bool
+	return name.equals(UpsertMethod)
+end 'mapMethodMutatesReceiver'
+
+// ⭐⭐ **DOES A VALUE'S TAG FIT A HASH-TABLE COLUMN WHOSE DECLARED TYPE IS `declared`?** — THE rule, asked
+// by every container column: a `Set`'s key, a `Map`'s key and a `Map`'s value. The three containers word
+// their refusals differently (each names the type it is), but the RULE must not fork, which is why only the
+// verdict lives here.
+//
+// ⚠ **"IS THIS AN INT?" IS `tagIsIntegral`, NOT `== ValueTypeTag.integer`, AND THE NARROW SPELLING WAS A
+// MEASURED FALSE REFUSAL.** A value whose static type is a RANGED ALIAS carries the `named` tag until
+// TypeResolution collapses it — which is every parameter and every field read of `typealias Integer =
+// int(…)` — so `insert(v)` inside `function add(s IntSet, v Integer)` was rejected as *"`Set with int`
+// requires an int key — got a 'int' value"*, a sentence that argues against itself precisely because
+// `typeTagName` already reads `named` as `int`.
+//
+// ⚠ A Character column asks the DEFINITELY question and not `tagIsByteRecord`: a `String` value is a byte
+// record too, and hashing one as a Character key would put `"a"` and `'a'` in one bucket under two types.
+function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) returns bool
+	if declared == ValueTypeTag.character 'characterColumn'
+		return valueTag == ValueTypeTag.character
+	end 'characterColumn'
+	if tagIsText(declared) 'textColumn'
+		return tagIsText(valueTag)
+	end 'textColumn'
+
+	// ⚠⚠ **THE LAST ARM IS THE INT ARM, AND IT IS DELIBERATELY A FALL-THROUGH RATHER THAN A `tagIsIntegral`
+	// TEST WITH A PANIC PAST IT — because `declared` IS NOT CONFINED TO THE ADMITTED THREE, and that was
+	// MEASURED, not assumed.** `requireHashTableColumnType` runs where a container is MATERIALIZED
+	// (`IntSet.create()`), so a method call on an instance this function never created reaches here with any
+	// column type at all: `function add(s BadSet) s.insert(1.0) end` over `typealias BadSet = Set with float`
+	// answers *"`Set with float` requires a float key — got a 'float' value"* today — a nonsense sentence, but
+	// a clean E2015 on a program that is refused either way. A panic on the residual would replace that
+	// refusal with a COMPILER CRASH, and the `insert(1)` spelling of the same program would lose its E2062
+	// (the honest diagnostic, on the type argument) to it. A fourth ADMITTED column type must therefore be
+	// added here as an arm of its own, ahead of this one — and its gate is not what will stop you forgetting.
+	return tagIsIntegral(valueTag)
+end 'columnValueTagMatches'
+
+// `typeTagName` with its English indefinite article — *"an int"*, *"a String"*, *"a Character"*. It exists
+// because the container-column refusals above compose that phrase and a bare `"a {typeTagName(t)}"` reads
+// *"a int"*, so without it the article would be written out once per refusal site and the three would be
+// free to disagree.
+//
+// ⚠ The three ADMITTED column types (`requireHashTableColumnType` passes `int`, `String` and `Character`)
+// include exactly one that takes *"an"*, which is why the test is the integral one and not a vowel scan over
+// the name. But `tag` is NOT confined to those three — see `columnValueTagMatches`'s last arm for the
+// measured reason — so the `"a"` branch is a real default and not an unreachable one, and it is CORRECT for
+// every remaining tag name (`float`, `bool`, a struct's name…), all of which begin with a consonant. A
+// fourth admitted type whose name opens with a vowel needs its own arm here; nothing will crash to tell you.
+function articledTypeTagName(tag ValueTypeTag) returns String
+	let name = typeTagName(tag)
+	return "an {name}" if tagIsIntegral(tag) else "a {name}"
+end 'articledTypeTagName'
 
 // Append one argument to a call's THREE PARALLEL COLUMNS — its value, its `name:` label (the empty
 // slice when positional), and its source span.
@@ -4637,6 +4711,50 @@ union TryHandler
 	terminated
 	fellThrough
 end 'TryHandler'
+
+// ⭐ **WHAT AN `if`'s CONDITION SLOT TURNED OUT TO BE — the two shapes `parseIfStatement` branches on.**
+// An ordinary condition is a bool and nothing else; a `try` in that slot is CAUGHT by the `if` rather than
+// propagated, so the branch tests the call's error flag and the two edges of the `if` ARE the two edges of
+// the try. Everything the catching form owes downstream rides here:
+//   • `test`      — the bool the two-way branch takes, so the branch, the value merge and the move
+//                   reconciliation stay ONE code path for both shapes.
+//   • `result`    — the call's success value, live on the THEN edge alone (a throw zeroes the register), so
+//                   only that edge may bind or drop it.
+//   • `flag`      — the raw error flag, which the else edge decodes into an `else (e)` binding and — for a
+//                   payload-bearing union — owns as a heap box that must be released on that edge.
+//   • `errorType` — the callee's throws enum, carried instead of the `TryTarget` it was derived from
+//                   because it is the ONLY thing the else edge asks: which enum `e` is, and whether the
+//                   flag is a box pointer or an `ordinal + bias`.
+union IfCondition
+	plain(test ValueId)
+	tryCatch(test ValueId, result ValueId, flag ValueId, errorType MaxonType)
+end 'IfCondition'
+
+// The optional success binder in front of a catching condition — `if let x = try …` / `if var x = try …`.
+// It carries the name's TOKEN INDEX rather than its text: the token is what `declareInitializedBinding`
+// wants (name, line and column together), and an index costs no managed field on a union arm.
+union IfBinder
+	none
+	binding(nameIndex TokenIndex, mutable bool)
+end 'IfBinder'
+
+// The bool an `if`'s two-way branch tests, whichever shape its condition took.
+function ifConditionTest(cond IfCondition) returns ValueId
+	return match cond 'shape'
+		plain(test) gives test
+		tryCatch(test, _, _, _) gives test
+	end 'shape'
+end 'ifConditionTest'
+
+// Does this `if` CATCH — i.e. is its else edge the error edge of a `try`? It decides one thing in
+// `parseIfStatement`: a catching `if` always gets a real else block, even with no `else` written, because
+// that edge carries an obligation (release the caught error) an `entry → continuation` edge cannot hold.
+function ifConditionCatches(cond IfCondition) returns bool
+	return match cond 'shape'
+		plain gives false
+		tryCatch gives true
+	end 'shape'
+end 'ifConditionCatches'
 
 // ⭐ **WHAT A `try` IS APPLIED TO — the ONE thing the whole desugar asks about its target (P1.7a slice
 // 2b-v).** Everything downstream of `rewriteLastCallToTryCall` wants exactly two facts: the NAME a
@@ -6298,6 +6416,15 @@ export type Parser
 	var lastFieldReadValue as ValueId
 	var lastFieldReadBox as ValueId
 	var lastFieldReadOffset as ByteOffset
+	// ⭐ **THE LAST MEMBER DISPATCH — its member-name TOKEN and the receiver it was dispatched on** (E3087).
+	// Two SCALAR fields, written in one place (`noteMemberDispatch`) and read in one (the
+	// redundant-`contains`/`get` lint), following `lastFieldRead*` above in shape and for the same reason: a
+	// field read allocates nothing, and the reader recognizes its own record by IDENTITY — the token index
+	// must fall strictly inside the `if` condition being checked — so a stale entry cannot be mistaken for a
+	// live one. A miss skips the lint; it can never name the wrong receiver. No validity flag is needed
+	// because index 0 is a file's first token and can never be a member name inside an `if` condition.
+	var lastDispatchedMemberIndex as TokenIndex
+	var lastDispatchedReceiver as ValueId
 	// ⭐ **THE RETURN TYPE OF EVERY NON-CAPTURING CLOSURE LIFTED IN THIS FILE (P1.5-A2a), keyed by its
 	// synthetic name.** A lifted closure's signature is FILE-LOCAL: it never reaches the whole-program
 	// `SignatureIndex` (built from tokens before any body is parsed, and a closure is an EXPRESSION inside a
@@ -6515,6 +6642,8 @@ export type Parser
 			ownedBindings: VarInfoArray.create(),
 			unusedCandidates: UnusedBindingCandidateArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
+			lastDispatchedMemberIndex: 0,
+			lastDispatchedReceiver: 0,
 			inMatchArmBody: false,
 			lastFieldReadValid: false,
 			lastFieldReadValue: 0,
@@ -10523,25 +10652,23 @@ export type Parser
 			return
 		end 'indexStillBuilding'
 
-		// `Array` is a BUILTIN generic with one type parameter `Element` — there is no `type Array uses
-		// Element` declaration (its runtime is synthesized, P1.7), so `structOf` finds nothing. Validate its
-		// arity here instead; the managed-element rejection (slice 1 is trivial elements only) is done where
-		// an array is materialized, which has the resolved element type in hand.
-		if self.signatures.isArrayBaseName(baseTok.value) 'array'
-			if argCount != ArrayTypeParamCount 'wrongArity'
-				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {ArrayTypeParamCount} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
+		// ⭐ **A SYNTHESIZED BUILTIN GENERIC HAS NO DECLARATION TO READ AN ARITY OFF** — `Array with Element`,
+		// `Set with Element` and `Map with (Key, Value)` are all built by the compiler, so `structOf` finds
+		// nothing for any of them and the arity is validated against the index's own table instead. Their
+		// KEY/ELEMENT-type restrictions are not checked here: those need the RESOLVED argument type and are
+		// enforced where the container is materialized — `requireHashTableColumnType`, asked once of a `Set`'s
+		// key and twice of a `Map`'s two columns.
+		//
+		// ⚠ One arm for all three, reading `builtinGenericTypeParamCount` — this used to be a per-builtin arm
+		// that spelled the predicate and the count together, and a third builtin generic is exactly the edit
+		// that would have left one of the two behind.
+		if self.signatures.isBuiltinGenericBaseName(baseTok.value) 'builtinGeneric'
+			let expected = self.signatures.builtinGenericTypeParamCount(baseTok.value)
+			if argCount != expected 'wrongArity'
+				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {expected} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
 			end 'wrongArity'
 			return
-		end 'array'
-		// `Set` is a BUILTIN generic with one type parameter `Element` (P1.7b slice A) — like `Array`, no `type
-		// Set uses Element` declaration exists, so validate its arity here; the int-key-only restriction is
-		// enforced where a set method receives its element (which has the resolved key type in hand).
-		if self.signatures.isSetBaseName(baseTok.value) 'set'
-			if argCount != SetTypeParamCount 'wrongArity'
-				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {SetTypeParamCount} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
-			end 'wrongArity'
-			return
-		end 'set'
+		end 'builtinGeneric'
 		match self.signatures.structOf(baseTok.value) 'base'
 			undeclared then self.recordBaseNotGeneric(baseTok)
 			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, argCount: argCount)
@@ -16374,8 +16501,45 @@ export type Parser
 		self.ownedBindings.push(binding)
 	end 'enrollCaughtBox'
 
+	// ⭐⭐ **RECOVER THE CAUGHT ERROR INTO `currentBlock` — THE ONE DECODE, SHARED BY THE TWO CONSTRUCTS THAT
+	// CATCH.** `try f() otherwise (e) 'err' … end` and `if try f() 'ok' … end 'ok' else (e) 'err' … end` are
+	// one operation reached by two grammars: the same flag, caught the same way, and the error-flag ABI has
+	// exactly two shapes to undo (`throwsTypeIsBoxedUnion`, the fact the throw ENCODE turned on):
+	//   • a BOXED union — the flag IS the box pointer, written verbatim by the throw, so the binding takes it
+	//     with NO arithmetic and only its type columns move (`enrollCaughtBox`).
+	//   • a SCALAR enum — `e = flag - ErrorFlagOrdinalBias`, the exact inverse of the Std-tier throw ENCODE
+	//     (`lowerThrowError`). Both read the one `ErrorFlagOrdinalBias`, so a change to the bias cannot leave
+	//     this decode silently binding `match e` to the wrong case.
+	// A BOXED error is enrolled owned whether or not it is named — ANONYMOUS for a binder-less catch — so a
+	// transferred box is released exactly once on the edge that leaves the branch; the caller's
+	// `dropArmScopedOwned` does the releasing. A SCALAR error owns no heap and enrols nothing, so a
+	// binder-less scalar catch emits no code at all.
+	//
+	// The caller has already opened the scope frame the binding lands in, and owns the matching
+	// `ownedFloor` / `popScope` / `dropArmScopedOwned` — this routine only declares.
+	function declareCaughtError(flag ValueId, errorType MaxonType, bindingName ByteArray, hasBinding bool, anchor Token) throws ParseError
+		if self.throwsTypeIsBoxedUnion(errorType) 'boxedError'
+			var eBinding = VarInfo.createValueBinding(EmptySourceText, varType: errorType, mutable: false, boundValue: flag)
+			if hasBinding 'nameBoxedE'
+				eBinding = try self.scope.declareValueBinding(bindingName, varType: errorType, mutable: false, value: flag) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: anchor.line, column: anchor.column)
+			end 'nameBoxedE'
+			self.enrollCaughtBox(flag, eType: errorType, binding: eBinding)
+			return
+		end 'boxedError'
+
+		if not hasBinding 'scalarUnnamed'
+			return
+		end 'scalarUnnamed'
+
+		let bias = self.emitLiteral(ErrorFlagOrdinalBias, valueType: MaxonType.integer, range: SourceRange.ofToken(anchor))
+		let eValue = self.mintValueOfType(errorType)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(eValue, lhs: flag, rhs: bias, op: MaxonBinOp.sub), range: SourceRange.ofToken(anchor))
+		_ = try self.scope.declareValueBinding(bindingName, varType: errorType, mutable: false, value: eValue) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: anchor.line, column: anchor.column)
+	end 'declareCaughtError'
+
 	// Parse an `otherwise` handler BLOCK (`otherwise ['(e)'] 'label' … end 'label'`) into the error block.
-	// When `hasBinding`, `e = flag - 1` is declared in a fresh scope frame before the body. Both forms are
+	// The caught error is recovered by the shared `declareCaughtError` — the same decode `if try … else (e)`
+	// runs — in a fresh scope frame opened before the body and drained after it. Both forms are
 	// E2049 in a match arm (the block label is where the arm-body single-statement rule is violated).
 	function parseOtherwiseBlock(func IrFunction, bindingName ByteArray, hasBinding bool, flag ValueId, target TryTarget) returns TryHandler throws ParseError
 		if not self.at(TokenKind.charLiteral) 'noLabel'
@@ -16391,8 +16555,6 @@ export type Parser
 		try self.consume(TokenKind.charLiteral)
 
 		var errBlock = self.currentBlock
-		let eType = self.tryErrorEnumType(self.tryTargetThrows(target))
-		let boxed = self.throwsTypeIsBoxedUnion(eType)
 
 		// The owned-binding height BEFORE the caught box is enrolled — a handler-local drop FLOOR, the try
 		// twin of `openBlock`'s `ownedCount` (drained by `dropArmScopedOwned` below). A boxed error is an
@@ -16400,27 +16562,7 @@ export type Parser
 		let ownedFloor = self.ownedBindings.count()
 		self.scope.pushScope()
 
-		if boxed 'boxedError'
-			// The caught box is enrolled owned — NAMED for `(e)`, ANONYMOUS for a `otherwise 'l'` — so a
-			// binding-less block on a heap error still releases the transferred box exactly once.
-			// `dropArmScopedOwned` frees it on the edge that leaves the handler, and a `throw e` that moved it
-			// out first is skipped.
-			var eBinding = VarInfo.createValueBinding(EmptySourceText, varType: eType, mutable: false, boundValue: flag)
-			if hasBinding 'nameBoxedE'
-				eBinding = try self.scope.declareValueBinding(bindingName, varType: eType, mutable: false, value: flag) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: labelTok.line, column: labelTok.column)
-			end 'nameBoxedE'
-			self.enrollCaughtBox(flag, eType: eType, binding: eBinding)
-		end 'boxedError' else 'scalarError'
-			if hasBinding 'bindScalarE'
-				// DECODE the caught flag back to the enum ordinal: `e = flag - ErrorFlagOrdinalBias`, the exact
-				// inverse of the Std-tier throw ENCODE (`lowerThrowError`). Both read the one `ErrorFlagOrdinalBias`
-				// so a change to the bias cannot leave this decode silently binding `match e` to the wrong case.
-				let bias = self.emitLiteral(ErrorFlagOrdinalBias, valueType: MaxonType.integer, range: SourceRange.ofToken(labelTok))
-				let eValue = self.mintValueOfType(eType)
-				self.artifact.emitOp(errBlock, op: MaxonOp.binOp(eValue, lhs: flag, rhs: bias, op: MaxonBinOp.sub), range: SourceRange.ofToken(labelTok))
-				_ = try self.scope.declareValueBinding(bindingName, varType: eType, mutable: false, value: eValue) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: labelTok.line, column: labelTok.column)
-			end 'bindScalarE'
-		end 'scalarError'
+		try self.declareCaughtError(flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), bindingName: bindingName, hasBinding: hasBinding, anchor: labelTok)
 
 		let errEnd = try self.parseBlockBody(func, block: errBlock, label: labelTok.value)
 		self.scope.popScope()
@@ -16561,8 +16703,8 @@ export type Parser
 	// ⭐ **IS THE THROWN/CAUGHT ERROR A BOXED (payload-bearing) UNION?** — the ONE fact the error-flag ABI
 	// turns on, and the derive-once point for it. Read at BOTH ends so the flag round-trips: the throw
 	// ENCODE (`emitThrowError`, which stamps it on the `throwError` op for `lowerThrowError` to write the box
-	// pointer verbatim) and the catch DECODE (`parseOtherwiseBlock`, which binds `e` to that pointer
-	// verbatim). Both funnel through the one `enumOf(name).isBoxed()` here, so a boxed union cannot be
+	// pointer verbatim) and the catch DECODE (`declareCaughtError`, which binds `e` to that pointer verbatim
+	// for BOTH catching constructs). Both funnel through the one `enumOf(name).isBoxed()` here, so a boxed union cannot be
 	// encoded as a pointer at one end and decoded as an `ordinal + bias` at the other. A SCALAR enum and a
 	// non-`named` type are `false` — their flag is `ordinal + ErrorFlagOrdinalBias`.
 	function throwsTypeIsBoxedUnion(errorType MaxonType) returns bool
@@ -17598,8 +17740,12 @@ export type Parser
 		let ifEnd = self.blockStatementEndIndex(ifIndex, continuesAtElse: true)
 		let assignedBindings = self.assignedBindingsIn(ifIndex, endIndex: ifEnd)
 
+		// `if let x = try …` / `if var x = try …` — the success binder, read off the tokens BEFORE the
+		// condition because it is what makes the condition's `try` mandatory rather than optional.
+		let binder = try self.parseIfBinder()
+
 		let condTempFloor = self.pendingTempDrops.count()
-		let cond = try self.parseBoolCondition(func, block: block, kwTok: ifTok)
+		let cond = try self.parseIfCondition(func, block: block, ifTok: ifTok, binder: binder)
 		// The condition's own blocks: a short-circuit `and`/`or` in it (`if a() and b()`)
 		// has already branched, and control now sits in ITS merge block. That — not the
 		// block the `if` started in — is where the two-way branch belongs, and it is the
@@ -17615,6 +17761,12 @@ export type Parser
 		// that returned early, never at all).
 		self.drainPendingTemps(condTempFloor, anchor: ifTok)
 
+		// E3087 — `if x.contains(k)` guarding a `try x.get(k)` on the same key. Asked HERE, with the cursor
+		// still on the then-label, because this is the first point that holds both halves the check needs: the
+		// condition has been parsed (so the receiver's TYPE is resolved and recorded) and the then-block's
+		// tokens are still ahead, unconsumed and readable.
+		try self.requireNoRedundantContainsGet(ifIndex)
+
 		let thenLabel = try self.consume(TokenKind.charLiteral)
 
 		// Values entering the branches (the condition only reads, so `entry`'s values
@@ -17629,7 +17781,7 @@ export type Parser
 		// statement parser fills the block; the finalizers wire its terminator) — a
 		// `let` binding cannot be forwarded to a mutating parameter (E3019).
 		var thenBlock = self.newBlock(func, label: thenLabel.value, line: thenLabel.line)
-		var thenEnd = try self.parseBlockBody(func, block: thenBlock, label: thenLabel.value)
+		var thenEnd = try self.parseIfThenBody(func, thenBlock: thenBlock, label: thenLabel.value, cond: cond, binder: binder, anchor: thenLabel)
 
 		// Snapshot the then-branch's exit values and move state, then rewind BOTH to the entry state so the
 		// else/false path is parsed against the pre-`if` values and pre-`if` ownership, not the then-branch's.
@@ -17638,40 +17790,461 @@ export type Parser
 		self.restoreBindings(assignedBindings, snapshot: entryVals)
 		self.restoreMoveMark(entryMoveMark)
 
-		if not self.at(TokenKind.else) 'noElse'
-			let cont = self.finalizeIfNoElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, bindings: assignedBindings, entryVals: entryVals, thenVals: thenVals, entryMoveMark: entryMoveMark, thenMoveMark: thenMoveMark)
+		// ⭐ **A CATCHING `if` WITH NO `else` STILL HAS AN ELSE BLOCK.** Its false edge is the error edge of a
+		// `try`, which carries an obligation an `entry → continuation` edge structurally cannot: a caught
+		// payload-bearing error is a heap box this construct owns, and it must be released on the path that
+		// caught it. Giving that edge a real (possibly empty) block hands the release, the `else (e)` binding
+		// and the written-`else` body to ONE routine, instead of splitting the ownership rule across the
+		// two-block and three-block merge shapes. A PLAIN `if` with no `else` is untouched and keeps the
+		// direct false edge.
+		if not self.at(TokenKind.else) and not ifConditionCatches(cond) 'noElse'
+			let cont = self.finalizeIfNoElse(func, entry: entry, cond: ifConditionTest(cond), ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, bindings: assignedBindings, entryVals: entryVals, thenVals: thenVals, entryMoveMark: entryMoveMark, thenMoveMark: thenMoveMark)
 			self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
 			return cont
 		end 'noElse'
 
-		try self.consume(TokenKind.else)
 		var elseBlock = self.newBlock(func, label: b"ifelse", line: ifTok.line)
-		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock)
+		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock, cond: cond, ifTok: ifTok)
 		let elseVals = self.snapshotBindings(assignedBindings)
 		let elseMoveMark = self.captureMoveMark()
-		let cont = self.finalizeIfElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, bindings: assignedBindings, thenVals: thenVals, elseVals: elseVals, thenMoveMark: thenMoveMark, elseMoveMark: elseMoveMark)
+		let cont = self.finalizeIfElse(func, entry: entry, cond: ifConditionTest(cond), ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, bindings: assignedBindings, thenVals: thenVals, elseVals: elseVals, thenMoveMark: thenMoveMark, elseMoveMark: elseMoveMark)
 		self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
 		return cont
 	end 'parseIfStatement'
 
-	// Parse an `else` body into `elseBlock`: either a nested `if` (the `else if …`
-	// chain — the else branch IS a nested if statement, so `elseBlock` becomes that
-	// if's entry) or a plain labelled `else` block. Returns the block the else branch
-	// left control in (its own continuation for a nested if; the block its last
-	// statement filled for a plain else).
+	// ⭐⭐ **E3087 — `if x.contains(k)` FOLLOWED BY `try x.get(k)` IS TWO LOOKUPS WHERE ONE WILL DO.** The
+	// membership test and the value read probe the same table for the same key, so the pattern is refused and
+	// the author is pointed at `if let v = try x.get(k)`, which does one.
 	//
-	// The `else if` form opens NO scope frame of its own: its condition is evaluated in
-	// the ENCLOSING scope (it is not inside any block), and each of the nested if's own
-	// branches opens a frame when it is parsed. Only the plain `else 'label'` form is a
-	// block body.
-	function parseElseBody(func IrFunction, elseBlock IrBlock) returns IrBlock throws ParseError
+	// ⭐ **IT IS A PARSER CHECK, AND THAT IS A DELIBERATE DEPARTURE FROM BOTH REFERENCE COMPILERS.** The
+	// bootstrap (`SemanticCheckPass.CheckRedundantContainsGet`) and v1 (`SemanticCheck.maxon`'s
+	// `maybeEmitRedundantContainsGet`) both run it over the lowered IR and RECONSTRUCT the receiver's access
+	// path by walking SSA def-use chains backwards — `BuildAccessPath` / `buildAccessPath` — because by then
+	// the source text is gone. shv2 does not have to: its parser resolves types AND still holds the tokens, so
+	// `holder.cache` and the key's spelling are READ rather than rebuilt, and the anchor the diagnostic wants
+	// (the `contains` member-name token) is a token this function has in its hand. Nothing here re-derives a
+	// path, so nothing here can disagree with the receiver the call actually took.
+	//
+	// ⚠ **WHAT IS NOT DEPARTED FROM IS THE RULE**, which is the references' to the letter: the receiver and the
+	// key must be the SAME access path on both sides (matched structurally, so a field chain counts exactly as
+	// a bare local does); the `get` must be under a `try`; and the scan of the then-block STOPS at the first
+	// thing that could have invalidated the membership answer — a write to any name in either path, or any
+	// other call on the same receiver. Suppressing on those is what keeps the lint from being a false accusation
+	// against code that legitimately probes twice.
+	//
+	// ⚠ **A NON-PATH RECEIVER OR KEY IS SIMPLY NOT LINTED**, again as in both references (`BuildAccessPath`
+	// answers null and the walk `continue`s). `t.get(0).contains(k)` and `m.contains(a + b)` are outside what a
+	// token-level path comparison can prove equal, and an unprovable pair must not be reported.
+	function requireNoRedundantContainsGet(ifIndex TokenIndex) throws ParseError
+		// The condition spans `(if, then-label)`; the cursor sits on the label, which `parseIfStatement` has
+		// not consumed yet. A `contains` this `if` did not dispatch — an `and`/`or` arm, a nested call, an
+		// earlier statement's — fails the containment test below and stops the check.
+		let condStart = ifIndex + 1
+		let memberIndex = self.lastDispatchedMemberIndex
+		if memberIndex <= condStart or memberIndex >= self.pos 'containsIsNotThisCondition'
+			return
+		end 'containsIsNotThisCondition'
+		if not self.tokenAt(memberIndex).value.equals(ContainsMethod) 'notAContainsCondition'
+			return
+		end 'notAContainsCondition'
+
+		// The condition must be the `contains` call and NOTHING ELSE: `if not m.contains(k)` and
+		// `if m.contains(k) and f()` guard something different from what the `if` tests, so neither is this
+		// pattern. `chain . contains ( args )` — the chain runs `[condStart, memberIndex - 1)` and the `(`
+		// immediately follows the member name.
+		if not self.isDottedChain(condStart, pastEnd: memberIndex - 1) or self.kindAt(memberIndex - 1) != TokenKind.dot 'conditionIsNotALoneContainsCall'
+			return
+		end 'conditionIsNotALoneContainsCall'
+		if self.kindAt(memberIndex + 1) != TokenKind.leftParen or self.kindAt(self.pos - 1) != TokenKind.rightParen 'notACallSpanningTheCondition'
+			return
+		end 'notACallSpanningTheCondition'
+		let keyStart = memberIndex + 2
+		let keyPastEnd = self.pos - 1
+		if not self.isDottedChain(keyStart, pastEnd: keyPastEnd) 'keyIsNotAPath'
+			return
+		end 'keyIsNotAPath'
+
+		// The THEN block's own extent — `continuesAtElse: false`, so the scan stops at the first `end` and
+		// never walks an `else` branch, which the membership test did not guard.
+		if not self.thenBlockRepeatsTheLookup(self.pos, ifEnd: self.blockStatementEndIndex(ifIndex, continuesAtElse: false), chainStart: condStart, chainPastEnd: memberIndex - 1, keyStart: keyStart, keyPastEnd: keyPastEnd) 'noRedundantGet'
+			return
+		end 'noRedundantGet'
+
+		let receiverText = self.dottedChainText(condStart, pastEnd: memberIndex - 1)
+		let keyText = self.dottedChainText(keyStart, pastEnd: keyPastEnd)
+		let owner = self.receiverTypeDisplayName(self.lastDispatchedReceiver)
+		let anchor = self.tokenAt(memberIndex)
+		throw ParseError.redundantContainsGet("redundant '{owner}.{String.from(ContainsMethod)}' followed by '{owner}.{String.from(GetMethod)}' on '{receiverText}': use 'if let v = try {receiverText}.{String.from(GetMethod)}({keyText})' (or 'if var') instead — performs one lookup instead of two", line: anchor.line, column: anchor.column)
+	end 'requireNoRedundantContainsGet'
+
+	// Does the then-block `(labelIndex, ifEnd)` read `try <chain>.get(<key>)` on the very path the condition
+	// already probed? The walk STOPS — never `continue`s past — at anything that could have
+	// invalidated the membership answer, which is the references' suppression rule:
+	//
+	//   • a WRITE to any name the receiver or key path mentions (`m = other`, `holder.cache = fresh`), and the
+	//     guard set is every segment of both paths, so a write to `cache` stops a `holder.cache` receiver;
+	//   • ANY other member access on the same receiver — `m.upsert(…)` may have inserted, `m.remove(…)` may
+	//     have deleted — including a `get` whose key differs or one not under a `try`.
+	//
+	// A nested block inside the then-block is walked like the rest: a `get` reached only conditionally is still
+	// a second lookup on a path the `contains` already answered for, and the writes that would suppress it are
+	// seen on the way in.
+	function thenBlockRepeatsTheLookup(labelIndex TokenIndex, ifEnd TokenIndex, chainStart TokenIndex, chainPastEnd TokenIndex, keyStart TokenIndex, keyPastEnd TokenIndex) returns bool
+		var i = labelIndex + 1
+		while i < ifEnd 'scan'
+			// A write to a guarded name — `<name> =` where `<name>` is a segment of either path. `==` is a
+			// distinct token kind, so a comparison is not mistaken for an assignment.
+			if self.kindAt(i + 1) == TokenKind.equals and self.tokenNamesAPathSegment(i, chainStart: chainStart, chainPastEnd: chainPastEnd, keyStart: keyStart, keyPastEnd: keyPastEnd) 'guardedNameWritten'
+				return false
+			end 'guardedNameWritten'
+
+			if not self.tokensEqualAt(i, otherStart: chainStart, otherPastEnd: chainPastEnd) 'notTheReceiver'
+				i = i + 1
+				continue
+			end 'notTheReceiver'
+
+			// The receiver path occurs here. Every use of it decides the answer: the matching `try …get(key)`
+			// fires, and anything else ends the scan.
+			let memberIndex = i + (chainPastEnd - chainStart) + 1
+			if self.kindAt(memberIndex - 1) != TokenKind.dot 'notAMemberAccess'
+				return false
+			end 'notAMemberAccess'
+			if not self.tokenAt(memberIndex).value.equals(GetMethod) or self.kindAt(i - 1) != TokenKind.try 'notATryGet'
+				return false
+			end 'notATryGet'
+			if self.kindAt(memberIndex + 1) != TokenKind.leftParen 'notACall'
+				return false
+			end 'notACall'
+			let argStart = memberIndex + 2
+			let argPastEnd = argStart + (keyPastEnd - keyStart)
+			if self.kindAt(argPastEnd) != TokenKind.rightParen or not self.tokensEqualAt(argStart, otherStart: keyStart, otherPastEnd: keyPastEnd) 'differentKey'
+				return false
+			end 'differentKey'
+			return true
+		end 'scan'
+		return false
+	end 'thenBlockRepeatsTheLookup'
+
+	// Is the token at `index` an identifier spelled like some segment of either guarded path? The guard set is
+	// the path SEGMENTS rather than the whole path, deliberately: `holder.cache = fresh` rebinds the field a
+	// `holder.cache` receiver reads, and `holder = other` rebinds its base, and both must suppress.
+	function tokenNamesAPathSegment(index TokenIndex, chainStart TokenIndex, chainPastEnd TokenIndex, keyStart TokenIndex, keyPastEnd TokenIndex) returns bool
+		if self.kindAt(index) != TokenKind.identifier 'notAName'
+			return false
+		end 'notAName'
+		let name = self.tokenAt(index).value
+		return self.chainMentionsName(name, chainStart: chainStart, chainPastEnd: chainPastEnd) or self.chainMentionsName(name, chainStart: keyStart, chainPastEnd: keyPastEnd)
+	end 'tokenNamesAPathSegment'
+
+	function chainMentionsName(name ByteArray, chainStart TokenIndex, chainPastEnd TokenIndex) returns bool
+		var i = chainStart
+		while i < chainPastEnd 'eachSegment'
+			if self.tokenAt(i).value.equals(name) 'mentions'
+				return true
+			end 'mentions'
+			// Segments alternate `ident . ident`, so stepping two lands on the next name.
+			i = i + 2
+		end 'eachSegment'
+		return false
+	end 'chainMentionsName'
+
+	// Is `[start, pastEnd)` exactly `ident ( . ident )*` — the token shape of an access PATH, which is the
+	// whole of what this lint can compare structurally. An empty span is not one.
+	function isDottedChain(start TokenIndex, pastEnd TokenIndex) returns bool
+		if pastEnd <= start 'empty'
+			return false
+		end 'empty'
+		var i = start
+		while i < pastEnd 'eachSegment'
+			if self.kindAt(i) != TokenKind.identifier 'notAName'
+				return false
+			end 'notAName'
+			if i + 1 >= pastEnd 'lastSegment'
+				return true
+			end 'lastSegment'
+			if self.kindAt(i + 1) != TokenKind.dot 'notADot'
+				return false
+			end 'notADot'
+			i = i + 2
+		end 'eachSegment'
+		return false
+	end 'isDottedChain'
+
+	// Do the tokens at `[start, …)` spell the same thing as `[otherStart, otherPastEnd)`? Compared by the
+	// tokens' own source bytes, which is what makes `holder.cache` on one side and `holder.cache` on the other
+	// the same receiver without a name table.
+	//
+	// ⚠ **THE KIND IS COMPARED TOO, and it is not belt-and-braces**: a PUNCTUATION token carries no source
+	// bytes of its own, so a value-only test reads every `.`, `,` and `+` as the same empty string and
+	// `holder + cache` would answer equal to the chain `holder . cache`.
+	function tokensEqualAt(start TokenIndex, otherStart TokenIndex, otherPastEnd TokenIndex) returns bool
+		var offset = 0
+		while otherStart + offset < otherPastEnd 'eachToken'
+			let here = self.tokenAt(start + offset)
+			let there = self.tokenAt(otherStart + offset)
+			if here.kind != there.kind or not here.value.equals(there.value) 'differs'
+				return false
+			end 'differs'
+			offset = offset + 1
+		end 'eachToken'
+		return true
+	end 'tokensEqualAt'
+
+	// The source spelling of the dotted chain `[start, pastEnd)` — `m`, `holder.cache`. Rebuilt from the
+	// tokens' own bytes rather than sliced out of the source buffer, because the chain is exactly
+	// `ident ( . ident )*` and so has no interior trivia to preserve.
+	function dottedChainText(start TokenIndex, pastEnd TokenIndex) returns String
+		var out = ""
+		var i = start
+		while i < pastEnd 'eachSegment'
+			if i > start 'separator'
+				out.append(".")
+			end 'separator'
+			out.append(String.from(self.tokenAt(i).value))
+			i = i + 2
+		end 'eachSegment'
+		return out
+	end 'dottedChainText'
+
+	// The name the diagnostic calls a receiver's TYPE — `Map` for a `Map with (String, String)`, `Set` for a
+	// set, the declared name for a struct. It is the BASE name of a generic instance and not the mangled
+	// instance name, because the sentence names a method (`Map.contains`) and a method belongs to the base.
+	function receiverTypeDisplayName(receiver ValueId) returns String
+		let tag = self.tagOf(receiver)
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return String.from(self.signatures.genericInstanceBaseName(self.valueNameId(receiver)))
+		end 'instance'
+		return typeTagName(tag) if self.valueNameId(receiver) == UnnamedTypeId else String.from(self.internedName(self.valueNameId(receiver)))
+	end 'receiverTypeDisplayName'
+
+	// Record the member dispatch about to happen — the token index of the member NAME and the receiver whose
+	// type it is being dispatched on. TWO SCALAR FIELDS written in ONE place, exactly as `lastFieldRead*` is:
+	// the redundant-`contains`/`get` lint recognizes its own condition by IDENTITY (the index must fall inside
+	// the condition it is checking), so a stale record from an earlier dispatch cannot be mistaken for this
+	// one, and a miss simply skips the lint rather than reporting the wrong receiver.
+	function noteMemberDispatch(recv MethodReceiver)
+		self.lastDispatchedMemberIndex = self.pos
+		self.lastDispatchedReceiver = recv.value
+	end 'noteMemberDispatch'
+
+	// Parse an `else` branch into `elseBlock`. A PLAIN condition's else is exactly what it always was — the
+	// `else` keyword and then a body. A CATCHING condition's else is the try's ERROR EDGE, which owns the
+	// caught error whether or not an `else` was written, so it routes to its own opener.
+	function parseElseBody(func IrFunction, elseBlock IrBlock, cond IfCondition, ifTok Token) returns IrBlock throws ParseError
+		match cond 'shape'
+			plain then break 'shape'
+			tryCatch(_, _, flag, errorType) then return try self.parseCatchingElseBody(func, elseBlock: elseBlock, flag: flag, errorType: errorType, ifTok: ifTok)
+		end 'shape'
+
+		try self.consume(TokenKind.else)
+		return try self.parseElseBranchBody(func, elseBlock: elseBlock)
+	end 'parseElseBody'
+
+	// The else branch's BODY, once its `else` (and, for a catching `if`, any `(e)` binder) has been
+	// consumed: either a nested `if` (the `else if …` chain — the else branch IS a nested if statement, so
+	// `elseBlock` becomes that if's entry) or a plain labelled `else` block. Returns the block the else
+	// branch left control in (its own continuation for a nested if; the block its last statement filled for
+	// a plain else).
+	//
+	// The `else if` form opens NO scope frame of its own: its condition is evaluated in the ENCLOSING scope
+	// (it is not inside any block), and each of the nested if's own branches opens a frame when it is
+	// parsed. Only the plain `else 'label'` form is a block body.
+	function parseElseBranchBody(func IrFunction, elseBlock IrBlock) returns IrBlock throws ParseError
 		if self.at(TokenKind.if) 'elseIf'
 			return try self.parseIfStatement(func, block: elseBlock)
 		end 'elseIf'
 
 		let elseLabelTok = try self.consume(TokenKind.charLiteral)
 		return try self.parseBlockBody(func, block: elseBlock, label: elseLabelTok.value)
-	end 'parseElseBody'
+	end 'parseElseBranchBody'
+
+	// ⭐ **THE ERROR EDGE OF `if try …` / `if let x = try …`, WHICH IS ALSO ITS `else` BRANCH.** It owns the
+	// caught error end to end, exactly as `parseOtherwiseBlock` owns an `otherwise` handler's: the error is
+	// enrolled as an owned binding — NAMED by an `else (e)` binder, ANONYMOUS otherwise — and released on
+	// whichever edge leaves the branch (`dropArmScopedOwned`: a decref on a live fall-through, the
+	// terminating statement's own scope drops on a `return`/`throw`).
+	//
+	// ⭐ **IT RUNS EVEN WHEN NO `else` IS WRITTEN**, because the error edge exists either way and a caught box
+	// has to die on it. With nothing written the branch is empty: the release is all it holds and it falls
+	// straight through to the merge, carrying the entry values the caller already restored.
+	function parseCatchingElseBody(func IrFunction, elseBlock IrBlock, flag ValueId, errorType MaxonType, ifTok Token) returns IrBlock throws ParseError
+		let elseWritten = self.at(TokenKind.else)
+		let ownedFloor = self.ownedBindings.count()
+		self.scope.pushScope()
+
+		var bindingName = EmptySourceText
+		var hasBinding = false
+		// With no `else` written there is no token on this branch to anchor its release to, so the `if` that
+		// caught the error is what the drop is attributed to — the construct a reader would look at to ask
+		// where the error went.
+		var anchor = ifTok
+		if elseWritten 'openElse'
+			try self.consume(TokenKind.else)
+			anchor = self.current()
+			// `else (e) 'err'` — the caught error, named. The same binder `otherwise (e) 'err'` spells, and
+			// the same decode, because it is the same caught flag.
+			if self.at(TokenKind.leftParen) 'errorBinder'
+				try self.consume(TokenKind.leftParen)
+				let eNameTok = try self.consume(TokenKind.identifier)
+				try self.consume(TokenKind.rightParen)
+				bindingName = eNameTok.value
+				hasBinding = true
+				anchor = eNameTok
+			end 'errorBinder'
+		end 'openElse'
+
+		// The decode (and, for a boxed error, the enrolment) belongs at the TOP of the error edge — before a
+		// nested `else if`'s own condition, and before the written body's first statement.
+		self.currentBlock = elseBlock
+		try self.declareCaughtError(flag, errorType: errorType, bindingName: bindingName, hasBinding: hasBinding, anchor: anchor)
+
+		var elseEnd = elseBlock
+		if elseWritten 'writtenBody'
+			elseEnd = try self.parseElseBranchBody(func, elseBlock: elseBlock)
+		end 'writtenBody'
+
+		self.scope.popScope()
+		self.dropArmScopedOwned(ownedFloor, exitBlock: elseEnd, anchor: anchor)
+		return elseEnd
+	end 'parseCatchingElseBody'
+
+	// `if let x = try …` / `if var x = try …` — the optional success binder in front of the condition.
+	// `let`/`var` here declares exactly what it declares at statement level, and goes through the same
+	// `declareInitializedBinding`; only the initializer differs, and it is not optional. The binding names
+	// the value a `try` PRODUCED, so `parseIfCondition` requires `try` after the `=` — and a
+	// `if let x = 5 'l'` is refused there by the ordinary "expected `try`" mismatch rather than by a rule of
+	// its own.
+	function parseIfBinder() returns IfBinder throws ParseError
+		if not self.at(TokenKind.let) and not self.at(TokenKind.var) 'noBinder'
+			return IfBinder.none
+		end 'noBinder'
+
+		let keywordTok = self.current()
+		try self.consume(keywordTok.kind)
+		let nameIndex = self.pos
+		let nameTok = try self.consume(TokenKind.identifier)
+		try self.requireUnreservedName(nameTok)
+		try self.consume(TokenKind.equals)
+		return IfBinder.binding(nameIndex, mutable: keywordTok.kind == TokenKind.var)
+	end 'parseIfBinder'
+
+	// ⭐⭐ **THE `if`'s CONDITION SLOT HAS TWO SHAPES, AND THE TOKEN AFTER `if` DECIDES WHICH:**
+	//   • `if <expr>`                  — an ordinary bool condition; the then branch runs when it is true.
+	//   • `if try <call>`              — a CATCHING try; the then branch runs when the call did NOT throw.
+	//   • `if let/var x = try <call>`  — the same, with the success value bound in the then branch.
+	//
+	// ⭐ **THE CATCHING FORM IS RECOGNIZED LEXICALLY, HERE — NOT BY A PARSER MODE THREADED THROUGH THE WHOLE
+	// EXPRESSION GRAMMAR, WHICH IS THE ONE PLACE THIS CONSTRUCT DEPARTS FROM v1.** v1 sets an `inIfCondition`
+	// field around the condition parse (`Parser.maxon:7632`) that makes `parseTryExpression` hand back a
+	// `tryCondition` from wherever inside the expression the `try` happened to sit, and the field must be
+	// saved and restored so a nested `if` in the body cannot leak it back out. shv2 does not need the mode,
+	// because the language admits the catching `try` in exactly ONE position — first in the condition slot —
+	// and a mode that can fire anywhere is answerable for every position it can reach: `if a and try f()`
+	// would have silently become "a, and f did not throw", a meaning no spec grants it. Asked at the one
+	// position it is legal, the grammar states its own boundary, and the propagating `try` keeps every other
+	// position it had.
+	function parseIfCondition(func IrFunction, block IrBlock, ifTok Token, binder IfBinder) returns IfCondition throws ParseError
+		match binder 'b'
+			none then break 'b'
+			binding then return try self.parseCatchingCondition(func, block: block)
+		end 'b'
+
+		if self.at(TokenKind.try) 'bareCatch'
+			return try self.parseCatchingCondition(func, block: block)
+		end 'bareCatch'
+
+		return IfCondition.plain(try self.parseBoolCondition(func, block: block, kwTok: ifTok))
+	end 'parseIfCondition'
+
+	// ⭐ **`try <call>` IN A CONDITION: THE CALL IS REWRITTEN EXACTLY AS AN EXPRESSION `try` REWRITES IT, AND
+	// THEN THE `if` — NOT `desugarTry` — OWNS THE FORK.** `parseTryCallTarget` + `rewriteLastCallToTryCall` +
+	// `requireThrowingTryTarget` are the SAME three steps `parseTry` runs, so every try target shape (a free
+	// call, a method, a field chain, a witness dispatch, `try await p`, a literal receiver) and every refusal
+	// (E3055 on a non-throwing callee, E2015 on a non-call) reaches a condition unchanged and cannot drift
+	// from the expression form. What is NOT run is `desugarTry`: its `flag != 0` split, error block, handler
+	// and merge are precisely what the `if` already is, and building both would fork twice.
+	//
+	// The test is `flag == 0` — TRUE on the success path — so the then branch is the ok edge and the else
+	// branch the error edge, with no swapping anywhere downstream.
+	function parseCatchingCondition(func IrFunction, block IrBlock) returns IfCondition throws ParseError
+		self.currentBlock = block
+		let tryTok = try self.consume(TokenKind.try)
+
+		let targetOpFloor = self.artifact.module.ops.count()
+		let result = try self.parseTryCallTarget(func)
+		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
+		try self.requireThrowingTryTarget(target, tryTok: tryTok)
+
+		// ⭐ **A MANAGED SUCCESS VALUE IS OWNED ON THE THEN EDGE ALONE, so it leaves the pending-temp list
+		// here** — the same removal `desugarTry` makes at its fork, and for the same reason: on the error edge
+		// the result register is NULL (a throw zeroes it), while `parseIfStatement` drains the condition's
+		// temporaries into the ENTRY block, which both edges flow from. `parseIfThenBody` re-homes it onto the
+		// `if let`/`if var` binding, or onto a drop of its own when the boolean form discards it. A scalar
+		// result is in no drop set and this is inert for it.
+		if self.valueIsOwnedHeap(result) 'managedResultOffEntry'
+			self.removeFromPendingTemps(result)
+		end 'managedResultOffEntry'
+
+		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryTok))
+		let test = try self.emitCompare(flag, rhs: zero, op: MaxonCmpOp.eq, opTok: tryTok)
+		return IfCondition.tryCatch(test, result: result, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)))
+	end 'parseCatchingCondition'
+
+	// Parse the then branch's body, giving a catching `if`'s success value the home its condition could not.
+	function parseIfThenBody(func IrFunction, thenBlock IrBlock, label ByteArray, cond IfCondition, binder IfBinder, anchor Token) returns IrBlock throws ParseError
+		match cond 'shape'
+			plain then break 'shape'
+			tryCatch(_, result, _, _) then return try self.parseCaughtThenBody(func, thenBlock: thenBlock, label: label, result: result, binder: binder, anchor: anchor)
+		end 'shape'
+
+		return try self.parseBlockBody(func, block: thenBlock, label: label)
+	end 'parseIfThenBody'
+
+	// ⭐ **THE OK EDGE OF A CATCHING `if`, WHERE ITS SUCCESS VALUE FINDS AN OWNER.** Two shapes, and they are
+	// the two ways the value can be owned:
+	//   • BOUND (`if let x = …` / `if var x = …`) — the ordinary binding machinery takes it, in a scope frame
+	//     one level outside the body's own.
+	//   • DISCARDED (`if try …`) — nothing names it, and this edge is the only one it is live on, so a MANAGED
+	//     result is dropped at the TOP of the then block. Never in the continuation: the error edge reaches
+	//     that too, with a NULL register a decref would fault on.
+	function parseCaughtThenBody(func IrFunction, thenBlock IrBlock, label ByteArray, result ValueId, binder IfBinder, anchor Token) returns IrBlock throws ParseError
+		match binder 'b'
+			none then break 'b'
+			binding(nameIndex, mutable) then return try self.parseBoundThenBody(func, thenBlock: thenBlock, label: label, result: result, nameIndex: nameIndex, mutable: mutable)
+		end 'b'
+
+		if self.valueIsOwnedHeap(result) 'dropDiscardedResult'
+			self.currentBlock = thenBlock
+			self.emitDecref(result, range: SourceRange.ofToken(anchor))
+		end 'dropDiscardedResult'
+
+		return try self.parseBlockBody(func, block: thenBlock, label: label)
+	end 'parseCaughtThenBody'
+
+	// The bound half of the above. The binding lives in a frame ONE LEVEL OUTSIDE the body's own, which is
+	// what makes it visible to every statement of the body and — just as importantly — makes it leave
+	// `mutableVars` and `ownedBindings` before `parseIfStatement` snapshots this branch's exit values (those
+	// snapshots are positional over the carried set computed at the `if`, which cannot contain a `var` the
+	// branch itself declared).
+	function parseBoundThenBody(func IrFunction, thenBlock IrBlock, label ByteArray, result ValueId, nameIndex TokenIndex, mutable bool) returns IrBlock throws ParseError
+		let nameTok = self.tokenAt(nameIndex)
+		let mark = self.openBlock()
+		self.currentBlock = thenBlock
+
+		// ⭐ **THE SAME DECLARATION A STATEMENT-LEVEL `let`/`var` MAKES, THROUGH THE SAME DOOR.** That is what
+		// carries the success value's FULL type across — a function-typed result keeps its signature, so
+		// `if let g = try pick(true) 'ok' … g(4)` calls through a properly typed value — and it is the whole
+		// reason this is not a second, shorter binding path. `rhsWasBareLocal: false`: the success value is a
+		// fresh call result held by no binding, so there is no source to poison; it is a CONSUME, exactly as
+		// `let x = f()` is.
+		try self.declareInitializedBinding(func, nameTok: nameTok, value: result, rhsWasBareLocal: false, mutable: mutable)
+
+		let thenEnd = try self.parseBlockBody(func, block: thenBlock, label: label)
+		self.dropArmScopedOwned(mark.ownedCount, exitBlock: thenEnd, anchor: nameTok)
+		self.closeBlock(mark)
+		return thenEnd
+	end 'parseBoundThenBody'
 
 	// Finalize an `if` with no `else`: the false path flows straight to the
 	// continuation, so the continuation is always reachable. Wire the entry's
@@ -18421,7 +18994,7 @@ export type Parser
 	// Everything else happened to land on a comparison type error (`"a" to "c"`, `1 to 3.5`) — which is
 	// luck, not a rule: it is `emitCompare` refusing two operands, and it says nothing about the STEP.
 	//
-	// ⚠ **The test is `tagIsIntegral`, NOT `== ValueTypeTag.integer`** — see `requireSetKeyMatchesType`'s
+	// ⚠ **The test is `tagIsIntegral`, NOT `== ValueTypeTag.integer`** — see `columnValueTagMatches`'s
 	// header for the measured false refusal the narrow spelling caused. A ranged alias (`typealias Row =
 	// int(0 to 63)`) carries `named` until TypeResolution collapses it, and `for r in 0 to lastRow` where
 	// `lastRow` is such a parameter must stay legal. A char literal is an integer codepoint here
@@ -22481,8 +23054,8 @@ export type Parser
 		return self.mintValue(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType))
 	end 'mintValueOfType'
 
-	// Re-record an EXISTING value's type columns in place. The caught error flag is a box POINTER that
-	// `desugarTry` minted as `integer` for the `flag != 0` null test; a boxed `(e)` binding re-records it as
+	// Re-record an EXISTING value's type columns in place. The caught error flag is a box POINTER that the
+	// try fork minted as `integer` for its zero test; a boxed `(e)` binding re-records it as
 	// its UNION type so `match e` dispatches through the box (`enumMatchFor`) and its scope-exit drop routes
 	// to `__destruct_<U>` (`decrefCalleeFor`), both of which read the value TAG. Only the two type columns
 	// move — the value's Std width is unchanged (`valueTagToStdType` collapses both `integer` and `named` to
@@ -25358,8 +25931,9 @@ export type Parser
 	// integer-coercion cases all use single-byte literals and the Character cases all use multi-byte ones
 	// — and the width rule needs no context-dependent literal typing, which shv2 has nowhere else. The
 	// visible consequence is that `'A'.asciiValue()` is not available (an int has no methods) while
-	// `'é'.asciiValue()` is; `character-type.md`'s five single-byte `ascii-value-*` cases stay disabled
-	// naming exactly that, rather than a missing Character.
+	// `'é'.asciiValue()` is — and now that the member is BUILT, that consequence is the whole of what
+	// separates `character-type.md`'s two live `ascii-value-*` cases from its five disabled single-byte
+	// ones, which stay disabled naming the width rule rather than a missing Character.
 	function parseCharLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.charLiteral)
 		match decodeCharLiteral(tok.value) 'decoded'
@@ -27174,19 +27748,31 @@ export type Parser
 			return try self.parseStringStaticCall(func, typeTok: typeTok)
 		end 'stringStatic'
 
-		// `IntArray.create()` — a static call on an `Array` instance alias (P1.7 slice 1). Intercepted before
-		// the generic-alias → base rewrite below (which would mangle it to `Array.create`, a callee no file
-		// declares): `Array` has no base struct, so its statics lower to the array runtime, not a user method.
-		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.isArrayInstance(self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath)) 'arrayStatic'
-			return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: typeTok.value, giid: self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath))
-		end 'arrayStatic'
+		// `IntArray.create()` / `IntSet.create()` / `StrMap.create()` — a static call on a BUILTIN-CONTAINER
+		// instance alias (P1.7 slice 1, P1.7b slice A, and `Map`). All three are intercepted before the
+		// generic-alias → base rewrite below, which would mangle them to `Array.create` / `Set.create` /
+		// `Map.create` — callees no file declares, because none of the three builtins has a base struct. Their
+		// statics lower to their own runtime, not to a user method.
+		//
+		// ⚠ **THE ALIAS QUESTION IS ASKED ONCE AND THE INSTANCE RESOLVED ONCE**, then each container tests the
+		// SINGLE resolved id. Written as three self-contained arms it was six index resolves to answer one
+		// question, and each new container added two more — the shape that grows fastest is the one to collapse
+		// first.
+		if self.signatures.isGenericAlias(typeTok.value) 'containerAliasStatic'
+			let aliasGiid = self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath)
 
-		// `IntSet.create()` — a static call on a `Set` instance alias (P1.7b slice A), intercepted before the
-		// generic-alias → base rewrite (which would mangle it to `Set.create`, a callee no file declares):
-		// `Set` has no base struct, so its statics lower to the set runtime, not a user method.
-		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.isSetInstance(self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath)) 'setStatic'
-			return try self.parseSetStaticCall(typeTok, giid: self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath))
-		end 'setStatic'
+			if self.signatures.isArrayInstance(aliasGiid) 'arrayStatic'
+				return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: typeTok.value, giid: aliasGiid)
+			end 'arrayStatic'
+
+			if self.signatures.isSetInstance(aliasGiid) 'setStatic'
+				return try self.parseSetStaticCall(typeTok, giid: aliasGiid)
+			end 'setStatic'
+
+			if self.signatures.isMapInstance(aliasGiid) 'mapStatic'
+				return try self.parseMapStaticCall(typeTok, giid: aliasGiid)
+			end 'mapStatic'
+		end 'containerAliasStatic'
 
 		// `ElementArray.create()` — a static call on a NESTED generic-instance alias inside the enclosing
 		// generic body (P1.7 slice 3b-i). The bare member is recognized against `enclosingInnerAliases` and
@@ -27195,9 +27781,13 @@ export type Parser
 		// same reason the top-level `arrayStatic` case is: `Array` has no base struct to mangle a `.create` onto.
 		if self.enclosingInnerAliases.contains(typeTok.value) 'innerAlias'
 			let qualified = joinQualifiedName(self.enclosingType, member: typeTok.value)
-			if self.signatures.isGenericAlias(qualified) and self.signatures.isArrayInstance(self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)) 'innerArrayStatic'
-				return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: qualified, giid: self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath))
-			end 'innerArrayStatic'
+			if self.signatures.isGenericAlias(qualified) 'innerAliasResolves'
+				let innerGiid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
+
+				if self.signatures.isArrayInstance(innerGiid) 'innerArrayStatic'
+					return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: qualified, giid: innerGiid)
+				end 'innerArrayStatic'
+			end 'innerAliasResolves'
 		end 'innerAlias'
 
 		try self.consume(TokenKind.dot)
@@ -27521,6 +28111,7 @@ export type Parser
 	// conformances instead of the String method table.
 	function dispatchMethodOnReceiver(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
+		self.noteMemberDispatch(recv)
 
 		// A STRING RECEIVER takes the builtin String methods rather than the struct path, which would reject
 		// it as not a struct. String is the one non-struct type carrying a method table of its own.
@@ -27548,6 +28139,12 @@ export type Parser
 		if recv.tag == ValueTypeTag.genericInstance and self.signatures.isSetInstance(recv.nameId) 'setMethod'
 			return try self.dispatchSetMethod(func, set: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, receiverOwner: recv.owner)
 		end 'setMethod'
+
+		// A MAP RECEIVER (`m.upsert(k, value: v)`, `m.contains(k)`, `try m.get(k)`) goes to the map runtime —
+		// the two-column twin of the set arm above.
+		if recv.tag == ValueTypeTag.genericInstance and self.signatures.isMapInstance(recv.nameId) 'mapMethod'
+			return try self.dispatchMapMethod(func, map: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, receiverOwner: recv.owner)
+		end 'mapMethod'
 
 		// A `StringIndex` RECEIVER (`idx.charIndex()`, `idx.bytePos()`, P1.8 slice B2) takes its own two
 		// accessors rather than the struct path — which would accept the box (the layout IS registered) and
@@ -28583,16 +29180,22 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitLoadStringField(recv.value, offset: StringLengthOffset, range: range)
 		end 'byteLength'
-		// ⚠ **`asciiValue()` IS ABSENT ON PURPOSE, NOT MISSING BY OVERSIGHT** — which is why it is named in the
-		// gate's tail clause rather than left out of it. It is a THROWING method
-		// (`stdlib/Character.maxon:154-166` — `CharacterError.notAscii`), and its two corpus cases spell the
-		// call `if try c.asciiValue()`, the SUCCESS-TEST form of `try` in a condition. shv2 does not have
-		// that form for ANY throwing call — measured on an already-throwing builtin: `if try a.first()` on
-		// an `Array` is `E3005: 'if' requires a bool condition, got 'int'` — so it is a gap in the `try`
-		// machinery, not in this type. Shipping the method regardless would be vocabulary ahead of its
-		// consumer, and a non-throwing version would have to answer a non-ASCII cluster with a sentinel.
-		// ⇒ The rung that builds it pushes it onto `characterSurfaceMemberNames` and strikes it from that
-		// tail clause in the same edit.
+		// ⭐ **`asciiValue()` — THE ONE THROWING `Character` MEMBER**, and the one arm here whose call is a
+		// `tryCall` rather than a plain one. Nothing about that is decided at this site: the arm emits an
+		// ordinary call and `isThrowingRuntimeCallee` — which `GraphemeRuntime.isThrowingCharacterRuntimeCallee`
+		// now joins — is what makes the parser's E3055 ACCEPT a `try` on it and SemanticCheck's E3057 REJECT a
+		// bare one, off the one predicate so the accept and the reject cannot name different sets.
+		//
+		// ⚠ **IT WAS ABSENT UNTIL THE `if try …` FORM EXISTED, AND ITS ABSENCE WAS NEVER ABOUT THIS TYPE.**
+		// The two corpus cases spell the call `if try c.asciiValue()` — the SUCCESS-TEST form of `try` in a
+		// condition — and shv2 had that form for NO throwing call; the gap was in the `try` machinery, one
+		// layer over. With the form built, the member is vocabulary WITH its consumer, which is the bar this
+		// dispatcher's siblings are held to. A non-throwing variant was never on the table: it would have to
+		// answer a non-ASCII cluster with a sentinel.
+		if methodTok.value.equals(CharacterAsciiValueMethod) 'asciiValue'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(CharAsciiValueName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'asciiValue'
 		let drift = rosterDriftMessage("dispatchCharacterMethod", member: methodTok.value, roster: roster, rosterFuncs: "`characterSurfaceMemberNames`")
 		panic("{drift}")
 	end 'dispatchCharacterMethod'
@@ -29955,7 +30558,7 @@ export type Parser
 			throw ParseError.unsupported("`Set` static method '{String.from(methodTok.value)}' — P1.7b slice A provides `create()` only", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
 		try self.consumeEmptyArgList()
-		try self.requireSetKeyType(giid, tok: aliasTok)
+		try self.requireHashTableColumnType(giid, position: HashTableKeyArgPosition, containerName: "Set", columnNoun: "key", tok: aliasTok)
 		let set = self.emitSetCreateOp(giid, range: SourceRange.between(aliasTok, last: methodTok))
 		self.trackOwnedTemp(set)
 		return set
@@ -29966,7 +30569,7 @@ export type Parser
 	// destructor (`__str_decref` for a String key, 0 for a trivial int key) so the set drops its owned keys at
 	// teardown / dup-insert / remove.
 	function emitSetCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
-		let elemDrop = self.setElementDestroyValue(giid, range: range)
+		let elemDrop = self.columnDestroyValue(self.signatures.setKeyType(giid), range: range)
 		return self.emitRuntimeCall(SetCreateName, args: singletonArgs(elemDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitSetCreateOp'
 
@@ -29974,12 +30577,15 @@ export type Parser
 	// MANAGED key (String) → the RAW `.text` address of its drop callee (`__str_decref`), via the same P1.5-A1
 	// `funcAddr` code→register path the array element destructor rides (no rdata reloc, no descriptor); a trivial
 	// int key → 0. `__set_decref`'s teardown walk calls it through a `callIndirect` on each live key.
-	function setElementDestroyValue(giid GenericInstanceId, range SourceRange) returns ValueId
-		if self.signatures.setKeyIsManaged(giid) 'managed'
-			return self.emitRuntimeFuncAddr(self.signatures.setKeyDropCallee(giid), range: range)
+	// ⚠ It is keyed on the column's TYPE and not on a `(giid, which-column)` pair, because a `Map` has TWO of
+	// these stamps and a per-column copy is exactly how the key's and the value's teardown would come to
+	// disagree about what "managed" means.
+	function columnDestroyValue(columnType MaxonType, range SourceRange) returns ValueId
+		if self.signatures.slotTypeIsManaged(columnType) 'managed'
+			return self.emitRuntimeFuncAddr(self.signatures.slotTypeDropCallee(columnType), range: range)
 		end 'managed'
 		return self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
-	end 'setElementDestroyValue'
+	end 'columnDestroyValue'
 
 	// ⭐ **THE KEY-TYPE GATE (P1.7b).** A `Set`'s key type must be `int` (or a ranged-int alias) OR `String`:
 	// this slice dispatches `hash`/`equals` through the key's `Hashable`/`Equatable` WITNESSES, and those are
@@ -29994,12 +30600,18 @@ export type Parser
 	// `conformerTypeArgName` — the SAME canonical-conformer reducer the witness threading uses
 	// (`LowerMaxonToStd.appendSetWitnessArgs`) — so the gate and the dispatch agree on the key's identity (an
 	// `int` and a ranged-int alias both reduce to `int`; a `String` names itself).
-	function requireSetKeyType(giid GenericInstanceId, tok Token) throws ParseError
-		let keyType = self.signatures.conformerTypeArgName(giid, position: 0 as TypeParamId).toByteArray()
-		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName) or keyType.equals(CharacterConformerName)) 'unsupportedKey'
-			throw ParseError.unsupported("`Set` supports `int`, `String` and `Character` keys — a '{String.from(keyType)}' key (struct / ByteArray) is a later slice", line: tok.line, column: tok.column)
-		end 'unsupportedKey'
-	end 'requireSetKeyType'
+	// ⚠ It is asked of a `Map` COLUMN too — both its key and its value — which is why the container and the
+	// noun are parameters rather than the literals a `Set`-only gate would have spelled. A map's VALUE is
+	// held to the same three types as its key even though the value is never hashed: the value column is one
+	// machine word wide and drops through `managedFieldDropCallee`, and those are exactly the types whose
+	// single-word storage and drop protocol the container already knows. A struct / ByteArray value is the
+	// same later slice a struct key is.
+	function requireHashTableColumnType(giid GenericInstanceId, position TypeParamId, containerName String, columnNoun String, tok Token) throws ParseError
+		let columnType = self.signatures.conformerTypeArgName(giid, position: position).toByteArray()
+		if not (columnType.equals(IntConformerName) or columnType.equals(StringConformerName) or columnType.equals(CharacterConformerName)) 'unsupportedColumn'
+			throw ParseError.unsupported("`{containerName}` supports `int`, `String` and `Character` {columnNoun}s — a '{String.from(columnType)}' {columnNoun} (struct / ByteArray) is a later slice", line: tok.line, column: tok.column)
+		end 'unsupportedColumn'
+	end 'requireHashTableColumnType'
 
 	// ⭐ **`Set from [1, 2, 3]` — CONSTRUCT A SET FROM AN ARRAY LITERAL (P1.7b slice B).** The cursor sits on the
 	// `Set` identifier. Parse `from` then the `[…]` through the EXISTING array-literal parser — which infers the
@@ -30158,68 +30770,62 @@ export type Parser
 		throw ParseError.unsupported("`Set` method '{String.from(methodTok.value)}' — P1.7b provides create/insert/contains/remove/count; `from`-construction and iteration are later slices", line: methodTok.line, column: methodTok.column)
 	end 'dispatchSetMethod'
 
-	// `( key )` — a single positional key argument for `insert`/`contains`/`remove` (P1.7b). The key's type must
-	// match the set's key type (int or String), rejected here so a mismatched value (an int where a String key is
-	// expected, or vice versa — a pointer hashed as an integer, or an int hashed as String bytes) is a clean E2015
-	// rather than a wrong answer. For `insert` (`consume: true`) a managed (String) key is MOVED into the set —
-	// the set becomes its sole owner (`moveKeyIntoSet`, the set twin of `moveElementIntoArray`); `contains`/`remove`
-	// (`consume: false`) BORROW the key for the compare (its owned temp drops at statement end). A trivial int key
-	// is a scalar — no move either way.
+	// `( key )` — a single positional key argument for `insert`/`contains`/`remove` (P1.7b). The BRACKETS are
+	// what is left here: the argument itself is parsed, type-checked and moved in by the shared
+	// `parseHashTableColumnArg`, which a `Map`'s two columns ride too. For `insert` (`consume: true`) a managed
+	// (String) key is MOVED into the set — the set becomes its sole owner; `contains`/`remove` (`consume: false`)
+	// BORROW the key for the compare (its owned temp drops at statement end). A trivial int key is a scalar —
+	// no move either way.
+	//
+	// The refusal's SUBJECT is composed here because only the caller knows which container is speaking: a `Set`
+	// says *"`Set with int` requires an int key"* where a `Map` says *"this `Map`'s key is an int"*. The shared
+	// core appends the `— got a '<tag>' value` tail the two have always shared.
 	function parseSetKeyArg(func IrFunction, giid GenericInstanceId, consume bool) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
-		let keyTok = self.current()
-		let valueStart = self.pos
-		// ⭐ A LONE CHARACTER LITERAL ADOPTS THE SET'S KEY TYPE (P1.8 Slice D). `chars.contains('x')` on a
-		// `Set with Character` is the whole reason: `'x'` is one byte, so `parseCharLiteral` materialized it
-		// as an INT (shv2 types a character literal by its byte WIDTH), and the key check below would refuse
-		// a program the oracle runs. This is `characterizedOperand`'s existing rule reaching one more
-		// position — exactly the `let`/`return`/comparison positions it already serves.
-		let key = try self.characterizedOperand(try self.parseExpression(func, block: self.currentBlock), expected: maxonTypeTag(self.signatures.setKeyType(giid)), start: valueStart, pastEnd: self.pos)
-		try self.requireSetKeyMatchesType(key, giid: giid, keyTok: keyTok)
-		// The move-in MUST run before the `)` is consumed — `rhsWasBareLocalReference` reads `[valueStart, self.pos)`
-		// to decide whether the arg is a bare local to POISON, exactly as `parseArrayElementArg` moves before its `)`.
-		var result = key
-		if consume 'moveIn'
-			result = try self.moveKeyIntoSet(key, giid: giid, valueStart: valueStart)
-		end 'moveIn'
+		let keyType = self.signatures.setKeyType(giid)
+		let declared = maxonTypeTag(keyType)
+		let key = try self.parseHashTableColumnArg(func, columnType: keyType, columnSubject: "`Set with {typeTagName(declared)}` requires {articledTypeTagName(declared)} key", consume: consume)
 		try self.consume(TokenKind.rightParen)
-		return result
+		return key
 	end 'parseSetKeyArg'
 
-	// The key VALUE's tag must match the set's key TYPE (P1.7b): an int-keyed set takes an integer value, a
-	// String-keyed set takes a String value. `requireSetKeyType` at `create` fixed the KEY type; this rejects a
-	// mismatched value at the call (a String pointer hashed as an int, or an int hashed as String bytes, would be
-	// a wrong answer or a fault). Only int and String keys reach here — the create gate admits no other.
+	// ⭐⭐ **ONE HASH-TABLE COLUMN ARGUMENT, PARSED — a `Set`'s key, a `Map`'s key and a `Map`'s VALUE.** Parse
+	// the expression, characterize a lone literal against the column's declared type, refuse a mismatched tag,
+	// and — when the callee KEEPS the value (`consume`) — move it in so the table becomes its sole owner. The
+	// three columns differ in the column TYPE they read and in the SUBJECT of their refusal, and in nothing
+	// else, which is why those two are parameters and the sequence is not.
 	//
-	// ⚠ **"IS THIS AN INT?" IS `tagIsIntegral`, NOT `== ValueTypeTag.integer`, AND THE NARROW SPELLING WAS A
-	// MEASURED FALSE REFUSAL.** A value whose static type is a RANGED ALIAS carries the `named` tag until
-	// TypeResolution collapses it — which is every parameter and every field read of `typealias Integer =
-	// int(…)` — so `insert(v)` inside `function add(s IntSet, v Integer)` was rejected as *"`Set with int`
-	// requires an int key — got a 'int' value"*, a sentence that argues against itself precisely because
-	// `typeTagName` already reads `named` as `int`. It was unreachable through a self-field receiver only
-	// because the false E3019 this rung removed fired first, which is how it survived. Ownership is unaffected:
-	// the move-in asks `setKeyIsManaged` — the SET's key TYPE — and never this tag.
-	function requireSetKeyMatchesType(key ValueId, giid GenericInstanceId, keyTok Token) throws ParseError
-		let keyTag = self.tagOf(key)
-		let declared = maxonTypeTag(self.signatures.setKeyType(giid))
-		if declared == ValueTypeTag.character 'characterKey'
-			// The DEFINITELY question, not `tagIsByteRecord`: a `String` value is a byte record too, and
-			// hashing one as a Character key would put `"a"` and `'a'` in one bucket under two types.
-			if keyTag != ValueTypeTag.character 'notCharacter'
-				throw ParseError.unsupported("`Set with Character` requires a Character key — got a '{typeTagName(keyTag)}' value", line: keyTok.line, column: keyTok.column)
-			end 'notCharacter'
-			return
-		end 'characterKey'
-		if tagIsText(declared) 'stringKey'
-			if not tagIsText(keyTag) 'notString'
-				throw ParseError.unsupported("`Set with String` requires a String key — got a '{typeTagName(keyTag)}' value", line: keyTok.line, column: keyTok.column)
-			end 'notString'
-			return
-		end 'stringKey'
-		if not tagIsIntegral(keyTag) 'notInt'
-			throw ParseError.unsupported("`Set with int` requires an int key — got a '{typeTagName(keyTag)}' value", line: keyTok.line, column: keyTok.column)
-		end 'notInt'
-	end 'requireSetKeyMatchesType'
+	// ⚠⚠ **THE MOVE-IN MUST RUN BEFORE THE ARGUMENT'S CLOSING TOKEN IS CONSUMED.** `rhsWasBareLocalReference`
+	// reads `[valueStart, self.pos)` to decide whether the argument is a bare local to POISON, so a `)` — or a
+	// `,` — consumed first widens that window and mis-decides. That is an OWNERSHIP wrong answer with no
+	// compile error to find it by, which is exactly why the callers hand the fencing tokens in rather than this
+	// function consuming them: a `Set` key is fenced by `( … )`, a `Map`'s two columns by `(`, `,` and `)`.
+	// Written once per container, the ordering contract was stated twice and could be honoured once.
+	//
+	// ⚠ **A LONE CHARACTER LITERAL ADOPTS THE COLUMN'S TYPE (P1.8 Slice D).** `chars.contains('x')` on a
+	// `Set with Character` is the whole reason: `'x'` is one byte, so `parseCharLiteral` materializes it as an
+	// INT (shv2 types a character literal by its byte WIDTH), and the tag check below would refuse a program the
+	// oracle runs. This is `characterizedOperand`'s existing rule reaching one more position — exactly the
+	// `let`/`return`/comparison positions it already serves.
+	//
+	// The tag rule itself is `columnValueTagMatches`, whose header carries the measured reason "is this an int?"
+	// is `tagIsIntegral` and not `== ValueTypeTag.integer`.
+	function parseHashTableColumnArg(func IrFunction, columnType MaxonType, columnSubject String, consume bool) returns ValueId throws ParseError
+		let valueTok = self.current()
+		let valueStart = self.pos
+		let declared = maxonTypeTag(columnType)
+		let parsed = try self.characterizedOperand(try self.parseExpression(func, block: self.currentBlock), expected: declared, start: valueStart, pastEnd: self.pos)
+
+		if not columnValueTagMatches(self.tagOf(parsed), declared: declared) 'mismatch'
+			throw ParseError.unsupported("{columnSubject} — got a '{typeTagName(self.tagOf(parsed))}' value", line: valueTok.line, column: valueTok.column)
+		end 'mismatch'
+
+		if not consume 'borrowed'
+			return parsed
+		end 'borrowed'
+
+		return try self.moveColumnValueIntoTable(parsed, columnType: columnType, valueStart: valueStart)
+	end 'parseHashTableColumnArg'
 
 	// ⭐ **MOVE A PARSED KEY INTO A MANAGED-KEY SET (P1.7b String keys).** The `Set` twin of `moveElementIntoArray`:
 	// the set becomes the key's sole owner (its `__set_decref` walk / dup-drop / remove-drop destroys it), so a
@@ -30228,8 +30834,13 @@ export type Parser
 	// `moveManagedValueInto`. A trivial int key owns no heap and passes through unchanged. A `Set` key is always
 	// CONCRETE this slice (int or String), so there is no opaque-`T` case `moveElementIntoArray` carries.
 	// `valueStart` locates the value's first token — its bare-local source and the diagnostic anchor both.
-	function moveKeyIntoSet(value ValueId, giid GenericInstanceId, valueStart TokenIndex) returns ValueId throws ParseError
-		if not self.signatures.setKeyIsManaged(giid) 'trivial'
+	// ⚠ It takes the column's TYPE rather than a `giid`, so a `Set`'s key, a `Map`'s key and a `Map`'s VALUE —
+	// independently managed columns of two containers — ask it without a per-column copy. Whether the column
+	// owns what it holds is DERIVED from that type here, through the same `slotTypeIsManaged` the stamped
+	// destructor is chosen by (`columnDestroyValue`): a caller that passed the answer in would be a second
+	// place deciding which type argument is the key, and the move-in and the stamp could then disagree.
+	function moveColumnValueIntoTable(value ValueId, columnType MaxonType, valueStart TokenIndex) returns ValueId throws ParseError
+		if not self.signatures.slotTypeIsManaged(columnType) 'trivial'
 			return value
 		end 'trivial'
 		let anchor = self.tokenAt(valueStart)
@@ -30237,9 +30848,136 @@ export type Parser
 		// protocol, a question about the key's REPRESENTATION — and since P1.8 Slice D a `Set with Character`
 		// reaches it, which is exactly the day this spelling was written for. A borrowed `.rdata` Character
 		// literal is promoted to an owned copy here; an owned one is transferred.
-		let isString = tagIsByteRecord(maxonTypeTag(self.signatures.setKeyType(giid)))
+		let isString = tagIsByteRecord(maxonTypeTag(columnType))
 		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
-	end 'moveKeyIntoSet'
+	end 'moveColumnValueIntoTable'
+
+	// --- The `Map` builtin generic: `create` / `upsert` / `contains` / `get` / `count` ---
+
+	// `StrMap.create()` — the one `Map` static factory. Yields an OWNED empty map (`__map_create`), tracked so
+	// its scope-exit drop routes through `genericInstanceBoxDropCallee` → `__map_decref`, which frees the record
+	// and its four buffers after dropping every live key and value. The `Map` twin of `parseSetStaticCall`.
+	function parseMapStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let methodTok = try self.consume(TokenKind.identifier)
+		if not methodTok.value.equals(CreateMethod) 'unknownStatic'
+			throw ParseError.unsupported("`Map` static method '{String.from(methodTok.value)}' — shv2 provides `create()` only", line: methodTok.line, column: methodTok.column)
+		end 'unknownStatic'
+		try self.consumeEmptyArgList()
+		try self.requireMapColumnTypes(giid, tok: aliasTok)
+		let map = self.emitMapCreateOp(giid, range: SourceRange.between(aliasTok, last: methodTok))
+		self.trackOwnedTemp(map)
+		return map
+	end 'parseMapStaticCall'
+
+	// BOTH of a map's column types, gated together at the one door a map is born through, so a program can
+	// never build a table whose key is admissible and whose value is not.
+	function requireMapColumnTypes(giid GenericInstanceId, tok Token) throws ParseError
+		try self.requireHashTableColumnType(giid, position: HashTableKeyArgPosition, containerName: "Map", columnNoun: "key", tok: tok)
+		try self.requireHashTableColumnType(giid, position: MapValueArgPosition, containerName: "Map", columnNoun: "value", tok: tok)
+	end 'requireMapColumnTypes'
+
+	// Emit `__map_create(keyDrop, valueDrop)` for instance `giid`, yielding the empty map record. The record is
+	// zeroed by `__mm_alloc`, so the first `upsert` lazily allocates the four buffers; the two destructor stamps
+	// carry the key's and the value's drop callees (`__str_decref` for a managed column, 0 for a trivial one) so
+	// the map drops what it owns at teardown, at a replaced value and at a redundant duplicate key.
+	function emitMapCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+		let keyDrop = self.columnDestroyValue(self.signatures.mapKeyType(giid), range: range)
+		let valueDrop = self.columnDestroyValue(self.signatures.mapValueType(giid), range: range)
+		return self.emitRuntimeCall(MapCreateName, args: pairArgs(keyDrop, second: valueDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+	end 'emitMapCreateOp'
+
+	// ⭐ **DISPATCH A BUILTIN `Map` METHOD** — cursor on the method NAME, `map` the (borrowed) receiver record.
+	// `count` returns the entry count and `contains` a `bool`; `get` returns the VALUE and THROWS
+	// `MapError.keyNotFound`; `upsert` is a VOID mutator (refused in value position by
+	// `requireVoidMethodIsStatement`) that returns the receiver — what the statement still denotes, like
+	// `emitArrayVoidCall`.
+	//
+	// All three carry the KEY's witness tables, appended by `LowerMaxonToStd`; the parser passes only the
+	// receiver, the key and (for `upsert`) the value. Ownership splits exactly as the `Set` dispatcher's does:
+	// `upsert` MOVES a managed key AND a managed value in (the map becomes their sole owner), while
+	// `contains`/`get` BORROW the key for the compare.
+	function dispatchMapMethod(func IrFunction, map ValueId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.ofToken(methodTok)
+		let giid = self.valueNameId(map)
+
+		// `receiverStorage: NoMutatedParams` for the reason the `String` and `Set` dispatchers state: a map
+		// write cannot free an ARRAY element, which is the only borrow E3070 tracks.
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: mapMethodMutatesReceiver(methodTok.value))
+
+		if methodTok.value.equals(CountMethod) 'count'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(MapCountName, args: singletonArgs(map), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'count'
+
+		if methodTok.value.equals(ContainsMethod) 'contains'
+			let key = try self.parseMapKeyArgList(func, giid: giid)
+			return self.emitRuntimeCall(MapContainsName, args: pairArgs(map, second: key), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'contains'
+
+		// `get` is a THROWING accessor: an ordinary `call` here, which the enclosing `try` rewrites into a
+		// `tryCall` (`rewriteLastCallToTryCall`) — the same shape every throwing `Array` accessor takes. Its
+		// result is a BORROW of the stored value: the map keeps owning it, so it is neither tracked owned nor
+		// dropped by the caller, exactly as `__arr_get`'s element read is.
+		if methodTok.value.equals(GetMethod) 'get'
+			let key = try self.parseMapKeyArgList(func, giid: giid)
+			let resultType = self.containerSlotValueType(self.signatures.mapValueType(giid))
+			return self.emitRuntimeCall(MapGetName, args: pairArgs(map, second: key), resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: range)
+		end 'get'
+
+		// `upsert` is a non-throwing VOID mutator, so a value-position call is refused — from INSIDE the arm its
+		// name matched, which is the shared check's whole scoping (`requireVoidMethodIsStatement`).
+		if methodTok.value.equals(UpsertMethod) 'upsert'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			// `( key, value: v )` — BOTH columns are consumed: the map becomes the sole owner of a managed key
+			// and of a managed value alike. `ArrayValueLabel` is the same `value:` label the two-argument
+			// `Array` mutators give their value argument — one label, three containers.
+			try self.consume(TokenKind.leftParen)
+			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: "key", consume: true)
+			try self.consume(TokenKind.comma)
+			let labelTok = try self.consumeNameToken(NamePosition.declaration)
+			if not labelTok.value.equals(ArrayValueLabel) 'wrongLabel'
+				throw ParseError.unsupported("`Map.upsert` names its second argument '{String.from(ArrayValueLabel)}:' — got '{String.from(labelTok.value)}:'", line: labelTok.line, column: labelTok.column)
+			end 'wrongLabel'
+			try self.consume(TokenKind.colon)
+			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: "value", consume: true)
+			try self.consume(TokenKind.rightParen)
+			_ = self.emitRuntimeCall(MapUpsertName, args: threeArgs(map, second: key, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return map
+		end 'upsert'
+
+		throw ParseError.unsupported("`Map` method '{String.from(methodTok.value)}' — shv2 provides create/upsert/contains/get/count; insert/remove, `[k: v]` literals and iteration are later slices", line: methodTok.line, column: methodTok.column)
+	end 'dispatchMapMethod'
+
+	// `( key )` — the argument list of `contains` / `get`, whose key is BORROWED for the compare (its owned temp
+	// drops at statement end). The `Set` twin is `parseSetKeyArg(consume: false)`.
+	function parseMapKeyArgList(func IrFunction, giid GenericInstanceId) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: "key", consume: false)
+		try self.consume(TokenKind.rightParen)
+		return key
+	end 'parseMapKeyArgList'
+
+	// ONE `Map` column argument — the `Set` key's twin, and it rides the same `parseHashTableColumnArg`: this
+	// end resolves WHICH column (key or value) and composes the `Map`'s own refusal subject, and nothing else.
+	// The key half and the value half differ only in which type argument they read, so they are one function:
+	// a per-column copy is how the two would come to disagree about the move.
+	//
+	// ⚠ The caller consumes the fencing tokens — `(`, the `,` before `value:` and the closing `)` — AFTER this
+	// returns, because the move-in inside must run first (see `parseHashTableColumnArg`'s ordering contract).
+	function parseMapColumnValue(func IrFunction, giid GenericInstanceId, position TypeParamId, columnNoun String, consume bool) returns ValueId throws ParseError
+		let columnType = self.mapColumnType(giid, position: position)
+		return try self.parseHashTableColumnArg(func, columnType: columnType, columnSubject: "this `Map`'s {columnNoun} is {articledTypeTagName(maxonTypeTag(columnType))}", consume: consume)
+	end 'parseMapColumnValue'
+
+	// The declared type of map column `position` — a selector rather than a `position` threaded into the index,
+	// because the index's own doors are named for the columns (`mapKeyType` / `mapValueType`) and a positional
+	// door there would be a second way to ask. THE one place that knows which type argument is the key: whether
+	// a column owns what it holds is derived from the type this hands back, never from the position again.
+	function mapColumnType(giid GenericInstanceId, position TypeParamId) returns MaxonType
+		return self.signatures.mapKeyType(giid) if position == HashTableKeyArgPosition else self.signatures.mapValueType(giid)
+	end 'mapColumnType'
 
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THIS BINDING-BACKED RECEIVER — EMPTY when it may be
 	// written through.** The ONE place the `let` rule and the parameter exception meet, for EVERY
@@ -31029,7 +31767,7 @@ export type Parser
 		// last/pop/remove) or a discarded dummy (set). `resultUsed` is the try's concern, not checked here.
 		// ⭐ get/first/last yield a BORROW of the element (the array keeps ownership — the caller must not drop
 		// it); pop/remove MOVE the element OUT (the runtime nulls its slot), so their result is OWNED (P1.7 slice 3).
-		if methodTok.value.equals(ArrayGetMethod) 'get'
+		if methodTok.value.equals(GetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
 			return self.emitArrayElementAccessor(func, callee: ArrGetName, args: pairArgs(arr, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
@@ -31637,11 +32375,11 @@ export type Parser
 		// `Array with integer` — an 8-byte stride over values that came out of a 1-byte one — and the byte
 		// array could not be rebuilt from its own elements. MEASURED before this line, on
 		// `String.from([x, y, z])` over a `b"Hi!"`: `E3005 requires a Array with Byte, but its argument is
-		// Array_int`, a false reject of a program both references accept. `arrayElementValueType` is the one
+		// Array_int`, a false reject of a program both references accept. `containerSlotValueType` is the one
 		// function that answers "what type does an element READ as", and it answered here already for a
 		// managed element; a trivial one now asks the same question of the same function.
 		if not self.signatures.arrayElementIsManaged(giid) and not self.signatures.arrayElementIsOpaque(giid) 'trivial'
-			let trivialType = self.arrayElementValueType(giid)
+			let trivialType = self.containerSlotValueType(self.signatures.arrayElementType(giid))
 			return self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(trivialType), resultNameId: typeNameIdOf(trivialType), range: range)
 		end 'trivial'
 
@@ -31678,13 +32416,13 @@ export type Parser
 	// The VALUE type an element accessor's result carries — the opaque element's own `typeParameter(pos)` for an
 	// OPAQUE array (the shared body keeps the element opaque; its drop is descriptor-gated, `decrefCalleeFor`'s
 	// `typeParameter` arm → `__drop_type_param`), else the CONCRETE managed element's usable value form
-	// (`arrayElementValueType`). Split so `emitArrayElementAccessor` reads ONE type either way; the opaque
+	// (`containerSlotValueType`). Split so `emitArrayElementAccessor` reads ONE type either way; the opaque
 	// `typeParameter` carries a POSITION, not an interned name, so it needs no interner adoption.
 	function elementAccessorResultType(giid GenericInstanceId) returns MaxonType
 		if self.signatures.arrayElementIsOpaque(giid) 'opaque'
 			return self.signatures.arrayElementType(giid)
 		end 'opaque'
-		return self.arrayElementValueType(giid)
+		return self.containerSlotValueType(self.signatures.arrayElementType(giid))
 	end 'elementAccessorResultType'
 
 	// ⭐ **THE ONE DOOR FOR "A RUNTIME CALL WHOSE RESULT IS A FRESH OWNED HEAP VALUE".** The result carries the
@@ -31895,14 +32633,19 @@ export type Parser
 	//
 	// A FLOAT element cannot reach `payloadValueTypeOf`'s float panic: `Array with Float` and
 	// `Array with float` are both E2062 at the type ARGUMENT, one gate earlier.
-	function arrayElementValueType(giid GenericInstanceId) returns MaxonType
-		let declared = self.signatures.declaredSlotType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames, slotScopeFilePath: self.filePath)
+	//
+	// ⭐ **IT TAKES THE SLOT'S DECLARED TYPE, NOT A `giid`, because a `Map`'s VALUE column asks the identical
+	// question of a different slot.** Keyed on the instance it would have had to re-derive "which argument is
+	// the slot" per container, which is the enumeration a two-column container breaks; keyed on the TYPE, an
+	// `Array` element and a `Map` value are one question with one answer.
+	function containerSlotValueType(slotType MaxonType) returns MaxonType
+		let declared = self.signatures.declaredSlotType(slotType, into: self.artifact.typeNames, slotScopeFilePath: self.filePath)
 		let tag = maxonTypeTag(declared)
 		if tag == ValueTypeTag.genericInstance 'instance'
 			return declared
 		end 'instance'
 		if tag == ValueTypeTag.named 'named'
-			let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("arrayElementValueType: an adopted `named` element type's id is not in this file's interner")
+			let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("containerSlotValueType: an adopted `named` slot type's id is not in this file's interner")
 			if self.signatures.isGenericAlias(name) 'genericAlias'
 				return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
 			end 'genericAlias'
@@ -31926,7 +32669,7 @@ export type Parser
 			end 'rangedAlias'
 		end 'named'
 		return payloadValueTypeOf(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared), declared: declared)
-	end 'arrayElementValueType'
+	end 'containerSlotValueType'
 
 	// ⭐⭐ **AN ELEMENT ARGUMENT MUST AGREE WITH THE INSTANCE'S ELEMENT TYPE.** The `Array` mutators are
 	// PARSER-INTRINSIC — `push`/`set`/`insert` emit `__arr_push`/`__arr_set`/`__arr_insert` directly, so they
@@ -36364,7 +37107,7 @@ export type Parser
 	// ⭐ **BOTH UAX #29 CLASSIFIERS FROM ONE EMITTER** — they differ only in the runtime entry point they
 	// name and the tag of their result, so the arity check, the operand-domain check and the call are
 	// written once. A codepoint is an INTEGER, checked with `tagIsIntegral` rather than
-	// `== ValueTypeTag.integer` for `requireSetKeyMatchesType`'s measured reason: a value whose static type
+	// `== ValueTypeTag.integer` for `columnValueTagMatches`'s measured reason: a value whose static type
 	// is a ranged alias carries the `named` tag until TypeResolution collapses it, so the narrow spelling
 	// would falsely refuse `graphemeBreakProperty(cp)` where `cp` is a `Codepoint`-typed parameter.
 	function emitGraphemeClassifier(args ValueIdArray, runtimeName ByteArray, builtinName ByteArray, resultTag ValueTypeTag, calleeTok Token) returns ValueId throws ParseError

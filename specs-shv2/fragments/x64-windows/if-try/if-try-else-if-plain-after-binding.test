@@ -1,0 +1,70 @@
+// Test: if-try-else-if-plain-after-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	let x = 2
+	var result = 0
+	if let v = try mayFail() 'check'
+		result = v
+	end 'check' else if x == 2 'two'
+		result = 22
+	end 'two' else 'fallback'
+		result = 99
+	end 'fallback'
+	return result
+end 'main'
+---
+ExitCode: 22
+---
+func @mayFail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 2
+    x64.callDirect mayFail
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, check
+    x64.jmp ifelse
+  check:
+    x64.jmp ifcont
+  ifelse:
+    x64.cmpRegImm32 rbx, 2
+    x64.jcc equal, two
+    x64.jmp ifelse
+  two:
+    x64.movRegImm32 rax, 22
+    x64.jmp ifcont
+  ifelse:
+    x64.movRegImm32 rax, 99
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

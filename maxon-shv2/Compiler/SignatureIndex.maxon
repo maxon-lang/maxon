@@ -1765,6 +1765,52 @@ export let SetBuiltinBaseName = b"Set"
 // validates a `Set with …` against, the `Array` twin.
 export let SetTypeParamCount = 1 as FieldIndex
 
+// The name of the builtin `Map` generic type (`Map with (Key, Value)`) — the two-parameter twin of
+// `SetBuiltinBaseName`. Like `Set`, no file declares `type Map uses Key, Value`: shv2 reads no stdlib and
+// synthesizes the whole surface, so every `genericInstance*` query that would read a base `StructLayout`
+// special-cases a `Map` instance exactly as it does an `Array` or a `Set` one — its box is the fixed
+// `MapRecordBytes` fused record and it drops through `__map_decref`. One speller, shared by the parser's
+// `Base with Args` arity check and every `Map`-instance query. See `ProgramSignatures.isMapBaseName` for why
+// it is synthesized rather than read from `stdlib/Map.maxon`.
+export let MapBuiltinBaseName = b"Map"
+
+// The two type parameters `Map` declares (`Map with (Key, Value)`) — the arity `checkGenericInstance`
+// validates a `Map with …` against. It is the ONE thing that makes `Map` structurally unlike `Array`/`Set`,
+// so every door that reads "the sole type argument" has a key/value pair here instead.
+export let MapTypeParamCount = 2 as FieldIndex
+
+// ⭐ **WHICH TYPE ARGUMENT IS THE KEY — A FACT ABOUT EVERY HASH TABLE, NOT ABOUT `Map`.** A `Set with Key`
+// and a `Map with (Key, Value)` both put the key first, and three doors depend on it being the same 0:
+// `Parser.parseSetStaticCall`'s and `Parser.parseMapStaticCall`'s column gates, and
+// `LowerMaxonToStd.setWitnessKeyTypeName`, which threads the `Hashable`/`Equatable` tables of that argument
+// for BOTH containers. So it is ONE exported constant those three read — it was briefly two, a `Map`-named
+// one here and a file-private `Set`-named copy in `LowerMaxonToStd`, which made the shared invariant
+// something this header ASSERTED while the code that depended on it read a different name.
+//
+// The VALUE position stays `Map`-only, because only a `Map` has a second column.
+export let HashTableKeyArgPosition = 0 as TypeParamId
+export let MapValueArgPosition = 1 as TypeParamId
+
+// ⭐⭐ **`MapError` — WHAT A MISSING-KEY `Map.get` THROWS, AND IT WEARS THE BARE NAME FOR `ArrayError`'S
+// EXACT REASON.** `stdlib/Map.maxon:6-9` declares it, and shv2 does not load that module (see
+// `ProgramSignatures.isMapBaseName` for the measured reason), so the compiler synthesizes what that file
+// declares — the same provenance `ArrayError` and `StringError` have, and it takes the same unconditional
+// seed in `Project.createEnumRegistry`.
+//
+// ⚠ It is NOT `__MapError`, because a user function that PROPAGATES a `map.get` failure writes
+// `throws MapError` in its own source; under a reserved spelling every one of those would meet
+// `E3059: try propagates '__MapError' but enclosing function throws 'MapError'` — one error type under two
+// spellings, the very confusion the prefix exists to prevent. ⇒ It is RESERVED PROGRAM-WIDE instead
+// (`TypeResolution.isCompilerOwnedTypeName`), exactly as `ArrayError` is.
+export let MapErrorTypeName = b"MapError"
+
+// The cases of `MapError`, in `stdlib/Map.maxon:7-8`'s DECLARATION ORDER — the ordinals are positional and a
+// handler's `match` arms are resolved against them, so the order is the contract. `keyNotFound` is what
+// `__map_get` throws; `keyAlreadyExists` belongs to the `insert` this slice does not provide, and is declared
+// anyway so that adding `insert` later cannot renumber the case handlers already written against the first.
+export let MapErrorKeyNotFoundCaseName = b"keyNotFound"
+export let MapErrorKeyAlreadyExistsCaseName = b"keyAlreadyExists"
+
 // The `element_size@24` of a MANAGED-element array (P1.7 slice 3) — a managed element (String / struct /
 // union / instance / nested Array) is a HEAP BOX addressed by a POINTER, so a slot holds the 8-byte pointer,
 // NOT the element's full logical size. A trivial element is stored inline and strides by its own size (an
@@ -2260,7 +2306,7 @@ export let ManagedMemoryByteAtMethod = b"byteAt"
 // for the same reason — the buffer and the `Array` both spell `slice`.
 export let ArraySetMethod = b"set"
 export let AppendMethod = b"append"
-export let ArrayGetMethod = b"get"
+export let GetMethod = b"get"
 export let ArrayFirstMethod = b"first"
 export let ArrayLastMethod = b"last"
 export let ArrayPopMethod = b"pop"
@@ -2378,6 +2424,12 @@ export let StringFindLastMethod = b"findLast"
 // runtime callee can reach an E3057, so `stringIndexSourceMethodName` has to answer with the very constant
 // `dispatchStringMethod` matches the source token against.
 export let StringIndexAfterMethod = b"indexAfter"
+
+// `c.asciiValue()` — `stdlib/Character.maxon:154-166`, the one THROWING `Character` member. It lives here
+// for `StringIndexAfterMethod`'s reason and no other: `GtRuntime.runtimeCalleeSourceMethod` has to answer
+// E3057 with the very constant `dispatchCharacterMethod` matches the source token against, and a
+// file-private `let` in the parser would force a second `b"asciiValue"` in the runtime layer.
+export let CharacterAsciiValueMethod = b"asciiValue"
 
 // ⭐ **THE ERROR EVERY `__ManagedFile` OPERATION THROWS (R4.1)**, and the type a handler's `match e`
 // discriminates. It is DECLARED at `stdlib/Builtins.maxon:175` and read from there (A1s); the reason its
@@ -7216,24 +7268,74 @@ export type ProgramSignatures
 	// `arrayElementType`.
 	export function setKeyType(id GenericInstanceId) returns MaxonType
 		let args = self.genericInstances.instanceArgs(id)
-		return try args.get(0) otherwise panic("ProgramSignatures.setKeyType: `Set` instance {id} has no type argument — arity (1) was checked at instantiation")
+		return try args.get(HashTableKeyArgPosition) otherwise panic("ProgramSignatures.setKeyType: `Set` instance {id} has no type argument — arity (1) was checked at instantiation")
 	end 'setKeyType'
 
-	// Is `Set with T`'s key itself managed (String at this slice) — the boundary a managed-key set needs the
-	// per-key destroy walk for (P1.7b). A trivial key (int / ranged-int) is stored inline and owns nothing. The
-	// `Set` twin of `arrayElementIsManaged`, reading the SAME `typeIsManaged` boundary the drop cascade decides on.
-	export function setKeyIsManaged(id GenericInstanceId) returns bool
-		return self.typeIsManaged(self.setKeyType(id), from: self.typeNames)
-	end 'setKeyIsManaged'
+	// ⭐⭐ **THE TWO QUESTIONS A CONTAINER COLUMN ASKS OF ITS SLOT TYPE, keyed on the TYPE and not on the
+	// container.** An `Array`'s element, a `Set`'s key, a `Map`'s key and a `Map`'s VALUE are four columns
+	// asking one pair of questions — *does this slot own heap?* and *what drops it?* — and the answer must be
+	// the same for all four or a value moved in through one door and dropped through another leaks or
+	// double-frees. `Map` is what forced the split: it is the first container with TWO independently managed
+	// columns, so a per-container `…KeyIsManaged` / `…KeyDropCallee` pair would have had to be written twice
+	// in one type.
+	//
+	// The drop callee is the SHARED `managedFieldDropCallee`, so a column's stamped destructor equals the drop
+	// a managed FIELD of the same type gets — the moved-in value and the dropped value agree by construction.
+	// Precondition of the second: `slotTypeIsManaged`.
+	export function slotTypeIsManaged(slotType MaxonType) returns bool
+		return self.typeIsManaged(slotType, from: self.typeNames)
+	end 'slotTypeIsManaged'
 
-	// The key DESTRUCTOR callee for a managed-key `Set with T` (P1.7b) — the runtime entry the set's teardown /
-	// dup-drop / remove-drop calls on each vacated key: a String → `__str_decref`. Routed through the SHARED
-	// `managedFieldDropCallee` over the key type, so the stamped key destructor equals the drop callee a managed
-	// FIELD of the same type gets — the moved-in key and the dropped key agree by construction. The `Set` twin of
-	// `arrayElementDropCallee`. Precondition: `setKeyIsManaged`.
-	export function setKeyDropCallee(id GenericInstanceId) returns ByteArray
-		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.setKeyType(id))
-	end 'setKeyDropCallee'
+	export function slotTypeDropCallee(slotType MaxonType) returns ByteArray
+		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: slotType)
+	end 'slotTypeDropCallee'
+
+	// --- The `Map` builtin generic ---
+	//
+	// ⭐ **A `Map with (Key, Value)` IS THE `Set` ABOVE WITH A PARALLEL VALUE COLUMN**, and that is a
+	// REPRESENTATION claim, not a metaphor: `MapRecordBytes`' first 48 bytes are byte-identical to a `Set`
+	// record's, so both tables share one probe, one grow and one teardown walk (`HashTableRuntime`). What is
+	// different here is exactly the ARITY — two type arguments instead of one — so every `Set` door above
+	// that reads "the sole argument" splits in two: a KEY half (which must be `Hashable`/`Equatable`, since
+	// the probe hashes and compares it) and a VALUE half (which needs only a drop callee).
+	//
+	// ⚠ **`Map` IS SYNTHESIZED HERE, NOT READ FROM `stdlib/Map.maxon`, AND THE REASON IS MEASURED.** That
+	// file's `Map` is written against dictionary-passing generics — four `Array with Key` fields, a
+	// `typealias Entry = (Key, Value)` and an `Iterable` conformance — and shv2 cannot compile it: five
+	// separate mechanisms are missing (a tuple over type parameters, expression field defaults, `Array{}`
+	// construction of a builtin, `__ManagedMemory with Key` fields, and the transitive-consume fixpoint), and
+	// the one shape that DOES compile — a generic type holding an `Array with T` over a managed `T` — was
+	// measured to ACCESS-VIOLATE at teardown where the bootstrap exits 0. Synthesizing is what `Array`,
+	// `String`, `Character` and `Set` already do, and it is the only route with no wrong answer in it.
+
+	// Is `name` the builtin `Map` type — the base of every map instance.
+	export function isMapBaseName(name ByteArray) returns bool
+		return name.equals(MapBuiltinBaseName)
+	end 'isMapBaseName'
+
+	// Is generic instance `id` a `Map with (K, V)`? (Reads the base NAME, which needs no base struct.)
+	export function isMapInstance(id GenericInstanceId) returns bool
+		return self.isMapBaseName(self.genericInstanceBaseName(id))
+	end 'isMapInstance'
+
+	// The KEY type of `Map with (K, V)` — type argument 0, the one the probe hashes and compares.
+	export function mapKeyType(id GenericInstanceId) returns MaxonType
+		let args = self.genericInstances.instanceArgs(id)
+		return try args.get(HashTableKeyArgPosition) otherwise panic("ProgramSignatures.mapKeyType: `Map` instance {id} has no key type argument — arity (2) was checked at instantiation")
+	end 'mapKeyType'
+
+	// The VALUE type of `Map with (K, V)` — type argument 1, which the table only stores and drops.
+	export function mapValueType(id GenericInstanceId) returns MaxonType
+		let args = self.genericInstances.instanceArgs(id)
+		return try args.get(MapValueArgPosition) otherwise panic("ProgramSignatures.mapValueType: `Map` instance {id} has no value type argument — arity (2) was checked at instantiation")
+	end 'mapValueType'
+
+	// ⚠ There is deliberately no `mapKeyIsManaged` / `mapValueIsManaged` / `setKeyIsManaged` beside these two
+	// selectors. A map carries TWO independently stamped destructors (`keyDrop@40`, `valueDrop@56`) — a
+	// `Map with (String, Int)` owns heap keys and trivial values — and a per-column predicate is a second place
+	// that has to know which type argument is the key. Every caller already holds the column TYPE (from
+	// `setKeyType` / `mapKeyType` / `mapValueType`) and asks `slotTypeIsManaged` of it, so the moved-in value
+	// and the stamped destructor read the one answer.
 
 	// Is `Array with T`'s element itself managed (String / struct / boxed union / nested array) — the
 	// slice-1 boundary: a managed-element array needs the element-destroy walk (P1.7 slice 3) and is
@@ -8186,6 +8288,11 @@ export type ProgramSignatures
 		if self.isSetInstance(id) 'set'
 			return SetRecordBytes as ByteOffset
 		end 'set'
+		// A `Map` instance's box is the same fused record with the value column appended — see
+		// `MapRecordBytes`, whose first `SetRecordBytes` bytes ARE a `Set` record's.
+		if self.isMapInstance(id) 'map'
+			return MapRecordBytes as ByteOffset
+		end 'map'
 		match self.structOf(self.genericInstanceBaseName(id)) 'base'
 			declared(layout) then return layout.sizeBytes()
 			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base '{String.from(self.genericInstanceBaseName(id))}' is neither a builtin nor a declared struct, so it has no box — every caller opens with genericInstanceBaseIsKnown")
@@ -8792,8 +8899,29 @@ export type ProgramSignatures
 	// Is `name` a BUILTIN generic base — one shv2 synthesizes rather than reads a declaration for, so no
 	// `StructLayout` exists for it and none is missing. The one home of the `Array`-or-`Set` disjunction.
 	export function isBuiltinGenericBaseName(name ByteArray) returns bool
-		return self.isArrayBaseName(name) or self.isSetBaseName(name)
+		return self.isArrayBaseName(name) or self.isSetBaseName(name) or self.isMapBaseName(name)
 	end 'isBuiltinGenericBaseName'
+
+	// ⭐ **HOW MANY TYPE ARGUMENTS THE SYNTHESIZED GENERIC `name` TAKES** — the arity `Parser.checkGenericInstance`
+	// validates a `Base with …` against when there is no declaration to read one off.
+	//
+	// It sits DIRECTLY BESIDE the predicate above, and takes its precondition from it, because the two are one
+	// fact: `checkGenericInstance` used to carry a per-builtin arm that spelled the predicate and the count
+	// together, so a third builtin generic meant remembering to widen two lists in two files. Here the miss arm
+	// is a `panic` naming the omission, so a name that answers yes above and has no arity here cannot compile a
+	// program at all rather than silently skipping its arity check.
+	export function builtinGenericTypeParamCount(name ByteArray) returns FieldIndex
+		if self.isArrayBaseName(name) 'array'
+			return ArrayTypeParamCount
+		end 'array'
+		if self.isSetBaseName(name) 'set'
+			return SetTypeParamCount
+		end 'set'
+		if self.isMapBaseName(name) 'map'
+			return MapTypeParamCount
+		end 'map'
+		panic("ProgramSignatures.builtinGenericTypeParamCount: `{String.from(name)}` is not a synthesized builtin generic — every caller opens with isBuiltinGenericBaseName, and a name that answers yes there owes an arity here")
+	end 'builtinGenericTypeParamCount'
 
 	// Does instance `id`'s base struct have a declared `StructLayout` to read fields out of — the exact
 	// precondition of `baseLayoutOf`, and the gate every instance FIELD WALK opens with. False for a
@@ -9165,6 +9293,11 @@ export type ProgramSignatures
 		if self.isSetInstance(id) 'set'
 			return SetDecrefName
 		end 'set'
+		// A `Map` drops through `__map_decref` — the same teardown with a FOURTH buffer (the values) and a
+		// second per-slot drop walk, since a map's key column and value column are independently managed.
+		if self.isMapInstance(id) 'map'
+			return MapDecrefName
+		end 'map'
 		if self.genericInstanceHasManagedField(id) 'managed'
 			return destructorSymbol(self.mangleGenericInstance(id))
 		end 'managed'
@@ -9300,7 +9433,7 @@ export type ProgramSignatures
 	// slot loses its `count()`, and a float slot is stored as raw i64 bits.
 	//
 	// ⚠ **IT IS ONE FUNCTION BECAUSE THE ELEMENT DOOR HAD A PARTIAL COPY OF IT, AND THE PART THE COPY
-	// DROPPED WAS REACHABLE.** `Parser.arrayElementValueType` spelled out the generic-alias re-tag and
+	// DROPPED WAS REACHABLE.** `Parser.containerSlotValueType` spelled out the generic-alias re-tag and
 	// neither of the other two, so an `Array with <function alias>` element stayed `named` — an INT. It
 	// went unnoticed while nothing compared an element against its type; the moment the element-argument
 	// check (`Parser.requireArrayElementType`) did, that `named` would have read a pushed function VALUE as
@@ -9322,7 +9455,7 @@ export type ProgramSignatures
 	//     review, both directions: `E3005 … expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'` at the
 	//     construction line, and the narrow declarer's own read striding 1 correctly) — and every read of
 	//     the slot strides the way the record was stamped.
-	//   • **An `Array` ELEMENT** (`Parser.arrayElementValueType`, `Parser.requireArrayElementType`) passes
+	//   • **An `Array` ELEMENT** (`Parser.containerSlotValueType`, `Parser.requireArrayElementType`) passes
 	//     the PARSING FILE — which reads as "the reader's" and is not that at all. An array INSTANCE is
 	//     declared in no file, so it has no declaring one to ask; what it has is the file its `giid` was
 	//     already range-scoped FOR, one line earlier in the same parser, and that file is `self.filePath`.

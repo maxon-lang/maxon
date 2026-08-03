@@ -2692,6 +2692,24 @@ export function builtinStringErrorEnum() returns EnumLayout
 	return layout
 end 'builtinStringErrorEnum'
 
+// ⭐ **THE COMPILER-OWNED `MapError`** — what a missing-key `Map.get` throws. Registered under the BARE name
+// `SignatureIndex.MapErrorTypeName`; that constant carries the argument for the bare spelling.
+//
+// Its provenance is `ArrayError`'s and `StringError`'s exactly — `stdlib/Map.maxon:6-9` declares it and shv2
+// synthesizes `Map` rather than loading that module (see `ProgramSignatures.isMapBaseName` for the measured
+// reason) — so it takes the same UNCONDITIONAL seed for the same stated reason.
+//
+// ⚠ **BOTH of that declaration's cases are registered even though only `keyNotFound` is throwable at this
+// slice**, for `ManagedMemoryErrorTypeName`'s reason: the ordinals are POSITIONAL, so declaring
+// `keyAlreadyExists` only when an `insert` arrives would silently renumber every handler already written
+// against a case after it.
+export function builtinMapErrorEnum() returns EnumLayout
+	var layout = EnumLayout.createCompilerOwned(MapErrorTypeName, conformsTo: builtinErrorConformance())
+	addBuiltinEnumCase(layout, caseName: MapErrorKeyNotFoundCaseName)
+	addBuiltinEnumCase(layout, caseName: MapErrorKeyAlreadyExistsCaseName)
+	return layout
+end 'builtinMapErrorEnum'
+
 // ⭐ **THE COMPILER-OWNED `__DivisionByZeroError` (A1)** — what a possibly-zero `/` or `mod` throws, and the
 // type `specs-shv2/safety.md`'s `divide-by-zero-expression-form` and `mod-by-zero` discriminate.
 //
@@ -2905,6 +2923,8 @@ export function createEnumRegistry() returns EnumLayoutMap
 	registry.upsert(ArrayErrorTypeName, value: builtinArrayErrorEnum())
 	// What the throwing `String` searches and `indexAfter` throw. See `builtinStringErrorEnum`.
 	registry.upsert(StringErrorTypeName, value: builtinStringErrorEnum())
+	// What a missing-key `Map.get` throws. See `builtinMapErrorEnum`.
+	registry.upsert(MapErrorTypeName, value: builtinMapErrorEnum())
 	// A1: what a possibly-zero `/` or `mod` throws. See `builtinDivisionByZeroErrorEnum`.
 	registry.upsert(DivisionByZeroErrorTypeName, value: builtinDivisionByZeroErrorEnum())
 	return registry

@@ -433,7 +433,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: ascii-value-non-ascii -->
+<!-- test: ascii-value-non-ascii -->
 <!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try c.asciiValue()`. NOT a Character gap: `Character` and its `bytes`/`byteLength` land at P1.8 Slice B, and the blocker is that shv2 has no `if try <throwing call>` form for ANY callee (measured on an already-throwing builtin: `if try a.first()` over an `Array` is `E3005: 'if' requires a bool condition, got 'int'`). `Character.asciiValue()` itself is deliberately unbuilt until that form exists — it throws `CharacterError.notAscii`, so without it there is no non-sentinel way to call it -->
 ### ASCII Value for Non-ASCII Returns Error
 
@@ -450,7 +450,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: ascii-value-emoji -->
+<!-- test: ascii-value-emoji -->
 <!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try c.asciiValue()`. NOT a Character gap: `Character` and its `bytes`/`byteLength` land at P1.8 Slice B, and the blocker is that shv2 has no `if try <throwing call>` form for ANY callee (measured on an already-throwing builtin: `if try a.first()` over an `Array` is `E3005: 'if' requires a bool condition, got 'int'`). `Character.asciiValue()` itself is deliberately unbuilt until that form exists — it throws `CharacterError.notAscii`, so without it there is no non-sentinel way to call it -->
 ### ASCII Value for Emoji Returns Error
 

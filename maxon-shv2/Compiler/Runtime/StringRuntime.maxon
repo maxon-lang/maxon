@@ -428,6 +428,14 @@ export type RuntimeUsage
 	// its three external buffers inside their Std bodies, which this Maxon-module scan cannot see. It drives
 	// `installSetRuntime`. Its own bit so a set-free program stays golden-neutral (installs nothing).
 	export var usesSet as bool
+	// The program touches a `Map`. Any `__map_*` runtime call turns this on — and, like `usesSet`, turns on
+	// `usesHeap` too, because the map helpers `__mm_alloc`/`__mm_free` the record and its FOUR external
+	// buffers inside their Std bodies, which this Maxon-module scan cannot see. It drives `installMapRuntime`.
+	// Its OWN bit and NOT `usesSet`, even though the two runtimes are built from one shared graph
+	// (`HashTableRuntime`): the graph is shared at BUILD time, but the installed functions are two disjoint
+	// name sets, so a set-only program must not carry `__map_*` and a map-only program must not carry
+	// `__set_*`.
+	export var usesMap as bool
 	// The program DROPS a single opaque type-parameter value (`__drop_type_param`, P1.7 slice 3b-v /
 	// Finding A) — a consumed feed binding left live at a scope exit, an opaque array element moved out
 	// (`.pop()`), OR a bare opaque `T` field reassignment (`self.saved = next`). Its OWN bit, decoupled from
@@ -545,6 +553,9 @@ export type RuntimeUsage
 	// `__char_at` MINTS a Character — one `__mm_alloc`'d fused record per call, blitted with `__str_copy`
 	// — so it declares the heap and the copy loop that `emitBuildOwnedInlineString` puts inside its body.
 	export var usesCharAt as bool
+	// `__char_ascii` reads two fields of a BORROWED record and calls nothing, so it is the one grapheme
+	// entry point with no transitive floor at all — hence no arm in `closeGraphemeNeeds`.
+	export var usesCharAsciiValue as bool
 	// `__str_to_bytes` PUSHES into a caller-created `Array with Byte`, so it declares the array runtime
 	// (and the heap under it) exactly as `__str_split` declares them for its segments.
 	export var usesStrToBytes as bool
@@ -602,7 +613,7 @@ export type RuntimeUsage
 	export var usesCommandLine as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -823,6 +834,14 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesSet = true
 		usage.usesHeap = true
 	end 'set'
+	// Any `__map_*` call carries the whole map runtime, and the heap under it — the `__set_*` arm above, one
+	// column wider: `__map_create`/`__map_grow` `__mm_alloc` the record and its FOUR buffers and
+	// `__map_decref` `__mm_free`s them, none of which this Maxon-module scan sees. It is a SEPARATE arm rather
+	// than a widened prefix test because the two runtimes install disjoint name sets — see `usesMap`.
+	if isMapRuntimeCallee(callee) 'map'
+		usage.usesMap = true
+		usage.usesHeap = true
+	end 'map'
 	// The single-value descriptor-gated drop (P1.7 slice 3b-v / Finding A). Decoupled from `usesArray` so an
 	// array-free bare-field reassign links: it is `__`-prefixed but neither `__mm_`- nor `__arr_`-prefixed, so
 	// none of the arms above sees it. Its body only reads the descriptor and `callIndirect`s the destructor
@@ -963,6 +982,9 @@ function recordGraphemeUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(CharAtName) 'charat'
 		usage.usesCharAt = true
 	end 'charat'
+	if callee.equals(CharAsciiValueName) 'charascii'
+		usage.usesCharAsciiValue = true
+	end 'charascii'
 	if callee.equals(StrToBytesName) 'tobytes'
 		usage.usesStrToBytes = true
 	end 'tobytes'
