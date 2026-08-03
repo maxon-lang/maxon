@@ -1,0 +1,170 @@
+// Test: interface-param-checked-float-divide-survives-specialization
+typealias Real = float(f64.min to f64.max)
+
+interface Scorer
+	function score() returns Real
+end 'Scorer'
+
+type Alpha implements Scorer
+	let n as Real
+	function score() returns Real
+		return n * 2.0
+	end 'score'
+	static function create(n Real) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Alpha'
+
+function opaque(x Real) returns Real
+	return x
+end 'opaque'
+
+function ratioVia(s Scorer, d Real) returns Real
+	let base = s.score()
+	return try (base / d) otherwise panic("ratioVia: d was 0")
+end 'ratioVia'
+
+function main() returns ExitCode
+	let a = Alpha.create(21.0)
+	let r = ratioVia(a, d: opaque(3.0))
+	return 14 if r == 14.0 else 1
+end 'main'
+---
+ExitCode: 14
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Alpha.score {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 xmm0, [rcx + 0]
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Alpha.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.storeSlotReg slot0, xmm6
+    x64.movRegReg xmm6, xmm0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], xmm6
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}
+
+func @opaque {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ratioVia {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.storeSlotReg slot0, xmm6
+    x64.movRegReg xmm6, xmm0
+    x64.movRegReg rbx, rdx
+    x64.callMem [rbx + 24]
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.ucomisdRegReg xmm6, xmm1
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rax
+    x64.divsdRegReg xmm0, xmm0, xmm6
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movsdRegRip xmm0, [rip + __fconst_4]
+    x64.callDirect Alpha.create
+    x64.movRegReg rbx, r8
+    x64.movsdRegRip xmm0, [rip + __fconst_5]
+    x64.callDirect opaque
+    x64.leaRegRdata rdx, [rip + __witness_Alpha.Scorer]
+    x64.movRegReg rcx, rbx
+    x64.callDirect ratioVia
+    x64.movsdRegRip xmm1, [rip + __fconst_6]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, ternaryfalse
+    x64.jmp fordered
+  fordered:
+    x64.jcc equal, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r12, 14
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r12, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

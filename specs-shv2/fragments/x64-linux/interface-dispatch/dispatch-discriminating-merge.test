@@ -1,0 +1,165 @@
+// Test: dispatch-discriminating-merge
+typealias Integer = int(i64.min to i64.max)
+
+interface Shower
+	function show() returns Integer
+end 'Shower'
+
+type A implements Shower
+	function show() returns Integer
+		return 1
+	end 'show'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'A'
+
+type B implements Shower
+	function show() returns Integer
+		return 2
+	end 'show'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'B'
+
+function run(s Shower, again Shower, pick Integer) returns Integer
+	var t = s
+	if pick > 0 'grow'
+		t = again
+	end 'grow'
+	return t.show()
+end 'run'
+
+function main() returns ExitCode
+	return run(A.create(), again: B.create(), pick: 0) as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @A.show {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @A.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @B.show {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @B.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @run {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greater, grow
+    x64.jmp critsplit
+  grow:
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rbx, rsi
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rbx, r9
+    x64.jmp ifcont
+  ifcont:
+    x64.callMem [rbx + 24]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect A.create
+    x64.movRegReg rbx, r8
+    x64.callDirect B.create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __witness_A.Shower]
+    x64.leaRegRdata rsi, [rip + __witness_B.Shower]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect run
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r13, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

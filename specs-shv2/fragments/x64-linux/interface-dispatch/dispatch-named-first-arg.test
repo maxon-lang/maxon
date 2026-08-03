@@ -1,0 +1,130 @@
+// Test: dispatch-named-first-arg
+
+typealias Integer = int(i64.min to i64.max)
+
+// An interface (or type-parameter) method call may name its FIRST argument:
+// the receiver dispatches through interface monomorphization, which is
+// receiver-type-dependent and so cannot be ruled out syntactically at parse
+// time. The C# bootstrap accepts this (it routes interface/type-param method
+// calls through a path that silently consumes a first-arg label); the self-
+// hosted parser defers the E2052 check to TypeResolution, which re-applies it
+// only for concrete-struct / enum / builtin receivers. This is the regression
+// guard for that split.
+interface Combiner
+	function combine(first Integer, second Integer) returns Integer
+end 'Combiner'
+
+type Summer implements Combiner
+	let bias as Integer
+
+	function combine(first Integer, second Integer) returns Integer
+		return bias + first + second
+	end 'combine'
+
+	static function create(bias Integer) returns Self
+		return Self{bias: bias}
+	end 'create'
+end 'Summer'
+
+function combineVia(c Combiner) returns Integer
+	return c.combine(first: 12, second: 30)
+end 'combineVia'
+
+function main() returns ExitCode
+	let s = Summer.create(0)
+	return combineVia(s)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Summer.combine {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Summer.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @combineVia {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.movRegImm32 rdx, 12
+    x64.movRegImm32 rax, 30
+    x64.callMem [rbx + 24]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Summer.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __witness_Summer.Combiner]
+    x64.movRegReg rcx, rbx
+    x64.callDirect combineVia
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

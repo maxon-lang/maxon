@@ -1,0 +1,199 @@
+// Test: dispatch-three-types
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Valued
+	function value() returns Integer
+end 'Valued'
+
+type One implements Valued
+	function value() returns Integer
+		return 1
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'One'
+
+type Two implements Valued
+	function value() returns Integer
+		return 2
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Two'
+
+type Three implements Valued
+	function value() returns Integer
+		return 3
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Three'
+
+function getValue(v Valued) returns Integer
+	return v.value()
+end 'getValue'
+
+function main() returns ExitCode
+	let a = One.create()
+	let b = Two.create()
+	let c = Three.create()
+	return getValue(a) + getValue(b) + getValue(c)
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @One.value {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @One.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Two.value {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Two.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Three.value {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Three.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @getValue {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.callMem [rbx + 24]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.callDirect One.create
+    x64.movRegReg rbx, r8
+    x64.callDirect Two.create
+    x64.movRegReg r12, r8
+    x64.callDirect Three.create
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rdx, [rip + __witness_One.Valued]
+    x64.movRegReg rcx, rbx
+    x64.callDirect getValue
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rdx, [rip + __witness_Two.Valued]
+    x64.movRegReg rcx, r12
+    x64.callDirect getValue
+    x64.leaRegRegReg r14, r14, r8
+    x64.leaRegRdata rdx, [rip + __witness_Three.Valued]
+    x64.movRegReg rcx, r13
+    x64.callDirect getValue
+    x64.leaRegRegReg r14, r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r14, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
